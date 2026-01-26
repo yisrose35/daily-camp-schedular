@@ -1,52 +1,58 @@
 // ============================================================================
-// special_activities.js — PRODUCTION-READY v2.0
+// locations.js — LOCATION ZONES & FACILITIES MANAGEMENT v2.1
 // ============================================================================
-// 1. Layout: Apple-inspired Two-Pane with Collapsible Detail Sections.
-// 2. Logic: Retains Sharing, Frequency, and Time Rules.
-// 3. Style: Matches fields.js for consistent UI/UX across the app.
-// 4. Update: Added Location Dropdown for Special Activities.
-// 5. Update: Added RBAC Checks for Add/Delete operations.
-// 6. Update: Transition/Zone rules removed - now managed in Locations tab.
+// This module manages:
+// 1. ZONES - Physical areas with transition times (Main Campus, #2 School, etc.)
+// 2. FIELDS IN ZONE - Which sports fields belong to each zone
+// 3. SPECIAL ACTIVITIES IN ZONE - Which special activities belong to each zone
+// 4. LOCATIONS/FACILITIES - Non-field spaces (Pool, Lunchroom, Gym, Auditorium)
+// 5. PINNED TILE DEFAULTS - Default locations for Lunch, Swim, Snacks, etc.
 //
-// v2.0 PRODUCTION FIXES:
-// - ★ CLOUD SYNC: Proper cloud sync via saveGlobalSettings
-// - ★ TAB REFRESH: Refreshes data when tab becomes visible
+// KEY CONCEPT: Location capacity = 1 ACTIVITY at a time (unlimited bunks)
+// If Lunch is happening in Lunchroom, 20 bunks can be there.
+// But Skits CANNOT happen there at the same time because it's a different activity.
+//
+// v2.1 CHANGES:
+// - ★ NEW: Special activities can be assigned to zones alongside fields
+// - ★ Updated dropdown to show both fields and special activities
+// - ★ Updated summary to show fields + specials count
+//
+// v2.0 FIXES:
+// - ★ CLOUD SYNC: Properly saves to cloud via saveGlobalSettings
+// - ★ DATA REFRESH: Refreshes from cloud when tab is activated
 // - ★ MEMORY LEAK FIX: Proper cleanup of all event listeners
-// - ★ DATA VALIDATION: Validates structure on load
-// - ★ TYPE CONSISTENCY: Ensures proper number/string handling
-// - ★ NULL SAFETY: Added checks for DOM elements and parameters
-// - ★ ORPHAN CLEANUP: Validates divisions and locations on load
-// - ★ ERROR HANDLING: Added try/catch around risky operations
+// - ★ STATE CONSISTENCY: Internal state always matches persisted state
+// - ★ DATA VALIDATION: Validates zone/location structure on load
 // ============================================================================
-(function() {
+(function(){
 'use strict';
 
-console.log("[SPECIAL_ACTIVITIES] Module v2.0 loading...");
+console.log("[LOCATIONS] Location Zones module v2.1 loading...");
 
 // =========================================================================
-// STATE - Internal variables
+// STATE - Internal variables (always synced with persisted storage)
 // =========================================================================
-let specialActivities = [];
-let rainyDayActivities = [];
-let selectedItemId = null;
-let specialsListEl = null;
-let rainyDayListEl = null;
+let locationZones = {};
+let pinnedTileDefaults = {};  // { "Lunch": "Lunchroom", "Swim": "Pool", etc. }
+let selectedZoneId = null;
+let zonesListEl = null;
 let detailPaneEl = null;
-let addSpecialInput = null;
-let addRainyDayInput = null;
+let addZoneInput = null;
 let _isInitialized = false;
 let _refreshTimeout = null;
 
 // ★ FIX: Track active event listeners for cleanup (with target info)
 let activeEventListeners = [];
 
-// ★ FIX: Track cloud sync callback for cleanup
-let _cloudSyncCallback = null;
-
 // =========================================================================
-// ★ EVENT LISTENER CLEANUP HELPER
+// CLEANUP HELPER - Remove orphaned panels and event listeners
 // =========================================================================
-function cleanupEventListeners() {
+function cleanupDropdownPanels() {
+    // Remove any orphaned dropdown panels from body
+    const existingPanels = document.querySelectorAll('.multi-select-options');
+    existingPanels.forEach(p => p.remove());
+    
+    // Remove tracked event listeners (handle both window and document targets)
     activeEventListeners.forEach(({ type, handler, options, target }) => {
         const eventTarget = target || window;
         try {
@@ -56,18 +62,101 @@ function cleanupEventListeners() {
         }
     });
     activeEventListeners = [];
-    
-    // Cleanup cloud sync callback
-    if (_cloudSyncCallback && window.SupabaseSync?.removeStatusCallback) {
-        window.SupabaseSync.removeStatusCallback(_cloudSyncCallback);
-        _cloudSyncCallback = null;
+}
+
+// =========================================================================
+// ★ DATA VALIDATION - Ensure zone/location structure is valid
+// =========================================================================
+function validateZone(zone, zoneName) {
+    if (!zone || typeof zone !== 'object') {
+        return {
+            name: zoneName,
+            isDefault: false,
+            transition: { preMin: 0, postMin: 0 },
+            maxConcurrent: 99,
+            fields: [],
+            specialActivities: [],  // ★ NEW: Special activities in zone
+            locations: {}
+        };
     }
     
-    // Clear any pending refresh timeout
-    if (_refreshTimeout) {
-        clearTimeout(_refreshTimeout);
-        _refreshTimeout = null;
+    // ★ FIX: Get all valid field names for orphan detection
+    let validFieldNames = null;
+    try {
+        const allFields = window.getFields?.() || [];
+        validFieldNames = new Set(allFields.map(f => f.name));
+    } catch (e) {
+        // If getFields isn't available yet, skip validation
+        validFieldNames = null;
     }
+    
+    // ★ Get all valid special activity names for orphan detection
+    let validSpecialNames = null;
+    try {
+        const allSpecials = window.getAllSpecialActivities?.() || [];
+        validSpecialNames = new Set(allSpecials.map(s => s.name));
+    } catch (e) {
+        validSpecialNames = null;
+    }
+    
+    // Filter fields to only include valid ones (if we can validate)
+    let validatedFields = Array.isArray(zone.fields) ? zone.fields.filter(f => typeof f === 'string') : [];
+    if (validFieldNames && validFieldNames.size > 0) {
+        const originalCount = validatedFields.length;
+        validatedFields = validatedFields.filter(f => validFieldNames.has(f));
+        if (validatedFields.length < originalCount) {
+            console.warn(`[LOCATIONS] Zone "${zoneName}": Removed ${originalCount - validatedFields.length} orphaned field reference(s)`);
+        }
+    }
+    
+    // ★ NEW: Filter special activities to only include valid ones
+    let validatedSpecials = Array.isArray(zone.specialActivities) ? zone.specialActivities.filter(s => typeof s === 'string') : [];
+    if (validSpecialNames && validSpecialNames.size > 0) {
+        const originalCount = validatedSpecials.length;
+        validatedSpecials = validatedSpecials.filter(s => validSpecialNames.has(s));
+        if (validatedSpecials.length < originalCount) {
+            console.warn(`[LOCATIONS] Zone "${zoneName}": Removed ${originalCount - validatedSpecials.length} orphaned special activity reference(s)`);
+        }
+    }
+    
+    return {
+        name: zone.name || zoneName,
+        isDefault: zone.isDefault === true,
+        transition: {
+            preMin: parseInt(zone.transition?.preMin) || 0,
+            postMin: parseInt(zone.transition?.postMin) || 0
+        },
+        maxConcurrent: parseInt(zone.maxConcurrent) || 99,
+        fields: validatedFields,
+        specialActivities: validatedSpecials,  // ★ NEW
+        locations: (zone.locations && typeof zone.locations === 'object') ? zone.locations : {}
+    };
+}
+
+function validateAllZones(zones) {
+    if (!zones || typeof zones !== 'object') {
+        return {};
+    }
+    
+    const validated = {};
+    Object.entries(zones).forEach(([name, zone]) => {
+        validated[name] = validateZone(zone, name);
+    });
+    return validated;
+}
+
+function validatePinnedDefaults(defaults) {
+    if (!defaults || typeof defaults !== 'object') {
+        return {};
+    }
+    
+    const validated = {};
+    Object.entries(defaults).forEach(([tile, location]) => {
+        if (typeof tile === 'string' && typeof location === 'string') {
+            validated[tile] = location;
+        }
+    });
+    return validated;
 }
 
 // =========================================================================
@@ -76,7 +165,7 @@ function cleanupEventListeners() {
 let _visibilityHandler = null;
 let _focusHandler = null;
 
-function setupTabListeners() {
+function setupTabVisibilityListener() {
     // Cleanup existing listeners first
     cleanupTabListeners();
     
@@ -88,7 +177,7 @@ function setupTabListeners() {
                 clearTimeout(_refreshTimeout);
             }
             _refreshTimeout = setTimeout(() => {
-                console.log("[SPECIAL_ACTIVITIES] Tab visible - refreshing data...");
+                console.log("[LOCATIONS] Tab visible - refreshing data...");
                 refreshFromStorage();
             }, 300);
         }
@@ -103,7 +192,7 @@ function setupTabListeners() {
                 clearTimeout(_refreshTimeout);
             }
             _refreshTimeout = setTimeout(() => {
-                console.log("[SPECIAL_ACTIVITIES] Window focused - refreshing data...");
+                console.log("[LOCATIONS] Window focused - refreshing data...");
                 refreshFromStorage();
             }, 300);
         }
@@ -130,27 +219,30 @@ function cleanupTabListeners() {
 // =========================================================================
 // ★ CLOUD SYNC LISTENER - React to remote changes
 // =========================================================================
+let _cloudSyncCallback = null;
+
 function setupCloudSyncListener() {
     // Cleanup existing
     if (_cloudSyncCallback && window.SupabaseSync?.removeStatusCallback) {
         window.SupabaseSync.removeStatusCallback(_cloudSyncCallback);
     }
     
-    // Listen for cloud sync events
+    // Listen for cloud sync events (if the sync system provides callbacks)
     if (window.SupabaseSync?.onStatusChange) {
         _cloudSyncCallback = (status) => {
             if (status === 'idle' && _isInitialized) {
-                console.log("[SPECIAL_ACTIVITIES] Cloud sync complete - refreshing...");
+                // After sync completes, refresh our data
+                console.log("[LOCATIONS] Cloud sync complete - refreshing...");
                 refreshFromStorage();
             }
         };
         window.SupabaseSync.onStatusChange(_cloudSyncCallback);
     }
     
-    // Also listen for custom campistry events
+    // Also listen for custom campistry events (dispatched by integration_hooks)
     const handleRemoteChange = (event) => {
-        if (_isInitialized && event.detail?.key === 'specialActivities') {
-            console.log("[SPECIAL_ACTIVITIES] Remote specialActivities change detected");
+        if (_isInitialized && (event.detail?.key === 'locationZones' || event.detail?.key === 'pinnedTileDefaults')) {
+            console.log("[LOCATIONS] Remote change detected for:", event.detail?.key);
             refreshFromStorage();
         }
     };
@@ -158,222 +250,207 @@ function setupCloudSyncListener() {
     activeEventListeners.push({ type: 'campistry-remote-change', handler: handleRemoteChange, target: window });
 }
 
-// =========================================================================
-// ★ BEFOREUNLOAD HANDLER - Ensure sync on page exit
-// =========================================================================
-let _beforeUnloadHandler = null;
-
-function setupBeforeUnloadHandler() {
-    // Cleanup existing
-    if (_beforeUnloadHandler) {
-        window.removeEventListener('beforeunload', _beforeUnloadHandler);
-    }
+//------------------------------------------------------------------
+// INIT - ★ WITH CLOUD SUBSCRIPTION AND TAB VISIBILITY HANDLING
+//------------------------------------------------------------------
+function initLocationsTab(){
+    const container = document.getElementById("locations");
+    if(!container) return;
     
-    _beforeUnloadHandler = () => {
-        if (window._specialActivitiesSyncTimeout) {
-            clearTimeout(window._specialActivitiesSyncTimeout);
-            window._specialActivitiesSyncTimeout = null;
-            // Force immediate sync
-            window.forceSyncToCloud?.();
-        }
-    };
-    
-    window.addEventListener('beforeunload', _beforeUnloadHandler);
-    activeEventListeners.push({ type: 'beforeunload', handler: _beforeUnloadHandler, target: window });
-}
-
-// =========================================================================
-// ★ DATA VALIDATION - Ensure activity structure is valid
-// =========================================================================
-function validateSpecialActivity(activity, activityName) {
-    if (!activity || typeof activity !== 'object') {
-        return createDefaultActivity(activityName || 'Unknown');
-    }
-    
-    // ★ Get valid division names for orphan detection
-    let validDivisions = null;
-    try {
-        const settings = window.loadGlobalSettings?.() || {};
-        const divisions = settings.divisions || {};
-        validDivisions = new Set(Object.keys(divisions));
-    } catch (e) {
-        validDivisions = null;
-    }
-    
-    // ★ Validate sharableWith structure
-    let sharableWith = activity.sharableWith;
-    if (!sharableWith || typeof sharableWith !== 'object') {
-        sharableWith = { type: 'not_sharable', divisions: [], capacity: 2 };
-    } else {
-        // Validate type
-        if (!['not_sharable', 'custom', 'all'].includes(sharableWith.type)) {
-            sharableWith.type = 'not_sharable';
-        }
-        // Validate divisions array and remove orphans
-        if (!Array.isArray(sharableWith.divisions)) {
-            sharableWith.divisions = [];
-        } else if (validDivisions && validDivisions.size > 0) {
-            const originalLength = sharableWith.divisions.length;
-            sharableWith.divisions = sharableWith.divisions.filter(d => 
-                typeof d === 'string' && validDivisions.has(d)
-            );
-            if (sharableWith.divisions.length < originalLength) {
-                console.warn(`[SPECIAL_ACTIVITIES] "${activity.name}": Removed ${originalLength - sharableWith.divisions.length} orphaned division(s) from sharableWith`);
-            }
-        }
-        // ★ FIX: Ensure capacity is a number
-        sharableWith.capacity = parseInt(sharableWith.capacity, 10) || 2;
-    }
-    
-    // ★ Validate limitUsage structure (match fields.js pattern)
-    let limitUsage = activity.limitUsage;
-    if (!limitUsage || typeof limitUsage !== 'object') {
-        limitUsage = { enabled: false, divisions: {}, priorityList: [] };
-    } else {
-        limitUsage.enabled = limitUsage.enabled === true;
-        
-        // Validate divisions object
-        if (typeof limitUsage.divisions !== 'object' || limitUsage.divisions === null) {
-            limitUsage.divisions = {};
-        } else if (validDivisions && validDivisions.size > 0) {
-            // Remove orphaned division keys
-            const divKeys = Object.keys(limitUsage.divisions);
-            divKeys.forEach(divKey => {
-                if (!validDivisions.has(divKey)) {
-                    delete limitUsage.divisions[divKey];
-                    console.warn(`[SPECIAL_ACTIVITIES] "${activity.name}": Removed orphaned division "${divKey}" from limitUsage`);
-                }
-            });
-        }
-        
-        // ★ FIX: Ensure priorityList exists and is valid (like fields.js)
-        if (!Array.isArray(limitUsage.priorityList)) {
-            limitUsage.priorityList = Object.keys(limitUsage.divisions);
-        } else if (validDivisions && validDivisions.size > 0) {
-            limitUsage.priorityList = limitUsage.priorityList.filter(d => validDivisions.has(d));
-        }
-    }
-    
-    // ★ Validate timeRules with parsed times
-    let timeRules = activity.timeRules;
-    if (!Array.isArray(timeRules)) {
-        timeRules = [];
-    } else {
-        timeRules = timeRules.map(rule => ({
-            type: rule.type || 'Available',
-            start: rule.start || '',
-            end: rule.end || '',
-            startMin: rule.startMin ?? parseTimeToMinutes(rule.start),
-            endMin: rule.endMin ?? parseTimeToMinutes(rule.end)
-        })).filter(rule => rule.start && rule.end);
-    }
-    
-    // ★ Validate location
-    let location = activity.location;
-    if (location) {
-        // Check if location still exists
-        const allLocations = window.getAllLocations?.() || [];
-        const locationExists = allLocations.some(loc => loc.name === location);
-        if (!locationExists) {
-            console.warn(`[SPECIAL_ACTIVITIES] "${activity.name}": Location "${location}" no longer exists, clearing`);
-            location = null;
-        }
-    }
-    
-    return {
-        name: activity.name || activityName || 'Unknown',
-        available: activity.available !== false,
-        sharableWith: sharableWith,
-        limitUsage: limitUsage,
-        timeRules: timeRules,
-        maxUsage: (activity.maxUsage !== undefined && activity.maxUsage !== "" && activity.maxUsage !== null) 
-            ? parseInt(activity.maxUsage, 10) || null 
-            : null,
-        frequencyWeeks: parseInt(activity.frequencyWeeks, 10) || 0,
-        rainyDayExclusive: activity.rainyDayExclusive === true,
-        rainyDayOnly: activity.rainyDayOnly === true, // Legacy support
-        rainyDayAvailable: activity.rainyDayAvailable !== false,
-        location: location
-    };
-}
-
-function createDefaultActivity(name) {
-    return {
-        name: name,
-        available: true,
-        sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
-        limitUsage: { enabled: false, divisions: {}, priorityList: [] },
-        timeRules: [],
-        maxUsage: null,
-        frequencyWeeks: 0,
-        rainyDayExclusive: false,
-        rainyDayAvailable: true,
-        location: null
-    };
-}
-
-function validateAllActivities(activities) {
-    if (!Array.isArray(activities)) return [];
-    return activities.map(a => validateSpecialActivity(a, a?.name));
-}
-
-// =========================================================================
-// INIT
-// =========================================================================
-function initSpecialActivitiesTab() {
-    const container = document.getElementById("special_activities");
-    if (!container) {
-        console.warn("[SPECIAL_ACTIVITIES] Container element not found");
-        return;
-    }
-
-    // ★ FIX: Clean up any existing state before re-init
-    cleanupEventListeners();
+    // ★ FIX: Cleanup any previous state when re-initializing
+    cleanupDropdownPanels();
     cleanupTabListeners();
     
     loadData();
+    _isInitialized = true;
+
     container.innerHTML = "";
 
-    // Inject Styles (matching fields.js)
+    // ★ Setup tab visibility listener to refresh data when tab becomes active
+    setupTabVisibilityListener();
+    
+    // ★ Setup cloud sync listener (if available)
+    setupCloudSyncListener();
+
+    // Inject Styles
     const style = document.createElement('style');
     style.innerHTML = `
-        /* Master List Styles */
-        .sa-master-list { border: 1px solid #E5E7EB; border-radius: 12px; background: #fff; overflow: hidden; }
-        .sa-list-item { padding: 12px 14px; border-bottom: 1px solid #F3F4F6; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background 0.15s; }
-        .sa-list-item:last-child { border-bottom: none; }
-        .sa-list-item:hover { background: #F9FAFB; }
-        .sa-list-item.selected { background: #F0FDF4; border-left: 3px solid #10B981; }
-        .sa-list-item-name { font-weight: 500; color: #1F2937; font-size: 0.9rem; }
-        .sa-list-item-meta { font-size: 0.75rem; color: #6B7280; margin-left: 6px; }
+        /* Two-pane layout styles */
+        .locations-master-list { border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; overflow: hidden; }
+        .locations-list-item { padding: 12px 14px; border-bottom: 1px solid #f3f4f6; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background 0.15s, border-color 0.15s, box-shadow 0.18s, transform 0.08s; }
+        .locations-list-item:last-child { border-bottom: none; }
+        .locations-list-item:hover { background: #f9fafb; transform: translateY(-0.5px); }
+        .locations-list-item.selected { background: #eff6ff; border-left: 3px solid #2563eb; }
+        .locations-list-item-name { font-weight: 500; color: #111827; font-size: 0.9rem; }
+        .locations-list-item-meta { font-size: 0.75rem; color: #6b7280; margin-left: 6px; }
+        .locations-list-item-badge { font-size: 0.65rem; padding: 2px 8px; border-radius: 999px; background: linear-gradient(135deg, #2563eb, #0ea5e9); color: #fff; margin-left: 8px; font-weight: 500; }
 
-        /* Accordion / Collapsible Sections */
-        .sa-detail-section { margin-bottom: 12px; border: 1px solid #E5E7EB; border-radius: 12px; background: #fff; overflow: hidden; }
-        .sa-detail-section-header { padding: 12px 16px; background: #F9FAFB; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; }
-        .sa-detail-section-header:hover { background: #F3F4F6; }
-        .sa-detail-section-title { font-size: 0.9rem; font-weight: 600; color: #111; }
-        .sa-detail-section-summary { font-size: 0.8rem; color: #6B7280; margin-top: 2px; }
-        .sa-detail-section-body { display: none; padding: 16px; border-top: 1px solid #E5E7EB; }
+        /* Detail Section Accordion */
+        .loc-detail-section { margin-bottom: 12px; border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; }
+        .loc-detail-section-header { padding: 12px 16px; background: #f9fafb; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; border-radius: 11px; transition: background 0.15s; }
+        .loc-detail-section-header:hover { background: #f3f4f6; }
+        .loc-detail-section-title { font-size: 0.9rem; font-weight: 600; color: #111827; }
+        .loc-detail-section-summary { font-size: 0.8rem; color: #6b7280; margin-top: 2px; }
+        .loc-detail-section-body { display: none; padding: 16px; border-top: 1px solid #e5e7eb; }
 
-        /* Chips */
-        .sa-chip { display: inline-block; padding: 6px 12px; border-radius: 6px; margin: 4px; cursor: pointer; transition: all 0.15s; font-size: 0.85rem; }
-        .sa-chip.active { background: #ECFDF5; color: #047857; border: 1px solid #10B981; }
-        .sa-chip.inactive { background: #F9FAFB; color: #6B7280; border: 1px solid #E5E7EB; }
-        .sa-chip:hover { transform: scale(1.05); }
+        /* Multi-select dropdown trigger */
+        .multi-select-dropdown { position: relative; }
+        .multi-select-trigger { 
+            width: 100%; 
+            padding: 10px 14px; 
+            border: 1px solid #d1d5db; 
+            border-radius: 10px; 
+            background: #fff; 
+            cursor: pointer; 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            min-height: 44px; 
+            flex-wrap: wrap; 
+            gap: 6px;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .multi-select-trigger:hover { border-color: #9ca3af; }
+        .multi-select-trigger.open { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.15); }
+        .multi-select-placeholder { color: #9ca3af; font-size: 0.9rem; }
+        .multi-select-tag { 
+            background: #dbeafe; 
+            color: #1e40af; 
+            padding: 4px 10px; 
+            border-radius: 6px; 
+            font-size: 0.8rem; 
+            font-weight: 500; 
+            display: inline-flex; 
+            align-items: center; 
+            gap: 6px;
+            border: 1px solid #bfdbfe;
+        }
+        .multi-select-tag.special-tag {
+            background: #fef3c7;
+            color: #92400e;
+            border: 1px solid #fcd34d;
+        }
+        .multi-select-tag-remove { 
+            cursor: pointer; 
+            opacity: 0.6; 
+            font-size: 1rem; 
+            line-height: 1;
+            transition: opacity 0.15s;
+        }
+        .multi-select-tag-remove:hover { opacity: 1; }
+        
+        /* Multi-select dropdown panel - FIXED positioning */
+        .multi-select-options { 
+            position: fixed; 
+            z-index: 999999;
+            background: #fff; 
+            border: 1px solid #e5e7eb; 
+            border-radius: 12px; 
+            overflow-y: auto;
+            overflow-x: hidden;
+            overscroll-behavior: contain;
+            box-shadow: 0 20px 50px rgba(15,23,42,0.2), 0 0 0 1px rgba(0,0,0,0.05);
+            display: none;
+        }
+        .multi-select-options.show { display: block; }
+        .multi-select-option { 
+            padding: 12px 14px; 
+            cursor: pointer; 
+            display: flex; 
+            align-items: center; 
+            gap: 10px;
+            transition: background 0.1s;
+            border-bottom: 1px solid #f3f4f6;
+        }
+        .multi-select-option:last-child { border-bottom: none; }
+        .multi-select-option:hover { background: #f9fafb; }
+        .multi-select-option.selected { background: #eff6ff; }
+        .multi-select-option.disabled { opacity: 0.5; cursor: not-allowed; }
+        .multi-select-option.disabled:hover { background: transparent; }
+        .multi-select-checkbox { 
+            width: 18px; 
+            height: 18px; 
+            accent-color: #2563eb; 
+            flex-shrink: 0;
+        }
+        .multi-select-option-label { 
+            flex: 1; 
+            font-size: 0.9rem; 
+            color: #111827;
+        }
+        .multi-select-option-badge {
+            font-size: 0.7rem;
+            color: #dc2626;
+            background: #fef2f2;
+            padding: 2px 8px;
+            border-radius: 999px;
+            border: 1px solid #fecaca;
+        }
+        .multi-select-option-type {
+            font-size: 0.7rem;
+            color: #6b7280;
+            background: #f3f4f6;
+            padding: 2px 8px;
+            border-radius: 999px;
+        }
+        .multi-select-option-type.special {
+            color: #92400e;
+            background: #fef3c7;
+        }
+        .multi-select-section-header {
+            padding: 10px 14px;
+            background: #f9fafb;
+            border-bottom: 1px solid #e5e7eb;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
 
-        /* Toggle Switch */
-        .sa-switch { position: relative; width: 40px; height: 22px; display: inline-block; }
-        .sa-switch input { opacity: 0; width: 0; height: 0; }
-        .sa-slider { position: absolute; cursor: pointer; inset: 0; background: #ccc; border-radius: 22px; transition: 0.2s; }
-        .sa-slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.2s; }
-        .sa-switch input:checked + .sa-slider { background: #10B981; }
-        .sa-switch input:checked + .sa-slider:before { transform: translateX(18px); }
+        /* Location item in list */
+        .location-item { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center;
+            padding: 12px 14px; 
+            background: #f9fafb; 
+            border: 1px solid #e5e7eb; 
+            border-radius: 10px; 
+            margin-bottom: 8px; 
+            transition: all 0.15s;
+        }
+        .location-item:hover { background: #eff6ff; border-color: #bfdbfe; }
+        .location-item-name { font-weight: 500; color: #111827; font-size: 0.9rem; }
+        .location-item-actions { display: flex; gap: 8px; align-items: center; }
+        .location-delete-btn { 
+            background: transparent; 
+            border: none; 
+            color: #dc2626; 
+            cursor: pointer;
+            padding: 6px 10px; 
+            border-radius: 6px; 
+            font-size: 0.85rem; 
+            transition: background 0.15s;
+        }
+        .location-delete-btn:hover { background: #fee2e2; }
 
-        /* Muted / Empty */
-        .sa-muted { color: #9CA3AF; font-style: italic; text-align: center; padding: 20px; }
+        /* Form inputs */
+        .loc-input {
+            padding: 10px 14px; 
+            border: 1px solid #d1d5db; 
+            border-radius: 10px; 
+            font-size: 0.9rem; 
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .loc-input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.15); }
+        .loc-input-small { width: 80px; text-align: center; }
 
-        /* Rainy Day List Styles */
-        .sa-rainy-list { background: linear-gradient(to bottom, #f0f9ff, #fff) !important; border-color: #7dd3fc !important; }
-        .sa-rainy-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 0.7rem; color: #0284c7; background: #e0f2fe; padding: 2px 8px; border-radius: 999px; margin-left: 8px; }
+        /* Muted text */
+        .loc-muted { color: #6b7280; font-size: 0.85rem; }
     `;
     container.appendChild(style);
 
@@ -383,134 +460,106 @@ function initSpecialActivitiesTab() {
           <section>
             <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:16px; margin-bottom:24px;">
               <div>
-                <div class="setup-title">Special Activities</div>
-                <p class="setup-description">Manage special camp programs and their availability, sharing, division access, and rotation rules.</p>
+                <div class="setup-title">Location Zones</div>
+                <p class="setup-description">Manage physical zones, assign fields and special activities, and configure transition times.</p>
               </div>
             </div>
 
             <div style="display:flex; flex-wrap:wrap; gap:24px;">
-              <!-- LEFT SIDE: MASTER LISTS -->
-              <div style="flex:1; min-width:280px;">
-                <!-- Regular Special Activities -->
+              <!-- LEFT SIDE: ZONES LIST -->
+              <div style="flex:1; min-width:260px;">
                 <div style="display:flex; justify-content:space-between; align-items:end; margin-bottom:8px;">
-                    <div class="setup-subtitle">All Specials</div>
+                    <div class="setup-subtitle">Zones</div>
                 </div>
                 
                 <div style="background:white; padding:10px; border-radius:12px; border:1px solid #E5E7EB; margin-bottom:12px; display:flex; gap:8px;">
-                  <input id="new-special-input" placeholder="New Special (e.g., Canteen)" style="flex:1; border:none; outline:none; font-size:0.9rem;">
-                  <button id="add-special-btn" style="background:#111; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
+                  <input id="new-zone-input" placeholder="New Zone (e.g., #2 School)" style="flex:1; border:none; outline:none; font-size:0.9rem;">
+                  <button id="add-zone-btn" style="background:#111; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
                 </div>
-                <div id="specials-master-list" class="sa-master-list" style="max-height:280px; overflow-y:auto;"></div>
-
-                <!-- Rainy Day Special Activities -->
+                <div id="zones-master-list" class="locations-master-list" style="max-height:400px; overflow-y:auto;"></div>
+                
+                <!-- Pinned Tile Defaults Section -->
                 <div style="margin-top:24px;">
-                  <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
-                    <span style="font-size:1.2rem;">🌧️</span>
-                    <div class="setup-subtitle" style="margin:0;">Rainy Day Activities</div>
+                  <div class="setup-subtitle" style="margin-bottom:8px;">📌 Default Locations</div>
+                  <p style="font-size:0.8rem; color:#6B7280; margin:0 0 12px 0;">
+                    Set default locations for common activities like Lunch, Swim, etc.
+                  </p>
+                  <div id="pinned-defaults-list" style="margin-bottom:12px;"></div>
+                  <div style="display:flex; gap:8px; align-items:center;">
+                    <input id="new-pinned-tile-input" class="loc-input" placeholder="Tile name" style="flex:1;">
+                    <select id="new-pinned-tile-location" class="loc-input" style="flex:1;"></select>
+                    <button id="add-pinned-default-btn" style="background:#2563eb; color:white; border:none; border-radius:8px; padding:8px 12px; cursor:pointer; font-size:0.85rem;">Add</button>
                   </div>
-                  <p style="font-size:0.75rem; color:#6B7280; margin:0 0 8px 0;">Exclusively available during rainy days</p>
-                  
-                  <div style="background:linear-gradient(135deg, #e0f2fe 0%, #f0f9ff 100%); padding:10px; border-radius:12px; border:1px solid #7dd3fc; margin-bottom:12px; display:flex; gap:8px;">
-                    <input id="new-rainy-day-input" placeholder="New Rainy Day Activity" style="flex:1; border:none; outline:none; font-size:0.9rem; background:transparent;">
-                    <button id="add-rainy-day-btn" style="background:#0284c7; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
-                  </div>
-                  <div id="rainy-day-master-list" class="sa-master-list sa-rainy-list" style="max-height:200px; overflow-y:auto;"></div>
                 </div>
               </div>
 
               <!-- RIGHT SIDE: DETAIL PANE -->
               <div style="flex:1.4; min-width:340px;">
-                <div class="setup-subtitle">Special Configuration</div>
-                <div id="specials-detail-pane" style="margin-top:8px;"></div>
+                <div class="setup-subtitle">Zone Configuration</div>
+                <div id="zones-detail-pane" style="margin-top:8px;"></div>
               </div>
             </div>
           </section>
         </div>`;
+
     container.appendChild(contentWrapper);
 
-    // ★ FIX: Null check all DOM elements
-    specialsListEl = document.getElementById("specials-master-list");
-    rainyDayListEl = document.getElementById("rainy-day-master-list");
-    detailPaneEl = document.getElementById("specials-detail-pane");
-    addSpecialInput = document.getElementById("new-special-input");
-    addRainyDayInput = document.getElementById("new-rainy-day-input");
+    zonesListEl = document.getElementById("zones-master-list");
+    detailPaneEl = document.getElementById("zones-detail-pane");
+    addZoneInput = document.getElementById("new-zone-input");
 
-    const addSpecialBtn = document.getElementById("add-special-btn");
-    const addRainyDayBtn = document.getElementById("add-rainy-day-btn");
+    document.getElementById("add-zone-btn").onclick = addZone;
+    addZoneInput.onkeyup = e => { if(e.key === "Enter") addZone(); };
 
-    if (addSpecialBtn) {
-        addSpecialBtn.onclick = addSpecial;
-    }
-    if (addSpecialInput) {
-        addSpecialInput.onkeyup = e => { if (e.key === "Enter") addSpecial(); };
-    }
+    // Initialize pinned tile defaults section
+    initPinnedTileDefaultsSection();
 
-    if (addRainyDayBtn) {
-        addRainyDayBtn.onclick = addRainyDayActivity;
-    }
-    if (addRainyDayInput) {
-        addRainyDayInput.onkeyup = e => { if (e.key === "Enter") addRainyDayActivity(); };
-    }
-
-    // ★ Setup event listeners for tab visibility and cloud sync
-    setupTabListeners();
-    setupCloudSyncListener();
-    setupBeforeUnloadHandler();
-    
-    _isInitialized = true;
-
-    renderMasterList();
-    renderRainyDayList();
+    renderZonesList();
     renderDetailPane();
     
-    console.log("[SPECIAL_ACTIVITIES] Initialized:", {
-        specials: specialActivities.length,
-        rainyDay: rainyDayActivities.length
+    console.log("[LOCATIONS] Initialized:", {
+        zones: Object.keys(locationZones).length,
+        pinnedDefaults: Object.keys(pinnedTileDefaults).length
     });
 }
 
-// =========================================================================
+//------------------------------------------------------------------
 // DATA LOADING / SAVING - ★ CLOUD SYNC AWARE
-// =========================================================================
+//------------------------------------------------------------------
 
 /**
  * Load data from persisted storage (localStorage/cloud cache)
  * Always reads fresh from loadGlobalSettings to stay in sync
  */
-function loadData() {
-    try {
-        const allActivities = window.getGlobalSpecialActivities?.() || [];
-        
-        // Separate regular and rainy day exclusive activities
-        specialActivities = [];
-        rainyDayActivities = [];
-        
-        allActivities.forEach(s => {
-            // ★ FIX: Validate each activity on load
-            const validated = validateSpecialActivity(s, s?.name);
-            
-            // Also support legacy property name from daily_adjustments.js
-            if (validated.rainyDayOnly === true) {
-                validated.rainyDayExclusive = true;
-            }
-            
-            // Separate into appropriate list
-            if (validated.rainyDayExclusive) {
-                rainyDayActivities.push(validated);
-            } else {
-                specialActivities.push(validated);
-            }
-        });
-        
-        console.log("[SPECIAL_ACTIVITIES] Data loaded:", {
-            specials: specialActivities.length,
-            rainyDay: rainyDayActivities.length
-        });
-    } catch (e) {
-        console.error("[SPECIAL_ACTIVITIES] Error loading data:", e);
-        specialActivities = [];
-        rainyDayActivities = [];
+function loadData(){
+    const settings = window.loadGlobalSettings?.() || {};
+    
+    // ★ Validate and load location zones
+    const rawZones = settings.locationZones || {};
+    locationZones = validateAllZones(rawZones);
+    
+    // ★ Validate and load pinned tile defaults
+    pinnedTileDefaults = validatePinnedDefaults(settings.pinnedTileDefaults || {});
+
+    // Create default "Main Campus" zone if none exist
+    if(Object.keys(locationZones).length === 0){
+        locationZones["Main Campus"] = {
+            name: "Main Campus",
+            isDefault: true,
+            transition: { preMin: 0, postMin: 0 },
+            maxConcurrent: 99,
+            fields: [],
+            specialActivities: [],  // ★ NEW
+            locations: {}
+        };
+        // Save the default zone immediately
+        saveData();
     }
+
+    console.log("[LOCATIONS] Data loaded:", {
+        zones: Object.keys(locationZones).length,
+        pinnedDefaults: Object.keys(pinnedTileDefaults).length
+    });
 }
 
 /**
@@ -518,1022 +567,907 @@ function loadData() {
  */
 function refreshFromStorage() {
     // ★ FIX: Store previous state for proper comparison
-    const previousSpecialsJson = JSON.stringify(specialActivities);
-    const previousRainyJson = JSON.stringify(rainyDayActivities);
-    const previousSelected = selectedItemId;
+    const previousZonesJson = JSON.stringify(locationZones);
+    const previousDefaultsJson = JSON.stringify(pinnedTileDefaults);
+    const previousSelectedZone = selectedZoneId;
     
     loadData();
     
-    // If selected item no longer exists, clear selection
-    if (selectedItemId) {
-        const [, name] = selectedItemId.split(/-(.+)/);
-        const exists = specialActivities.some(s => s.name === name) || 
-                       rainyDayActivities.some(s => s.name === name);
-        if (!exists) {
-            selectedItemId = null;
-        }
+    // If selected zone no longer exists, clear selection
+    if (selectedZoneId && !locationZones[selectedZoneId]) {
+        selectedZoneId = null;
     }
     
     // ★ FIX: Compare actual content, not just counts
-    const newSpecialsJson = JSON.stringify(specialActivities);
-    const newRainyJson = JSON.stringify(rainyDayActivities);
-    const dataChanged = previousSpecialsJson !== newSpecialsJson || 
-                        previousRainyJson !== newRainyJson ||
-                        previousSelected !== selectedItemId;
+    const newZonesJson = JSON.stringify(locationZones);
+    const newDefaultsJson = JSON.stringify(pinnedTileDefaults);
+    const dataChanged = previousZonesJson !== newZonesJson || 
+                        previousDefaultsJson !== newDefaultsJson ||
+                        previousSelectedZone !== selectedZoneId;
     
     if (dataChanged) {
-        console.log("[SPECIAL_ACTIVITIES] Data changed - re-rendering UI");
-        if (specialsListEl) renderMasterList();
-        if (rainyDayListEl) renderRainyDayList();
+        console.log("[LOCATIONS] Data changed - re-rendering UI");
+        if (zonesListEl) renderZonesList();
         if (detailPaneEl) renderDetailPane();
     } else {
-        console.log("[SPECIAL_ACTIVITIES] Data unchanged - skipping re-render");
+        console.log("[LOCATIONS] Data unchanged - skipping re-render");
     }
 }
 
 /**
  * Save data to persisted storage and queue for cloud sync
- * ★ Uses saveGlobalSpecialActivities which handles cloud sync
+ * ★ Uses saveGlobalSettings which handles batching and cloud sync
  */
-function saveData() {
+function saveData(){
     // ✅ RBAC Check for modifications
     if (window.AccessControl?.canEditSetup && !window.AccessControl.canEditSetup()) {
-        console.warn('[SPECIAL_ACTIVITIES] Save blocked - insufficient permissions');
+        console.warn('[LOCATIONS] Save blocked - insufficient permissions');
         return;
     }
     
-    try {
-        // ★ Validate before saving
-        const validatedSpecials = validateAllActivities(specialActivities);
-        const validatedRainy = validateAllActivities(rainyDayActivities);
-        
-        // Update internal state with validated data
-        specialActivities = validatedSpecials;
-        rainyDayActivities = validatedRainy;
-        
-        // Combine both lists for saving
-        const allActivities = [...specialActivities, ...rainyDayActivities];
-        window.saveGlobalSpecialActivities?.(allActivities);
-        
-        // ⭐ Trigger cloud sync to ensure data persists
-        if (typeof window.forceSyncToCloud === 'function') {
-            // Use a slight delay to batch multiple rapid saves
-            if (window._specialActivitiesSyncTimeout) {
-                clearTimeout(window._specialActivitiesSyncTimeout);
-            }
-            window._specialActivitiesSyncTimeout = setTimeout(() => {
-                window.forceSyncToCloud();
-                window._specialActivitiesSyncTimeout = null;
-            }, 500);
-        }
-    } catch (e) {
-        console.error("[SPECIAL_ACTIVITIES] Error saving data:", e);
-    }
+    // ★ Validate before saving to ensure data integrity
+    const validatedZones = validateAllZones(locationZones);
+    const validatedDefaults = validatePinnedDefaults(pinnedTileDefaults);
+    
+    // ★ Update internal state with validated data
+    locationZones = validatedZones;
+    pinnedTileDefaults = validatedDefaults;
+    
+    // ★ Save both keys via saveGlobalSettings (handles batching + cloud sync)
+    window.saveGlobalSettings?.("locationZones", validatedZones);
+    window.saveGlobalSettings?.("pinnedTileDefaults", validatedDefaults);
 }
 
-// =========================================================================
-// LEFT LIST (Master List)
-// =========================================================================
-function renderMasterList() {
-    if (!specialsListEl) return;
+//------------------------------------------------------------------
+// LEFT PANEL — ZONES LIST
+//------------------------------------------------------------------
+function renderZonesList(){
+    if (!zonesListEl) return;
     
-    specialsListEl.innerHTML = "";
+    zonesListEl.innerHTML = "";
     
-    if (specialActivities.length === 0) {
-        specialsListEl.innerHTML = `<div style="padding:20px; text-align:center; color:#9CA3AF;">No special activities yet.</div>`;
+    const zones = Object.values(locationZones);
+    if(zones.length === 0){
+        zonesListEl.innerHTML = `<div style="padding:20px; text-align:center; color:#9CA3AF;">No zones created yet.</div>`;
         return;
     }
     
-    specialActivities.forEach(item => {
-        specialsListEl.appendChild(createMasterListItem(item, false));
+    // Sort: default first, then alphabetical
+    zones.sort((a,b) => {
+        if(a.isDefault && !b.isDefault) return -1;
+        if(!a.isDefault && b.isDefault) return 1;
+        return a.name.localeCompare(b.name);
+    });
+    
+    zones.forEach(zone => {
+        zonesListEl.appendChild(createZoneListItem(zone));
     });
 }
 
-function renderRainyDayList() {
-    if (!rainyDayListEl) return;
-    
-    rainyDayListEl.innerHTML = "";
-    
-    if (rainyDayActivities.length === 0) {
-        rainyDayListEl.innerHTML = `<div style="padding:16px; text-align:center; color:#0369a1; font-size:0.85rem;">
-            <span style="font-size:1.5rem;">☔</span><br>
-            No rainy day activities yet.<br>
-            <span style="font-size:0.75rem; opacity:0.7;">Add activities that only appear during rainy days.</span>
-        </div>`;
-        return;
-    }
-    
-    rainyDayActivities.forEach(item => {
-        rainyDayListEl.appendChild(createMasterListItem(item, true));
-    });
-}
-
-function createMasterListItem(item, isRainyDay = false) {
-    if (!item || !item.name) return document.createElement('div');
-    
-    const id = `special-${item.name}`;
+function createZoneListItem(zone){
     const el = document.createElement("div");
-    el.className = "sa-list-item" + (id === selectedItemId ? " selected" : "");
-    el.onclick = () => { 
-        selectedItemId = id; 
-        renderMasterList(); 
-        renderRainyDayList();
-        renderDetailPane(); 
+    el.className = "locations-list-item" + (zone.name === selectedZoneId ? " selected" : "");
+    el.onclick = () => {
+        selectedZoneId = zone.name;
+        renderZonesList();
+        renderDetailPane();
     };
 
     const infoDiv = document.createElement("div");
     
-    const nameEl = document.createElement("div");
-    nameEl.className = "sa-list-item-name";
-    nameEl.textContent = item.name; // ★ FIX: Use textContent for safety
-
-    // Add rainy day badge for rainy exclusive items
-    if (isRainyDay) {
-        const badge = document.createElement("span");
-        badge.className = "sa-rainy-badge";
-        badge.textContent = "🌧️ Rainy Only";
-        nameEl.appendChild(badge);
-    }
-
+    const nameEl = document.createElement("span");
+    nameEl.className = "locations-list-item-name";
+    nameEl.textContent = zone.name;
     infoDiv.appendChild(nameEl);
-    el.appendChild(infoDiv);
+    
+    if(zone.isDefault){
+        const badge = document.createElement("span");
+        badge.className = "locations-list-item-badge";
+        badge.textContent = "Default";
+        infoDiv.appendChild(badge);
+    }
+    
+    const meta = document.createElement("div");
+    meta.className = "locations-list-item-meta";
+    const fieldCount = zone.fields?.length || 0;
+    const specialCount = zone.specialActivities?.length || 0;  // ★ NEW
+    const locCount = Object.keys(zone.locations || {}).length;
+    meta.textContent = `${fieldCount} field${fieldCount !== 1 ? 's' : ''} • ${specialCount} special${specialCount !== 1 ? 's' : ''} • ${locCount} location${locCount !== 1 ? 's' : ''}`;
+    
+    const wrapper = document.createElement("div");
+    wrapper.appendChild(infoDiv);
+    wrapper.appendChild(meta);
+    
+    el.appendChild(wrapper);
 
-    // Toggle Switch
-    const tog = document.createElement("label");
-    tog.className = "sa-switch";
-    tog.onclick = e => e.stopPropagation();
-
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = item.available;
-    cb.onchange = () => { 
-        item.available = cb.checked; 
-        saveData(); 
-        renderDetailPane(); 
-    };
-
-    const slider = document.createElement("span");
-    slider.className = "sa-slider";
-    tog.appendChild(cb);
-    tog.appendChild(slider);
-    el.appendChild(tog);
+    // Transition time indicator
+    const transDiv = document.createElement("div");
+    transDiv.style.fontSize = "0.75rem";
+    transDiv.style.color = "#6B7280";
+    transDiv.style.textAlign = "right";
+    transDiv.innerHTML = `${zone.transition.preMin}m / ${zone.transition.postMin}m`;
+    el.appendChild(transDiv);
 
     return el;
 }
 
-// =========================================================================
-// RIGHT PANEL — APPLE STYLE COLLAPSIBLE SECTIONS
-// =========================================================================
-function renderDetailPane() {
-    if (!detailPaneEl) return;
+//------------------------------------------------------------------
+// DETAIL PANE (Right Panel)
+//------------------------------------------------------------------
+function renderDetailPane(){
+    if (!detailPaneEl) return; // ★ FIX: Null check
     
-    if (!selectedItemId) {
+    // ★ FIX: Cleanup any orphaned panels when re-rendering detail pane
+    cleanupDropdownPanels();
+    
+    if(!selectedZoneId || !locationZones[selectedZoneId]){ 
         detailPaneEl.innerHTML = `
             <div style="height:300px; display:flex; align-items:center; justify-content:center; color:#9CA3AF; border:1px dashed #E5E7EB; border-radius:12px;">
-                Select a special to edit details
-            </div>`;
-        return;
+                Select a zone to configure
+            </div>`; 
+        return; 
     }
 
-    const [, name] = selectedItemId.split(/-(.+)/);
-    if (!name) {
-        detailPaneEl.innerHTML = `<p class='sa-muted'>Invalid selection.</p>`;
-        selectedItemId = null;
-        return;
-    }
-    
-    // Search in both regular and rainy day activities
-    let item = specialActivities.find(s => s.name === name);
-    let isRainyDayItem = false;
-    
-    if (!item) {
-        item = rainyDayActivities.find(s => s.name === name);
-        isRainyDayItem = true;
-    }
-    
-    if (!item) {
-        detailPaneEl.innerHTML = `<p class='sa-muted'>Not found.</p>`;
-        selectedItemId = null;
-        return;
-    }
-
+    const zone = locationZones[selectedZoneId];
     detailPaneEl.innerHTML = "";
 
-    // -- 1. HEADER (Title & Delete) --
+    // -- HEADER --
     const header = document.createElement("div");
     header.style.display = "flex";
     header.style.justifyContent = "space-between";
     header.style.alignItems = "center";
     header.style.marginBottom = "16px";
 
-    const titleContainer = document.createElement("div");
-    titleContainer.style.display = "flex";
-    titleContainer.style.alignItems = "center";
-    titleContainer.style.gap = "10px";
-
     const title = document.createElement("h2");
-    title.textContent = item.name;
+    title.textContent = zone.name;
     title.style.margin = "0";
     title.style.fontSize = "1.25rem";
     title.title = "Double click to rename";
-    makeEditable(title, newName => {
-        if (!newName.trim()) return;
-        const oldName = item.name;
-        if (oldName === newName) return;
-        
-        // ★ FIX: Check for duplicate names in both lists
-        if (specialActivities.some(s => s !== item && s.name.toLowerCase() === newName.toLowerCase()) ||
-            rainyDayActivities.some(s => s !== item && s.name.toLowerCase() === newName.toLowerCase())) {
-            alert(`A special activity named "${newName}" already exists.`);
-            return;
-        }
-        
-        item.name = newName;
-        selectedItemId = `special-${newName}`;
-        
-        // ★ FIX: Propagate rename to schedules (like fields.js does)
-        propagateSpecialActivityRename(oldName, newName);
-        
-        saveData();
-        renderMasterList();
-        renderRainyDayList();
-        renderDetailPane();
-    });
-    titleContainer.appendChild(title);
 
-    // Add rainy day badge in detail pane header
-    if (isRainyDayItem) {
-        const badge = document.createElement("span");
-        badge.style.cssText = "display:inline-flex; align-items:center; gap:4px; padding:4px 10px; background:linear-gradient(135deg, #0ea5e9, #0284c7); color:white; border-radius:999px; font-size:0.75rem; font-weight:600;";
-        badge.textContent = "🌧️ Rainy Day Only";
-        titleContainer.appendChild(badge);
+    if(!zone.isDefault){
+        makeEditable(title, newName => {
+            if(!newName.trim()) return;
+            if(locationZones[newName] && newName !== zone.name){
+                alert("A zone with that name already exists.");
+                return;
+            }
+            delete locationZones[zone.name];
+            zone.name = newName;
+            locationZones[newName] = zone;
+            selectedZoneId = newName;
+            saveData();
+            renderZonesList();
+            renderDetailPane();
+        });
     }
 
-    const delBtn = document.createElement("button");
-    delBtn.innerHTML = `
-        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
-        </svg> Delete`;
-    delBtn.style.color = "#DC2626";
-    delBtn.style.background = "#FEF2F2";
-    delBtn.style.border = "1px solid #FECACA";
-    delBtn.style.padding = "6px 12px";
-    delBtn.style.borderRadius = "6px";
-    delBtn.style.cursor = "pointer";
-    delBtn.style.display = "flex";
-    delBtn.style.gap = "6px";
-    delBtn.style.alignItems = "center";
-    delBtn.onclick = () => {
-        // ✅ RBAC Check
-        if (window.AccessControl?.canEraseData && !window.AccessControl.canEraseData()) {
-            window.AccessControl?.showPermissionDenied?.('delete special activities');
-            return;
-        }
-        if (!window.AccessControl?.checkSetupAccess?.('delete special activities')) return;
+    const btnGroup = document.createElement("div");
+    btnGroup.style.display = "flex";
+    btnGroup.style.gap = "8px";
 
-        if (confirm(`Delete "${escapeHtml(item.name)}"?\n\nThis will also remove references from all schedules.`)) {
-            const deletedName = item.name;
-            
-            // ★ FIX: Cleanup before removing (like fields.js)
-            cleanupDeletedSpecialActivity(deletedName);
-            
-            if (isRainyDayItem) {
-                rainyDayActivities = rainyDayActivities.filter(s => s.name !== item.name);
-            } else {
-                specialActivities = specialActivities.filter(s => s.name !== item.name);
+    if(!zone.isDefault){
+        const delBtn = document.createElement("button");
+        delBtn.innerHTML = `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg> Delete`;
+        delBtn.style.cssText = "color:#dc2626; background:#fef2f2; border:1px solid #fecaca; padding:6px 12px; border-radius:999px; cursor:pointer; display:flex; gap:6px; align-items:center; font-size:0.85rem;";
+        delBtn.onclick = () => {
+            if (!window.AccessControl?.checkSetupAccess('delete zones')) return;
+            if(confirm(`Delete zone "${zone.name}"? Fields and special activities will be unassigned.`)){
+                // ★ FIX: Also cleanup any pinnedTileDefaults that reference locations in this zone
+                const locationsInZone = Object.keys(zone.locations || {});
+                if (locationsInZone.length > 0) {
+                    Object.entries(pinnedTileDefaults).forEach(([tileName, location]) => {
+                        if (locationsInZone.includes(location)) {
+                            delete pinnedTileDefaults[tileName];
+                            console.log(`[LOCATIONS] Removed orphaned default: "${tileName}" → "${location}" (zone deleted)`);
+                        }
+                    });
+                }
+                
+                delete locationZones[zone.name];
+                saveData();
+                selectedZoneId = null;
+                renderZonesList();
+                renderDetailPane();
             }
-            saveData();
-            selectedItemId = null;
-            renderMasterList();
-            renderRainyDayList();
-            renderDetailPane();
-        }
-    };
+        };
+        btnGroup.appendChild(delBtn);
+    }
 
-    header.appendChild(titleContainer);
-    header.appendChild(delBtn);
+    header.appendChild(title);
+    header.appendChild(btnGroup);
     detailPaneEl.appendChild(header);
 
-    // -- 2. AVAILABILITY STRIP --
-    const availability = document.createElement("div");
-    availability.style.padding = "12px";
-    availability.style.borderRadius = "8px";
-    availability.style.marginBottom = "20px";
-    availability.style.background = item.available ? "#ECFDF5" : "#FEF2F2";
-    availability.style.display = "flex";
-    availability.style.justifyContent = "space-between";
-    availability.style.alignItems = "center";
+    // -- DEFAULT INDICATOR --
+    if(zone.isDefault){
+        const defaultStrip = document.createElement("div");
+        defaultStrip.style.cssText = "padding:10px 14px; background:linear-gradient(135deg, rgba(37,99,235,0.1), rgba(14,165,233,0.1)); border:1px solid rgba(59,130,246,0.3); border-radius:999px; margin-bottom:16px; color:#1d4ed8; font-size:0.85rem;";
+        defaultStrip.innerHTML = `<strong>Default Zone</strong> — Items not assigned to any zone will use these settings.`;
+        detailPaneEl.appendChild(defaultStrip);
+    }
 
-    const avLabel = document.createElement("span");
-    avLabel.style.fontWeight = "500";
-    avLabel.style.color = item.available ? "#047857" : "#DC2626";
-    avLabel.textContent = item.available ? "✓ Available for Scheduling" : "✗ Not Available";
-    availability.appendChild(avLabel);
+    // -- ACCORDION SECTIONS --
+    detailPaneEl.appendChild(createSection("🚶 Transition Times", summaryTransition(zone), () => renderTransitionSection(zone)));
+    detailPaneEl.appendChild(createSection("⚽ Fields & Specials", summaryFieldsAndSpecials(zone), () => renderFieldsAndSpecialsSection(zone)));  // ★ UPDATED
+    detailPaneEl.appendChild(createSection("🏢 Locations / Facilities", summaryLocations(zone), () => renderLocationsSection(zone)));
+}
 
-    const avTog = document.createElement("label");
-    avTog.className = "sa-switch";
-    const avCb = document.createElement("input");
-    avCb.type = "checkbox";
-    avCb.checked = item.available;
-    avCb.onchange = () => {
-        item.available = avCb.checked;
-        saveData();
-        renderDetailPane();
-        renderMasterList();
-        renderRainyDayList();
+//------------------------------------------------------------------
+// ACCORDION SECTION BUILDER
+//------------------------------------------------------------------
+function createSection(title, summary, builder){
+    const wrap = document.createElement("div"); 
+    wrap.className = "loc-detail-section";
+
+    const head = document.createElement("div");
+    head.className = "loc-detail-section-header";
+
+    const t = document.createElement("div");
+    t.innerHTML = `<div class="loc-detail-section-title">${title}</div><div class="loc-detail-section-summary">${escapeHtml(summary)}</div>`;
+
+    const caret = document.createElement("span");
+    caret.innerHTML = `<svg width="20" height="20" fill="none" stroke="#9CA3AF" stroke-width="2" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"></path></svg>`;
+    caret.style.transition = "transform 0.2s";
+
+    head.appendChild(t);
+    head.appendChild(caret);
+
+    const body = document.createElement("div");
+    body.className = "loc-detail-section-body";
+
+    head.onclick = () => {
+        const open = body.style.display === "block";
+        body.style.display = open ? "none" : "block";
+        caret.style.transform = open ? "rotate(0deg)" : "rotate(90deg)";
+
+        // ★ FIX: Cleanup dropdowns when closing section
+        if (open) {
+            cleanupDropdownPanels();
+        }
+
+        if(!open && !body.dataset.built){ 
+            body.innerHTML = "";
+            body.appendChild(builder()); 
+            body.dataset.built = "1"; 
+        }
     };
-    const avSlider = document.createElement("span");
-    avSlider.className = "sa-slider";
-    avTog.appendChild(avCb);
-    avTog.appendChild(avSlider);
-    availability.appendChild(avTog);
-    detailPaneEl.appendChild(availability);
 
-    // -- 3. LOCATION DROPDOWN --
-    detailPaneEl.appendChild(renderLocationDropdown(item));
-
-    // -- 4. COLLAPSIBLE SECTIONS --
-    const sections = [
-        { title: "Sharing Rules", summary: summarySharing(item), render: () => renderSharing(item) },
-        { title: "Division Access", summary: summaryAccess(item), render: () => renderAccess(item) },
-        { title: "Time Availability", summary: summaryTime(item), render: () => renderTimeRules(item) }
-    ];
-
-    sections.forEach(sec => {
-        const section = document.createElement("div");
-        section.className = "sa-detail-section";
-
-        const hdr = document.createElement("div");
-        hdr.className = "sa-detail-section-header";
-        hdr.innerHTML = `<div>
-            <div class="sa-detail-section-title">${escapeHtml(sec.title)}</div>
-            <div class="sa-detail-section-summary">${escapeHtml(sec.summary)}</div>
-        </div>
-        <span style="font-size:1rem;">▸</span>`;
-
-        const body = document.createElement("div");
-        body.className = "sa-detail-section-body";
-        body.appendChild(sec.render());
-
-        hdr.onclick = () => {
-            const isOpen = body.style.display === "block";
-            body.style.display = isOpen ? "none" : "block";
-            hdr.querySelector("span").textContent = isOpen ? "▸" : "▾";
-        };
-
-        section.appendChild(hdr);
-        section.appendChild(body);
-        detailPaneEl.appendChild(section);
-    });
+    wrap.appendChild(head);
+    wrap.appendChild(body);
+    return wrap;
 }
 
-// =========================================================================
-// SUMMARIES
-// =========================================================================
-function summarySharing(item) { 
-    if (!item.sharableWith) return "Not sharable";
-    return item.sharableWith.type === "not_sharable" 
-        ? "Not sharable" 
-        : `Sharable (Max ${parseInt(item.sharableWith.capacity, 10) || 2})`; 
+//------------------------------------------------------------------
+// SECTION SUMMARIES
+//------------------------------------------------------------------
+function summaryTransition(zone){
+    if(zone.transition.preMin === 0 && zone.transition.postMin === 0){
+        return "No transition time";
+    }
+    return `${zone.transition.preMin}m pre / ${zone.transition.postMin}m post`;
 }
 
-function summaryAccess(item) {
-    if (!item.limitUsage || !item.limitUsage.enabled) return "Open to All Divisions";
-    const allowedCount = Object.keys(item.limitUsage.divisions || {}).length;
-    if (allowedCount === 0) return "Restricted (none selected)";
-    return `${allowedCount} division${allowedCount !== 1 ? 's' : ''} with priority`;
+// ★ UPDATED: Combined summary for fields and specials
+function summaryFieldsAndSpecials(zone){
+    const fieldCount = zone.fields?.length || 0;
+    const specialCount = zone.specialActivities?.length || 0;
+    
+    if(fieldCount === 0 && specialCount === 0) return "Nothing assigned";
+    
+    const parts = [];
+    if (fieldCount > 0) parts.push(`${fieldCount} field${fieldCount !== 1 ? 's' : ''}`);
+    if (specialCount > 0) parts.push(`${specialCount} special${specialCount !== 1 ? 's' : ''}`);
+    return parts.join(', ');
 }
 
-function summaryTime(item) { 
-    const count = (item.timeRules || []).length;
-    return count ? `${count} rule(s) active` : "Available all day"; 
+function summaryLocations(zone){
+    const count = Object.keys(zone.locations || {}).length;
+    if(count === 0) return "No locations created";
+    return `${count} location${count !== 1 ? 's' : ''}`;
 }
 
-// =========================================================================
-// CONTENT RENDERERS
-// =========================================================================
-
-// 0. LOCATION DROPDOWN HELPER
-function renderLocationDropdown(item) {
+//------------------------------------------------------------------
+// TRANSITION TIMES SECTION
+//------------------------------------------------------------------
+function renderTransitionSection(zone){
     const container = document.createElement("div");
-    container.style.cssText = "margin-bottom: 20px; padding: 16px; background: #F0F9FF; border: 1px solid #BAE6FD; border-radius: 12px;";
     
-    // Get all locations from the locations.js module
-    const allLocations = window.getAllLocations?.() || [];
-    
-    let optionsHtml = '<option value="">No specific location</option>';
-    allLocations.forEach(loc => {
-        const selected = item.location === loc.name ? 'selected' : '';
-        optionsHtml += `<option value="${escapeHtml(loc.name)}" ${selected}>${escapeHtml(loc.displayName || loc.name)}</option>`;
-    });
+    const updateSummary = () => {
+        const summaryEl = container.closest('.loc-detail-section')?.querySelector('.loc-detail-section-summary');
+        if(summaryEl) summaryEl.textContent = summaryTransition(zone);
+    };
     
     container.innerHTML = `
-        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
-            <span style="font-size: 1.2rem;">📍</span>
+        <p class="loc-muted" style="margin-top:0; margin-bottom:16px;">
+            Transition time adds buffer before/after activities in this zone for travel or setup.
+        </p>
+        <div style="display:flex; gap:20px; flex-wrap:wrap; margin-bottom:16px;">
             <div>
-                <div style="font-weight: 600; color: #0369A1; font-size: 0.95rem;">Location</div>
-                <div style="font-size: 0.8rem; color: #0284C7;">Where does this activity take place?</div>
+                <label style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:4px;">Pre-Buffer (minutes)</label>
+                <input type="number" id="zone-pre-min" class="loc-input loc-input-small" min="0" step="5" value="${zone.transition.preMin}">
+            </div>
+            <div>
+                <label style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:4px;">Post-Buffer (minutes)</label>
+                <input type="number" id="zone-post-min" class="loc-input loc-input-small" min="0" step="5" value="${zone.transition.postMin}">
+            </div>
+            <div>
+                <label style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:4px;">Max Concurrent Activities</label>
+                <input type="number" id="zone-max-concurrent" class="loc-input loc-input-small" min="1" value="${zone.maxConcurrent}">
             </div>
         </div>
-        <select id="special-location-select" style="width: 100%; padding: 10px 12px; border: 1px solid #7DD3FC; border-radius: 8px; font-size: 0.9rem; background: white;">
-            ${optionsHtml}
-        </select>
-        <p style="margin: 8px 0 0 0; font-size: 0.8rem; color: #0369A1;">
-            ⓘ Activities at the same location cannot be scheduled at the same time. Transition times are configured in the Locations tab.
+        <p class="loc-muted" style="font-size:0.8rem;">
+            <strong>Max Concurrent</strong> limits how many activities can happen in this zone at once 
+            (e.g., bus capacity for off-site locations). Set to 99 for no limit.
         </p>
     `;
     
-    const selectEl = container.querySelector('#special-location-select');
-    if (selectEl) {
-        selectEl.onchange = function() {
-            item.location = this.value || null;
-            saveData();
-        };
-    }
+    container.querySelector('#zone-pre-min').onchange = (e) => {
+        zone.transition.preMin = parseInt(e.target.value) || 0;
+        saveData();
+        renderZonesList();
+        updateSummary();
+    };
+    
+    container.querySelector('#zone-post-min').onchange = (e) => {
+        zone.transition.postMin = parseInt(e.target.value) || 0;
+        saveData();
+        renderZonesList();
+        updateSummary();
+    };
+    
+    container.querySelector('#zone-max-concurrent').onchange = (e) => {
+        zone.maxConcurrent = parseInt(e.target.value) || 99;
+        saveData();
+    };
     
     return container;
 }
 
-// 1. SHARING RULES
-function renderSharing(item) {
+//------------------------------------------------------------------
+// ★ FIELDS & SPECIAL ACTIVITIES SECTION (Combined Multi-select dropdown)
+//------------------------------------------------------------------
+function renderFieldsAndSpecialsSection(zone){
+    // ★ FIX: Clean up any orphaned dropdown panels first
+    cleanupDropdownPanels();
+
     const container = document.createElement("div");
-
+    
+    // Ensure arrays exist
+    if (!zone.fields) zone.fields = [];
+    if (!zone.specialActivities) zone.specialActivities = [];
+    
     const updateSummary = () => {
-        const summaryEl = container.closest('.sa-detail-section')?.querySelector('.sa-detail-section-summary');
-        if (summaryEl) summaryEl.textContent = summarySharing(item);
+        const summaryEl = container.closest('.loc-detail-section')?.querySelector('.loc-detail-section-summary');
+        if(summaryEl) summaryEl.textContent = summaryFieldsAndSpecials(zone);
     };
-
-    const renderContent = () => {
-        container.innerHTML = "";
-
-        const rules = item.sharableWith || { type: 'not_sharable', divisions: [], capacity: 2 };
-
-        // Mode Buttons
-        const modeWrap = document.createElement("div");
-        modeWrap.style.display = "flex";
-        modeWrap.style.gap = "12px";
-        modeWrap.style.marginBottom = "16px";
-
-        const btnNot = document.createElement("button");
-        btnNot.textContent = "Not Sharable";
-        btnNot.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:${rules.type === 'not_sharable' ? '#ECFDF5' : '#fff'}; color:${rules.type === 'not_sharable' ? '#047857' : '#333'}; border-color:${rules.type === 'not_sharable' ? '#10B981' : '#E5E7EB'}; font-weight:${rules.type === 'not_sharable' ? '600' : '400'}; transition:all 0.2s;`;
-
-        const btnSha = document.createElement("button");
-        btnSha.textContent = "Sharable";
-        btnSha.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:${rules.type !== 'not_sharable' ? '#ECFDF5' : '#fff'}; color:${rules.type !== 'not_sharable' ? '#047857' : '#333'}; border-color:${rules.type !== 'not_sharable' ? '#10B981' : '#E5E7EB'}; font-weight:${rules.type !== 'not_sharable' ? '600' : '400'}; transition:all 0.2s;`;
-
-        btnNot.onclick = () => { 
-            rules.type = 'not_sharable'; 
-            rules.divisions = [];
-            saveData(); 
-            renderContent(); 
-            updateSummary(); 
-        };
-        btnSha.onclick = () => { 
-            rules.type = 'custom'; 
-            saveData(); 
-            renderContent(); 
-            updateSummary(); 
-        };
-
-        modeWrap.appendChild(btnNot);
-        modeWrap.appendChild(btnSha);
-        container.appendChild(modeWrap);
-
-        // Detail if Sharable
-        if (rules.type !== 'not_sharable') {
-            const det = document.createElement("div");
-            det.style.background = "#F9FAFB";
-            det.style.padding = "12px";
-            det.style.borderRadius = "8px";
-
-            // Capacity
-            const capRow = document.createElement("div");
-            capRow.style.marginBottom = "12px";
-            capRow.innerHTML = `<label style="font-size:0.85rem;font-weight:500;">Max Groups at Once</label>`;
-            const capIn = document.createElement("input");
-            capIn.type = "number";
-            capIn.min = "2";
-            capIn.max = "99";
-            capIn.value = parseInt(rules.capacity, 10) || 2;
-            capIn.style.cssText = "width:60px; padding:6px; margin-left:8px; border:1px solid #E5E7EB; border-radius:4px;";
-            capIn.onchange = () => { 
-                rules.capacity = Math.max(2, parseInt(capIn.value, 10) || 2); 
-                saveData(); 
-                updateSummary(); 
-            };
-            capRow.appendChild(capIn);
-            det.appendChild(capRow);
-
-            // Division Chips
-            const chipLabel = document.createElement("div");
-            chipLabel.textContent = "Limit to Divisions (optional):";
-            chipLabel.style.fontSize = "0.85rem";
-            chipLabel.style.fontWeight = "500";
-            chipLabel.style.marginBottom = "6px";
-            det.appendChild(chipLabel);
-
-            const chipWrap = document.createElement("div");
-            const availableDivisions = window.availableDivisions || Object.keys(window.divisions || {});
-            availableDivisions.forEach(d => {
-                const isActive = rules.divisions.includes(d);
-                const chip = document.createElement("span");
-                chip.className = "sa-chip " + (isActive ? "active" : "inactive");
-                chip.textContent = d;
-                chip.onclick = () => {
-                    if (isActive) {
-                        rules.divisions = rules.divisions.filter(x => x !== d);
-                    } else {
-                        rules.divisions.push(d);
-                    }
-                    rules.type = rules.divisions.length > 0 ? 'custom' : 'all';
-                    saveData();
-                    chip.className = "sa-chip " + (rules.divisions.includes(d) ? "active" : "inactive");
-                };
-                chipWrap.appendChild(chip);
+    
+    // Get all fields from fields.js
+    const allFields = window.getFields?.() || [];
+    const fieldNames = allFields.map(f => f.name);
+    
+    // ★ NEW: Get all special activities
+    const allSpecials = window.getAllSpecialActivities?.() || [];
+    const specialNames = allSpecials.map(s => s.name);
+    
+    // Get items already assigned to OTHER zones
+    const fieldsAssignedElsewhere = new Set();
+    const specialsAssignedElsewhere = new Set();
+    
+    Object.entries(locationZones).forEach(([zoneName, z]) => {
+        if(zoneName !== zone.name){
+            (z.fields || []).forEach(f => fieldsAssignedElsewhere.add(f));
+            (z.specialActivities || []).forEach(s => specialsAssignedElsewhere.add(s));
+        }
+    });
+    
+    container.innerHTML = `
+        <p class="loc-muted" style="margin-top:0; margin-bottom:16px;">
+            Select which fields and special activities belong to this zone. They inherit the zone's transition times.
+        </p>
+        <div id="fields-specials-multiselect" class="multi-select-dropdown"></div>
+    `;
+    
+    const multiSelectContainer = container.querySelector('#fields-specials-multiselect');
+    
+    // Build the multi-select
+    const trigger = document.createElement("div");
+    trigger.className = "multi-select-trigger";
+    
+    const renderTriggerContent = () => {
+        trigger.innerHTML = "";
+        
+        const totalSelected = zone.fields.length + zone.specialActivities.length;
+        
+        if(totalSelected === 0){
+            const placeholder = document.createElement("span");
+            placeholder.className = "multi-select-placeholder";
+            placeholder.textContent = "Click to select fields & specials...";
+            trigger.appendChild(placeholder);
+        } else {
+            // Show field tags
+            zone.fields.forEach(fieldName => {
+                const tag = document.createElement("span");
+                tag.className = "multi-select-tag";
+                tag.innerHTML = `⚽ ${escapeHtml(fieldName)} <span class="multi-select-tag-remove" data-item="${escapeHtml(fieldName)}" data-type="field">×</span>`;
+                trigger.appendChild(tag);
             });
-            det.appendChild(chipWrap);
-            container.appendChild(det);
-        }
-    };
-
-    renderContent();
-    return container;
-}
-
-// 2. ACCESS & RESTRICTIONS
-function renderAccess(item) {
-    const container = document.createElement("div");
-
-    const updateSummary = () => {
-        const summaryEl = container.closest('.sa-detail-section')?.querySelector('.sa-detail-section-summary');
-        if (summaryEl) summaryEl.textContent = summaryAccess(item);
-    };
-
-    const renderContent = () => {
-        container.innerHTML = "";
-
-        const rules = item.limitUsage || { enabled: false, divisions: {}, priorityList: [] };
-        // ★ FIX: Ensure priorityList exists
-        if (!rules.priorityList) {
-            rules.priorityList = Object.keys(rules.divisions || {});
-        }
-
-        // Toggle Mode Buttons
-        const modeWrap = document.createElement("div");
-        modeWrap.style.display = "flex";
-        modeWrap.style.gap = "12px";
-        modeWrap.style.marginBottom = "16px";
-
-        const btnAll = document.createElement("button");
-        btnAll.textContent = "Open to All";
-        btnAll.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:${!rules.enabled ? '#ECFDF5' : '#fff'}; color:${!rules.enabled ? '#047857' : '#333'}; border-color:${!rules.enabled ? '#10B981' : '#E5E7EB'}; font-weight:${!rules.enabled ? '600' : '400'}; transition:all 0.2s;`;
-
-        const btnRes = document.createElement("button");
-        btnRes.textContent = "Restricted";
-        btnRes.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:${rules.enabled ? '#ECFDF5' : '#fff'}; color:${rules.enabled ? '#047857' : '#333'}; border-color:${rules.enabled ? '#10B981' : '#E5E7EB'}; font-weight:${rules.enabled ? '600' : '400'}; transition:all 0.2s;`;
-
-        btnAll.onclick = () => { 
-            rules.enabled = false; 
-            item.limitUsage = rules;
-            saveData(); 
-            renderContent(); 
-            updateSummary(); 
-        };
-        btnRes.onclick = () => { 
-            rules.enabled = true; 
-            item.limitUsage = rules;
-            saveData(); 
-            renderContent(); 
-            updateSummary(); 
-        };
-
-        modeWrap.appendChild(btnAll);
-        modeWrap.appendChild(btnRes);
-        container.appendChild(modeWrap);
-
-        // Restricted Details
-        if (rules.enabled) {
-            const body = document.createElement("div");
-            body.style.background = "#F9FAFB";
-            body.style.padding = "12px";
-            body.style.borderRadius = "8px";
-
-            // Priority List
-            const listContainer = document.createElement("div");
-            listContainer.style.marginBottom = "16px";
-
-            if (rules.priorityList.length === 0) {
-                listContainer.innerHTML = `<div style="color:#9CA3AF; font-style:italic; font-size:0.85rem;">Click divisions below to allow access.</div>`;
-            }
-
-            rules.priorityList.forEach((divName, idx) => {
-                const row = document.createElement("div");
-                row.style.cssText = "display:flex; align-items:center; justify-content:space-between; padding:8px 10px; background:white; border:1px solid #E5E7EB; border-radius:6px; margin-bottom:6px;";
-                row.innerHTML = `<span style="font-weight:bold; color:#10B981; width:20px;">${idx + 1}</span> <span style="flex:1;">${escapeHtml(divName)}</span>`;
-
-                const ctrls = document.createElement("div");
-                ctrls.style.display = "flex";
-                ctrls.style.gap = "4px";
-
-                const mkBtn = (txt, fn, dis) => {
-                    const b = document.createElement("button");
-                    b.style.cssText = "padding:4px 8px; border:1px solid #E5E7EB; border-radius:4px; background:white; cursor:pointer; font-size:0.8rem;";
-                    b.textContent = txt;
-                    if (dis) {
-                        b.disabled = true;
-                        b.style.opacity = "0.5";
-                        b.style.cursor = "not-allowed";
-                    } else {
-                        b.onclick = fn;
-                    }
-                    return b;
-                };
-
-                ctrls.appendChild(mkBtn("↑", () => {
-                    [rules.priorityList[idx - 1], rules.priorityList[idx]] = [rules.priorityList[idx], rules.priorityList[idx - 1]];
-                    saveData();
-                    renderContent();
-                }, idx === 0));
-
-                ctrls.appendChild(mkBtn("↓", () => {
-                    [rules.priorityList[idx + 1], rules.priorityList[idx]] = [rules.priorityList[idx], rules.priorityList[idx + 1]];
-                    saveData();
-                    renderContent();
-                }, idx === rules.priorityList.length - 1));
-
-                const rm = mkBtn("✕", () => {
-                    rules.priorityList = rules.priorityList.filter(d => d !== divName);
-                    delete rules.divisions[divName];
-                    saveData();
-                    renderContent();
-                    updateSummary();
-                }, false);
-                rm.style.color = "#DC2626";
-                rm.style.borderColor = "#FECACA";
-                ctrls.appendChild(rm);
-
-                row.appendChild(ctrls);
-                listContainer.appendChild(row);
-            });
-
-            body.appendChild(listContainer);
-
-            // Division Selector Chips
-            const divHeader = document.createElement("div");
-            divHeader.textContent = "Allowed Divisions (Click to add/remove):";
-            divHeader.style.fontSize = "0.85rem";
-            divHeader.style.fontWeight = "600";
-            divHeader.style.marginTop = "16px";
-            divHeader.style.marginBottom = "6px";
-            body.appendChild(divHeader);
-
-            const chipWrap = document.createElement("div");
-            const availableDivisions = window.availableDivisions || Object.keys(window.divisions || {});
-
-            availableDivisions.forEach(divName => {
-                const isAllowed = divName in rules.divisions;
-                const c = document.createElement("span");
-                c.className = "sa-chip " + (isAllowed ? "active" : "inactive");
-                c.textContent = divName;
-                c.onclick = () => {
-                    if (isAllowed) {
-                        delete rules.divisions[divName];
-                        rules.priorityList = rules.priorityList.filter(d => d !== divName);
-                    } else {
-                        rules.divisions[divName] = [];
-                        if (!rules.priorityList.includes(divName)) rules.priorityList.push(divName);
-                    }
-                    saveData();
-                    renderContent();
-                    updateSummary();
-                };
-                chipWrap.appendChild(c);
-            });
-
-            body.appendChild(chipWrap);
-            container.appendChild(body);
-        }
-    };
-
-    renderContent();
-    return container;
-}
-
-// 3. TIME RULES
-function renderTimeRules(item) {
-    const container = document.createElement("div");
-
-    const updateSummary = () => {
-        const summaryEl = container.closest('.sa-detail-section')?.querySelector('.sa-detail-section-summary');
-        if (summaryEl) summaryEl.textContent = summaryTime(item);
-    };
-
-    const renderContent = () => {
-        container.innerHTML = "";
-
-        // Ensure timeRules is an array
-        if (!Array.isArray(item.timeRules)) {
-            item.timeRules = [];
-        }
-
-        // Existing Rules
-        if (item.timeRules.length > 0) {
-            item.timeRules.forEach((r, i) => {
-                const row = document.createElement("div");
-                row.style.display = "flex";
-                row.style.justifyContent = "space-between";
-                row.style.alignItems = "center";
-                row.style.background = "#F9FAFB";
-                row.style.padding = "8px";
-                row.style.marginBottom = "6px";
-                row.style.borderRadius = "6px";
-                row.style.border = "1px solid #E5E7EB";
-
-                const txt = document.createElement("span");
-                const colorClass = r.type === 'Available' ? '#10B981' : '#DC2626';
-                txt.innerHTML = `<strong style="color:${colorClass}">${escapeHtml(r.type)}</strong> ${escapeHtml(r.start)} - ${escapeHtml(r.end)}`;
-                row.appendChild(txt);
-
-                const delBtn = document.createElement("button");
-                delBtn.textContent = "✕";
-                delBtn.style.cssText = "background:none; border:none; color:#DC2626; cursor:pointer; font-size:1rem;";
-                delBtn.onclick = () => {
-                    item.timeRules.splice(i, 1);
-                    saveData();
-                    renderContent();
-                    updateSummary();
-                };
-                row.appendChild(delBtn);
-
-                container.appendChild(row);
+            
+            // ★ Show special activity tags
+            zone.specialActivities.forEach(specialName => {
+                const tag = document.createElement("span");
+                tag.className = "multi-select-tag special-tag";
+                tag.innerHTML = `⭐ ${escapeHtml(specialName)} <span class="multi-select-tag-remove" data-item="${escapeHtml(specialName)}" data-type="special">×</span>`;
+                trigger.appendChild(tag);
             });
         }
-
-        // Add New Rule
-        const addRow = document.createElement("div");
-        addRow.style.display = "flex";
-        addRow.style.gap = "8px";
-        addRow.style.alignItems = "center";
-        addRow.style.flexWrap = "wrap";
-        addRow.style.marginTop = "12px";
-
-        const typeSel = document.createElement("select");
-        typeSel.innerHTML = `<option value="Available">Available</option><option value="Unavailable">Unavailable</option>`;
-        typeSel.style.cssText = "padding:6px; border:1px solid #E5E7EB; border-radius:4px;";
-
-        const startIn = document.createElement("input");
-        startIn.type = "text";
-        startIn.placeholder = "9:00am";
-        startIn.style.cssText = "width:80px; padding:6px; border:1px solid #E5E7EB; border-radius:4px;";
-
-        const endIn = document.createElement("input");
-        endIn.type = "text";
-        endIn.placeholder = "10:00am";
-        endIn.style.cssText = "width:80px; padding:6px; border:1px solid #E5E7EB; border-radius:4px;";
-
-        const btn = document.createElement("button");
-        btn.textContent = "+ Add";
-        btn.style.cssText = "padding:6px 12px; background:#10B981; color:white; border:none; border-radius:4px; cursor:pointer;";
-        btn.onclick = () => {
-            if (!startIn.value.trim() || !endIn.value.trim()) {
-                alert("Please enter both start and end times.");
-                return;
-            }
-            const startMin = parseTimeToMinutes(startIn.value);
-            const endMin = parseTimeToMinutes(endIn.value);
-            if (startMin === null) {
-                alert("Invalid Start Time format. Use format like 9:00am");
-                return;
-            }
-            if (endMin === null) {
-                alert("Invalid End Time format. Use format like 10:00am");
-                return;
-            }
-            if (startMin >= endMin) {
-                alert("End time must be after start time.");
-                return;
-            }
-            item.timeRules.push({
-                type: typeSel.value,
-                start: startIn.value,
-                end: endIn.value,
-                startMin: startMin,
-                endMin: endMin
+        
+        // Add chevron
+        const chevron = document.createElement("span");
+        chevron.innerHTML = `<svg width="16" height="16" fill="none" stroke="#9CA3AF" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>`;
+        chevron.style.marginLeft = "auto";
+        trigger.appendChild(chevron);
+    };
+    
+    renderTriggerContent();
+    
+    const optionsPanel = document.createElement("div");
+    optionsPanel.className = "multi-select-options";
+    
+    const renderOptions = () => {
+        optionsPanel.innerHTML = "";
+        
+        const totalItems = fieldNames.length + specialNames.length;
+        
+        if(totalItems === 0){
+            const emptyMsg = document.createElement("div");
+            emptyMsg.style.cssText = "padding: 16px; color: #6b7280; text-align: center; font-size: 0.9rem;";
+            emptyMsg.textContent = "No fields or special activities created yet.";
+            optionsPanel.appendChild(emptyMsg);
+            return;
+        }
+        
+        // ★ FIELDS SECTION
+        if (fieldNames.length > 0) {
+            const fieldHeader = document.createElement("div");
+            fieldHeader.className = "multi-select-section-header";
+            fieldHeader.textContent = `⚽ Fields (${fieldNames.length})`;
+            optionsPanel.appendChild(fieldHeader);
+            
+            fieldNames.forEach(fieldName => {
+                const isSelected = zone.fields.includes(fieldName);
+                const isAssignedElsewhere = fieldsAssignedElsewhere.has(fieldName);
+                
+                const option = document.createElement("div");
+                option.className = "multi-select-option" + (isSelected ? " selected" : "") + (isAssignedElsewhere ? " disabled" : "");
+                
+                const checkbox = document.createElement("input");
+                checkbox.type = "checkbox";
+                checkbox.className = "multi-select-checkbox";
+                checkbox.checked = isSelected;
+                checkbox.disabled = isAssignedElsewhere;
+                
+                const label = document.createElement("span");
+                label.className = "multi-select-option-label";
+                label.textContent = fieldName;
+                
+                option.appendChild(checkbox);
+                option.appendChild(label);
+                
+                if(isAssignedElsewhere){
+                    const badge = document.createElement("span");
+                    badge.className = "multi-select-option-badge";
+                    badge.textContent = "In another zone";
+                    option.appendChild(badge);
+                }
+                
+                if(!isAssignedElsewhere){
+                    option.onclick = (e) => {
+                        e.stopPropagation();
+                        if(isSelected){
+                            zone.fields = zone.fields.filter(f => f !== fieldName);
+                        } else {
+                            zone.fields.push(fieldName);
+                        }
+                        saveData();
+                        renderTriggerContent();
+                        renderOptions();
+                        updateSummary();
+                        renderZonesList();
+                    };
+                }
+                
+                optionsPanel.appendChild(option);
             });
+        }
+        
+        // ★ SPECIAL ACTIVITIES SECTION
+        if (specialNames.length > 0) {
+            const specialHeader = document.createElement("div");
+            specialHeader.className = "multi-select-section-header";
+            specialHeader.style.background = "#fef3c7";
+            specialHeader.style.color = "#92400e";
+            specialHeader.textContent = `⭐ Special Activities (${specialNames.length})`;
+            optionsPanel.appendChild(specialHeader);
+            
+            specialNames.forEach(specialName => {
+                const isSelected = zone.specialActivities.includes(specialName);
+                const isAssignedElsewhere = specialsAssignedElsewhere.has(specialName);
+                
+                const option = document.createElement("div");
+                option.className = "multi-select-option" + (isSelected ? " selected" : "") + (isAssignedElsewhere ? " disabled" : "");
+                
+                const checkbox = document.createElement("input");
+                checkbox.type = "checkbox";
+                checkbox.className = "multi-select-checkbox";
+                checkbox.checked = isSelected;
+                checkbox.disabled = isAssignedElsewhere;
+                
+                const label = document.createElement("span");
+                label.className = "multi-select-option-label";
+                label.textContent = specialName;
+                
+                option.appendChild(checkbox);
+                option.appendChild(label);
+                
+                // Add type indicator
+                const typeTag = document.createElement("span");
+                typeTag.className = "multi-select-option-type special";
+                typeTag.textContent = "Special";
+                option.appendChild(typeTag);
+                
+                if(isAssignedElsewhere){
+                    const badge = document.createElement("span");
+                    badge.className = "multi-select-option-badge";
+                    badge.textContent = "In another zone";
+                    option.appendChild(badge);
+                }
+                
+                if(!isAssignedElsewhere){
+                    option.onclick = (e) => {
+                        e.stopPropagation();
+                        if(isSelected){
+                            zone.specialActivities = zone.specialActivities.filter(s => s !== specialName);
+                        } else {
+                            zone.specialActivities.push(specialName);
+                        }
+                        saveData();
+                        renderTriggerContent();
+                        renderOptions();
+                        updateSummary();
+                        renderZonesList();
+                    };
+                }
+                
+                optionsPanel.appendChild(option);
+            });
+        }
+    };
+    
+    renderOptions();
+    
+    // Position dropdown using fixed positioning to escape any overflow containers
+    const positionDropdown = () => {
+        const rect = trigger.getBoundingClientRect();
+        const viewportHeight = window.innerHeight;
+        const spaceBelow = viewportHeight - rect.bottom - 20;
+        const spaceAbove = rect.top - 20;
+        
+        let maxHeight = Math.min(350, Math.max(spaceBelow, spaceAbove));
+        
+        if(spaceBelow >= 150 || spaceBelow >= spaceAbove) {
+            optionsPanel.style.top = (rect.bottom + 4) + 'px';
+            optionsPanel.style.bottom = 'auto';
+            maxHeight = Math.min(350, spaceBelow);
+        } else {
+            optionsPanel.style.bottom = (viewportHeight - rect.top + 4) + 'px';
+            optionsPanel.style.top = 'auto';
+            maxHeight = Math.min(350, spaceAbove);
+        }
+        
+        optionsPanel.style.left = rect.left + 'px';
+        optionsPanel.style.width = rect.width + 'px';
+        optionsPanel.style.maxHeight = maxHeight + 'px';
+    };
+    
+    // Toggle dropdown
+    trigger.onclick = (e) => {
+        if(e.target.classList.contains('multi-select-tag-remove')){
+            const itemToRemove = e.target.dataset.item;
+            const itemType = e.target.dataset.type;
+            
+            if (itemType === 'field') {
+                zone.fields = zone.fields.filter(f => f !== itemToRemove);
+            } else if (itemType === 'special') {
+                zone.specialActivities = zone.specialActivities.filter(s => s !== itemToRemove);
+            }
+            
             saveData();
+            renderTriggerContent();
+            renderOptions();
+            updateSummary();
+            renderZonesList();
+            return;
+        }
+        
+        const isOpen = optionsPanel.classList.contains('show');
+        
+        if(!isOpen){
+            positionDropdown();
+        }
+        
+        optionsPanel.classList.toggle('show');
+        trigger.classList.toggle('open');
+    };
+    
+    // ★ FIX: Track event listeners for proper cleanup
+    const repositionHandler = () => {
+        if(optionsPanel.classList.contains('show')){
+            positionDropdown();
+        }
+    };
+    
+    window.addEventListener('scroll', repositionHandler, true);
+    window.addEventListener('resize', repositionHandler);
+    
+    activeEventListeners.push({ type: 'scroll', handler: repositionHandler, options: true, target: window });
+    activeEventListeners.push({ type: 'resize', handler: repositionHandler, options: undefined, target: window });
+    
+    // Close on click outside
+    const closeOnClickOutside = (e) => {
+        if(!multiSelectContainer.contains(e.target) && !optionsPanel.contains(e.target)){
+            optionsPanel.classList.remove('show');
+            trigger.classList.remove('open');
+        }
+    };
+    
+    document.addEventListener('click', closeOnClickOutside);
+    activeEventListeners.push({ type: 'click', handler: closeOnClickOutside, options: undefined, target: document });
+    
+    multiSelectContainer.appendChild(trigger);
+    
+    // Append options panel to body so it escapes all containers
+    document.body.appendChild(optionsPanel);
+    
+    return container;
+}
+
+//------------------------------------------------------------------
+// LOCATIONS / FACILITIES SECTION
+//------------------------------------------------------------------
+function renderLocationsSection(zone){
+    const container = document.createElement("div");
+    
+    const updateSummary = () => {
+        const summaryEl = container.closest('.loc-detail-section')?.querySelector('.loc-detail-section-summary');
+        if(summaryEl) summaryEl.textContent = summaryLocations(zone);
+    };
+    
+    const renderContent = () => {
+        container.innerHTML = `
+            <div id="locations-list"></div>
+            <div style="display:flex; gap:8px; margin-top:16px; padding-top:16px; border-top:1px solid #e5e7eb; align-items:center;">
+                <input type="text" id="new-location-input" class="loc-input" placeholder="New location (e.g., Lunchroom)" style="flex:1;">
+                <button id="add-location-btn" style="background:#111827; color:white; border:none; border-radius:8px; padding:10px 16px; cursor:pointer; font-weight:500; font-size:0.85rem; white-space:nowrap;">Add</button>
+            </div>
+        `;
+        
+        const listEl = container.querySelector('#locations-list');
+        const addInput = container.querySelector('#new-location-input');
+        const addBtn = container.querySelector('#add-location-btn');
+        
+        // Render existing locations
+        const locationNames = Object.keys(zone.locations || {});
+        
+        if(locationNames.length === 0){
+            listEl.innerHTML = `<div class="loc-muted" style="padding:16px; text-align:center; border:1px dashed #e5e7eb; border-radius:8px;">
+                No locations in this zone yet.<br>
+                <span style="font-size:0.8rem;">Add facilities like Pool, Lunchroom, Gym, etc.</span>
+            </div>`;
+        } else {
+            locationNames.forEach(locName => {
+                const item = document.createElement("div");
+                item.className = "location-item";
+                item.innerHTML = `
+                    <span class="location-item-name">${escapeHtml(locName)}</span>
+                    <button class="location-delete-btn" data-loc="${escapeHtml(locName)}">✕ Remove</button>
+                `;
+                
+                item.querySelector('.location-delete-btn').onclick = () => {
+                    if (!window.AccessControl?.checkSetupAccess('delete locations')) return;
+                    if(confirm(`Remove "${locName}" from this zone?`)){
+                        // ★ FIX: Also cleanup pinnedTileDefaults
+                        Object.entries(pinnedTileDefaults).forEach(([tileName, location]) => {
+                            if (location === locName) {
+                                delete pinnedTileDefaults[tileName];
+                                console.log(`[LOCATIONS] Removed orphaned default: "${tileName}" → "${locName}"`);
+                            }
+                        });
+                        
+                        delete zone.locations[locName];
+                        saveData();
+                        renderContent();
+                        updateSummary();
+                        renderZonesList();
+                        
+                        // Refresh pinned tile defaults UI
+                        window.refreshPinnedTileDefaultsUI?.();
+                    }
+                };
+                
+                listEl.appendChild(item);
+            });
+        }
+        
+        // Add new location
+        const doAdd = () => {
+            if (!window.AccessControl?.checkSetupAccess('add locations')) return;
+            
+            const name = addInput.value.trim();
+            if(!name){
+                alert("Please enter a location name.");
+                return;
+            }
+            if(zone.locations[name]){
+                alert("A location with that name already exists in this zone.");
+                return;
+            }
+            zone.locations[name] = { capacity: 1 };  // Always 1 activity at a time
+            saveData();
+            addInput.value = "";
             renderContent();
             updateSummary();
+            renderZonesList();
+
+            // Refresh pinned tile defaults dropdown
+            window.refreshPinnedTileDefaultsUI?.();
         };
-
-        addRow.appendChild(typeSel);
-        addRow.appendChild(startIn);
-        addRow.appendChild(document.createTextNode(" to "));
-        addRow.appendChild(endIn);
-        addRow.appendChild(btn);
-
-        container.appendChild(addRow);
+        
+        addBtn.onclick = doAdd;
+        addInput.onkeyup = (e) => { if(e.key === "Enter") doAdd(); };
     };
-
+    
     renderContent();
     return container;
 }
 
-// =========================================================================
-// ADD SPECIAL
-// =========================================================================
-function addSpecial() {
+//------------------------------------------------------------------
+// ADD ZONE
+//------------------------------------------------------------------
+function addZone(){
     // ✅ RBAC Check
-    if (!window.AccessControl?.checkSetupAccess?.('add special activities')) return;
-    
-    if (!addSpecialInput) return;
-    
-    const n = addSpecialInput.value.trim();
-    if (!n) return;
+    if (!window.AccessControl?.checkSetupAccess('add zones')) return;
 
-    // Check both lists for name conflicts
-    if (specialActivities.some(s => s.name.toLowerCase() === n.toLowerCase()) ||
-        rainyDayActivities.some(s => s.name.toLowerCase() === n.toLowerCase())) {
-        alert("A special activity with that name already exists.");
+    if (!addZoneInput) {
+        console.warn('[LOCATIONS] addZoneInput element not found');
         return;
     }
 
-    specialActivities.push(createDefaultActivity(n));
-
-    addSpecialInput.value = "";
-    saveData();
-    selectedItemId = `special-${n}`;
-    renderMasterList();
-    renderRainyDayList();
-    renderDetailPane();
-}
-
-// =========================================================================
-// ADD RAINY DAY ACTIVITY
-// =========================================================================
-function addRainyDayActivity() {
-    // ✅ RBAC Check
-    if (!window.AccessControl?.checkSetupAccess?.('add rainy day activities')) return;
-    
-    if (!addRainyDayInput) return;
-    
-    const n = addRainyDayInput.value.trim();
-    if (!n) return;
-
-    // Check both lists for name conflicts
-    if (specialActivities.some(s => s.name.toLowerCase() === n.toLowerCase()) ||
-        rainyDayActivities.some(s => s.name.toLowerCase() === n.toLowerCase())) {
-        alert("A special activity with that name already exists.");
+    const name = addZoneInput.value.trim();
+    if(!name){
+        alert("Please enter a zone name.");
         return;
     }
-
-    const newActivity = createDefaultActivity(n);
-    newActivity.rainyDayExclusive = true;
-    newActivity.rainyDayOnly = true; // Legacy support
-    rainyDayActivities.push(newActivity);
-
-    addRainyDayInput.value = "";
+    if(locationZones[name]){
+        alert("A zone with that name already exists.");
+        return;
+    }
+    
+    locationZones[name] = {
+        name: name,
+        isDefault: false,
+        transition: { preMin: 0, postMin: 0 },
+        maxConcurrent: 99,
+        fields: [],
+        specialActivities: [],  // ★ NEW
+        locations: {}
+    };
+    
+    addZoneInput.value = "";
     saveData();
-    selectedItemId = `special-${n}`;
-    renderMasterList();
-    renderRainyDayList();
+    selectedZoneId = name;
+    renderZonesList();
     renderDetailPane();
 }
 
-// =========================================================================
-// ★ CLEANUP & RENAME HELPERS (like fields.js)
-// =========================================================================
-
-/**
- * Cleanup all references to a deleted special activity
- */
-function cleanupDeletedSpecialActivity(activityName) {
-    if (!activityName) return;
+//------------------------------------------------------------------
+// PINNED TILE DEFAULTS (Hub for managing default locations)
+//------------------------------------------------------------------
+function initPinnedTileDefaultsSection(){
+    const listEl = document.getElementById("pinned-defaults-list");
+    const tileInput = document.getElementById("new-pinned-tile-input");
+    const locationSelect = document.getElementById("new-pinned-tile-location");
+    const addBtn = document.getElementById("add-pinned-default-btn");
     
-    console.log(`🗑️ [SPECIAL_ACTIVITIES] Cleaning up references to: "${activityName}"`);
-    let cleanupCount = 0;
+    if(!listEl || !tileInput || !locationSelect || !addBtn) return;
     
-    try {
-        // 1. Clean from daily schedules
-        const settings = window.loadGlobalSettings?.() || {};
-        const dailySchedules = settings.daily_schedules || {};
+    // Populate location dropdown
+    populateLocationDropdown(locationSelect);
+    
+    // Add button handler
+    addBtn.onclick = () => {
+        const tileName = tileInput.value.trim();
+        const location = locationSelect.value;
         
-        Object.keys(dailySchedules).forEach(dateKey => {
-            const dayData = dailySchedules[dateKey];
-            if (!dayData?.scheduleAssignments) return;
-            
-            Object.keys(dayData.scheduleAssignments).forEach(bunkKey => {
-                const slots = dayData.scheduleAssignments[bunkKey];
-                if (!Array.isArray(slots)) return;
-                
-                slots.forEach((slot, idx) => {
-                    if (slot?._activity === activityName || 
-                        slot?.activity === activityName ||
-                        slot?.event === activityName) {
-                        dayData.scheduleAssignments[bunkKey][idx] = null;
-                        cleanupCount++;
-                    }
-                });
-            });
-        });
-        
-        if (cleanupCount > 0) {
-            window.saveGlobalSettings?.('daily_schedules', dailySchedules);
-            console.log(`   ✅ Cleared ${cleanupCount} schedule references`);
+        if(!tileName){
+            alert("Please enter a tile name (e.g., Lunch, Swim, Assembly)");
+            return;
+        }
+        if(!location){
+            alert("Please select a location");
+            return;
         }
         
-        // 2. Clean from current session
-        if (window.scheduleAssignments) {
-            Object.keys(window.scheduleAssignments).forEach(bunkKey => {
-                const slots = window.scheduleAssignments[bunkKey];
-                if (!Array.isArray(slots)) return;
-                
-                slots.forEach((slot, idx) => {
-                    if (slot?._activity === activityName || 
-                        slot?.activity === activityName ||
-                        slot?.event === activityName) {
-                        window.scheduleAssignments[bunkKey][idx] = null;
-                    }
-                });
-            });
-        }
-        
-        // 3. Clean from activityProperties
-        if (window.activityProperties?.[activityName]) {
-            delete window.activityProperties[activityName];
-            console.log(`   ✅ Removed from activityProperties`);
-        }
-        
-        console.log(`🗑️ [SPECIAL_ACTIVITIES] Cleanup complete for "${activityName}"`);
-        
-    } catch (e) {
-        console.error('[SPECIAL_ACTIVITIES] Error during cleanup:', e);
-    }
+        pinnedTileDefaults[tileName] = location;
+        saveData();
+        tileInput.value = "";
+        renderPinnedTileDefaults();
+    };
+    
+    tileInput.onkeyup = (e) => { if(e.key === "Enter") addBtn.click(); };
+    
+    // Initial render
+    renderPinnedTileDefaults();
 }
 
-/**
- * Propagate special activity rename to all references
- */
-function propagateSpecialActivityRename(oldName, newName) {
-    if (!oldName || !newName || oldName === newName) return;
+function populateLocationDropdown(selectEl){
+    if (!selectEl) return;
     
-    console.log(`📝 [SPECIAL_ACTIVITIES] Propagating rename: "${oldName}" → "${newName}"`);
+    selectEl.innerHTML = '<option value="">-- Select Location --</option>';
     
-    try {
-        // 1. Update daily schedules
-        const settings = window.loadGlobalSettings?.() || {};
-        const dailySchedules = settings.daily_schedules || {};
-        let updateCount = 0;
-        
-        Object.keys(dailySchedules).forEach(dateKey => {
-            const dayData = dailySchedules[dateKey];
-            if (!dayData?.scheduleAssignments) return;
-            
-            Object.keys(dayData.scheduleAssignments).forEach(bunkKey => {
-                const slots = dayData.scheduleAssignments[bunkKey];
-                if (!Array.isArray(slots)) return;
-                
-                slots.forEach((slot, idx) => {
-                    if (slot?._activity === oldName) {
-                        dayData.scheduleAssignments[bunkKey][idx]._activity = newName;
-                        updateCount++;
-                    }
-                    if (slot?.activity === oldName) {
-                        dayData.scheduleAssignments[bunkKey][idx].activity = newName;
-                        updateCount++;
-                    }
-                    if (slot?.event === oldName) {
-                        dayData.scheduleAssignments[bunkKey][idx].event = newName;
-                        updateCount++;
-                    }
-                });
-            });
-        });
-        
-        if (updateCount > 0) {
-            window.saveGlobalSettings?.('daily_schedules', dailySchedules);
-            console.log(`   ✅ Updated ${updateCount} schedule references`);
-        }
-        
-        // 2. Update activityProperties
-        if (window.activityProperties?.[oldName]) {
-            window.activityProperties[newName] = {
-                ...window.activityProperties[oldName]
-            };
-            delete window.activityProperties[oldName];
-            console.log(`   ✅ Updated activityProperties`);
-        }
-        
-        console.log(`📝 [SPECIAL_ACTIVITIES] Rename propagation complete`);
-        
-    } catch (e) {
-        console.error('[SPECIAL_ACTIVITIES] Error during rename propagation:', e);
-    }
+    const allLocations = window.getAllLocations?.() || [];
+    
+    allLocations.forEach(loc => {
+        const opt = document.createElement('option');
+        opt.value = loc.name;
+        opt.textContent = loc.displayName;
+        selectEl.appendChild(opt);
+    });
 }
 
-// =========================================================================
+function renderPinnedTileDefaults(){
+    const listEl = document.getElementById("pinned-defaults-list");
+    const locationSelect = document.getElementById("new-pinned-tile-location");
+    
+    if(!listEl) return;
+    
+    // Refresh dropdown options
+    if(locationSelect) populateLocationDropdown(locationSelect);
+    
+    const entries = Object.entries(pinnedTileDefaults);
+    
+    if(entries.length === 0){
+        listEl.innerHTML = `<div class="loc-muted" style="padding:12px; text-align:center; border:1px dashed #e5e7eb; border-radius:8px; font-size:0.85rem;">
+            No defaults set yet.
+        </div>`;
+        return;
+    }
+    
+    listEl.innerHTML = "";
+    
+    entries.forEach(([tileName, locationName]) => {
+        const item = document.createElement("div");
+        item.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; margin-bottom:6px;";
+        item.innerHTML = `
+            <div>
+                <span style="font-weight:500; color:#111827;">${escapeHtml(tileName)}</span>
+                <span style="color:#6b7280; margin:0 8px;">→</span>
+                <span style="color:#2563eb;">${escapeHtml(locationName)}</span>
+            </div>
+            <button style="background:transparent; border:none; color:#dc2626; cursor:pointer; padding:4px 8px; border-radius:4px;" data-tile="${escapeHtml(tileName)}">✕</button>
+        `;
+        
+        item.querySelector('button').onclick = () => {
+            delete pinnedTileDefaults[tileName];
+            saveData();
+            renderPinnedTileDefaults();
+        };
+        
+        listEl.appendChild(item);
+    });
+}
+
+//------------------------------------------------------------------
 // HELPERS
-// =========================================================================
+//------------------------------------------------------------------
 function escapeHtml(str) {
     if (str === null || str === undefined) return "";
     const div = document.createElement("div");
@@ -1541,259 +1475,311 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
-function makeEditable(el, save) {
-    if (!el) return;
-    
+function makeEditable(el, save){
     el.ondblclick = () => {
-        const inp = document.createElement("input");
-        inp.value = el.textContent;
-        inp.style.fontSize = "inherit";
-        inp.style.fontWeight = "inherit";
-        inp.style.border = "1px solid #10B981";
-        inp.style.outline = "none";
-        inp.style.borderRadius = "4px";
-        inp.style.padding = "2px 6px";
-        inp.style.width = Math.max(100, el.offsetWidth + 20) + "px";
-        el.replaceWith(inp);
+        const inp = document.createElement("input"); 
+        inp.value = el.textContent.replace(/Default$/, '').trim();
+        inp.style.cssText = "font-size:inherit; font-weight:inherit; border:1px solid #3B82F6; outline:none; border-radius:4px; padding:2px 6px; width:" + Math.max(100, el.offsetWidth + 20) + "px;";
+
+        el.replaceWith(inp); 
         inp.focus();
         inp.select();
 
-        const finish = () => {
+        const finish = () => { 
             const newVal = inp.value.trim();
-            if (newVal && newVal !== el.textContent) {
-                save(newVal);
+            if(newVal && newVal !== el.textContent.replace(/Default$/, '').trim()) {
+                save(newVal); 
             } else {
-                if (inp.parentNode) inp.replaceWith(el);
+                if(inp.parentNode) inp.replaceWith(el); 
             }
         };
 
         inp.onblur = finish;
-        inp.onkeyup = e => {
-            if (e.key === "Enter") finish();
-            if (e.key === "Escape") { inp.replaceWith(el); }
+        inp.onkeyup = e => { 
+            if(e.key === "Enter") finish(); 
+            if(e.key === "Escape") { inp.replaceWith(el); }
         };
     };
 }
 
-function parseTimeToMinutes(str) {
-    if (!str || typeof str !== "string") return null;
-    let s = str.trim().toLowerCase();
-    let mer = null;
-    if (s.endsWith("am") || s.endsWith("pm")) {
-        mer = s.endsWith("am") ? "am" : "pm";
-        s = s.replace(/am|pm/g, "").trim();
-    }
-    const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-    if (!m) return null;
-    let hh = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
-    if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
-    if (mer) {
-        if (hh === 12) hh = mer === "am" ? 0 : 12;
-        else if (mer === "pm") hh += 12;
-    }
-    return hh * 60 + mm;
+function buildLocationOptions(selectedLocation = '') {
+    const allLocations = window.getAllLocations?.() || [];
+    let html = '<option value="">-- None --</option>';
+    
+    allLocations.forEach(loc => {
+        const selected = loc.name === selectedLocation ? 'selected' : '';
+        html += `<option value="${escapeHtml(loc.name)}" ${selected}>${escapeHtml(loc.displayName)}</option>`;
+    });
+    
+    return html;
 }
 
-// =========================================================================
-// EXPORTS
-// =========================================================================
-window.initSpecialActivitiesTab = initSpecialActivitiesTab;
+//------------------------------------------------------------------
+// PUBLIC API
+//------------------------------------------------------------------
+window.initLocationsTab = initLocationsTab;
 
-// ★ FIX: Export arrays via getters (not direct references which can become stale)
-Object.defineProperty(window, 'specialActivities', {
-    get: function() { return specialActivities; },
-    set: function(val) { specialActivities = val; },
-    configurable: true
-});
-
-Object.defineProperty(window, 'rainyDayActivities', {
-    get: function() { return rainyDayActivities; },
-    set: function(val) { rainyDayActivities = val; },
-    configurable: true
-});
-
-// Export getters for external access
-window.getSpecialActivities = function() {
-    return [...specialActivities]; // Return copy to prevent external mutation
+// Get all locations across all zones (for dropdowns in other modules)
+window.getAllLocations = function(){
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    const locations = [];
+    
+    Object.entries(zones).forEach(([zoneName, zone]) => {
+        if (!zone || typeof zone !== 'object') return;
+        Object.keys(zone.locations || {}).forEach(locName => {
+            locations.push({
+                name: locName,
+                zone: zoneName,
+                displayName: `${locName} (${zoneName})`
+            });
+        });
+    });
+    
+    return locations;
 };
 
-window.getRainyDayActivities = function() {
-    return [...rainyDayActivities]; // Return copy
-};
-
-window.getAllSpecialActivities = function() {
-    return [...specialActivities, ...rainyDayActivities];
-};
-
-window.getSpecialActivityByName = function(name) {
-    if (!name) return null;
-    const nameStr = String(name);
-    let item = specialActivities.find(s => s.name === nameStr);
-    if (!item) {
-        item = rainyDayActivities.find(s => s.name === nameStr);
+// Get zone for a specific field
+window.getZoneForField = function(fieldName){
+    if (!fieldName) return null;
+    
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    
+    for(const [zoneName, zone] of Object.entries(zones)){
+        if (!zone || typeof zone !== 'object') continue;
+        if(Array.isArray(zone.fields) && zone.fields.includes(fieldName)){
+            return zone;
+        }
     }
-    return item ? { ...item } : null; // Return copy
+    
+    return null;
 };
 
-// Check if rainy day mode is active (for scheduler integration)
-window.isRainyDayModeActive = function() {
-    try {
-        const dailyData = window.loadCurrentDailyData?.() || {};
-        return dailyData.rainyDayMode === true;
-    } catch (e) {
-        return false;
+// ★ NEW: Get zone for a specific special activity
+window.getZoneForSpecialActivity = function(specialName){
+    if (!specialName) return null;
+    
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    
+    for(const [zoneName, zone] of Object.entries(zones)){
+        if (!zone || typeof zone !== 'object') continue;
+        if(Array.isArray(zone.specialActivities) && zone.specialActivities.includes(specialName)){
+            return zone;
+        }
+    }
+    
+    return null;
+};
+
+// Get default location for a pinned tile type (e.g., "Lunch" → "Lunchroom")
+window.getPinnedTileDefaultLocation = function(tileType){
+    if (!tileType) return null;
+    
+    const settings = window.loadGlobalSettings?.() || {};
+    const defaults = settings.pinnedTileDefaults || {};
+    
+    // Try exact match first
+    if (defaults[tileType]) {
+        return defaults[tileType];
+    }
+    
+    // ★ FIX: Case-insensitive lookup
+    const lowerType = tileType.toLowerCase();
+    for (const [key, value] of Object.entries(defaults)) {
+        if (key.toLowerCase() === lowerType) {
+            return value;
+        }
+    }
+    
+    // ★ FIX: Common alias patterns
+    const ALIASES = {
+        'swim': ['pool', 'swimming', 'aquatics'],
+        'pool': ['swim', 'swimming', 'aquatics'],
+        'lunch': ['lunchroom', 'dining', 'cafeteria'],
+        'snacks': ['snack', 'snacktime'],
+        'dismissal': ['dismiss', 'end']
+    };
+    
+    const aliases = ALIASES[lowerType] || [];
+    for (const alias of aliases) {
+        for (const [key, value] of Object.entries(defaults)) {
+            if (key.toLowerCase() === alias || key.toLowerCase().includes(alias)) {
+                return value;
+            }
+        }
+    }
+    
+    return null;
+};
+
+// Get all pinned tile defaults
+window.getPinnedTileDefaults = function(){
+    const settings = window.loadGlobalSettings?.() || {};
+    return settings.pinnedTileDefaults || {};
+};
+
+// Set a pinned tile default location
+window.setPinnedTileDefaultLocation = function(tileType, locationName){
+    if (!tileType) return;
+    
+    const settings = window.loadGlobalSettings?.() || {};
+    settings.pinnedTileDefaults = settings.pinnedTileDefaults || {};
+    settings.pinnedTileDefaults[tileType] = locationName || null;
+    
+    window.saveGlobalSettings?.("pinnedTileDefaults", settings.pinnedTileDefaults);
+    
+    if (_isInitialized) {
+        pinnedTileDefaults = settings.pinnedTileDefaults;
     }
 };
 
-// Get available special activities based on weather
-window.getAvailableSpecialActivities = function() {
-    const isRainy = window.isRainyDayModeActive?.() || false;
+// Refresh pinned tile defaults UI
+window.refreshPinnedTileDefaultsUI = renderPinnedTileDefaults;
 
-    if (isRainy) {
-        // Rainy day: return regular specials that are rainy-available + rainy day exclusives
-        const regularAvailable = specialActivities.filter(s => s.available && s.rainyDayAvailable !== false);
-        const rainyAvailable = rainyDayActivities.filter(s => s.available);
-        return [...regularAvailable, ...rainyAvailable];
-    } else {
-        // Normal day: return only regular specials (not rainy day exclusives)
-        return specialActivities.filter(s => s.available);
-    }
-};
-
-// ★ FIX: Export cleanup function for external use
-window.cleanupSpecialActivitiesModule = function() {
-    cleanupEventListeners();
+// ★ FIX: Export cleanup function
+window.cleanupLocationsModule = function() {
+    cleanupDropdownPanels();
     cleanupTabListeners();
     _isInitialized = false;
-    console.log("[SPECIAL_ACTIVITIES] Module cleaned up");
 };
 
-// ★ NEW: Force refresh from cloud/storage
-window.refreshSpecialActivitiesFromStorage = function() {
+// ★ Force refresh from cloud/storage
+window.refreshLocationsFromStorage = function() {
     if (_isInitialized) {
         refreshFromStorage();
     }
 };
 
-// ★ NEW: Validate special activities (can be called externally)
-window.validateSpecialActivities = function() {
-    const allActivities = window.getAllSpecialActivities?.() || [];
-    const validated = validateAllActivities(allActivities);
-    
-    let issuesFixed = 0;
-    allActivities.forEach((original, i) => {
-        const fixed = validated[i];
-        if (JSON.stringify(original) !== JSON.stringify(fixed)) {
-            issuesFixed++;
-        }
-    });
-    
-    if (issuesFixed > 0) {
-        console.log(`[SPECIAL_ACTIVITIES] Validation fixed ${issuesFixed} issues`);
-        // Reload with validated data
-        loadData();
-        if (_isInitialized) {
-            renderMasterList();
-            renderRainyDayList();
-            renderDetailPane();
-        }
-    }
-    
-    return { activitiesChecked: allActivities.length, issuesFixed };
-};
-
-// ★ COMPREHENSIVE DIAGNOSTICS (like fields.js)
-window.diagnoseSpecialActivities = function() {
-    console.log('\n' + '═'.repeat(60));
-    console.log('🔍 SPECIAL ACTIVITIES DIAGNOSTICS');
-    console.log('═'.repeat(60));
+// ★ Get location zone for a location name (not field)
+window.getZoneForLocation = function(locationName) {
+    if (!locationName) return null;
     
     const settings = window.loadGlobalSettings?.() || {};
-    const storedActivities = window.getGlobalSpecialActivities?.() || [];
-    const divisions = Object.keys(settings.divisions || {});
-    const locations = window.getAllLocations?.() || [];
+    const zones = settings.locationZones || {};
     
-    console.log(`\n📊 SUMMARY:`);
-    console.log(`   Total activities: ${storedActivities.length}`);
-    console.log(`   Regular specials: ${specialActivities.length}`);
-    console.log(`   Rainy day specials: ${rainyDayActivities.length}`);
-    console.log(`   Valid divisions: ${divisions.join(', ') || 'none'}`);
-    console.log(`   Available locations: ${locations.length}`);
-    
-    const issues = [];
-    
-    storedActivities.forEach((a, idx) => {
-        const actIssues = [];
-        
-        // Check sharableWith structure
-        if (!a.sharableWith) {
-            actIssues.push('Missing sharableWith');
-        } else {
-            if (!a.sharableWith.type) actIssues.push('sharableWith.type missing');
-            if (!Array.isArray(a.sharableWith.divisions)) actIssues.push('sharableWith.divisions not array');
-            if (a.sharableWith.capacity === undefined) actIssues.push('sharableWith.capacity missing');
-            
-            // Check for stale divisions
-            if (Array.isArray(a.sharableWith.divisions)) {
-                const stale = a.sharableWith.divisions.filter(d => !divisions.includes(d));
-                if (stale.length > 0) actIssues.push(`Stale sharableWith.divisions: ${stale.join(', ')}`);
-            }
+    for(const [zoneName, zone] of Object.entries(zones)){
+        if (!zone || typeof zone !== 'object') continue;
+        if (zone.locations && zone.locations[locationName]) {
+            return zone;
         }
-        
-        // Check limitUsage structure
-        if (!a.limitUsage) {
-            actIssues.push('Missing limitUsage');
-        } else {
-            if (a.limitUsage.enabled === undefined) actIssues.push('limitUsage.enabled missing');
-            if (typeof a.limitUsage.divisions !== 'object') actIssues.push('limitUsage.divisions not object');
-            if (!Array.isArray(a.limitUsage.priorityList)) actIssues.push('limitUsage.priorityList missing');
-            
-            // Check for stale divisions
-            if (typeof a.limitUsage.divisions === 'object') {
-                const stale = Object.keys(a.limitUsage.divisions).filter(d => !divisions.includes(d));
-                if (stale.length > 0) actIssues.push(`Stale limitUsage.divisions: ${stale.join(', ')}`);
-            }
-        }
-        
-        // Check timeRules
-        if (!Array.isArray(a.timeRules)) {
-            actIssues.push('timeRules not array');
-        } else {
-            a.timeRules.forEach((rule, rIdx) => {
-                if (rule.startMin === undefined) actIssues.push(`timeRules[${rIdx}].startMin missing`);
-                if (rule.endMin === undefined) actIssues.push(`timeRules[${rIdx}].endMin missing`);
-            });
-        }
-        
-        // Check location
-        if (a.location && locations.length > 0) {
-            const locationExists = locations.some(l => l.name === a.location);
-            if (!locationExists) actIssues.push(`Invalid location: "${a.location}"`);
-        }
-        
-        if (actIssues.length > 0) {
-            issues.push({ activity: a.name || `[index ${idx}]`, issues: actIssues });
-        }
-    });
-    
-    if (issues.length === 0) {
-        console.log('\n✅ All special activities have valid structure!');
-    } else {
-        console.log(`\n⚠️ ISSUES FOUND (${issues.length} activities):`);
-        issues.forEach(item => {
-            console.log(`\n   📁 ${item.activity}:`);
-            item.issues.forEach(issue => console.log(`      - ${issue}`));
-        });
     }
     
-    console.log('\n' + '═'.repeat(60));
-    console.log('💡 Run validateSpecialActivities() to auto-fix issues');
-    console.log('═'.repeat(60) + '\n');
-    
-    return { activities: storedActivities.length, issues: issues.length };
+    return null;
 };
 
-console.log("[SPECIAL_ACTIVITIES] Module v2.0 loaded");
+// ★ Check if location/zone system is ready
+window.isLocationsSystemReady = function() {
+    return _isInitialized;
+};
+
+// ★ Get transition times for a field
+window.getTransitionForField = function(fieldName) {
+    const zone = window.getZoneForField?.(fieldName);
+    if (zone && zone.transition) {
+        return {
+            preMin: parseInt(zone.transition.preMin) || 0,
+            postMin: parseInt(zone.transition.postMin) || 0
+        };
+    }
+    return { preMin: 0, postMin: 0 };
+};
+
+// ★ NEW: Get transition times for a special activity
+window.getTransitionForSpecialActivity = function(specialName) {
+    const zone = window.getZoneForSpecialActivity?.(specialName);
+    if (zone && zone.transition) {
+        return {
+            preMin: parseInt(zone.transition.preMin) || 0,
+            postMin: parseInt(zone.transition.postMin) || 0
+        };
+    }
+    return { preMin: 0, postMin: 0 };
+};
+
+// ★ Check zone capacity
+window.getZoneMaxConcurrent = function(zoneName) {
+    if (!zoneName) return 99;
+    const settings = window.loadGlobalSettings?.() || {};
+    const zone = settings.locationZones?.[zoneName];
+    return parseInt(zone?.maxConcurrent) || 99;
+};
+
+// ★ Check if adding an activity to a zone would exceed capacity
+window.checkZoneCapacity = function(zoneName, slotIndex, currentCount) {
+    const maxConcurrent = window.getZoneMaxConcurrent(zoneName);
+    return (currentCount || 0) < maxConcurrent;
+};
+
+// ★ Get all fields in a zone
+window.getFieldsInZone = function(zoneName) {
+    if (!zoneName) return [];
+    const settings = window.loadGlobalSettings?.() || {};
+    const zone = settings.locationZones?.[zoneName];
+    return Array.isArray(zone?.fields) ? [...zone.fields] : [];
+};
+
+// ★ NEW: Get all special activities in a zone
+window.getSpecialActivitiesInZone = function(zoneName) {
+    if (!zoneName) return [];
+    const settings = window.loadGlobalSettings?.() || {};
+    const zone = settings.locationZones?.[zoneName];
+    return Array.isArray(zone?.specialActivities) ? [...zone.specialActivities] : [];
+};
+
+// ★ Check if a field belongs to any zone
+window.isFieldInAnyZone = function(fieldName) {
+    if (!fieldName) return false;
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    
+    for (const zone of Object.values(zones)) {
+        if (!zone || typeof zone !== 'object') continue;
+        if (Array.isArray(zone.fields) && zone.fields.includes(fieldName)) {
+            return true;
+        }
+    }
+    return false;
+};
+
+// ★ NEW: Check if a special activity belongs to any zone
+window.isSpecialActivityInAnyZone = function(specialName) {
+    if (!specialName) return false;
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    
+    for (const zone of Object.values(zones)) {
+        if (!zone || typeof zone !== 'object') continue;
+        if (Array.isArray(zone.specialActivities) && zone.specialActivities.includes(specialName)) {
+            return true;
+        }
+    }
+    return false;
+};
+
+// ★ Batch check multiple fields for zone membership
+window.getZonesForFields = function(fieldNames) {
+    if (!Array.isArray(fieldNames)) return {};
+    
+    const result = {};
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    
+    for (const fieldName of fieldNames) {
+        result[fieldName] = null;
+        for (const [zoneName, zone] of Object.entries(zones)) {
+            if (!zone || typeof zone !== 'object') continue;
+            if (Array.isArray(zone.fields) && zone.fields.includes(fieldName)) {
+                result[fieldName] = zone;
+                break;
+            }
+        }
+    }
+    
+    return result;
+};
+
+console.log("[LOCATIONS] Location Zones module v2.1 loaded");
 
 })();
