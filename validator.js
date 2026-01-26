@@ -1,5 +1,5 @@
 // =================================================================
-// validator.js v2.0 — COMPREHENSIVE SCHEDULE VALIDATOR
+// validator.js v2.1 — COMPREHENSIVE SCHEDULE VALIDATOR
 // =================================================================
 // 
 // CHECKS FOR:
@@ -8,6 +8,8 @@
 // ✅ Same-day activity repetitions
 // ✅ Missing required activities (lunch/dismissal)
 // ✅ Division-specific time awareness
+//
+// v2.1: ★★★ FIXED getFieldCapacity - type='all' now returns 999 ★★★
 //
 // =================================================================
 
@@ -113,22 +115,46 @@
     }
 
     /**
-     * Get field capacity from properties
+     * ★★★ FIXED v2.1: Get field capacity from properties ★★★
+     * - type='not_sharable' → 1
+     * - type='all' → 999 (unlimited)
+     * - type='custom' → configured capacity (default 2)
      */
     function getFieldCapacity(fieldName, activityProperties) {
+        // Use centralized utility if available
+        if (window.SchedulerCoreUtils?.getFieldCapacity) {
+            return window.SchedulerCoreUtils.getFieldCapacity(fieldName, activityProperties);
+        }
+        
         const props = activityProperties[fieldName] || {};
         
-        if (props.sharableWith?.capacity) {
-            return parseInt(props.sharableWith.capacity) || 1;
+        // Check sharableWith config
+        if (props.sharableWith) {
+            // ★★★ FIX: type='all' means unlimited (999) ★★★
+            if (props.sharableWith.type === 'all') {
+                return 999;
+            }
+            // type='custom' uses configured capacity
+            if (props.sharableWith.type === 'custom') {
+                return parseInt(props.sharableWith.capacity) || 2;
+            }
+            // Explicit capacity value
+            if (props.sharableWith.capacity) {
+                return parseInt(props.sharableWith.capacity);
+            }
         }
-        if (props.sharableWith?.type === 'all' || props.sharableWith?.type === 'custom' || props.sharable) {
+        
+        // Legacy sharable boolean
+        if (props.sharable) {
             return 2;
         }
+        
+        // Check direct capacity property
         if (props.capacity) {
             return parseInt(props.capacity) || 1;
         }
         
-        return 1;
+        return 1; // Default: not sharable
     }
 
     /**
@@ -461,7 +487,7 @@
                 <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:10px; margin-bottom:15px;">
                     <h2 style="margin:0; color:#333; display:flex; align-items:center; gap:8px;">
                         🛡️ Schedule Validator
-                        <span style="font-size:0.6em; background:#e0e0e0; padding:2px 8px; border-radius:4px;">v2.0</span>
+                        <span style="font-size:0.6em; background:#e0e0e0; padding:2px 8px; border-radius:4px;">v2.1</span>
                     </h2>
                     <button id="val-close-x" style="background:none; border:none; font-size:1.5em; cursor:pointer; color:#888; padding:0 8px;">&times;</button>
                 </div>
@@ -569,7 +595,11 @@
 
     // Export
     window.validateSchedule = validateSchedule;
+    window.ScheduleValidator = {
+        validate: validateSchedule,
+        getFieldCapacity: getFieldCapacity
+    };
 
-    console.log('🛡️ Validator v2.0 loaded - Cross-division time conflict detection enabled');
+    console.log('🛡️ Validator v2.1 loaded - FIXED capacity logic (type=all → 999)');
 
 })();
