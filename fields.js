@@ -10,6 +10,7 @@
 // 6. SYNC: Explicit Cloud Sync trigger added to saveData.
 // 7. SEC: Added RBAC checks for Add, Delete, and Save operations.
 // 8. Update: Transition/Zone rules removed - now managed in Locations tab.
+// 9. ★★★ v2.0: COMPREHENSIVE FIELD NORMALIZATION on save ★★★
 // ============================================================================
 (function(){
 'use strict';
@@ -251,14 +252,19 @@ function loadData(){
 
         f.sharableWith = f.sharableWith || { type:"not_sharable", divisions:[], capacity:2 };
         if(!f.sharableWith.capacity) f.sharableWith.capacity = 2;
+        if(!f.sharableWith.divisions) f.sharableWith.divisions = [];
         
-        f.limitUsage = f.limitUsage || { enabled:false, divisions:{} };
+        f.limitUsage = f.limitUsage || { enabled:false, divisions:{}, priorityList:[] };
+        if(!f.limitUsage.priorityList) f.limitUsage.priorityList = [];
 
         // Rainy Day Default
         f.rainyDayAvailable = f.rainyDayAvailable ?? false;
     });
 }
 
+//------------------------------------------------------------------
+// ★★★ COMPREHENSIVE SAVE WITH FULL NORMALIZATION ★★★
+//------------------------------------------------------------------
 function saveData(){
     // ✅ RBAC Check
     if (!window.AccessControl?.canEditSetup?.()) {
@@ -267,19 +273,71 @@ function saveData(){
     }
 
     try {
+        // ★★★ NORMALIZE FIELDS BEFORE SAVE to ensure complete structure ★★★
+        const normalizedFields = fields.map(f => ({
+            // Basic properties
+            name: f.name || '',
+            activities: Array.isArray(f.activities) ? f.activities : [],
+            available: f.available !== false,
+            
+            // ★ Sharing rules - ensure complete structure
+            sharableWith: {
+                type: f.sharableWith?.type || 'not_sharable',
+                divisions: Array.isArray(f.sharableWith?.divisions) ? f.sharableWith.divisions : [],
+                capacity: parseInt(f.sharableWith?.capacity) || (f.sharableWith?.type === 'not_sharable' ? 1 : 2)
+            },
+            
+            // ★ Access restrictions - ensure complete structure  
+            limitUsage: {
+                enabled: f.limitUsage?.enabled === true,
+                divisions: typeof f.limitUsage?.divisions === 'object' ? f.limitUsage.divisions : {},
+                priorityList: Array.isArray(f.limitUsage?.priorityList) ? f.limitUsage.priorityList : []
+            },
+            
+            // ★ Time rules - ensure array with parsed times
+            timeRules: Array.isArray(f.timeRules) ? f.timeRules.map(r => ({
+                type: r.type || 'Available',
+                start: r.start || '',
+                end: r.end || '',
+                startMin: r.startMin ?? parseTimeToMinutes(r.start),
+                endMin: r.endMin ?? parseTimeToMinutes(r.end)
+            })) : [],
+            
+            // ★ Indoor/Outdoor for rainy day
+            rainyDayAvailable: f.rainyDayAvailable === true,
+            
+            // Preserve any additional properties
+            ...(f.transition ? { transition: f.transition } : {}),
+            ...(f.preferences ? { preferences: f.preferences } : {}),
+            ...(f.minDurationMin ? { minDurationMin: f.minDurationMin } : {})
+        }));
+        
         const settings = window.loadGlobalSettings?.() || {};
         settings.app1 = settings.app1 || {};
-        settings.app1.fields = fields;
+        settings.app1.fields = normalizedFields;
         settings.app1.sportMetaData = sportMetaData;
         window.saveGlobalSettings?.("app1", settings.app1);
+        
+        // ⭐ Also save at root level for redundancy
+        window.saveGlobalSettings?.("fields", normalizedFields);
         
         // ⭐ CLOUD SYNC FIX: Explicitly request cloud sync after saving
         if (typeof window.requestCloudSync === 'function') {
             window.requestCloudSync();
         }
         
+        // Update local reference with normalized data
+        fields = normalizedFields;
+        
         // Expose globally for other modules
         window.fields = fields;
+        
+        // ★★★ REFRESH ACTIVITY PROPERTIES to keep generator in sync ★★★
+        if (typeof window.refreshActivityPropertiesFromFields === 'function') {
+            setTimeout(() => window.refreshActivityPropertiesFromFields(), 50);
+        }
+        
+        console.log('☁️ [Fields] Saved', normalizedFields.length, 'fields with complete structure');
     } catch (e) {
         console.error("Failed to save fields data:", e);
     }
@@ -874,7 +932,7 @@ function renderSharing(item){
             const capIn = document.createElement("input"); 
             capIn.type="number"; capIn.min="2"; capIn.value=rules.capacity;
             capIn.style.width="60px"; capIn.style.marginLeft="8px"; capIn.style.padding="4px";
-            capIn.onchange = ()=>{ rules.capacity = Math.max(2, parseInt(capIn.value)||2); saveData(); };
+            capIn.onchange = ()=>{ rules.capacity = Math.max(2, parseInt(capIn.value)||2); saveData(); updateSummary(); };
             capRow.appendChild(capIn);
             det.appendChild(capRow);
 
@@ -884,7 +942,7 @@ function renderSharing(item){
             divLabel.style.fontSize="0.85rem"; divLabel.style.marginBottom="6px";
             det.appendChild(divLabel);
 
-            const allDivs = window.availableDivisions || [];
+            const allDivs = window.availableDivisions || Object.keys(window.divisions || {});
             allDivs.forEach(d => {
                 const isActive = rules.divisions.includes(d);
                 const chip = document.createElement("span");
@@ -896,6 +954,7 @@ function renderSharing(item){
                     rules.type = rules.divisions.length > 0 ? 'custom' : 'all';
                     saveData();
                     chip.className = "chip " + (rules.divisions.includes(d) ? "active" : "inactive");
+                    updateSummary();
                 };
                 det.appendChild(chip);
             });
@@ -1031,7 +1090,7 @@ function renderAccess(item){
             body.appendChild(divHeader);
 
             const chipWrap = document.createElement("div");
-            const availableDivisions = window.availableDivisions || [];
+            const availableDivisions = window.availableDivisions || Object.keys(window.divisions || {});
 
             availableDivisions.forEach(divName => {
                 const isAllowed = divName in rules.divisions;
@@ -1113,15 +1172,24 @@ function renderTimeRules(item){
             alert("Please enter both start and end times."); 
             return; 
         }
-        if(parseTimeToMinutes(startIn.value) === null){ 
+        const startMinParsed = parseTimeToMinutes(startIn.value);
+        const endMinParsed = parseTimeToMinutes(endIn.value);
+        if(startMinParsed === null){ 
             alert("Invalid Start Time format. Use format like 9:00am"); 
             return; 
         }
-        if(parseTimeToMinutes(endIn.value) === null){ 
+        if(endMinParsed === null){ 
             alert("Invalid End Time format. Use format like 10:00am"); 
             return; 
         }
-        item.timeRules.push({ type: typeSel.value, start: startIn.value, end: endIn.value });
+        // ★★★ Save with pre-parsed minutes ★★★
+        item.timeRules.push({ 
+            type: typeSel.value, 
+            start: startIn.value, 
+            end: endIn.value,
+            startMin: startMinParsed,
+            endMin: endMinParsed
+        });
         saveData();
         renderDetailPane();
     };
@@ -1273,8 +1341,8 @@ function addField(){
         name: n,
         activities: [],
         available: true,
-        sharableWith: { type:'not_sharable', divisions:[], capacity:2 },
-        limitUsage: { enabled:false, divisions:{} },
+        sharableWith: { type:'not_sharable', divisions:[], capacity:1 },
+        limitUsage: { enabled:false, divisions:{}, priorityList:[] },
         timeRules: [],
         rainyDayAvailable: false
     });
@@ -1311,6 +1379,41 @@ window.getFields = function() {
 window.getFieldByName = function(name) {
     const allFields = window.getFields();
     return allFields.find(f => f.name === name);
+};
+
+// ★★★ NEW: Refresh activity properties from stored fields ★★★
+window.refreshActivityPropertiesFromFields = function() {
+    const settings = window.loadGlobalSettings?.() || {};
+    const fields = settings.app1?.fields || settings.fields || [];
+    const specials = settings.app1?.specialActivities || [];
+    
+    if (!window.activityProperties) window.activityProperties = {};
+    
+    // Update fields in activityProperties
+    fields.forEach(f => {
+        if (!f?.name) return;
+        
+        const normalizedShareable = {
+            type: f.sharableWith?.type || 'not_sharable',
+            divisions: Array.isArray(f.sharableWith?.divisions) ? f.sharableWith.divisions : [],
+            capacity: parseInt(f.sharableWith?.capacity) || (f.sharableWith?.type === 'not_sharable' ? 1 : 2)
+        };
+        
+        window.activityProperties[f.name] = {
+            ...window.activityProperties[f.name],
+            type: 'field',
+            available: f.available !== false,
+            sharable: normalizedShareable.type !== 'not_sharable',
+            sharableWith: normalizedShareable,
+            limitUsage: f.limitUsage || null,
+            timeRules: Array.isArray(f.timeRules) ? f.timeRules : [],
+            rainyDayAvailable: f.rainyDayAvailable === true,
+            activities: Array.isArray(f.activities) ? f.activities : []
+        };
+    });
+    
+    console.log('🔄 [Fields] activityProperties refreshed from stored fields');
+    return window.activityProperties;
 };
 
 })();
