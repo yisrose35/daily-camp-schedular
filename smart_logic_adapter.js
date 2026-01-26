@@ -1,12 +1,12 @@
-
 // ============================================================================
-// SmartLogicAdapter V44 (ELECTIVE LOCK SUPPORT + SWIM/POOL ALIAS)
+// SmartLogicAdapter V44.1 (RAINY DAY FILTERING FIX)
 // ============================================================================
-// CRITICAL FIXES FROM V43:
+// CRITICAL FIXES FROM V44:
 // 1. NOW CHECKS GlobalFieldLocks for elective locks (division-aware)
 // 2. When activity is locked, uses fallback instead of leaving empty
 // 3. Swim/Pool interchangeability - treats them as the same resource
 // 4. Better logging for lock conflicts
+// ★★★ V44.1: FILTERS OUT RAINY DAY ACTIVITIES ON NORMAL DAYS ★★★
 // ============================================================================
 
 (function() {
@@ -215,6 +215,7 @@
      * 2. activityProps - for availability, time rules, capacity, restrictions
      * 3. dailyFieldAvailability - for daily overrides
      * 4. GlobalFieldLocks - for elective locks
+     * ★★★ V44.1: Now filters by rainy day mode ★★★
      * * @param {number} startMin - Block start time in minutes
      * @param {number} endMin - Block end time in minutes
      * @param {string} divisionName - The division to check access for
@@ -224,13 +225,45 @@
      */
     function getAvailableSpecialsForTimeBlock(startMin, endMin, divisionName, activityProps, dailyFieldAvailability) {
         // Get all specials from the global registry
-        const allSpecials = window.getGlobalSpecialActivities?.() || [];
+        let allSpecials = window.getGlobalSpecialActivities?.() || [];
+        
+        // ★★★ FIX V44.1: Filter out rainy day exclusive activities on normal days ★★★
+        const isRainyMode = window.isRainyDayModeActive?.() || false;
+        
+        if (!isRainyMode) {
+            // Normal day: exclude rainy-day-only activities
+            const beforeCount = allSpecials.length;
+            allSpecials = allSpecials.filter(s => 
+                s.rainyDayExclusive !== true && s.rainyDayOnly !== true
+            );
+            const filtered = beforeCount - allSpecials.length;
+            if (filtered > 0) {
+                log(`  [RainyDay] Filtered out ${filtered} rainy-day-only activities (normal day)`);
+            }
+        } else {
+            // Rainy day: exclude activities not available on rainy days
+            const beforeCount = allSpecials.length;
+            allSpecials = allSpecials.filter(s => 
+                s.rainyDayAvailable !== false && s.availableOnRainyDay !== false
+            );
+            const filtered = beforeCount - allSpecials.length;
+            if (filtered > 0) {
+                log(`  [RainyDay] Filtered out ${filtered} activities unavailable on rainy days`);
+            }
+        }
         
         // Also check activityProperties for specials (backup source)
         const propsSpecials = [];
         if (activityProps) {
             Object.entries(activityProps).forEach(([name, props]) => {
                 if (props.type === 'Special' || props.type === 'special') {
+                    // ★★★ FIX V44.1: Also filter activityProps specials by rainy day status ★★★
+                    if (!isRainyMode && (props.rainyDayExclusive === true || props.rainyDayOnly === true)) {
+                        return; // Skip rainy-day-only on normal days
+                    }
+                    if (isRainyMode && (props.rainyDayAvailable === false || props.availableOnRainyDay === false)) {
+                        return; // Skip non-rainy-available on rainy days
+                    }
                     if (!allSpecials.find(s => s.name === name)) {
                         propsSpecials.push({ name, ...props });
                     }
@@ -242,7 +275,7 @@
         const available = [];
 
         log(`\n  Checking specials for ${divisionName} at ${startMin}-${endMin}:`);
-        log(`  Found ${combinedSpecials.length} total specials to check`);
+        log(`  Found ${combinedSpecials.length} total specials to check (after rainy day filter)`);
 
         // Get slots for this time block
         const slots = window.SchedulerCoreUtils?.findSlotsForRange(startMin, endMin) || [];
@@ -490,16 +523,17 @@
         },
 
         // =====================================================================
-        // MAIN ASSIGNMENT LOGIC (V44 - ELECTIVE LOCK AWARE)
+        // MAIN ASSIGNMENT LOGIC (V44.1 - RAINY DAY FILTERING)
         // =====================================================================
 
         generateAssignments(bunks, job, historical = {}, specialNames = [], activityProps = {}, masterFields = [], dailyFieldAvailability = {}, yesterdayHistory = {}) {
             
             log("\n" + "=".repeat(70));
-            log(`SMART TILE V44: ${job.division}`);
+            log(`SMART TILE V44.1: ${job.division}`);
             log(`Main1: ${job.main1}, Main2: ${job.main2}`);
             log(`Fallback: ${job.fallbackActivity} (for ${job.fallbackFor})`);
             log(`Bunks: ${bunks.join(', ')}`);
+            log(`Rainy Day Mode: ${window.isRainyDayModeActive?.() || false}`);
             log("=".repeat(70));
 
             const divisionName = job.division;
@@ -838,7 +872,8 @@
                 block2,
                 specialWinnersA: [...specialWinnersA],
                 ineligibleBunks,
-                nextDayPriority
+                nextDayPriority,
+                rainyDayMode: window.isRainyDayModeActive?.() || false
             };
 
             log("\n" + "=".repeat(70));
@@ -884,6 +919,7 @@
         
         console.log(`\n=== SMART TILE CAPACITY FOR ${divisionName} ===`);
         console.log(`Time: ${startMin} - ${endMin} minutes`);
+        console.log(`Rainy Day Mode: ${window.isRainyDayModeActive?.() || false}`);
         
         const available = getAvailableSpecialsForTimeBlock(
             startMin, 
@@ -903,5 +939,7 @@
         
         return available;
     };
+
+    console.log("[SmartTile] V44.1 loaded (with rainy day filtering fix)");
 
 })();
