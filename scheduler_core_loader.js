@@ -1,6 +1,7 @@
 // ============================================================================
 // scheduler_core_loader.js (GCM PATCHED FOR SMART LEAGUE ENGINE v2)
 // FULL REWRITE — SPEC-COMPLIANT LOADER FOR ORCHESTRATOR V3
+// ★★★ v2.1: ENHANCED buildActivityProperties with ALL field properties ★★★
 // ============================================================================
 
 (function () {
@@ -19,6 +20,29 @@
 
     function getDailyOverrides() {
         return window.loadCurrentDailyData?.() || {};
+    }
+
+    // ------------------------------------------------------------------------
+    // ★★★ TIME PARSING HELPER ★★★
+    // ------------------------------------------------------------------------
+    function parseTimeString(str) {
+        if (!str || typeof str !== "string") return null;
+        let s = str.trim().toLowerCase();
+        let mer = null;
+        if (s.endsWith("am") || s.endsWith("pm")) {
+            mer = s.endsWith("am") ? "am" : "pm";
+            s = s.replace(/am|pm/gi, "").trim();
+        }
+        const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+        if (!m) return null;
+        let hh = parseInt(m[1], 10);
+        const mm = parseInt(m[2], 10);
+        if (mm < 0 || mm > 59) return null;
+        if (mer) {
+            if (hh === 12) hh = mer === "am" ? 0 : 12;
+            else if (mer === "pm") hh += 12;
+        }
+        return hh * 60 + mm;
     }
 
     // ------------------------------------------------------------------------
@@ -159,7 +183,7 @@
     }
 
     // ------------------------------------------------------------------------
-    // 5. ACTIVITY PROPERTIES
+    // 5. ★★★ ENHANCED ACTIVITY PROPERTIES (INCLUDES ALL FIELD PROPERTIES) ★★★
     // ------------------------------------------------------------------------
     function buildActivityProperties(masterActivities, fields) {
         const props = {};
@@ -168,7 +192,7 @@
             return {
                 available: true,
                 sharable: false,
-                sharableWith: { type: "not_sharable", capacity: 999 },
+                sharableWith: { type: "not_sharable", divisions: [], capacity: 1 },
                 preferredDivisions: [],
                 allowedDivisions: [],
                 allowedFields: null,
@@ -179,6 +203,9 @@
                 minDurationMin: 0,
                 maxUsage: 0,
                 frequencyWeeks: 0,
+                rainyDayAvailable: false,
+                activities: [],
+                type: 'activity',
                 ...over
             };
         }
@@ -196,20 +223,50 @@
                 limitUsage: a.limitUsage || null,
                 timeRules: a.timeRules || [],
                 minDurationMin: a.minDurationMin || 0,
-                maxUsage: a.maxUsage || 0
+                maxUsage: a.maxUsage || 0,
+                type: a.type || 'activity'
             });
         });
 
+        // ★★★ ENHANCED: Include ALL field properties ★★★
         fields.forEach(f => {
-            const cap = f.sharableWith?.capacity || 999;
+            // ★ Normalize sharableWith with complete structure
+            const normalizedSharable = {
+                type: f.sharableWith?.type || 'not_sharable',
+                divisions: Array.isArray(f.sharableWith?.divisions) ? f.sharableWith.divisions : [],
+                capacity: parseInt(f.sharableWith?.capacity) || (f.sharableWith?.type === 'all' ? 999 : 1)
+            };
+            
+            // ★ Normalize limitUsage with complete structure
+            const normalizedLimitUsage = f.limitUsage ? {
+                enabled: f.limitUsage.enabled === true,
+                divisions: typeof f.limitUsage.divisions === 'object' ? f.limitUsage.divisions : {},
+                priorityList: Array.isArray(f.limitUsage.priorityList) ? f.limitUsage.priorityList : []
+            } : null;
+            
+            // ★ Parse timeRules to include startMin/endMin
+            const parsedTimeRules = Array.isArray(f.timeRules) ? f.timeRules.map(r => ({
+                type: r.type || 'Available',
+                start: r.start || '',
+                end: r.end || '',
+                startMin: r.startMin ?? parseTimeString(r.start),
+                endMin: r.endMin ?? parseTimeString(r.end)
+            })) : [];
+
             props[f.name] = base({
+                type: 'field',
                 available: f.available !== false,
-                sharableWith: { ...f.sharableWith, capacity: cap },
-                allowedDivisions: [],
+                sharable: normalizedSharable.type !== 'not_sharable',
+                sharableWith: normalizedSharable,
+                allowedDivisions: normalizedSharable.type === 'custom' ? normalizedSharable.divisions : [],
                 transition: f.transition || null,
                 preferences: f.preferences || null,
-                limitUsage: f.limitUsage || null,
-                timeRules: f.timeRules || []
+                limitUsage: normalizedLimitUsage,
+                timeRules: parsedTimeRules,
+                // ★★★ NEW: Include rainyDayAvailable ★★★
+                rainyDayAvailable: f.rainyDayAvailable === true,
+                // ★★★ NEW: Include activities array (sports this field supports) ★★★
+                activities: Array.isArray(f.activities) ? f.activities : []
             });
         });
 
@@ -318,5 +375,8 @@
     // Expose to window
     window.loadAndFilterData = loadAndFilterData;
     window.generateSchedulableBlocks = generateSchedulableBlocks;
+    
+    // ★★★ NEW: Expose buildActivityProperties for refresh calls ★★★
+    window.buildActivityProperties = buildActivityProperties;
 
 })();
