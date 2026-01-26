@@ -1457,22 +1457,69 @@
 
                 for (const slotIdx of Object.keys(divAssignments)) {
                     const slotData = divAssignments[slotIdx];
+                    if (!slotData) continue;
                     
-                    // Check if this is for our league (by name match)
+                    // Check if this is for our league
                     const slotLeagueName = slotData?.leagueName || '';
                     const slotGameLabel = slotData?.gameLabel || '';
+                    const matchups = slotData.matchups || [];
                     
-                    const isOurLeague = slotLeagueName === league.name ||
+                    // Debug: log what's in this slot
+                    console.log('[LEAGUES] Import: Checking slot', slotIdx, '- leagueName:', slotLeagueName, 'gameLabel:', slotGameLabel, 'matchups:', matchups);
+                    
+                    // Method A: Direct league name match
+                    const nameMatches = slotLeagueName === league.name ||
                         slotLeagueName.toLowerCase() === league.name.toLowerCase() ||
-                        slotGameLabel.toLowerCase().includes(league.name.toLowerCase());
+                        (slotGameLabel && slotGameLabel.toLowerCase().includes(league.name.toLowerCase()));
+                    
+                    // Method B: If no league name stored, check if matchup teams belong to this league
+                    let teamsMatch = false;
+                    if (!nameMatches && matchups.length > 0) {
+                        // Extract team names from matchups
+                        const matchupTeams = new Set();
+                        matchups.forEach(m => {
+                            if (typeof m === 'object') {
+                                if (m.teamA) matchupTeams.add(m.teamA);
+                                if (m.teamB) matchupTeams.add(m.teamB);
+                            } else if (typeof m === 'string') {
+                                const parts = m.split(' vs ');
+                                if (parts.length === 2) {
+                                    matchupTeams.add(parts[0].trim());
+                                    matchupTeams.add(parts[1].split('—')[0].trim());
+                                }
+                            }
+                        });
+                        
+                        console.log('[LEAGUES] Import: Matchup teams found:', Array.from(matchupTeams));
+                        console.log('[LEAGUES] Import: League teams:', league.teams);
+                        
+                        // Check if ALL matchup teams are in this league's team list
+                        if (matchupTeams.size > 0 && league.teams && league.teams.length > 0) {
+                            const leagueTeamsSet = new Set(league.teams);
+                            teamsMatch = Array.from(matchupTeams).every(t => 
+                                t === 'BYE' || leagueTeamsSet.has(t)
+                            );
+                            
+                            if (!teamsMatch) {
+                                // Log which teams didn't match
+                                const nonMatching = Array.from(matchupTeams).filter(t => 
+                                    t !== 'BYE' && !leagueTeamsSet.has(t)
+                                );
+                                console.log('[LEAGUES] Import: Teams NOT in league:', nonMatching);
+                            } else {
+                                console.log('[LEAGUES] Import: ✓ All teams matched!');
+                            }
+                        }
+                    }
+                    
+                    const isOurLeague = nameMatches || teamsMatch;
                     
                     if (!isOurLeague) {
-                        console.log('[LEAGUES] Import: Skipping slot - league mismatch:', slotLeagueName, 'vs', league.name);
+                        console.log('[LEAGUES] Import: Skipping slot - no match (nameMatches=' + nameMatches + ', teamsMatch=' + teamsMatch + ')');
                         continue;
                     }
 
-                    console.log('[LEAGUES] Import: Found matching slot in div "' + divName + '" slot ' + slotIdx);
-                    const matchups = slotData.matchups || [];
+                    console.log('[LEAGUES] Import: ✓ Found matching slot in div "' + divName + '" slot ' + slotIdx + (teamsMatch ? ' (matched by teams)' : ' (matched by name)'));
 
                     matchups.forEach(m => {
                         let teamA, teamB;
@@ -1514,16 +1561,41 @@
                         const activityName = entry._activity || entry.field || '';
                         const entryLeagueName = entry._leagueName || '';
                         const isH2H = entry._h2h === true;
+                        const allMatchups = entry._allMatchups || [];
 
-                        const isOurLeague = entryLeagueName === league.name ||
+                        // Method A: Direct name match
+                        const nameMatches = entryLeagueName === league.name ||
                             entryLeagueName.toLowerCase() === league.name.toLowerCase() ||
                             activityName.toLowerCase().includes(`league: ${league.name.toLowerCase()}`) ||
                             activityName.toLowerCase().includes(league.name.toLowerCase()) ||
                             (isH2H && activityName.toLowerCase().includes(league.name.toLowerCase()));
 
-                        if (!isOurLeague) continue;
+                        // Method B: For H2H entries without league name, check if teams belong to this league
+                        let teamsMatch = false;
+                        if (!nameMatches && isH2H && allMatchups.length > 0 && league.teams && league.teams.length > 0) {
+                            const matchupTeams = new Set();
+                            allMatchups.forEach(m => {
+                                if (typeof m === 'string') {
+                                    const vsMatch = m.match(/^(.+?)\s+vs\s+(.+?)(?:\s*—|$)/i);
+                                    if (vsMatch) {
+                                        matchupTeams.add(vsMatch[1].trim());
+                                        matchupTeams.add(vsMatch[2].trim());
+                                    }
+                                } else if (typeof m === 'object') {
+                                    if (m.teamA) matchupTeams.add(m.teamA);
+                                    if (m.teamB) matchupTeams.add(m.teamB);
+                                }
+                            });
+                            
+                            if (matchupTeams.size > 0) {
+                                const leagueTeamsSet = new Set(league.teams);
+                                teamsMatch = Array.from(matchupTeams).every(t => 
+                                    t === 'BYE' || leagueTeamsSet.has(t)
+                                );
+                            }
+                        }
 
-                        const allMatchups = entry._allMatchups || [];
+                        if (!nameMatches && !teamsMatch) continue;
 
                         allMatchups.forEach(m => {
                             let teamA, teamB;
@@ -1544,6 +1616,7 @@
                                     if (!processedMatchups.has(key)) {
                                         processedMatchups.add(key);
                                         foundMatchups.push({ teamA, teamB });
+                                        console.log('[LEAGUES] Import (Method 2): Found match:', teamA, 'vs', teamB);
                                     }
                                 }
                             }
