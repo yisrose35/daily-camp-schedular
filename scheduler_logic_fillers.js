@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_logic_fillers.js (v6.1 - UNIFIED ROTATION SCORING)
+// scheduler_logic_fillers.js (v6.2 - FIXED CAPACITY LOGIC)
 // ============================================================================
 // ★★★ THIS FILE NOW DELEGATES ALL ROTATION LOGIC TO rotation_engine.js ★★★
 //
@@ -10,7 +10,8 @@
 // - Preference scoring
 // - All scoring is delegated to window.RotationEngine
 //
-// KEY FIXES IN v6.1:
+// KEY FIXES IN v6.2:
+// - ★★★ FIXED: canShareWithActivity capacity - type='all' now returns 999 ★★★
 // - findBestGeneralActivity now uses UNIFIED scoring (no type bias)
 // - Case-insensitive type filtering throughout
 // - Dual property lookup (checks both field AND activity names)
@@ -50,6 +51,48 @@
 
         const divisionContext = block.divName || block.division;
         return window.GlobalFieldLocks.isFieldLocked(fieldName, slots, divisionContext) !== null;
+    }
+
+    // =========================================================================
+    // ★★★ CENTRALIZED CAPACITY FUNCTION ★★★
+    // =========================================================================
+
+    /**
+     * Get field capacity - SINGLE SOURCE OF TRUTH
+     * - type='not_sharable' → 1
+     * - type='all' → 999 (unlimited)
+     * - type='custom' → configured capacity (default 2)
+     */
+    function getFieldCapacity(fieldName, activityProperties) {
+        // Use centralized utility if available
+        if (window.SchedulerCoreUtils?.getFieldCapacity) {
+            return window.SchedulerCoreUtils.getFieldCapacity(fieldName, activityProperties);
+        }
+        
+        // Fallback implementation
+        const props = activityProperties?.[fieldName] || {};
+        
+        if (props.sharableWith) {
+            // ★★★ FIX: type='all' = unlimited (999) ★★★
+            if (props.sharableWith.type === 'all') {
+                return 999;
+            }
+            // type='custom' uses configured capacity
+            if (props.sharableWith.type === 'custom') {
+                return parseInt(props.sharableWith.capacity) || 2;
+            }
+            // Explicit capacity value
+            if (props.sharableWith.capacity) {
+                return parseInt(props.sharableWith.capacity);
+            }
+        }
+        
+        // Legacy sharable boolean
+        if (props.sharable) {
+            return 2;
+        }
+        
+        return 1; // Default: not sharable
     }
 
     // =========================================================================
@@ -150,6 +193,9 @@
         return state;
     }
 
+    /**
+     * ★★★ FIXED v6.2: canShareWithActivity with correct capacity logic ★★★
+     */
     function canShareWithActivity(fieldName, block, activityName, activityProperties) {
         if (isFieldUnavailable(fieldName, block)) {
             return false;
@@ -159,14 +205,10 @@
 
         if (state.count === 0) return true;
 
-        // ★★★ FIX: Check both field AND activity name for properties ★★★
-        const props = activityProperties[fieldName] || activityProperties[activityName] || {};
-        let maxCapacity = 1;
-        if (props.sharableWith?.capacity) {
-            maxCapacity = parseInt(props.sharableWith.capacity) || 1;
-        } else if (props.sharable || props.sharableWith?.type === "all" || props.sharableWith?.type === "custom") {
-            maxCapacity = 2;
-        }
+        // ★★★ FIX v6.2: Use centralized capacity function ★★★
+        // Check both field AND activity name for properties
+        const maxCapacity = getFieldCapacity(fieldName, activityProperties) || 
+                           getFieldCapacity(activityName, activityProperties) || 1;
 
         if (state.count >= maxCapacity) {
             return false;
@@ -642,6 +684,9 @@
         return 0;
     };
 
-    console.log('[FILLERS] v6.1 loaded - UNIFIED SCORING, DELEGATING to RotationEngine');
+    // Expose getFieldCapacity for external use
+    window.getFieldCapacityFromFillers = getFieldCapacity;
+
+    console.log('[FILLERS] v6.2 loaded - FIXED CAPACITY LOGIC (type=all → 999)');
 
 })();
