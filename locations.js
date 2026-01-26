@@ -1,5 +1,5 @@
 // ============================================================================
-// locations.js — LOCATION ZONES & FACILITIES MANAGEMENT
+// locations.js — LOCATION ZONES & FACILITIES MANAGEMENT v2.0
 // ============================================================================
 // This module manages:
 // 1. ZONES - Physical areas with transition times (Main Campus, #2 School, etc.)
@@ -10,27 +10,149 @@
 // KEY CONCEPT: Location capacity = 1 ACTIVITY at a time (unlimited bunks)
 // If Lunch is happening in Lunchroom, 20 bunks can be there.
 // But Skits CANNOT happen there at the same time because it's a different activity.
+//
+// v2.0 FIXES:
+// - ★ CLOUD SYNC: Properly saves to cloud via saveGlobalSettings
+// - ★ DATA REFRESH: Refreshes from cloud when tab is activated
+// - ★ MEMORY LEAK FIX: Proper cleanup of all event listeners
+// - ★ STATE CONSISTENCY: Internal state always matches persisted state
+// - ★ DATA VALIDATION: Validates zone/location structure on load
 // ============================================================================
 (function(){
 'use strict';
 
+console.log("[LOCATIONS] Location Zones module v2.0 loading...");
+
+// =========================================================================
+// STATE - Internal variables (always synced with persisted storage)
+// =========================================================================
 let locationZones = {};
 let pinnedTileDefaults = {};  // { "Lunch": "Lunchroom", "Swim": "Pool", etc. }
 let selectedZoneId = null;
 let zonesListEl = null;
 let detailPaneEl = null;
 let addZoneInput = null;
+let _isInitialized = false;
+let _refreshTimeout = null;
+
+// ★ FIX: Track active event listeners for cleanup (with target info)
+let activeEventListeners = [];
+
+// =========================================================================
+// CLEANUP HELPER - Remove orphaned panels and event listeners
+// =========================================================================
+function cleanupDropdownPanels() {
+    // Remove any orphaned dropdown panels from body
+    const existingPanels = document.querySelectorAll('.multi-select-options');
+    existingPanels.forEach(p => p.remove());
+    
+    // Remove tracked event listeners (handle both window and document targets)
+    activeEventListeners.forEach(({ type, handler, options, target }) => {
+        const eventTarget = target || window;
+        try {
+            eventTarget.removeEventListener(type, handler, options);
+        } catch (e) {
+            // Ignore errors during cleanup
+        }
+    });
+    activeEventListeners = [];
+}
+
+// =========================================================================
+// ★ DATA VALIDATION - Ensure zone/location structure is valid
+// =========================================================================
+function validateZone(zone, zoneName) {
+    if (!zone || typeof zone !== 'object') {
+        return {
+            name: zoneName,
+            isDefault: false,
+            transition: { preMin: 0, postMin: 0 },
+            maxConcurrent: 99,
+            fields: [],
+            locations: {}
+        };
+    }
+    
+    // ★ FIX: Get all valid field names for orphan detection
+    let validFieldNames = null;
+    try {
+        const allFields = window.getFields?.() || [];
+        validFieldNames = new Set(allFields.map(f => f.name));
+    } catch (e) {
+        // If getFields isn't available yet, skip validation
+        validFieldNames = null;
+    }
+    
+    // Filter fields to only include valid ones (if we can validate)
+    let validatedFields = Array.isArray(zone.fields) ? zone.fields.filter(f => typeof f === 'string') : [];
+    if (validFieldNames && validFieldNames.size > 0) {
+        const originalCount = validatedFields.length;
+        validatedFields = validatedFields.filter(f => validFieldNames.has(f));
+        if (validatedFields.length < originalCount) {
+            console.warn(`[LOCATIONS] Zone "${zoneName}": Removed ${originalCount - validatedFields.length} orphaned field reference(s)`);
+        }
+    }
+    
+    return {
+        name: zone.name || zoneName,
+        isDefault: zone.isDefault === true,
+        transition: {
+            preMin: parseInt(zone.transition?.preMin) || 0,
+            postMin: parseInt(zone.transition?.postMin) || 0
+        },
+        maxConcurrent: parseInt(zone.maxConcurrent) || 99,
+        fields: validatedFields,
+        locations: (zone.locations && typeof zone.locations === 'object') ? zone.locations : {}
+    };
+}
+
+function validateAllZones(zones) {
+    if (!zones || typeof zones !== 'object') {
+        return {};
+    }
+    
+    const validated = {};
+    Object.entries(zones).forEach(([name, zone]) => {
+        validated[name] = validateZone(zone, name);
+    });
+    return validated;
+}
+
+function validatePinnedDefaults(defaults) {
+    if (!defaults || typeof defaults !== 'object') {
+        return {};
+    }
+    
+    const validated = {};
+    Object.entries(defaults).forEach(([tile, location]) => {
+        if (typeof tile === 'string' && typeof location === 'string') {
+            validated[tile] = location;
+        }
+    });
+    return validated;
+}
 
 //------------------------------------------------------------------
-// INIT
+// INIT - ★ WITH CLOUD SUBSCRIPTION AND TAB VISIBILITY HANDLING
 //------------------------------------------------------------------
 function initLocationsTab(){
     const container = document.getElementById("locations");
     if(!container) return;
     
+    // ★ FIX: Cleanup any previous state when re-initializing
+    cleanupDropdownPanels();
+    cleanupTabListeners();
+    
     loadData();
+    _isInitialized = true;
 
     container.innerHTML = "";
+
+    // ★ Setup tab visibility listener to refresh data when tab becomes active
+    setupTabVisibilityListener();
+    
+    // ★ Setup cloud sync listener (if available)
+    setupCloudSyncListener();
 
     // Inject Styles
     const style = document.createElement('style');
@@ -281,51 +403,200 @@ function initLocationsTab(){
 }
 
 //------------------------------------------------------------------
-// DATA LOADING / SAVING
+// DATA LOADING / SAVING - ★ CLOUD SYNC AWARE
 //------------------------------------------------------------------
+
+/**
+ * Load data from persisted storage (localStorage/cloud cache)
+ * Always reads fresh from loadGlobalSettings to stay in sync
+ */
 function loadData(){
     const settings = window.loadGlobalSettings?.() || {};
-    locationZones = settings.locationZones || {};
-    pinnedTileDefaults = settings.pinnedTileDefaults || {};
+    
+    // ★ Validate and load location zones
+    const rawZones = settings.locationZones || {};
+    locationZones = validateAllZones(rawZones);
+    
+    // ★ Validate and load pinned tile defaults
+    pinnedTileDefaults = validatePinnedDefaults(settings.pinnedTileDefaults || {});
 
     // Create default "Main Campus" zone if none exist
     if(Object.keys(locationZones).length === 0){
         locationZones["Main Campus"] = {
             name: "Main Campus",
             isDefault: true,
-            transition: { preMin: 0, postMin: 0 },  // DEFAULT = 0 for Main Campus
+            transition: { preMin: 0, postMin: 0 },
             maxConcurrent: 99,
             fields: [],
             locations: {}
         };
+        // Save the default zone immediately
+        saveData();
     }
 
-    // Ensure all zones have required properties
-    Object.values(locationZones).forEach(zone => {
-        zone.transition = zone.transition || { preMin: 0, postMin: 0 };
-        zone.maxConcurrent = zone.maxConcurrent ?? 99;
-        zone.fields = zone.fields || [];
-        zone.locations = zone.locations || {};
+    console.log("[LOCATIONS] Data loaded:", {
+        zones: Object.keys(locationZones).length,
+        pinnedDefaults: Object.keys(pinnedTileDefaults).length
     });
 }
 
+/**
+ * Refresh data from storage (call when tab becomes visible or after cloud sync)
+ */
+function refreshFromStorage() {
+    // ★ FIX: Store previous state for proper comparison
+    const previousZonesJson = JSON.stringify(locationZones);
+    const previousDefaultsJson = JSON.stringify(pinnedTileDefaults);
+    const previousSelectedZone = selectedZoneId;
+    
+    loadData();
+    
+    // If selected zone no longer exists, clear selection
+    if (selectedZoneId && !locationZones[selectedZoneId]) {
+        selectedZoneId = null;
+    }
+    
+    // ★ FIX: Compare actual content, not just counts
+    const newZonesJson = JSON.stringify(locationZones);
+    const newDefaultsJson = JSON.stringify(pinnedTileDefaults);
+    const dataChanged = previousZonesJson !== newZonesJson || 
+                        previousDefaultsJson !== newDefaultsJson ||
+                        previousSelectedZone !== selectedZoneId;
+    
+    if (dataChanged) {
+        console.log("[LOCATIONS] Data changed - re-rendering UI");
+        if (zonesListEl) renderZonesList();
+        if (detailPaneEl) renderDetailPane();
+    } else {
+        console.log("[LOCATIONS] Data unchanged - skipping re-render");
+    }
+}
+
+/**
+ * Save data to persisted storage and queue for cloud sync
+ * ★ Uses saveGlobalSettings which handles batching and cloud sync
+ */
 function saveData(){
-    // ⭐ Save both at once - more efficient and ensures updated_at is set once
-    const settings = window.loadGlobalSettings?.() || {};
+    // ✅ RBAC Check for modifications
+    if (window.AccessControl?.canEditSetup && !window.AccessControl.canEditSetup()) {
+        console.warn('[LOCATIONS] Save blocked - insufficient permissions');
+        return;
+    }
     
-    // Update the settings object
-    settings.locationZones = locationZones;
-    settings.pinnedTileDefaults = pinnedTileDefaults;
+    // ★ Validate before saving to ensure data integrity
+    const validatedZones = validateAllZones(locationZones);
+    const validatedDefaults = validatePinnedDefaults(pinnedTileDefaults);
     
-    // Save both keys (each call now updates updated_at properly with Fix 4)
-    window.saveGlobalSettings?.("locationZones", locationZones);
-    window.saveGlobalSettings?.("pinnedTileDefaults", pinnedTileDefaults);
+    // ★ Update internal state with validated data
+    locationZones = validatedZones;
+    pinnedTileDefaults = validatedDefaults;
+    
+    // ★ Save both keys via saveGlobalSettings (handles batching + cloud sync)
+    window.saveGlobalSettings?.("locationZones", validatedZones);
+    window.saveGlobalSettings?.("pinnedTileDefaults", validatedDefaults);
+    
+    console.log("[LOCATIONS] Data saved:", {
+        zones: Object.keys(validatedZones).length,
+        pinnedDefaults: Object.keys(validatedDefaults).length
+    });
+}
+
+//------------------------------------------------------------------
+// ★ TAB VISIBILITY LISTENER - Refresh data when user returns to tab
+//------------------------------------------------------------------
+let _visibilityHandler = null;
+let _focusHandler = null;
+
+function setupTabVisibilityListener() {
+    // Cleanup any existing listeners
+    cleanupTabListeners();
+    
+    // Refresh when page becomes visible
+    _visibilityHandler = () => {
+        if (document.visibilityState === 'visible' && _isInitialized) {
+            // Debounce to avoid rapid refreshes
+            if (_refreshTimeout) clearTimeout(_refreshTimeout);
+            _refreshTimeout = setTimeout(() => {
+                console.log("[LOCATIONS] Tab visible - checking for updates...");
+                refreshFromStorage();
+            }, 500);
+        }
+    };
+    
+    // Also refresh on window focus (catches more cases)
+    _focusHandler = () => {
+        if (_isInitialized) {
+            if (_refreshTimeout) clearTimeout(_refreshTimeout);
+            _refreshTimeout = setTimeout(() => {
+                refreshFromStorage();
+            }, 500);
+        }
+    };
+    
+    document.addEventListener('visibilitychange', _visibilityHandler);
+    window.addEventListener('focus', _focusHandler);
+    
+    // Track for cleanup
+    activeEventListeners.push({ type: 'visibilitychange', handler: _visibilityHandler, target: document });
+    activeEventListeners.push({ type: 'focus', handler: _focusHandler, target: window });
+}
+
+function cleanupTabListeners() {
+    if (_visibilityHandler) {
+        document.removeEventListener('visibilitychange', _visibilityHandler);
+        _visibilityHandler = null;
+    }
+    if (_focusHandler) {
+        window.removeEventListener('focus', _focusHandler);
+        _focusHandler = null;
+    }
+    if (_refreshTimeout) {
+        clearTimeout(_refreshTimeout);
+        _refreshTimeout = null;
+    }
+}
+
+//------------------------------------------------------------------
+// ★ CLOUD SYNC LISTENER - React to remote changes
+//------------------------------------------------------------------
+let _cloudSyncCallback = null;
+
+function setupCloudSyncListener() {
+    // Cleanup existing
+    if (_cloudSyncCallback && window.SupabaseSync?.removeStatusCallback) {
+        window.SupabaseSync.removeStatusCallback(_cloudSyncCallback);
+    }
+    
+    // Listen for cloud sync events (if the sync system provides callbacks)
+    if (window.SupabaseSync?.onStatusChange) {
+        _cloudSyncCallback = (status) => {
+            if (status === 'idle' && _isInitialized) {
+                // After sync completes, refresh our data
+                console.log("[LOCATIONS] Cloud sync complete - refreshing...");
+                refreshFromStorage();
+            }
+        };
+        window.SupabaseSync.onStatusChange(_cloudSyncCallback);
+    }
+    
+    // Also listen for custom campistry events (dispatched by other modules)
+    const handleRemoteChange = (e) => {
+        if (_isInitialized && (e.detail?.key === 'locationZones' || e.detail?.key === 'pinnedTileDefaults')) {
+            console.log("[LOCATIONS] Remote change detected for:", e.detail?.key);
+            refreshFromStorage();
+        }
+    };
+    
+    window.addEventListener('campistry-settings-changed', handleRemoteChange);
+    activeEventListeners.push({ type: 'campistry-settings-changed', handler: handleRemoteChange, target: window });
 }
 
 //------------------------------------------------------------------
 // ZONES LIST (Left Panel)
 //------------------------------------------------------------------
 function renderZonesList(){
+    if (!zonesListEl) return; // ★ FIX: Null check
+    
     zonesListEl.innerHTML = "";
 
     const zoneNames = Object.keys(locationZones).sort((a, b) => {
@@ -348,8 +619,15 @@ function renderZonesList(){
 
 function createZoneListItem(zone){
     const el = document.createElement("div");
+    // ★ FIX: Added space before "selected" class
     el.className = "locations-list-item" + (selectedZoneId === zone.name ? " selected" : "");
-    el.onclick = ()=>{ selectedZoneId = zone.name; renderZonesList(); renderDetailPane(); };
+    el.onclick = () => { 
+        // ★ FIX: Cleanup dropdowns when switching zones
+        cleanupDropdownPanels();
+        selectedZoneId = zone.name; 
+        renderZonesList(); 
+        renderDetailPane(); 
+    };
 
     const infoDiv = document.createElement("div");
     infoDiv.style.display = "flex";
@@ -396,6 +674,11 @@ function createZoneListItem(zone){
 // DETAIL PANE (Right Panel)
 //------------------------------------------------------------------
 function renderDetailPane(){
+    if (!detailPaneEl) return; // ★ FIX: Null check
+    
+    // ★ FIX: Cleanup any orphaned panels when re-rendering detail pane
+    cleanupDropdownPanels();
+    
     if(!selectedZoneId || !locationZones[selectedZoneId]){ 
         detailPaneEl.innerHTML = `
             <div style="height:300px; display:flex; align-items:center; justify-content:center; color:#9CA3AF; border:1px dashed #E5E7EB; border-radius:12px;">
@@ -448,6 +731,19 @@ function renderDetailPane(){
         delBtn.onclick = () => {
             if (!window.AccessControl?.checkSetupAccess('delete zones')) return;
             if(confirm(`Delete zone "${zone.name}"? Fields will be unassigned.`)){
+                // ★ FIX: Also cleanup any pinnedTileDefaults that reference locations in this zone
+                const locationsInZone = Object.keys(zone.locations || {});
+                if (locationsInZone.length > 0) {
+                    let cleanedDefaults = false;
+                    Object.entries(pinnedTileDefaults).forEach(([tileName, location]) => {
+                        if (locationsInZone.includes(location)) {
+                            delete pinnedTileDefaults[tileName];
+                            cleanedDefaults = true;
+                            console.log(`[LOCATIONS] Removed orphaned default: "${tileName}" → "${location}" (zone deleted)`);
+                        }
+                    });
+                }
+                
                 delete locationZones[zone.name];
                 saveData();
                 selectedZoneId = null;
@@ -503,6 +799,11 @@ function createSection(title, summary, builder){
         const open = body.style.display === "block";
         body.style.display = open ? "none" : "block";
         caret.style.transform = open ? "rotate(0deg)" : "rotate(90deg)";
+
+        // ★ FIX: Cleanup dropdowns when closing section
+        if (open) {
+            cleanupDropdownPanels();
+        }
 
         if(!open && !body.dataset.built){ 
             body.innerHTML = "";
@@ -599,13 +900,8 @@ function renderTransitionSection(zone){
 // FIELDS SECTION (Multi-select dropdown)
 //------------------------------------------------------------------
 function renderFieldsSection(zone){
-    // Clean up any orphaned dropdown panels
-    const existingPanels = document.querySelectorAll('.multi-select-options');
-    existingPanels.forEach(p => {
-        if (!document.querySelector('.multi-select-trigger.open')) {
-            p.remove();
-        }
-    });
+    // ★ FIX: Clean up any orphaned dropdown panels first
+    cleanupDropdownPanels();
 
     const container = document.createElement("div");
     
@@ -783,22 +1079,31 @@ function renderFieldsSection(zone){
         trigger.classList.toggle('open');
     };
     
-    // Reposition on scroll/resize while open
+    // ★ FIX: Track event listeners for proper cleanup
     const repositionHandler = () => {
         if(optionsPanel.classList.contains('show')){
             positionDropdown();
         }
     };
+    
     window.addEventListener('scroll', repositionHandler, true);
     window.addEventListener('resize', repositionHandler);
     
+    // Track these listeners for cleanup (with proper target)
+    activeEventListeners.push({ type: 'scroll', handler: repositionHandler, options: true, target: window });
+    activeEventListeners.push({ type: 'resize', handler: repositionHandler, options: undefined, target: window });
+    
     // Close on click outside
-    document.addEventListener('click', (e) => {
+    const closeOnClickOutside = (e) => {
         if(!multiSelectContainer.contains(e.target) && !optionsPanel.contains(e.target)){
             optionsPanel.classList.remove('show');
             trigger.classList.remove('open');
         }
-    });
+    };
+    
+    document.addEventListener('click', closeOnClickOutside);
+    // ★ FIX: Track with correct target (document, not window)
+    activeEventListeners.push({ type: 'click', handler: closeOnClickOutside, options: undefined, target: document });
     
     multiSelectContainer.appendChild(trigger);
     
@@ -849,9 +1154,25 @@ function renderLocationsSection(zone){
                 item.querySelector('.location-delete-btn').onclick = () => {
                     if(confirm(`Delete location "${locName}"?`)){
                         delete zone.locations[locName];
+                        
+                        // ★ FIX: Also cleanup any pinnedTileDefaults that reference this location
+                        let cleanedDefaults = false;
+                        Object.entries(pinnedTileDefaults).forEach(([tileName, location]) => {
+                            if (location === locName) {
+                                delete pinnedTileDefaults[tileName];
+                                cleanedDefaults = true;
+                                console.log(`[LOCATIONS] Removed orphaned default: "${tileName}" → "${locName}"`);
+                            }
+                        });
+                        
                         saveData();
                         renderContent();
                         updateSummary();
+                        
+                        // Refresh pinned tile defaults if we cleaned any
+                        if (cleanedDefaults) {
+                            window.refreshPinnedTileDefaultsUI?.();
+                        }
                     }
                 };
                 
@@ -897,6 +1218,12 @@ function renderLocationsSection(zone){
 function addZone(){
     // ✅ RBAC Check
     if (!window.AccessControl?.checkSetupAccess('add zones')) return;
+
+    // ★ FIX: Null check for input element
+    if (!addZoneInput) {
+        console.warn('[LOCATIONS] addZoneInput element not found');
+        return;
+    }
 
     const name = addZoneInput.value.trim();
     if(!name){
@@ -965,6 +1292,8 @@ function initPinnedTileDefaultsSection(){
 }
 
 function populateLocationDropdown(selectEl){
+    if (!selectEl) return; // ★ FIX: Null check
+    
     selectEl.innerHTML = '<option value="">-- Select Location --</option>';
     
     const allLocations = window.getAllLocations?.() || [];
@@ -992,19 +1321,48 @@ function renderPinnedTileDefaults(){
     // Re-populate location dropdown (in case new locations were added)
     if(locationSelect) populateLocationDropdown(locationSelect);
     
+    // ★ FIX: Get all valid locations for orphan detection
+    const allLocations = window.getAllLocations?.() || [];
+    const validLocations = new Set(allLocations.map(l => l.name));
+    
     const defaults = Object.entries(pinnedTileDefaults);
+    
+    // ★ FIX: Filter out orphaned references (locations that no longer exist)
+    // But only if we have locations to validate against (avoid clearing all on initial load)
+    let hasOrphanedReferences = false;
+    let validDefaults = defaults;
+    
+    if (validLocations.size > 0) {
+        validDefaults = defaults.filter(([tileName, location]) => {
+            if (!validLocations.has(location)) {
+                console.warn(`[LOCATIONS] Orphaned reference: "${tileName}" → "${location}" (location no longer exists)`);
+                hasOrphanedReferences = true;
+                return false;
+            }
+            return true;
+        });
+        
+        // ★ Auto-cleanup orphaned references
+        if (hasOrphanedReferences) {
+            const cleanedDefaults = {};
+            validDefaults.forEach(([tile, loc]) => { cleanedDefaults[tile] = loc; });
+            pinnedTileDefaults = cleanedDefaults;
+            // Save the cleaned data (async, don't block render)
+            setTimeout(() => saveData(), 100);
+        }
+    }
     
     // Update summary
     if(summaryEl){
-        if(defaults.length === 0){
+        if(validDefaults.length === 0){
             summaryEl.textContent = "No defaults set yet";
         } else {
-            summaryEl.textContent = defaults.map(([tile, loc]) => `${tile} → ${loc}`).join(", ");
+            summaryEl.textContent = validDefaults.map(([tile, loc]) => `${tile} → ${loc}`).join(", ");
         }
     }
     
     // Render list
-    if(defaults.length === 0){
+    if(validDefaults.length === 0){
         listEl.innerHTML = `
             <div style="padding:16px; text-align:center; color:#9CA3AF; border:1px dashed #E5E7EB; border-radius:8px;">
                 No defaults configured yet. Add common pinned tiles like Lunch, Swim, Snacks above.
@@ -1014,7 +1372,7 @@ function renderPinnedTileDefaults(){
     
     listEl.innerHTML = "";
     
-    defaults.sort((a, b) => a[0].localeCompare(b[0])).forEach(([tileName, location]) => {
+    validDefaults.sort((a, b) => a[0].localeCompare(b[0])).forEach(([tileName, location]) => {
         const row = document.createElement("div");
         row.className = "location-item";
         row.innerHTML = `
@@ -1112,6 +1470,7 @@ window.getAllLocations = function(){
     const locations = [];
     
     Object.entries(zones).forEach(([zoneName, zone]) => {
+        if (!zone || typeof zone !== 'object') return;
         Object.keys(zone.locations || {}).forEach(locName => {
             locations.push({
                 name: locName,
@@ -1126,21 +1485,25 @@ window.getAllLocations = function(){
 
 // Get zone for a specific field
 window.getZoneForField = function(fieldName){
+    if (!fieldName) return null;
+    
     const settings = window.loadGlobalSettings?.() || {};
     const zones = settings.locationZones || {};
     
     for(const [zoneName, zone] of Object.entries(zones)){
-        if((zone.fields || []).includes(fieldName)){
+        if (!zone || typeof zone !== 'object') continue;
+        if(Array.isArray(zone.fields) && zone.fields.includes(fieldName)){
             return zone;
         }
     }
     
     // Return default zone if not found
-    return Object.values(zones).find(z => z.isDefault) || null;
+    return Object.values(zones).find(z => z && z.isDefault) || null;
 };
 
 // Get zone by name
 window.getZone = function(zoneName){
+    if (!zoneName) return null;
     const settings = window.loadGlobalSettings?.() || {};
     return settings.locationZones?.[zoneName] || null;
 };
@@ -1153,12 +1516,22 @@ window.getZones = function(){
 
 // Check if a location is available at a given time
 window.isLocationAvailable = function(locationName, slots, currentActivity){
+    if (!locationName) return true;
+    
     // This will be used by the scheduler to check conflicts
     // Returns true if no OTHER activity is using the location
     const usage = window.locationUsageBySlot || {};
     
-    for(const slotIdx of slots){
-        const slotUsage = usage[slotIdx];
+    // ★ FIX: Handle both string and number slot indices, and ensure slots is array
+    const normalizedSlots = Array.isArray(slots) ? slots : [slots];
+    
+    for(const slotIdx of normalizedSlots){
+        if (slotIdx === undefined || slotIdx === null) continue;
+        
+        // ★ FIX: Check string key first (our standard), then original type
+        const strKey = String(slotIdx);
+        const slotUsage = usage[strKey] || usage[slotIdx];
+        
         if(slotUsage && slotUsage[locationName]){
             // Location is in use - check if it's the same activity
             if(slotUsage[locationName].activity !== currentActivity){
@@ -1172,13 +1545,18 @@ window.isLocationAvailable = function(locationName, slots, currentActivity){
 
 // Register location usage (called by scheduler)
 window.registerLocationUsage = function(slotIndex, locationName, activity, division){
+    if (!locationName || slotIndex === undefined || slotIndex === null) return;
+    
     window.locationUsageBySlot = window.locationUsageBySlot || {};
     
-    if(!window.locationUsageBySlot[slotIndex]){
-        window.locationUsageBySlot[slotIndex] = {};
+    // ★ FIX: Use consistent key type (string)
+    const normalizedIdx = String(slotIndex);
+    
+    if(!window.locationUsageBySlot[normalizedIdx]){
+        window.locationUsageBySlot[normalizedIdx] = {};
     }
     
-    window.locationUsageBySlot[slotIndex][locationName] = {
+    window.locationUsageBySlot[normalizedIdx][locationName] = {
         activity: activity,
         division: division,
         timestamp: Date.now()
@@ -1191,9 +1569,44 @@ window.resetLocationUsage = function(){
 };
 
 // Get default location for a pinned tile type
+// ★ Enhanced: Supports case-insensitive lookup and common aliases
 window.getPinnedTileDefaultLocation = function(tileType){
+    if (!tileType) return null;
     const settings = window.loadGlobalSettings?.() || {};
-    return settings.pinnedTileDefaults?.[tileType] || null;
+    const defaults = settings.pinnedTileDefaults || {};
+    
+    // Try exact match first
+    if (defaults[tileType]) {
+        return defaults[tileType];
+    }
+    
+    // ★ FIX: Case-insensitive lookup (handles 'swim' vs 'Swim' vs 'SWIM')
+    const lowerType = tileType.toLowerCase();
+    for (const [key, value] of Object.entries(defaults)) {
+        if (key.toLowerCase() === lowerType) {
+            return value;
+        }
+    }
+    
+    // ★ FIX: Common alias patterns (e.g., looking up 'swim' should also check 'pool')
+    const ALIASES = {
+        'swim': ['pool', 'swimming', 'aquatics'],
+        'pool': ['swim', 'swimming', 'aquatics'],
+        'lunch': ['lunchroom', 'dining', 'cafeteria'],
+        'snacks': ['snack', 'snacktime'],
+        'dismissal': ['dismiss', 'end']
+    };
+    
+    const aliases = ALIASES[lowerType] || [];
+    for (const alias of aliases) {
+        for (const [key, value] of Object.entries(defaults)) {
+            if (key.toLowerCase() === alias || key.toLowerCase().includes(alias)) {
+                return value;
+            }
+        }
+    }
+    
+    return null;
 };
 
 // Get all pinned tile defaults
@@ -1204,15 +1617,132 @@ window.getPinnedTileDefaults = function(){
 
 // Set a pinned tile default location (can be called from other modules)
 window.setPinnedTileDefaultLocation = function(tileType, locationName){
+    if (!tileType) return;
+    
     const settings = window.loadGlobalSettings?.() || {};
     settings.pinnedTileDefaults = settings.pinnedTileDefaults || {};
-    settings.pinnedTileDefaults[tileType] = locationName;
+    settings.pinnedTileDefaults[tileType] = locationName || null;
+    
+    // ★ Save via saveGlobalSettings for proper cloud sync
     window.saveGlobalSettings?.("pinnedTileDefaults", settings.pinnedTileDefaults);
+    
+    // Update internal state if initialized
+    if (_isInitialized) {
+        pinnedTileDefaults = settings.pinnedTileDefaults;
+    }
 };
 
 // Refresh pinned tile defaults UI (call after adding locations)
 window.refreshPinnedTileDefaultsUI = renderPinnedTileDefaults;
 
-console.log("[LOCATIONS] Location Zones module loaded");
+// ★ FIX: Export cleanup function for external use (e.g., when navigating away from tab)
+window.cleanupLocationsModule = function() {
+    cleanupDropdownPanels();
+    cleanupTabListeners();
+    _isInitialized = false;
+};
+
+// ★ NEW: Force refresh from cloud/storage (call after cloud sync)
+window.refreshLocationsFromStorage = function() {
+    if (_isInitialized) {
+        refreshFromStorage();
+    }
+};
+
+// ★ NEW: Get location zone for a location name (not field)
+window.getZoneForLocation = function(locationName) {
+    if (!locationName) return null;
+    
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    
+    for(const [zoneName, zone] of Object.entries(zones)){
+        if (!zone || typeof zone !== 'object') continue;
+        if (zone.locations && zone.locations[locationName]) {
+            return zone;
+        }
+    }
+    
+    return null;
+};
+
+// ★ NEW: Check if location/zone system is ready
+window.isLocationsSystemReady = function() {
+    return _isInitialized;
+};
+
+// ★ NEW: Get transition times for a field (direct helper for scheduler)
+// Returns { preMin: number, postMin: number } or null
+window.getTransitionForField = function(fieldName) {
+    const zone = window.getZoneForField?.(fieldName);
+    if (zone && zone.transition) {
+        return {
+            preMin: parseInt(zone.transition.preMin) || 0,
+            postMin: parseInt(zone.transition.postMin) || 0
+        };
+    }
+    return { preMin: 0, postMin: 0 };
+};
+
+// ★ NEW: Check zone capacity (how many activities can happen simultaneously)
+window.getZoneMaxConcurrent = function(zoneName) {
+    if (!zoneName) return 99;
+    const settings = window.loadGlobalSettings?.() || {};
+    const zone = settings.locationZones?.[zoneName];
+    return parseInt(zone?.maxConcurrent) || 99;
+};
+
+// ★ NEW: Check if adding an activity to a zone would exceed capacity
+window.checkZoneCapacity = function(zoneName, slotIndex, currentCount) {
+    const maxConcurrent = window.getZoneMaxConcurrent(zoneName);
+    return (currentCount || 0) < maxConcurrent;
+};
+
+// ★ NEW: Get all fields in a zone
+window.getFieldsInZone = function(zoneName) {
+    if (!zoneName) return [];
+    const settings = window.loadGlobalSettings?.() || {};
+    const zone = settings.locationZones?.[zoneName];
+    return Array.isArray(zone?.fields) ? [...zone.fields] : [];
+};
+
+// ★ NEW: Check if a field belongs to any zone (returns boolean)
+window.isFieldInAnyZone = function(fieldName) {
+    if (!fieldName) return false;
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    
+    for (const zone of Object.values(zones)) {
+        if (!zone || typeof zone !== 'object') continue;
+        if (Array.isArray(zone.fields) && zone.fields.includes(fieldName)) {
+            return true;
+        }
+    }
+    return false;
+};
+
+// ★ NEW: Batch check multiple fields for zone membership
+window.getZonesForFields = function(fieldNames) {
+    if (!Array.isArray(fieldNames)) return {};
+    
+    const result = {};
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    
+    for (const fieldName of fieldNames) {
+        result[fieldName] = null;
+        for (const [zoneName, zone] of Object.entries(zones)) {
+            if (!zone || typeof zone !== 'object') continue;
+            if (Array.isArray(zone.fields) && zone.fields.includes(fieldName)) {
+                result[fieldName] = zone;
+                break;
+            }
+        }
+    }
+    
+    return result;
+};
+
+console.log("[LOCATIONS] Location Zones module v2.0 loaded");
 
 })();
