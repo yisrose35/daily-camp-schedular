@@ -1,6 +1,10 @@
 // =============================================================================
-// integration_hooks.js v6.3 — CAMPISTRY SCHEDULER INTEGRATION
+// integration_hooks.js v6.4 — CAMPISTRY SCHEDULER INTEGRATION
 // =============================================================================
+//
+// v6.4 FIXES:
+// - ★ FIXED: Duplicate save notifications - added deduplication with 3s threshold
+// - ★ FIXED: Multiple rapid saves now coalesced into single operation
 //
 // v6.3 FIXES:
 // - ★ NEW: CloudPermissions unified permission helper
@@ -27,7 +31,7 @@
 (function() {
     'use strict';
 
-    console.log('🔗 Campistry Integration Hooks v6.3 loading...');
+    console.log('🔗 Campistry Integration Hooks v6.4 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -54,6 +58,12 @@
     let _datePickerHooked = false;
     let _datePickerRetries = 0;
     let _scheduleCloudLoadDone = false;
+    
+    // ★★★ v6.4: Deduplication state for save operations ★★★
+    let _lastSaveKey = null;
+    let _lastSaveTime = 0;
+    let _saveInProgress = false;
+    const SAVE_DEDUP_MS = 3000; // Ignore duplicate saves within 3 seconds
 
     // Store the TRUE original saveGlobalSettings before ANY patches
     const _trueOriginalSaveGlobalSettings = window.saveGlobalSettings;
@@ -470,7 +480,7 @@
     }
 
     // =========================================================================
-    // VERIFIED SCHEDULE SAVE (WITH RETRY)
+    // VERIFIED SCHEDULE SAVE (WITH RETRY AND DEDUPLICATION)
     // =========================================================================
 
     async function verifiedScheduleSave(dateKey, data, attempt = 1) {
@@ -486,10 +496,32 @@
         }
 
         const bunkCount = Object.keys(data.scheduleAssignments || {}).length;
+        
+        // ★★★ v6.4: Deduplication check - skip if same save within threshold ★★★
+        const now = Date.now();
+        const saveKey = `${dateKey}:${bunkCount}`;
+        
+        if (attempt === 1) {  // Only check dedup on first attempt, not retries
+            if (_saveInProgress) {
+                log('[VERIFIED SAVE] Save already in progress, skipping duplicate');
+                return { success: true, target: 'deduplicated', reason: 'in-progress' };
+            }
+            
+            if (_lastSaveKey === saveKey && (now - _lastSaveTime) < SAVE_DEDUP_MS) {
+                log('[VERIFIED SAVE] Duplicate save detected, skipping (within', SAVE_DEDUP_MS, 'ms)');
+                return { success: true, target: 'deduplicated', reason: 'recent-duplicate' };
+            }
+            
+            _saveInProgress = true;
+            _lastSaveKey = saveKey;
+            _lastSaveTime = now;
+        }
+        
         log(`[VERIFIED SAVE] Attempt ${attempt}/${CONFIG.SAVE_MAX_RETRIES} - ${bunkCount} bunks for ${dateKey}`);
 
         if (bunkCount === 0) {
             log('[VERIFIED SAVE] No data to save');
+            _saveInProgress = false;
             return { success: true, target: 'empty' };
         }
 
@@ -497,6 +529,7 @@
         if (!navigator.onLine) {
             log('[VERIFIED SAVE] Offline - saved to localStorage only');
             showNotification('📴 Saved locally (offline)', 'warning');
+            _saveInProgress = false;
             
             // Queue for later via ScheduleSync if available
             if (window.ScheduleSync?.queueSave) {
@@ -513,6 +546,7 @@
                 return verifiedScheduleSave(dateKey, data, attempt + 1);
             }
             logError('[VERIFIED SAVE] ScheduleDB never became available');
+            _saveInProgress = false;
             return { success: false, error: 'ScheduleDB not available' };
         }
 
@@ -526,6 +560,7 @@
                 return verifiedScheduleSave(dateKey, data, attempt + 1);
             }
             logError('[VERIFIED SAVE] Auth never became available');
+            _saveInProgress = false;
             return { success: false, error: 'Missing authentication' };
         }
 
@@ -533,8 +568,9 @@
             const result = await window.ScheduleDB.saveSchedule(dateKey, data);
             
             if (result?.success && (result?.target === 'cloud' || result?.target === 'cloud-verified')) {
-                console.log('🔗 ✅ Schedule saved to cloud:', bunkCount, 'bunks');
+                log('✅ Schedule saved to cloud:', bunkCount, 'bunks');
                 showNotification(`Saved ${bunkCount} bunks`, 'success');
+                _saveInProgress = false;
                 return result;
             } else if (result?.target === 'local' || result?.target === 'local-fallback') {
                 console.warn('🔗 ⚠️ Schedule saved to LOCAL only, retrying cloud...');
@@ -543,6 +579,7 @@
                     return verifiedScheduleSave(dateKey, data, attempt + 1);
                 }
                 showNotification('Saved locally (offline)', 'warning');
+                _saveInProgress = false;
                 return result;
             } else {
                 logError('[VERIFIED SAVE] Save failed:', result?.error);
@@ -551,6 +588,7 @@
                     return verifiedScheduleSave(dateKey, data, attempt + 1);
                 }
                 showNotification('Save failed', 'error');
+                _saveInProgress = false;
                 return result;
             }
         } catch (e) {
@@ -560,6 +598,7 @@
                 return verifiedScheduleSave(dateKey, data, attempt + 1);
             }
             showNotification('Save error', 'error');
+            _saveInProgress = false;
             return { success: false, error: e.message };
         }
     }
@@ -1299,7 +1338,7 @@
         const client = window.CampistryDB?.getClient?.();
 
         console.log('═══════════════════════════════════════════════════════');
-        console.log('SCHEDULE SYNC DIAGNOSTIC v6.3');
+        console.log('SCHEDULE SYNC DIAGNOSTIC v6.4');
         console.log('═══════════════════════════════════════════════════════');
         console.log('Date:', dateKey);
         console.log('Online:', navigator.onLine);
@@ -1367,8 +1406,8 @@
         setTimeout(waitForSystems, 300);
     }
 
-    console.log('🔗 Campistry Integration Hooks v6.3 loaded');
+    console.log('🔗 Campistry Integration Hooks v6.4 loaded');
     console.log('   Commands: diagnoseScheduleSync(), verifiedScheduleSave(), forceLoadScheduleFromCloud()');
-    console.log('   New: CloudPermissions.diagnose() for unified permission checking');
+    console.log('   v6.4: Save deduplication - prevents duplicate notifications');
 
 })();
