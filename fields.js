@@ -3,12 +3,13 @@
 // CLOUD SYNC PATCH APPLIED
 // ============================================================================
 // 1. Layout: Apple-inspired Two-Pane with Collapsible Detail Sections.
-// 2. Logic: Retains all Transition, Sharing, Priority, and Sport Logic.
+// 2. Logic: Retains Sharing, Priority, and Sport Logic.
 // 3. Fix: Access & Restrictions toggle stays open and updates locally.
 // 4. Feat: Sport Player Requirements section.
 // 5. NEW: Weather & Availability (Rainy Day Mode configuration).
 // 6. SYNC: Explicit Cloud Sync trigger added to saveData.
 // 7. SEC: Added RBAC checks for Add, Delete, and Save operations.
+// 8. Update: Transition/Zone rules removed - now managed in Locations tab.
 // ============================================================================
 (function(){
 'use strict';
@@ -253,16 +254,6 @@ function loadData(){
         
         f.limitUsage = f.limitUsage || { enabled:false, divisions:{} };
         f.preferences = f.preferences || { enabled:false, exclusive:false, list:[] };
-        
-        // Ensure Transition/Zone Logic exists
-        f.transition = f.transition || {
-            preMin:0,
-            postMin:0,
-            label:"Travel",
-            zone:window.DEFAULT_ZONE_NAME || "Default",
-            occupiesField:false,
-            minDurationMin:0
-        };
 
         // Rainy Day Default
         f.rainyDayAvailable = f.rainyDayAvailable ?? false;
@@ -286,12 +277,10 @@ function saveData(){
         // ⭐ CLOUD SYNC FIX: Explicitly request cloud sync after saving
         if (typeof window.requestCloudSync === 'function') {
             window.requestCloudSync();
-            // console.log("☁️ Fields: Cloud sync requested");
         }
         
         // Expose globally for other modules
         window.fields = fields;
-        // Window.sportMetaData is usually exposed via getter, but we update the internal state
     } catch (e) {
         console.error("Failed to save fields data:", e);
     }
@@ -484,14 +473,6 @@ function masterListItem(item){
     name.className = "list-item-name";
     name.textContent = item.name;
     
-    // Add meta info (Transition/Zone)
-    if(item.transition.preMin > 0 || item.transition.postMin > 0){
-        const meta = document.createElement("span");
-        meta.className = "list-item-meta";
-        meta.textContent = `(${item.transition.preMin}m / ${item.transition.postMin}m)`;
-        name.appendChild(meta);
-    }
-    
     infoDiv.appendChild(name);
     el.appendChild(infoDiv);
 
@@ -608,12 +589,11 @@ function renderDetailPane(){
     detailPaneEl.appendChild(availability);
 
     // -- 3. ACCORDION SECTIONS (Logic Wrappers) --
+    // NOTE: Transition & Zone Rules removed - now managed in Locations tab
     
     // Activities
     detailPaneEl.appendChild(section("Activities", summaryActivities(item), 
         () => renderActivities(item, allSports)));
-
-    
 
     // Access & Priority
     detailPaneEl.appendChild(section("Access & Restrictions", summaryAccess(item), 
@@ -682,7 +662,6 @@ function summaryAccess(f){
     if(f.preferences.exclusive) return "Exclusive to specific divisions";
     return "Priority/Restrictions Active";
 }
-
 function summaryTime(f){ return f.timeRules.length ? `${f.timeRules.length} rule(s) active` : "Available all day"; }
 function summaryWeather(f) { return f.rainyDayAvailable ? "🏠 Indoor (Rain OK)" : "🌳 Outdoor"; }
 
@@ -711,7 +690,7 @@ function renderActivities(item, allSports){
             b.title = "Double-click to remove this custom activity";
         }
 
-       let clickTimer = null;
+        let clickTimer = null;
         b.onclick = ()=>{
             if(clickTimer) {
                 clearTimeout(clickTimer);
@@ -734,7 +713,6 @@ function renderActivities(item, allSports){
             }, 300);
         };
 
-        
         // Double-click to delete custom activities
         b.ondblclick = (e) => {
             e.preventDefault();
@@ -844,75 +822,7 @@ function renderActivities(item, allSports){
     return box;
 }
 
-
-
-    // Times
-    const timeRow = document.createElement("div");
-    timeRow.style.display="flex"; 
-    timeRow.style.gap="12px"; 
-    timeRow.style.marginBottom="12px";
-    
-    const mkInput = (lbl, val, setter) => {
-        const d = document.createElement("div");
-        d.innerHTML = `<label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:4px;">${lbl}</label>`;
-        const i = document.createElement("input");
-        i.type="number"; i.min="0"; i.step="5"; i.value=val;
-        i.style.width="80px"; i.style.padding="6px"; i.style.border="1px solid #D1D5DB"; i.style.borderRadius="6px";
-        i.onchange = ()=>{ setter(parseInt(i.value)||0); update(); };
-        d.appendChild(i); 
-        return d;
-    };
-
-    timeRow.appendChild(mkInput("Pre-Buffer (min)", t.preMin, v=>t.preMin=v));
-    timeRow.appendChild(mkInput("Post-Buffer (min)", t.postMin, v=>t.postMin=v));
-    box.appendChild(timeRow);
-
-    // Label & Zone
-    const metaRow = document.createElement("div");
-    metaRow.style.display="flex"; 
-    metaRow.style.gap="12px"; 
-    metaRow.style.marginBottom="12px";
-    
-    // Zone Select
-    const zoneDiv = document.createElement("div");
-    zoneDiv.style.flex = "1";
-    zoneDiv.innerHTML = `<label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:4px;">Zone (Location)</label>`;
-    const zoneSel = document.createElement("select");
-    zoneSel.style.width="100%"; zoneSel.style.padding="6px"; zoneSel.style.borderRadius="6px"; zoneSel.style.border="1px solid #D1D5DB";
-
-    const zones = window.getZones?.() || {};
-    Object.values(zones).forEach(z => {
-        const opt = document.createElement("option");
-        opt.value = z.name;
-        opt.textContent = z.name + (z.isDefault ? " (Default)" : "");
-        if(z.name === t.zone) opt.selected = true;
-        zoneSel.appendChild(opt);
-    });
-
-    zoneSel.onchange = ()=>{ t.zone = zoneSel.value; update(); };
-    zoneDiv.appendChild(zoneSel);
-    metaRow.appendChild(zoneDiv);
-    
-    // Min Duration
-    metaRow.appendChild(mkInput("Min Activity (min)", t.minDurationMin, v=>t.minDurationMin=v));
-    
-    box.appendChild(metaRow);
-
-    // Occupancy Toggle
-    const occLabel = document.createElement("label");
-    occLabel.style.display="flex"; occLabel.style.alignItems="center"; occLabel.style.gap="8px"; occLabel.style.cursor="pointer";
-    const occCk = document.createElement("input"); 
-    occCk.type="checkbox"; 
-    occCk.checked = t.occupiesField;
-    occCk.onchange = ()=>{ t.occupiesField = occCk.checked; update(); };
-    occLabel.appendChild(occCk);
-    occLabel.appendChild(document.createTextNode("Buffer occupies field (e.g. Setup/Teardown)"));
-    box.appendChild(occLabel);
-
-    return box;
-}
-
-// 3. SHARING
+// 2. SHARING
 function renderSharing(item){
     const container = document.createElement("div");
 
@@ -998,7 +908,7 @@ function renderSharing(item){
     return container;
 }
 
-// 4. ACCESS & PRIORITY
+// 3. ACCESS & PRIORITY
 function renderAccess(item){
     const container = document.createElement("div");
 
@@ -1157,7 +1067,7 @@ function renderAccess(item){
     return container;
 }
 
-// 5. TIME RULES
+// 4. TIME RULES
 function renderTimeRules(item){
     const container = document.createElement("div");
     
@@ -1231,7 +1141,7 @@ function renderTimeRules(item){
     return container;
 }
 
-// 6. WEATHER / RAINY DAY AVAILABILITY
+// 5. WEATHER / RAINY DAY AVAILABILITY
 function renderWeatherSettings(item) {
     const container = document.createElement("div");
     
@@ -1332,6 +1242,26 @@ function makeEditable(el, save){
     };
 }
 
+function parseTimeToMinutes(str) {
+    if (!str || typeof str !== "string") return null;
+    let s = str.trim().toLowerCase();
+    let mer = null;
+    if (s.endsWith("am") || s.endsWith("pm")) {
+        mer = s.endsWith("am") ? "am" : "pm";
+        s = s.replace(/am|pm/g, "").trim();
+    }
+    const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+    if (!m) return null;
+    let hh = parseInt(m[1], 10);
+    const mm = parseInt(m[2], 10);
+    if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
+    if (mer) {
+        if (hh === 12) hh = mer === "am" ? 0 : 12;
+        else if (mer === "pm") hh += 12;
+    }
+    return hh * 60 + mm;
+}
+
 function addField(){
     // ✅ RBAC Check
     if (!window.AccessControl?.checkSetupAccess('add fields')) return;
@@ -1352,7 +1282,6 @@ function addField(){
         limitUsage: { enabled:false, divisions:{} },
         preferences: { enabled:false, exclusive:false, list:[] },
         timeRules: [],
-        transition: { preMin:0, postMin:0, label:"Travel", zone:window.DEFAULT_ZONE_NAME || "Default", occupiesField:false, minDurationMin:0 },
         rainyDayAvailable: false
     });
 
@@ -1362,8 +1291,6 @@ function addField(){
     renderMasterLists(); 
     renderDetailPane();
 }
-
-
 
 //------------------------------------------------------------------
 // EXPORTS
