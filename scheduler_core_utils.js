@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_utils.js (FIXED v7.4 - REMOVED LEGACY FALLBACKS)
+// scheduler_core_utils.js (FIXED v7.5 - ENHANCED FIELD PROPERTY CHECKS)
 //
 // PART 1: THE FOUNDATION & CONSOLIDATED UTILITIES
 //
@@ -9,6 +9,8 @@
 // - v7.3: RBAC FIX - Uses window.AccessControl
 // - v7.4: REMOVED LEGACY UNIFIED TIMES FALLBACKS. Added robust cross-division
 //         conflict detection and division-aware time helpers.
+// - v7.5: ★★★ ENHANCED sharableWith.divisions check for custom sharing mode ★★★
+//         ★★★ FIXED capacity calculation for type="all" (999 = unlimited) ★★★
 // ============================================================================
 
 (function () {
@@ -419,7 +421,8 @@
             count: 0,
             bunks: {},
             activities: new Set(),
-            bunkList: []
+            bunkList: [],
+            divisions: []
         };
 
         if (!fieldUsageBySlot || !fieldUsageBySlot[slotIndex]) return result;
@@ -432,6 +435,7 @@
         result.count = fieldData.count || 0;
         result.bunks = fieldData.bunks || {};
         result.bunkList = Object.keys(result.bunks);
+        result.divisions = fieldData.divisions || [];
 
         Object.values(result.bunks).forEach(actName => {
             if (actName) result.activities.add(actName.toLowerCase().trim());
@@ -445,7 +449,8 @@
             count: 0,
             bunks: {},
             activities: new Set(),
-            bunkList: []
+            bunkList: [],
+            divisions: []
         };
 
         const schedules = window.scheduleAssignments || {};
@@ -464,11 +469,42 @@
 
                 const actName = entry._activity || entry.sport;
                 if (actName) result.activities.add(actName.toLowerCase().trim());
+                
+                // Track divisions of existing users
+                const bunkDiv = Utils.getDivisionForBunk(bunk);
+                if (bunkDiv && !result.divisions.includes(bunkDiv)) {
+                    result.divisions.push(bunkDiv);
+                }
             }
         }
 
         return result;
     }
+    
+    // =================================================================
+    // ★★★ NEW: GET FIELD CAPACITY (SINGLE SOURCE OF TRUTH) ★★★
+    // =================================================================
+    Utils.getFieldCapacity = function(fieldName, activityProperties) {
+        const props = activityProperties?.[fieldName];
+        if (!props) return 1;
+        
+        // Check sharableWith config
+        if (props.sharableWith) {
+            // ★★★ FIX v7.5: type="all" means unlimited sharing ★★★
+            if (props.sharableWith.type === 'all') return 999;
+            if (props.sharableWith.type === 'custom') {
+                return parseInt(props.sharableWith.capacity) || 2;
+            }
+            if (props.sharableWith.capacity) {
+                return parseInt(props.sharableWith.capacity);
+            }
+        }
+        
+        // Legacy sharable check
+        if (props.sharable) return 2;
+        
+        return 1; // Default: not sharable
+    };
 
     // =================================================================
     // 7. MAIN FIT LOGIC (WITH DIVISION-AWARE LOCK CHECK)
@@ -527,8 +563,9 @@
      * 2. DIVISION LOCKS (electives) - Check if this division is allowed
      * 3. Field reservations (skeleton)
      * 4. Activity properties (availability, time rules, preferences)
-     * 5. Capacity checks
-     * 6. Player requirements (soft check)
+     * 5. ★★★ NEW: sharableWith.divisions check for custom sharing mode ★★★
+     * 6. Capacity checks
+     * 7. Player requirements (soft check)
      * =========================================================================
      */
     Utils.canBlockFit = function (block, fieldName, activityProperties, fieldUsageBySlot, actName, forceLeague = false) {
@@ -584,7 +621,7 @@
         const baseProps = {
             available: true,
             sharable: false,
-            sharableWith: { capacity: 1, type: "not_sharable" },
+            sharableWith: { capacity: 1, type: "not_sharable", divisions: [] },
             timeRules: [],
             transition: { preMin: 0, postMin: 0, zone: "default", occupiesField: false }
         };
@@ -625,15 +662,11 @@
             return false;
         }
 
-       // =================================================================
-        // CAPACITY CALCULATION
         // =================================================================
-        let maxCapacity = 1;
-        if (effectiveProps.sharableWith?.capacity) {
-            maxCapacity = parseInt(effectiveProps.sharableWith.capacity) || 1;
-        } else if (effectiveProps.sharable || effectiveProps.sharableWith?.type === "all" || effectiveProps.sharableWith?.type === "custom") {
-            maxCapacity = 2;
-        }
+        // ★★★ ENHANCED CAPACITY CALCULATION (v7.5) ★★★
+        // =================================================================
+        let maxCapacity = Utils.getFieldCapacity(fieldName, activityProperties);
+        
         // Basic availability checks
         if (effectiveProps.available === false) {
             if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - not available`);
@@ -680,8 +713,8 @@
                     let withinAvailable = false;
                     
                     for (const rule of availableRules) {
-                        const ruleStart = Utils.parseTimeToMinutes(rule.startTime || rule.start);
-                        const ruleEnd = Utils.parseTimeToMinutes(rule.endTime || rule.end);
+                        const ruleStart = rule.startMin ?? Utils.parseTimeToMinutes(rule.startTime || rule.start);
+                        const ruleEnd = rule.endMin ?? Utils.parseTimeToMinutes(rule.endTime || rule.end);
                         
                         if (ruleStart == null || ruleEnd == null) continue;
                         
@@ -700,8 +733,8 @@
                 
                 // Check "Unavailable" rules - block must NOT overlap
                 for (const rule of unavailableRules) {
-                    const ruleStart = Utils.parseTimeToMinutes(rule.startTime || rule.start);
-                    const ruleEnd = Utils.parseTimeToMinutes(rule.endTime || rule.end);
+                    const ruleStart = rule.startMin ?? Utils.parseTimeToMinutes(rule.startTime || rule.start);
+                    const ruleEnd = rule.endMin ?? Utils.parseTimeToMinutes(rule.endTime || rule.end);
                     
                     if (ruleStart == null || ruleEnd == null) continue;
                     
@@ -714,12 +747,14 @@
                 }
             }
         }
+        
         // =================================================================
         // CHECK EACH SLOT FOR CAPACITY AND ACTIVITY MATCHING
         // =================================================================
         const bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || Utils._bunkMetaData || {};
         const sportMeta = window.getSportMetaData?.() || window.sportMetaData || Utils._sportMetaData || {};
         const mySize = bunkMeta[block.bunk]?.size || 0;
+        const myDivision = block.divName || Utils.getDivisionForBunk(block.bunk);
 
         for (const idx of uniqueSlots) {
             const trackedUsage = getFieldUsageAtSlot(idx, fieldName, fieldUsageBySlot);
@@ -727,6 +762,7 @@
 
             const allBunks = new Set([...trackedUsage.bunkList, ...scheduleUsage.bunkList]);
             const allActivities = new Set([...trackedUsage.activities, ...scheduleUsage.activities]);
+            const allDivisions = [...new Set([...trackedUsage.divisions, ...scheduleUsage.divisions])];
 
             allBunks.delete(block.bunk);
 
@@ -736,6 +772,28 @@
             if (currentCount >= maxCapacity) {
                 if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - at capacity (${currentCount}/${maxCapacity})`);
                 return false;
+            }
+
+            // =================================================================
+            // ★★★ NEW v7.5: sharableWith.divisions CHECK FOR CUSTOM SHARING ★★★
+            // When type="custom", only allow sharing with specified divisions
+            // =================================================================
+            if (effectiveProps.sharableWith?.type === 'custom' && currentCount > 0) {
+                const allowedDivisions = effectiveProps.sharableWith.divisions || [];
+                
+                // Check if MY division is in the allowed list
+                if (allowedDivisions.length > 0 && !allowedDivisions.includes(myDivision)) {
+                    if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - sharableWith.divisions: my division ${myDivision} not in allowed list [${allowedDivisions.join(', ')}]`);
+                    return false;
+                }
+                
+                // Check if EXISTING users' divisions are in the allowed list
+                for (const existingDiv of allDivisions) {
+                    if (allowedDivisions.length > 0 && !allowedDivisions.includes(existingDiv)) {
+                        if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - sharableWith.divisions: existing division ${existingDiv} not compatible`);
+                        return false;
+                    }
+                }
             }
 
             // SAME ACTIVITY REQUIREMENT WHEN SHARING
@@ -972,8 +1030,14 @@
         console.log('Available:', props?.available);
         console.log('Sharable:', props?.sharable);
         console.log('SharableWith:', props?.sharableWith);
+        console.log('  - type:', props?.sharableWith?.type);
+        console.log('  - divisions:', props?.sharableWith?.divisions);
+        console.log('  - capacity:', props?.sharableWith?.capacity);
+        console.log('Calculated Capacity:', Utils.getFieldCapacity(fieldName, window.activityProperties));
         console.log('TimeRules:', props?.timeRules);
-        console.log('Preferences:', props?.preferences);
+        console.log('LimitUsage:', props?.limitUsage);
+        console.log('RainyDayAvailable:', props?.rainyDayAvailable);
+        console.log('Activities:', props?.activities);
 
         // Check global lock status
         if (window.GlobalFieldLocks) {
@@ -986,6 +1050,10 @@
                 console.log('Not globally locked');
             }
         }
+        
+        // Check disabled status
+        const disabledFields = window.currentDisabledFields || [];
+        console.log('Disabled (rainy day):', disabledFields.includes(fieldName));
     };
 
     Utils.debugSportRequirements = function(sportName) {
@@ -1448,7 +1516,7 @@
                 props[f.name] = {
                     ...f,
                     type: 'field',
-                    capacity: f.sharableWith?.capacity || (f.sharableWith?.type === 'all' ? 999 : 1),
+                    capacity: Utils.getFieldCapacity(f.name, { [f.name]: f }),
                     available: f.available !== false
                 };
             }
@@ -1482,24 +1550,6 @@
         });
         
         return props;
-    };
-
-    /**
-     * Get field capacity
-     */
-    Utils.getFieldCapacity = function(fieldName, activityProperties) {
-        const props = activityProperties || Utils.getActivityProperties();
-        const fieldProps = props[fieldName];
-        
-        if (!fieldProps) return 1;
-        
-        // Check sharableWith config
-        if (fieldProps.sharableWith) {
-            if (fieldProps.sharableWith.type === 'all') return 999;
-            if (fieldProps.sharableWith.capacity) return fieldProps.sharableWith.capacity;
-        }
-        
-        return fieldProps.capacity || 1;
     };
 
     // =================================================================
@@ -1724,52 +1774,6 @@
     Utils.checkTimeOverlap = function(start1, end1, start2, end2) {
         return !(end1 <= start2 || start1 >= end2);
     };
-    
-    Utils.checkCrossDivisionFieldConflict = function(fieldName, startMin, endMin, excludeBunk = null, maxCapacity = 1) {
-        const conflicts = [];
-        const divisions = window.divisions || {};
-        const fieldLower = fieldName.toLowerCase();
-        
-        for (const [divName, divData] of Object.entries(divisions)) {
-            const divSlots = window.divisionTimes?.[divName] || [];
-            
-            for (const bunk of (divData.bunks || [])) {
-                if (excludeBunk && String(bunk) === String(excludeBunk)) continue;
-                
-                const assignments = window.scheduleAssignments?.[bunk] || [];
-                
-                for (let idx = 0; idx < divSlots.length; idx++) {
-                    const slot = divSlots[idx];
-                    
-                    if (Utils.checkTimeOverlap(startMin, endMin, slot.startMin, slot.endMin)) {
-                        const entry = assignments[idx];
-                        if (!entry || entry.continuation) continue;
-                        
-                        const entryField = typeof entry.field === 'object' 
-                            ? entry.field?.name 
-                            : entry.field;
-                        
-                        if (entryField?.toLowerCase() === fieldLower) {
-                            conflicts.push({
-                                bunk,
-                                division: divName,
-                                slotIndex: idx,
-                                timeStart: slot.startMin,
-                                timeEnd: slot.endMin,
-                                activity: entry._activity || entryField
-                            });
-                        }
-                    }
-                }
-            }
-        }
-        
-        return {
-            hasConflict: conflicts.length >= maxCapacity,
-            count: conflicts.length,
-            conflicts
-        };
-    };
 
     // =================================================================
     // 16. LEGACY COMPATIBILITY LAYER
@@ -1817,16 +1821,9 @@
         isReserved: Utils.isFieldReserved,
         parseTimeToMinutes: Utils.parseTimeToMinutes
     };
-// =============================================================================
-// ADD THIS CODE TO scheduler_core_utils.js
-// =============================================================================
-// Insert this section BEFORE the final console.log and closing })();
-// Look for a line like: console.log('⚙️ Scheduler Core Utils loaded');
-// Add this code BEFORE that line
-// =============================================================================
 
     // =================================================================
-    // 14. ACTIVITY ROTATION TRACKING (CONSOLIDATED - SINGLE SOURCE OF TRUTH)
+    // 17. ACTIVITY ROTATION TRACKING (CONSOLIDATED - SINGLE SOURCE OF TRUTH)
     // =================================================================
 
     /**
@@ -2020,8 +2017,81 @@
     window.rebuildHistoricalCounts = Utils.rebuildHistoricalCounts;
 
     // =================================================================
-    // END OF ACTIVITY ROTATION TRACKING SECTION
+    // ★★★ NEW v7.5: DIAGNOSTIC FUNCTIONS ★★★
     // =================================================================
-    console.log("✅ SchedulerCoreUtils v7.4 Loaded (RBAC Fixed & Legacy Fallbacks Removed)");
+    
+    /**
+     * Diagnose field data integrity - checks all fields for complete structure
+     */
+    Utils.diagnoseFieldData = function(fieldNameFilter = null) {
+        const settings = window.loadGlobalSettings?.() || {};
+        const fields = settings.app1?.fields || [];
+        
+        console.log('=== FIELD DATA INTEGRITY CHECK ===');
+        console.log(`Total fields: ${fields.length}`);
+        
+        const issues = [];
+        
+        fields.forEach(f => {
+            if (fieldNameFilter && f.name !== fieldNameFilter) return;
+            
+            const fieldIssues = [];
+            
+            // Check sharableWith
+            if (!f.sharableWith) {
+                fieldIssues.push('Missing sharableWith');
+            } else {
+                if (!f.sharableWith.type) fieldIssues.push('sharableWith.type missing');
+                if (!Array.isArray(f.sharableWith.divisions)) fieldIssues.push('sharableWith.divisions not an array');
+                if (f.sharableWith.capacity === undefined) fieldIssues.push('sharableWith.capacity missing');
+            }
+            
+            // Check limitUsage
+            if (!f.limitUsage) {
+                fieldIssues.push('Missing limitUsage');
+            } else {
+                if (f.limitUsage.enabled === undefined) fieldIssues.push('limitUsage.enabled missing');
+                if (typeof f.limitUsage.divisions !== 'object') fieldIssues.push('limitUsage.divisions not an object');
+                if (!Array.isArray(f.limitUsage.priorityList)) fieldIssues.push('limitUsage.priorityList not an array');
+            }
+            
+            // Check timeRules
+            if (!Array.isArray(f.timeRules)) {
+                fieldIssues.push('timeRules not an array');
+            } else {
+                f.timeRules.forEach((r, i) => {
+                    if (r.startMin === undefined || r.startMin === null) {
+                        fieldIssues.push(`timeRules[${i}].startMin not pre-parsed`);
+                    }
+                });
+            }
+            
+            // Check rainyDayAvailable
+            if (f.rainyDayAvailable === undefined) {
+                fieldIssues.push('rainyDayAvailable missing');
+            }
+            
+            if (fieldIssues.length > 0) {
+                issues.push({ field: f.name, issues: fieldIssues });
+                console.log(`\n❌ ${f.name}:`);
+                fieldIssues.forEach(i => console.log(`   - ${i}`));
+            } else {
+                console.log(`\n✅ ${f.name}: OK`);
+            }
+        });
+        
+        console.log('\n=== SUMMARY ===');
+        console.log(`Fields with issues: ${issues.length}/${fields.length}`);
+        
+        return issues;
+    };
+    
+    // Export diagnostic
+    window.diagnoseFieldData = Utils.diagnoseFieldData;
+
+    // =================================================================
+    // END OF FILE
+    // =================================================================
+    console.log("✅ SchedulerCoreUtils v7.5 Loaded (Enhanced Field Property Checks)");
 
 })();
