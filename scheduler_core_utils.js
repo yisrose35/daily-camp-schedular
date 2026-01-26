@@ -230,20 +230,49 @@
     // =================================================================
 
     Utils.getTransitionRules = function (fieldName, activityProperties) {
-        const base = {
-            preMin: 0,
-            postMin: 0,
-            label: "Travel",
-            zone: window.DEFAULT_ZONE_NAME || "default",
-            occupiesField: false,
-            minDurationMin: 0
-        };
-
-        if (!activityProperties) return base;
-        const props = activityProperties[fieldName];
-        if (!props?.transition) return base;
-        return { ...base, ...props.transition };
+    const base = {
+        preMin: 0,
+        postMin: 0,
+        label: "Travel",
+        zone: window.DEFAULT_ZONE_NAME || "default",
+        occupiesField: false,
+        minDurationMin: 0
     };
+
+    // ★★★ v18.0: Get transition rules from ZONE (locations.js) instead of field/activity ★★★
+    // First, try to find the zone for this field
+    const zone = window.getZoneForField?.(fieldName);
+    if (zone && zone.transition) {
+        return {
+            ...base,
+            preMin: zone.transition.preMin || 0,
+            postMin: zone.transition.postMin || 0,
+            zone: zone.name || base.zone,
+            label: "Travel"
+        };
+    }
+
+    // Fallback: check if it's a special activity with a location
+    if (activityProperties) {
+        const props = activityProperties[fieldName];
+        if (props?.location) {
+            // Find zone for the location
+            const locZone = window.getZoneForField?.(props.location);
+            if (locZone && locZone.transition) {
+                return {
+                    ...base,
+                    preMin: locZone.transition.preMin || 0,
+                    postMin: locZone.transition.postMin || 0,
+                    zone: locZone.name || base.zone,
+                    label: "Travel"
+                };
+            }
+        }
+    }
+
+    // Final fallback: return base (no transition)
+    return base;
+};
 
     Utils.getEffectiveTimeRange = function (block, rules) {
         const { blockStartMin, blockEndMin } = Utils.getBlockTimeRange(block);
