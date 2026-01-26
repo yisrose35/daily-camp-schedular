@@ -318,13 +318,7 @@ function createMasterListItem(item, isRainyDay = false) {
         nameEl.appendChild(badge);
     }
 
-    // Add meta info (Transition times)
-    if (item.transition.preMin > 0 || item.transition.postMin > 0) {
-        const meta = document.createElement("span");
-        meta.className = "sa-list-item-meta";
-        meta.textContent = `(${item.transition.preMin}m / ${item.transition.postMin}m)`;
-        nameEl.appendChild(meta);
-    }
+    
 
     infoDiv.appendChild(nameEl);
     el.appendChild(infoDiv);
@@ -511,9 +505,7 @@ function renderDetailPane() {
 
     // -- 3. ACCORDION SECTIONS --
     
-    // Transition & Zone Rules
-    detailPaneEl.appendChild(createSection("Transition & Zone Rules", summaryTransition(item), 
-        () => renderTransition(item)));
+    
 
     // Frequency Limits
     detailPaneEl.appendChild(createSection("Frequency Limits", summaryFrequency(item), 
@@ -574,9 +566,7 @@ function createSection(title, summary, builder) {
 //------------------------------------------------------------------
 // SUMMARY GENERATORS
 //------------------------------------------------------------------
-function summaryTransition(item) { 
-    return `${item.transition.preMin}m Pre / ${item.transition.postMin}m Post`; 
-}
+
 
 function summaryFrequency(item) {
     if (item.maxUsage === null || item.maxUsage === undefined) {
@@ -642,119 +632,6 @@ function renderLocationDropdown(item) {
     return container;
 }
 
-// 1. TRANSITION & ZONE
-function renderTransition(item) {
-    const t = item.transition;
-    const container = document.createElement("div");
-    
-    const update = () => { 
-        saveData(); 
-        renderMasterList(); 
-        // Update summary
-        const summaryEl = container.closest('.sa-detail-section')?.querySelector('.sa-detail-section-summary');
-        if (summaryEl) summaryEl.textContent = summaryTransition(item);
-    };
-
-    // Times Row
-    const timeRow = document.createElement("div");
-    timeRow.style.display = "flex";
-    timeRow.style.gap = "12px";
-    timeRow.style.marginBottom = "12px";
-    timeRow.style.flexWrap = "wrap";
-
-    const mkInput = (lbl, val, setter) => {
-        const d = document.createElement("div");
-        d.innerHTML = `<label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:4px;">${lbl}</label>`;
-        const i = document.createElement("input");
-        i.type = "number";
-        i.min = "0";
-        i.step = "5";
-        i.value = val;
-        i.className = "sa-field-input";
-        i.style.width = "80px";
-        i.onchange = () => { setter(parseInt(i.value) || 0); update(); };
-        d.appendChild(i);
-        return d;
-    };
-
-    timeRow.appendChild(mkInput("Pre-Buffer (min)", t.preMin, v => t.preMin = v));
-    timeRow.appendChild(mkInput("Post-Buffer (min)", t.postMin, v => t.postMin = v));
-    container.appendChild(timeRow);
-
-    // Label & Zone Row
-    const metaRow = document.createElement("div");
-    metaRow.style.display = "flex";
-    metaRow.style.gap = "12px";
-    metaRow.style.marginBottom = "12px";
-    metaRow.style.flexWrap = "wrap";
-
-    // Label Input
-    const labelDiv = document.createElement("div");
-    labelDiv.style.flex = "1";
-    labelDiv.style.minWidth = "120px";
-    labelDiv.innerHTML = `<label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:4px;">Label</label>`;
-    const labelIn = document.createElement("input");
-    // Fix #2: Correctly set input type
-    labelIn.type = "text";
-    labelIn.value = t.label;
-    labelIn.className = "sa-field-input";
-    labelIn.style.width = "100%";
-    labelIn.onchange = () => { t.label = labelIn.value.trim() || "Transition"; update(); };
-    labelDiv.appendChild(labelIn);
-    metaRow.appendChild(labelDiv);
-
-    // Zone Select
-    const zoneDiv = document.createElement("div");
-    zoneDiv.style.flex = "1";
-    zoneDiv.style.minWidth = "120px";
-    zoneDiv.innerHTML = `<label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:4px;">Zone (Location)</label>`;
-    const zoneSel = document.createElement("select");
-    zoneSel.className = "sa-field-input";
-    zoneSel.style.width = "100%";
-    const zones = window.getZones?.() || {};
-    Object.values(zones).forEach(z => {
-        const opt = document.createElement("option");
-        opt.value = z.name;
-        opt.textContent = z.name + (z.isDefault ? " (Default)" : "");
-        if (z.name === t.zone) opt.selected = true;
-        zoneSel.appendChild(opt);
-    });
-    zoneSel.onchange = () => { t.zone = zoneSel.value; update(); };
-    zoneDiv.appendChild(zoneSel);
-    metaRow.appendChild(zoneDiv);
-
-    // Min Duration
-    metaRow.appendChild(mkInput("Min Duration (min)", t.minDurationMin, v => t.minDurationMin = v));
-
-    container.appendChild(metaRow);
-
-    // Occupancy Toggle
-    const occLabel = document.createElement("label");
-    occLabel.style.display = "flex";
-    occLabel.style.alignItems = "center";
-    occLabel.style.gap = "8px";
-    occLabel.style.cursor = "pointer";
-    occLabel.style.marginTop = "8px";
-
-    const occCk = document.createElement("input");
-    occCk.type = "checkbox";
-    occCk.checked = t.occupiesField;
-    occCk.onchange = () => { t.occupiesField = occCk.checked; update(); };
-
-    occLabel.appendChild(occCk);
-    occLabel.appendChild(document.createTextNode("Buffer occupies resource (e.g. Setup/Change)"));
-    container.appendChild(occLabel);
-
-    const hint = document.createElement("p");
-    hint.className = "sa-muted";
-    hint.style.fontSize = "0.75rem";
-    hint.style.marginTop = "4px";
-    hint.style.paddingLeft = "22px";
-    hint.textContent = "If unchecked (Travel), the resource is available during transition time.";
-    container.appendChild(hint);
-
-    return container;
-}
 
 // 2. FREQUENCY LIMITS
 function renderFrequency(item) {
