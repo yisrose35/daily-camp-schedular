@@ -1,11 +1,9 @@
 // ============================================================================
 // specialty_leagues.js — PRODUCTION-READY v2.2.6 (EMERALD CAMP THEME)
 // ============================================================================
-// v2.2.6 LIVE STANDINGS & SCORE PERSISTENCE:
-// - ★ LIVE MINI-STANDINGS: Shows standings above games, updates instantly
+// v2.2.6 SCORE PERSISTENCE FIXES:
 // - ★ EXTENDED PROTECTION: 5-second window prevents tab-switch data loss
 // - ★ IMMEDIATE SAVE: Scores save on blur AND every 100ms while typing
-// - ★ NO RE-RENDER FLASH: Standings update without full page refresh
 // - ★ STANDINGS REFRESH: Standings tab refreshes with latest data when opened
 //
 // v2.2.5 ADVANCED STANDINGS & TIEBREAKERS:
@@ -1550,13 +1548,6 @@
         header.appendChild(importBtn);
         container.appendChild(header);
 
-        // ★ v2.2.6: LIVE MINI-STANDINGS (updates in real-time as you enter scores)
-        const miniStandingsContainer = document.createElement('div');
-        miniStandingsContainer.id = 'sl-live-standings';
-        miniStandingsContainer.style.cssText = 'margin-bottom:20px;';
-        renderMiniStandings(league, miniStandingsContainer);
-        container.appendChild(miniStandingsContainer);
-
         // Get and group games by date
         const games = league.games || [];
         const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
@@ -1665,101 +1656,6 @@
             renderGameEntryUI(league, container);
         };
         container.appendChild(addNewBtn);
-    }
-    
-    /**
-     * ★ v2.2.6: Render compact mini-standings that update in real-time
-     */
-    function renderMiniStandings(league, container) {
-        if (!container) return;
-        container.innerHTML = '';
-        
-        if (!league.teams || league.teams.length === 0) return;
-        
-        // Collapsible header
-        const header = document.createElement('div');
-        header.style.cssText = 'display:flex; justify-content:space-between; align-items:center; cursor:pointer; padding:8px 12px; background:#F0FDF4; border:1px solid #BBF7D0; border-radius:8px 8px 0 0;';
-        
-        const titleArea = document.createElement('div');
-        titleArea.style.cssText = 'display:flex; align-items:center; gap:8px;';
-        titleArea.innerHTML = '<span style="font-size:0.65rem;">▼</span> <span style="font-size:0.8rem; font-weight:600; color:#166534;">Live Standings</span>';
-        header.appendChild(titleArea);
-        
-        const toggleText = document.createElement('span');
-        toggleText.style.cssText = 'font-size:0.7rem; color:#6B7280;';
-        toggleText.textContent = 'Updates as you enter scores';
-        header.appendChild(toggleText);
-        
-        container.appendChild(header);
-        
-        // Content area
-        const content = document.createElement('div');
-        content.id = 'sl-mini-standings-content';
-        content.style.cssText = 'background:#FAFAFA; border:1px solid #E5E7EB; border-top:none; border-radius:0 0 8px 8px; padding:8px;';
-        
-        // Sort teams with tiebreakers
-        const sorted = sortTeamsWithTiebreakers(league);
-        
-        // Compact table
-        const table = document.createElement('table');
-        table.style.cssText = 'width:100%; border-collapse:collapse; font-size:0.8rem;';
-        
-        sorted.forEach((teamData, idx) => {
-            const team = teamData.team;
-            const stats = league.standings[team] || { w: 0, l: 0, t: 0 };
-            const diff = teamData.pointDiff || 0;
-            
-            const row = document.createElement('tr');
-            row.style.cssText = idx % 2 === 0 ? 'background:#fff;' : '';
-            
-            // Place
-            const tdPlace = document.createElement('td');
-            tdPlace.style.cssText = 'padding:6px 8px; font-weight:600; color:#111827; width:30px;';
-            tdPlace.textContent = `${idx + 1}.`;
-            row.appendChild(tdPlace);
-            
-            // Team
-            const tdTeam = document.createElement('td');
-            tdTeam.style.cssText = 'padding:6px 8px; font-weight:500;';
-            tdTeam.textContent = team;
-            row.appendChild(tdTeam);
-            
-            // Record
-            const tdRecord = document.createElement('td');
-            tdRecord.style.cssText = 'padding:6px 8px; text-align:right; color:#6B7280; width:60px;';
-            tdRecord.textContent = `${stats.w}-${stats.l}${stats.t > 0 ? '-' + stats.t : ''}`;
-            row.appendChild(tdRecord);
-            
-            // +/-
-            const tdDiff = document.createElement('td');
-            const diffColor = diff > 0 ? '#059669' : diff < 0 ? '#DC2626' : '#6B7280';
-            tdDiff.style.cssText = `padding:6px 8px; text-align:right; color:${diffColor}; font-weight:500; width:40px;`;
-            tdDiff.textContent = diff > 0 ? `+${diff}` : `${diff}`;
-            row.appendChild(tdDiff);
-            
-            table.appendChild(row);
-        });
-        
-        content.appendChild(table);
-        container.appendChild(content);
-        
-        // Toggle collapse
-        let isExpanded = true;
-        header.onclick = () => {
-            isExpanded = !isExpanded;
-            content.style.display = isExpanded ? 'block' : 'none';
-            titleArea.innerHTML = `<span style="font-size:0.65rem;">${isExpanded ? '▼' : '▶'}</span> <span style="font-size:0.8rem; font-weight:600; color:#166534;">Live Standings</span>`;
-        };
-    }
-    
-    /**
-     * ★ v2.2.6: Update the mini-standings without re-rendering the full page
-     */
-    function updateLiveStandings(league) {
-        const container = document.getElementById('sl-live-standings');
-        if (container) {
-            renderMiniStandings(league, container);
-        }
     }
     
     /**
@@ -1986,9 +1882,6 @@
                 saveData(true); // ★ Force cloud sync
                 
                 console.log('[SPECIALTY_LEAGUES] Score saved:', match.teamA, newScoreA, '-', newScoreB, match.teamB);
-                
-                // ★ v2.2.6: Update live standings immediately
-                updateLiveStandings(league);
                 
                 // Show save indicator
                 const statusEl = document.getElementById('sl-save-status-' + game._idx);
