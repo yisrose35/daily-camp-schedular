@@ -1,29 +1,30 @@
 // =================================================================
-// leagues.js — PRODUCTION-READY v2.2
+// leagues.js — PRODUCTION-READY v2.4
 // =================================================================
+// v2.4 FIXES:
+// - ★ IMPORT: Now imports ALL games from the day (Game 11, Game 12, etc.)
+// - ★ GAME NUMBERS: Preserves game numbers from schedule (Game 11 stays Game 11)
+// - ★ AUTO-EDIT: After import, automatically shows games for score entry
+// - ★ GAME LABEL: Added editable game label field in form
+// v2.3 FIXES:
+// - ★ CROSS-DEVICE SYNC: Now works! Uses best source outside protection window
+// - ★ RACE CONDITION: Still protected - prefers localStorage for 5s after save
 // v2.2 FIXES:
 // - ★ PREFER localStorage over loadGlobalSettings (prevents race conditions)
 // - ★ Deep clone data to prevent mutation issues
 // - ★ 5-second protection window after save
 // - ★ Validate league data quality, not just key count
-// v2.1 FIXES:
-// - ★ Write to localStorage immediately when saving
-// - ★ Safeguard against overwriting good data with empty
 // v2.0 PRODUCTION FIXES:
 // - ★ CLOUD SYNC: Proper cloud sync via saveGlobalSettings
 // - ★ TAB REFRESH: Refreshes data when tab becomes visible
 // - ★ MEMORY LEAK FIX: Proper cleanup of all event listeners
 // - ★ DATA VALIDATION: Validates structure on load
-// - ★ TYPE CONSISTENCY: Ensures proper number/string handling
-// - ★ NULL SAFETY: Added checks for DOM elements and parameters
-// - ★ ORPHAN CLEANUP: Validates divisions on load
-// - ★ ERROR HANDLING: Added try/catch around risky operations
 // - ★ XSS PREVENTION: Added escapeHtml for user content
 // - ★ RBAC: Added permission checks for add/delete operations
 // =================================================================
 (function () {
     'use strict';
-    console.log("🏆 leagues.js v2.2 loading...");
+    console.log("🏆 leagues.js v2.4 loading...");
 
     // =========================================================================
     // GLOBAL LEAGUE STORAGE
@@ -377,11 +378,15 @@
                 return count;
             }
             
+            // ★ Check if we're in the protection window after a save
+            const timeSinceSave = Date.now() - _lastSaveTime;
+            const inProtectionWindow = timeSinceSave < 5000;
+            
             // ★ Check multiple sources for league data
             let loadedData = {};
             let source = 'none';
             
-            // Source 1: localStorage directly (PREFERRED - most reliable, where we write)
+            // Source 1: localStorage directly (most recent local writes)
             let fromLS = {};
             let fromLSCount = 0;
             try {
@@ -395,7 +400,7 @@
                 console.log("[LEAGUES] localStorage read failed:", lsErr);
             }
             
-            // Source 2: loadGlobalSettings (may have stale/cached data)
+            // Source 2: loadGlobalSettings (includes cloud-synced data)
             const global = window.loadGlobalSettings?.() || {};
             const fromGlobal = global.leaguesByName || {};
             const fromGlobalCount = countValidLeagues(fromGlobal);
@@ -404,17 +409,34 @@
             const fromApp1 = global.app1?.leaguesByName || {};
             const fromApp1Count = countValidLeagues(fromApp1);
             
-            // ★ ALWAYS prefer localStorage first (it's our source of truth)
-            // Only use other sources if localStorage is empty
-            if (fromLSCount > 0) {
-                loadedData = deepClone(fromLS);  // ★ Deep clone to prevent mutations
-                source = 'localStorage';
-            } else if (fromGlobalCount > 0) {
-                loadedData = deepClone(fromGlobal);
-                source = 'global';
-            } else if (fromApp1Count > 0) {
-                loadedData = deepClone(fromApp1);
-                source = 'app1';
+            // ★ SMART SOURCE SELECTION:
+            // - During protection window: ALWAYS prefer localStorage (prevents race condition)
+            // - Outside protection window: Use whichever has the most valid data (allows cross-device sync)
+            
+            if (inProtectionWindow) {
+                // In protection window - prefer localStorage to prevent race condition
+                if (fromLSCount > 0) {
+                    loadedData = deepClone(fromLS);
+                    source = 'localStorage (protected)';
+                } else if (fromGlobalCount > 0) {
+                    loadedData = deepClone(fromGlobal);
+                    source = 'global (fallback)';
+                } else if (fromApp1Count > 0) {
+                    loadedData = deepClone(fromApp1);
+                    source = 'app1 (fallback)';
+                }
+            } else {
+                // Outside protection window - use the best source (allows cross-device sync)
+                if (fromGlobalCount >= fromLSCount && fromGlobalCount >= fromApp1Count && fromGlobalCount > 0) {
+                    loadedData = deepClone(fromGlobal);
+                    source = 'global';
+                } else if (fromLSCount >= fromApp1Count && fromLSCount > 0) {
+                    loadedData = deepClone(fromLS);
+                    source = 'localStorage';
+                } else if (fromApp1Count > 0) {
+                    loadedData = deepClone(fromApp1);
+                    source = 'app1';
+                }
             }
             
             const loadedCount = countValidLeagues(loadedData);
@@ -426,7 +448,8 @@
                 fromApp1: fromApp1Count,
                 using: source,
                 loadedCount: loadedCount,
-                currentInMemory: currentCount
+                currentInMemory: currentCount,
+                inProtectionWindow: inProtectionWindow
             });
 
             // ★ SAFEGUARD: If we have data but loaded empty, this is suspicious
@@ -1224,10 +1247,17 @@
     // =========================================================================
     // GAME ENTRY + IMPORT
     // =========================================================================
-    function renderGameEntryUI(league, container) {
+    
+    /**
+     * Render game entry UI with optional pre-selected game
+     */
+    function renderGameEntryUIWithSelection(league, container, selectedGameIdx) {
         if (!container) return;
 
         container.innerHTML = '';
+        
+        // ★ Add data attribute for scrolling
+        container.setAttribute('data-section', 'games');
 
         const controls = document.createElement('div');
         Object.assign(controls.style, {
@@ -1248,23 +1278,37 @@
         select.style.border = "1px solid #D1D5DB";
         select.style.borderRadius = "8px";
         
-        // ★ FIX: Build options using DOM to avoid XSS
         const defaultOpt = document.createElement('option');
         defaultOpt.value = 'new';
         defaultOpt.textContent = '-- Enter New Game --';
         select.appendChild(defaultOpt);
         
-        (league.games || []).forEach(function (g, i) {
+        // ★ Sort games by date and game number, show game label
+        const sortedGames = (league.games || []).map((g, i) => ({ ...g, _originalIndex: i }));
+        sortedGames.sort((a, b) => {
+            if (a.date !== b.date) return (a.date || '').localeCompare(b.date || '');
+            const numA = a.gameNumber || 0;
+            const numB = b.gameNumber || 0;
+            return numA - numB;
+        });
+        
+        sortedGames.forEach(function (g) {
             const opt = document.createElement('option');
-            opt.value = String(i);
-            opt.textContent = 'Game ' + (i + 1) + ' (' + (g.date || 'no date') + ')';
+            opt.value = String(g._originalIndex);
+            const displayLabel = g.gameLabel || ('Game ' + (g._originalIndex + 1));
+            const dateStr = g.date || 'no date';
+            opt.textContent = displayLabel + ' (' + dateStr + ')';
+            // ★ Auto-select the specified game
+            if (selectedGameIdx != null && g._originalIndex === selectedGameIdx) {
+                opt.selected = true;
+            }
             select.appendChild(opt);
         });
         controls.appendChild(select);
 
         const importBtn = document.createElement('button');
-        importBtn.textContent = 'Import from Schedule';
-        importBtn.style.cssText = 'padding:8px 12px; border-radius:8px; background:#3B82F6; color:white; border:none; cursor:pointer;';
+        importBtn.textContent = '📥 Import from Schedule';
+        importBtn.style.cssText = 'padding:8px 12px; border-radius:8px; background:#3B82F6; color:white; border:none; cursor:pointer; font-weight:500;';
         importBtn.onclick = function () {
             importGamesFromSchedule(league);
         };
@@ -1275,18 +1319,33 @@
         const formArea = document.createElement('div');
         container.appendChild(formArea);
 
-        renderGameForm(league, formArea, select.value === 'new' ? null : parseInt(select.value, 10));
+        // ★ Use selected game idx or fallback to 'new'
+        const initialIdx = selectedGameIdx != null ? selectedGameIdx : (select.value === 'new' ? null : parseInt(select.value, 10));
+        renderGameForm(league, formArea, initialIdx);
 
         select.onchange = function () {
             renderGameForm(league, formArea, select.value === 'new' ? null : parseInt(select.value, 10));
         };
+    }
+    
+    function renderGameEntryUI(league, container) {
+        // ★ Call the new function with no pre-selection
+        renderGameEntryUIWithSelection(league, container, null);
     }
 
     function renderGameForm(league, container, gameIdx) {
         if (!container) return;
 
         container.innerHTML = '';
-        const game = gameIdx != null ? league.games[gameIdx] : { date: '', matches: [] };
+        const game = gameIdx != null ? league.games[gameIdx] : { date: '', gameLabel: '', matches: [] };
+
+        // ★ Show game title/label if editing an existing game
+        if (gameIdx != null && game.gameLabel) {
+            const gameTitle = document.createElement('div');
+            gameTitle.style.cssText = 'font-size:1.1rem; font-weight:600; color:#111827; margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid #E5E7EB;';
+            gameTitle.textContent = '📋 ' + game.gameLabel;
+            container.appendChild(gameTitle);
+        }
 
         // Date input
         const dateRow = document.createElement('div');
@@ -1302,6 +1361,22 @@
         dateInput.style.cssText = 'padding:8px; border:1px solid #D1D5DB; border-radius:8px; width:100%;';
         dateRow.appendChild(dateInput);
         container.appendChild(dateRow);
+
+        // ★ Game label input (for new games or editing)
+        const labelRow = document.createElement('div');
+        labelRow.style.marginBottom = '12px';
+        const labelLabel = document.createElement('label');
+        labelLabel.style.cssText = 'font-weight:500; display:block; margin-bottom:4px;';
+        labelLabel.textContent = 'Game Label (e.g., Game 11):';
+        labelRow.appendChild(labelLabel);
+        
+        const labelInput = document.createElement('input');
+        labelInput.type = 'text';
+        labelInput.placeholder = 'Game 1';
+        labelInput.value = game.gameLabel || '';
+        labelInput.style.cssText = 'padding:8px; border:1px solid #D1D5DB; border-radius:8px; width:100%;';
+        labelRow.appendChild(labelInput);
+        container.appendChild(labelRow);
 
         // Matches section
         const matchesLabel = document.createElement('label');
@@ -1420,6 +1495,15 @@
         saveBtn.style.cssText = 'margin-top:16px; padding:10px 20px; background:#10B981; color:#fff; border:none; border-radius:8px; cursor:pointer; font-weight:500; display:block;';
         saveBtn.onclick = function () {
             game.date = dateInput.value;
+            game.gameLabel = labelInput.value.trim() || null;  // ★ Save game label
+            
+            // ★ Extract game number from label if provided
+            if (game.gameLabel) {
+                const numMatch = game.gameLabel.match(/Game\s*(\d+)/i);
+                if (numMatch) {
+                    game.gameNumber = parseInt(numMatch[1], 10);
+                }
+            }
 
             // Filter out matches without both teams selected
             game.matches = (game.matches || []).filter(m => m.teamA && m.teamB);
@@ -1556,6 +1640,7 @@
     /**
      * ★ Import games from the current day's schedule
      * Finds league matchups and creates game entries for result entry
+     * Supports multiple games per day with correct game numbers from schedule
      */
     function importGamesFromSchedule(league) {
         if (!league) {
@@ -1574,9 +1659,9 @@
             console.log('[LEAGUES] Import: League divisions:', league.divisions);
             console.log('[LEAGUES] Import: Available leagueAssignments keys:', Object.keys(leagueAssignments));
 
-            // Find matchups for this league
-            const foundMatchups = [];
-            const processedMatchups = new Set(); // Avoid duplicates
+            // ★ Group matchups by game number/label
+            // Structure: { "Game 11": { gameLabel, slotIdx, matchups: [...] }, "Game 12": {...} }
+            const gamesByLabel = {};
 
             // ★ Use smart division matching to find schedule divisions that match league divisions
             const availableScheduleDivisions = Object.keys(leagueAssignments);
@@ -1593,82 +1678,73 @@
                     const slotData = divAssignments[slotIdx];
                     if (!slotData) continue;
                     
-                    // Check if this is for our league
                     const slotLeagueName = slotData?.leagueName || '';
                     const slotGameLabel = slotData?.gameLabel || '';
                     const matchups = slotData.matchups || [];
                     
-                    // Debug: log what's in this slot
-                    console.log('[LEAGUES] Import: Checking slot', slotIdx, '- leagueName:', slotLeagueName, 'gameLabel:', slotGameLabel, 'matchups:', matchups);
+                    console.log('[LEAGUES] Import: Checking slot', slotIdx, '- leagueName:', slotLeagueName, 'gameLabel:', slotGameLabel, 'matchups:', matchups.length);
                     
-                    // Method A: Direct league name match
+                    // Check if this is our league
                     const nameMatches = slotLeagueName === league.name ||
                         slotLeagueName.toLowerCase() === league.name.toLowerCase() ||
                         (slotGameLabel && slotGameLabel.toLowerCase().includes(league.name.toLowerCase()));
                     
-                    // Method B: If no league name stored, check if matchup teams belong to this league
+                    // If no name match, check if teams belong to this league
                     let teamsMatch = false;
                     if (!nameMatches && matchups.length > 0) {
-                        // Extract team names from matchups
                         const matchupTeams = new Set();
                         matchups.forEach(m => {
                             if (typeof m === 'object') {
                                 if (m.teamA) matchupTeams.add(m.teamA);
                                 if (m.teamB) matchupTeams.add(m.teamB);
                             } else if (typeof m === 'string') {
-                                // Parse formats like:
-                                // "1 vs 5 @ Field B (Baseball)"
-                                // "Team A vs Team B — Field"
-                                // "Red vs Blue"
                                 const vsMatch = m.match(/^(.+?)\s+vs\s+(.+?)(?:\s+@|\s*—|$)/i);
                                 if (vsMatch) {
                                     matchupTeams.add(vsMatch[1].trim());
                                     matchupTeams.add(vsMatch[2].trim());
-                                } else {
-                                    // Fallback: simple split on ' vs '
-                                    const parts = m.split(' vs ');
-                                    if (parts.length === 2) {
-                                        matchupTeams.add(parts[0].trim());
-                                        // Remove @ field info or — field info
-                                        let teamB = parts[1].trim();
-                                        teamB = teamB.split(' @ ')[0].trim();
-                                        teamB = teamB.split('—')[0].trim();
-                                        matchupTeams.add(teamB);
-                                    }
                                 }
                             }
                         });
                         
-                        console.log('[LEAGUES] Import: Matchup teams found:', Array.from(matchupTeams));
-                        console.log('[LEAGUES] Import: League teams:', league.teams);
-                        
-                        // Check if ALL matchup teams are in this league's team list
                         if (matchupTeams.size > 0 && league.teams && league.teams.length > 0) {
                             const leagueTeamsSet = new Set(league.teams);
                             teamsMatch = Array.from(matchupTeams).every(t => 
                                 t === 'BYE' || leagueTeamsSet.has(t)
                             );
-                            
-                            if (!teamsMatch) {
-                                // Log which teams didn't match
-                                const nonMatching = Array.from(matchupTeams).filter(t => 
-                                    t !== 'BYE' && !leagueTeamsSet.has(t)
-                                );
-                                console.log('[LEAGUES] Import: Teams NOT in league:', nonMatching);
-                            } else {
-                                console.log('[LEAGUES] Import: ✓ All teams matched!');
-                            }
                         }
                     }
                     
-                    const isOurLeague = nameMatches || teamsMatch;
+                    if (!nameMatches && !teamsMatch) continue;
+
+                    // ★ Extract game number from gameLabel (e.g., "Game 11" → 11)
+                    let gameNumber = null;
+                    let gameLabel = slotGameLabel || 'Game';
                     
-                    if (!isOurLeague) {
-                        console.log('[LEAGUES] Import: Skipping slot - no match (nameMatches=' + nameMatches + ', teamsMatch=' + teamsMatch + ')');
-                        continue;
+                    const gameNumMatch = slotGameLabel.match(/Game\s*(\d+)/i);
+                    if (gameNumMatch) {
+                        gameNumber = parseInt(gameNumMatch[1], 10);
+                        gameLabel = 'Game ' + gameNumber;
+                    } else {
+                        // Fallback: use slot index to differentiate
+                        gameLabel = 'Game (Slot ' + slotIdx + ')';
                     }
 
-                    console.log('[LEAGUES] Import: ✓ Found matching slot in div "' + divName + '" slot ' + slotIdx + (teamsMatch ? ' (matched by teams)' : ' (matched by name)'));
+                    console.log('[LEAGUES] Import: ✓ Found ' + gameLabel + ' in div "' + divName + '" slot ' + slotIdx);
+
+                    // ★ Initialize game entry if not exists
+                    if (!gamesByLabel[gameLabel]) {
+                        gamesByLabel[gameLabel] = {
+                            gameLabel: gameLabel,
+                            gameNumber: gameNumber,
+                            slotIdx: parseInt(slotIdx, 10),
+                            matchups: []
+                        };
+                    }
+
+                    // ★ Add matchups to this game (avoid duplicates)
+                    const existingKeys = new Set(gamesByLabel[gameLabel].matchups.map(m => 
+                        [m.teamA, m.teamB].sort().join('|')
+                    ));
 
                     matchups.forEach(m => {
                         let teamA, teamB;
@@ -1676,122 +1752,28 @@
                             teamA = m.teamA;
                             teamB = m.teamB;
                         } else if (typeof m === 'string') {
-                            // Parse formats like:
-                            // "1 vs 5 @ Field B (Baseball)"
-                            // "Team A vs Team B — Field"
-                            // "Red vs Blue"
                             const vsMatch = m.match(/^(.+?)\s+vs\s+(.+?)(?:\s+@|\s*—|$)/i);
                             if (vsMatch) {
                                 teamA = vsMatch[1].trim();
                                 teamB = vsMatch[2].trim();
-                            } else {
-                                // Fallback: simple split
-                                const parts = m.split(' vs ');
-                                if (parts.length === 2) {
-                                    teamA = parts[0].trim();
-                                    teamB = parts[1].trim();
-                                    // Remove @ field info or — field info
-                                    teamB = teamB.split(' @ ')[0].trim();
-                                    teamB = teamB.split('—')[0].trim();
-                                }
                             }
                         }
 
                         if (teamA && teamB && teamA !== 'BYE' && teamB !== 'BYE') {
                             const key = [teamA, teamB].sort().join('|');
-                            if (!processedMatchups.has(key)) {
-                                processedMatchups.add(key);
-                                foundMatchups.push({ teamA, teamB });
-                                console.log('[LEAGUES] Import: Found match:', teamA, 'vs', teamB);
+                            if (!existingKeys.has(key)) {
+                                existingKeys.add(key);
+                                gamesByLabel[gameLabel].matchups.push({ teamA, teamB });
+                                console.log('[LEAGUES] Import: Added match:', teamA, 'vs', teamB, 'to', gameLabel);
                             }
                         }
                     });
                 }
             }
 
-            // Method 2: Scan scheduleAssignments for league entries (fallback)
-            if (foundMatchups.length === 0) {
-                console.log('[LEAGUES] Import: No matches from leagueAssignments, trying scheduleAssignments...');
-                
-                for (const bunkName of Object.keys(scheduleAssignments)) {
-                    const bunkSchedule = scheduleAssignments[bunkName];
-                    if (!Array.isArray(bunkSchedule)) continue;
-
-                    for (let slotIdx = 0; slotIdx < bunkSchedule.length; slotIdx++) {
-                        const entry = bunkSchedule[slotIdx];
-                        if (!entry) continue;
-
-                        const activityName = entry._activity || entry.field || '';
-                        const entryLeagueName = entry._leagueName || '';
-                        const isH2H = entry._h2h === true;
-                        const allMatchups = entry._allMatchups || [];
-
-                        // Method A: Direct name match
-                        const nameMatches = entryLeagueName === league.name ||
-                            entryLeagueName.toLowerCase() === league.name.toLowerCase() ||
-                            activityName.toLowerCase().includes(`league: ${league.name.toLowerCase()}`) ||
-                            activityName.toLowerCase().includes(league.name.toLowerCase()) ||
-                            (isH2H && activityName.toLowerCase().includes(league.name.toLowerCase()));
-
-                        // Method B: For H2H entries without league name, check if teams belong to this league
-                        let teamsMatch = false;
-                        if (!nameMatches && isH2H && allMatchups.length > 0 && league.teams && league.teams.length > 0) {
-                            const matchupTeams = new Set();
-                            allMatchups.forEach(m => {
-                                if (typeof m === 'string') {
-                                    // Parse "1 vs 5 @ Field" or "A vs B — Field" or "A vs B"
-                                    const vsMatch = m.match(/^(.+?)\s+vs\s+(.+?)(?:\s+@|\s*—|$)/i);
-                                    if (vsMatch) {
-                                        matchupTeams.add(vsMatch[1].trim());
-                                        matchupTeams.add(vsMatch[2].trim());
-                                    }
-                                } else if (typeof m === 'object') {
-                                    if (m.teamA) matchupTeams.add(m.teamA);
-                                    if (m.teamB) matchupTeams.add(m.teamB);
-                                }
-                            });
-                            
-                            if (matchupTeams.size > 0) {
-                                const leagueTeamsSet = new Set(league.teams);
-                                teamsMatch = Array.from(matchupTeams).every(t => 
-                                    t === 'BYE' || leagueTeamsSet.has(t)
-                                );
-                            }
-                        }
-
-                        if (!nameMatches && !teamsMatch) continue;
-
-                        allMatchups.forEach(m => {
-                            let teamA, teamB;
-                            if (typeof m === 'string') {
-                                // Parse "1 vs 5 @ Field" or "A vs B — Field" or "A vs B"
-                                const vsMatch = m.match(/^(.+?)\s+vs\s+(.+?)(?:\s+@|\s*—|$)/i);
-                                if (vsMatch) {
-                                    teamA = vsMatch[1].trim();
-                                    teamB = vsMatch[2].trim();
-                                }
-                            } else if (typeof m === 'object') {
-                                teamA = m.teamA;
-                                teamB = m.teamB;
-                            }
-
-                            if (teamA && teamB && teamA !== 'BYE' && teamB !== 'BYE') {
-                                if (league.teams.includes(teamA) && league.teams.includes(teamB)) {
-                                    const key = [teamA, teamB].sort().join('|');
-                                    if (!processedMatchups.has(key)) {
-                                        processedMatchups.add(key);
-                                        foundMatchups.push({ teamA, teamB });
-                                        console.log('[LEAGUES] Import (Method 2): Found match:', teamA, 'vs', teamB);
-                                    }
-                                }
-                            }
-                        });
-                    }
-                }
-            }
-
-            // Check if we found any matchups
-            if (foundMatchups.length === 0) {
+            // Check if we found any games
+            const gameLabels = Object.keys(gamesByLabel);
+            if (gameLabels.length === 0) {
                 alert(
                     'No league games found in today\'s schedule for "' + league.name + '".\n\n' +
                     'Make sure:\n' +
@@ -1802,48 +1784,101 @@
                 return;
             }
 
-            // Create a new game entry with the found matchups
-            const newGame = {
-                date: currentDate,
-                matches: foundMatchups.map(m => ({
-                    teamA: m.teamA,
-                    teamB: m.teamB,
-                    scoreA: null,
-                    scoreB: null
-                })),
-                importedFrom: 'schedule',
-                importedAt: new Date().toISOString()
-            };
+            // ★ Sort games by game number
+            gameLabels.sort((a, b) => {
+                const numA = gamesByLabel[a].gameNumber || 0;
+                const numB = gamesByLabel[b].gameNumber || 0;
+                return numA - numB;
+            });
 
-            // Check if a game for this date already exists
+            // ★ Create game entries for each game found
             if (!league.games) league.games = [];
-            const existingGameIdx = league.games.findIndex(g => g.date === currentDate);
             
-            if (existingGameIdx >= 0) {
-                const overwrite = confirm(
-                    'A game entry already exists for ' + currentDate + '.\n\n' +
-                    'Do you want to replace it with the imported matchups?\n' +
-                    '(Any existing scores will be lost)'
-                );
-                if (overwrite) {
-                    league.games[existingGameIdx] = newGame;
-                } else {
-                    return;
-                }
-            } else {
-                league.games.push(newGame);
-            }
+            const importedGames = [];
+            let totalMatchups = 0;
 
-            // Save and refresh
+            gameLabels.forEach(label => {
+                const gameData = gamesByLabel[label];
+                if (gameData.matchups.length === 0) return;
+
+                const newGame = {
+                    date: currentDate,
+                    gameLabel: gameData.gameLabel,
+                    gameNumber: gameData.gameNumber,
+                    matches: gameData.matchups.map(m => ({
+                        teamA: m.teamA,
+                        teamB: m.teamB,
+                        scoreA: null,
+                        scoreB: null
+                    })),
+                    importedFrom: 'schedule',
+                    importedAt: new Date().toISOString()
+                };
+
+                // Check if this specific game already exists (by date AND game label)
+                const existingIdx = league.games.findIndex(g => 
+                    g.date === currentDate && g.gameLabel === gameData.gameLabel
+                );
+
+                if (existingIdx >= 0) {
+                    // Update existing
+                    league.games[existingIdx] = newGame;
+                } else {
+                    // Add new
+                    league.games.push(newGame);
+                }
+
+                importedGames.push(gameData.gameLabel);
+                totalMatchups += gameData.matchups.length;
+            });
+
+            // Save
             saveLeaguesData();
             
-            alert(
-                'Successfully imported ' + foundMatchups.length + ' match(es) from today\'s schedule!\n\n' +
-                'Matchups:\n' + foundMatchups.map(m => '• ' + m.teamA + ' vs ' + m.teamB).join('\n') +
-                '\n\nYou can now enter the scores.'
-            );
+            // ★ Build summary message
+            let summary = 'Successfully imported ' + importedGames.length + ' game(s) with ' + totalMatchups + ' total match(es)!\n\n';
             
-            renderDetailPane();
+            gameLabels.forEach(label => {
+                const gameData = gamesByLabel[label];
+                if (gameData.matchups.length === 0) return;
+                summary += '📋 ' + gameData.gameLabel + ':\n';
+                gameData.matchups.forEach(m => {
+                    summary += '   • ' + m.teamA + ' vs ' + m.teamB + '\n';
+                });
+                summary += '\n';
+            });
+            
+            summary += 'You can now enter the scores below.';
+            
+            alert(summary);
+            
+            // ★ Find the container where games are rendered and refresh it
+            // We need to find the games div container and re-render with the imported game selected
+            const gamesContainer = detailPaneEl?.querySelector('[data-section="games"]');
+            
+            if (gamesContainer) {
+                // Find the index of the first imported game to auto-select it
+                const firstImportedLabel = importedGames[0];
+                const firstImportedIdx = league.games.findIndex(g => 
+                    g.date === currentDate && g.gameLabel === firstImportedLabel
+                );
+                
+                // Re-render the game entry UI
+                renderGameEntryUIWithSelection(league, gamesContainer, firstImportedIdx >= 0 ? firstImportedIdx : null);
+                
+                // Scroll to the games section
+                gamesContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            } else {
+                // Fallback: re-render the whole detail pane and try to switch to games tab
+                renderDetailPane();
+                
+                setTimeout(() => {
+                    const gamesTab = detailPaneEl?.querySelector('#tab-games');
+                    if (gamesTab) {
+                        gamesTab.click();
+                    }
+                }, 100);
+            }
 
         } catch (e) {
             console.error('[LEAGUES] Import error:', e);
@@ -1952,5 +1987,5 @@
     // Auto-load on script run
     window.loadLeagueGlobals();
 
-    console.log("🏆 leagues.js v2.2: window.initLeagues ready");
+    console.log("🏆 leagues.js v2.4: window.initLeagues ready");
 })();
