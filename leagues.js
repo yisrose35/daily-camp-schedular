@@ -1,26 +1,18 @@
 // =================================================================
-// leagues.js — PRODUCTION-READY v2.5
+// leagues.js — PRODUCTION v2.5
 // =================================================================
-// v2.5 UI/UX REDESIGN:
-// - ★ CARD-BASED UI: All games shown as cards (no dropdown)
-// - ★ TODAY'S GAMES: Prominently displayed at top
-// - ★ INLINE EDITING: Enter scores directly, auto-saves
-// - ★ WINNER HIGHLIGHTING: Green highlight for winning team
-// - ★ PAST GAMES: Collapsible section for history
-// - ★ BETTER IMPORT: Shows all imported games immediately
-// v2.4 FIXES:
-// - ★ IMPORT: Now imports ALL games from the day (Game 11, Game 12, etc.)
-// - ★ GAME NUMBERS: Preserves game numbers from schedule
-// v2.3 FIXES:
-// - ★ CROSS-DEVICE SYNC: Uses best source outside protection window
-// - ★ RACE CONDITION: Prefers localStorage for 5s after save
-// v2.0 PRODUCTION FIXES:
-// - ★ CLOUD SYNC, TAB REFRESH, MEMORY LEAK FIX
-// - ★ DATA VALIDATION, XSS PREVENTION, RBAC
+// v2.5: Professional UI redesign
+// - Clean, minimal card-based interface
+// - Inline score editing with auto-save
+// - Subtle winner/tie highlighting
+// - Collapsible history section
+// v2.4: Multi-game import, game number preservation
+// v2.3: Cross-device sync, race condition protection
+// v2.0: Cloud sync, tab refresh, data validation, RBAC
 // =================================================================
 (function () {
     'use strict';
-    console.log("🏆 leagues.js v2.5 loading...");
+    console.log("[LEAGUES] v2.5 initializing...");
 
     // =========================================================================
     // GLOBAL LEAGUE STORAGE
@@ -1241,12 +1233,11 @@
     }
 
     // =========================================================================
-    // GAME ENTRY + IMPORT - REDESIGNED UI/UX v2.4
+    // GAME ENTRY + IMPORT - PROFESSIONAL UI v2.5
     // =========================================================================
     
     /**
-     * Render the main game entry UI with improved UX
-     * Shows all games as cards, grouped by date
+     * Render the main game entry UI with professional styling
      */
     function renderGameEntryUI(league, container) {
         renderGameEntryUIWithSelection(league, container, null);
@@ -1258,45 +1249,45 @@
         container.innerHTML = '';
         container.setAttribute('data-section', 'games');
 
-        // ★ Header with Import button
+        // Header bar
         const header = document.createElement('div');
         Object.assign(header.style, {
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            marginBottom: '16px',
-            padding: '12px 16px',
-            background: 'linear-gradient(135deg, #3B82F6 0%, #2563EB 100%)',
-            borderRadius: '12px',
-            color: 'white'
+            marginBottom: '20px',
+            paddingBottom: '16px',
+            borderBottom: '1px solid #E5E7EB'
         });
         
         const headerTitle = document.createElement('div');
-        headerTitle.innerHTML = '<span style="font-weight:600; font-size:1rem;">📊 Game Results</span><br><span style="font-size:0.8rem; opacity:0.9;">Enter scores to update standings</span>';
+        headerTitle.style.cssText = 'font-weight:600; font-size:1.1rem; color:#111827;';
+        headerTitle.textContent = 'Game Results';
         header.appendChild(headerTitle);
         
         const importBtn = document.createElement('button');
-        importBtn.innerHTML = '📥 Import Today\'s Games';
+        importBtn.textContent = 'Import from Schedule';
         Object.assign(importBtn.style, {
-            padding: '10px 16px',
-            borderRadius: '8px',
-            background: 'white',
-            color: '#2563EB',
+            padding: '8px 16px',
+            borderRadius: '6px',
+            background: '#111827',
+            color: '#fff',
             border: 'none',
             cursor: 'pointer',
-            fontWeight: '600',
-            fontSize: '0.9rem',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+            fontWeight: '500',
+            fontSize: '0.875rem',
+            transition: 'background 0.15s ease'
         });
+        importBtn.onmouseover = () => importBtn.style.background = '#374151';
+        importBtn.onmouseout = () => importBtn.style.background = '#111827';
         importBtn.onclick = () => importGamesFromSchedule(league);
         header.appendChild(importBtn);
         container.appendChild(header);
 
-        // ★ Get and group games by date
+        // Get and group games by date
         const games = league.games || [];
         const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
         
-        // Separate today's games from past games
         const todaysGames = [];
         const pastGames = [];
         
@@ -1309,53 +1300,48 @@
             }
         });
         
-        // Sort by game number
         const sortByGameNum = (a, b) => (a.gameNumber || 0) - (b.gameNumber || 0);
         todaysGames.sort(sortByGameNum);
         pastGames.sort((a, b) => {
-            // Sort by date descending, then game number
             if (a.date !== b.date) return (b.date || '').localeCompare(a.date || '');
             return sortByGameNum(a, b);
         });
 
-        // ★ TODAY'S GAMES SECTION
+        // TODAY'S GAMES
         const todaySection = document.createElement('div');
-        todaySection.style.marginBottom = '20px';
+        todaySection.style.marginBottom = '24px';
         
         const todayHeader = document.createElement('div');
-        todayHeader.style.cssText = 'font-weight:600; font-size:1rem; color:#111827; margin-bottom:12px; display:flex; align-items:center; gap:8px;';
-        todayHeader.innerHTML = '<span style="font-size:1.2rem;">📅</span> Today\'s Games <span style="font-size:0.8rem; color:#6B7280; font-weight:400;">(' + currentDate + ')</span>';
+        todayHeader.style.cssText = 'font-size:0.75rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#6B7280; margin-bottom:12px;';
+        todayHeader.textContent = 'Today — ' + formatDateDisplay(currentDate);
         todaySection.appendChild(todayHeader);
         
         if (todaysGames.length === 0) {
             const emptyMsg = document.createElement('div');
-            emptyMsg.style.cssText = 'padding:24px; text-align:center; background:#F9FAFB; border-radius:12px; border:2px dashed #D1D5DB;';
-            emptyMsg.innerHTML = '<div style="font-size:2rem; margin-bottom:8px;">🏟️</div>' +
-                '<div style="font-weight:500; color:#374151; margin-bottom:4px;">No games imported yet</div>' +
-                '<div style="font-size:0.85rem; color:#6B7280;">Click "Import Today\'s Games" to pull matchups from the schedule</div>';
+            emptyMsg.style.cssText = 'padding:32px 24px; text-align:center; background:#FAFAFA; border-radius:8px; border:1px solid #E5E7EB;';
+            emptyMsg.innerHTML = '<div style="font-weight:500; color:#374151; margin-bottom:4px;">No games for today</div>' +
+                '<div style="font-size:0.875rem; color:#6B7280;">Import games from the schedule to enter results</div>';
             todaySection.appendChild(emptyMsg);
         } else {
-            // ★ Render each game as a card
             todaysGames.forEach(game => {
-                const isHighlighted = highlightGameIdx != null && game._idx === highlightGameIdx;
-                const card = renderGameCard(league, game, isHighlighted);
+                const card = renderGameCard(league, game, false);
                 todaySection.appendChild(card);
             });
         }
         
         container.appendChild(todaySection);
         
-        // ★ PAST GAMES SECTION (collapsible)
+        // PAST GAMES (collapsible)
         if (pastGames.length > 0) {
             const pastSection = document.createElement('div');
+            pastSection.style.marginBottom = '24px';
             
             const pastHeader = document.createElement('div');
-            pastHeader.style.cssText = 'font-weight:600; font-size:0.95rem; color:#6B7280; margin-bottom:12px; cursor:pointer; display:flex; align-items:center; gap:8px; padding:8px; background:#F3F4F6; border-radius:8px;';
-            pastHeader.innerHTML = '<span id="past-arrow">▶</span> Past Games <span style="font-size:0.8rem; font-weight:400;">(' + pastGames.length + ' games)</span>';
+            pastHeader.style.cssText = 'font-size:0.75rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#9CA3AF; margin-bottom:12px; cursor:pointer; display:flex; align-items:center; gap:6px;';
+            pastHeader.innerHTML = '<span id="past-arrow" style="font-size:0.65rem;">▶</span> History (' + pastGames.length + ')';
             
             const pastContent = document.createElement('div');
             pastContent.style.display = 'none';
-            pastContent.id = 'past-games-content';
             
             pastHeader.onclick = () => {
                 const isHidden = pastContent.style.display === 'none';
@@ -1364,7 +1350,7 @@
             };
             
             pastGames.forEach(game => {
-                const card = renderGameCard(league, game, false, true);
+                const card = renderGameCard(league, game, true);
                 pastContent.appendChild(card);
             });
             
@@ -1373,15 +1359,13 @@
             container.appendChild(pastSection);
         }
         
-        // ★ ADD NEW GAME BUTTON
-        const addNewSection = document.createElement('div');
-        addNewSection.style.cssText = 'margin-top:16px; padding-top:16px; border-top:1px solid #E5E7EB;';
-        
+        // ADD NEW GAME
         const addNewBtn = document.createElement('button');
-        addNewBtn.innerHTML = '➕ Add Game Manually';
-        addNewBtn.style.cssText = 'padding:10px 16px; border:1px dashed #D1D5DB; border-radius:8px; background:#fff; cursor:pointer; color:#6B7280; font-weight:500; width:100%;';
+        addNewBtn.textContent = '+ Add Game';
+        addNewBtn.style.cssText = 'padding:10px 16px; border:1px solid #E5E7EB; border-radius:6px; background:#fff; cursor:pointer; color:#6B7280; font-weight:500; font-size:0.875rem; width:100%; transition: all 0.15s ease;';
+        addNewBtn.onmouseover = () => { addNewBtn.style.borderColor = '#111827'; addNewBtn.style.color = '#111827'; };
+        addNewBtn.onmouseout = () => { addNewBtn.style.borderColor = '#E5E7EB'; addNewBtn.style.color = '#6B7280'; };
         addNewBtn.onclick = () => {
-            // Add empty game and show form
             if (!league.games) league.games = [];
             const newIdx = league.games.length;
             league.games.push({
@@ -1392,236 +1376,257 @@
             saveLeaguesData();
             renderGameEntryUIWithSelection(league, container, newIdx);
         };
-        addNewSection.appendChild(addNewBtn);
-        container.appendChild(addNewSection);
+        container.appendChild(addNewBtn);
     }
     
     /**
-     * Render a single game as a card with inline score editing
+     * Format date for display
      */
-    function renderGameCard(league, game, isHighlighted, isPast) {
+    function formatDateDisplay(dateStr) {
+        if (!dateStr) return '';
+        try {
+            const d = new Date(dateStr + 'T12:00:00');
+            return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+        } catch (e) {
+            return dateStr;
+        }
+    }
+    
+    /**
+     * Render a single game card
+     */
+    function renderGameCard(league, game, isPast) {
         const card = document.createElement('div');
         Object.assign(card.style, {
-            background: isHighlighted ? '#EFF6FF' : '#fff',
-            border: isHighlighted ? '2px solid #3B82F6' : '1px solid #E5E7EB',
-            borderRadius: '12px',
-            padding: '16px',
+            background: '#fff',
+            border: '1px solid #E5E7EB',
+            borderRadius: '8px',
             marginBottom: '12px',
-            boxShadow: isHighlighted ? '0 4px 12px rgba(59, 130, 246, 0.15)' : '0 1px 3px rgba(0,0,0,0.05)'
+            overflow: 'hidden'
         });
         
-        // ★ Card Header
+        // Card Header
         const cardHeader = document.createElement('div');
-        cardHeader.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid #F3F4F6;';
+        cardHeader.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:#FAFAFA; border-bottom:1px solid #E5E7EB;';
         
         const gameTitle = document.createElement('div');
-        gameTitle.style.cssText = 'font-weight:600; font-size:1rem; color:#111827;';
+        gameTitle.style.cssText = 'font-weight:600; font-size:0.9rem; color:#111827;';
         gameTitle.textContent = game.gameLabel || ('Game ' + (game._idx + 1));
         
-        const gameDate = document.createElement('div');
+        const headerRight = document.createElement('div');
+        headerRight.style.cssText = 'display:flex; align-items:center; gap:12px;';
+        
+        const gameDate = document.createElement('span');
         gameDate.style.cssText = 'font-size:0.8rem; color:#6B7280;';
-        gameDate.textContent = game.date || 'No date';
+        gameDate.textContent = formatDateDisplay(game.date);
         
         const deleteBtn = document.createElement('button');
-        deleteBtn.innerHTML = '🗑️';
-        deleteBtn.title = 'Delete this game';
-        deleteBtn.style.cssText = 'background:none; border:none; cursor:pointer; font-size:1rem; opacity:0.5; padding:4px;';
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.style.cssText = 'background:none; border:none; cursor:pointer; font-size:0.75rem; color:#9CA3AF; padding:4px 8px; transition: color 0.15s;';
+        deleteBtn.onmouseover = () => deleteBtn.style.color = '#DC2626';
+        deleteBtn.onmouseout = () => deleteBtn.style.color = '#9CA3AF';
         deleteBtn.onclick = (e) => {
             e.stopPropagation();
-            if (confirm('Delete this game? This cannot be undone.')) {
+            if (confirm('Delete this game? This action cannot be undone.')) {
                 league.games.splice(game._idx, 1);
                 recalcStandings(league);
                 saveLeaguesData();
-                renderGameEntryUI(league, card.parentElement.parentElement);
+                renderGameEntryUI(league, card.parentElement);
             }
         };
         
-        const headerLeft = document.createElement('div');
-        headerLeft.style.cssText = 'display:flex; align-items:center; gap:12px;';
-        headerLeft.appendChild(gameTitle);
-        headerLeft.appendChild(gameDate);
-        
-        cardHeader.appendChild(headerLeft);
-        cardHeader.appendChild(deleteBtn);
+        headerRight.appendChild(gameDate);
+        headerRight.appendChild(deleteBtn);
+        cardHeader.appendChild(gameTitle);
+        cardHeader.appendChild(headerRight);
         card.appendChild(cardHeader);
         
-        // ★ Matchups Grid
-        const matchupsGrid = document.createElement('div');
-        matchupsGrid.style.cssText = 'display:flex; flex-direction:column; gap:8px;';
+        // Matchups
+        const matchupsContainer = document.createElement('div');
+        matchupsContainer.style.padding = '8px 0';
         
         if (!game.matches || game.matches.length === 0) {
             const noMatches = document.createElement('div');
-            noMatches.style.cssText = 'text-align:center; padding:12px; color:#9CA3AF; font-size:0.9rem;';
-            noMatches.textContent = 'No matchups - click edit to add';
-            matchupsGrid.appendChild(noMatches);
+            noMatches.style.cssText = 'text-align:center; padding:16px; color:#9CA3AF; font-size:0.875rem;';
+            noMatches.textContent = 'No matchups added';
+            matchupsContainer.appendChild(noMatches);
         } else {
             game.matches.forEach((match, mIdx) => {
                 const matchRow = renderMatchRow(league, game, match, mIdx, isPast);
-                matchupsGrid.appendChild(matchRow);
+                matchupsContainer.appendChild(matchRow);
             });
         }
         
-        card.appendChild(matchupsGrid);
+        card.appendChild(matchupsContainer);
         
-        // ★ Card Footer - Save indicator
-        const footer = document.createElement('div');
-        footer.style.cssText = 'margin-top:12px; padding-top:8px; border-top:1px solid #F3F4F6; display:flex; justify-content:flex-end; gap:8px;';
-        
-        const addMatchBtn = document.createElement('button');
-        addMatchBtn.innerHTML = '+ Add Match';
-        addMatchBtn.style.cssText = 'padding:6px 12px; border:1px dashed #D1D5DB; border-radius:6px; background:#fff; cursor:pointer; color:#6B7280; font-size:0.85rem;';
-        addMatchBtn.onclick = () => {
-            if (!game.matches) game.matches = [];
-            game.matches.push({ teamA: '', teamB: '', scoreA: null, scoreB: null });
-            league.games[game._idx] = game;
-            saveLeaguesData();
-            renderGameEntryUI(league, card.parentElement.parentElement);
-        };
-        
-        const saveStatus = document.createElement('span');
-        saveStatus.id = 'save-status-' + game._idx;
-        saveStatus.style.cssText = 'font-size:0.8rem; color:#10B981; display:none;';
-        saveStatus.textContent = '✓ Saved';
-        
-        footer.appendChild(addMatchBtn);
-        footer.appendChild(saveStatus);
-        card.appendChild(footer);
+        // Footer
+        if (!isPast) {
+            const footer = document.createElement('div');
+            footer.style.cssText = 'padding:8px 16px; border-top:1px solid #F3F4F6; display:flex; justify-content:space-between; align-items:center;';
+            
+            const addMatchBtn = document.createElement('button');
+            addMatchBtn.textContent = '+ Add Match';
+            addMatchBtn.style.cssText = 'background:none; border:none; cursor:pointer; color:#6B7280; font-size:0.8rem; font-weight:500; padding:4px 0; transition: color 0.15s;';
+            addMatchBtn.onmouseover = () => addMatchBtn.style.color = '#111827';
+            addMatchBtn.onmouseout = () => addMatchBtn.style.color = '#6B7280';
+            addMatchBtn.onclick = () => {
+                if (!game.matches) game.matches = [];
+                game.matches.push({ teamA: '', teamB: '', scoreA: null, scoreB: null });
+                league.games[game._idx] = game;
+                saveLeaguesData();
+                renderGameEntryUI(league, card.parentElement);
+            };
+            
+            const saveStatus = document.createElement('span');
+            saveStatus.id = 'save-status-' + game._idx;
+            saveStatus.style.cssText = 'font-size:0.75rem; color:#10B981; opacity:0; transition: opacity 0.2s;';
+            saveStatus.textContent = 'Saved';
+            
+            footer.appendChild(addMatchBtn);
+            footer.appendChild(saveStatus);
+            card.appendChild(footer);
+        }
         
         return card;
     }
     
     /**
-     * Render a single match row with inline score editing
+     * Render a single match row
      */
     function renderMatchRow(league, game, match, matchIdx, isPast) {
         const row = document.createElement('div');
-        row.style.cssText = 'display:flex; align-items:center; gap:8px; padding:8px 12px; background:#F9FAFB; border-radius:8px;';
+        row.style.cssText = 'display:grid; grid-template-columns:1fr auto 1fr auto; align-items:center; padding:10px 16px; border-bottom:1px solid #F3F4F6;';
+        
+        // Determine winner for styling
+        const hasScores = match.scoreA != null && match.scoreB != null;
+        const aWins = hasScores && match.scoreA > match.scoreB;
+        const bWins = hasScores && match.scoreB > match.scoreA;
+        const isTie = hasScores && match.scoreA === match.scoreB;
         
         // Team A
-        const teamALabel = document.createElement('div');
-        teamALabel.style.cssText = 'flex:1; font-weight:500; text-align:right; color:#111827;';
-        teamALabel.textContent = match.teamA || '—';
+        const teamADiv = document.createElement('div');
+        teamADiv.style.cssText = 'text-align:right; padding-right:12px;';
         
-        // Score A input
+        const teamAName = document.createElement('span');
+        teamAName.style.cssText = 'font-weight:' + (aWins ? '600' : '400') + '; color:' + (aWins ? '#111827' : '#6B7280') + '; font-size:0.9rem;';
+        teamAName.textContent = match.teamA || '—';
+        teamADiv.appendChild(teamAName);
+        
+        // Scores container
+        const scoresDiv = document.createElement('div');
+        scoresDiv.style.cssText = 'display:flex; align-items:center; gap:4px;';
+        
         const scoreAInput = document.createElement('input');
         scoreAInput.type = 'number';
         scoreAInput.min = '0';
         scoreAInput.value = match.scoreA != null ? match.scoreA : '';
-        scoreAInput.placeholder = '-';
-        scoreAInput.style.cssText = 'width:45px; text-align:center; padding:6px; border:1px solid #D1D5DB; border-radius:6px; font-weight:600; font-size:1rem;';
-        if (isPast) scoreAInput.disabled = true;
+        scoreAInput.placeholder = '–';
+        Object.assign(scoreAInput.style, {
+            width: '40px',
+            textAlign: 'center',
+            padding: '6px 4px',
+            border: '1px solid #E5E7EB',
+            borderRadius: '4px',
+            fontSize: '0.9rem',
+            fontWeight: '600',
+            color: '#111827',
+            background: aWins ? '#F0FDF4' : (isTie ? '#FFFBEB' : '#fff')
+        });
+        if (isPast) { scoreAInput.disabled = true; scoreAInput.style.background = '#F9FAFB'; }
         
-        // Highlight winner
-        if (match.scoreA != null && match.scoreB != null) {
-            if (match.scoreA > match.scoreB) {
-                teamALabel.style.color = '#059669';
-                scoreAInput.style.background = '#D1FAE5';
-                scoreAInput.style.borderColor = '#059669';
-            } else if (match.scoreA < match.scoreB) {
-                teamALabel.style.color = '#6B7280';
-            }
-        }
+        const separator = document.createElement('span');
+        separator.style.cssText = 'color:#D1D5DB; font-weight:400; padding:0 2px;';
+        separator.textContent = '–';
         
-        // VS divider
-        const vs = document.createElement('span');
-        vs.style.cssText = 'color:#9CA3AF; font-weight:600; font-size:0.9rem;';
-        vs.textContent = ':';
-        
-        // Score B input
         const scoreBInput = document.createElement('input');
         scoreBInput.type = 'number';
         scoreBInput.min = '0';
         scoreBInput.value = match.scoreB != null ? match.scoreB : '';
-        scoreBInput.placeholder = '-';
-        scoreBInput.style.cssText = 'width:45px; text-align:center; padding:6px; border:1px solid #D1D5DB; border-radius:6px; font-weight:600; font-size:1rem;';
-        if (isPast) scoreBInput.disabled = true;
+        scoreBInput.placeholder = '–';
+        Object.assign(scoreBInput.style, {
+            width: '40px',
+            textAlign: 'center',
+            padding: '6px 4px',
+            border: '1px solid #E5E7EB',
+            borderRadius: '4px',
+            fontSize: '0.9rem',
+            fontWeight: '600',
+            color: '#111827',
+            background: bWins ? '#F0FDF4' : (isTie ? '#FFFBEB' : '#fff')
+        });
+        if (isPast) { scoreBInput.disabled = true; scoreBInput.style.background = '#F9FAFB'; }
+        
+        scoresDiv.appendChild(scoreAInput);
+        scoresDiv.appendChild(separator);
+        scoresDiv.appendChild(scoreBInput);
         
         // Team B
-        const teamBLabel = document.createElement('div');
-        teamBLabel.style.cssText = 'flex:1; font-weight:500; text-align:left; color:#111827;';
-        teamBLabel.textContent = match.teamB || '—';
+        const teamBDiv = document.createElement('div');
+        teamBDiv.style.cssText = 'padding-left:12px;';
         
-        // Highlight winner
-        if (match.scoreA != null && match.scoreB != null) {
-            if (match.scoreB > match.scoreA) {
-                teamBLabel.style.color = '#059669';
-                scoreBInput.style.background = '#D1FAE5';
-                scoreBInput.style.borderColor = '#059669';
-            } else if (match.scoreB < match.scoreA) {
-                teamBLabel.style.color = '#6B7280';
-            }
+        const teamBName = document.createElement('span');
+        teamBName.style.cssText = 'font-weight:' + (bWins ? '600' : '400') + '; color:' + (bWins ? '#111827' : '#6B7280') + '; font-size:0.9rem;';
+        teamBName.textContent = match.teamB || '—';
+        teamBDiv.appendChild(teamBName);
+        
+        // Delete button
+        const actionsDiv = document.createElement('div');
+        actionsDiv.style.cssText = 'padding-left:12px;';
+        
+        if (!isPast) {
+            const deleteBtn = document.createElement('button');
+            deleteBtn.textContent = '×';
+            deleteBtn.style.cssText = 'background:none; border:none; cursor:pointer; color:#D1D5DB; font-size:1.1rem; padding:4px 8px; transition: color 0.15s; line-height:1;';
+            deleteBtn.onmouseover = () => deleteBtn.style.color = '#DC2626';
+            deleteBtn.onmouseout = () => deleteBtn.style.color = '#D1D5DB';
+            deleteBtn.onclick = () => {
+                game.matches.splice(matchIdx, 1);
+                league.games[game._idx] = game;
+                recalcStandings(league);
+                saveLeaguesData();
+                renderGameEntryUI(league, row.closest('[data-section="games"]'));
+            };
+            actionsDiv.appendChild(deleteBtn);
         }
         
-        // ★ Auto-save on score change
+        // Auto-save handler
         const handleScoreChange = () => {
-            const newScoreA = scoreAInput.value !== '' ? parseInt(scoreAInput.value, 10) : null;
-            const newScoreB = scoreBInput.value !== '' ? parseInt(scoreBInput.value, 10) : null;
-            
-            match.scoreA = newScoreA;
-            match.scoreB = newScoreB;
+            match.scoreA = scoreAInput.value !== '' ? parseInt(scoreAInput.value, 10) : null;
+            match.scoreB = scoreBInput.value !== '' ? parseInt(scoreBInput.value, 10) : null;
             league.games[game._idx].matches[matchIdx] = match;
             
             recalcStandings(league);
             saveLeaguesData();
             
+            // Update styling
+            const newHasScores = match.scoreA != null && match.scoreB != null;
+            const newAWins = newHasScores && match.scoreA > match.scoreB;
+            const newBWins = newHasScores && match.scoreB > match.scoreA;
+            const newIsTie = newHasScores && match.scoreA === match.scoreB;
+            
+            teamAName.style.fontWeight = newAWins ? '600' : '400';
+            teamAName.style.color = newAWins ? '#111827' : '#6B7280';
+            teamBName.style.fontWeight = newBWins ? '600' : '400';
+            teamBName.style.color = newBWins ? '#111827' : '#6B7280';
+            
+            scoreAInput.style.background = newAWins ? '#F0FDF4' : (newIsTie ? '#FFFBEB' : '#fff');
+            scoreBInput.style.background = newBWins ? '#F0FDF4' : (newIsTie ? '#FFFBEB' : '#fff');
+            
             // Show save indicator
             const saveStatus = document.getElementById('save-status-' + game._idx);
             if (saveStatus) {
-                saveStatus.style.display = 'inline';
-                setTimeout(() => { saveStatus.style.display = 'none'; }, 2000);
-            }
-            
-            // Update winner highlighting
-            if (newScoreA != null && newScoreB != null) {
-                if (newScoreA > newScoreB) {
-                    teamALabel.style.color = '#059669';
-                    scoreAInput.style.background = '#D1FAE5';
-                    scoreAInput.style.borderColor = '#059669';
-                    teamBLabel.style.color = '#6B7280';
-                    scoreBInput.style.background = '';
-                    scoreBInput.style.borderColor = '#D1D5DB';
-                } else if (newScoreB > newScoreA) {
-                    teamBLabel.style.color = '#059669';
-                    scoreBInput.style.background = '#D1FAE5';
-                    scoreBInput.style.borderColor = '#059669';
-                    teamALabel.style.color = '#6B7280';
-                    scoreAInput.style.background = '';
-                    scoreAInput.style.borderColor = '#D1D5DB';
-                } else {
-                    // Tie
-                    teamALabel.style.color = '#111827';
-                    teamBLabel.style.color = '#111827';
-                    scoreAInput.style.background = '#FEF3C7';
-                    scoreBInput.style.background = '#FEF3C7';
-                    scoreAInput.style.borderColor = '#F59E0B';
-                    scoreBInput.style.borderColor = '#F59E0B';
-                }
+                saveStatus.style.opacity = '1';
+                setTimeout(() => { saveStatus.style.opacity = '0'; }, 1500);
             }
         };
         
         scoreAInput.onchange = handleScoreChange;
         scoreBInput.onchange = handleScoreChange;
         
-        // Delete match button
-        const deleteMatchBtn = document.createElement('button');
-        deleteMatchBtn.innerHTML = '×';
-        deleteMatchBtn.title = 'Remove match';
-        deleteMatchBtn.style.cssText = 'background:#FEE2E2; color:#DC2626; border:none; border-radius:4px; padding:4px 8px; cursor:pointer; font-weight:600; font-size:0.9rem;';
-        deleteMatchBtn.onclick = () => {
-            game.matches.splice(matchIdx, 1);
-            league.games[game._idx] = game;
-            recalcStandings(league);
-            saveLeaguesData();
-            renderGameEntryUI(league, row.parentElement.parentElement.parentElement);
-        };
-        if (isPast) deleteMatchBtn.style.display = 'none';
-        
-        row.appendChild(teamALabel);
-        row.appendChild(scoreAInput);
-        row.appendChild(vs);
-        row.appendChild(scoreBInput);
-        row.appendChild(teamBLabel);
-        row.appendChild(deleteMatchBtn);
+        row.appendChild(teamADiv);
+        row.appendChild(scoresDiv);
+        row.appendChild(teamBDiv);
+        row.appendChild(actionsDiv);
         
         return row;
     }
@@ -1935,20 +1940,18 @@
             // Save
             saveLeaguesData();
             
-            // ★ Build summary message
-            let summary = 'Successfully imported ' + importedGames.length + ' game(s) with ' + totalMatchups + ' total match(es)!\n\n';
+            // Build summary message
+            let summary = 'Imported ' + importedGames.length + ' game(s) with ' + totalMatchups + ' matches.\n\n';
             
             gameLabels.forEach(label => {
                 const gameData = gamesByLabel[label];
                 if (gameData.matchups.length === 0) return;
-                summary += '📋 ' + gameData.gameLabel + ':\n';
+                summary += gameData.gameLabel + ':\n';
                 gameData.matchups.forEach(m => {
-                    summary += '   • ' + m.teamA + ' vs ' + m.teamB + '\n';
+                    summary += '  ' + m.teamA + ' vs ' + m.teamB + '\n';
                 });
                 summary += '\n';
             });
-            
-            summary += 'Enter the scores below - they auto-save!';
             
             alert(summary);
             
@@ -2074,5 +2077,5 @@
     // Auto-load on script run
     window.loadLeagueGlobals();
 
-    console.log("🏆 leagues.js v2.5: window.initLeagues ready");
+    console.log("[LEAGUES] v2.5 ready");
 })();
