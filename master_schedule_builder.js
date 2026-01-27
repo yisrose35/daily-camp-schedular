@@ -1,9 +1,12 @@
 // =================================================================
-// SCHEDULE BUILDER v9.2 — PREMIUM ENTERPRISE DESIGN
+// SCHEDULE BUILDER v9.0 — ULTIMATE DESIGN
 // =================================================================
-// v9.2 FIXES:
-// - Fixed time labels getting cut off at top (added padding)
-// - Improved off-hours diagonal stripe pattern (grey, more visible)
+// Principles:
+// 1. Content is everything - chrome disappears
+// 2. Every interaction feels tactile
+// 3. Whitespace is a feature
+// 4. Simplicity is the ultimate sophistication
+// 5. Details matter at every level
 // =================================================================
 
 (function() {
@@ -19,7 +22,7 @@ let _keyHandler = null;
 let _visHandler = null;
 
 const STORE = 'sched_v9';
-const PX = 1.84;
+const PX = 1.6;
 const SNAP = 5;
 
 const BLOCKS = {
@@ -57,67 +60,11 @@ const saveT = (n, u) => { if (!n) return; window.saveSkeleton?.(n, skeleton); wi
 const delT = n => { if (!n) return; window.deleteSkeleton?.(n); window.forceSyncToCloud?.(); if (template === n) { template = null; skeleton = []; clear(); draw(); } fills(); sync(); notify('Deleted'); };
 const fills = () => { const all = window.getSavedSkeletons?.() || {}, opts = Object.keys(all).sort().map(n => `<option value="${h(n)}">${h(n)}</option>`).join(''); const s1 = document.getElementById('tpl-sel'), s2 = document.getElementById('del-sel'); if (s1) s1.innerHTML = '<option value="">Load template...</option>' + opts; if (s2) s2.innerHTML = '<option value="">Delete...</option>' + opts; };
 
-// Bump overlapping tiles - push tiles that overlap down
-const bumpOverlappingTiles = (movedEvent) => {
-    const movedStart = toM(movedEvent.startTime);
-    const movedEnd = toM(movedEvent.endTime);
-    const movedDiv = movedEvent.division;
-    
-    // Find overlapping tiles in the same division
-    const overlapping = skeleton.filter(ev => 
-        ev.id !== movedEvent.id && 
-        ev.division === movedDiv &&
-        toM(ev.startTime) < movedEnd && 
-        toM(ev.endTime) > movedStart
-    );
-    
-    if (overlapping.length === 0) return;
-    
-    // Sort by start time
-    overlapping.sort((a, b) => toM(a.startTime) - toM(b.startTime));
-    
-    // Push each overlapping tile down
-    let pushTo = movedEnd;
-    overlapping.forEach(ev => {
-        const evStart = toM(ev.startTime);
-        const evEnd = toM(ev.endTime);
-        const dur = evEnd - evStart;
-        
-        if (evStart < pushTo) {
-            ev.startTime = toS(pushTo);
-            ev.endTime = toS(pushTo + dur);
-            pushTo = pushTo + dur;
-        }
-    });
-};
-
 // Notify
 const notify = msg => { let t = document.getElementById('notify'); if (!t) { t = document.createElement('div'); t.id = 'notify'; document.body.appendChild(t); } t.textContent = msg; t.classList.add('on'); setTimeout(() => t.classList.remove('on'), 2000); };
 
 // Sync UI
-const sync = () => { 
-    const b = document.getElementById('status-badge'), n = document.getElementById('status-name'), u = document.getElementById('btn-update'); 
-    if (!b) return; 
-    if (template) { 
-        b.className = 'badge saved'; 
-        b.textContent = 'Saved'; 
-        n.textContent = '📄 ' + template; 
-        n.style.display = ''; 
-        if(u) u.style.display = ''; 
-    } else if (skeleton.length) { 
-        b.className = 'badge draft'; 
-        b.textContent = 'Draft'; 
-        n.textContent = ''; 
-        n.style.display = 'none'; 
-        if(u) u.style.display = 'none'; 
-    } else { 
-        b.className = 'badge'; 
-        b.textContent = ''; 
-        n.textContent = ''; 
-        n.style.display = 'none'; 
-        if(u) u.style.display = 'none'; 
-    } 
-};
+const sync = () => { const b = document.getElementById('status-badge'), n = document.getElementById('status-name'), u = document.getElementById('btn-update'); if (!b) return; if (template) { b.className = 'badge saved'; b.textContent = 'Saved'; n.textContent = template; if(u)u.style.display = ''; } else if (skeleton.length) { b.className = 'badge draft'; b.textContent = 'Draft'; n.textContent = 'Unsaved'; if(u)u.style.display = 'none'; } else { b.className = 'badge'; b.textContent = ''; n.textContent = 'New'; if(u)u.style.display = 'none'; } };
 
 // Keyboard
 const keys = () => { _keyHandler = e => { const t = document.getElementById('master-scheduler'); if (!t || !t.classList.contains('active')) return; const sel = document.querySelector('.ev.sel'); if ((e.ctrlKey || e.metaKey) && e.key === 'c' && sel) { const ev = skeleton.find(x => x.id === sel.dataset.id); if (ev) { clipboard = { ...ev, id: null }; notify('Copied'); } e.preventDefault(); } if ((e.ctrlKey || e.metaKey) && e.key === 'v' && clipboard && hoveredCol) { const { lo } = bounds(); const dur = toM(clipboard.endTime) - toM(clipboard.startTime); skeleton.push({ ...clipboard, id: id(), division: hoveredCol.dataset.d, startTime: toS(lo), endTime: toS(lo + dur) }); save(); draw(); notify('Pasted'); e.preventDefault(); } if ((e.key === 'Delete' || e.key === 'Backspace') && sel && !e.target.matches('input,textarea,select')) { skeleton = skeleton.filter(x => x.id !== sel.dataset.id); save(); draw(); e.preventDefault(); } }; document.addEventListener('keydown', _keyHandler); };
@@ -128,181 +75,67 @@ const modal = (type, div, start, existing) => {
     const B = BLOCKS[type]; if (!B) return;
     const { lo } = bounds();
     let sM = existing ? toM(existing.startTime) : (start ?? lo);
-    let eM = existing ? toM(existing.endTime) : sM + 40;
+    let eM = existing ? toM(existing.endTime) : sM + 30;
     
-    const wrap = document.createElement('div'); wrap.className = 'modal-wrap'; wrap.id = 'modal-wrap';
-    const box = document.createElement('div'); box.className = 'modal';
+    let fields = '';
+    if (type === 'custom') fields = `<div class="mf"><label>Name</label><input id="f-name" value="${h(existing?.event || '')}" placeholder="Event name" autofocus></div>`;
+    else if (type === 'smart') fields = `<div class="mf mf-row"><div class="mf"><label>Activity 1</label><input id="f-a1" value="${h(existing?.smartData?.activity1 || '')}"></div><div class="mf"><label>Activity 2</label><input id="f-a2" value="${h(existing?.smartData?.activity2 || '')}"></div></div><div class="mf mf-row"><div class="mf"><label>Fallback for</label><select id="f-ff"><option value="1">Activity 1</option><option value="2">Activity 2</option></select></div><div class="mf"><label>Fallback</label><input id="f-fb" value="${h(existing?.smartData?.fallbackActivity || '')}"></div></div>`;
+    else if (type === 'split') fields = `<div class="mf mf-row"><div class="mf"><label>First half</label><input id="f-s1" value="${h(existing?.subEvents?.[0]?.activity || '')}"></div><div class="mf"><label>Second half</label><input id="f-s2" value="${h(existing?.subEvents?.[1]?.activity || '')}"></div></div>`;
+    else if (type === 'elective') { const g = window.loadGlobalSettings?.() || {}, acts = [...(g.app1?.fields || []).filter(f => f.available !== false).map(f => f.name), ...(g.app1?.specialActivities || []).filter(s => s.available !== false).map(s => s.name)], sel = existing?.electiveActivities || []; fields = `<div class="mf"><label>Activities</label><div class="checks">${acts.map(a => `<label><input type="checkbox" name="el" value="${h(a)}" ${sel.includes(a) ? 'checked' : ''}><span>${h(a)}</span></label>`).join('')}</div></div>`; }
     
-    const renderBody = () => {
-        let extra = '';
-        if (type === 'smart') {
-            const a1 = existing?.smartActivities?.[0] || '', a2 = existing?.smartActivities?.[1] || '', fb = existing?.smartActivities?.[2] || '';
-            extra = `<div class="mf"><label>Primary Activity</label><input id="f-a1" value="${h(a1)}" placeholder="e.g., Basketball"></div><div class="mf"><label>Secondary Activity</label><input id="f-a2" value="${h(a2)}" placeholder="e.g., Soccer"></div><div class="mf"><label>Fallback (optional)</label><input id="f-fb" value="${h(fb)}" placeholder="e.g., Indoor Games"></div>`;
-        } else if (type === 'split') {
-            const s1 = existing?.subEvents?.[0]?.activity || '', s2 = existing?.subEvents?.[1]?.activity || '';
-            extra = `<div class="mf"><label>First Half</label><input id="f-s1" value="${h(s1)}" placeholder="Activity 1"></div><div class="mf"><label>Second Half</label><input id="f-s2" value="${h(s2)}" placeholder="Activity 2"></div>`;
-        } else if (type === 'elective') {
-            const sp = window.loadGlobalSettings?.()?.sports || [], sel = existing?.electiveActivities || [];
-            extra = `<div class="mf"><label>Available Activities</label><div class="checks">${sp.length ? sp.map(s => `<label><input type="checkbox" name="el" value="${h(s)}" ${sel.includes(s) ? 'checked' : ''}><span>${h(s)}</span></label>`).join('') : '<span style="color:#94a3b8;font-size:12px;">No sports configured</span>'}</div></div>`;
-        } else if (type === 'custom') {
-            const selLocs = existing?.locations || (existing?.location ? [existing.location] : []);
-            const allLocs = locs();
-            extra = `<div class="mf"><label>Reserve Locations (optional)</label><div class="loc-buttons" id="loc-buttons">${allLocs.length ? allLocs.map(l => `<button type="button" class="loc-btn ${selLocs.includes(l.n) ? 'active' : ''}" data-loc="${h(l.n)}">${h(l.n)}<span class="loc-type">${l.t}</span></button>`).join('') : '<span style="color:#94a3b8;font-size:12px;">No locations configured</span>'}</div></div>`;
-        }
-        
-        // Only show event name field for custom tiles
-        const nameField = type === 'custom' 
-            ? `<div class="mf"><label>Event Name</label><input id="f-name" value="${h(existing?.event || '')}" placeholder="Custom Event"></div>`
-            : `<input type="hidden" id="f-name" value="${h(existing?.event || '')}">`;
-        
-        return `
-            <div class="modal-head">
-                <span class="modal-icon" style="--c:${B.color}">${B.name[0]}</span>
-                <h2>${existing ? 'Edit' : 'Add'} ${B.name}</h2>
-                <button class="modal-x" id="modal-close">×</button>
-            </div>
-            <div class="modal-body">
-                ${nameField}
-                <div class="mf-row">
-                    <div class="mf"><label>Start</label><div class="time-box"><button data-d="-5" data-t="s">−</button><input id="f-start" value="${toS(sM)}" placeholder="e.g. 9:00 AM"><button data-d="5" data-t="s">+</button></div></div>
-                    <div class="mf"><label>End</label><div class="time-box"><button data-d="-5" data-t="e">−</button><input id="f-end" value="${toS(eM)}" placeholder="e.g. 10:00 AM"><button data-d="5" data-t="e">+</button></div></div>
-                </div>
-                <div class="dur-row"><button data-m="20">20m</button><button data-m="30">30m</button><button data-m="40">40m</button><button data-m="45">45m</button><button data-m="60">1h</button><button data-m="90">1.5h</button></div>
-                ${extra}
-            </div>
-            <div class="modal-foot">
-                <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
-                <button class="btn btn-primary" id="modal-save">${existing ? 'Update' : 'Add'}</button>
-            </div>
-        `;
+    let locHTML = '';
+    if (type === 'custom') { const L = locs(), res = existing?.reservedFields || []; if (L.length) locHTML = `<div class="mf"><label>Locations</label><div class="checks">${L.map(l => `<label><input type="checkbox" name="loc" value="${h(l.n)}" ${res.includes(l.n) ? 'checked' : ''}><span>${h(l.n)}</span></label>`).join('')}</div></div>`; }
+    
+    const el = document.createElement('div'); el.id = 'modal-wrap';
+    el.innerHTML = `<div class="modal"><div class="modal-accent" style="--c:${B.color}"></div><div class="modal-head"><div class="modal-icon" style="--c:${B.color}">${B.name[0]}</div><div><h2>${existing ? 'Edit' : 'Add'} ${h(B.name)}</h2></div><button class="modal-x" id="mx">×</button></div><div class="modal-body">${fields}<div class="mf"><label>Time</label><div class="time-row"><div class="time-box"><button data-a="s-">−</button><input id="f-s" value="${toS(sM)}"><button data-a="s+">+</button></div><span>→</span><div class="time-box"><button data-a="e-">−</button><input id="f-e" value="${toS(eM)}"><button data-a="e+">+</button></div></div><div class="dur-row"><button data-d="15">15m</button><button data-d="30">30m</button><button data-d="45">45m</button><button data-d="60">1h</button></div></div>${locHTML}</div><div class="modal-foot"><button class="btn btn-ghost" id="mc">Cancel</button><button class="btn btn-primary" id="ms" style="--c:${B.color}">${existing ? 'Save' : 'Add'}</button></div></div>`;
+    document.body.appendChild(el);
+    
+    const $s = document.getElementById('f-s'), $e = document.getElementById('f-e');
+    const sy = () => { $s.value = toS(sM); $e.value = toS(eM); };
+    $s.onblur = () => { const v = toM($s.value); if (v != null) { sM = v; if (sM >= eM) eM = sM + 30; } sy(); };
+    $e.onblur = () => { const v = toM($e.value); if (v != null && v > sM) eM = v; sy(); };
+    el.querySelectorAll('.time-box button').forEach(b => b.onclick = () => { const a = b.dataset.a; if (a === 's+') sM = Math.min(sM + 5, eM - 5); else if (a === 's-') sM = Math.max(sM - 5, 0); else if (a === 'e+') eM = Math.min(eM + 5, 1439); else if (a === 'e-') eM = Math.max(eM - 5, sM + 5); sy(); });
+    el.querySelectorAll('.dur-row button').forEach(b => b.onclick = () => { eM = sM + +b.dataset.d; sy(); });
+    
+    const close = () => el.remove();
+    document.getElementById('mx').onclick = close;
+    document.getElementById('mc').onclick = close;
+    el.onclick = e => e.target === el && close();
+    
+    document.getElementById('ms').onclick = () => {
+        const ev = existing ? { ...existing } : { id: id(), type, event: B.name, division: div, reservedFields: [] };
+        ev.startTime = toS(sM); ev.endTime = toS(eM);
+        if (type === 'custom') { const n = document.getElementById('f-name')?.value.trim(); if (!n) return alert('Enter name'); ev.event = n; ev.reservedFields = [...el.querySelectorAll('input[name="loc"]:checked')].map(c => c.value); }
+        else if (type === 'smart') { const a1 = document.getElementById('f-a1')?.value.trim(), a2 = document.getElementById('f-a2')?.value.trim(), fb = document.getElementById('f-fb')?.value.trim(); if (!a1 || !a2 || !fb) return alert('Fill all fields'); ev.smartData = { activity1: a1, activity2: a2, fallbackFor: document.getElementById('f-ff').value === '1' ? a1 : a2, fallbackActivity: fb }; }
+        else if (type === 'split') { const s1 = document.getElementById('f-s1')?.value.trim(), s2 = document.getElementById('f-s2')?.value.trim(); if (!s1 || !s2) return alert('Fill both'); const mid = sM + Math.floor((eM - sM) / 2); ev.subEvents = [{ activity: s1, startTime: toS(sM), endTime: toS(mid) }, { activity: s2, startTime: toS(mid), endTime: toS(eM) }]; }
+        else if (type === 'elective') { const acts = [...el.querySelectorAll('input[name="el"]:checked')].map(c => c.value); if (acts.length < 2) return alert('Select 2+'); ev.electiveActivities = acts; }
+        if (existing) { const i = skeleton.findIndex(x => x.id === existing.id); if (i >= 0) skeleton[i] = ev; } else skeleton.push(ev);
+        close(); save(); draw();
     };
-    
-    box.innerHTML = renderBody();
-    wrap.appendChild(box);
-    document.body.appendChild(wrap);
-    
-    // Time buttons
-    box.querySelectorAll('.time-box button').forEach(btn => {
-        btn.onclick = () => {
-            const d = parseInt(btn.dataset.d), t = btn.dataset.t;
-            if (t === 's') { sM = Math.max(0, sM + d); if (sM >= eM) eM = sM + 5; }
-            else { eM = Math.max(sM + 5, eM + d); }
-            document.getElementById('f-start').value = toS(sM);
-            document.getElementById('f-end').value = toS(eM);
-        };
-    });
-    
-    // Allow typing time values
-    document.getElementById('f-start').onblur = e => {
-        const parsed = toM(e.target.value);
-        if (parsed != null) { sM = parsed; if (sM >= eM) eM = sM + 30; }
-        e.target.value = toS(sM);
-        document.getElementById('f-end').value = toS(eM);
-    };
-    document.getElementById('f-end').onblur = e => {
-        const parsed = toM(e.target.value);
-        if (parsed != null && parsed > sM) eM = parsed;
-        e.target.value = toS(eM);
-    };
-    
-    // Duration buttons
-    box.querySelectorAll('.dur-row button').forEach(btn => {
-        btn.onclick = () => { eM = sM + parseInt(btn.dataset.m); document.getElementById('f-end').value = toS(eM); };
-    });
-    
-    // Location buttons (for custom tiles - multi-select with persistent selection)
-    box.querySelectorAll('.loc-btn').forEach(btn => {
-        btn.onclick = (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            btn.classList.toggle('active');
-            // Force repaint to ensure CSS applies
-            btn.offsetHeight;
-        };
-    });
-    
-    // Close
-    const close = () => wrap.remove();
-    wrap.onclick = e => { if (e.target === wrap) close(); };
-    document.getElementById('modal-close').onclick = close;
-    document.getElementById('modal-cancel').onclick = close;
-    
-    // Save
-    document.getElementById('modal-save').onclick = () => {
-        const name = document.getElementById('f-name').value.trim() || B.name;
-        if (sM >= eM) return alert('End must be after start');
-        
-        const ev = existing ? { ...existing } : { id: id(), type, division: div };
-        ev.event = name;
-        ev.startTime = toS(sM);
-        ev.endTime = toS(eM);
-        
-        if (type === 'smart') {
-            const a1 = document.getElementById('f-a1')?.value.trim();
-            const a2 = document.getElementById('f-a2')?.value.trim();
-            const fb = document.getElementById('f-fb')?.value.trim();
-            if (!a1 || !a2) return alert('Fill primary and secondary');
-            ev.smartActivities = fb ? [a1, a2, fb] : [a1, a2];
-        } else if (type === 'split') {
-            const s1 = document.getElementById('f-s1')?.value.trim();
-            const s2 = document.getElementById('f-s2')?.value.trim();
-            if (!s1 || !s2) return alert('Fill both halves');
-            const mid = sM + Math.floor((eM - sM) / 2);
-            ev.subEvents = [{ activity: s1, startTime: toS(sM), endTime: toS(mid) }, { activity: s2, startTime: toS(mid), endTime: toS(eM) }];
-        } else if (type === 'elective') {
-            const acts = [...box.querySelectorAll('input[name="el"]:checked')].map(c => c.value);
-            if (acts.length < 2) return alert('Select at least 2');
-            ev.electiveActivities = acts;
-        } else if (type === 'custom') {
-            const selectedLocs = [...box.querySelectorAll('.loc-btn.active')].map(b => b.dataset.loc);
-            if (selectedLocs.length > 0) {
-                ev.locations = selectedLocs;
-                delete ev.location; // Remove old single location field
-            } else {
-                delete ev.locations;
-                delete ev.location;
-            }
-        }
-        
-        if (existing) {
-            const i = skeleton.findIndex(x => x.id === existing.id);
-            if (i >= 0) skeleton[i] = ev;
-        } else {
-            skeleton.push(ev);
-        }
-        
-        close();
-        save();
-        draw();
-    };
-    
-    setTimeout(() => document.getElementById('f-name')?.focus(), 50);
+    setTimeout(() => el.querySelector('input:not([type="checkbox"])')?.focus(), 50);
 };
 
-// Draw
+// Render
+const render = () => {
+    if (!container) return;
+    container.innerHTML = `<div class="sch">${css()}<div class="top"><div class="top-left"><h1>Schedule Builder</h1><span id="status-badge" class="badge"></span><span id="status-name" class="status-name">New</span></div><div class="top-right"><div class="tool-group"><label>Load</label><select id="tpl-sel"></select><button class="btn btn-ghost" id="btn-load">Load</button><button class="btn btn-ghost" id="btn-update" style="display:none">Update</button></div><div class="tool-group"><label>Save</label><input id="save-name" placeholder="Template name"><button class="btn btn-primary" id="btn-save">Save</button></div><div class="tool-group"><label>Manage</label><select id="del-sel"></select><button class="btn btn-danger" id="btn-del">Delete</button><button class="btn btn-ghost" id="btn-clear">Clear All</button></div></div></div><div class="body"><div class="side"><div class="side-head"><span>Tiles</span><span class="side-hint">Click for info</span></div><div class="blocks">${Object.entries(BLOCKS).map(([k, v]) => `<div class="block" draggable="true" data-type="${k}" data-desc="${h(v.desc)}"><span class="block-dot" style="--c:${v.color};--bg:${v.bg}">${v.name[0]}</span><span>${v.name}</span></div>`).join('')}</div></div><div class="main"><div id="grid" class="grid"></div></div></div><div id="tile-info" class="tile-info"></div></div>`;
+    bindUI(); fills(); draw(); sync();
+};
+
 const draw = () => {
     const g = document.getElementById('grid'); if (!g) return;
     const D = window.divisions || {}, cols = Object.keys(D).filter(d => D[d]?.bunks?.length);
-    
-    if (!cols.length) {
-        g.innerHTML = `<div class="empty"><svg width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg><p>No divisions configured</p><small>Add divisions in Setup to begin</small></div>`;
-        return;
-    }
+    if (!cols.length) { g.innerHTML = `<div class="empty"><div class="empty-icon">📅</div><p>No divisions configured</p></div>`; return; }
     
     const { lo, hi } = bounds(), ht = (hi - lo) * PX;
     let html = `<div class="calendar" style="--cols:${cols.length}"><div class="cal-corner"></div>`;
     
     // Headers
-    cols.forEach(c => {
-        const clr = D[c]?.color || '#64748b';
-        html += `<div class="cal-head"><span class="cal-head-dot" style="background:${clr}"></span><span>${h(c)}</span></div>`;
-    });
+    cols.forEach(c => { const clr = D[c]?.color || '#6366F1'; html += `<div class="cal-head"><span class="cal-head-dot" style="--c:${clr}"></span><span>${h(c)}</span></div>`; });
     
-    // Time rail (extra height for first label padding)
-    html += `<div class="cal-times" style="height:${ht + 12}px">`;
-    for (let m = lo; m < hi; m += 60) {
-        html += `<div class="cal-time" style="top:${(m - lo) * PX + 12}px">${toS(m)}</div>`;
-    }
+    // Time rail
+    html += `<div class="cal-times" style="height:${ht}px">`;
+    for (let m = lo; m < hi; m += 60) html += `<div class="cal-time" style="top:${(m - lo) * PX}px">${toS(m)}</div>`;
     html += `</div>`;
     
     // Columns
@@ -311,11 +144,9 @@ const draw = () => {
         html += `<div class="cal-col" data-d="${h(c)}" style="height:${ht}px">`;
         
         // Grid lines
-        for (let m = lo; m < hi; m += 60) {
-            html += `<div class="cal-line" style="top:${(m - lo) * PX}px"></div>`;
-        }
+        for (let m = lo; m < hi; m += 60) html += `<div class="cal-line" style="top:${(m - lo) * PX}px"></div>`;
         
-        // Inactive zones (grey diagonal stripes for times outside division hours)
+        // Inactive
         if (ds != null && ds > lo) html += `<div class="cal-off" style="height:${(ds - lo) * PX}px"></div>`;
         if (de != null && de < hi) html += `<div class="cal-off cal-off-b" style="height:${(hi - de) * PX}px"></div>`;
         
@@ -325,12 +156,11 @@ const draw = () => {
             if (s != null && e != null && e > s) {
                 const top = (s - lo) * PX, height = (e - s) * PX - 1;
                 const B = BLOCKS[ev.type] || BLOCKS.custom;
-                const small = height < 42;
-                // Always show time, just formatted differently for small tiles
-                html += `<div class="ev ${small ? 'ev-sm' : ''}" data-id="${ev.id}" draggable="true" style="top:${top}px;height:${Math.max(height, 24)}px;--c:${B.color};--bg:${B.bg};${B.dashed ? 'border-style:dashed;' : ''}"><div class="ev-body"><span class="ev-name">${h(ev.event || B.name)}</span><span class="ev-time">${toS(s)} – ${toS(e)}</span></div><div class="ev-handle ev-handle-t"></div><div class="ev-handle ev-handle-b"></div></div>`;
+                const small = height < 32;
+                const timeStr = `${ev.startTime} – ${ev.endTime}`;
+                html += `<div class="ev ${small ? 'ev-sm' : ''}" data-id="${ev.id}" draggable="true" data-time="${timeStr}" style="top:${top}px;height:${Math.max(height, 20)}px;--c:${B.color};--bg:${B.bg};${B.dashed ? 'border-style:dashed;' : ''}"><div class="ev-body"><span class="ev-name">${h(ev.event || B.name)}</span>${small ? '' : `<span class="ev-time">${timeStr}</span>`}</div><div class="ev-handle ev-handle-t"></div><div class="ev-handle ev-handle-b"></div></div>`;
             }
         });
-        
         html += `</div>`;
     });
     
@@ -339,10 +169,9 @@ const draw = () => {
     bindGrid();
 };
 
-// Bind UI
 const bindUI = () => {
-    document.getElementById('btn-load')?.addEventListener('click', () => { const n = document.getElementById('tpl-sel').value; if (!n) return notify('Select a template'); if (skeleton.length && !confirm('Replace current schedule?')) return; loadT(n); });
-    document.getElementById('btn-save')?.addEventListener('click', () => { const n = document.getElementById('save-name').value.trim(); if (!n) return notify('Enter a name'); const all = window.getSavedSkeletons?.() || {}; if (all[n] && !confirm(`Replace "${n}"?`)) return; saveT(n, !!all[n]); document.getElementById('save-name').value = ''; });
+    document.getElementById('btn-load')?.addEventListener('click', () => { const n = document.getElementById('tpl-sel').value; if (!n) return notify('Select template'); if (skeleton.length && !confirm('Replace current?')) return; loadT(n); });
+    document.getElementById('btn-save')?.addEventListener('click', () => { const n = document.getElementById('save-name').value.trim(); if (!n) return notify('Enter name'); const all = window.getSavedSkeletons?.() || {}; if (all[n] && !confirm(`Replace "${n}"?`)) return; saveT(n, !!all[n]); document.getElementById('save-name').value = ''; });
     document.getElementById('btn-update')?.addEventListener('click', () => template && saveT(template, true));
     document.getElementById('btn-clear')?.addEventListener('click', () => { if (skeleton.length && !confirm('Clear entire schedule?')) return; skeleton = []; template = null; clear(); draw(); sync(); });
     document.getElementById('btn-del')?.addEventListener('click', () => { const n = document.getElementById('del-sel').value; if (!n || !confirm(`Delete "${n}"?`)) return; delT(n); });
@@ -352,15 +181,16 @@ const bindUI = () => {
         b.addEventListener('dragstart', e => { e.dataTransfer.setData('type', b.dataset.type); b.classList.add('dragging'); });
         b.addEventListener('dragend', () => b.classList.remove('dragging'));
         b.addEventListener('click', e => {
-            if (e.detail === 1) {
+            if (e.detail === 1) { // Single click - show info
                 const info = document.getElementById('tile-info');
                 const rect = b.getBoundingClientRect();
                 const type = b.dataset.type;
                 const B = BLOCKS[type];
-                info.innerHTML = `<div class="tile-info-header"><span class="tile-info-dot" style="background:${B.color}"></span><strong>${B.name}</strong></div><p>${B.desc}</p><small>Drag to add to schedule</small>`;
+                info.innerHTML = `<div class="tile-info-header" style="--c:${B.color}"><span class="tile-info-dot" style="background:${B.color}"></span><strong>${B.name}</strong></div><p>${B.desc}</p><small>Drag to add to schedule</small>`;
                 info.style.top = rect.top + 'px';
                 info.style.left = (rect.right + 12) + 'px';
                 info.classList.add('show');
+                
                 const hideInfo = () => { info.classList.remove('show'); document.removeEventListener('click', hideInfo); };
                 setTimeout(() => document.addEventListener('click', hideInfo), 10);
             }
@@ -370,461 +200,121 @@ const bindUI = () => {
 
 const bindGrid = () => {
     const { lo } = bounds();
-    
-    // Ensure drop preview elements exist in each column
     document.querySelectorAll('.cal-col').forEach(col => {
-        if (!col.querySelector('.drop-preview')) {
-            const preview = document.createElement('div');
-            preview.className = 'drop-preview';
-            preview.innerHTML = '<div class="preview-time"></div>';
-            col.appendChild(preview);
-        }
-    });
-    
-    // Store drag data for move operations
-    let moveDragData = null;
-    
-    document.querySelectorAll('.cal-col').forEach(col => {
-        const preview = col.querySelector('.drop-preview');
-        
         col.addEventListener('mouseenter', () => hoveredCol = col);
         col.addEventListener('mouseleave', () => { if (hoveredCol === col) hoveredCol = null; });
-        
-        col.addEventListener('dragover', e => { 
-            e.preventDefault(); 
-            col.classList.add('over');
-            
-            // Show drop preview for move operations
-            const mv = e.dataTransfer.types.includes('move') || moveDragData;
-            if (mv && preview && moveDragData) {
-                const rect = col.getBoundingClientRect();
-                const y = e.clientY - rect.top;
-                const snapM = Math.round(y / PX / SNAP) * SNAP;
-                const startM = lo + snapM;
-                const endM = startM + moveDragData.duration;
-                
-                preview.style.display = 'block';
-                preview.style.top = (snapM * PX) + 'px';
-                preview.style.height = (moveDragData.duration * PX) + 'px';
-                preview.querySelector('.preview-time').textContent = `${toS(startM)} – ${toS(endM)}`;
-            }
-        });
-        
-        col.addEventListener('dragleave', e => { 
-            if (!col.contains(e.relatedTarget)) {
-                col.classList.remove('over');
-                if (preview) preview.style.display = 'none';
-            }
-        });
-        
+        col.addEventListener('dragover', e => { e.preventDefault(); col.classList.add('over'); });
+        col.addEventListener('dragleave', e => { if (!col.contains(e.relatedTarget)) col.classList.remove('over'); });
         col.addEventListener('drop', e => {
-            e.preventDefault(); 
-            col.classList.remove('over');
-            if (preview) preview.style.display = 'none';
-            moveDragData = null;
-            
+            e.preventDefault(); col.classList.remove('over');
             const mv = e.dataTransfer.getData('move');
-            if (mv) {
-                const ev = skeleton.find(x => x.id === mv);
-                if (ev) {
-                    const rect = col.getBoundingClientRect();
-                    const y = e.clientY - rect.top;
-                    const m = lo + Math.round(y / PX / SNAP) * SNAP;
-                    const dur = toM(ev.endTime) - toM(ev.startTime);
-                    ev.division = col.dataset.d;
-                    ev.startTime = toS(m);
-                    ev.endTime = toS(m + dur);
-                    
-                    // Bump overlapping tiles
-                    bumpOverlappingTiles(ev);
-                    
-                    save(); draw();
-                }
-            } else {
-                const type = e.dataTransfer.getData('type');
-                if (type) {
-                    const rect = col.getBoundingClientRect();
-                    const y = e.clientY - rect.top;
-                    const m = lo + Math.round(y / PX / SNAP) * SNAP;
-                    modal(type, col.dataset.d, m);
-                }
-            }
+            if (mv) { const ev = skeleton.find(x => x.id === mv); if (ev) { const r = col.getBoundingClientRect(), y = e.clientY - r.top, ns = lo + Math.round(y / PX / SNAP) * SNAP, dur = toM(ev.endTime) - toM(ev.startTime); ev.division = col.dataset.d; ev.startTime = toS(ns); ev.endTime = toS(ns + dur); save(); draw(); } return; }
+            const type = e.dataTransfer.getData('type');
+            if (type) { const r = col.getBoundingClientRect(), y = e.clientY - r.top; modal(type, col.dataset.d, lo + Math.round(y / PX / 15) * 15); }
         });
     });
     
     document.querySelectorAll('.ev').forEach(tile => {
-        const ev = skeleton.find(x => x.id === tile.dataset.id);
+        const eid = tile.dataset.id, ev = skeleton.find(x => x.id === eid);
+        tile.addEventListener('click', e => { if (e.target.classList.contains('ev-handle')) return; document.querySelectorAll('.ev.sel').forEach(t => t.classList.remove('sel')); tile.classList.add('sel'); });
+        tile.addEventListener('dblclick', e => { if (!e.target.classList.contains('ev-handle') && ev) modal(ev.type, ev.division, null, ev); });
+        tile.addEventListener('contextmenu', e => { e.preventDefault(); if (confirm('Delete?')) { skeleton = skeleton.filter(x => x.id !== eid); save(); draw(); } });
+        tile.addEventListener('dragstart', e => { if (e.target.classList.contains('ev-handle')) { e.preventDefault(); return; } e.dataTransfer.setData('move', eid); tile.classList.add('moving'); });
+        tile.addEventListener('dragend', () => tile.classList.remove('moving'));
         
-        tile.addEventListener('click', e => {
-            if (!e.target.classList.contains('ev-handle')) {
-                document.querySelectorAll('.ev.sel').forEach(t => t.classList.remove('sel'));
-                tile.classList.add('sel');
-            }
-        });
-        tile.addEventListener('dblclick', () => { if (ev) modal(ev.type, ev.division, null, ev); });
-        tile.addEventListener('contextmenu', e => { e.preventDefault(); if (ev && confirm('Delete this block?')) { skeleton = skeleton.filter(x => x.id !== ev.id); save(); draw(); } });
-        
-        // Drag with ghost preview and moveDragData
-        tile.addEventListener('dragstart', e => { 
-            if (e.target.classList.contains('ev-handle')) { e.preventDefault(); return; } 
-            e.dataTransfer.setData('move', ev?.id || ''); 
-            tile.classList.add('moving');
-            
-            // Store drag data for drop preview
-            if (ev) {
-                const dur = toM(ev.endTime) - toM(ev.startTime);
-                moveDragData = { id: ev.id, duration: dur };
-            }
-            
-            // Show drag ghost
-            let ghost = document.getElementById('drag-ghost');
-            if (!ghost) {
-                ghost = document.createElement('div');
-                ghost.id = 'drag-ghost';
-                document.body.appendChild(ghost);
-            }
-            if (ev) {
-                ghost.innerHTML = `<strong>${h(ev.event || BLOCKS[ev.type]?.name || 'Event')}</strong><br><span>${ev.startTime} – ${ev.endTime}</span>`;
-            }
-            ghost.style.display = 'block';
-            
-            // Use transparent drag image
-            const img = new Image();
-            img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-            e.dataTransfer.setDragImage(img, 0, 0);
-        });
-        
-        tile.addEventListener('drag', e => {
-            if (e.clientX === 0 && e.clientY === 0) return;
-            const ghost = document.getElementById('drag-ghost');
-            if (ghost) {
-                ghost.style.left = (e.clientX + 12) + 'px';
-                ghost.style.top = (e.clientY + 12) + 'px';
-            }
-        });
-        
-        tile.addEventListener('dragend', () => { 
-            tile.classList.remove('moving');
-            const ghost = document.getElementById('drag-ghost');
-            if (ghost) ghost.style.display = 'none';
-            // Clear all drop previews
-            document.querySelectorAll('.drop-preview').forEach(p => { p.style.display = 'none'; });
-            document.querySelectorAll('.cal-col').forEach(c => c.classList.remove('over'));
-        });
-        
-        // Resize handles with live tooltip
         tile.querySelectorAll('.ev-handle').forEach(hndl => {
-            const isTop = hndl.classList.contains('ev-handle-t');
+            const isT = hndl.classList.contains('ev-handle-t');
             let y0, t0, h0;
-            
-            // Create/get tooltip
-            let tooltip = document.getElementById('resize-tooltip');
-            if (!tooltip) {
-                tooltip = document.createElement('div');
-                tooltip.id = 'resize-tooltip';
-                document.body.appendChild(tooltip);
-            }
-            
-            const move = e => {
-                const d = e.clientY - y0;
-                if (isTop) {
-                    const nt = Math.round((t0 + d) / (SNAP * PX)) * (SNAP * PX);
-                    const nh = h0 - (nt - t0);
-                    if (nh >= 24) { 
-                        tile.style.top = nt + 'px'; 
-                        tile.style.height = nh + 'px';
-                        // Update tooltip
-                        const newStart = toS(lo + nt / PX);
-                        const newEnd = toS(lo + (nt + nh) / PX);
-                        tooltip.innerHTML = `${newStart}<br><span>to</span><br>${newEnd}`;
-                    }
-                } else {
-                    const nh = Math.max(24, Math.round((h0 + d) / (SNAP * PX)) * (SNAP * PX));
-                    tile.style.height = nh + 'px';
-                    // Update tooltip
-                    const newStart = toS(lo + parseFloat(tile.style.top) / PX);
-                    const newEnd = toS(lo + (parseFloat(tile.style.top) + nh) / PX);
-                    tooltip.innerHTML = `${newStart}<br><span>to</span><br>${newEnd}`;
-                }
-                tooltip.style.left = (e.clientX + 15) + 'px';
-                tooltip.style.top = (e.clientY - 30) + 'px';
-            };
-            const up = () => {
-                document.removeEventListener('mousemove', move);
-                document.removeEventListener('mouseup', up);
-                tile.classList.remove('resizing');
-                tooltip.style.display = 'none';
-                if (ev) {
-                    const nt = parseFloat(tile.style.top);
-                    const nh = parseFloat(tile.style.height);
-                    ev.startTime = toS(lo + nt / PX);
-                    ev.endTime = toS(lo + (nt + nh) / PX);
-                    save(); draw();
-                }
-            };
-            hndl.addEventListener('mousedown', e => {
-                e.preventDefault(); e.stopPropagation();
-                y0 = e.clientY;
-                t0 = parseFloat(tile.style.top);
-                h0 = parseFloat(tile.style.height);
-                tile.classList.add('resizing');
-                tooltip.style.display = 'block';
-                tooltip.innerHTML = `${toS(lo + t0 / PX)}<br><span>to</span><br>${toS(lo + (t0 + h0) / PX)}`;
-                tooltip.style.left = (e.clientX + 15) + 'px';
-                tooltip.style.top = (e.clientY - 30) + 'px';
-                document.addEventListener('mousemove', move);
-                document.addEventListener('mouseup', up);
-            });
-            
-            // Touch support for resize
-            hndl.addEventListener('touchstart', e => {
-                e.preventDefault(); e.stopPropagation();
-                const touch = e.touches[0];
-                y0 = touch.clientY;
-                t0 = parseFloat(tile.style.top);
-                h0 = parseFloat(tile.style.height);
-                tile.classList.add('resizing');
-                tooltip.style.display = 'block';
-                tooltip.innerHTML = `${toS(lo + t0 / PX)}<br><span>to</span><br>${toS(lo + (t0 + h0) / PX)}`;
-            }, { passive: false });
-            
-            hndl.addEventListener('touchmove', e => {
-                e.preventDefault();
-                const touch = e.touches[0];
-                const d = touch.clientY - y0;
-                if (isTop) {
-                    const nt = Math.round((t0 + d) / (SNAP * PX)) * (SNAP * PX);
-                    const nh = h0 - (nt - t0);
-                    if (nh >= 24) { 
-                        tile.style.top = nt + 'px'; 
-                        tile.style.height = nh + 'px';
-                        const newStart = toS(lo + nt / PX);
-                        const newEnd = toS(lo + (nt + nh) / PX);
-                        tooltip.innerHTML = `${newStart}<br><span>to</span><br>${newEnd}`;
-                    }
-                } else {
-                    const nh = Math.max(24, Math.round((h0 + d) / (SNAP * PX)) * (SNAP * PX));
-                    tile.style.height = nh + 'px';
-                    const newStart = toS(lo + parseFloat(tile.style.top) / PX);
-                    const newEnd = toS(lo + (parseFloat(tile.style.top) + nh) / PX);
-                    tooltip.innerHTML = `${newStart}<br><span>to</span><br>${newEnd}`;
-                }
-                tooltip.style.left = (touch.clientX + 15) + 'px';
-                tooltip.style.top = (touch.clientY - 30) + 'px';
-            }, { passive: false });
-            
-            hndl.addEventListener('touchend', () => {
-                tile.classList.remove('resizing');
-                tooltip.style.display = 'none';
-                if (ev) {
-                    const nt = parseFloat(tile.style.top);
-                    const nh = parseFloat(tile.style.height);
-                    ev.startTime = toS(lo + nt / PX);
-                    ev.endTime = toS(lo + (nt + nh) / PX);
-                    save(); draw();
-                }
-            });
+            const move = e => { const d = e.clientY - y0; if (isT) { const nt = Math.round((t0 + d) / (SNAP * PX)) * (SNAP * PX), nh = h0 - (nt - t0); if (nh >= 20) { tile.style.top = nt + 'px'; tile.style.height = nh + 'px'; } } else { const nh = Math.max(20, Math.round((h0 + d) / (SNAP * PX)) * (SNAP * PX)); tile.style.height = nh + 'px'; } };
+            const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); tile.classList.remove('resizing'); if (ev) { const nt = parseFloat(tile.style.top), nh = parseFloat(tile.style.height); ev.startTime = toS(lo + nt / PX); ev.endTime = toS(lo + (nt + nh) / PX); save(); draw(); } };
+            hndl.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); y0 = e.clientY; t0 = parseFloat(tile.style.top); h0 = parseFloat(tile.style.height); tile.classList.add('resizing'); document.addEventListener('mousemove', move); document.addEventListener('mouseup', up); });
         });
     });
     
-    document.getElementById('grid')?.addEventListener('click', e => {
-        if (!e.target.closest('.ev')) document.querySelectorAll('.ev.sel').forEach(t => t.classList.remove('sel'));
-    });
+    document.getElementById('grid')?.addEventListener('click', e => { if (!e.target.closest('.ev')) document.querySelectorAll('.ev.sel').forEach(t => t.classList.remove('sel')); });
 };
 
-// Render
-const render = () => {
-    if (!container) return;
-    container.innerHTML = `
-        <div class="sch">
-            ${css()}
-            <div class="top">
-                <div class="top-left">
-                    <h1>Schedule Builder</h1>
-                    <span id="status-badge" class="badge"></span>
-                </div>
-                <div class="top-right">
-                    <div class="tool-group tpl-group">
-                        <span id="status-name" class="status-name"></span>
-                        <select id="tpl-sel"></select>
-                        <button class="btn btn-load" id="btn-load">Load</button>
-                        <button class="btn btn-update" id="btn-update" style="display:none">Update</button>
-                    </div>
-                    <div class="tool-group">
-                        <input id="save-name" placeholder="Template name...">
-                        <button class="btn btn-primary" id="btn-save">Save</button>
-                    </div>
-                    <div class="tool-group">
-                        <select id="del-sel"></select>
-                        <button class="btn btn-danger" id="btn-del">Delete</button>
-                        <button class="btn btn-clear" id="btn-clear">Clear</button>
-                    </div>
-                </div>
-            </div>
-            <div class="body">
-                <div class="side">
-                    <div class="side-head">
-                        <span>Block Types</span>
-                        <span class="side-hint">Drag to builder</span>
-                    </div>
-                    <div class="blocks">
-                        ${Object.entries(BLOCKS).map(([k, v]) => `
-                            <div class="block" draggable="true" data-type="${k}">
-                                <span class="block-dot" style="--c:${v.color};--bg:${v.bg}">${v.name[0]}</span>
-                                <span>${v.name}</span>
-                            </div>
-                        `).join('')}
-                    </div>
-                </div>
-                <div class="main">
-                    <div id="grid" class="grid"></div>
-                </div>
-            </div>
-            <div id="tile-info" class="tile-info"></div>
-        </div>
-    `;
-    bindUI();
-    fills();
-    draw();
-    sync();
-};
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// PREMIUM CSS — SLEEK, PROFESSIONAL, ENTERPRISE-GRADE
-// ═══════════════════════════════════════════════════════════════════════════════
-
+// CSS
 const css = () => `<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-/* Hide the main page title when Schedule Builder is shown */
-#master-scheduler.active ~ .app-page-title,
-#master-scheduler.active + .app-page-title,
-.tab-content#master-scheduler.active ~ h1.app-page-title {
-    display: none !important;
-}
-/* Also target parent container */
-#master-scheduler.active { margin-top: -20px; }
-
-/* Make the tab content fill available space */
-#master-scheduler {
-    height: calc(100vh - 140px);
-    min-height: 500px;
-}
-#master-scheduler-content {
-    height: 100%;
-}
+/* ══════════════════════════════════════════════════════════════════════
+   SCHEDULE BUILDER — MODERN DASHBOARD STYLE
+   ══════════════════════════════════════════════════════════════════════ */
 
 .sch {
     --bg: #f8fafc;
     --surface: #ffffff;
     --border: #e2e8f0;
     --border-light: #f1f5f9;
-    --border-strong: #cbd5e1;
-    --text: #0f172a;
-    --text-secondary: #475569;
+    --text: #1e293b;
+    --text-secondary: #64748b;
     --text-muted: #94a3b8;
-    --accent: #4f46e5;
-    --accent-hover: #4338ca;
-    --accent-light: #eef2ff;
-    --success: #059669;
-    --success-light: #ecfdf5;
-    --warning: #d97706;
-    --warning-light: #fffbeb;
-    --danger: #dc2626;
-    --danger-light: #fef2f2;
-    --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-    --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -1px rgba(0,0,0,0.04);
-    --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.08), 0 4px 6px -2px rgba(0,0,0,0.04);
-    --shadow-xl: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.03);
-    
+    --accent: #14b8a6;
+    --accent-light: #ccfbf1;
+    --accent-dark: #0d9488;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     background: var(--bg);
     color: var(--text);
-    height: calc(100vh - 120px);
-    min-height: 600px;
+    height: 100%;
     display: flex;
     flex-direction: column;
     -webkit-font-smoothing: antialiased;
     position: relative;
+    z-index: 1;
 }
 
-.sch ::-webkit-scrollbar { width: 8px; height: 8px; }
+/* Custom Scrollbar */
+.sch ::-webkit-scrollbar { width: 6px; height: 6px; }
 .sch ::-webkit-scrollbar-track { background: transparent; }
-.sch ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
-.sch ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+.sch ::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+.sch ::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
 
 /* ═══════════ TOP BAR ═══════════ */
 .top {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 24px;
-    height: 64px;
+    padding: 0 20px;
+    height: 60px;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
+    position: relative;
+    z-index: 100;
 }
 .top-left { display: flex; align-items: center; gap: 16px; }
-.top h1 { font-size: 16px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
-.top-right { display: flex; align-items: center; gap: 12px; }
-
-.badge {
-    padding: 4px 12px;
-    border-radius: 100px;
-    font-size: 13px;
-    font-weight: 600;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
+.top h1 { font-size: 15px; font-weight: 600; margin: 0; color: var(--text); }
+.badge { padding: 5px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
 .badge:empty { display: none; }
 .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.badge.draft { background: var(--warning-light); color: var(--warning); }
-.badge.saved { background: var(--success-light); color: var(--success); }
+.badge.draft { background: #fef3c7; color: #b45309; }
+.badge.saved { background: var(--accent-light); color: var(--accent-dark); }
+.status-name { font-size: 13px; color: var(--text-secondary); font-weight: 500; }
 
-.tool-group {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding-left: 12px;
-    border-left: 1px solid var(--border-light);
-}
-.tool-group:first-child { padding-left: 0; border-left: none; }
-.tpl-group {
-    background: var(--bg);
-    padding: 6px 12px;
-    border-radius: 8px;
-    border: 1px solid var(--border-light);
-}
+.top-right { display: flex; align-items: center; gap: 10px; }
+.tool-group { display: flex; align-items: center; gap: 6px; }
+.tool-group label { display: none; }
 
 /* ═══════════ CONTROLS ═══════════ */
 select, input[type="text"], .top input {
     background: var(--surface);
     border: 1px solid var(--border);
     font-family: inherit;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 500;
-    padding: 10px 14px;
+    padding: 8px 12px;
     border-radius: 8px;
     color: var(--text);
     outline: none;
     transition: all 0.15s;
-    min-width: 140px;
+    min-width: 130px;
 }
-select:hover, input:hover { border-color: var(--border-strong); }
 select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); }
-select {
-    cursor: pointer;
-    padding-right: 32px;
-    background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 12 12' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%23475569' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 10px center;
-    appearance: none;
-}
+select { cursor: pointer; }
 
 .btn {
     padding: 8px 16px;
-    border-radius: 8px;
+    border-radius: 6px;
     font-family: inherit;
     font-weight: 600;
     font-size: 13px;
@@ -833,241 +323,175 @@ select {
     color: var(--text);
     cursor: pointer;
     transition: all 0.15s;
-    display: inline-flex;
+    display: flex;
     align-items: center;
     justify-content: center;
     gap: 6px;
 }
-.btn:hover { background: var(--bg); border-color: var(--border-strong); }
+.btn:hover { background: #f1f5f9; }
 .btn:active { transform: scale(0.98); }
 .btn-primary { background: var(--accent); color: white; border-color: var(--accent); }
-.btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn-primary:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
 .btn-ghost { background: transparent; border-color: transparent; }
-.btn-ghost:hover { background: var(--bg); border-color: var(--border); }
-.btn-danger { background: var(--danger-light); color: var(--danger); border-color: #fecaca; }
-.btn-danger:hover { background: #fee2e2; border-color: #fca5a5; }
-.btn-load { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
-.btn-load:hover { background: #bfdbfe; border-color: #60a5fa; }
-.btn-update { background: #d1fae5; color: #047857; border-color: #6ee7b7; }
-.btn-update:hover { background: #a7f3d0; border-color: #34d399; }
-.btn-clear { background: #fef3c7; color: #b45309; border-color: #fcd34d; }
-.btn-clear:hover { background: #fde68a; border-color: #fbbf24; }
-
-.status-name { 
-    font-size: 14px; 
-    font-weight: 600;
-    padding: 8px 14px;
-    background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%);
-    border-radius: 8px;
-    border: 2px solid var(--accent);
-    color: var(--accent);
-    display: none;
-}
-.status-name:not(:empty) {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
+.btn-ghost:hover { background: #f1f5f9; border-color: var(--border); }
+.btn-danger { background: #fef2f2; color: #dc2626; border-color: #fecaca; }
+.btn-danger:hover { background: #fee2e2; }
 
 /* ═══════════ LAYOUT ═══════════ */
-.body { 
-    display: flex; 
-    flex: 1; 
-    overflow: hidden;
-    min-height: 0;
-}
+.body { display: flex; flex: 1; overflow: hidden; }
 
-/* ═══════════ SIDEBAR (PERSISTENT BLOCKS PANEL) ═══════════ */
-.side {
-    width: 260px;
-    background: var(--surface);
-    border-right: 1px solid var(--border);
-    display: flex;
+/* ═══════════ SIDEBAR ═══════════ */
+.side { 
+    width: 220px; 
+    background: var(--surface); 
+    border-right: 1px solid var(--border); 
+    display: flex; 
     flex-direction: column;
-    flex-shrink: 0;
-    height: 100%;
     overflow: hidden;
 }
-.side-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 18px 18px 16px;
+.side-head { 
+    display: flex; 
+    align-items: center; 
+    justify-content: space-between; 
+    padding: 16px 16px 12px;
     border-bottom: 1px solid var(--border-light);
 }
-.side-head span:first-child {
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--text);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+.side-head span:first-child { 
+    font-size: 11px; 
+    font-weight: 700; 
+    color: var(--text-muted);
+    text-transform: uppercase; 
+    letter-spacing: 0.05em; 
 }
-.side-hint { font-size: 13px; color: var(--text-secondary); }
-
-.blocks {
-    flex: 1;
-    padding: 16px;
-    overflow-y: auto;
+.side-hint { font-size: 10px; color: var(--text-muted); }
+.blocks { 
+    flex: 1; 
+    padding: 12px; 
+    overflow-y: auto; 
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
+    gap: 8px;
     align-content: start;
 }
-
-.block {
+.block { 
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    padding: 16px 10px;
+    gap: 6px;
+    padding: 12px 8px;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: 6px;
     cursor: grab;
-    transition: all 0.2s;
+    transition: all 0.15s;
 }
-.block:hover {
+.block:hover { 
     border-color: var(--accent);
     background: var(--accent-light);
-    box-shadow: var(--shadow-sm);
-    transform: translateY(-1px);
 }
-.block:active { cursor: grabbing; transform: scale(0.97); }
+.block:active { cursor: grabbing; transform: scale(0.96); }
 .block.dragging { opacity: 0.5; }
-
-.block-dot {
-    width: 40px;
-    height: 40px;
-    border-radius: 10px;
+.block-dot { 
+    width: 32px; 
+    height: 32px; 
+    border-radius: 6px;
     border: 2px solid var(--c);
-    background: var(--bg);
+    background: transparent;
     display: flex;
     align-items: center;
     justify-content: center;
     color: var(--c);
     font-weight: 700;
-    font-size: 16px;
-}
-.block span:last-child {
     font-size: 13px;
-    font-weight: 600;
-    color: var(--text);
-    text-align: center;
-    line-height: 1.2;
 }
-
-/* ═══════════ EMPTY STATE ═══════════ */
-.empty {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    padding: 65px;
-    color: var(--text-muted);
+.block span:last-child { 
+    font-size: 10px; 
+    font-weight: 600; 
+    color: var(--text-secondary);
     text-align: center;
 }
-.empty svg { margin-bottom: 22px; opacity: 0.4; width: 65px; height: 65px; }
-.empty p { font-size: 20px; font-weight: 600; color: var(--text-secondary); margin: 0 0 5px; }
-.empty small { font-size: 18px; color: var(--text-muted); }
 
-/* ═══════════ TILE INFO ═══════════ */
+/* ═══════════ TILE INFO POPUP ═══════════ */
 .tile-info {
     position: fixed;
     z-index: 9000;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 22px;
-    width: 350px;
-    box-shadow: var(--shadow-xl);
+    border-radius: 8px;
+    padding: 14px;
+    width: 240px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);
     opacity: 0;
     pointer-events: none;
-    transform: translateX(-11px);
+    transform: translateX(-8px);
     transition: all 0.2s;
 }
 .tile-info.show { opacity: 1; pointer-events: auto; transform: translateX(0); }
-.tile-info-header {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    margin-bottom: 16px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid var(--border-light);
-}
-.tile-info-dot { width: 27px; height: 27px; border-radius: 8px; }
-.tile-info-header strong { font-size: 19px; font-weight: 600; }
-.tile-info p { font-size: 18px; color: var(--text-secondary); line-height: 1.5; margin: 0 0 16px; }
-.tile-info small { font-size: 15px; color: var(--text-muted); }
+.tile-info-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border-light); }
+.tile-info-dot { width: 18px; height: 18px; border-radius: 4px; }
+.tile-info-header strong { font-size: 13px; font-weight: 600; color: var(--text); }
+.tile-info p { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin: 0 0 10px; }
+.tile-info small { font-size: 10px; color: var(--text-muted); }
 
 /* ═══════════ MAIN GRID ═══════════ */
-.main { 
-    flex: 1; 
-    overflow: auto; 
-    padding: 22px; 
-    background: var(--bg);
-    min-height: 0;
-}
-.grid {
-    background: var(--surface);
-    border-radius: 16px;
-    border: 1px solid var(--border);
-    overflow: visible;
+.main { flex: 1; overflow: auto; padding: 16px; }
+.grid { 
+    background: var(--surface); 
+    border-radius: 8px; 
+    border: 1px solid var(--border); 
+    overflow: hidden; 
     min-height: 100%;
-    box-shadow: var(--shadow-sm);
 }
 
-.calendar { 
-    display: grid; 
-    grid-template-columns: 83px repeat(var(--cols), minmax(200px, 1fr));
-    min-width: max-content;
-}
-.cal-corner {
-    background: var(--bg);
-    border-bottom: 1px solid var(--border);
-    border-right: 1px solid var(--border);
-    position: sticky;
-    left: 0;
+.calendar { display: grid; grid-template-columns: 90px repeat(var(--cols), minmax(140px, 1fr)); }
+.cal-corner { 
+    background: var(--bg); 
+    border-bottom: 1px solid var(--border); 
+    border-right: 1px solid var(--border); 
+    position: sticky; 
+    left: 0; 
     top: 0;
-    z-index: 5;
+    z-index: 50;
+    width: 90px;
 }
+
 .cal-head {
     position: sticky;
     top: 0;
-    z-index: 4;
+    z-index: 40;
     background: var(--bg);
     border-bottom: 1px solid var(--border);
     border-right: 1px solid var(--border-light);
-    padding: 16px 12px;
+    padding: 14px 10px;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 9px;
-    font-size: 15px;
+    font-size: 13px;
     font-weight: 600;
+    color: var(--text);
 }
-.cal-head-dot { width: 9px; height: 9px; border-radius: 50%; }
+.cal-head-dot { display: none; }
 
-/* ═══════════ TIME RAIL (FIXED CUTOFF) ═══════════ */
+/* TIME AXIS */
 .cal-times {
     position: sticky;
     left: 0;
-    z-index: 3;
+    z-index: 30;
     background: var(--bg);
     border-right: 1px solid var(--border);
-    width: 83px;
-    padding-top: 12px;
-    box-sizing: border-box;
+    width: 90px;
+    min-width: 90px;
 }
 .cal-time {
     position: absolute;
-    left: 0;
-    right: 9px;
+    left: 8px;
+    right: 8px;
     transform: translateY(-50%);
-    font-size: 12px;
+    font-size: 10px;
     font-weight: 600;
     color: var(--text-muted);
+    white-space: nowrap;
     text-align: right;
 }
 
@@ -1080,465 +504,340 @@ select {
 .cal-col:last-child { border-right: none; }
 .cal-col.over { background: var(--accent-light); }
 
-.cal-line {
-    position: absolute;
-    left: 0;
-    right: 0;
-    border-top: 1px solid var(--border-light);
-    pointer-events: none;
-}
+.cal-line { position: absolute; left: 0; right: 0; border-top: 1px solid var(--border-light); pointer-events: none; }
 
-/* ═══════════ OFF-HOURS ZONES (GREY DIAGONAL STRIPES) ═══════════ */
-.cal-off {
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 0;
-    background: #e2e8f0;
+/* INACTIVE ZONES */
+.cal-off { 
+    position: absolute; 
+    left: 0; 
+    right: 0; 
+    top: 0; 
+    background: #f1f5f9;
     background-image: repeating-linear-gradient(
         -45deg,
         transparent,
-        transparent 8px,
-        #94a3b8 8px,
-        #94a3b8 9px
+        transparent 4px,
+        #e2e8f0 4px,
+        #e2e8f0 5px
     );
     pointer-events: none;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid #cbd5e1;
 }
-.cal-off-b { top: auto; bottom: 0; border-bottom: none; border-top: 1px solid var(--border); }
+.cal-off-b { 
+    top: auto; 
+    bottom: 0; 
+    border-bottom: none;
+    border-top: 1px solid #cbd5e1;
+}
 
 /* ═══════════ EVENTS ═══════════ */
 .ev {
     position: absolute;
-    left: 5px;
-    right: 5px;
-    min-height: 28px;
-    border-radius: 7px;
+    left: 4px;
+    right: 4px;
+    min-height: 22px;
+    border-radius: 4px;
     background: var(--bg);
-    border: 2px solid var(--c);
+    border: 1px solid var(--c);
     cursor: pointer;
     z-index: 10;
     display: flex;
     flex-direction: column;
     transition: all 0.15s;
     overflow: hidden;
+    box-sizing: border-box;
 }
-.ev:hover { z-index: 20; box-shadow: var(--shadow-md); transform: translateY(-1px); }
-.ev.sel { box-shadow: 0 0 0 3px var(--accent), var(--shadow-md); z-index: 30; }
+.ev:hover {
+    z-index: 20;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+.ev.sel {
+    box-shadow: 0 0 0 2px var(--accent), 0 2px 8px rgba(0, 0, 0, 0.1);
+    z-index: 30;
+}
 .ev.moving { opacity: 0.6; }
 .ev.resizing { z-index: 40; }
 
-.ev-body {
+.ev-body { 
     flex: 1;
-    padding: 5px 9px;
+    padding: 3px 6px;
     display: flex;
     flex-direction: column;
     justify-content: center;
+    min-height: 0;
 }
-.ev-name {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text);
-    line-height: 1.3;
+.ev-name { 
+    font-size: 11px; 
+    font-weight: 600; 
+    color: var(--text); 
+    line-height: 1.2; 
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.ev-time {
-    font-size: 11px;
-    font-weight: 500;
+.ev-time { 
+    font-size: 9px; 
+    font-weight: 500; 
     color: var(--text-secondary);
-    margin-top: 2px;
+    margin-top: 1px;
 }
 
-.ev-sm { min-height: 24px; }
-.ev-sm .ev-body { flex-direction: row; align-items: center; gap: 7px; padding: 3px 7px; }
-.ev-sm .ev-name { font-size: 11px; flex-shrink: 1; min-width: 0; }
-.ev-sm .ev-time { font-size: 10px; margin-top: 0; opacity: 0.7; white-space: nowrap; flex-shrink: 0; }
+/* Small events */
+.ev-sm { padding: 1px 4px; min-height: 18px; }
+.ev-sm .ev-body { flex-direction: row; align-items: center; gap: 4px; padding: 0; }
+.ev-sm .ev-name { font-size: 9px; }
 
-.ev-handle {
+/* Tooltip for small events */
+.ev-sm::after {
+    content: attr(data-time);
     position: absolute;
-    left: 0;
-    right: 0;
-    height: 9px;
-    cursor: ns-resize;
-    background: transparent;
-    z-index: 5;
-}
-.ev-handle-t { top: 0; }
-.ev-handle-b { bottom: 0; }
-.ev-handle:hover { background: rgba(79, 70, 229, 0.1); }
-
-/* ═══════════ RESIZE TOOLTIP ═══════════ */
-#resize-tooltip {
-    position: fixed;
-    padding: 10px 14px;
-    background: #111827;
-    color: #fff;
-    border-radius: 8px;
-    font-size: 13px;
-    font-weight: 600;
-    pointer-events: none;
-    z-index: 10002;
-    display: none;
-    box-shadow: 0 8px 24px rgba(15,23,42,0.35);
-    text-align: center;
-    line-height: 1.4;
-}
-#resize-tooltip span {
-    font-size: 11px;
-    opacity: 0.7;
-}
-
-/* ═══════════ DRAG GHOST ═══════════ */
-#drag-ghost {
-    position: fixed;
-    padding: 10px 14px;
-    background: #ffffff;
-    border: 2px solid var(--accent);
-    border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(79, 70, 229, 0.25);
-    pointer-events: none;
-    z-index: 10001;
-    display: none;
-    font-size: 13px;
-    color: #111827;
-    max-width: 200px;
-}
-#drag-ghost span {
-    color: #6b7280;
-    font-size: 12px;
-}
-
-/* ═══════════ DROP PREVIEW ═══════════ */
-.drop-preview {
-    display: none;
-    position: absolute;
-    left: 4px;
-    right: 4px;
-    background: rgba(79, 70, 229, 0.15);
-    border: 2px dashed var(--accent);
-    border-radius: 6px;
-    pointer-events: none;
-    z-index: 5;
-}
-.drop-preview .preview-time {
-    position: absolute;
-    top: 50%;
+    bottom: calc(100% + 4px);
     left: 50%;
-    transform: translate(-50%, -50%);
-    background: var(--accent);
+    transform: translateX(-50%);
+    background: #1e293b;
     color: white;
-    padding: 4px 8px;
+    padding: 5px 8px;
     border-radius: 4px;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 600;
     white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s;
+    z-index: 100;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
+.ev-sm::before {
+    content: '';
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 4px solid transparent;
+    border-top-color: #1e293b;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s;
+    z-index: 100;
+}
+.ev-sm:hover::after,
+.ev-sm:hover::before {
+    opacity: 1;
+}
+
+.ev-handle { position: absolute; left: 0; right: 0; height: 4px; cursor: ns-resize; opacity: 0; transition: opacity 0.15s; z-index: 5; }
+.ev-handle:hover { opacity: 1; background: rgba(0,0,0,0.1); }
+.ev-handle-t { top: 0; border-radius: 4px 4px 0 0; }
+.ev-handle-b { bottom: 0; border-radius: 0 0 4px 4px; }
+
+/* ═══════════ EMPTY ═══════════ */
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 40px; }
+.empty-icon { font-size: 40px; margin-bottom: 12px; opacity: 0.3; }
+.empty p { margin: 0; color: var(--text-muted); font-size: 14px; font-weight: 500; }
 
 /* ═══════════ MODAL ═══════════ */
-.modal-wrap {
-    position: fixed;
-    inset: 0;
-    background: rgba(15, 23, 42, 0.75);
-    backdrop-filter: blur(8px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 10000;
+#modal-wrap { 
+    position: fixed; 
+    inset: 0; 
+    background: rgba(15, 23, 42, 0.6); 
+    backdrop-filter: blur(4px); 
+    -webkit-backdrop-filter: blur(4px); 
+    display: flex; 
+    align-items: center; 
+    justify-content: center; 
+    z-index: 9999; 
+    animation: fadeIn 0.15s; 
 }
-.modal {
-    background: #ffffff;
-    border-radius: 18px;
-    width: 480px;
-    max-width: calc(100vw - 48px);
-    max-height: calc(100vh - 48px);
+@keyframes fadeIn { from { opacity: 0; } }
+.modal { 
+    background: #ffffff; 
+    border-radius: 8px; 
+    width: 380px; 
+    max-width: calc(100vw - 40px); 
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); 
+    animation: slideUp 0.2s ease-out;
     overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0,0,0,0.05);
 }
-.modal-head {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 22px 26px;
-    border-bottom: 1px solid var(--border);
+@keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+.modal-accent { height: 3px; background: var(--c); }
+.modal-head { 
+    display: flex; 
+    align-items: center; 
+    gap: 12px; 
+    padding: 16px 20px;
+    border-bottom: 1px solid #e2e8f0;
     background: #f8fafc;
-    flex-shrink: 0;
 }
-.modal-icon {
-    width: 40px;
-    height: 40px;
-    border-radius: 11px;
-    background: var(--c);
-    color: white;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 17px;
+.modal-icon { 
+    width: 36px; 
+    height: 36px; 
+    border-radius: 6px; 
+    background: var(--c); 
+    color: white; 
+    display: flex; 
+    align-items: center; 
+    justify-content: center; 
+    font-size: 14px; 
     font-weight: 700;
 }
-.modal-head h2 { margin: 0; font-size: 18px; font-weight: 600; flex: 1; }
-.modal-x {
-    width: 36px;
-    height: 36px;
+.modal-head h2 { margin: 0; font-size: 15px; font-weight: 600; color: #1e293b; flex: 1; }
+.modal-x { 
+    width: 28px; 
+    height: 28px; 
     background: transparent;
-    border: none;
-    border-radius: 9px;
-    cursor: pointer;
-    font-size: 22px;
-    color: var(--text-muted);
-    transition: all 0.15s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    border: none; 
+    border-radius: 4px; 
+    cursor: pointer; 
+    font-size: 18px; 
+    color: #94a3b8; 
+    transition: all 0.15s; 
+    display: flex; 
+    align-items: center; 
+    justify-content: center; 
 }
-.modal-x:hover { background: #e2e8f0; color: var(--text-secondary); }
-.modal-body { 
-    padding: 26px; 
-    background: #ffffff; 
-    overflow-y: auto;
-    flex: 1;
-    min-height: 0;
+.modal-x:hover { background: #e2e8f0; color: #475569; }
+.modal-body { padding: 20px; }
+.modal-foot { 
+    display: flex; 
+    gap: 8px; 
+    padding: 16px 20px; 
+    background: #f8fafc; 
+    border-top: 1px solid #e2e8f0; 
 }
-.modal-foot {
-    display: flex;
-    flex-direction: row;
-    gap: 16px;
-    padding: 20px 26px;
-    background: #f8fafc;
-    border-top: 1px solid var(--border);
-    flex-shrink: 0;
-}
-.modal-foot .btn { 
-    flex: 1; 
-    padding: 16px 24px; 
-    font-size: 16px; 
-    font-weight: 600;
-    min-width: 120px;
-    text-align: center;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-.modal-foot .btn-ghost {
-    background: #ffffff;
-    border: 2px solid var(--border);
-    color: var(--text);
-}
-.modal-foot .btn-ghost:hover {
-    background: var(--bg);
-    border-color: var(--border-strong);
-}
-.modal-foot .btn-primary {
-    background: #4f46e5;
-    border: 2px solid #4f46e5;
-    color: #ffffff !important;
-}
-.modal-foot .btn-primary:hover {
-    background: #4338ca;
-    border-color: #4338ca;
-}
+.modal-foot .btn { flex: 1; padding: 10px 16px; font-size: 13px; }
 
 /* ═══════════ FORM ═══════════ */
-.mf { margin-bottom: 22px; }
+.mf { margin-bottom: 16px; }
 .mf:last-child { margin-bottom: 0; }
-.mf label {
-    display: block;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-secondary);
-    margin-bottom: 9px;
+.mf label { 
+    display: block; 
+    font-size: 11px; 
+    font-weight: 600; 
+    color: #64748b; 
+    margin-bottom: 6px; 
+    text-transform: uppercase; 
+    letter-spacing: 0.04em; 
 }
-.mf input:not([type="checkbox"]), .mf select {
-    width: 100%;
-    height: 48px;
-    font-size: 15px;
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 9px;
-    padding: 0 15px;
-    color: var(--text);
+.mf input:not([type="checkbox"]), .mf select { 
+    width: 100%; 
+    height: 38px; 
+    font-size: 13px; 
+    background: #ffffff; 
+    border: 1px solid #d1d5db;
+    border-radius: 6px; 
+    padding: 0 12px;
+    color: #1e293b;
     font-family: inherit;
 }
-.mf input:focus, .mf select:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-light);
-    outline: none;
+.mf input:focus, .mf select:focus { 
+    border-color: var(--accent); 
+    box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.15); 
+    outline: none; 
 }
-.mf-row { display: flex; gap: 18px; }
+.mf-row { display: flex; gap: 12px; }
 .mf-row .mf { flex: 1; }
 
-.time-box {
-    display: flex;
-    align-items: center;
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 9px;
-    overflow: hidden;
+.time-row { display: flex; align-items: center; gap: 8px; }
+.time-box { 
+    display: flex; 
+    align-items: center; 
+    background: #ffffff; 
+    border: 1px solid #d1d5db; 
+    border-radius: 6px; 
+    overflow: hidden; 
 }
-.time-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); }
-.time-box input {
-    flex: 1;
-    height: 48px !important;
-    border: none !important;
-    background: #ffffff !important;
-    text-align: center;
-    font-weight: 600;
-    font-size: 15px !important;
-    padding: 0 8px !important;
-    cursor: text;
-    color: var(--text);
+.time-box:focus-within { 
+    border-color: var(--accent); 
+    box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.15); 
 }
-.time-box button {
-    width: 46px;
-    height: 48px;
-    border: none;
-    background: var(--bg);
-    cursor: pointer;
-    font-size: 20px;
-    color: var(--text-muted);
-    transition: all 0.15s;
+.time-box input { 
+    width: 72px !important; 
+    height: 38px !important; 
+    border: none !important; 
+    background: none !important; 
+    text-align: center; 
+    font-weight: 600; 
+    font-size: 13px !important; 
+    padding: 0 !important; 
+    color: #1e293b; 
 }
-.time-box button:hover { background: var(--border-light); color: var(--text); }
-.time-box button:first-child { border-right: 1px solid var(--border-light); }
-.time-box button:last-child { border-left: 1px solid var(--border-light); }
+.time-box button { 
+    width: 30px; 
+    height: 38px; 
+    border: none; 
+    background: #f8fafc; 
+    cursor: pointer; 
+    font-size: 14px; 
+    color: #64748b; 
+    transition: all 0.1s; 
+}
+.time-box button:hover { background: #e2e8f0; color: #1e293b; }
+.time-box button:first-child { border-right: 1px solid #e2e8f0; }
+.time-box button:last-child { border-left: 1px solid #e2e8f0; }
+.time-row > span { color: #94a3b8; font-size: 12px; font-weight: 500; }
 
-.dur-row { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 14px; }
-.dur-row button {
-    padding: 10px 16px;
-    font: inherit;
-    font-size: 13px;
-    font-weight: 600;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    cursor: pointer;
-    color: var(--text-secondary);
-    transition: all 0.15s;
+.dur-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.dur-row button { 
+    padding: 6px 10px; 
+    font: inherit; 
+    font-size: 11px; 
+    font-weight: 600; 
+    background: #f1f5f9; 
+    border: 1px solid #e2e8f0; 
+    border-radius: 4px; 
+    cursor: pointer; 
+    color: #475569; 
+    transition: all 0.1s; 
 }
-.dur-row button:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+.dur-row button:hover { 
+    border-color: var(--accent); 
+    color: var(--accent); 
+    background: #f0fdfa; 
+}
 
-.checks {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 7px;
-    max-height: 185px;
-    overflow-y: auto;
-    padding: 14px;
-    background: #f8fafc;
-    border-radius: 9px;
-    border: 1px solid var(--border);
+.checks { 
+    display: grid; 
+    grid-template-columns: repeat(2, 1fr); 
+    gap: 4px; 
+    max-height: 120px; 
+    overflow-y: auto; 
+    padding: 8px; 
+    background: #f8fafc; 
+    border-radius: 6px; 
+    border: 1px solid #e2e8f0; 
 }
-.checks label {
-    display: flex;
-    align-items: center;
-    gap: 11px;
-    padding: 12px 14px;
-    background: #ffffff;
-    border-radius: 7px;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    transition: all 0.15s;
-    border: 1px solid transparent;
+.checks label { 
+    display: flex; 
+    align-items: center; 
+    gap: 8px; 
+    padding: 8px; 
+    background: #ffffff; 
+    border-radius: 4px; 
+    cursor: pointer; 
+    font-size: 12px; 
+    font-weight: 500; 
+    color: #475569;
+    transition: all 0.1s; 
 }
-.checks label:hover { background: var(--accent-light); border-color: var(--accent-light); }
-.checks input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
-
-/* ═══════════ LOCATION BUTTONS (Multi-select) ═══════════ */
-.loc-buttons {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 9px;
-    padding: 14px;
-    background: #f8fafc;
-    border-radius: 9px;
-    border: 1px solid var(--border);
-    max-height: 200px;
-    overflow-y: auto;
-}
-.loc-btn {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 3px;
-    padding: 12px 16px;
-    background: #ffffff !important;
-    border: 2px solid var(--border) !important;
-    border-radius: 9px;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text);
-    transition: all 0.15s;
-    min-width: 92px;
-    position: relative;
-    outline: none !important;
-}
-.loc-btn:focus {
-    outline: none !important;
-}
-.loc-btn:hover:not(.active) {
-    border-color: var(--accent) !important;
-    background: var(--accent-light) !important;
-}
-.loc-btn.active {
-    border: 3px solid #16a34a !important;
-    background: #dcfce7 !important;
-    color: #15803d !important;
-    box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.25) !important;
-}
-.loc-btn.active::after {
-    content: '✓';
-    position: absolute;
-    top: -8px;
-    right: -8px;
-    width: 20px;
-    height: 20px;
-    background: #16a34a;
-    color: white;
-    border-radius: 50%;
-    font-size: 12px;
-    font-weight: bold;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-.loc-btn.active:hover {
-    background: #bbf7d0 !important;
-    border-color: #15803d !important;
-}
-.loc-btn.active .loc-type {
-    color: #16a34a;
-}
-.loc-type {
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-}
+.checks label:hover { background: #f0fdfa; }
+.checks input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
 
 /* ═══════════ NOTIFY ═══════════ */
-#notify {
-    position: fixed;
-    bottom: 28px;
-    left: 50%;
-    transform: translateX(-50%) translateY(8px);
-    background: var(--text);
-    color: white;
-    padding: 14px 28px;
-    border-radius: 12px;
-    font-size: 14px;
-    font-weight: 600;
-    opacity: 0;
-    box-shadow: var(--shadow-xl);
-    transition: all 0.25s;
-    z-index: 9999;
-    pointer-events: none;
+#notify { 
+    position: fixed; 
+    bottom: 24px; 
+    left: 50%; 
+    transform: translateX(-50%) translateY(10px); 
+    background: var(--text); 
+    color: white; 
+    padding: 12px 24px; 
+    border-radius: 10px; 
+    font-size: 13px; 
+    font-weight: 600; 
+    opacity: 0; 
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15); 
+    transition: all 0.2s; 
+    z-index: 1001; 
 }
 #notify.on { opacity: 1; transform: translateX(-50%) translateY(0); }
 
@@ -1546,56 +845,21 @@ select {
 @media (max-width: 1100px) {
     .top { flex-wrap: wrap; height: auto; padding: 12px 16px; gap: 10px; }
     .top-right { flex-wrap: wrap; gap: 8px; }
-    .tool-group { padding-left: 0; border-left: none; }
-    .side { width: 220px; }
-    .blocks { grid-template-columns: 1fr; }
-}
-@media (max-width: 768px) {
+    .tool-group { flex-wrap: wrap; }
     .side { width: 180px; }
-    .block { padding: 12px 8px; }
-    .block-dot { width: 36px; height: 36px; font-size: 14px; }
+    .blocks { grid-template-columns: 1fr; }
 }
 </style>`;
 
 // Init
 const init = () => {
-    container = document.getElementById('master-scheduler-content');
-    if (!container) return;
-    
-    // Hide the main page title when Schedule Builder is shown
-    const pageTitle = document.querySelector('.app-page-title');
-    if (pageTitle) pageTitle.style.display = 'none';
-    
-    if (!load()) {
-        try {
-            const a = window.getSkeletonAssignments?.() || {};
-            const s = window.getSavedSkeletons?.() || {};
-            const dt = window.currentScheduleDate || '';
-            const [y, m, d] = dt.split('-').map(Number);
-            const dow = y && m && d ? new Date(y, m - 1, d).getDay() : 0;
-            const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-            const t = a[days[dow]] || a['Default'];
-            skeleton = t && s[t] ? JSON.parse(JSON.stringify(s[t])) : [];
-        } catch(e) {
-            skeleton = [];
-        }
-    }
-    
-    render();
-    keys();
-    vis();
+    container = document.getElementById('master-scheduler-content'); if (!container) return;
+    if (!load()) { try { const a = window.getSkeletonAssignments?.() || {}, s = window.getSavedSkeletons?.() || {}, dt = window.currentScheduleDate || '', [y, m, d] = dt.split('-').map(Number), dow = y && m && d ? new Date(y, m - 1, d).getDay() : 0, days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'], t = a[days[dow]] || a['Default']; skeleton = t && s[t] ? JSON.parse(JSON.stringify(s[t])) : []; } catch(e) { skeleton = []; } }
+    render(); keys(); vis();
 };
 
 window.initMasterScheduler = init;
-window.cleanupMasterScheduler = () => {
-    if (_keyHandler) document.removeEventListener('keydown', _keyHandler);
-    if (_visHandler) document.removeEventListener('visibilitychange', _visHandler);
-    document.getElementById('modal-wrap')?.remove();
-    document.getElementById('notify')?.remove();
-    // Restore page title when leaving
-    const pageTitle = document.querySelector('.app-page-title');
-    if (pageTitle) pageTitle.style.display = '';
-};
+window.cleanupMasterScheduler = () => { if (_keyHandler) document.removeEventListener('keydown', _keyHandler); if (_visHandler) document.removeEventListener('visibilitychange', _visHandler); document.getElementById('modal-wrap')?.remove(); document.getElementById('notify')?.remove(); };
 window.refreshMasterSchedulerFromCloud = fills;
 
 })();
