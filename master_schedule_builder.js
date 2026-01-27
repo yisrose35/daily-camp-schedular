@@ -57,6 +57,40 @@ const saveT = (n, u) => { if (!n) return; window.saveSkeleton?.(n, skeleton); wi
 const delT = n => { if (!n) return; window.deleteSkeleton?.(n); window.forceSyncToCloud?.(); if (template === n) { template = null; skeleton = []; clear(); draw(); } fills(); sync(); notify('Deleted'); };
 const fills = () => { const all = window.getSavedSkeletons?.() || {}, opts = Object.keys(all).sort().map(n => `<option value="${h(n)}">${h(n)}</option>`).join(''); const s1 = document.getElementById('tpl-sel'), s2 = document.getElementById('del-sel'); if (s1) s1.innerHTML = '<option value="">Load template...</option>' + opts; if (s2) s2.innerHTML = '<option value="">Delete...</option>' + opts; };
 
+// Bump overlapping tiles - push tiles that overlap down
+const bumpOverlappingTiles = (movedEvent) => {
+    const movedStart = toM(movedEvent.startTime);
+    const movedEnd = toM(movedEvent.endTime);
+    const movedDiv = movedEvent.division;
+    
+    // Find overlapping tiles in the same division
+    const overlapping = skeleton.filter(ev => 
+        ev.id !== movedEvent.id && 
+        ev.division === movedDiv &&
+        toM(ev.startTime) < movedEnd && 
+        toM(ev.endTime) > movedStart
+    );
+    
+    if (overlapping.length === 0) return;
+    
+    // Sort by start time
+    overlapping.sort((a, b) => toM(a.startTime) - toM(b.startTime));
+    
+    // Push each overlapping tile down
+    let pushTo = movedEnd;
+    overlapping.forEach(ev => {
+        const evStart = toM(ev.startTime);
+        const evEnd = toM(ev.endTime);
+        const dur = evEnd - evStart;
+        
+        if (evStart < pushTo) {
+            ev.startTime = toS(pushTo);
+            ev.endTime = toS(pushTo + dur);
+            pushTo = pushTo + dur;
+        }
+    });
+};
+
 // Notify
 const notify = msg => { let t = document.getElementById('notify'); if (!t) { t = document.createElement('div'); t.id = 'notify'; document.body.appendChild(t); } t.textContent = msg; t.classList.add('on'); setTimeout(() => t.classList.remove('on'), 2000); };
 
@@ -308,13 +342,59 @@ const bindUI = () => {
 
 const bindGrid = () => {
     const { lo } = bounds();
+    
+    // Ensure drop preview elements exist in each column
     document.querySelectorAll('.cal-col').forEach(col => {
+        if (!col.querySelector('.drop-preview')) {
+            const preview = document.createElement('div');
+            preview.className = 'drop-preview';
+            preview.innerHTML = '<div class="preview-time"></div>';
+            col.appendChild(preview);
+        }
+    });
+    
+    // Store drag data for move operations
+    let moveDragData = null;
+    
+    document.querySelectorAll('.cal-col').forEach(col => {
+        const preview = col.querySelector('.drop-preview');
+        
         col.addEventListener('mouseenter', () => hoveredCol = col);
         col.addEventListener('mouseleave', () => { if (hoveredCol === col) hoveredCol = null; });
-        col.addEventListener('dragover', e => { e.preventDefault(); col.classList.add('over'); });
-        col.addEventListener('dragleave', e => { if (!col.contains(e.relatedTarget)) col.classList.remove('over'); });
+        
+        col.addEventListener('dragover', e => { 
+            e.preventDefault(); 
+            col.classList.add('over');
+            
+            // Show drop preview for move operations
+            const mv = e.dataTransfer.types.includes('move') || moveDragData;
+            if (mv && preview && moveDragData) {
+                const rect = col.getBoundingClientRect();
+                const y = e.clientY - rect.top;
+                const snapM = Math.round(y / PX / SNAP) * SNAP;
+                const startM = lo + snapM;
+                const endM = startM + moveDragData.duration;
+                
+                preview.style.display = 'block';
+                preview.style.top = (snapM * PX) + 'px';
+                preview.style.height = (moveDragData.duration * PX) + 'px';
+                preview.querySelector('.preview-time').textContent = `${toS(startM)} – ${toS(endM)}`;
+            }
+        });
+        
+        col.addEventListener('dragleave', e => { 
+            if (!col.contains(e.relatedTarget)) {
+                col.classList.remove('over');
+                if (preview) preview.style.display = 'none';
+            }
+        });
+        
         col.addEventListener('drop', e => {
-            e.preventDefault(); col.classList.remove('over');
+            e.preventDefault(); 
+            col.classList.remove('over');
+            if (preview) preview.style.display = 'none';
+            moveDragData = null;
+            
             const mv = e.dataTransfer.getData('move');
             if (mv) {
                 const ev = skeleton.find(x => x.id === mv);
@@ -326,6 +406,10 @@ const bindGrid = () => {
                     ev.division = col.dataset.d;
                     ev.startTime = toS(m);
                     ev.endTime = toS(m + dur);
+                    
+                    // Bump overlapping tiles
+                    bumpOverlappingTiles(ev);
+                    
                     save(); draw();
                 }
             } else {
@@ -342,6 +426,7 @@ const bindGrid = () => {
     
     document.querySelectorAll('.ev').forEach(tile => {
         const ev = skeleton.find(x => x.id === tile.dataset.id);
+        
         tile.addEventListener('click', e => {
             if (!e.target.classList.contains('ev-handle')) {
                 document.querySelectorAll('.ev.sel').forEach(t => t.classList.remove('sel'));
@@ -350,28 +435,97 @@ const bindGrid = () => {
         });
         tile.addEventListener('dblclick', () => { if (ev) modal(ev.type, ev.division, null, ev); });
         tile.addEventListener('contextmenu', e => { e.preventDefault(); if (ev && confirm('Delete this block?')) { skeleton = skeleton.filter(x => x.id !== ev.id); save(); draw(); } });
-        tile.addEventListener('dragstart', e => { if (e.target.classList.contains('ev-handle')) { e.preventDefault(); return; } e.dataTransfer.setData('move', ev?.id || ''); tile.classList.add('moving'); });
-        tile.addEventListener('dragend', () => tile.classList.remove('moving'));
         
-        // Resize handles
+        // Drag with ghost preview and moveDragData
+        tile.addEventListener('dragstart', e => { 
+            if (e.target.classList.contains('ev-handle')) { e.preventDefault(); return; } 
+            e.dataTransfer.setData('move', ev?.id || ''); 
+            tile.classList.add('moving');
+            
+            // Store drag data for drop preview
+            if (ev) {
+                const dur = toM(ev.endTime) - toM(ev.startTime);
+                moveDragData = { id: ev.id, duration: dur };
+            }
+            
+            // Show drag ghost
+            let ghost = document.getElementById('drag-ghost');
+            if (!ghost) {
+                ghost = document.createElement('div');
+                ghost.id = 'drag-ghost';
+                document.body.appendChild(ghost);
+            }
+            if (ev) {
+                ghost.innerHTML = `<strong>${h(ev.event || BLOCKS[ev.type]?.name || 'Event')}</strong><br><span>${ev.startTime} – ${ev.endTime}</span>`;
+            }
+            ghost.style.display = 'block';
+            
+            // Use transparent drag image
+            const img = new Image();
+            img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+            e.dataTransfer.setDragImage(img, 0, 0);
+        });
+        
+        tile.addEventListener('drag', e => {
+            if (e.clientX === 0 && e.clientY === 0) return;
+            const ghost = document.getElementById('drag-ghost');
+            if (ghost) {
+                ghost.style.left = (e.clientX + 12) + 'px';
+                ghost.style.top = (e.clientY + 12) + 'px';
+            }
+        });
+        
+        tile.addEventListener('dragend', () => { 
+            tile.classList.remove('moving');
+            const ghost = document.getElementById('drag-ghost');
+            if (ghost) ghost.style.display = 'none';
+            // Clear all drop previews
+            document.querySelectorAll('.drop-preview').forEach(p => { p.style.display = 'none'; });
+            document.querySelectorAll('.cal-col').forEach(c => c.classList.remove('over'));
+        });
+        
+        // Resize handles with live tooltip
         tile.querySelectorAll('.ev-handle').forEach(hndl => {
             const isTop = hndl.classList.contains('ev-handle-t');
             let y0, t0, h0;
+            
+            // Create/get tooltip
+            let tooltip = document.getElementById('resize-tooltip');
+            if (!tooltip) {
+                tooltip = document.createElement('div');
+                tooltip.id = 'resize-tooltip';
+                document.body.appendChild(tooltip);
+            }
+            
             const move = e => {
                 const d = e.clientY - y0;
                 if (isTop) {
                     const nt = Math.round((t0 + d) / (SNAP * PX)) * (SNAP * PX);
                     const nh = h0 - (nt - t0);
-                    if (nh >= 24) { tile.style.top = nt + 'px'; tile.style.height = nh + 'px'; }
+                    if (nh >= 24) { 
+                        tile.style.top = nt + 'px'; 
+                        tile.style.height = nh + 'px';
+                        // Update tooltip
+                        const newStart = toS(lo + nt / PX);
+                        const newEnd = toS(lo + (nt + nh) / PX);
+                        tooltip.innerHTML = `${newStart}<br><span>to</span><br>${newEnd}`;
+                    }
                 } else {
                     const nh = Math.max(24, Math.round((h0 + d) / (SNAP * PX)) * (SNAP * PX));
                     tile.style.height = nh + 'px';
+                    // Update tooltip
+                    const newStart = toS(lo + parseFloat(tile.style.top) / PX);
+                    const newEnd = toS(lo + (parseFloat(tile.style.top) + nh) / PX);
+                    tooltip.innerHTML = `${newStart}<br><span>to</span><br>${newEnd}`;
                 }
+                tooltip.style.left = (e.clientX + 15) + 'px';
+                tooltip.style.top = (e.clientY - 30) + 'px';
             };
             const up = () => {
                 document.removeEventListener('mousemove', move);
                 document.removeEventListener('mouseup', up);
                 tile.classList.remove('resizing');
+                tooltip.style.display = 'none';
                 if (ev) {
                     const nt = parseFloat(tile.style.top);
                     const nh = parseFloat(tile.style.height);
@@ -386,8 +540,61 @@ const bindGrid = () => {
                 t0 = parseFloat(tile.style.top);
                 h0 = parseFloat(tile.style.height);
                 tile.classList.add('resizing');
+                tooltip.style.display = 'block';
+                tooltip.innerHTML = `${toS(lo + t0 / PX)}<br><span>to</span><br>${toS(lo + (t0 + h0) / PX)}`;
+                tooltip.style.left = (e.clientX + 15) + 'px';
+                tooltip.style.top = (e.clientY - 30) + 'px';
                 document.addEventListener('mousemove', move);
                 document.addEventListener('mouseup', up);
+            });
+            
+            // Touch support for resize
+            hndl.addEventListener('touchstart', e => {
+                e.preventDefault(); e.stopPropagation();
+                const touch = e.touches[0];
+                y0 = touch.clientY;
+                t0 = parseFloat(tile.style.top);
+                h0 = parseFloat(tile.style.height);
+                tile.classList.add('resizing');
+                tooltip.style.display = 'block';
+                tooltip.innerHTML = `${toS(lo + t0 / PX)}<br><span>to</span><br>${toS(lo + (t0 + h0) / PX)}`;
+            }, { passive: false });
+            
+            hndl.addEventListener('touchmove', e => {
+                e.preventDefault();
+                const touch = e.touches[0];
+                const d = touch.clientY - y0;
+                if (isTop) {
+                    const nt = Math.round((t0 + d) / (SNAP * PX)) * (SNAP * PX);
+                    const nh = h0 - (nt - t0);
+                    if (nh >= 24) { 
+                        tile.style.top = nt + 'px'; 
+                        tile.style.height = nh + 'px';
+                        const newStart = toS(lo + nt / PX);
+                        const newEnd = toS(lo + (nt + nh) / PX);
+                        tooltip.innerHTML = `${newStart}<br><span>to</span><br>${newEnd}`;
+                    }
+                } else {
+                    const nh = Math.max(24, Math.round((h0 + d) / (SNAP * PX)) * (SNAP * PX));
+                    tile.style.height = nh + 'px';
+                    const newStart = toS(lo + parseFloat(tile.style.top) / PX);
+                    const newEnd = toS(lo + (parseFloat(tile.style.top) + nh) / PX);
+                    tooltip.innerHTML = `${newStart}<br><span>to</span><br>${newEnd}`;
+                }
+                tooltip.style.left = (touch.clientX + 15) + 'px';
+                tooltip.style.top = (touch.clientY - 30) + 'px';
+            }, { passive: false });
+            
+            hndl.addEventListener('touchend', () => {
+                tile.classList.remove('resizing');
+                tooltip.style.display = 'none';
+                if (ev) {
+                    const nt = parseFloat(tile.style.top);
+                    const nh = parseFloat(tile.style.height);
+                    ev.startTime = toS(lo + nt / PX);
+                    ev.endTime = toS(lo + (nt + nh) / PX);
+                    save(); draw();
+                }
             });
         });
     });
@@ -907,6 +1114,73 @@ select {
 .ev-handle-t { top: 0; }
 .ev-handle-b { bottom: 0; }
 .ev-handle:hover { background: rgba(79, 70, 229, 0.1); }
+
+/* ═══════════ RESIZE TOOLTIP ═══════════ */
+#resize-tooltip {
+    position: fixed;
+    padding: 10px 14px;
+    background: #111827;
+    color: #fff;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    pointer-events: none;
+    z-index: 10002;
+    display: none;
+    box-shadow: 0 8px 24px rgba(15,23,42,0.35);
+    text-align: center;
+    line-height: 1.4;
+}
+#resize-tooltip span {
+    font-size: 11px;
+    opacity: 0.7;
+}
+
+/* ═══════════ DRAG GHOST ═══════════ */
+#drag-ghost {
+    position: fixed;
+    padding: 10px 14px;
+    background: #ffffff;
+    border: 2px solid var(--accent);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(79, 70, 229, 0.25);
+    pointer-events: none;
+    z-index: 10001;
+    display: none;
+    font-size: 13px;
+    color: #111827;
+    max-width: 200px;
+}
+#drag-ghost span {
+    color: #6b7280;
+    font-size: 12px;
+}
+
+/* ═══════════ DROP PREVIEW ═══════════ */
+.drop-preview {
+    display: none;
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    background: rgba(79, 70, 229, 0.15);
+    border: 2px dashed var(--accent);
+    border-radius: 6px;
+    pointer-events: none;
+    z-index: 5;
+}
+.drop-preview .preview-time {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--accent);
+    color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
 
 /* ═══════════ MODAL ═══════════ */
 .modal-wrap {
