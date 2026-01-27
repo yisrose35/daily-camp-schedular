@@ -1,6 +1,13 @@
 // ============================================================================
-// specialty_leagues.js — PRODUCTION-READY v2.2.5 (EMERALD CAMP THEME)
+// specialty_leagues.js — PRODUCTION-READY v2.2.6 (EMERALD CAMP THEME)
 // ============================================================================
+// v2.2.6 LIVE STANDINGS & SCORE PERSISTENCE:
+// - ★ LIVE MINI-STANDINGS: Shows standings above games, updates instantly
+// - ★ EXTENDED PROTECTION: 5-second window prevents tab-switch data loss
+// - ★ IMMEDIATE SAVE: Scores save on blur AND every 100ms while typing
+// - ★ NO RE-RENDER FLASH: Standings update without full page refresh
+// - ★ STANDINGS REFRESH: Standings tab refreshes with latest data when opened
+//
 // v2.2.5 ADVANCED STANDINGS & TIEBREAKERS:
 // - ★ AUTO-SORT: Standings automatically re-sort after manual W/L/T changes
 // - ★ TIEBREAKER 1: Head-to-head record between tied teams
@@ -65,7 +72,7 @@
 (function() {
     'use strict';
 
-    console.log("[SPECIALTY_LEAGUES] Module v2.2.5 loading...");
+    console.log("[SPECIALTY_LEAGUES] Module v2.2.6 loading...");
 
     // =============================================================
     // STATE & GLOBALS
@@ -158,9 +165,10 @@
         // Visibility change handler
         _visibilityHandler = () => {
             if (document.visibilityState === 'visible' && _isInitialized) {
-                // ★ FIX v2.1: Check save in progress before refresh
-                if (_saveInProgress) {
-                    console.log("[SPECIALTY_LEAGUES] Save in progress, skipping refresh");
+                // ★ FIX v2.2.6: Extend protection window to 5 seconds to prevent overwriting scores
+                const timeSinceSave = Date.now() - _lastSaveTime;
+                if (_saveInProgress || timeSinceSave < 5000) {
+                    console.log("[SPECIALTY_LEAGUES] Recent save detected (" + Math.round(timeSinceSave/1000) + "s ago), skipping refresh");
                     return;
                 }
                 // Debounce refresh
@@ -168,9 +176,9 @@
                     clearTimeout(_refreshTimeout);
                 }
                 _refreshTimeout = setTimeout(() => {
-                    console.log("[SPECIALTY_LEAGUES] Tab visible - refreshing data...");
+                    console.log("[SPECIALTY_LEAGUES] Tab visible - checking for cloud updates...");
                     refreshFromStorage();
-                }, 300);
+                }, 500); // Increased delay
             }
         };
         document.addEventListener('visibilitychange', _visibilityHandler);
@@ -179,19 +187,19 @@
         // Focus handler
         _focusHandler = () => {
             if (_isInitialized) {
-                // ★ FIX v2.1: Check save in progress and protection window
+                // ★ FIX v2.2.6: Extend protection window to 5 seconds
                 const timeSinceSave = Date.now() - _lastSaveTime;
-                if (_saveInProgress || timeSinceSave < 2000) {
-                    console.log("[SPECIALTY_LEAGUES] In protection window, skipping focus refresh");
+                if (_saveInProgress || timeSinceSave < 5000) {
+                    console.log("[SPECIALTY_LEAGUES] Recent save (" + Math.round(timeSinceSave/1000) + "s ago), skipping focus refresh");
                     return;
                 }
                 if (_refreshTimeout) {
                     clearTimeout(_refreshTimeout);
                 }
                 _refreshTimeout = setTimeout(() => {
-                    console.log("[SPECIALTY_LEAGUES] Window focused - refreshing data...");
+                    console.log("[SPECIALTY_LEAGUES] Window focused - checking for updates...");
                     refreshFromStorage();
-                }, 300);
+                }, 500); // Increased delay
             }
         };
         window.addEventListener('focus', _focusHandler);
@@ -518,10 +526,10 @@
      * ★ FIX v2.2.1: More defensive - won't wipe data if source returns empty
      */
     function refreshFromStorage() {
-        // ★ FIX v2.1: Check protection window
+        // ★ FIX v2.2.6: Extended protection window to 5 seconds
         const timeSinceSave = Date.now() - _lastSaveTime;
-        if (_saveInProgress || timeSinceSave < 2000) {
-            console.log("[SPECIALTY_LEAGUES] In protection window, skipping refresh");
+        if (_saveInProgress || timeSinceSave < 5000) {
+            console.log("[SPECIALTY_LEAGUES] In protection window (" + Math.round(timeSinceSave/1000) + "s since save), skipping refresh");
             return;
         }
 
@@ -1137,6 +1145,8 @@
                 btnGames.classList.remove('active');
                 standingsDiv.style.display = 'block';
                 gamesDiv.style.display = 'none';
+                // ★ v2.2.6: Always refresh standings when switching to this tab
+                renderStandingsTable(league, standingsDiv);
             };
             btnGames.onclick = () => {
                 btnGames.classList.add('active');
@@ -1540,6 +1550,13 @@
         header.appendChild(importBtn);
         container.appendChild(header);
 
+        // ★ v2.2.6: LIVE MINI-STANDINGS (updates in real-time as you enter scores)
+        const miniStandingsContainer = document.createElement('div');
+        miniStandingsContainer.id = 'sl-live-standings';
+        miniStandingsContainer.style.cssText = 'margin-bottom:20px;';
+        renderMiniStandings(league, miniStandingsContainer);
+        container.appendChild(miniStandingsContainer);
+
         // Get and group games by date
         const games = league.games || [];
         const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
@@ -1648,6 +1665,101 @@
             renderGameEntryUI(league, container);
         };
         container.appendChild(addNewBtn);
+    }
+    
+    /**
+     * ★ v2.2.6: Render compact mini-standings that update in real-time
+     */
+    function renderMiniStandings(league, container) {
+        if (!container) return;
+        container.innerHTML = '';
+        
+        if (!league.teams || league.teams.length === 0) return;
+        
+        // Collapsible header
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex; justify-content:space-between; align-items:center; cursor:pointer; padding:8px 12px; background:#F0FDF4; border:1px solid #BBF7D0; border-radius:8px 8px 0 0;';
+        
+        const titleArea = document.createElement('div');
+        titleArea.style.cssText = 'display:flex; align-items:center; gap:8px;';
+        titleArea.innerHTML = '<span style="font-size:0.65rem;">▼</span> <span style="font-size:0.8rem; font-weight:600; color:#166534;">Live Standings</span>';
+        header.appendChild(titleArea);
+        
+        const toggleText = document.createElement('span');
+        toggleText.style.cssText = 'font-size:0.7rem; color:#6B7280;';
+        toggleText.textContent = 'Updates as you enter scores';
+        header.appendChild(toggleText);
+        
+        container.appendChild(header);
+        
+        // Content area
+        const content = document.createElement('div');
+        content.id = 'sl-mini-standings-content';
+        content.style.cssText = 'background:#FAFAFA; border:1px solid #E5E7EB; border-top:none; border-radius:0 0 8px 8px; padding:8px;';
+        
+        // Sort teams with tiebreakers
+        const sorted = sortTeamsWithTiebreakers(league);
+        
+        // Compact table
+        const table = document.createElement('table');
+        table.style.cssText = 'width:100%; border-collapse:collapse; font-size:0.8rem;';
+        
+        sorted.forEach((teamData, idx) => {
+            const team = teamData.team;
+            const stats = league.standings[team] || { w: 0, l: 0, t: 0 };
+            const diff = teamData.pointDiff || 0;
+            
+            const row = document.createElement('tr');
+            row.style.cssText = idx % 2 === 0 ? 'background:#fff;' : '';
+            
+            // Place
+            const tdPlace = document.createElement('td');
+            tdPlace.style.cssText = 'padding:6px 8px; font-weight:600; color:#111827; width:30px;';
+            tdPlace.textContent = `${idx + 1}.`;
+            row.appendChild(tdPlace);
+            
+            // Team
+            const tdTeam = document.createElement('td');
+            tdTeam.style.cssText = 'padding:6px 8px; font-weight:500;';
+            tdTeam.textContent = team;
+            row.appendChild(tdTeam);
+            
+            // Record
+            const tdRecord = document.createElement('td');
+            tdRecord.style.cssText = 'padding:6px 8px; text-align:right; color:#6B7280; width:60px;';
+            tdRecord.textContent = `${stats.w}-${stats.l}${stats.t > 0 ? '-' + stats.t : ''}`;
+            row.appendChild(tdRecord);
+            
+            // +/-
+            const tdDiff = document.createElement('td');
+            const diffColor = diff > 0 ? '#059669' : diff < 0 ? '#DC2626' : '#6B7280';
+            tdDiff.style.cssText = `padding:6px 8px; text-align:right; color:${diffColor}; font-weight:500; width:40px;`;
+            tdDiff.textContent = diff > 0 ? `+${diff}` : `${diff}`;
+            row.appendChild(tdDiff);
+            
+            table.appendChild(row);
+        });
+        
+        content.appendChild(table);
+        container.appendChild(content);
+        
+        // Toggle collapse
+        let isExpanded = true;
+        header.onclick = () => {
+            isExpanded = !isExpanded;
+            content.style.display = isExpanded ? 'block' : 'none';
+            titleArea.innerHTML = `<span style="font-size:0.65rem;">${isExpanded ? '▼' : '▶'}</span> <span style="font-size:0.8rem; font-weight:600; color:#166534;">Live Standings</span>`;
+        };
+    }
+    
+    /**
+     * ★ v2.2.6: Update the mini-standings without re-rendering the full page
+     */
+    function updateLiveStandings(league) {
+        const container = document.getElementById('sl-live-standings');
+        if (container) {
+            renderMiniStandings(league, container);
+        }
     }
     
     /**
@@ -1847,45 +1959,95 @@
             row.appendChild(deleteMatchBtn);
         }
         
-        // Auto-save on score change (debounced)
+        // ★ v2.2.6: Improved score handling - saves immediately, updates standings in real-time
         if (!isPast) {
-            let saveTimeout = null;
-            const handleScoreChange = () => {
-                if (saveTimeout) clearTimeout(saveTimeout);
-                saveTimeout = setTimeout(() => {
-                    const newScoreA = scoreAInput.value !== '' ? parseInt(scoreAInput.value, 10) : null;
-                    const newScoreB = scoreBInput.value !== '' ? parseInt(scoreBInput.value, 10) : null;
-                    
-                    match.scoreA = newScoreA;
-                    match.scoreB = newScoreB;
-                    
-                    // Determine winner
-                    if (newScoreA !== null && newScoreB !== null) {
-                        if (newScoreA > newScoreB) match.winner = match.teamA;
-                        else if (newScoreB > newScoreA) match.winner = match.teamB;
-                        else match.winner = 'tie';
-                    } else {
-                        match.winner = null;
-                    }
-                    
-                    league.games[game._idx] = game;
-                    recalcStandings(league);
-                    saveData(true); // ★ Force cloud sync for standings change
-                    
-                    // Show save indicator
-                    const statusEl = document.getElementById('sl-save-status-' + game._idx);
-                    if (statusEl) {
-                        statusEl.style.opacity = '1';
-                        setTimeout(() => { statusEl.style.opacity = '0'; }, 1500);
-                    }
-                    
-                    // Re-render to update highlighting
-                    renderGameEntryUI(league, parentContainer);
-                }, 500);
+            // Function to save scores and update data
+            const saveScores = () => {
+                const newScoreA = scoreAInput.value !== '' ? parseInt(scoreAInput.value, 10) : null;
+                const newScoreB = scoreBInput.value !== '' ? parseInt(scoreBInput.value, 10) : null;
+                
+                // Only save if something changed
+                if (match.scoreA === newScoreA && match.scoreB === newScoreB) return;
+                
+                match.scoreA = newScoreA;
+                match.scoreB = newScoreB;
+                
+                // Determine winner
+                if (newScoreA !== null && newScoreB !== null) {
+                    if (newScoreA > newScoreB) match.winner = match.teamA;
+                    else if (newScoreB > newScoreA) match.winner = match.teamB;
+                    else match.winner = 'tie';
+                } else {
+                    match.winner = null;
+                }
+                
+                league.games[game._idx] = game;
+                recalcStandings(league);
+                saveData(true); // ★ Force cloud sync
+                
+                console.log('[SPECIALTY_LEAGUES] Score saved:', match.teamA, newScoreA, '-', newScoreB, match.teamB);
+                
+                // ★ v2.2.6: Update live standings immediately
+                updateLiveStandings(league);
+                
+                // Show save indicator
+                const statusEl = document.getElementById('sl-save-status-' + game._idx);
+                if (statusEl) {
+                    statusEl.style.opacity = '1';
+                    setTimeout(() => { statusEl.style.opacity = '0'; }, 1500);
+                }
+                
+                // Update highlighting colors without full re-render
+                updateRowHighlighting();
             };
             
-            scoreAInput.oninput = handleScoreChange;
-            scoreBInput.oninput = handleScoreChange;
+            // Function to update visual highlighting without re-render
+            const updateRowHighlighting = () => {
+                const valA = scoreAInput.value !== '' ? parseInt(scoreAInput.value, 10) : null;
+                const valB = scoreBInput.value !== '' ? parseInt(scoreBInput.value, 10) : null;
+                const hasScores = valA !== null && valB !== null;
+                const winA = hasScores && valA > valB;
+                const winB = hasScores && valB > valA;
+                const tie = hasScores && valA === valB;
+                
+                // Update team name colors
+                teamAEl.style.color = winA ? '#059669' : (winB ? '#9CA3AF' : '#111827');
+                teamBEl.style.color = winB ? '#059669' : (winA ? '#9CA3AF' : '#111827');
+                
+                // Update score input colors
+                scoreAInput.style.color = winA ? '#059669' : '#111827';
+                scoreBInput.style.color = winB ? '#059669' : '#111827';
+                
+                // Update VS indicator
+                vsEl.textContent = tie ? '=' : '—';
+            };
+            
+            // ★ Save on blur (when leaving input) - ensures persistence on tab switch
+            scoreAInput.onblur = saveScores;
+            scoreBInput.onblur = saveScores;
+            
+            // ★ Debounced update while typing (100ms for quick feedback)
+            let inputTimeout = null;
+            const handleInput = () => {
+                // Update highlighting immediately for visual feedback
+                updateRowHighlighting();
+                
+                // Debounce the actual save
+                if (inputTimeout) clearTimeout(inputTimeout);
+                inputTimeout = setTimeout(saveScores, 100);
+            };
+            
+            scoreAInput.oninput = handleInput;
+            scoreBInput.oninput = handleInput;
+            
+            // ★ Save on Enter key
+            const handleKeydown = (e) => {
+                if (e.key === 'Enter') {
+                    e.target.blur(); // This triggers saveScores via onblur
+                }
+            };
+            scoreAInput.onkeydown = handleKeydown;
+            scoreBInput.onkeydown = handleKeydown;
         }
         
         return row;
@@ -2295,6 +2457,6 @@
     // ★ v2.1: Export diagnostics
     window.diagnoseSpecialtyLeagues = diagnoseSpecialtyLeagues;
 
-    console.log("[SPECIALTY_LEAGUES] Module v2.2.5 loaded");
+    console.log("[SPECIALTY_LEAGUES] Module v2.2.6 loaded");
 
 })();
