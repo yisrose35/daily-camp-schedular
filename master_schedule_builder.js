@@ -417,7 +417,7 @@ const render = () => {
                 <div class="side">
                     <div class="side-head">
                         <span>Block Types</span>
-                        <span class="side-hint">Drag to calendar</span>
+                        <span class="side-hint">Drag to builder</span>
                     </div>
                     <div class="blocks">
                         ${Object.entries(BLOCKS).map(([k, v]) => `
@@ -605,7 +605,7 @@ select {
 
 /* ═══════════ SIDEBAR (PERSISTENT BLOCKS PANEL) ═══════════ */
 .side {
-    width: 200px;
+    width: 230px;
     background: var(--surface);
     border-right: 1px solid var(--border);
     display: flex;
@@ -618,25 +618,25 @@ select {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 14px 14px 12px;
+    padding: 16px 16px 14px;
     border-bottom: 1px solid var(--border-light);
 }
 .side-head span:first-child {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.08em;
 }
-.side-hint { font-size: 10px; color: var(--text-muted); }
+.side-hint { font-size: 12px; color: var(--text-muted); }
 
 .blocks {
     flex: 1;
-    padding: 12px;
+    padding: 14px;
     overflow-y: auto;
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 8px;
+    gap: 9px;
     align-content: start;
 }
 
@@ -645,11 +645,11 @@ select {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 4px;
-    padding: 10px 6px;
+    gap: 5px;
+    padding: 12px 7px;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 9px;
     cursor: grab;
     transition: all 0.2s;
 }
@@ -663,9 +663,9 @@ select {
 .block.dragging { opacity: 0.5; }
 
 .block-dot {
-    width: 28px;
-    height: 28px;
-    border-radius: 8px;
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
     border: 2px solid var(--c);
     background: var(--bg);
     display: flex;
@@ -673,10 +673,10 @@ select {
     justify-content: center;
     color: var(--c);
     font-weight: 700;
-    font-size: 12px;
+    font-size: 14px;
 }
 .block span:last-child {
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 600;
     color: var(--text-secondary);
     text-align: center;
@@ -1149,13 +1149,13 @@ select {
     .top { flex-wrap: wrap; height: auto; padding: 12px 16px; gap: 10px; }
     .top-right { flex-wrap: wrap; gap: 8px; }
     .tool-group { padding-left: 0; border-left: none; }
-    .side { width: 160px; }
+    .side { width: 185px; }
     .blocks { grid-template-columns: 1fr; }
 }
 @media (max-width: 768px) {
-    .side { width: 120px; }
-    .block { padding: 8px 4px; }
-    .block-dot { width: 24px; height: 24px; font-size: 10px; }
+    .side { width: 140px; }
+    .block { padding: 9px 5px; }
+    .block-dot { width: 28px; height: 28px; font-size: 12px; }
 }
 </style>`;
 
