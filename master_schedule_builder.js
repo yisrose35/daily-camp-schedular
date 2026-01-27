@@ -1,8 +1,9 @@
 // =================================================================
-// SCHEDULE BUILDER v9.1 — PREMIUM ENTERPRISE DESIGN
+// SCHEDULE BUILDER v9.2 — PREMIUM ENTERPRISE DESIGN
 // =================================================================
-// Updated CSS for professional, sleek appearance
-// All functionality preserved from v9.0
+// v9.2 FIXES:
+// - Fixed time labels getting cut off at top (added padding)
+// - Improved off-hours diagonal stripe pattern (grey, more visible)
 // =================================================================
 
 (function() {
@@ -206,10 +207,10 @@ const draw = () => {
         html += `<div class="cal-head"><span class="cal-head-dot" style="background:${clr}"></span><span>${h(c)}</span></div>`;
     });
     
-    // Time rail
-    html += `<div class="cal-times" style="height:${ht}px">`;
+    // Time rail (extra height for first label padding)
+    html += `<div class="cal-times" style="height:${ht + 10}px">`;
     for (let m = lo; m < hi; m += 60) {
-        html += `<div class="cal-time" style="top:${(m - lo) * PX}px">${toS(m)}</div>`;
+        html += `<div class="cal-time" style="top:${(m - lo) * PX + 10}px">${toS(m)}</div>`;
     }
     html += `</div>`;
     
@@ -223,7 +224,7 @@ const draw = () => {
             html += `<div class="cal-line" style="top:${(m - lo) * PX}px"></div>`;
         }
         
-        // Inactive zones
+        // Inactive zones (grey diagonal stripes for times outside division hours)
         if (ds != null && ds > lo) html += `<div class="cal-off" style="height:${(ds - lo) * PX}px"></div>`;
         if (de != null && de < hi) html += `<div class="cal-off cal-off-b" style="height:${(hi - de) * PX}px"></div>`;
         
@@ -719,6 +720,7 @@ select {
 }
 .cal-head-dot { width: 8px; height: 8px; border-radius: 50%; }
 
+/* ═══════════ TIME RAIL (FIXED CUTOFF) ═══════════ */
 .cal-times {
     position: sticky;
     left: 0;
@@ -726,6 +728,8 @@ select {
     background: var(--bg);
     border-right: 1px solid var(--border);
     width: 72px;
+    padding-top: 10px;
+    box-sizing: border-box;
 }
 .cal-time {
     position: absolute;
@@ -755,13 +759,20 @@ select {
     pointer-events: none;
 }
 
+/* ═══════════ OFF-HOURS ZONES (GREY DIAGONAL STRIPES) ═══════════ */
 .cal-off {
     position: absolute;
     left: 0;
     right: 0;
     top: 0;
-    background: var(--bg);
-    background-image: repeating-linear-gradient(-45deg, transparent, transparent 4px, var(--border-light) 4px, var(--border-light) 5px);
+    background: #e2e8f0;
+    background-image: repeating-linear-gradient(
+        -45deg,
+        transparent,
+        transparent 8px,
+        #94a3b8 8px,
+        #94a3b8 9px
+    );
     pointer-events: none;
     border-bottom: 1px solid var(--border);
 }
