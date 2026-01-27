@@ -353,26 +353,52 @@ function refreshFromStorage() {
 // =================================================================
 function getCampTimeRange() {
     const divisions = window.divisions || {};
-    const divNames = Object.keys(divisions);
+    const divNames = Object.keys(divisions).filter(d => divisions[d]?.bunks?.length > 0);
     
-    let earliestMin = 540; // 9:00 AM default
-    let latestMin = 960;   // 4:00 PM default
+    let earliestMin = null;
+    let latestMin = null;
     
+    // Debug logging
+    console.log('[MasterScheduler] getCampTimeRange - checking', divNames.length, 'divisions');
+    
+    // Get actual times from divisions
     divNames.forEach(d => {
         const div = divisions[d];
         const s = parseTimeToMinutes(div?.startTime);
         const e = parseTimeToMinutes(div?.endTime);
-        if (s !== null && s < earliestMin) earliestMin = s;
-        if (e !== null && e > latestMin) latestMin = e;
+        console.log(`[MasterScheduler] Division "${d}": start=${div?.startTime} (${s} min), end=${div?.endTime} (${e} min)`);
+        if (s !== null) {
+            if (earliestMin === null || s < earliestMin) earliestMin = s;
+        }
+        if (e !== null) {
+            if (latestMin === null || e > latestMin) latestMin = e;
+        }
     });
     
-    // Also check skeleton events
+    // Also check skeleton events (may extend beyond division times)
     dailySkeleton.forEach(ev => {
         const s = parseTimeToMinutes(ev.startTime);
         const e = parseTimeToMinutes(ev.endTime);
-        if (s !== null && s < earliestMin) earliestMin = s;
-        if (e !== null && e > latestMin) latestMin = e;
+        if (s !== null && (earliestMin === null || s < earliestMin)) earliestMin = s;
+        if (e !== null && (latestMin === null || e > latestMin)) latestMin = e;
     });
+    
+    // Fallback defaults only if no data found
+    if (earliestMin === null) {
+        console.log('[MasterScheduler] No division start times found, using default 9:00 AM');
+        earliestMin = 540;
+    }
+    if (latestMin === null) {
+        console.log('[MasterScheduler] No division end times found, using default 4:00 PM');
+        latestMin = 960;
+    }
+    
+    // Ensure minimum 1 hour range
+    if (latestMin - earliestMin < 60) {
+        latestMin = earliestMin + 60;
+    }
+    
+    console.log(`[MasterScheduler] Final time range: ${minutesToTime(earliestMin)} - ${minutesToTime(latestMin)}`);
     
     return { earliestMin, latestMin };
 }
@@ -578,7 +604,7 @@ function showTileConfigModal(tileType, divisionName, initialStartMin, callback) 
                             <span class="ms-time-label">Start</span>
                             <div class="ms-time-control">
                                 <button type="button" class="ms-time-btn" data-action="start-down">-</button>
-                                <span id="modal-start-time" class="ms-time-display">${minutesToTime(startMin)}</span>
+                                <input type="text" id="modal-start-time" class="ms-time-input" value="${minutesToTime(startMin)}">
                                 <button type="button" class="ms-time-btn" data-action="start-up">+</button>
                             </div>
                         </div>
@@ -587,12 +613,13 @@ function showTileConfigModal(tileType, divisionName, initialStartMin, callback) 
                             <span class="ms-time-label">End</span>
                             <div class="ms-time-control">
                                 <button type="button" class="ms-time-btn" data-action="end-down">-</button>
-                                <span id="modal-end-time" class="ms-time-display">${minutesToTime(endMin)}</span>
+                                <input type="text" id="modal-end-time" class="ms-time-input" value="${minutesToTime(endMin)}">
                                 <button type="button" class="ms-time-btn" data-action="end-up">+</button>
                             </div>
                         </div>
                     </div>
                     <div class="ms-time-presets">
+                        <span class="ms-presets-label">Duration:</span>
                         <button type="button" class="ms-preset-btn" data-duration="15">15 min</button>
                         <button type="button" class="ms-preset-btn" data-duration="30">30 min</button>
                         <button type="button" class="ms-preset-btn" data-duration="45">45 min</button>
@@ -616,10 +643,47 @@ function showTileConfigModal(tileType, divisionName, initialStartMin, callback) 
     let currentStart = startMin;
     let currentEnd = endMin;
     
+    const startInput = document.getElementById('modal-start-time');
+    const endInput = document.getElementById('modal-end-time');
+    
     const updateTimeDisplays = () => {
-        document.getElementById('modal-start-time').textContent = minutesToTime(currentStart);
-        document.getElementById('modal-end-time').textContent = minutesToTime(currentEnd);
+        if (startInput) startInput.value = minutesToTime(currentStart);
+        if (endInput) endInput.value = minutesToTime(currentEnd);
     };
+    
+    // Handle typing in time inputs
+    if (startInput) {
+        startInput.addEventListener('blur', () => {
+            const parsed = parseTimeToMinutes(startInput.value);
+            if (parsed !== null) {
+                currentStart = parsed;
+                if (currentStart >= currentEnd) {
+                    currentEnd = currentStart + 30;
+                }
+            }
+            updateTimeDisplays();
+        });
+        startInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                startInput.blur();
+            }
+        });
+    }
+    
+    if (endInput) {
+        endInput.addEventListener('blur', () => {
+            const parsed = parseTimeToMinutes(endInput.value);
+            if (parsed !== null && parsed > currentStart) {
+                currentEnd = parsed;
+            }
+            updateTimeDisplays();
+        });
+        endInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                endInput.blur();
+            }
+        });
+    }
     
     // Time button handlers
     modal.querySelectorAll('.ms-time-btn').forEach(btn => {
@@ -630,9 +694,9 @@ function showTileConfigModal(tileType, divisionName, initialStartMin, callback) 
             if (action === 'start-up') {
                 currentStart = Math.min(currentStart + step, currentEnd - step);
             } else if (action === 'start-down') {
-                currentStart = Math.max(currentStart - step, earliestMin - 60);
+                currentStart = Math.max(currentStart - step, 0);
             } else if (action === 'end-up') {
-                currentEnd = Math.min(currentEnd + step, latestMin + 60);
+                currentEnd = Math.min(currentEnd + step, 1440);
             } else if (action === 'end-down') {
                 currentEnd = Math.max(currentEnd - step, currentStart + step);
             }
@@ -779,7 +843,7 @@ function showTileEditModal(event) {
                             <span class="ms-time-label">Start</span>
                             <div class="ms-time-control">
                                 <button type="button" class="ms-time-btn" data-action="start-down">-</button>
-                                <span id="edit-start-time" class="ms-time-display">${minutesToTime(currentStart)}</span>
+                                <input type="text" id="edit-start-time" class="ms-time-input" value="${minutesToTime(currentStart)}">
                                 <button type="button" class="ms-time-btn" data-action="start-up">+</button>
                             </div>
                         </div>
@@ -788,7 +852,7 @@ function showTileEditModal(event) {
                             <span class="ms-time-label">End</span>
                             <div class="ms-time-control">
                                 <button type="button" class="ms-time-btn" data-action="end-down">-</button>
-                                <span id="edit-end-time" class="ms-time-display">${minutesToTime(currentEnd)}</span>
+                                <input type="text" id="edit-end-time" class="ms-time-input" value="${minutesToTime(currentEnd)}">
                                 <button type="button" class="ms-time-btn" data-action="end-up">+</button>
                             </div>
                         </div>
@@ -804,10 +868,37 @@ function showTileEditModal(event) {
     
     document.body.appendChild(modal);
     
+    const startInput = document.getElementById('edit-start-time');
+    const endInput = document.getElementById('edit-end-time');
+    
     const updateTimeDisplays = () => {
-        document.getElementById('edit-start-time').textContent = minutesToTime(currentStart);
-        document.getElementById('edit-end-time').textContent = minutesToTime(currentEnd);
+        if (startInput) startInput.value = minutesToTime(currentStart);
+        if (endInput) endInput.value = minutesToTime(currentEnd);
     };
+    
+    // Handle typing in time inputs
+    if (startInput) {
+        startInput.addEventListener('blur', () => {
+            const parsed = parseTimeToMinutes(startInput.value);
+            if (parsed !== null) {
+                currentStart = parsed;
+                if (currentStart >= currentEnd) {
+                    currentEnd = currentStart + 30;
+                }
+            }
+            updateTimeDisplays();
+        });
+    }
+    
+    if (endInput) {
+        endInput.addEventListener('blur', () => {
+            const parsed = parseTimeToMinutes(endInput.value);
+            if (parsed !== null && parsed > currentStart) {
+                currentEnd = parsed;
+            }
+            updateTimeDisplays();
+        });
+    }
     
     modal.querySelectorAll('.ms-time-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -1243,13 +1334,20 @@ function renderGrid() {
 
 function renderEventTile(ev, top, height) {
     const tile = getTileByType(ev.type);
-    const style = getTileStyle(tile);
+    
+    // Build inline style with tile colors
+    const borderStyle = tile.dashed ? 'dashed' : 'solid';
+    const bgColor = tile.color;
+    const borderColor = tile.border;
     
     const fontSize = height < 40 ? '0.7em' : '0.85em';
     const showDetails = height >= 50;
     const showResizeHandles = height >= 50;
     
-    let content = `<strong>${escapeHtml(ev.event)}</strong>`;
+    // For custom events, show the custom name prominently
+    const displayName = ev.event || tile.name;
+    
+    let content = `<strong>${escapeHtml(displayName)}</strong>`;
     if (showDetails) {
         content += `<span class="ms-tile-time">${ev.startTime} - ${ev.endTime}</span>`;
     }
@@ -1263,7 +1361,7 @@ function renderEventTile(ev, top, height) {
              data-id="${ev.id}" 
              draggable="true" 
              title="Double-click to delete"
-             style="${style} top:${top}px; height:${height}px; font-size:${fontSize};">
+             style="background:${bgColor}; border:2px ${borderStyle} ${borderColor}; top:${top}px; height:${height}px; font-size:${fontSize};">
             ${showResizeHandles ? '<div class="ms-resize-handle ms-resize-top"></div>' : ''}
             <div class="ms-event-content">${content}</div>
             ${showResizeHandles ? '<div class="ms-resize-handle ms-resize-bottom"></div>' : ''}
@@ -1565,7 +1663,8 @@ function getStyles() {
         .ms-grid-cell:last-child { border-right:none; }
         .ms-cell-hover { background:#f0fdf4; }
         
-        .ms-disabled-zone { position:absolute; width:100%; background:repeating-linear-gradient(-45deg, transparent, transparent 5px, rgba(0,0,0,0.03) 5px, rgba(0,0,0,0.03) 10px); z-index:1; pointer-events:none; }
+        /* Disabled zones - dark grey with diagonal stripes */
+        .ms-disabled-zone { position:absolute; width:100%; background-color:#9ca3af; background-image:repeating-linear-gradient(-45deg, transparent, transparent 4px, rgba(0,0,0,0.15) 4px, rgba(0,0,0,0.15) 8px); z-index:1; pointer-events:none; }
         
         /* Events */
         .ms-event { position:absolute; width:94%; left:3%; border-radius:4px; cursor:pointer; box-sizing:border-box; z-index:2; display:flex; flex-direction:column; justify-content:center; padding:4px 8px; overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,0.1); transition:box-shadow 0.15s; }
@@ -1617,11 +1716,15 @@ function getStyles() {
         .ms-time-control { display:flex; align-items:center; gap:4px; }
         .ms-time-btn { width:32px; height:32px; border:1px solid #d1d5db; background:#fff; border-radius:6px; cursor:pointer; font-size:1.1rem; font-weight:600; color:#374151; }
         .ms-time-btn:hover { background:#f3f4f6; }
+        .ms-time-input { width:90px; text-align:center; font-size:1rem; font-weight:500; padding:6px 8px; background:#fff; border:1px solid #d1d5db; border-radius:4px; }
+        .ms-time-input:focus { outline:none; border-color:#3b82f6; box-shadow:0 0 0 2px rgba(59,130,246,0.2); }
         .ms-time-display { min-width:90px; text-align:center; font-size:1rem; font-weight:500; padding:6px 8px; background:#f3f4f6; border-radius:4px; }
         .ms-time-separator { color:#9ca3af; font-weight:500; }
-        .ms-time-presets { display:flex; gap:6px; margin-top:8px; width:100%; }
+        .ms-time-presets { display:flex; align-items:center; gap:6px; margin-top:8px; width:100%; }
+        .ms-presets-label { font-size:0.8rem; color:#6b7280; margin-right:4px; }
         .ms-preset-btn { padding:6px 12px; border:1px solid #e5e7eb; background:#fff; border-radius:4px; font-size:0.8rem; cursor:pointer; }
         .ms-preset-btn:hover { background:#f3f4f6; border-color:#d1d5db; }
+        .ms-preset-btn:active { background:#e5e7eb; }
         
         /* Checkbox Grid */
         .ms-checkbox-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:8px; max-height:200px; overflow-y:auto; padding:8px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; }
