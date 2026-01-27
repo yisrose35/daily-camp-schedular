@@ -89,10 +89,15 @@ const modal = (type, div, start, existing) => {
             const sp = window.loadGlobalSettings?.()?.sports || [], sel = existing?.electiveActivities || [];
             extra = `<div class="mf"><label>Available Activities</label><div class="checks">${sp.length ? sp.map(s => `<label><input type="checkbox" name="el" value="${h(s)}" ${sel.includes(s) ? 'checked' : ''}><span>${h(s)}</span></label>`).join('') : '<span style="color:#94a3b8;font-size:12px;">No sports configured</span>'}</div></div>`;
         } else if (type === 'custom') {
-            const loc = existing?.location || '';
+            const selLocs = existing?.locations || (existing?.location ? [existing.location] : []);
             const allLocs = locs();
-            extra = `<div class="mf"><label>Reserve Location (optional)</label><select id="f-loc"><option value="">None</option>${allLocs.map(l => `<option value="${h(l.n)}" ${loc === l.n ? 'selected' : ''}>${h(l.n)} (${l.t})</option>`).join('')}</select></div>`;
+            extra = `<div class="mf"><label>Reserve Locations (optional)</label><div class="loc-buttons" id="loc-buttons">${allLocs.length ? allLocs.map(l => `<button type="button" class="loc-btn ${selLocs.includes(l.n) ? 'active' : ''}" data-loc="${h(l.n)}">${h(l.n)}<span class="loc-type">${l.t}</span></button>`).join('') : '<span style="color:#94a3b8;font-size:12px;">No locations configured</span>'}</div></div>`;
         }
+        
+        // Only show event name field for custom tiles
+        const nameField = type === 'custom' 
+            ? `<div class="mf"><label>Event Name</label><input id="f-name" value="${h(existing?.event || '')}" placeholder="Custom Event"></div>`
+            : `<input type="hidden" id="f-name" value="${h(existing?.event || '')}">`;
         
         return `
             <div class="modal-head">
@@ -101,7 +106,7 @@ const modal = (type, div, start, existing) => {
                 <button class="modal-x" id="modal-close">×</button>
             </div>
             <div class="modal-body">
-                <div class="mf"><label>Event Name</label><input id="f-name" value="${h(existing?.event || '')}" placeholder="${B.name}"></div>
+                ${nameField}
                 <div class="mf-row">
                     <div class="mf"><label>Start</label><div class="time-box"><button data-d="-5" data-t="s">−</button><input id="f-start" value="${toS(sM)}" readonly><button data-d="5" data-t="s">+</button></div></div>
                     <div class="mf"><label>End</label><div class="time-box"><button data-d="-5" data-t="e">−</button><input id="f-end" value="${toS(eM)}" readonly><button data-d="5" data-t="e">+</button></div></div>
@@ -134,6 +139,11 @@ const modal = (type, div, start, existing) => {
     // Duration buttons
     box.querySelectorAll('.dur-row button').forEach(btn => {
         btn.onclick = () => { eM = sM + parseInt(btn.dataset.m); document.getElementById('f-end').value = toS(eM); };
+    });
+    
+    // Location buttons (for custom tiles - multi-select)
+    box.querySelectorAll('.loc-btn').forEach(btn => {
+        btn.onclick = () => btn.classList.toggle('active');
     });
     
     // Close
@@ -169,8 +179,14 @@ const modal = (type, div, start, existing) => {
             if (acts.length < 2) return alert('Select at least 2');
             ev.electiveActivities = acts;
         } else if (type === 'custom') {
-            const loc = document.getElementById('f-loc')?.value;
-            if (loc) ev.location = loc; else delete ev.location;
+            const selectedLocs = [...box.querySelectorAll('.loc-btn.active')].map(b => b.dataset.loc);
+            if (selectedLocs.length > 0) {
+                ev.locations = selectedLocs;
+                delete ev.location; // Remove old single location field
+            } else {
+                delete ev.locations;
+                delete ev.location;
+            }
         }
         
         if (existing) {
@@ -235,7 +251,8 @@ const draw = () => {
                 const top = (s - lo) * PX, height = (e - s) * PX - 1;
                 const B = BLOCKS[ev.type] || BLOCKS.custom;
                 const small = height < 36;
-                html += `<div class="ev ${small ? 'ev-sm' : ''}" data-id="${ev.id}" draggable="true" style="top:${top}px;height:${Math.max(height, 24)}px;--c:${B.color};--bg:${B.bg};${B.dashed ? 'border-style:dashed;' : ''}"><div class="ev-body"><span class="ev-name">${h(ev.event || B.name)}</span>${small ? '' : `<span class="ev-time">${toS(s)} – ${toS(e)}</span>`}</div><div class="ev-handle ev-handle-t"></div><div class="ev-handle ev-handle-b"></div></div>`;
+                // Always show time, just formatted differently for small tiles
+                html += `<div class="ev ${small ? 'ev-sm' : ''}" data-id="${ev.id}" draggable="true" style="top:${top}px;height:${Math.max(height, 24)}px;--c:${B.color};--bg:${B.bg};${B.dashed ? 'border-style:dashed;' : ''}"><div class="ev-body"><span class="ev-name">${h(ev.event || B.name)}</span><span class="ev-time">${toS(s)} – ${toS(e)}</span></div><div class="ev-handle ev-handle-t"></div><div class="ev-handle ev-handle-b"></div></div>`;
             }
         });
         
@@ -824,7 +841,8 @@ select {
 
 .ev-sm { min-height: 20px; }
 .ev-sm .ev-body { flex-direction: row; align-items: center; gap: 6px; padding: 2px 6px; }
-.ev-sm .ev-name { font-size: 10px; }
+.ev-sm .ev-name { font-size: 10px; flex-shrink: 1; min-width: 0; }
+.ev-sm .ev-time { font-size: 9px; margin-top: 0; opacity: 0.7; white-space: nowrap; flex-shrink: 0; }
 
 .ev-handle {
     position: absolute;
@@ -843,7 +861,7 @@ select {
 .modal-wrap {
     position: fixed;
     inset: 0;
-    background: rgba(15, 23, 42, 0.5);
+    background: rgba(15, 23, 42, 0.6);
     backdrop-filter: blur(4px);
     display: flex;
     align-items: center;
@@ -865,6 +883,7 @@ select {
     gap: 12px;
     padding: 20px 24px;
     border-bottom: 1px solid var(--border);
+    background: var(--bg);
 }
 .modal-icon {
     width: 36px;
@@ -893,8 +912,8 @@ select {
     align-items: center;
     justify-content: center;
 }
-.modal-x:hover { background: var(--bg); color: var(--text-secondary); }
-.modal-body { padding: 24px; }
+.modal-x:hover { background: var(--surface); color: var(--text-secondary); }
+.modal-body { padding: 24px; background: var(--surface); }
 .modal-foot {
     display: flex;
     gap: 10px;
@@ -1008,6 +1027,54 @@ select {
 }
 .checks label:hover { background: var(--accent-light); border-color: var(--accent-light); }
 .checks input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+
+/* ═══════════ LOCATION BUTTONS (Multi-select) ═══════════ */
+.loc-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px;
+    background: var(--bg);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    max-height: 180px;
+    overflow-y: auto;
+}
+.loc-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 10px 14px;
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    transition: all 0.15s;
+    min-width: 80px;
+}
+.loc-btn:hover {
+    border-color: var(--accent);
+    background: var(--accent-light);
+}
+.loc-btn.active {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: white;
+}
+.loc-btn.active .loc-type {
+    color: rgba(255,255,255,0.8);
+}
+.loc-type {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
 
 /* ═══════════ NOTIFY ═══════════ */
 #notify {
