@@ -605,7 +605,7 @@ select {
 
 /* ═══════════ SIDEBAR (PERSISTENT BLOCKS PANEL) ═══════════ */
 .side {
-    width: 230px;
+    width: 260px;
     background: var(--surface);
     border-right: 1px solid var(--border);
     display: flex;
@@ -618,25 +618,25 @@ select {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 16px 14px;
+    padding: 18px 18px 16px;
     border-bottom: 1px solid var(--border-light);
 }
 .side-head span:first-child {
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 700;
-    color: var(--text-muted);
+    color: var(--text);
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.06em;
 }
-.side-hint { font-size: 12px; color: var(--text-muted); }
+.side-hint { font-size: 13px; color: var(--text-secondary); }
 
 .blocks {
     flex: 1;
-    padding: 14px;
+    padding: 16px;
     overflow-y: auto;
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 9px;
+    gap: 12px;
     align-content: start;
 }
 
@@ -645,11 +645,11 @@ select {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 5px;
-    padding: 12px 7px;
+    gap: 8px;
+    padding: 16px 10px;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 9px;
+    border-radius: 10px;
     cursor: grab;
     transition: all 0.2s;
 }
@@ -663,9 +663,9 @@ select {
 .block.dragging { opacity: 0.5; }
 
 .block-dot {
-    width: 32px;
-    height: 32px;
-    border-radius: 9px;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
     border: 2px solid var(--c);
     background: var(--bg);
     display: flex;
@@ -673,12 +673,12 @@ select {
     justify-content: center;
     color: var(--c);
     font-weight: 700;
-    font-size: 14px;
+    font-size: 16px;
 }
 .block span:last-child {
-    font-size: 10px;
+    font-size: 13px;
     font-weight: 600;
-    color: var(--text-secondary);
+    color: var(--text);
     text-align: center;
     line-height: 1.2;
 }
@@ -1149,13 +1149,13 @@ select {
     .top { flex-wrap: wrap; height: auto; padding: 12px 16px; gap: 10px; }
     .top-right { flex-wrap: wrap; gap: 8px; }
     .tool-group { padding-left: 0; border-left: none; }
-    .side { width: 185px; }
+    .side { width: 220px; }
     .blocks { grid-template-columns: 1fr; }
 }
 @media (max-width: 768px) {
-    .side { width: 140px; }
-    .block { padding: 9px 5px; }
-    .block-dot { width: 28px; height: 28px; font-size: 12px; }
+    .side { width: 180px; }
+    .block { padding: 12px 8px; }
+    .block-dot { width: 36px; height: 36px; font-size: 14px; }
 }
 </style>`;
 
