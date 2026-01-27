@@ -1,6 +1,11 @@
 // ============================================================================
-// specialty_leagues.js — PRODUCTION-READY v2.2 (EMERALD CAMP THEME)
+// specialty_leagues.js — PRODUCTION-READY v2.2.1 (EMERALD CAMP THEME)
 // ============================================================================
+// v2.2.1 BACKWARD COMPATIBILITY FIXES:
+// - ★ GAME LABEL FIX: Supports both g.name (old) and g.gameLabel (new)
+// - ★ AUTO-EXPAND HISTORY: Shows history if no today's games exist
+// - ★ ENHANCED DIAGNOSTICS: Shows all games with dates for verification
+//
 // v2.2 UI ENHANCEMENTS (matches leagues.js v2.5):
 // - ★ PROFESSIONAL CARD UI: Today's games shown as cards automatically
 // - ★ INLINE SCORE EDITING: Auto-save with debounce and visual feedback
@@ -37,7 +42,7 @@
 (function() {
     'use strict';
 
-    console.log("[SPECIALTY_LEAGUES] Module v2.2 loading...");
+    console.log("[SPECIALTY_LEAGUES] Module v2.2.1 loading...");
 
     // =============================================================
     // STATE & GLOBALS
@@ -1210,17 +1215,22 @@
         
         games.forEach((g, idx) => {
             const gameWithIdx = { ...g, _idx: idx };
+            // ★ FIX v2.2.1: Handle games without dates (treat as past)
             if (g.date === currentDate) {
                 todaysGames.push(gameWithIdx);
             } else {
+                // Games with different date OR no date go to history
                 pastGames.push(gameWithIdx);
             }
         });
         
         // Sort by game number/label
         const sortByGameNum = (a, b) => {
-            const numA = a.gameNumber || parseInt((a.gameLabel || '').match(/\d+/)?.[0]) || 0;
-            const numB = b.gameNumber || parseInt((b.gameLabel || '').match(/\d+/)?.[0]) || 0;
+            // ★ FIX: Support both gameLabel and name fields
+            const labelA = a.gameLabel || a.name || '';
+            const labelB = b.gameLabel || b.name || '';
+            const numA = a.gameNumber || parseInt((labelA).match(/\d+/)?.[0]) || 0;
+            const numB = b.gameNumber || parseInt((labelB).match(/\d+/)?.[0]) || 0;
             return numA - numB;
         };
         todaysGames.sort(sortByGameNum);
@@ -1258,12 +1268,15 @@
             const pastSection = document.createElement('div');
             pastSection.style.marginBottom = '24px';
             
+            // ★ FIX v2.2.1: Auto-expand if no today's games
+            const shouldAutoExpand = todaysGames.length === 0;
+            
             const pastHeader = document.createElement('div');
             pastHeader.style.cssText = 'font-size:0.75rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#9CA3AF; margin-bottom:12px; cursor:pointer; display:flex; align-items:center; gap:6px;';
-            pastHeader.innerHTML = '<span id="sl-past-arrow" style="font-size:0.65rem;">▶</span> History (' + pastGames.length + ')';
+            pastHeader.innerHTML = '<span id="sl-past-arrow" style="font-size:0.65rem;">' + (shouldAutoExpand ? '▼' : '▶') + '</span> History (' + pastGames.length + ')';
             
             const pastContent = document.createElement('div');
-            pastContent.style.display = 'none';
+            pastContent.style.display = shouldAutoExpand ? 'block' : 'none';
             
             pastHeader.onclick = () => {
                 const isHidden = pastContent.style.display === 'none';
@@ -1305,6 +1318,7 @@
     
     /**
      * Render a single game card with inline score editing
+     * ★ v2.2.1: Backward compatible with old g.name field
      */
     function renderGameCard(league, game, isPast, parentContainer) {
         const card = document.createElement('div');
@@ -1322,7 +1336,8 @@
         
         const gameTitle = document.createElement('div');
         gameTitle.style.cssText = 'font-weight:600; font-size:0.9rem; color:#111827;';
-        gameTitle.textContent = game.gameLabel || ('Game ' + (game._idx + 1));
+        // ★ FIX: Support both old (name) and new (gameLabel) fields
+        gameTitle.textContent = game.gameLabel || game.name || ('Game ' + (game._idx + 1));
         
         const headerRight = document.createElement('div');
         headerRight.style.cssText = 'display:flex; align-items:center; gap:12px;';
@@ -1841,7 +1856,7 @@
     }
 
     // =============================================================
-    // ★ v2.1: DIAGNOSTICS FUNCTION (matches other modules pattern)
+    // ★ v2.2: DIAGNOSTICS FUNCTION (matches other modules pattern)
     // =============================================================
     function diagnoseSpecialtyLeagues() {
         console.log('\n' + '═'.repeat(60));
@@ -1856,15 +1871,37 @@
         console.log('  In-memory leagues:', Object.keys(specialtyLeagues).length);
         console.log('  Data match:', JSON.stringify(storedLeagues) === JSON.stringify(specialtyLeagues) ? '✅' : '❌');
         
+        const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        console.log('  Current schedule date:', currentDate);
+        
         console.log('\n📋 LEAGUES DETAIL:');
         Object.entries(specialtyLeagues).forEach(([id, league]) => {
-            console.log(`  [${id}] "${league.name}":`);
+            console.log(`\n  [${id}] "${league.name}":`);
             console.log(`    - Enabled: ${league.enabled}`);
             console.log(`    - Divisions: ${(league.divisions || []).join(', ') || 'none'}`);
             console.log(`    - Sport: ${league.sport || 'none'}`);
             console.log(`    - Fields: ${(league.fields || []).join(', ') || 'none'}`);
             console.log(`    - Teams: ${(league.teams || []).length}`);
             console.log(`    - Games recorded: ${(league.games || []).length}`);
+            
+            // ★ Show all games with their data
+            if (league.games && league.games.length > 0) {
+                console.log('    - Games breakdown:');
+                league.games.forEach((g, idx) => {
+                    const label = g.gameLabel || g.name || `Game ${idx + 1}`;
+                    const matchCount = (g.matches || []).length;
+                    const isToday = g.date === currentDate;
+                    console.log(`      [${idx}] "${label}" - Date: ${g.date || 'NO DATE'} ${isToday ? '(TODAY)' : ''} - ${matchCount} matches`);
+                });
+            }
+            
+            // Show standings
+            if (league.standings && Object.keys(league.standings).length > 0) {
+                console.log('    - Standings:');
+                Object.entries(league.standings).forEach(([team, stats]) => {
+                    console.log(`      ${team}: W${stats.w} L${stats.l} T${stats.t}`);
+                });
+            }
         });
         
         console.log('\n🔗 INTEGRATION CHECK:');
@@ -1883,8 +1920,10 @@
         
         return {
             leagueCount: Object.keys(specialtyLeagues).length,
+            totalGames: Object.values(specialtyLeagues).reduce((sum, l) => sum + (l.games?.length || 0), 0),
             isInitialized: _isInitialized,
-            saveInProgress: _saveInProgress
+            saveInProgress: _saveInProgress,
+            leagues: specialtyLeagues
         };
     }
 
@@ -1906,6 +1945,6 @@
     // ★ v2.1: Export diagnostics
     window.diagnoseSpecialtyLeagues = diagnoseSpecialtyLeagues;
 
-    console.log("[SPECIALTY_LEAGUES] Module v2.2 loaded");
+    console.log("[SPECIALTY_LEAGUES] Module v2.2.1 loaded");
 
 })();
