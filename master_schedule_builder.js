@@ -19,7 +19,7 @@ let _keyHandler = null;
 let _visHandler = null;
 
 const STORE = 'sched_v9';
-const PX = 2.9;
+const PX = 1.84;
 const SNAP = 5;
 
 const BLOCKS = {
@@ -224,9 +224,9 @@ const draw = () => {
     });
     
     // Time rail (extra height for first label padding)
-    html += `<div class="cal-times" style="height:${ht + 14}px">`;
+    html += `<div class="cal-times" style="height:${ht + 12}px">`;
     for (let m = lo; m < hi; m += 60) {
-        html += `<div class="cal-time" style="top:${(m - lo) * PX + 14}px">${toS(m)}</div>`;
+        html += `<div class="cal-time" style="top:${(m - lo) * PX + 12}px">${toS(m)}</div>`;
     }
     html += `</div>`;
     
@@ -250,7 +250,7 @@ const draw = () => {
             if (s != null && e != null && e > s) {
                 const top = (s - lo) * PX, height = (e - s) * PX - 1;
                 const B = BLOCKS[ev.type] || BLOCKS.custom;
-                const small = height < 50;
+                const small = height < 42;
                 // Always show time, just formatted differently for small tiles
                 html += `<div class="ev ${small ? 'ev-sm' : ''}" data-id="${ev.id}" draggable="true" style="top:${top}px;height:${Math.max(height, 24)}px;--c:${B.color};--bg:${B.bg};${B.dashed ? 'border-style:dashed;' : ''}"><div class="ev-body"><span class="ev-name">${h(ev.event || B.name)}</span><span class="ev-time">${toS(s)} – ${toS(e)}</span></div><div class="ev-handle ev-handle-t"></div><div class="ev-handle ev-handle-b"></div></div>`;
             }
@@ -746,7 +746,7 @@ select {
 
 .calendar { 
     display: grid; 
-    grid-template-columns: 100px repeat(var(--cols), minmax(240px, 1fr));
+    grid-template-columns: 83px repeat(var(--cols), minmax(165px, 1fr));
     min-width: max-content;
 }
 .cal-corner {
@@ -765,15 +765,15 @@ select {
     background: var(--bg);
     border-bottom: 1px solid var(--border);
     border-right: 1px solid var(--border-light);
-    padding: 18px 16px;
+    padding: 16px 12px;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 12px;
-    font-size: 16px;
+    gap: 9px;
+    font-size: 15px;
     font-weight: 600;
 }
-.cal-head-dot { width: 12px; height: 12px; border-radius: 50%; }
+.cal-head-dot { width: 9px; height: 9px; border-radius: 50%; }
 
 /* ═══════════ TIME RAIL (FIXED CUTOFF) ═══════════ */
 .cal-times {
@@ -782,16 +782,16 @@ select {
     z-index: 3;
     background: var(--bg);
     border-right: 1px solid var(--border);
-    width: 100px;
-    padding-top: 14px;
+    width: 83px;
+    padding-top: 12px;
     box-sizing: border-box;
 }
 .cal-time {
     position: absolute;
     left: 0;
-    right: 12px;
+    right: 9px;
     transform: translateY(-50%);
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-muted);
     text-align: right;
@@ -836,10 +836,10 @@ select {
 /* ═══════════ EVENTS ═══════════ */
 .ev {
     position: absolute;
-    left: 6px;
-    right: 6px;
-    min-height: 32px;
-    border-radius: 8px;
+    left: 5px;
+    right: 5px;
+    min-height: 28px;
+    border-radius: 7px;
     background: var(--bg);
     border: 2px solid var(--c);
     cursor: pointer;
@@ -856,13 +856,13 @@ select {
 
 .ev-body {
     flex: 1;
-    padding: 6px 10px;
+    padding: 5px 9px;
     display: flex;
     flex-direction: column;
     justify-content: center;
 }
 .ev-name {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--text);
     line-height: 1.3;
@@ -871,22 +871,22 @@ select {
     text-overflow: ellipsis;
 }
 .ev-time {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 500;
     color: var(--text-secondary);
-    margin-top: 3px;
+    margin-top: 2px;
 }
 
-.ev-sm { min-height: 28px; }
-.ev-sm .ev-body { flex-direction: row; align-items: center; gap: 8px; padding: 4px 8px; }
-.ev-sm .ev-name { font-size: 12px; flex-shrink: 1; min-width: 0; }
-.ev-sm .ev-time { font-size: 11px; margin-top: 0; opacity: 0.7; white-space: nowrap; flex-shrink: 0; }
+.ev-sm { min-height: 24px; }
+.ev-sm .ev-body { flex-direction: row; align-items: center; gap: 7px; padding: 3px 7px; }
+.ev-sm .ev-name { font-size: 11px; flex-shrink: 1; min-width: 0; }
+.ev-sm .ev-time { font-size: 10px; margin-top: 0; opacity: 0.7; white-space: nowrap; flex-shrink: 0; }
 
 .ev-handle {
     position: absolute;
     left: 0;
     right: 0;
-    height: 10px;
+    height: 9px;
     cursor: ns-resize;
     background: transparent;
     z-index: 5;
@@ -908,42 +908,45 @@ select {
 }
 .modal {
     background: #ffffff;
-    border-radius: 16px;
-    width: 420px;
+    border-radius: 18px;
+    width: 480px;
     max-width: calc(100vw - 48px);
     max-height: calc(100vh - 48px);
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
     box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0,0,0,0.05);
 }
 .modal-head {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 20px 24px;
+    gap: 14px;
+    padding: 22px 26px;
     border-bottom: 1px solid var(--border);
     background: #f8fafc;
+    flex-shrink: 0;
 }
 .modal-icon {
-    width: 36px;
-    height: 36px;
-    border-radius: 10px;
+    width: 40px;
+    height: 40px;
+    border-radius: 11px;
     background: var(--c);
     color: white;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 15px;
+    font-size: 17px;
     font-weight: 700;
 }
-.modal-head h2 { margin: 0; font-size: 16px; font-weight: 600; flex: 1; }
+.modal-head h2 { margin: 0; font-size: 18px; font-weight: 600; flex: 1; }
 .modal-x {
-    width: 32px;
-    height: 32px;
+    width: 36px;
+    height: 36px;
     background: transparent;
     border: none;
-    border-radius: 8px;
+    border-radius: 9px;
     cursor: pointer;
-    font-size: 20px;
+    font-size: 22px;
     color: var(--text-muted);
     transition: all 0.15s;
     display: flex;
@@ -951,34 +954,41 @@ select {
     justify-content: center;
 }
 .modal-x:hover { background: #e2e8f0; color: var(--text-secondary); }
-.modal-body { padding: 24px; background: #ffffff; }
+.modal-body { 
+    padding: 26px; 
+    background: #ffffff; 
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+}
 .modal-foot {
     display: flex;
-    gap: 10px;
-    padding: 16px 24px;
+    gap: 12px;
+    padding: 18px 26px;
     background: #f8fafc;
     border-top: 1px solid var(--border);
+    flex-shrink: 0;
 }
-.modal-foot .btn { flex: 1; padding: 12px 20px; }
+.modal-foot .btn { flex: 1; padding: 14px 22px; font-size: 15px; }
 
 /* ═══════════ FORM ═══════════ */
-.mf { margin-bottom: 20px; }
+.mf { margin-bottom: 22px; }
 .mf:last-child { margin-bottom: 0; }
 .mf label {
     display: block;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--text-secondary);
-    margin-bottom: 8px;
+    margin-bottom: 9px;
 }
 .mf input:not([type="checkbox"]), .mf select {
     width: 100%;
-    height: 42px;
-    font-size: 14px;
-    background: var(--surface);
+    height: 48px;
+    font-size: 15px;
+    background: #ffffff;
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 0 14px;
+    border-radius: 9px;
+    padding: 0 15px;
     color: var(--text);
     font-family: inherit;
 }
@@ -987,35 +997,35 @@ select {
     box-shadow: 0 0 0 3px var(--accent-light);
     outline: none;
 }
-.mf-row { display: flex; gap: 16px; }
+.mf-row { display: flex; gap: 18px; }
 .mf-row .mf { flex: 1; }
 
 .time-box {
     display: flex;
     align-items: center;
-    background: var(--surface);
+    background: #ffffff;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 9px;
     overflow: hidden;
 }
 .time-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); }
 .time-box input {
     flex: 1;
-    height: 42px !important;
+    height: 48px !important;
     border: none !important;
     background: none !important;
     text-align: center;
     font-weight: 600;
-    font-size: 14px !important;
+    font-size: 15px !important;
     padding: 0 !important;
 }
 .time-box button {
-    width: 40px;
-    height: 42px;
+    width: 46px;
+    height: 48px;
     border: none;
     background: var(--bg);
     cursor: pointer;
-    font-size: 18px;
+    font-size: 20px;
     color: var(--text-muted);
     transition: all 0.15s;
 }
@@ -1023,15 +1033,15 @@ select {
 .time-box button:first-child { border-right: 1px solid var(--border-light); }
 .time-box button:last-child { border-left: 1px solid var(--border-light); }
 
-.dur-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.dur-row { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 14px; }
 .dur-row button {
-    padding: 8px 14px;
+    padding: 10px 16px;
     font: inherit;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
     background: var(--bg);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 7px;
     cursor: pointer;
     color: var(--text-secondary);
     transition: all 0.15s;
@@ -1041,58 +1051,58 @@ select {
 .checks {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 6px;
-    max-height: 160px;
+    gap: 7px;
+    max-height: 185px;
     overflow-y: auto;
-    padding: 12px;
-    background: var(--bg);
-    border-radius: 8px;
+    padding: 14px;
+    background: #f8fafc;
+    border-radius: 9px;
     border: 1px solid var(--border);
 }
 .checks label {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
-    background: var(--surface);
-    border-radius: 6px;
+    gap: 11px;
+    padding: 12px 14px;
+    background: #ffffff;
+    border-radius: 7px;
     cursor: pointer;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 500;
     color: var(--text-secondary);
     transition: all 0.15s;
     border: 1px solid transparent;
 }
 .checks label:hover { background: var(--accent-light); border-color: var(--accent-light); }
-.checks input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.checks input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
 
 /* ═══════════ LOCATION BUTTONS (Multi-select) ═══════════ */
 .loc-buttons {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
-    padding: 12px;
-    background: var(--bg);
-    border-radius: 8px;
+    gap: 9px;
+    padding: 14px;
+    background: #f8fafc;
+    border-radius: 9px;
     border: 1px solid var(--border);
-    max-height: 180px;
+    max-height: 200px;
     overflow-y: auto;
 }
 .loc-btn {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 2px;
-    padding: 10px 14px;
-    background: var(--surface);
+    gap: 3px;
+    padding: 12px 16px;
+    background: #ffffff;
     border: 2px solid var(--border);
-    border-radius: 8px;
+    border-radius: 9px;
     cursor: pointer;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
     color: var(--text);
     transition: all 0.15s;
-    min-width: 80px;
+    min-width: 92px;
 }
 .loc-btn:hover {
     border-color: var(--accent);
@@ -1107,7 +1117,7 @@ select {
     color: rgba(255,255,255,0.8);
 }
 .loc-type {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
     color: var(--text-muted);
     text-transform: uppercase;
