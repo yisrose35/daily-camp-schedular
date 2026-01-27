@@ -11,17 +11,21 @@
 let container, skeleton = [], template = null, _keyHandler, _visHandler;
 const PX = 1.2, SNAP = 5;
 
-// Premium Block Types with refined colors
+// Block Types — Original tile system
 const BLOCKS = {
-    general:    { name: 'General',    color: '#475569', bg: '#f8fafc',   desc: 'Standard activity block' },
-    rotation:   { name: 'Rotation',   color: '#4f46e5', bg: '#eef2ff',   desc: 'Rotating activity slot' },
-    specialty:  { name: 'Specialty',  color: '#7c3aed', bg: '#f5f3ff',   desc: 'Specialized program' },
-    split:      { name: 'Split',      color: '#0891b2', bg: '#ecfeff',   desc: 'Divided time block' },
-    conditional:{ name: 'Conditional',color: '#ea580c', bg: '#fff7ed',   desc: 'Weather-dependent block' },
-    elective:   { name: 'Elective',   color: '#059669', bg: '#ecfdf5',   desc: 'Camper choice activity' },
-    league:     { name: 'League',     color: '#dc2626', bg: '#fef2f2',   desc: 'Competitive league slot' },
-    lineup:     { name: 'Lineup',     color: '#64748b', bg: '#f1f5f9',   desc: 'Assembly/preparation', dashed: true },
-    custom:     { name: 'Custom',     color: '#78716c', bg: '#fafaf9',   desc: 'Custom event type' }
+    activity:         { name: 'Activity',    color: '#4F46E5', bg: '#E0E7FF', desc: 'General activity slot. The scheduler will assign any available activity.' },
+    sports:           { name: 'Sports',      color: '#16A34A', bg: '#DCFCE7', desc: 'Dedicated sports period. Assigns outdoor field activities and team sports.' },
+    special:          { name: 'Special',     color: '#0D9488', bg: '#CCFBF1', desc: 'Special activity slot. For unique camp-wide events or guest activities.' },
+    smart:            { name: 'Smart',       color: '#7C3AED', bg: '#EDE9FE', dashed: true, desc: 'Smart balanced slot. Automatically balances two activities with a fallback option.' },
+    split:            { name: 'Split',       color: '#D97706', bg: '#FEF3C7', desc: 'Split time block. Divides the period into two different activities.' },
+    elective:         { name: 'Elective',    color: '#DB2777', bg: '#FCE7F3', desc: 'Elective choice period. Campers choose from a set of available activities.' },
+    league:           { name: 'League',      color: '#9333EA', bg: '#F3E8FF', desc: 'League game slot. Scheduled competitive games between bunks or teams.' },
+    specialty_league: { name: 'Specialty',   color: '#CA8A04', bg: '#FEF9C3', desc: 'Specialty league. Tournament or bracket-style competition events.' },
+    swim:             { name: 'Swim',        color: '#0284C7', bg: '#E0F2FE', desc: 'Swimming period. Pool or lake activities with lifeguard supervision.' },
+    lunch:            { name: 'Lunch',       color: '#DC2626', bg: '#FEE2E2', desc: 'Lunch break. Meal time - no activities scheduled.' },
+    snacks:           { name: 'Snacks',      color: '#EA580C', bg: '#FFEDD5', desc: 'Snack time. Short break for refreshments between activities.' },
+    dismissal:        { name: 'Dismissal',   color: '#E11D48', bg: '#FCE7F3', desc: 'End of day dismissal. Wrap-up and departure time.' },
+    custom:           { name: 'Custom',      color: '#475569', bg: '#F1F5F9', desc: 'Custom event. Define your own activity with optional location reservations.' }
 };
 
 // Helpers
@@ -58,9 +62,33 @@ const bindGrid = () => {
     });
     
     document.querySelectorAll('.cal-col').forEach(col => {
-        col.addEventListener('dragover', e => { e.preventDefault(); col.classList.add('over'); });
-        col.addEventListener('dragleave', () => col.classList.remove('over'));
-        col.addEventListener('drop', e => { e.preventDefault(); col.classList.remove('over'); const type = e.dataTransfer.getData('type'), move = e.dataTransfer.getData('move'); const { lo } = bounds(), y = e.offsetY, m = lo + Math.round(y / PX / SNAP) * SNAP, div = col.dataset.d; if (move) { const ev = skeleton.find(x => x.id === move); if (ev) { const dur = toM(ev.endTime) - toM(ev.startTime); ev.division = div; ev.startTime = toS(m); ev.endTime = toS(m + dur); save(); draw(); } } else if (type) { openModal(type, div, toS(m), toS(m + 40)); } });
+        col.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); col.classList.add('over'); });
+        col.addEventListener('dragleave', e => { e.stopPropagation(); col.classList.remove('over'); });
+        col.addEventListener('drop', e => { 
+            e.preventDefault(); 
+            e.stopPropagation(); 
+            col.classList.remove('over'); 
+            const type = e.dataTransfer.getData('type'), move = e.dataTransfer.getData('move'); 
+            const { lo } = bounds();
+            // Use getBoundingClientRect for reliable Y position
+            const rect = col.getBoundingClientRect();
+            const y = e.clientY - rect.top;
+            const m = lo + Math.round(y / PX / SNAP) * SNAP;
+            const div = col.dataset.d; 
+            if (move) { 
+                const ev = skeleton.find(x => x.id === move); 
+                if (ev) { 
+                    const dur = toM(ev.endTime) - toM(ev.startTime); 
+                    ev.division = div; 
+                    ev.startTime = toS(m); 
+                    ev.endTime = toS(m + dur); 
+                    save(); 
+                    draw(); 
+                } 
+            } else if (type) { 
+                openModal(type, div, toS(m), toS(m + 40)); 
+            } 
+        });
     });
     
     document.querySelectorAll('.ev').forEach(tile => {
@@ -91,7 +119,7 @@ const openModal = (type, division, start, end, existing) => {
     const el = document.createElement('div'); el.className = 'modal';
     
     let extra = '';
-    if (type === 'conditional') { const a1 = existing?.primaryActivity || '', a2 = existing?.secondaryActivity || '', fb = existing?.fallbackActivity || ''; extra = `<div class="mf"><label>Primary (Outdoor)</label><input id="f-a1" value="${h(a1)}" placeholder="e.g., Swimming"></div><div class="mf"><label>Secondary (Indoor)</label><input id="f-a2" value="${h(a2)}" placeholder="e.g., Arts"></div><div class="mf"><label>Fallback Activity</label><input id="f-fb" value="${h(fb)}" placeholder="Optional"></div>`; }
+    if (type === 'smart') { const a1 = existing?.primaryActivity || '', a2 = existing?.secondaryActivity || '', fb = existing?.fallbackActivity || ''; extra = `<div class="mf"><label>Primary Activity</label><input id="f-a1" value="${h(a1)}" placeholder="e.g., Swimming"></div><div class="mf"><label>Secondary Activity</label><input id="f-a2" value="${h(a2)}" placeholder="e.g., Arts"></div><div class="mf"><label>Fallback Activity</label><input id="f-fb" value="${h(fb)}" placeholder="Optional"></div>`; }
     else if (type === 'split') { const s1 = existing?.subEvents?.[0]?.activity || '', s2 = existing?.subEvents?.[1]?.activity || ''; extra = `<div class="mf"><label>First Half</label><input id="f-s1" value="${h(s1)}" placeholder="Activity 1"></div><div class="mf"><label>Second Half</label><input id="f-s2" value="${h(s2)}" placeholder="Activity 2"></div>`; }
     else if (type === 'elective') { const sp = window.loadGlobalSettings?.()?.sports || [], sel = existing?.electiveActivities || []; extra = `<div class="mf"><label>Available Activities</label><div class="checks">${sp.map(s => `<label><input type="checkbox" name="el" value="${h(s)}" ${sel.includes(s) ? 'checked' : ''}>${h(s)}</label>`).join('')}</div></div>`; }
     
@@ -111,7 +139,7 @@ const openModal = (type, division, start, end, existing) => {
         const name = document.getElementById('f-name').value.trim() || B.name, sT = document.getElementById('f-start').value, eT = document.getElementById('f-end').value, sMn = toM(sT), eMn = toM(eT);
         if (sMn == null || eMn == null || eMn <= sMn) return alert('Invalid times');
         const ev = existing ? { ...existing, event: name, startTime: sT, endTime: eT } : { id: uid(), type, division, event: name, startTime: sT, endTime: eT };
-        if (type === 'conditional') { const a1 = document.getElementById('f-a1')?.value.trim(), a2 = document.getElementById('f-a2')?.value.trim(), fb = document.getElementById('f-fb')?.value.trim(); if (!a1 || !a2) return alert('Fill both activities'); ev.primaryActivity = a1; ev.secondaryActivity = a2; ev.conditionalType = 'weather'; ev.resolvedActivity = a1; ev.activities = fb ? [a1, a2, fb] : [a1, a2]; if (fb) ev.fallbackActivity = fb; }
+        if (type === 'smart') { const a1 = document.getElementById('f-a1')?.value.trim(), a2 = document.getElementById('f-a2')?.value.trim(), fb = document.getElementById('f-fb')?.value.trim(); if (!a1 || !a2) return alert('Fill both activities'); ev.primaryActivity = a1; ev.secondaryActivity = a2; ev.smartActivities = [a1, a2]; if (fb) { ev.fallbackActivity = fb; ev.smartActivities.push(fb); } }
         else if (type === 'split') { const s1 = document.getElementById('f-s1')?.value.trim(), s2 = document.getElementById('f-s2')?.value.trim(); if (!s1 || !s2) return alert('Fill both'); const mid = sMn + Math.floor((eMn - sMn) / 2); ev.subEvents = [{ activity: s1, startTime: toS(sMn), endTime: toS(mid) }, { activity: s2, startTime: toS(mid), endTime: toS(eMn) }]; }
         else if (type === 'elective') { const acts = [...el.querySelectorAll('input[name="el"]:checked')].map(c => c.value); if (acts.length < 2) return alert('Select 2+'); ev.electiveActivities = acts; }
         if (existing) { const i = skeleton.findIndex(x => x.id === existing.id); if (i >= 0) skeleton[i] = ev; } else skeleton.push(ev);
@@ -123,7 +151,7 @@ const openModal = (type, division, start, end, existing) => {
 // Render
 const render = () => {
     if (!container) return;
-    container.innerHTML = `<div class="sch">${css()}<div class="top"><div class="top-left"><h1>Schedule Builder</h1><span id="status-badge" class="badge"></span><span id="status-name" class="status-name">New</span></div><div class="top-right"><div class="tool-group"><label>Load</label><select id="tpl-sel"></select><button class="btn btn-ghost" id="btn-load">Load</button><button class="btn btn-ghost" id="btn-update" style="display:none">Update</button></div><div class="tool-group"><label>Save</label><input id="save-name" placeholder="Template name"><button class="btn btn-primary" id="btn-save">Save</button></div><div class="tool-group"><label>Manage</label><select id="del-sel"></select><button class="btn btn-danger" id="btn-del">Delete</button><button class="btn btn-ghost" id="btn-clear">Clear All</button></div></div></div><div class="body"><div class="side"><div class="side-head"><span>Block Types</span><span class="side-hint">Drag to calendar</span></div><div class="blocks">${Object.entries(BLOCKS).map(([k, v]) => `<div class="block" draggable="true" data-type="${k}" data-desc="${h(v.desc)}"><span class="block-dot" style="--c:${v.color};--bg:${v.bg}">${v.name[0]}</span><span>${v.name}</span></div>`).join('')}</div></div><div class="main"><div id="grid" class="grid"></div></div></div><div id="tile-info" class="tile-info"></div></div>`;
+    container.innerHTML = `<div class="sch">${css()}<div class="top"><div class="top-left"><h1>Schedule Builder</h1><span id="status-badge" class="badge"></span><span id="status-name" class="status-name">New</span></div><div class="top-right"><div class="tool-group"><label>Load</label><select id="tpl-sel"></select><button class="btn btn-ghost" id="btn-load">Load</button><button class="btn btn-ghost" id="btn-update" style="display:none">Update</button></div><div class="tool-group"><label>Save</label><input id="save-name" placeholder="Template name"><button class="btn btn-primary" id="btn-save">Save</button></div><div class="tool-group"><label>Manage</label><select id="del-sel"></select><button class="btn btn-danger" id="btn-del">Delete</button><button class="btn btn-ghost" id="btn-clear">Clear All</button></div></div></div><div class="body"><div class="side"><div class="side-head"><span>Block Types</span><span class="side-hint">Drag to calendar</span></div><div class="blocks">${Object.entries(BLOCKS).map(([k, v]) => `<div class="block" draggable="true" data-type="${k}" data-desc="${h(v.desc)}"><span class="block-dot" style="--c:${v.color};--bg:${v.bg}">${v.name[0]}</span><span>${v.name}</span></div>`).join('')}</div></div><div class="main"><div id="grid" class="grid"></div></div></div><div id="tile-info" class="tile-info"></div><div id="notify"></div></div>`;
     bindUI(); fills(); draw(); sync();
 };
 
@@ -698,6 +726,7 @@ select {
     right: 0; 
     border-top: 1px solid var(--border-subtle); 
     pointer-events: none; 
+    z-index: 1;
 }
 
 /* INACTIVE ZONES */
@@ -716,6 +745,7 @@ select {
     );
     pointer-events: none;
     border-bottom: 1px solid var(--border);
+    z-index: 2;
 }
 .cal-off-b { 
     top: auto; 
