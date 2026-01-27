@@ -19,7 +19,7 @@ let _keyHandler = null;
 let _visHandler = null;
 
 const STORE = 'sched_v9';
-const PX = 1.6;
+const PX = 2.9;
 const SNAP = 5;
 
 const BLOCKS = {
@@ -224,9 +224,9 @@ const draw = () => {
     });
     
     // Time rail (extra height for first label padding)
-    html += `<div class="cal-times" style="height:${ht + 10}px">`;
+    html += `<div class="cal-times" style="height:${ht + 14}px">`;
     for (let m = lo; m < hi; m += 60) {
-        html += `<div class="cal-time" style="top:${(m - lo) * PX + 10}px">${toS(m)}</div>`;
+        html += `<div class="cal-time" style="top:${(m - lo) * PX + 14}px">${toS(m)}</div>`;
     }
     html += `</div>`;
     
@@ -250,7 +250,7 @@ const draw = () => {
             if (s != null && e != null && e > s) {
                 const top = (s - lo) * PX, height = (e - s) * PX - 1;
                 const B = BLOCKS[ev.type] || BLOCKS.custom;
-                const small = height < 36;
+                const small = height < 50;
                 // Always show time, just formatted differently for small tiles
                 html += `<div class="ev ${small ? 'ev-sm' : ''}" data-id="${ev.id}" draggable="true" style="top:${top}px;height:${Math.max(height, 24)}px;--c:${B.color};--bg:${B.bg};${B.dashed ? 'border-style:dashed;' : ''}"><div class="ev-body"><span class="ev-name">${h(ev.event || B.name)}</span><span class="ev-time">${toS(s)} – ${toS(e)}</span></div><div class="ev-handle ev-handle-t"></div><div class="ev-handle ev-handle-b"></div></div>`;
             }
@@ -510,37 +510,37 @@ const css = () => `<style>
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 16px;
-    height: 56px;
+    padding: 0 22px;
+    height: 76px;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
-.top-left { display: flex; align-items: center; gap: 12px; }
-.top h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
-.top-right { display: flex; align-items: center; gap: 10px; }
+.top-left { display: flex; align-items: center; gap: 16px; }
+.top h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+.top-right { display: flex; align-items: center; gap: 14px; }
 
 .badge {
-    padding: 4px 10px;
+    padding: 5px 14px;
     border-radius: 100px;
-    font-size: 11px;
+    font-size: 15px;
     font-weight: 600;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
 }
 .badge:empty { display: none; }
-.badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.badge::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 .badge.draft { background: var(--warning-light); color: var(--warning); }
 .badge.saved { background: var(--success-light); color: var(--success); }
 
-.status-name { font-size: 13px; color: var(--text-secondary); font-weight: 500; }
+.status-name { font-size: 18px; color: var(--text-secondary); font-weight: 500; }
 
 .tool-group {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding-left: 12px;
+    gap: 11px;
+    padding-left: 16px;
     border-left: 1px solid var(--border-light);
 }
 .tool-group:first-child { padding-left: 0; border-left: none; }
@@ -550,32 +550,32 @@ select, input[type="text"], .top input {
     background: var(--surface);
     border: 1px solid var(--border);
     font-family: inherit;
-    font-size: 13px;
+    font-size: 18px;
     font-weight: 500;
-    padding: 8px 12px;
-    border-radius: 8px;
+    padding: 11px 16px;
+    border-radius: 11px;
     color: var(--text);
     outline: none;
     transition: all 0.15s;
-    min-width: 140px;
+    min-width: 190px;
 }
 select:hover, input:hover { border-color: var(--border-strong); }
-select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); }
+select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-light); }
 select {
     cursor: pointer;
-    padding-right: 32px;
+    padding-right: 43px;
     background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 12 12' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%23475569' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
-    background-position: right 10px center;
+    background-position: right 14px center;
     appearance: none;
 }
 
 .btn {
-    padding: 8px 16px;
-    border-radius: 8px;
+    padding: 11px 22px;
+    border-radius: 11px;
     font-family: inherit;
     font-weight: 600;
-    font-size: 13px;
+    font-size: 18px;
     border: 1px solid var(--border);
     background: var(--surface);
     color: var(--text);
@@ -584,7 +584,7 @@ select {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 8px;
 }
 .btn:hover { background: var(--bg); border-color: var(--border-strong); }
 .btn:active { transform: scale(0.98); }
@@ -605,7 +605,7 @@ select {
 
 /* ═══════════ SIDEBAR (PERSISTENT BLOCKS PANEL) ═══════════ */
 .side {
-    width: 200px;
+    width: 270px;
     background: var(--surface);
     border-right: 1px solid var(--border);
     display: flex;
@@ -618,25 +618,25 @@ select {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 14px 14px 12px;
+    padding: 19px 19px 16px;
     border-bottom: 1px solid var(--border-light);
 }
 .side-head span:first-child {
-    font-size: 10px;
+    font-size: 14px;
     font-weight: 700;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.08em;
 }
-.side-hint { font-size: 10px; color: var(--text-muted); }
+.side-hint { font-size: 14px; color: var(--text-muted); }
 
 .blocks {
     flex: 1;
-    padding: 12px;
+    padding: 16px;
     overflow-y: auto;
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 8px;
+    gap: 11px;
     align-content: start;
 }
 
@@ -645,11 +645,11 @@ select {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 4px;
-    padding: 10px 6px;
+    gap: 5px;
+    padding: 14px 8px;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 11px;
     cursor: grab;
     transition: all 0.2s;
 }
@@ -663,9 +663,9 @@ select {
 .block.dragging { opacity: 0.5; }
 
 .block-dot {
-    width: 28px;
-    height: 28px;
-    border-radius: 8px;
+    width: 38px;
+    height: 38px;
+    border-radius: 11px;
     border: 2px solid var(--c);
     background: var(--bg);
     display: flex;
@@ -673,10 +673,10 @@ select {
     justify-content: center;
     color: var(--c);
     font-weight: 700;
-    font-size: 12px;
+    font-size: 16px;
 }
 .block span:last-child {
-    font-size: 9px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-secondary);
     text-align: center;
@@ -690,13 +690,13 @@ select {
     align-items: center;
     justify-content: center;
     height: 100%;
-    padding: 48px;
+    padding: 65px;
     color: var(--text-muted);
     text-align: center;
 }
-.empty svg { margin-bottom: 16px; opacity: 0.4; }
-.empty p { font-size: 15px; font-weight: 600; color: var(--text-secondary); margin: 0 0 4px; }
-.empty small { font-size: 13px; color: var(--text-muted); }
+.empty svg { margin-bottom: 22px; opacity: 0.4; width: 65px; height: 65px; }
+.empty p { font-size: 20px; font-weight: 600; color: var(--text-secondary); margin: 0 0 5px; }
+.empty small { font-size: 18px; color: var(--text-muted); }
 
 /* ═══════════ TILE INFO ═══════════ */
 .tile-info {
@@ -704,40 +704,40 @@ select {
     z-index: 9000;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 16px;
-    width: 260px;
+    border-radius: 16px;
+    padding: 22px;
+    width: 350px;
     box-shadow: var(--shadow-xl);
     opacity: 0;
     pointer-events: none;
-    transform: translateX(-8px);
+    transform: translateX(-11px);
     transition: all 0.2s;
 }
 .tile-info.show { opacity: 1; pointer-events: auto; transform: translateX(0); }
 .tile-info-header {
     display: flex;
     align-items: center;
-    gap: 12px;
-    margin-bottom: 12px;
-    padding-bottom: 12px;
+    gap: 16px;
+    margin-bottom: 16px;
+    padding-bottom: 16px;
     border-bottom: 1px solid var(--border-light);
 }
-.tile-info-dot { width: 20px; height: 20px; border-radius: 6px; }
-.tile-info-header strong { font-size: 14px; font-weight: 600; }
-.tile-info p { font-size: 13px; color: var(--text-secondary); line-height: 1.5; margin: 0 0 12px; }
-.tile-info small { font-size: 11px; color: var(--text-muted); }
+.tile-info-dot { width: 27px; height: 27px; border-radius: 8px; }
+.tile-info-header strong { font-size: 19px; font-weight: 600; }
+.tile-info p { font-size: 18px; color: var(--text-secondary); line-height: 1.5; margin: 0 0 16px; }
+.tile-info small { font-size: 15px; color: var(--text-muted); }
 
 /* ═══════════ MAIN GRID ═══════════ */
 .main { 
     flex: 1; 
     overflow: auto; 
-    padding: 16px; 
+    padding: 22px; 
     background: var(--bg);
     min-height: 0;
 }
 .grid {
     background: var(--surface);
-    border-radius: 12px;
+    border-radius: 16px;
     border: 1px solid var(--border);
     overflow: visible;
     min-height: 100%;
@@ -746,7 +746,7 @@ select {
 
 .calendar { 
     display: grid; 
-    grid-template-columns: 72px repeat(var(--cols), minmax(160px, 1fr));
+    grid-template-columns: 100px repeat(var(--cols), minmax(240px, 1fr));
     min-width: max-content;
 }
 .cal-corner {
@@ -756,42 +756,42 @@ select {
     position: sticky;
     left: 0;
     top: 0;
-    z-index: 50;
+    z-index: 5;
 }
 .cal-head {
     position: sticky;
     top: 0;
-    z-index: 40;
+    z-index: 4;
     background: var(--bg);
     border-bottom: 1px solid var(--border);
     border-right: 1px solid var(--border-light);
-    padding: 14px 10px;
+    padding: 18px 16px;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    font-size: 13px;
+    gap: 12px;
+    font-size: 16px;
     font-weight: 600;
 }
-.cal-head-dot { width: 8px; height: 8px; border-radius: 50%; }
+.cal-head-dot { width: 12px; height: 12px; border-radius: 50%; }
 
 /* ═══════════ TIME RAIL (FIXED CUTOFF) ═══════════ */
 .cal-times {
     position: sticky;
     left: 0;
-    z-index: 30;
+    z-index: 3;
     background: var(--bg);
     border-right: 1px solid var(--border);
-    width: 72px;
-    padding-top: 10px;
+    width: 100px;
+    padding-top: 14px;
     box-sizing: border-box;
 }
 .cal-time {
     position: absolute;
     left: 0;
-    right: 8px;
+    right: 12px;
     transform: translateY(-50%);
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--text-muted);
     text-align: right;
@@ -836,12 +836,12 @@ select {
 /* ═══════════ EVENTS ═══════════ */
 .ev {
     position: absolute;
-    left: 4px;
-    right: 4px;
-    min-height: 24px;
-    border-radius: 6px;
+    left: 6px;
+    right: 6px;
+    min-height: 32px;
+    border-radius: 8px;
     background: var(--bg);
-    border: 1.5px solid var(--c);
+    border: 2px solid var(--c);
     cursor: pointer;
     z-index: 10;
     display: flex;
@@ -850,19 +850,19 @@ select {
     overflow: hidden;
 }
 .ev:hover { z-index: 20; box-shadow: var(--shadow-md); transform: translateY(-1px); }
-.ev.sel { box-shadow: 0 0 0 2px var(--accent), var(--shadow-md); z-index: 30; }
+.ev.sel { box-shadow: 0 0 0 3px var(--accent), var(--shadow-md); z-index: 30; }
 .ev.moving { opacity: 0.6; }
 .ev.resizing { z-index: 40; }
 
 .ev-body {
     flex: 1;
-    padding: 4px 8px;
+    padding: 6px 10px;
     display: flex;
     flex-direction: column;
     justify-content: center;
 }
 .ev-name {
-    font-size: 11px;
+    font-size: 14px;
     font-weight: 600;
     color: var(--text);
     line-height: 1.3;
@@ -871,22 +871,22 @@ select {
     text-overflow: ellipsis;
 }
 .ev-time {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 500;
     color: var(--text-secondary);
-    margin-top: 2px;
+    margin-top: 3px;
 }
 
-.ev-sm { min-height: 20px; }
-.ev-sm .ev-body { flex-direction: row; align-items: center; gap: 6px; padding: 2px 6px; }
-.ev-sm .ev-name { font-size: 10px; flex-shrink: 1; min-width: 0; }
-.ev-sm .ev-time { font-size: 9px; margin-top: 0; opacity: 0.7; white-space: nowrap; flex-shrink: 0; }
+.ev-sm { min-height: 28px; }
+.ev-sm .ev-body { flex-direction: row; align-items: center; gap: 8px; padding: 4px 8px; }
+.ev-sm .ev-name { font-size: 12px; flex-shrink: 1; min-width: 0; }
+.ev-sm .ev-time { font-size: 11px; margin-top: 0; opacity: 0.7; white-space: nowrap; flex-shrink: 0; }
 
 .ev-handle {
     position: absolute;
     left: 0;
     right: 0;
-    height: 8px;
+    height: 10px;
     cursor: ns-resize;
     background: transparent;
     z-index: 5;
