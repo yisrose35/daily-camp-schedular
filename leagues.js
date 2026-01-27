@@ -344,6 +344,21 @@
 
     function loadLeaguesData() {
         try {
+            // ★ Helper to count VALID leagues (not just keys)
+            function countValidLeagues(obj) {
+                if (!obj || typeof obj !== 'object') return 0;
+                let count = 0;
+                Object.keys(obj).forEach(key => {
+                    const league = obj[key];
+                    // A valid league must have a name or teams array
+                    if (league && typeof league === 'object' && 
+                        (league.name || Array.isArray(league.teams))) {
+                        count++;
+                    }
+                });
+                return count;
+            }
+            
             // ★ Check multiple sources for league data
             let loadedData = {};
             let source = 'none';
@@ -351,7 +366,7 @@
             // Source 1: loadGlobalSettings (may include cloud-synced data)
             const global = window.loadGlobalSettings?.() || {};
             const fromGlobal = global.leaguesByName || {};
-            const fromGlobalCount = Object.keys(fromGlobal).length;
+            const fromGlobalCount = countValidLeagues(fromGlobal);
             
             // Source 2: localStorage directly (most recent local writes)
             let fromLS = {};
@@ -361,7 +376,7 @@
                 if (lsRaw) {
                     const lsData = JSON.parse(lsRaw);
                     fromLS = lsData?.leaguesByName || {};
-                    fromLSCount = Object.keys(fromLS).length;
+                    fromLSCount = countValidLeagues(fromLS);
                 }
             } catch (lsErr) {
                 console.log("[LEAGUES] localStorage read failed:", lsErr);
@@ -369,9 +384,9 @@
             
             // Source 3: app1 nested structure (legacy)
             const fromApp1 = global.app1?.leaguesByName || {};
-            const fromApp1Count = Object.keys(fromApp1).length;
+            const fromApp1Count = countValidLeagues(fromApp1);
             
-            // ★ Use the source with the most data
+            // ★ Use the source with the most VALID data
             if (fromGlobalCount >= fromLSCount && fromGlobalCount >= fromApp1Count && fromGlobalCount > 0) {
                 loadedData = fromGlobal;
                 source = 'global';
@@ -383,7 +398,7 @@
                 source = 'app1';
             }
             
-            const loadedCount = Object.keys(loadedData).length;
+            const loadedCount = countValidLeagues(loadedData);
             const currentCount = Object.keys(leaguesByName).length;
 
             console.log("[LEAGUES] Load sources:", {
@@ -395,7 +410,6 @@
             });
 
             // ★ SAFEGUARD: If we have data but loaded empty, this is suspicious
-            // Don't overwrite unless we're sure (e.g., fresh init or explicit reset)
             if (currentCount > 0 && loadedCount === 0) {
                 console.warn("[LEAGUES] ⚠️ Refusing to overwrite " + currentCount + " leagues with empty data!");
                 console.warn("[LEAGUES] This may be a race condition or sync issue.");
@@ -406,9 +420,15 @@
             // 1. Remove old keys
             Object.keys(leaguesByName).forEach(k => delete leaguesByName[k]);
 
-            // 2. Add new keys with validation
+            // 2. Add new keys with validation (only valid leagues)
             Object.keys(loadedData).forEach(leagueName => {
-                leaguesByName[leagueName] = validateLeague(loadedData[leagueName], leagueName);
+                const league = loadedData[leagueName];
+                if (league && typeof league === 'object' && 
+                    (league.name || Array.isArray(league.teams))) {
+                    leaguesByName[leagueName] = validateLeague(league, leagueName);
+                } else {
+                    console.warn("[LEAGUES] Skipping invalid league entry:", leagueName, league);
+                }
             });
 
             console.log("[LEAGUES] Data loaded:", {
