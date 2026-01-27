@@ -1,6 +1,11 @@
 // ============================================================================
-// specialty_leagues.js — PRODUCTION-READY v2.2.1 (EMERALD CAMP THEME)
+// specialty_leagues.js — PRODUCTION-READY v2.2.2 (EMERALD CAMP THEME)
 // ============================================================================
+// v2.2.2 DATA PROTECTION FIXES:
+// - ★ DEFENSIVE LOADING: Won't wipe existing data if loadGlobalSettings returns empty
+// - ★ SAFE REFRESH: Checks source before clearing existing leagues
+// - ★ SAFE INIT: Preserves data if cloud hasn't hydrated yet
+//
 // v2.2.1 BACKWARD COMPATIBILITY FIXES:
 // - ★ GAME LABEL FIX: Supports both g.name (old) and g.gameLabel (new)
 // - ★ AUTO-EXPAND HISTORY: Shows history if no today's games exist
@@ -42,7 +47,7 @@
 (function() {
     'use strict';
 
-    console.log("[SPECIALTY_LEAGUES] Module v2.2.1 loading...");
+    console.log("[SPECIALTY_LEAGUES] Module v2.2.2 loading...");
 
     // =============================================================
     // STATE & GLOBALS
@@ -462,6 +467,16 @@
         try {
             const g = window.loadGlobalSettings?.() || {};
             const loaded = g.specialtyLeagues || {};
+            const loadedCount = Object.keys(loaded).length;
+            const existingCount = Object.keys(specialtyLeagues).length;
+            
+            // ★ FIX v2.2.1: DEFENSIVE LOADING - Don't wipe existing data if source is empty
+            // This prevents data loss when loadGlobalSettings returns stale/empty cache
+            if (loadedCount === 0 && existingCount > 0) {
+                console.warn("[SPECIALTY_LEAGUES] ⚠️ loadGlobalSettings returned empty but we have existing data. Keeping existing data.");
+                console.log("[SPECIALTY_LEAGUES] Existing leagues:", Object.keys(specialtyLeagues).join(', '));
+                return; // Don't wipe existing data
+            }
             
             // Clear and fill with validated data
             Object.keys(specialtyLeagues).forEach(k => delete specialtyLeagues[k]);
@@ -471,21 +486,36 @@
             });
 
             console.log("[SPECIALTY_LEAGUES] Data loaded:", {
-                leagues: Object.keys(specialtyLeagues).length
+                leagues: Object.keys(specialtyLeagues).length,
+                leagueNames: Object.values(specialtyLeagues).map(l => l.name).join(', ')
             });
         } catch (e) {
             console.error("[SPECIALTY_LEAGUES] Load failed:", e);
+            // ★ FIX: Don't clear data on error
         }
     }
 
     /**
      * Refresh data from storage (call when tab becomes visible or after cloud sync)
+     * ★ FIX v2.2.1: More defensive - won't wipe data if source returns empty
      */
     function refreshFromStorage() {
         // ★ FIX v2.1: Check protection window
         const timeSinceSave = Date.now() - _lastSaveTime;
         if (_saveInProgress || timeSinceSave < 2000) {
             console.log("[SPECIALTY_LEAGUES] In protection window, skipping refresh");
+            return;
+        }
+
+        // ★ FIX v2.2.1: Check what loadGlobalSettings would give us BEFORE clearing anything
+        const g = window.loadGlobalSettings?.() || {};
+        const freshData = g.specialtyLeagues || {};
+        const freshCount = Object.keys(freshData).length;
+        const existingCount = Object.keys(specialtyLeagues).length;
+        
+        // Don't refresh if it would wipe our data
+        if (freshCount === 0 && existingCount > 0) {
+            console.warn("[SPECIALTY_LEAGUES] ⚠️ Refresh skipped - source is empty but we have data");
             return;
         }
 
@@ -565,7 +595,18 @@
         cleanupEventListeners();
         cleanupTabListeners();
 
-        loadData();
+        // ★ FIX v2.2.1: Check if we already have data before loading
+        // This prevents wiping data if loadGlobalSettings hasn't hydrated yet
+        const existingCount = Object.keys(specialtyLeagues).length;
+        const g = window.loadGlobalSettings?.() || {};
+        const sourceCount = Object.keys(g.specialtyLeagues || {}).length;
+        
+        if (existingCount > 0 && sourceCount === 0) {
+            console.log("[SPECIALTY_LEAGUES] ⚠️ Keeping existing data (source empty, have " + existingCount + " leagues)");
+            // Don't call loadData() - keep what we have
+        } else {
+            loadData();
+        }
 
         // ---------------------------------------------------------
         // MAIN TEMPLATE
@@ -1945,6 +1986,6 @@
     // ★ v2.1: Export diagnostics
     window.diagnoseSpecialtyLeagues = diagnoseSpecialtyLeagues;
 
-    console.log("[SPECIALTY_LEAGUES] Module v2.2.1 loaded");
+    console.log("[SPECIALTY_LEAGUES] Module v2.2.2 loaded");
 
 })();
