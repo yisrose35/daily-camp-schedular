@@ -448,6 +448,24 @@ const render = () => {
 const css = () => `<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
+/* Hide the main page title when Schedule Builder is shown */
+#master-scheduler.active ~ .app-page-title,
+#master-scheduler.active + .app-page-title,
+.tab-content#master-scheduler.active ~ h1.app-page-title {
+    display: none !important;
+}
+/* Also target parent container */
+#master-scheduler.active { margin-top: -20px; }
+
+/* Make the tab content fill available space */
+#master-scheduler {
+    height: calc(100vh - 140px);
+    min-height: 500px;
+}
+#master-scheduler-content {
+    height: 100%;
+}
+
 .sch {
     --bg: #f8fafc;
     --surface: #ffffff;
@@ -474,10 +492,12 @@ const css = () => `<style>
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     background: var(--bg);
     color: var(--text);
-    height: 100%;
+    height: calc(100vh - 120px);
+    min-height: 600px;
     display: flex;
     flex-direction: column;
     -webkit-font-smoothing: antialiased;
+    position: relative;
 }
 
 .sch ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -490,15 +510,15 @@ const css = () => `<style>
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 24px;
-    height: 64px;
+    padding: 0 16px;
+    height: 56px;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
-.top-left { display: flex; align-items: center; gap: 16px; }
-.top h1 { font-size: 16px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
-.top-right { display: flex; align-items: center; gap: 12px; }
+.top-left { display: flex; align-items: center; gap: 12px; }
+.top h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+.top-right { display: flex; align-items: center; gap: 10px; }
 
 .badge {
     padding: 4px 10px;
@@ -576,40 +596,47 @@ select {
 .btn-danger:hover { background: #fee2e2; border-color: #fca5a5; }
 
 /* ═══════════ LAYOUT ═══════════ */
-.body { display: flex; flex: 1; overflow: hidden; }
+.body { 
+    display: flex; 
+    flex: 1; 
+    overflow: hidden;
+    min-height: 0;
+}
 
-/* ═══════════ SIDEBAR ═══════════ */
+/* ═══════════ SIDEBAR (PERSISTENT BLOCKS PANEL) ═══════════ */
 .side {
-    width: 240px;
+    width: 200px;
     background: var(--surface);
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
+    height: 100%;
+    overflow: hidden;
 }
 .side-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 20px 20px 16px;
+    padding: 14px 14px 12px;
     border-bottom: 1px solid var(--border-light);
 }
 .side-head span:first-child {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.08em;
 }
-.side-hint { font-size: 11px; color: var(--text-muted); }
+.side-hint { font-size: 10px; color: var(--text-muted); }
 
 .blocks {
     flex: 1;
-    padding: 16px;
+    padding: 12px;
     overflow-y: auto;
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 10px;
+    gap: 8px;
     align-content: start;
 }
 
@@ -618,11 +645,11 @@ select {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    padding: 14px 10px;
+    gap: 4px;
+    padding: 10px 6px;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: 8px;
     cursor: grab;
     transition: all 0.2s;
 }
@@ -636,9 +663,9 @@ select {
 .block.dragging { opacity: 0.5; }
 
 .block-dot {
-    width: 36px;
-    height: 36px;
-    border-radius: 10px;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
     border: 2px solid var(--c);
     background: var(--bg);
     display: flex;
@@ -646,13 +673,14 @@ select {
     justify-content: center;
     color: var(--c);
     font-weight: 700;
-    font-size: 14px;
+    font-size: 12px;
 }
 .block span:last-child {
-    font-size: 11px;
+    font-size: 9px;
     font-weight: 600;
     color: var(--text-secondary);
     text-align: center;
+    line-height: 1.2;
 }
 
 /* ═══════════ EMPTY STATE ═══════════ */
@@ -700,17 +728,27 @@ select {
 .tile-info small { font-size: 11px; color: var(--text-muted); }
 
 /* ═══════════ MAIN GRID ═══════════ */
-.main { flex: 1; overflow: auto; padding: 20px; background: var(--bg); }
+.main { 
+    flex: 1; 
+    overflow: auto; 
+    padding: 16px; 
+    background: var(--bg);
+    min-height: 0;
+}
 .grid {
     background: var(--surface);
     border-radius: 12px;
     border: 1px solid var(--border);
-    overflow: hidden;
+    overflow: visible;
     min-height: 100%;
     box-shadow: var(--shadow-sm);
 }
 
-.calendar { display: grid; grid-template-columns: 72px repeat(var(--cols), minmax(140px, 1fr)); }
+.calendar { 
+    display: grid; 
+    grid-template-columns: 72px repeat(var(--cols), minmax(160px, 1fr));
+    min-width: max-content;
+}
 .cal-corner {
     background: var(--bg);
     border-bottom: 1px solid var(--border);
@@ -861,21 +899,21 @@ select {
 .modal-wrap {
     position: fixed;
     inset: 0;
-    background: rgba(15, 23, 42, 0.6);
-    backdrop-filter: blur(4px);
+    background: rgba(15, 23, 42, 0.75);
+    backdrop-filter: blur(8px);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 1000;
+    z-index: 10000;
 }
 .modal {
-    background: var(--surface);
+    background: #ffffff;
     border-radius: 16px;
     width: 420px;
     max-width: calc(100vw - 48px);
     max-height: calc(100vh - 48px);
     overflow: hidden;
-    box-shadow: var(--shadow-xl);
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0,0,0,0.05);
 }
 .modal-head {
     display: flex;
@@ -883,7 +921,7 @@ select {
     gap: 12px;
     padding: 20px 24px;
     border-bottom: 1px solid var(--border);
-    background: var(--bg);
+    background: #f8fafc;
 }
 .modal-icon {
     width: 36px;
@@ -912,13 +950,13 @@ select {
     align-items: center;
     justify-content: center;
 }
-.modal-x:hover { background: var(--surface); color: var(--text-secondary); }
-.modal-body { padding: 24px; background: var(--surface); }
+.modal-x:hover { background: #e2e8f0; color: var(--text-secondary); }
+.modal-body { padding: 24px; background: #ffffff; }
 .modal-foot {
     display: flex;
     gap: 10px;
     padding: 16px 24px;
-    background: var(--bg);
+    background: #f8fafc;
     border-top: 1px solid var(--border);
 }
 .modal-foot .btn { flex: 1; padding: 12px 20px; }
@@ -1098,11 +1136,16 @@ select {
 
 /* ═══════════ RESPONSIVE ═══════════ */
 @media (max-width: 1100px) {
-    .top { flex-wrap: wrap; height: auto; padding: 16px 20px; gap: 12px; }
-    .top-right { flex-wrap: wrap; gap: 10px; }
+    .top { flex-wrap: wrap; height: auto; padding: 12px 16px; gap: 10px; }
+    .top-right { flex-wrap: wrap; gap: 8px; }
     .tool-group { padding-left: 0; border-left: none; }
-    .side { width: 200px; }
+    .side { width: 160px; }
     .blocks { grid-template-columns: 1fr; }
+}
+@media (max-width: 768px) {
+    .side { width: 140px; }
+    .block { padding: 8px 4px; }
+    .block-dot { width: 24px; height: 24px; font-size: 10px; }
 }
 </style>`;
 
@@ -1110,6 +1153,10 @@ select {
 const init = () => {
     container = document.getElementById('master-scheduler-content');
     if (!container) return;
+    
+    // Hide the main page title when Schedule Builder is shown
+    const pageTitle = document.querySelector('.app-page-title');
+    if (pageTitle) pageTitle.style.display = 'none';
     
     if (!load()) {
         try {
@@ -1137,6 +1184,9 @@ window.cleanupMasterScheduler = () => {
     if (_visHandler) document.removeEventListener('visibilitychange', _visHandler);
     document.getElementById('modal-wrap')?.remove();
     document.getElementById('notify')?.remove();
+    // Restore page title when leaving
+    const pageTitle = document.querySelector('.app-page-title');
+    if (pageTitle) pageTitle.style.display = '';
 };
 window.refreshMasterSchedulerFromCloud = fills;
 
