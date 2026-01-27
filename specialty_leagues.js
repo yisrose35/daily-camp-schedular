@@ -1,6 +1,14 @@
 // ============================================================================
-// specialty_leagues.js — PRODUCTION-READY v2.1 (EMERALD CAMP THEME)
+// specialty_leagues.js — PRODUCTION-READY v2.2 (EMERALD CAMP THEME)
 // ============================================================================
+// v2.2 UI ENHANCEMENTS (matches leagues.js v2.5):
+// - ★ PROFESSIONAL CARD UI: Today's games shown as cards automatically
+// - ★ INLINE SCORE EDITING: Auto-save with debounce and visual feedback
+// - ★ COLLAPSIBLE HISTORY: Past games in collapsible section
+// - ★ WINNER HIGHLIGHTING: Green for winner, gray for loser
+// - ★ ADD GAME/MATCH: Easy buttons to add new games and matches
+// - ★ IMPORT V2: Creates game entries that show in Today section
+//
 // v2.1 AUDIT FIXES:
 // - ★ RACE CONDITION FIX: Added _saveInProgress and _lastSaveTime flags
 // - ★ IMMEDIATE LOCALSTORAGE: saveData() now writes to localStorage immediately
@@ -29,7 +37,7 @@
 (function() {
     'use strict';
 
-    console.log("[SPECIALTY_LEAGUES] Module v2.1 loading...");
+    console.log("[SPECIALTY_LEAGUES] Module v2.2 loading...");
 
     // =============================================================
     // STATE & GLOBALS
@@ -1132,207 +1140,435 @@
     }
 
     // =============================================================
-    // GAME ENTRY
+    // ★ v2.1: PROFESSIONAL GAME ENTRY UI (matches leagues.js v2.5)
     // =============================================================
-    function renderGameEntryUI(league, container) {
-        container.innerHTML = '';
-
-        const controls = document.createElement('div');
-        Object.assign(controls.style, {
-            marginBottom: '15px',
-            padding: '12px',
-            background: '#F9FAFB',
-            borderRadius: '12px',
-            border: '1px solid #E5E7EB',
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: '10px',
-            alignItems: 'center'
-        });
-
-        const select = document.createElement('select');
-        select.style.flex = "1";
-        select.innerHTML = `<option value="new">-- Enter New Game Results --</option>`;
-        (league.games || []).forEach((g, idx) => {
-            const label = g.name || `Game ${idx + 1}`;
-            select.innerHTML += `<option value="${idx}">${escapeHtml(label)} (${escapeHtml(g.date || 'Unknown')})</option>`;
-        });
-
-        const importBtn = document.createElement('button');
-        importBtn.textContent = "Import Today's Schedule";
-        Object.assign(importBtn.style, {
-            background: '#00C896',
-            color: 'white',
-            border: 'none',
-            borderRadius: '8px',
-            padding: '8px 16px',
-            boxShadow: '0 2px 4px rgba(0, 200, 150, 0.3)',
-            fontWeight: '600',
-            cursor: 'pointer'
-        });
-
-        controls.appendChild(select);
-        controls.appendChild(importBtn);
-
-        const matchContainer = document.createElement('div');
-        matchContainer.style.maxHeight = '420px';
-        matchContainer.style.overflowY = 'auto';
-        matchContainer.style.padding = '4px';
-
-        container.appendChild(controls);
-        container.appendChild(matchContainer);
-
-        const saveBtn = document.createElement('button');
-        saveBtn.textContent = 'Save Game Results';
-        Object.assign(saveBtn.style, {
-            marginTop: '15px',
-            width: '100%',
-            background: '#00C896',
-            color: 'white',
-            border: 'none',
-            borderRadius: '8px',
-            padding: '12px',
-            display: 'none',
-            fontWeight: '600',
-            cursor: 'pointer',
-            boxShadow: '0 3px 8px rgba(0, 200, 150, 0.35)'
-        });
-        saveBtn.dataset.role = 'save-game-results';
-        saveBtn.onclick = () => saveGameResults(league, select.value, matchContainer);
-
-        container.appendChild(saveBtn);
-
-        importBtn.onclick = () => importGamesFromSchedule(league, matchContainer);
-
-        select.onchange = () => {
-            matchContainer.innerHTML = '';
-            if (select.value === 'new') {
-                importBtn.style.display = 'inline-block';
-                saveBtn.style.display = 'none';
-            } else {
-                importBtn.style.display = 'none';
-                saveBtn.style.display = 'block';
-                loadExistingGame(league, select.value, matchContainer, saveBtn);
-            }
-        };
-
-        function loadExistingGame(leagueObj, gameIdx, target, saveButton) {
-            const game = leagueObj.games[parseInt(gameIdx, 10)];
-            if (!game) return;
-            const groupedMatches = {};
-            (game.matches || []).forEach((m) => {
-                const label = m.timeLabel || 'Matchups';
-                if (!groupedMatches[label]) groupedMatches[label] = [];
-                groupedMatches[label].push(m);
-            });
-
-            const labels = Object.keys(groupedMatches).sort((a, b) => {
-                return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
-            });
-
-            labels.forEach((label) => {
-                const header = document.createElement('div');
-                header.className = 'group-header';
-                header.textContent = label;
-                target.appendChild(header);
-                groupedMatches[label].forEach((m) => {
-                    addMatchRow(target, m.teamA, m.teamB, m.scoreA || '', m.scoreB || '', saveButton, label);
-                });
-            });
+    
+    /**
+     * Format date for display
+     */
+    function formatDateDisplay(dateStr) {
+        if (!dateStr) return '';
+        try {
+            const d = new Date(dateStr + 'T12:00:00');
+            return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+        } catch (e) {
+            return dateStr;
         }
     }
 
-    function addMatchRow(target, teamA, teamB, scoreA = '', scoreB = '', saveButton, timeLabel = '') {
-        if (!target) return;
-        
-        const row = document.createElement('div');
-        row.className = 'match-row';
-        Object.assign(row.style, {
+    /**
+     * Render the main game entry UI with professional styling
+     * Shows today's games automatically as cards
+     */
+    function renderGameEntryUI(league, container) {
+        if (!container) return;
+
+        container.innerHTML = '';
+        container.setAttribute('data-section', 'games');
+
+        // Header bar
+        const header = document.createElement('div');
+        Object.assign(header.style, {
             display: 'flex',
+            justifyContent: 'space-between',
             alignItems: 'center',
-            gap: '12px',
-            marginBottom: '8px',
-            padding: '10px 12px',
-            background: '#FFFFFF',
-            border: '1px solid #E5E7EB',
-            borderRadius: '10px',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.02)'
+            marginBottom: '20px',
+            paddingBottom: '16px',
+            borderBottom: '1px solid #E5E7EB'
+        });
+        
+        const headerTitle = document.createElement('div');
+        headerTitle.style.cssText = 'font-weight:600; font-size:1.1rem; color:#111827;';
+        headerTitle.textContent = 'Game Results';
+        header.appendChild(headerTitle);
+        
+        const importBtn = document.createElement('button');
+        importBtn.textContent = 'Import from Schedule';
+        Object.assign(importBtn.style, {
+            padding: '8px 16px',
+            borderRadius: '6px',
+            background: '#111827',
+            color: '#fff',
+            border: 'none',
+            cursor: 'pointer',
+            fontWeight: '500',
+            fontSize: '0.875rem',
+            transition: 'background 0.15s ease'
+        });
+        importBtn.onmouseover = () => importBtn.style.background = '#374151';
+        importBtn.onmouseout = () => importBtn.style.background = '#111827';
+        importBtn.onclick = () => importGamesFromScheduleV2(league, container);
+        header.appendChild(importBtn);
+        container.appendChild(header);
+
+        // Get and group games by date
+        const games = league.games || [];
+        const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        
+        const todaysGames = [];
+        const pastGames = [];
+        
+        games.forEach((g, idx) => {
+            const gameWithIdx = { ...g, _idx: idx };
+            if (g.date === currentDate) {
+                todaysGames.push(gameWithIdx);
+            } else {
+                pastGames.push(gameWithIdx);
+            }
+        });
+        
+        // Sort by game number/label
+        const sortByGameNum = (a, b) => {
+            const numA = a.gameNumber || parseInt((a.gameLabel || '').match(/\d+/)?.[0]) || 0;
+            const numB = b.gameNumber || parseInt((b.gameLabel || '').match(/\d+/)?.[0]) || 0;
+            return numA - numB;
+        };
+        todaysGames.sort(sortByGameNum);
+        pastGames.sort((a, b) => {
+            if (a.date !== b.date) return (b.date || '').localeCompare(a.date || '');
+            return sortByGameNum(a, b);
         });
 
-        // ★ XSS PREVENTION: Build row using DOM methods
-        // Team A
-        const teamALabel = document.createElement('strong');
-        Object.assign(teamALabel.style, { flex: '1', textAlign: 'right', fontSize: '0.9rem' });
-        teamALabel.textContent = teamA;
-        row.appendChild(teamALabel);
+        // TODAY'S GAMES SECTION
+        const todaySection = document.createElement('div');
+        todaySection.style.marginBottom = '24px';
         
-        // Score A input
+        const todayHeader = document.createElement('div');
+        todayHeader.style.cssText = 'font-size:0.75rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#6B7280; margin-bottom:12px;';
+        todayHeader.textContent = 'Today — ' + formatDateDisplay(currentDate);
+        todaySection.appendChild(todayHeader);
+        
+        if (todaysGames.length === 0) {
+            const emptyMsg = document.createElement('div');
+            emptyMsg.style.cssText = 'padding:32px 24px; text-align:center; background:#FAFAFA; border-radius:8px; border:1px solid #E5E7EB;';
+            emptyMsg.innerHTML = '<div style="font-weight:500; color:#374151; margin-bottom:4px;">No games for today</div>' +
+                '<div style="font-size:0.875rem; color:#6B7280;">Import games from the schedule to enter results</div>';
+            todaySection.appendChild(emptyMsg);
+        } else {
+            todaysGames.forEach(game => {
+                const card = renderGameCard(league, game, false, container);
+                todaySection.appendChild(card);
+            });
+        }
+        
+        container.appendChild(todaySection);
+        
+        // PAST GAMES (collapsible history)
+        if (pastGames.length > 0) {
+            const pastSection = document.createElement('div');
+            pastSection.style.marginBottom = '24px';
+            
+            const pastHeader = document.createElement('div');
+            pastHeader.style.cssText = 'font-size:0.75rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#9CA3AF; margin-bottom:12px; cursor:pointer; display:flex; align-items:center; gap:6px;';
+            pastHeader.innerHTML = '<span id="sl-past-arrow" style="font-size:0.65rem;">▶</span> History (' + pastGames.length + ')';
+            
+            const pastContent = document.createElement('div');
+            pastContent.style.display = 'none';
+            
+            pastHeader.onclick = () => {
+                const isHidden = pastContent.style.display === 'none';
+                pastContent.style.display = isHidden ? 'block' : 'none';
+                const arrow = pastHeader.querySelector('#sl-past-arrow');
+                if (arrow) arrow.textContent = isHidden ? '▼' : '▶';
+            };
+            
+            pastGames.forEach(game => {
+                const card = renderGameCard(league, game, true, container);
+                pastContent.appendChild(card);
+            });
+            
+            pastSection.appendChild(pastHeader);
+            pastSection.appendChild(pastContent);
+            container.appendChild(pastSection);
+        }
+        
+        // ADD NEW GAME BUTTON
+        const addNewBtn = document.createElement('button');
+        addNewBtn.textContent = '+ Add Game';
+        addNewBtn.style.cssText = 'padding:10px 16px; border:1px solid #E5E7EB; border-radius:6px; background:#fff; cursor:pointer; color:#6B7280; font-weight:500; font-size:0.875rem; width:100%; transition: all 0.15s ease;';
+        addNewBtn.onmouseover = () => { addNewBtn.style.borderColor = '#111827'; addNewBtn.style.color = '#111827'; };
+        addNewBtn.onmouseout = () => { addNewBtn.style.borderColor = '#E5E7EB'; addNewBtn.style.color = '#6B7280'; };
+        addNewBtn.onclick = () => {
+            if (!league.games) league.games = [];
+            const newIdx = league.games.length;
+            const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+            league.games.push({
+                date: currentDate,
+                gameLabel: 'Game ' + (newIdx + 1),
+                matches: []
+            });
+            saveData();
+            renderGameEntryUI(league, container);
+        };
+        container.appendChild(addNewBtn);
+    }
+    
+    /**
+     * Render a single game card with inline score editing
+     */
+    function renderGameCard(league, game, isPast, parentContainer) {
+        const card = document.createElement('div');
+        Object.assign(card.style, {
+            background: '#fff',
+            border: '1px solid #E5E7EB',
+            borderRadius: '8px',
+            marginBottom: '12px',
+            overflow: 'hidden'
+        });
+        
+        // Card Header
+        const cardHeader = document.createElement('div');
+        cardHeader.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:#FAFAFA; border-bottom:1px solid #E5E7EB;';
+        
+        const gameTitle = document.createElement('div');
+        gameTitle.style.cssText = 'font-weight:600; font-size:0.9rem; color:#111827;';
+        gameTitle.textContent = game.gameLabel || ('Game ' + (game._idx + 1));
+        
+        const headerRight = document.createElement('div');
+        headerRight.style.cssText = 'display:flex; align-items:center; gap:12px;';
+        
+        const gameDate = document.createElement('span');
+        gameDate.style.cssText = 'font-size:0.8rem; color:#6B7280;';
+        gameDate.textContent = formatDateDisplay(game.date);
+        
+        const deleteBtn = document.createElement('button');
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.style.cssText = 'background:none; border:none; cursor:pointer; font-size:0.75rem; color:#9CA3AF; padding:4px 8px; transition: color 0.15s;';
+        deleteBtn.onmouseover = () => deleteBtn.style.color = '#DC2626';
+        deleteBtn.onmouseout = () => deleteBtn.style.color = '#9CA3AF';
+        deleteBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (confirm('Delete this game? This action cannot be undone.')) {
+                league.games.splice(game._idx, 1);
+                recalcStandings(league);
+                saveData();
+                renderGameEntryUI(league, parentContainer);
+            }
+        };
+        
+        headerRight.appendChild(gameDate);
+        headerRight.appendChild(deleteBtn);
+        cardHeader.appendChild(gameTitle);
+        cardHeader.appendChild(headerRight);
+        card.appendChild(cardHeader);
+        
+        // Matchups container
+        const matchupsContainer = document.createElement('div');
+        matchupsContainer.style.padding = '8px 0';
+        
+        if (!game.matches || game.matches.length === 0) {
+            const noMatches = document.createElement('div');
+            noMatches.style.cssText = 'text-align:center; padding:16px; color:#9CA3AF; font-size:0.875rem;';
+            noMatches.textContent = 'No matchups added';
+            matchupsContainer.appendChild(noMatches);
+        } else {
+            game.matches.forEach((match, mIdx) => {
+                const matchRow = renderMatchRow(league, game, match, mIdx, isPast, parentContainer);
+                matchupsContainer.appendChild(matchRow);
+            });
+        }
+        
+        card.appendChild(matchupsContainer);
+        
+        // Footer with Add Match button (only for today's games)
+        if (!isPast) {
+            const footer = document.createElement('div');
+            footer.style.cssText = 'padding:8px 16px; border-top:1px solid #F3F4F6; display:flex; justify-content:space-between; align-items:center;';
+            
+            const addMatchBtn = document.createElement('button');
+            addMatchBtn.textContent = '+ Add Match';
+            addMatchBtn.style.cssText = 'background:none; border:none; cursor:pointer; color:#6B7280; font-size:0.8rem; font-weight:500; padding:4px 0; transition: color 0.15s;';
+            addMatchBtn.onmouseover = () => addMatchBtn.style.color = '#111827';
+            addMatchBtn.onmouseout = () => addMatchBtn.style.color = '#6B7280';
+            addMatchBtn.onclick = () => {
+                if (!game.matches) game.matches = [];
+                // Default to first two teams if available
+                const teamA = league.teams?.[0] || '';
+                const teamB = league.teams?.[1] || '';
+                game.matches.push({ teamA, teamB, scoreA: null, scoreB: null });
+                league.games[game._idx] = game;
+                saveData();
+                renderGameEntryUI(league, parentContainer);
+            };
+            
+            const saveStatus = document.createElement('span');
+            saveStatus.id = 'sl-save-status-' + game._idx;
+            saveStatus.style.cssText = 'font-size:0.75rem; color:#10B981; opacity:0; transition: opacity 0.3s;';
+            saveStatus.textContent = '✓ Saved';
+            
+            footer.appendChild(addMatchBtn);
+            footer.appendChild(saveStatus);
+            card.appendChild(footer);
+        }
+        
+        return card;
+    }
+    
+    /**
+     * Render a single match row with inline score editing
+     */
+    function renderMatchRow(league, game, match, matchIdx, isPast, parentContainer) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex; align-items:center; gap:8px; padding:8px 16px; border-bottom:1px solid #F9FAFB;';
+        
+        // Determine winner for highlighting
+        const scoreA = match.scoreA !== null && match.scoreA !== undefined ? parseInt(match.scoreA, 10) : null;
+        const scoreB = match.scoreB !== null && match.scoreB !== undefined ? parseInt(match.scoreB, 10) : null;
+        const hasScores = scoreA !== null && scoreB !== null;
+        const isTie = hasScores && scoreA === scoreB;
+        const winnerIsA = hasScores && !isTie && scoreA > scoreB;
+        const winnerIsB = hasScores && !isTie && scoreB > scoreA;
+        
+        // Team A
+        const teamAEl = document.createElement('div');
+        teamAEl.style.cssText = 'flex:1; text-align:right; font-weight:500; font-size:0.9rem;';
+        if (winnerIsA) teamAEl.style.color = '#059669';
+        else if (winnerIsB) teamAEl.style.color = '#9CA3AF';
+        teamAEl.textContent = match.teamA || '—';
+        row.appendChild(teamAEl);
+        
+        // Score A
         const scoreAInput = document.createElement('input');
         scoreAInput.type = 'number';
-        scoreAInput.className = 'score-a';
-        scoreAInput.value = scoreA;
-        Object.assign(scoreAInput.style, { width: '50px', textAlign: 'center', padding: '6px', fontWeight: 'bold', borderColor: '#9CA3AF', borderRadius: '6px', border: '1px solid #D1D5DB' });
+        scoreAInput.min = '0';
+        scoreAInput.value = scoreA !== null ? scoreA : '';
+        scoreAInput.placeholder = '-';
+        scoreAInput.disabled = isPast;
+        Object.assign(scoreAInput.style, {
+            width: '44px',
+            textAlign: 'center',
+            padding: '6px 4px',
+            border: '1px solid #E5E7EB',
+            borderRadius: '4px',
+            fontSize: '0.9rem',
+            fontWeight: '600',
+            background: isPast ? '#F9FAFB' : '#fff'
+        });
+        if (winnerIsA) scoreAInput.style.color = '#059669';
         row.appendChild(scoreAInput);
         
-        // VS label
-        const vsLabel = document.createElement('span');
-        Object.assign(vsLabel.style, { color: '#6B7280', fontSize: '0.8rem', fontWeight: 'bold' });
-        vsLabel.textContent = 'VS';
-        row.appendChild(vsLabel);
+        // VS
+        const vsEl = document.createElement('span');
+        vsEl.style.cssText = 'color:#D1D5DB; font-size:0.75rem; font-weight:500;';
+        vsEl.textContent = isTie ? '=' : '—';
+        row.appendChild(vsEl);
         
-        // Score B input
+        // Score B
         const scoreBInput = document.createElement('input');
         scoreBInput.type = 'number';
-        scoreBInput.className = 'score-b';
-        scoreBInput.value = scoreB;
-        Object.assign(scoreBInput.style, { width: '50px', textAlign: 'center', padding: '6px', fontWeight: 'bold', borderColor: '#9CA3AF', borderRadius: '6px', border: '1px solid #D1D5DB' });
+        scoreBInput.min = '0';
+        scoreBInput.value = scoreB !== null ? scoreB : '';
+        scoreBInput.placeholder = '-';
+        scoreBInput.disabled = isPast;
+        Object.assign(scoreBInput.style, {
+            width: '44px',
+            textAlign: 'center',
+            padding: '6px 4px',
+            border: '1px solid #E5E7EB',
+            borderRadius: '4px',
+            fontSize: '0.9rem',
+            fontWeight: '600',
+            background: isPast ? '#F9FAFB' : '#fff'
+        });
+        if (winnerIsB) scoreBInput.style.color = '#059669';
         row.appendChild(scoreBInput);
         
         // Team B
-        const teamBLabel = document.createElement('strong');
-        Object.assign(teamBLabel.style, { flex: '1', fontSize: '0.9rem' });
-        teamBLabel.textContent = teamB;
-        row.appendChild(teamBLabel);
-
-        row.dataset.teamA = teamA;
-        row.dataset.teamB = teamB;
-        if (timeLabel) row.dataset.timeLabel = timeLabel;
-
-        target.appendChild(row);
-        if (saveButton) saveButton.style.display = 'block';
-    }
-
-    // =============================================================
-    // IMPORT LOGIC (SPECIALTY SPECIFIC) - ★ FIX v2.1: Enhanced
-    // =============================================================
-    function importGamesFromSchedule(league, target) {
-        if (!target) return;
+        const teamBEl = document.createElement('div');
+        teamBEl.style.cssText = 'flex:1; font-weight:500; font-size:0.9rem;';
+        if (winnerIsB) teamBEl.style.color = '#059669';
+        else if (winnerIsA) teamBEl.style.color = '#9CA3AF';
+        teamBEl.textContent = match.teamB || '—';
+        row.appendChild(teamBEl);
         
+        // Delete match button (only for today's games)
+        if (!isPast) {
+            const deleteMatchBtn = document.createElement('button');
+            deleteMatchBtn.innerHTML = '×';
+            deleteMatchBtn.style.cssText = 'background:none; border:none; cursor:pointer; color:#D1D5DB; font-size:1.2rem; padding:0 4px; line-height:1; transition: color 0.15s;';
+            deleteMatchBtn.onmouseover = () => deleteMatchBtn.style.color = '#DC2626';
+            deleteMatchBtn.onmouseout = () => deleteMatchBtn.style.color = '#D1D5DB';
+            deleteMatchBtn.onclick = () => {
+                game.matches.splice(matchIdx, 1);
+                league.games[game._idx] = game;
+                recalcStandings(league);
+                saveData();
+                renderGameEntryUI(league, parentContainer);
+            };
+            row.appendChild(deleteMatchBtn);
+        }
+        
+        // Auto-save on score change (debounced)
+        if (!isPast) {
+            let saveTimeout = null;
+            const handleScoreChange = () => {
+                if (saveTimeout) clearTimeout(saveTimeout);
+                saveTimeout = setTimeout(() => {
+                    const newScoreA = scoreAInput.value !== '' ? parseInt(scoreAInput.value, 10) : null;
+                    const newScoreB = scoreBInput.value !== '' ? parseInt(scoreBInput.value, 10) : null;
+                    
+                    match.scoreA = newScoreA;
+                    match.scoreB = newScoreB;
+                    
+                    // Determine winner
+                    if (newScoreA !== null && newScoreB !== null) {
+                        if (newScoreA > newScoreB) match.winner = match.teamA;
+                        else if (newScoreB > newScoreA) match.winner = match.teamB;
+                        else match.winner = 'tie';
+                    } else {
+                        match.winner = null;
+                    }
+                    
+                    league.games[game._idx] = game;
+                    recalcStandings(league);
+                    saveData();
+                    
+                    // Show save indicator
+                    const statusEl = document.getElementById('sl-save-status-' + game._idx);
+                    if (statusEl) {
+                        statusEl.style.opacity = '1';
+                        setTimeout(() => { statusEl.style.opacity = '0'; }, 1500);
+                    }
+                    
+                    // Re-render to update highlighting
+                    renderGameEntryUI(league, parentContainer);
+                }, 500);
+            };
+            
+            scoreAInput.oninput = handleScoreChange;
+            scoreBInput.oninput = handleScoreChange;
+        }
+        
+        return row;
+    }
+    
+    /**
+     * ★ v2.1: Import games from schedule - creates game entries that show in Today section
+     */
+    function importGamesFromScheduleV2(league, parentContainer) {
+        if (!league.teams || league.teams.length < 2) {
+            alert('Add at least 2 teams to this league first.');
+            return;
+        }
+
         try {
-            target.innerHTML = '';
-            
             const daily = window.loadCurrentDailyData?.() || {};
-            const skeleton = daily.manualSkeleton || [];
-            const assignments = daily.scheduleAssignments || window.scheduleAssignments || {};
             const leagueAssignments = window.leagueAssignments || {};
+            const scheduleAssignments = daily.scheduleAssignments || window.scheduleAssignments || {};
+            const skeleton = daily.manualSkeleton || [];
             const divisions = window.divisions || {};
-            
-            const saveButton = target.parentElement?.querySelector('[data-role="save-game-results"]');
+            const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
 
-            if (!league.teams || league.teams.length === 0) {
-                target.innerHTML = `<p class="muted" style="text-align:center; margin-top:20px;">Add teams to this league first.</p>`;
-                return;
-            }
+            console.log('[SPECIALTY_LEAGUES] Import: Looking for games for league "' + league.name + '"');
 
-            const gamesFound = {};
-
-            // ★ FIX v2.1: Use smart division matching (same pattern as leagues.js)
+            // Use smart division matching
             const availableScheduleDivisions = Object.keys(leagueAssignments);
             const matchingDivisions = getMatchingScheduleDivisions(league.divisions || [], availableScheduleDivisions);
             
-            console.log('[SPECIALTY_LEAGUES] Import: Looking for games for league "' + league.name + '"');
-            console.log('[SPECIALTY_LEAGUES] Import: League divisions:', league.divisions);
-            console.log('[SPECIALTY_LEAGUES] Import: Matching divisions found:', matchingDivisions);
+            console.log('[SPECIALTY_LEAGUES] Import: Matching divisions:', matchingDivisions);
+
+            // Group matchups by game label
+            const gamesByLabel = {};
 
             // Method 1: Check leagueAssignments for specialty league entries
             for (const divName of matchingDivisions) {
@@ -1343,45 +1579,43 @@
                     const slotData = divAssignments[slotIdx];
                     if (!slotData) continue;
                     
-                    // Check if this is our specialty league
                     const isOurLeague = slotData.isSpecialtyLeague && 
                         (slotData.leagueName === league.name || slotData.sport === league.sport);
                     
                     if (!isOurLeague) continue;
 
-                    const gameLabel = slotData.gameLabel || `Slot ${slotIdx}`;
+                    const gameLabel = slotData.gameLabel || `Game ${Object.keys(gamesByLabel).length + 1}`;
+                    const gameNumber = parseInt((gameLabel.match(/\d+/) || [])[0], 10) || Object.keys(gamesByLabel).length + 1;
                     const matchups = slotData.matchups || [];
+                    
+                    if (!gamesByLabel[gameLabel]) {
+                        gamesByLabel[gameLabel] = { gameLabel, gameNumber, matchups: [] };
+                    }
                     
                     matchups.forEach(m => {
                         const teamA = m.teamA?.trim();
                         const teamB = m.teamB?.trim();
                         
                         if (teamA && teamB && league.teams.includes(teamA) && league.teams.includes(teamB)) {
-                            if (!gamesFound[gameLabel]) gamesFound[gameLabel] = [];
-                            
-                            const exists = gamesFound[gameLabel].some(g =>
+                            const exists = gamesByLabel[gameLabel].matchups.some(g =>
                                 (g.teamA === teamA && g.teamB === teamB) ||
                                 (g.teamA === teamB && g.teamB === teamA)
                             );
                             
                             if (!exists) {
-                                gamesFound[gameLabel].push({ teamA, teamB });
-                                console.log('[SPECIALTY_LEAGUES] Import: Added match:', teamA, 'vs', teamB, 'to', gameLabel);
+                                gamesByLabel[gameLabel].matchups.push({ teamA, teamB });
                             }
                         }
                     });
                 }
             }
 
-            // Method 2: Iterate over skeleton blocks as fallback
-            if (Object.keys(gamesFound).length === 0) {
+            // Method 2: Fallback to skeleton scan if no leagueAssignments found
+            if (Object.keys(gamesByLabel).length === 0) {
                 skeleton.forEach(block => {
                     if (!block || !block.division) return;
-                    
-                    // Must match division
                     if (!league.divisions.includes(block.division)) return;
 
-                    // Get assignments
                     const startMin = parseTimeToMinutes(block.startTime);
                     if (startMin === null) return;
                     
@@ -1390,12 +1624,10 @@
 
                     const divBunks = divisions[block.division]?.bunks || [];
                     if (divBunks.length === 0) return;
-                    const representativeBunk = divBunks[0];
                     
-                    const entry = assignments[representativeBunk]?.[slotIdx];
+                    const entry = scheduleAssignments[divBunks[0]]?.[slotIdx];
                     if (!entry) return;
 
-                    // CRITERIA FOR SPECIALTY LEAGUES:
                     const entrySport = (entry.sport || "").trim();
                     const entryField = (typeof entry.field === 'string' ? entry.field : "").trim();
 
@@ -1404,37 +1636,34 @@
 
                     if (!matchSport && !matchField) return;
 
-                    let headerLabel = `${block.event || 'Activity'} (${minutesToTimeLabel(startMin)})`;
-
-                    // Scan for Teams
+                    const gameLabel = `${block.event || 'Activity'} (${minutesToTimeLabel(startMin)})`;
+                    
                     let linesToScan = [];
-                    if (entry._allMatchups && Array.isArray(entry._allMatchups) && entry._allMatchups.length > 0) {
+                    if (entry._allMatchups && Array.isArray(entry._allMatchups)) {
                         linesToScan = entry._allMatchups;
                     } else if (entryField) {
                         linesToScan = entryField.split('\n');
-                    } else if (entrySport) {
-                        linesToScan = [entrySport];
                     }
 
                     linesToScan.forEach(line => {
                         if (typeof line !== 'string') return;
-                        
-                        // Regex for "Team A vs Team B"
                         const m = line.match(/^(.*?)\s+vs\.?\s+(.*?)(?:\s*[@\(]|$)/i);
                         if (m) {
                             const tA = m[1].trim();
                             const tB = m[2].trim();
 
                             if (league.teams.includes(tA) && league.teams.includes(tB)) {
-                                if (!gamesFound[headerLabel]) gamesFound[headerLabel] = [];
+                                if (!gamesByLabel[gameLabel]) {
+                                    gamesByLabel[gameLabel] = { gameLabel, gameNumber: Object.keys(gamesByLabel).length + 1, matchups: [] };
+                                }
                                 
-                                const exists = gamesFound[headerLabel].some(g =>
-                                     (g.teamA === tA && g.teamB === tB) ||
-                                     (g.teamA === tB && g.teamB === tA)
+                                const exists = gamesByLabel[gameLabel].matchups.some(g =>
+                                    (g.teamA === tA && g.teamB === tB) ||
+                                    (g.teamA === tB && g.teamB === tA)
                                 );
                                 
                                 if (!exists) {
-                                    gamesFound[headerLabel].push({ teamA: tA, teamB: tB });
+                                    gamesByLabel[gameLabel].matchups.push({ teamA: tA, teamB: tB });
                                 }
                             }
                         }
@@ -1442,40 +1671,79 @@
                 });
             }
 
-            const groupNames = Object.keys(gamesFound).sort((a,b) =>
-                 a.localeCompare(b, undefined, {numeric: true})
-            );
-
-            if (groupNames.length === 0) {
-                // ★ XSS PREVENTION: Use textContent
-                const noMatchMsg = document.createElement('p');
-                noMatchMsg.className = 'muted';
-                noMatchMsg.style.cssText = 'text-align:center; padding:10px;';
-                noMatchMsg.textContent = `No games found for "${league.name}" in today's schedule. Make sure the schedule has been generated with this league's teams.`;
-                target.appendChild(noMatchMsg);
+            const gameLabels = Object.keys(gamesByLabel);
+            if (gameLabels.length === 0) {
+                alert(
+                    'No games found for "' + league.name + '" in today\'s schedule.\n\n' +
+                    'Make sure:\n' +
+                    '1. A schedule has been generated for today\n' +
+                    '2. This league is assigned to scheduled divisions\n' +
+                    '3. The league has teams that appear in matchups'
+                );
                 return;
             }
 
-            groupNames.forEach(label => {
-                const header = document.createElement('div');
-                header.className = 'group-header';
-                header.style.cssText = 'font-weight:600; margin-top:12px; margin-bottom:6px; color:#374151;';
-                header.textContent = label;
-                target.appendChild(header);
-                gamesFound[label].forEach(m => {
-                    addMatchRow(target, m.teamA, m.teamB, '', '', saveButton, label);
-                });
+            // Sort by game number
+            gameLabels.sort((a, b) => {
+                const numA = gamesByLabel[a].gameNumber || 0;
+                const numB = gamesByLabel[b].gameNumber || 0;
+                return numA - numB;
             });
 
-            if (saveButton) saveButton.style.display = 'block';
+            // Create game entries
+            if (!league.games) league.games = [];
+            
+            let importedCount = 0;
+            let totalMatchups = 0;
+
+            gameLabels.forEach(label => {
+                const gameData = gamesByLabel[label];
+                if (gameData.matchups.length === 0) return;
+
+                const newGame = {
+                    date: currentDate,
+                    gameLabel: gameData.gameLabel,
+                    gameNumber: gameData.gameNumber,
+                    matches: gameData.matchups.map(m => ({
+                        teamA: m.teamA,
+                        teamB: m.teamB,
+                        scoreA: null,
+                        scoreB: null
+                    })),
+                    importedFrom: 'schedule',
+                    importedAt: new Date().toISOString()
+                };
+
+                // Check if game already exists for today with same label
+                const existingIdx = league.games.findIndex(g => 
+                    g.date === currentDate && g.gameLabel === gameData.gameLabel
+                );
+
+                if (existingIdx >= 0) {
+                    league.games[existingIdx] = newGame;
+                } else {
+                    league.games.push(newGame);
+                }
+
+                importedCount++;
+                totalMatchups += gameData.matchups.length;
+            });
+
+            saveData();
+            
+            alert('Imported ' + importedCount + ' game(s) with ' + totalMatchups + ' match(es).');
+            
+            // Refresh to show the new games
+            renderGameEntryUI(league, parentContainer);
+
         } catch (e) {
-            console.error("[SPECIALTY_LEAGUES] Error importing games from schedule:", e);
-            target.innerHTML = '<p class="muted" style="text-align:center; padding:10px;">Error importing schedule. Please try again.</p>';
+            console.error('[SPECIALTY_LEAGUES] Import error:', e);
+            alert('Error importing games: ' + e.message);
         }
     }
 
     // =============================================================
-    // SAVE GAME RESULTS
+    // SAVE GAME RESULTS (legacy - kept for compatibility)
     // =============================================================
     function saveGameResults(league, selectValue, matchContainer) {
         try {
@@ -1638,6 +1906,6 @@
     // ★ v2.1: Export diagnostics
     window.diagnoseSpecialtyLeagues = diagnoseSpecialtyLeagues;
 
-    console.log("[SPECIALTY_LEAGUES] Module v2.1 loaded");
+    console.log("[SPECIALTY_LEAGUES] Module v2.2 loaded");
 
 })();
