@@ -619,7 +619,7 @@ const render = () => {
                 <div class="top-right">
                     <div class="tool-group">
                         <select id="tpl-sel"></select>
-                        <button class="btn btn-ghost" id="btn-load">Load</button>
+                        <button class="btn btn-load" id="btn-load">Load</button>
                         <button class="btn btn-ghost" id="btn-update" style="display:none">Update</button>
                     </div>
                     <div class="tool-group">
@@ -629,7 +629,7 @@ const render = () => {
                     <div class="tool-group">
                         <select id="del-sel"></select>
                         <button class="btn btn-danger" id="btn-del">Delete</button>
-                        <button class="btn btn-ghost" id="btn-clear">Clear</button>
+                        <button class="btn btn-clear" id="btn-clear">Clear</button>
                     </div>
                 </div>
             </div>
@@ -814,6 +814,10 @@ select {
 .btn-ghost:hover { background: var(--bg); border-color: var(--border); }
 .btn-danger { background: var(--danger-light); color: var(--danger); border-color: #fecaca; }
 .btn-danger:hover { background: #fee2e2; border-color: #fca5a5; }
+.btn-load { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
+.btn-load:hover { background: #bfdbfe; border-color: #60a5fa; }
+.btn-clear { background: #fef3c7; color: #b45309; border-color: #fcd34d; }
+.btn-clear:hover { background: #fde68a; border-color: #fbbf24; }
 
 /* ═══════════ LAYOUT ═══════════ */
 .body { 
