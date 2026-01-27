@@ -1146,42 +1146,42 @@
     }
 
     // =========================================================================
-    // STANDINGS TABLE
+    // STANDINGS TABLE - Editable with tiebreakers
     // =========================================================================
     function renderStandingsTable(league, container) {
         if (!container) return;
 
         container.innerHTML = '';
         if (!league.teams || league.teams.length === 0) {
-            container.innerHTML = '<p class="muted" style="text-align:center; padding:20px;">No teams in this league.</p>';
+            container.innerHTML = '<p style="text-align:center; padding:20px; color:#6B7280;">No teams in this league.</p>';
             return;
         }
 
         recalcStandings(league);
+        const sorted = sortTeamsByStandings(league);
 
-        const sorted = league.teams.slice().sort(function (a, b) {
-            const sA = league.standings[a] || { w: 0, l: 0, t: 0 };
-            const sB = league.standings[b] || { w: 0, l: 0, t: 0 };
-            if (sB.w !== sA.w) return sB.w - sA.w;
-            if (sA.l !== sB.l) return sA.l - sB.l;
-            return 0;
-        });
+        // Instructions
+        const instructions = document.createElement('div');
+        instructions.style.cssText = 'font-size:0.75rem; color:#9CA3AF; margin-bottom:12px;';
+        instructions.textContent = 'Click on W/L/T values to edit manually. Tiebreakers: head-to-head, then point differential.';
+        container.appendChild(instructions);
 
-        // ★ FIX: Build table using DOM methods to avoid XSS with team names
+        // Table
         const table = document.createElement('table');
-        table.style.cssText = 'width:100%; border-collapse:collapse; background:#fff; border-radius:12px; overflow:hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.06);';
+        table.style.cssText = 'width:100%; border-collapse:collapse; background:#fff; border:1px solid #E5E7EB; border-radius:8px; overflow:hidden;';
 
+        // Header
         const thead = document.createElement('thead');
         const headerRow = document.createElement('tr');
         headerRow.style.background = '#F9FAFB';
         
-        const headers = ['#', 'Team', 'W', 'L', 'T'];
-        const headerWidths = ['', '', '60px', '60px', '60px'];
-        const headerAligns = ['left', 'left', 'center', 'center', 'center'];
+        const headers = ['#', 'Team', 'W', 'L', 'T', '+/-'];
+        const headerWidths = ['40px', '', '50px', '50px', '50px', '60px'];
+        const headerAligns = ['center', 'left', 'center', 'center', 'center', 'center'];
         
         headers.forEach((text, i) => {
             const th = document.createElement('th');
-            th.style.cssText = `padding:12px ${i === 0 || i === 1 ? '16px' : '12px'}; text-align:${headerAligns[i]}; font-weight:600; color:#6B7280; font-size:0.8rem;`;
+            th.style.cssText = 'padding:10px 12px; text-align:' + headerAligns[i] + '; font-weight:600; color:#6B7280; font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em; border-bottom:1px solid #E5E7EB;';
             if (headerWidths[i]) th.style.width = headerWidths[i];
             th.textContent = text;
             headerRow.appendChild(th);
@@ -1189,47 +1189,169 @@
         thead.appendChild(headerRow);
         table.appendChild(thead);
 
+        // Body
         const tbody = document.createElement('tbody');
-        sorted.forEach(function (team, idx) {
-            const stats = league.standings[team] || { w: 0, l: 0, t: 0 };
+        sorted.forEach((team, idx) => {
+            const stats = league.standings[team] || { w: 0, l: 0, t: 0, diff: 0 };
+            const isManual = stats._manual;
             const borderBottom = idx < sorted.length - 1 ? '1px solid #F3F4F6' : 'none';
 
             const row = document.createElement('tr');
+            row.style.transition = 'background 0.1s';
+            row.onmouseover = () => row.style.background = '#FAFAFA';
+            row.onmouseout = () => row.style.background = '';
 
             // Rank
             const rankCell = document.createElement('td');
-            rankCell.style.cssText = `padding:12px 16px; border-bottom:${borderBottom}; font-weight:600; color:#111827;`;
-            rankCell.textContent = (idx + 1) + getPlaceSuffix(idx + 1);
+            rankCell.style.cssText = 'padding:10px 12px; border-bottom:' + borderBottom + '; font-weight:600; color:#111827; text-align:center;';
+            rankCell.textContent = idx + 1;
             row.appendChild(rankCell);
 
-            // Team name (safe: textContent)
+            // Team name
             const teamCell = document.createElement('td');
-            teamCell.style.cssText = `padding:12px 16px; border-bottom:${borderBottom}; font-weight:500;`;
-            teamCell.textContent = team;
+            teamCell.style.cssText = 'padding:10px 12px; border-bottom:' + borderBottom + '; font-weight:500; color:#111827;';
+            
+            const teamName = document.createElement('span');
+            teamName.textContent = team;
+            teamCell.appendChild(teamName);
+            
+            // Manual indicator
+            if (isManual) {
+                const manualBadge = document.createElement('span');
+                manualBadge.style.cssText = 'margin-left:8px; font-size:0.65rem; background:#FEF3C7; color:#92400E; padding:2px 6px; border-radius:4px; font-weight:500;';
+                manualBadge.textContent = 'MANUAL';
+                teamCell.appendChild(manualBadge);
+            }
             row.appendChild(teamCell);
 
-            // Wins
-            const winsCell = document.createElement('td');
-            winsCell.style.cssText = `padding:12px; border-bottom:${borderBottom}; text-align:center; color:#059669; font-weight:600;`;
-            winsCell.textContent = stats.w;
-            row.appendChild(winsCell);
+            // Editable W/L/T cells
+            ['w', 'l', 't'].forEach((stat, sIdx) => {
+                const cell = document.createElement('td');
+                const colors = ['#059669', '#DC2626', '#6B7280'];
+                cell.style.cssText = 'padding:10px 12px; border-bottom:' + borderBottom + '; text-align:center; color:' + colors[sIdx] + '; font-weight:600;';
+                
+                const valueSpan = document.createElement('span');
+                valueSpan.textContent = stats[stat] || 0;
+                valueSpan.style.cssText = 'cursor:pointer; padding:4px 8px; border-radius:4px; transition: background 0.1s;';
+                valueSpan.title = 'Click to edit';
+                valueSpan.onmouseover = () => valueSpan.style.background = '#F3F4F6';
+                valueSpan.onmouseout = () => valueSpan.style.background = '';
+                
+                valueSpan.onclick = () => {
+                    // Create input for editing
+                    const input = document.createElement('input');
+                    input.type = 'number';
+                    input.min = '0';
+                    input.value = stats[stat] || 0;
+                    input.style.cssText = 'width:40px; text-align:center; padding:4px; border:1px solid #3B82F6; border-radius:4px; font-weight:600; font-size:inherit; color:inherit;';
+                    
+                    const finishEdit = () => {
+                        const newVal = parseInt(input.value, 10) || 0;
+                        stats[stat] = newVal;
+                        stats._manual = true;  // Mark as manually edited
+                        saveLeaguesData();
+                        renderStandingsTable(league, container);
+                    };
+                    
+                    input.onblur = finishEdit;
+                    input.onkeydown = (e) => {
+                        if (e.key === 'Enter') finishEdit();
+                        if (e.key === 'Escape') renderStandingsTable(league, container);
+                    };
+                    
+                    cell.innerHTML = '';
+                    cell.appendChild(input);
+                    input.focus();
+                    input.select();
+                };
+                
+                cell.appendChild(valueSpan);
+                row.appendChild(cell);
+            });
 
-            // Losses
-            const lossCell = document.createElement('td');
-            lossCell.style.cssText = `padding:12px; border-bottom:${borderBottom}; text-align:center; color:#DC2626;`;
-            lossCell.textContent = stats.l;
-            row.appendChild(lossCell);
-
-            // Ties
-            const tieCell = document.createElement('td');
-            tieCell.style.cssText = `padding:12px; border-bottom:${borderBottom}; text-align:center; color:#6B7280;`;
-            tieCell.textContent = stats.t;
-            row.appendChild(tieCell);
+            // Point differential
+            const diffCell = document.createElement('td');
+            const diff = stats.diff || 0;
+            const diffColor = diff > 0 ? '#059669' : (diff < 0 ? '#DC2626' : '#6B7280');
+            diffCell.style.cssText = 'padding:10px 12px; border-bottom:' + borderBottom + '; text-align:center; font-weight:500; color:' + diffColor + ';';
+            diffCell.textContent = (diff > 0 ? '+' : '') + diff;
+            row.appendChild(diffCell);
 
             tbody.appendChild(row);
         });
         table.appendChild(tbody);
         container.appendChild(table);
+
+        // Reset manual edits button
+        const hasManualEdits = league.teams.some(t => league.standings[t]?._manual);
+        if (hasManualEdits) {
+            const resetBtn = document.createElement('button');
+            resetBtn.textContent = 'Reset to calculated values';
+            resetBtn.style.cssText = 'margin-top:12px; padding:8px 12px; border:1px solid #E5E7EB; border-radius:6px; background:#fff; cursor:pointer; color:#6B7280; font-size:0.8rem; transition: all 0.15s;';
+            resetBtn.onmouseover = () => { resetBtn.style.borderColor = '#111827'; resetBtn.style.color = '#111827'; };
+            resetBtn.onmouseout = () => { resetBtn.style.borderColor = '#E5E7EB'; resetBtn.style.color = '#6B7280'; };
+            resetBtn.onclick = () => {
+                if (confirm('Reset all standings to calculated values from game results?')) {
+                    league.teams.forEach(t => {
+                        if (league.standings[t]) {
+                            delete league.standings[t]._manual;
+                        }
+                    });
+                    recalcStandings(league);
+                    saveLeaguesData();
+                    renderStandingsTable(league, container);
+                }
+            };
+            container.appendChild(resetBtn);
+        }
+        
+        // Tiebreaker explanation (if there are ties)
+        const tiebreakInfo = findTiebreakers(league, sorted);
+        if (tiebreakInfo.length > 0) {
+            const tieSection = document.createElement('div');
+            tieSection.style.cssText = 'margin-top:16px; padding:12px; background:#F9FAFB; border-radius:6px; font-size:0.8rem; color:#6B7280;';
+            
+            const tieTitle = document.createElement('div');
+            tieTitle.style.cssText = 'font-weight:600; margin-bottom:6px; color:#374151;';
+            tieTitle.textContent = 'Tiebreaker Notes';
+            tieSection.appendChild(tieTitle);
+            
+            tiebreakInfo.forEach(info => {
+                const line = document.createElement('div');
+                line.style.marginBottom = '2px';
+                line.textContent = info;
+                tieSection.appendChild(line);
+            });
+            
+            container.appendChild(tieSection);
+        }
+    }
+    
+    /**
+     * Find tiebreaker explanations for teams with same record
+     */
+    function findTiebreakers(league, sortedTeams) {
+        const notes = [];
+        
+        for (let i = 0; i < sortedTeams.length - 1; i++) {
+            const teamA = sortedTeams[i];
+            const teamB = sortedTeams[i + 1];
+            const sA = league.standings[teamA] || { w: 0, l: 0, t: 0, diff: 0 };
+            const sB = league.standings[teamB] || { w: 0, l: 0, t: 0, diff: 0 };
+            
+            // Check if same W-L-T record
+            if (sA.w === sB.w && sA.l === sB.l && sA.t === sB.t) {
+                const h2h = getHeadToHeadResult(league, teamA, teamB);
+                if (h2h !== 0) {
+                    const winner = h2h > 0 ? teamA : teamB;
+                    notes.push(teamA + ' vs ' + teamB + ': ' + winner + ' wins head-to-head tiebreaker');
+                } else if (sA.diff !== sB.diff) {
+                    notes.push(teamA + ' vs ' + teamB + ': Tied H2H, ' + teamA + ' has better point differential (' + (sA.diff > 0 ? '+' : '') + sA.diff + ' vs ' + (sB.diff > 0 ? '+' : '') + sB.diff + ')');
+                }
+            }
+        }
+        
+        return notes;
     }
 
     // =========================================================================
@@ -1977,24 +2099,50 @@
     }
 
     // =========================================================================
-    // RECALC STANDINGS - ★ Score-based calculation
+    // RECALC STANDINGS - Score-based with point differential & head-to-head
     // =========================================================================
+    
+    /**
+     * Recalculate standings from game results
+     * Tracks: W, L, T, point differential, head-to-head records
+     */
     function recalcStandings(league) {
         if (!league || !league.teams) return;
 
-        // Reset all standings
+        // Initialize standings for all teams
         league.teams.forEach(function (t) {
-            league.standings[t] = { w: 0, l: 0, t: 0 };
+            if (!league.standings[t]) {
+                league.standings[t] = { w: 0, l: 0, t: 0, pf: 0, pa: 0, diff: 0 };
+            } else {
+                // Reset calculated fields (preserve manual overrides flag)
+                const manual = league.standings[t]._manual;
+                if (!manual) {
+                    league.standings[t].w = 0;
+                    league.standings[t].l = 0;
+                    league.standings[t].t = 0;
+                }
+                league.standings[t].pf = 0;  // Points for
+                league.standings[t].pa = 0;  // Points against
+                league.standings[t].diff = 0;
+            }
+        });
+
+        // Initialize head-to-head tracking
+        // Structure: league._h2h[teamA][teamB] = { wins: X, losses: Y }
+        if (!league._h2h) league._h2h = {};
+        league.teams.forEach(t => {
+            league._h2h[t] = {};
+            league.teams.forEach(opp => {
+                if (t !== opp) league._h2h[t][opp] = { wins: 0, losses: 0, pf: 0, pa: 0 };
+            });
         });
 
         // Calculate from games
         (league.games || []).forEach(function (g) {
             (g.matches || []).forEach(function (m) {
-                // Skip if teams don't exist or scores aren't entered
                 if (!m.teamA || !m.teamB) return;
                 if (!league.standings[m.teamA] || !league.standings[m.teamB]) return;
                 
-                // Check if scores are entered (allow 0 as valid score)
                 const hasScoreA = m.scoreA != null && m.scoreA !== '';
                 const hasScoreB = m.scoreB != null && m.scoreB !== '';
                 
@@ -2002,33 +2150,107 @@
                     const scoreA = parseInt(m.scoreA, 10) || 0;
                     const scoreB = parseInt(m.scoreB, 10) || 0;
                     
+                    // Update point differential
+                    league.standings[m.teamA].pf += scoreA;
+                    league.standings[m.teamA].pa += scoreB;
+                    league.standings[m.teamB].pf += scoreB;
+                    league.standings[m.teamB].pa += scoreA;
+                    
+                    // Update head-to-head
+                    if (league._h2h[m.teamA] && league._h2h[m.teamA][m.teamB]) {
+                        league._h2h[m.teamA][m.teamB].pf += scoreA;
+                        league._h2h[m.teamA][m.teamB].pa += scoreB;
+                    }
+                    if (league._h2h[m.teamB] && league._h2h[m.teamB][m.teamA]) {
+                        league._h2h[m.teamB][m.teamA].pf += scoreB;
+                        league._h2h[m.teamB][m.teamA].pa += scoreA;
+                    }
+                    
+                    // Skip W/L/T if manual override is set
+                    const manualA = league.standings[m.teamA]._manual;
+                    const manualB = league.standings[m.teamB]._manual;
+                    
                     if (scoreA > scoreB) {
-                        // Team A wins
-                        league.standings[m.teamA].w++;
-                        league.standings[m.teamB].l++;
+                        if (!manualA) league.standings[m.teamA].w++;
+                        if (!manualB) league.standings[m.teamB].l++;
+                        if (league._h2h[m.teamA]?.[m.teamB]) league._h2h[m.teamA][m.teamB].wins++;
+                        if (league._h2h[m.teamB]?.[m.teamA]) league._h2h[m.teamB][m.teamA].losses++;
                     } else if (scoreB > scoreA) {
-                        // Team B wins
-                        league.standings[m.teamB].w++;
-                        league.standings[m.teamA].l++;
+                        if (!manualB) league.standings[m.teamB].w++;
+                        if (!manualA) league.standings[m.teamA].l++;
+                        if (league._h2h[m.teamB]?.[m.teamA]) league._h2h[m.teamB][m.teamA].wins++;
+                        if (league._h2h[m.teamA]?.[m.teamB]) league._h2h[m.teamA][m.teamB].losses++;
                     } else {
-                        // Tie
-                        league.standings[m.teamA].t++;
-                        league.standings[m.teamB].t++;
+                        if (!manualA) league.standings[m.teamA].t++;
+                        if (!manualB) league.standings[m.teamB].t++;
                     }
                 } else if (m.winner) {
-                    // Legacy support: use winner field if scores not available
+                    // Legacy support
+                    const manualA = league.standings[m.teamA]._manual;
+                    const manualB = league.standings[m.teamB]._manual;
+                    
                     if (m.winner === 'tie') {
-                        league.standings[m.teamA].t++;
-                        league.standings[m.teamB].t++;
+                        if (!manualA) league.standings[m.teamA].t++;
+                        if (!manualB) league.standings[m.teamB].t++;
                     } else if (m.winner === m.teamA) {
-                        league.standings[m.teamA].w++;
-                        league.standings[m.teamB].l++;
+                        if (!manualA) league.standings[m.teamA].w++;
+                        if (!manualB) league.standings[m.teamB].l++;
                     } else if (m.winner === m.teamB) {
-                        league.standings[m.teamB].w++;
-                        league.standings[m.teamA].l++;
+                        if (!manualB) league.standings[m.teamB].w++;
+                        if (!manualA) league.standings[m.teamA].l++;
                     }
                 }
             });
+        });
+        
+        // Calculate final point differential
+        league.teams.forEach(t => {
+            const s = league.standings[t];
+            s.diff = (s.pf || 0) - (s.pa || 0);
+        });
+    }
+    
+    /**
+     * Get head-to-head record between two teams
+     * Returns: 1 if teamA wins H2H, -1 if teamB wins, 0 if tied
+     */
+    function getHeadToHeadResult(league, teamA, teamB) {
+        if (!league._h2h || !league._h2h[teamA] || !league._h2h[teamA][teamB]) return 0;
+        
+        const h2h = league._h2h[teamA][teamB];
+        if (h2h.wins > h2h.losses) return 1;   // teamA wins H2H
+        if (h2h.losses > h2h.wins) return -1;  // teamB wins H2H
+        return 0;  // H2H tied
+    }
+    
+    /**
+     * Sort teams with tiebreakers:
+     * 1. Win percentage (W / (W+L+T))
+     * 2. Head-to-head record
+     * 3. Point differential
+     */
+    function sortTeamsByStandings(league) {
+        return league.teams.slice().sort((a, b) => {
+            const sA = league.standings[a] || { w: 0, l: 0, t: 0, diff: 0 };
+            const sB = league.standings[b] || { w: 0, l: 0, t: 0, diff: 0 };
+            
+            // Primary: More wins
+            if (sB.w !== sA.w) return sB.w - sA.w;
+            
+            // Secondary: Fewer losses
+            if (sA.l !== sB.l) return sA.l - sB.l;
+            
+            // Tertiary: Head-to-head
+            const h2h = getHeadToHeadResult(league, a, b);
+            if (h2h !== 0) return -h2h;  // Negative because we want winner higher
+            
+            // Quaternary: Point differential
+            const diffA = sA.diff || 0;
+            const diffB = sB.diff || 0;
+            if (diffB !== diffA) return diffB - diffA;
+            
+            // Final: Alphabetical
+            return a.localeCompare(b);
         });
     }
 
