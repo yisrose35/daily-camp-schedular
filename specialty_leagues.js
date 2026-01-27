@@ -1,6 +1,19 @@
 // ============================================================================
-// specialty_leagues.js — PRODUCTION-READY v2.2.3 (EMERALD CAMP THEME)
+// specialty_leagues.js — PRODUCTION-READY v2.2.5 (EMERALD CAMP THEME)
 // ============================================================================
+// v2.2.5 ADVANCED STANDINGS & TIEBREAKERS:
+// - ★ AUTO-SORT: Standings automatically re-sort after manual W/L/T changes
+// - ★ TIEBREAKER 1: Head-to-head record between tied teams
+// - ★ TIEBREAKER 2: Head-to-head point differential
+// - ★ TIEBREAKER 3: Overall season point differential
+// - ★ +/- COLUMN: Shows each team's point differential
+//
+// v2.2.4 MANUAL STANDINGS EDITING:
+// - ★ EDITABLE W/L/T: Click directly on standings values to edit
+// - ★ AUTO-SAVE: Changes save immediately with cloud sync
+// - ★ RECALCULATE BUTTON: Reset standings from game results anytime
+// - ★ AUTO-SORT: Table re-sorts after manual changes
+//
 // v2.2.3 CLOUD SYNC FIXES:
 // - ★ STANDINGS SYNC: Force immediate cloud sync when standings change
 // - ★ DEEP CLONE: Uses JSON.parse(JSON.stringify()) to capture all nested data
@@ -52,7 +65,7 @@
 (function() {
     'use strict';
 
-    console.log("[SPECIALTY_LEAGUES] Module v2.2.3 loading...");
+    console.log("[SPECIALTY_LEAGUES] Module v2.2.5 loading...");
 
     // =============================================================
     // STATE & GLOBALS
@@ -1148,14 +1161,43 @@
                 return;
             }
 
-            // Sort teams by wins, then by losses (ascending)
-            const sorted = [...league.teams].sort((a, b) => {
-                const sA = league.standings[a] || { w: 0, l: 0, t: 0 };
-                const sB = league.standings[b] || { w: 0, l: 0, t: 0 };
-                if (sB.w !== sA.w) return sB.w - sA.w;
-                if (sA.l !== sB.l) return sA.l - sB.l;
-                return sB.t - sA.t;
+            // ★ v2.2.4: Add header with Recalculate button
+            const headerBar = document.createElement('div');
+            headerBar.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;';
+            
+            const headerTitle = document.createElement('div');
+            headerTitle.style.cssText = 'font-size:0.75rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#6B7280;';
+            headerTitle.textContent = 'Standings';
+            headerBar.appendChild(headerTitle);
+            
+            const recalcBtn = document.createElement('button');
+            recalcBtn.textContent = '↻ Recalculate from Games';
+            recalcBtn.title = 'Reset standings based on game results';
+            Object.assign(recalcBtn.style, {
+                padding: '6px 12px',
+                fontSize: '0.75rem',
+                border: '1px solid #E5E7EB',
+                borderRadius: '6px',
+                background: '#fff',
+                color: '#6B7280',
+                cursor: 'pointer',
+                fontWeight: '500',
+                transition: 'all 0.15s'
             });
+            recalcBtn.onmouseover = () => { recalcBtn.style.borderColor = '#111827'; recalcBtn.style.color = '#111827'; };
+            recalcBtn.onmouseout = () => { recalcBtn.style.borderColor = '#E5E7EB'; recalcBtn.style.color = '#6B7280'; };
+            recalcBtn.onclick = () => {
+                if (confirm('Recalculate standings from game results? This will overwrite any manual changes.')) {
+                    recalcStandings(league);
+                    saveData(true);
+                    renderStandingsTable(league, container);
+                }
+            };
+            headerBar.appendChild(recalcBtn);
+            container.appendChild(headerBar);
+
+            // ★ v2.2.5: Advanced sorting with tiebreakers
+            const sorted = sortTeamsWithTiebreakers(league);
 
             const table = document.createElement('table');
             Object.assign(table.style, {
@@ -1176,13 +1218,19 @@
                     <th style="padding:12px; text-align:center; font-weight:600; color:#6B7280; font-size:0.85rem;">W</th>
                     <th style="padding:12px; text-align:center; font-weight:600; color:#6B7280; font-size:0.85rem;">L</th>
                     <th style="padding:12px; text-align:center; font-weight:600; color:#6B7280; font-size:0.85rem;">T</th>
+                    <th style="padding:12px; text-align:center; font-weight:600; color:#6B7280; font-size:0.85rem;" title="Point Differential">+/-</th>
                 </tr>
             `;
             table.appendChild(thead);
 
             const tbody = document.createElement('tbody');
-            sorted.forEach((team, idx) => {
-                const stats = league.standings[team] || { w: 0, l: 0, t: 0 };
+            sorted.forEach((teamData, idx) => {
+                const team = teamData.team;
+                // Ensure standings object exists
+                if (!league.standings[team]) {
+                    league.standings[team] = { w: 0, l: 0, t: 0 };
+                }
+                const stats = league.standings[team];
                 const isLast = idx === sorted.length - 1;
                 const borderBottom = !isLast ? '1px solid #F3F4F6' : 'none';
                 
@@ -1200,32 +1248,234 @@
                 tdTeam.textContent = team;
                 row.appendChild(tdTeam);
                 
-                // Wins
+                // ★ v2.2.4: Editable Wins
                 const tdW = document.createElement('td');
-                Object.assign(tdW.style, { padding: '12px', borderBottom, textAlign: 'center', color: '#059669', fontWeight: '600' });
-                tdW.textContent = stats.w;
+                Object.assign(tdW.style, { padding: '8px', borderBottom, textAlign: 'center' });
+                const inputW = createStandingInput(stats.w, '#059669', (val) => {
+                    stats.w = val;
+                    saveData(true);
+                    // Re-sort after change
+                    setTimeout(() => renderStandingsTable(league, container), 100);
+                });
+                tdW.appendChild(inputW);
                 row.appendChild(tdW);
                 
-                // Losses
+                // ★ v2.2.4: Editable Losses
                 const tdL = document.createElement('td');
-                Object.assign(tdL.style, { padding: '12px', borderBottom, textAlign: 'center', color: '#DC2626' });
-                tdL.textContent = stats.l;
+                Object.assign(tdL.style, { padding: '8px', borderBottom, textAlign: 'center' });
+                const inputL = createStandingInput(stats.l, '#DC2626', (val) => {
+                    stats.l = val;
+                    saveData(true);
+                    setTimeout(() => renderStandingsTable(league, container), 100);
+                });
+                tdL.appendChild(inputL);
                 row.appendChild(tdL);
                 
-                // Ties
+                // ★ v2.2.4: Editable Ties
                 const tdT = document.createElement('td');
-                Object.assign(tdT.style, { padding: '12px', borderBottom, textAlign: 'center', color: '#6B7280' });
-                tdT.textContent = stats.t;
+                Object.assign(tdT.style, { padding: '8px', borderBottom, textAlign: 'center' });
+                const inputT = createStandingInput(stats.t, '#6B7280', (val) => {
+                    stats.t = val;
+                    saveData(true);
+                    setTimeout(() => renderStandingsTable(league, container), 100);
+                });
+                tdT.appendChild(inputT);
                 row.appendChild(tdT);
+                
+                // ★ v2.2.5: Point Differential column
+                const tdDiff = document.createElement('td');
+                const diff = teamData.pointDiff || 0;
+                const diffColor = diff > 0 ? '#059669' : diff < 0 ? '#DC2626' : '#6B7280';
+                const diffText = diff > 0 ? `+${diff}` : `${diff}`;
+                Object.assign(tdDiff.style, { padding: '12px', borderBottom, textAlign: 'center', color: diffColor, fontWeight: '500', fontSize: '0.85rem' });
+                tdDiff.textContent = diffText;
+                row.appendChild(tdDiff);
                 
                 tbody.appendChild(row);
             });
             
             table.appendChild(tbody);
             container.appendChild(table);
+            
+            // ★ v2.2.5: Updated helper text
+            const helperText = document.createElement('div');
+            helperText.style.cssText = 'margin-top:8px; font-size:0.75rem; color:#9CA3AF; text-align:center;';
+            helperText.textContent = 'Click W/L/T to edit • Tiebreakers: Head-to-head → Point differential';
+            container.appendChild(helperText);
+            
         } catch (e) {
             console.error("[SPECIALTY_LEAGUES] Error rendering standings table:", e);
         }
+    }
+    
+    /**
+     * ★ v2.2.5: Sort teams with advanced tiebreakers
+     * 1. Win percentage (W / (W+L+T))
+     * 2. Head-to-head record
+     * 3. Overall point differential
+     */
+    function sortTeamsWithTiebreakers(league) {
+        const teams = league.teams || [];
+        const games = league.games || [];
+        
+        // Calculate point differential for each team
+        const pointDiffs = {};
+        const headToHead = {}; // headToHead[teamA][teamB] = { wins: X, losses: Y, pointDiff: Z }
+        
+        teams.forEach(team => {
+            pointDiffs[team] = 0;
+            headToHead[team] = {};
+            teams.forEach(otherTeam => {
+                if (team !== otherTeam) {
+                    headToHead[team][otherTeam] = { wins: 0, losses: 0, pointDiff: 0 };
+                }
+            });
+        });
+        
+        // Process all games to calculate stats
+        games.forEach(game => {
+            (game.matches || []).forEach(match => {
+                const teamA = match.teamA;
+                const teamB = match.teamB;
+                const scoreA = match.scoreA;
+                const scoreB = match.scoreB;
+                
+                // Only process if we have valid scores and teams
+                if (scoreA === null || scoreB === null || scoreA === undefined || scoreB === undefined) return;
+                if (!teams.includes(teamA) || !teams.includes(teamB)) return;
+                
+                const diffA = scoreA - scoreB;
+                const diffB = scoreB - scoreA;
+                
+                // Update point differentials
+                pointDiffs[teamA] = (pointDiffs[teamA] || 0) + diffA;
+                pointDiffs[teamB] = (pointDiffs[teamB] || 0) + diffB;
+                
+                // Update head-to-head
+                if (headToHead[teamA] && headToHead[teamA][teamB]) {
+                    headToHead[teamA][teamB].pointDiff += diffA;
+                    if (scoreA > scoreB) {
+                        headToHead[teamA][teamB].wins++;
+                    } else if (scoreB > scoreA) {
+                        headToHead[teamA][teamB].losses++;
+                    }
+                }
+                if (headToHead[teamB] && headToHead[teamB][teamA]) {
+                    headToHead[teamB][teamA].pointDiff += diffB;
+                    if (scoreB > scoreA) {
+                        headToHead[teamB][teamA].wins++;
+                    } else if (scoreA > scoreB) {
+                        headToHead[teamB][teamA].losses++;
+                    }
+                }
+            });
+        });
+        
+        // Create sortable team objects
+        const teamData = teams.map(team => {
+            const stats = league.standings[team] || { w: 0, l: 0, t: 0 };
+            const totalGames = stats.w + stats.l + stats.t;
+            const winPct = totalGames > 0 ? (stats.w + stats.t * 0.5) / totalGames : 0;
+            
+            return {
+                team,
+                wins: stats.w,
+                losses: stats.l,
+                ties: stats.t,
+                winPct,
+                pointDiff: pointDiffs[team] || 0,
+                headToHead: headToHead[team] || {}
+            };
+        });
+        
+        // Sort with tiebreakers
+        teamData.sort((a, b) => {
+            // 1. Compare by wins first
+            if (b.wins !== a.wins) return b.wins - a.wins;
+            
+            // 2. Compare by losses (fewer is better)
+            if (a.losses !== b.losses) return a.losses - b.losses;
+            
+            // 3. Same W-L record - check head-to-head
+            const h2h = a.headToHead[b.team];
+            if (h2h) {
+                const h2hDiff = h2h.wins - h2h.losses;
+                if (h2hDiff !== 0) {
+                    // a beat b more times = a ranks higher (return negative)
+                    return -h2hDiff;
+                }
+                
+                // 4. Head-to-head tied - use head-to-head point differential
+                if (h2h.pointDiff !== 0) {
+                    return -h2h.pointDiff; // positive diff = a ranks higher
+                }
+            }
+            
+            // 5. Fall back to overall point differential
+            if (b.pointDiff !== a.pointDiff) return b.pointDiff - a.pointDiff;
+            
+            // 6. Still tied - alphabetical
+            return a.team.localeCompare(b.team);
+        });
+        
+        return teamData;
+    }
+    
+    /**
+     * ★ v2.2.4: Create an editable input for standings
+     */
+    function createStandingInput(value, color, onChange) {
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '0';
+        input.value = value || 0;
+        Object.assign(input.style, {
+            width: '48px',
+            textAlign: 'center',
+            padding: '6px 4px',
+            border: '1px solid transparent',
+            borderRadius: '6px',
+            fontSize: '0.95rem',
+            fontWeight: '600',
+            color: color,
+            background: 'transparent',
+            cursor: 'pointer',
+            transition: 'all 0.15s'
+        });
+        
+        // Show border on hover
+        input.onmouseover = () => { input.style.borderColor = '#E5E7EB'; input.style.background = '#F9FAFB'; };
+        input.onmouseout = () => { 
+            if (document.activeElement !== input) {
+                input.style.borderColor = 'transparent'; 
+                input.style.background = 'transparent'; 
+            }
+        };
+        
+        // Highlight on focus
+        input.onfocus = () => { input.style.borderColor = color; input.style.background = '#fff'; input.select(); };
+        input.onblur = () => { input.style.borderColor = 'transparent'; input.style.background = 'transparent'; };
+        
+        // Save on change
+        let saveTimeout = null;
+        input.oninput = () => {
+            if (saveTimeout) clearTimeout(saveTimeout);
+            saveTimeout = setTimeout(() => {
+                const newVal = parseInt(input.value, 10) || 0;
+                onChange(newVal);
+            }, 300);
+        };
+        
+        // Save on Enter
+        input.onkeydown = (e) => {
+            if (e.key === 'Enter') {
+                input.blur();
+                const newVal = parseInt(input.value, 10) || 0;
+                onChange(newVal);
+            }
+        };
+        
+        return input;
     }
 
     // =============================================================
@@ -2045,6 +2295,6 @@
     // ★ v2.1: Export diagnostics
     window.diagnoseSpecialtyLeagues = diagnoseSpecialtyLeagues;
 
-    console.log("[SPECIALTY_LEAGUES] Module v2.2.3 loaded");
+    console.log("[SPECIALTY_LEAGUES] Module v2.2.5 loaded");
 
 })();
