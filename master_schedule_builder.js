@@ -1,239 +1,81 @@
 // =================================================================
-// master_schedule_builder.js (PRODUCTION-READY v4.0)
+// master_schedule_builder.js (PREMIUM EDITION v5.0)
 // =================================================================
-// CHANGELOG v4.0:
-// - Professional UI (no emojis/symbols)
-// - Auto-save drafts (no popup on load)
-// - In-app tile configuration modal (no browser prompts)
-// - Time picker with increment buttons
-// - Multi-select checkboxes for fields/locations
-// - Integrated template management (Load/Update/Save/Delete)
-// - Timeline uses camp's actual start/end times
-// - Tile colors match between palette and grid
-// - Locations include all facilities from Locations tab
+// Complete UI overhaul - Enterprise-grade design system
+// Inspired by Linear, Notion, Figma, and Apple design principles
 // =================================================================
 
 (function(){
 'use strict';
 
-console.log("[MASTER_SCHEDULER] Module v4.0 loading...");
+console.log("[MASTER_SCHEDULER] Premium Edition v5.0 loading...");
 
 // =================================================================
-// STATE & GLOBALS
+// STATE & CONFIGURATION
 // =================================================================
 let container = null;
-let palette = null;
-let grid = null;
 let dailySkeleton = [];
 let currentLoadedTemplate = null;
 let _isInitialized = false;
 let _refreshTimeout = null;
 let _autoSaveTimeout = null;
-
-// Clipboard for copy/paste
 let clipboardTile = null;
 let lastHoveredCell = null;
-
-// Event listener tracking for cleanup
 let activeEventListeners = [];
 let _visibilityHandler = null;
 let _focusHandler = null;
 let _keyboardHandler = null;
 
-// Constants
 const SKELETON_DRAFT_KEY = 'master-schedule-draft';
 const SKELETON_DRAFT_NAME_KEY = 'master-schedule-draft-name';
 const PIXELS_PER_MINUTE = 2;
-const INCREMENT_MINS = 30;
 const SNAP_MINS = 5;
-const AUTO_SAVE_DELAY = 2000;
+const AUTO_SAVE_DELAY = 1500;
 
-// =================================================================
-// EVENT LISTENER MANAGEMENT
-// =================================================================
-function cleanupEventListeners() {
-    activeEventListeners.forEach(({ type, handler, target }) => {
-        try {
-            (target || document).removeEventListener(type, handler);
-        } catch (e) {
-            console.warn('[MasterScheduler] Failed to remove listener:', e);
-        }
-    });
-    activeEventListeners = [];
-}
+// Premium color palette for tiles
+const TILE_THEMES = {
+    activity:        { bg: '#EEF2FF', border: '#6366F1', text: '#4338CA', accent: '#818CF8' },
+    sports:          { bg: '#ECFDF5', border: '#10B981', text: '#047857', accent: '#34D399' },
+    special:         { bg: '#F0FDF4', border: '#22C55E', text: '#15803D', accent: '#4ADE80' },
+    smart:           { bg: '#EFF6FF', border: '#3B82F6', text: '#1D4ED8', accent: '#60A5FA', dashed: true },
+    split:           { bg: '#FFF7ED', border: '#F97316', text: '#C2410C', accent: '#FB923C' },
+    elective:        { bg: '#FAF5FF', border: '#A855F7', text: '#7E22CE', accent: '#C084FC' },
+    league:          { bg: '#F5F3FF', border: '#8B5CF6', text: '#6D28D9', accent: '#A78BFA' },
+    specialty_league:{ bg: '#FFFBEB', border: '#F59E0B', text: '#B45309', accent: '#FBBF24' },
+    swim:            { bg: '#E0F2FE', border: '#0EA5E9', text: '#0369A1', accent: '#38BDF8' },
+    lunch:           { bg: '#FEF2F2', border: '#EF4444', text: '#B91C1C', accent: '#F87171' },
+    snacks:          { bg: '#FEFCE8', border: '#EAB308', text: '#A16207', accent: '#FACC15' },
+    dismissal:       { bg: '#FEE2E2', border: '#DC2626', text: '#991B1B', accent: '#F87171' },
+    custom:          { bg: '#F8FAFC', border: '#64748B', text: '#334155', accent: '#94A3B8' }
+};
 
-function trackEventListener(type, handler, target = document) {
-    activeEventListeners.push({ type, handler, target });
-}
-
-function cleanupTabListeners() {
-    if (_visibilityHandler) {
-        document.removeEventListener('visibilitychange', _visibilityHandler);
-        _visibilityHandler = null;
-    }
-    if (_focusHandler) {
-        window.removeEventListener('focus', _focusHandler);
-        _focusHandler = null;
-    }
-    if (_keyboardHandler) {
-        document.removeEventListener('keydown', _keyboardHandler);
-        _keyboardHandler = null;
-    }
-    if (_refreshTimeout) {
-        clearTimeout(_refreshTimeout);
-        _refreshTimeout = null;
-    }
-    if (_autoSaveTimeout) {
-        clearTimeout(_autoSaveTimeout);
-        _autoSaveTimeout = null;
-    }
-}
-
-// =================================================================
-// TAB VISIBILITY & CLOUD SYNC
-// =================================================================
-function setupTabListeners() {
-    cleanupTabListeners();
-    
-    _visibilityHandler = () => {
-        if (document.visibilityState === 'visible' && _isInitialized) {
-            clearTimeout(_refreshTimeout);
-            _refreshTimeout = setTimeout(() => {
-                refreshFromStorage();
-            }, 150);
-        }
-    };
-    document.addEventListener('visibilitychange', _visibilityHandler);
-    trackEventListener('visibilitychange', _visibilityHandler, document);
-    
-    _focusHandler = () => {
-        if (_isInitialized) {
-            clearTimeout(_refreshTimeout);
-            _refreshTimeout = setTimeout(() => {
-                refreshFromStorage();
-            }, 200);
-        }
-    };
-    window.addEventListener('focus', _focusHandler);
-    trackEventListener('focus', _focusHandler, window);
-}
-
-// =================================================================
-// KEYBOARD SHORTCUTS
-// =================================================================
-function setupKeyboardShortcuts() {
-    if (_keyboardHandler) {
-        document.removeEventListener('keydown', _keyboardHandler);
-    }
-    
-    _keyboardHandler = (e) => {
-        const masterTab = document.getElementById('master-scheduler');
-        if (!masterTab || !masterTab.classList.contains('active')) return;
-        
-        // Ctrl+C - Copy
-        if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
-            const selected = grid?.querySelector('.ms-event.selected');
-            if (selected) {
-                const eventId = selected.dataset.id;
-                const event = dailySkeleton.find(ev => ev.id === eventId);
-                if (event) {
-                    copyTileToClipboard(event);
-                    showToast('Tile copied');
-                    e.preventDefault();
-                }
-            }
-        }
-        
-        // Ctrl+V - Paste
-        if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
-            if (clipboardTile && lastHoveredCell) {
-                pasteTileFromClipboard(lastHoveredCell);
-                showToast('Tile pasted');
-                e.preventDefault();
-            }
-        }
-        
-        // Delete key
-        if (e.key === 'Delete' || e.key === 'Backspace') {
-            const selected = grid?.querySelector('.ms-event.selected');
-            if (selected && !e.target.matches('input, textarea, select')) {
-                const eventId = selected.dataset.id;
-                if (eventId && confirm("Delete this block?")) {
-                    dailySkeleton = dailySkeleton.filter(x => x.id !== eventId);
-                    scheduleAutoSave();
-                    renderGrid();
-                }
-                e.preventDefault();
-            }
-        }
-    };
-    
-    document.addEventListener('keydown', _keyboardHandler);
-    trackEventListener('keydown', _keyboardHandler, document);
-}
-
-// =================================================================
-// CLIPBOARD FUNCTIONS
-// =================================================================
-function copyTileToClipboard(event) {
-    if (!event) return;
-    clipboardTile = { ...event, id: null, _copiedAt: Date.now() };
-}
-
-function pasteTileFromClipboard(targetCell) {
-    if (!clipboardTile || !targetCell) return;
-    
-    const divName = targetCell.dataset.div;
-    const cellStartMin = parseInt(targetCell.dataset.startMin, 10) || 540;
-    
-    const origStart = parseTimeToMinutes(clipboardTile.startTime);
-    const origEnd = parseTimeToMinutes(clipboardTile.endTime);
-    const duration = (origStart !== null && origEnd !== null) ? (origEnd - origStart) : INCREMENT_MINS;
-    
-    const newEvent = {
-        ...clipboardTile,
-        id: generateId(),
-        division: divName,
-        startTime: minutesToTime(cellStartMin),
-        endTime: minutesToTime(cellStartMin + duration)
-    };
-    delete newEvent._copiedAt;
-    
-    dailySkeleton.push(newEvent);
-    scheduleAutoSave();
-    renderGrid();
-}
-
-// =================================================================
-// TOAST NOTIFICATION
-// =================================================================
-function showToast(message, duration = 2000) {
-    let toast = document.getElementById('master-scheduler-toast');
-    if (!toast) {
-        toast = document.createElement('div');
-        toast.id = 'master-scheduler-toast';
-        document.body.appendChild(toast);
-    }
-    
-    toast.textContent = message;
-    toast.className = 'ms-toast ms-toast-show';
-    
-    setTimeout(() => {
-        toast.className = 'ms-toast';
-    }, duration);
-}
+const TILES = [
+    { type: 'activity', name: 'Activity', description: 'Flexible slot for sports or special activities' },
+    { type: 'sports', name: 'Sports', description: 'Dedicated sports period' },
+    { type: 'special', name: 'Special Activity', description: 'Special activity period' },
+    { type: 'smart', name: 'Smart Tile', description: 'Balances two activities with fallback' },
+    { type: 'split', name: 'Split Activity', description: 'Two activities share this block' },
+    { type: 'elective', name: 'Elective', description: 'Multiple activity choices for division' },
+    { type: 'league', name: 'League Game', description: 'Scheduled league game slot' },
+    { type: 'specialty_league', name: 'Specialty League', description: 'Specialty league period' },
+    { type: 'swim', name: 'Swim', description: 'Swimming period' },
+    { type: 'lunch', name: 'Lunch', description: 'Lunch break' },
+    { type: 'snacks', name: 'Snacks', description: 'Snack time' },
+    { type: 'dismissal', name: 'Dismissal', description: 'End of day dismissal' },
+    { type: 'custom', name: 'Custom Event', description: 'Custom scheduled event' }
+];
 
 // =================================================================
 // UTILITY FUNCTIONS
 // =================================================================
 function generateId() {
-    return Date.now().toString() + Math.random().toString(36).substr(2, 5);
+    return Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
 }
 
 function parseTimeToMinutes(str) {
     if (!str) return null;
     try {
-        let s = str.toLowerCase().replace(/\s/g, '').replace(/am|pm/g, match => ' ' + match).trim();
+        let s = str.toLowerCase().replace(/\s/g, '').replace(/am|pm/g, m => ' ' + m).trim();
         const isPM = s.includes('pm');
         const isAM = s.includes('am');
         s = s.replace(/am|pm/g, '').trim();
@@ -251,7 +93,7 @@ function minutesToTime(min) {
     if (min === null || min === undefined || isNaN(min)) return '';
     let h = Math.floor(min / 60);
     let m = min % 60;
-    let ap = h >= 12 ? 'PM' : 'AM';
+    const ap = h >= 12 ? 'PM' : 'AM';
     h = h % 12 || 12;
     return `${h}:${m.toString().padStart(2, '0')} ${ap}`;
 }
@@ -263,94 +105,6 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
-// =================================================================
-// AUTO-SAVE DRAFT SYSTEM
-// =================================================================
-function scheduleAutoSave() {
-    clearTimeout(_autoSaveTimeout);
-    _autoSaveTimeout = setTimeout(() => {
-        saveDraftToLocalStorage();
-    }, AUTO_SAVE_DELAY);
-}
-
-function saveDraftToLocalStorage() {
-    try {
-        if (dailySkeleton && dailySkeleton.length > 0) {
-            localStorage.setItem(SKELETON_DRAFT_KEY, JSON.stringify(dailySkeleton));
-            if (currentLoadedTemplate) {
-                localStorage.setItem(SKELETON_DRAFT_NAME_KEY, currentLoadedTemplate);
-            } else {
-                localStorage.removeItem(SKELETON_DRAFT_NAME_KEY);
-            }
-            updateDraftIndicator(true);
-        } else {
-            localStorage.removeItem(SKELETON_DRAFT_KEY);
-            localStorage.removeItem(SKELETON_DRAFT_NAME_KEY);
-            updateDraftIndicator(false);
-        }
-    } catch (e) {
-        console.error('[MasterScheduler] Failed to save draft:', e);
-    }
-}
-
-function clearDraftFromLocalStorage() {
-    try {
-        localStorage.removeItem(SKELETON_DRAFT_KEY);
-        localStorage.removeItem(SKELETON_DRAFT_NAME_KEY);
-        updateDraftIndicator(false);
-    } catch (e) {
-        console.warn('[MasterScheduler] Failed to clear draft:', e);
-    }
-}
-
-function loadDraftFromLocalStorage() {
-    try {
-        const savedDraft = localStorage.getItem(SKELETON_DRAFT_KEY);
-        const savedDraftName = localStorage.getItem(SKELETON_DRAFT_NAME_KEY);
-        
-        if (savedDraft) {
-            dailySkeleton = JSON.parse(savedDraft);
-            if (savedDraftName) {
-                currentLoadedTemplate = savedDraftName;
-            }
-            return true;
-        }
-    } catch (e) {
-        console.warn('[MasterScheduler] Failed to load draft:', e);
-    }
-    return false;
-}
-
-function updateDraftIndicator(hasUnsaved) {
-    const indicator = document.getElementById('draft-indicator');
-    if (indicator) {
-        indicator.style.display = hasUnsaved ? 'inline' : 'none';
-    }
-}
-
-// =================================================================
-// REFRESH FROM CLOUD
-// =================================================================
-function refreshFromStorage() {
-    try {
-        if (currentLoadedTemplate) {
-            const all = window.getSavedSkeletons?.() || {};
-            if (all[currentLoadedTemplate]) {
-                const cloudVersion = all[currentLoadedTemplate];
-                if (JSON.stringify(cloudVersion) !== JSON.stringify(dailySkeleton)) {
-                    // Don't auto-overwrite - just refresh template list
-                }
-            }
-        }
-        renderTemplateUI();
-    } catch (e) {
-        console.warn('[MasterScheduler] Refresh failed:', e);
-    }
-}
-
-// =================================================================
-// GET CAMP TIME RANGE
-// =================================================================
 function getCampTimeRange() {
     const divisions = window.divisions || {};
     const divNames = Object.keys(divisions).filter(d => divisions[d]?.bunks?.length > 0);
@@ -358,24 +112,14 @@ function getCampTimeRange() {
     let earliestMin = null;
     let latestMin = null;
     
-    // Debug logging
-    console.log('[MasterScheduler] getCampTimeRange - checking', divNames.length, 'divisions');
-    
-    // Get actual times from divisions
     divNames.forEach(d => {
         const div = divisions[d];
         const s = parseTimeToMinutes(div?.startTime);
         const e = parseTimeToMinutes(div?.endTime);
-        console.log(`[MasterScheduler] Division "${d}": start=${div?.startTime} (${s} min), end=${div?.endTime} (${e} min)`);
-        if (s !== null) {
-            if (earliestMin === null || s < earliestMin) earliestMin = s;
-        }
-        if (e !== null) {
-            if (latestMin === null || e > latestMin) latestMin = e;
-        }
+        if (s !== null && (earliestMin === null || s < earliestMin)) earliestMin = s;
+        if (e !== null && (latestMin === null || e > latestMin)) latestMin = e;
     });
     
-    // Also check skeleton events (may extend beyond division times)
     dailySkeleton.forEach(ev => {
         const s = parseTimeToMinutes(ev.startTime);
         const e = parseTimeToMinutes(ev.endTime);
@@ -383,65 +127,29 @@ function getCampTimeRange() {
         if (e !== null && (latestMin === null || e > latestMin)) latestMin = e;
     });
     
-    // Fallback defaults only if no data found
-    if (earliestMin === null) {
-        console.log('[MasterScheduler] No division start times found, using default 9:00 AM');
-        earliestMin = 540;
-    }
-    if (latestMin === null) {
-        console.log('[MasterScheduler] No division end times found, using default 4:00 PM');
-        latestMin = 960;
-    }
-    
-    // Ensure minimum 1 hour range
-    if (latestMin - earliestMin < 60) {
-        latestMin = earliestMin + 60;
-    }
-    
-    console.log(`[MasterScheduler] Final time range: ${minutesToTime(earliestMin)} - ${minutesToTime(latestMin)}`);
+    if (earliestMin === null) earliestMin = 540;
+    if (latestMin === null) latestMin = 960;
+    if (latestMin - earliestMin < 60) latestMin = earliestMin + 60;
     
     return { earliestMin, latestMin };
 }
 
-// =================================================================
-// GET ALL AVAILABLE FIELDS AND LOCATIONS
-// =================================================================
 function getAllFieldsAndLocations() {
     const globalSettings = window.loadGlobalSettings?.() || {};
-    const result = {
-        fields: [],
-        locations: [],
-        all: []
-    };
+    const result = [];
     
-    // Get fields
-    const fields = globalSettings.app1?.fields || [];
-    fields.forEach(f => {
-        if (f.available !== false) {
-            result.fields.push({ name: f.name, type: 'field' });
-            result.all.push({ name: f.name, type: 'field' });
-        }
+    (globalSettings.app1?.fields || []).forEach(f => {
+        if (f.available !== false) result.push({ name: f.name, type: 'Field' });
     });
     
-    // Get locations from location zones
     const zones = globalSettings.locationZones || {};
     Object.values(zones).forEach(zone => {
         if (zone.locations) {
             Object.keys(zone.locations).forEach(locName => {
-                if (!result.all.find(x => x.name === locName)) {
-                    result.locations.push({ name: locName, type: 'location', zone: zone.name });
-                    result.all.push({ name: locName, type: 'location', zone: zone.name });
+                if (!result.find(x => x.name === locName)) {
+                    result.push({ name: locName, type: zone.name || 'Location' });
                 }
             });
-        }
-    });
-    
-    // Get special activities that might have locations
-    const specials = globalSettings.app1?.specialActivities || [];
-    specials.forEach(s => {
-        if (s.location && !result.all.find(x => x.name === s.location)) {
-            result.locations.push({ name: s.location, type: 'facility' });
-            result.all.push({ name: s.location, type: 'facility' });
         }
     });
     
@@ -449,553 +157,197 @@ function getAllFieldsAndLocations() {
 }
 
 // =================================================================
-// TILES DEFINITION
+// EVENT LISTENER MANAGEMENT
 // =================================================================
-const TILES = [
-    { type: 'activity', name: 'Activity', color: '#e0f7fa', border: '#007bff', description: 'Flexible slot (Sport or Special).' },
-    { type: 'sports', name: 'Sports', color: '#dcedc8', border: '#689f38', description: 'Sports slot only.' },
-    { type: 'special', name: 'Special Activity', color: '#e8f5e9', border: '#43a047', description: 'Special Activity slot only.' },
-    { type: 'smart', name: 'Smart Tile', color: '#e3f2fd', border: '#0288d1', description: 'Balances 2 activities with a fallback.', dashed: true },
-    { type: 'split', name: 'Split Activity', color: '#fff3e0', border: '#f57c00', description: 'Two activities share the block.' },
-    { type: 'elective', name: 'Elective', color: '#e1bee7', border: '#8e24aa', description: 'Reserve multiple activities for division.' },
-    { type: 'league', name: 'League Game', color: '#d1c4e9', border: '#5e35b1', description: 'Regular League slot.' },
-    { type: 'specialty_league', name: 'Specialty League', color: '#fff8e1', border: '#f9a825', description: 'Specialty League slot.' },
-    { type: 'swim', name: 'Swim', color: '#bbdefb', border: '#1976d2', description: 'Pinned swim time.' },
-    { type: 'lunch', name: 'Lunch', color: '#fbe9e7', border: '#d84315', description: 'Pinned lunch time.' },
-    { type: 'snacks', name: 'Snacks', color: '#fff9c4', border: '#fbc02d', description: 'Pinned snack time.' },
-    { type: 'dismissal', name: 'Dismissal', color: '#ffcdd2', border: '#c62828', description: 'Pinned dismissal.' },
-    { type: 'custom', name: 'Custom Event', color: '#eceff1', border: '#616161', description: 'Custom pinned event.' }
-];
-
-function getTileStyle(tile) {
-    const borderStyle = tile.dashed ? 'dashed' : 'solid';
-    return `background:${tile.color};border:2px ${borderStyle} ${tile.border};`;
+function trackListener(type, handler, target = document) {
+    activeEventListeners.push({ type, handler, target });
 }
 
-function getTileByType(type) {
-    return TILES.find(t => t.type === type) || TILES.find(t => t.type === 'custom');
+function cleanupListeners() {
+    activeEventListeners.forEach(({ type, handler, target }) => {
+        try { (target || document).removeEventListener(type, handler); } catch (e) {}
+    });
+    activeEventListeners = [];
+    
+    if (_visibilityHandler) document.removeEventListener('visibilitychange', _visibilityHandler);
+    if (_focusHandler) window.removeEventListener('focus', _focusHandler);
+    if (_keyboardHandler) document.removeEventListener('keydown', _keyboardHandler);
+    
+    clearTimeout(_refreshTimeout);
+    clearTimeout(_autoSaveTimeout);
 }
 
 // =================================================================
-// TILE CONFIGURATION MODAL
+// AUTO-SAVE & DRAFT MANAGEMENT
 // =================================================================
-function showTileConfigModal(tileType, divisionName, initialStartMin, callback) {
-    const tile = getTileByType(tileType);
-    if (!tile) return;
+function scheduleAutoSave() {
+    clearTimeout(_autoSaveTimeout);
+    _autoSaveTimeout = setTimeout(saveDraft, AUTO_SAVE_DELAY);
+}
+
+function saveDraft() {
+    try {
+        if (dailySkeleton?.length > 0) {
+            localStorage.setItem(SKELETON_DRAFT_KEY, JSON.stringify(dailySkeleton));
+            if (currentLoadedTemplate) localStorage.setItem(SKELETON_DRAFT_NAME_KEY, currentLoadedTemplate);
+            else localStorage.removeItem(SKELETON_DRAFT_NAME_KEY);
+        } else {
+            localStorage.removeItem(SKELETON_DRAFT_KEY);
+            localStorage.removeItem(SKELETON_DRAFT_NAME_KEY);
+        }
+        updateStatusIndicator();
+    } catch (e) {}
+}
+
+function loadDraft() {
+    try {
+        const saved = localStorage.getItem(SKELETON_DRAFT_KEY);
+        const savedName = localStorage.getItem(SKELETON_DRAFT_NAME_KEY);
+        if (saved) {
+            dailySkeleton = JSON.parse(saved);
+            if (savedName) currentLoadedTemplate = savedName;
+            return true;
+        }
+    } catch (e) {}
+    return false;
+}
+
+function clearDraft() {
+    localStorage.removeItem(SKELETON_DRAFT_KEY);
+    localStorage.removeItem(SKELETON_DRAFT_NAME_KEY);
+    updateStatusIndicator();
+}
+
+function updateStatusIndicator() {
+    const indicator = document.getElementById('ms-status-indicator');
+    if (!indicator) return;
     
-    // Remove existing modal
-    const existingModal = document.getElementById('tile-config-modal');
-    if (existingModal) existingModal.remove();
+    const hasChanges = dailySkeleton.length > 0;
+    const isEditing = !!currentLoadedTemplate;
     
-    const { earliestMin, latestMin } = getCampTimeRange();
-    const allLocations = getAllFieldsAndLocations();
-    
-    // Default times
-    let startMin = initialStartMin || earliestMin;
-    let endMin = startMin + INCREMENT_MINS;
-    
-    const modal = document.createElement('div');
-    modal.id = 'tile-config-modal';
-    modal.className = 'ms-modal-overlay';
-    
-    // Build location checkboxes
-    let locationCheckboxes = '';
-    if (allLocations.all.length > 0) {
-        const fieldItems = allLocations.fields.map(f => 
-            `<label class="ms-checkbox-item"><input type="checkbox" name="reserved-location" value="${escapeHtml(f.name)}"><span>${escapeHtml(f.name)}</span><span class="ms-location-type">Field</span></label>`
-        ).join('');
-        
-        const locationItems = allLocations.locations.map(l => 
-            `<label class="ms-checkbox-item"><input type="checkbox" name="reserved-location" value="${escapeHtml(l.name)}"><span>${escapeHtml(l.name)}</span><span class="ms-location-type">${escapeHtml(l.zone || 'Location')}</span></label>`
-        ).join('');
-        
-        locationCheckboxes = `
-            <div class="ms-form-group">
-                <label class="ms-label">Reserve Fields / Locations</label>
-                <div class="ms-checkbox-grid">
-                    ${fieldItems}
-                    ${locationItems}
-                </div>
-            </div>
-        `;
+    if (isEditing) {
+        indicator.innerHTML = `<span class="ms-status-badge ms-status-editing">Editing</span><span class="ms-status-name">${escapeHtml(currentLoadedTemplate)}</span>`;
+    } else if (hasChanges) {
+        indicator.innerHTML = `<span class="ms-status-badge ms-status-draft">Draft</span><span class="ms-status-name">Unsaved Schedule</span>`;
+    } else {
+        indicator.innerHTML = `<span class="ms-status-badge ms-status-new">New</span><span class="ms-status-name">Empty Schedule</span>`;
     }
-    
-    // Build special fields for different tile types
-    let specialFields = '';
-    
-    if (tileType === 'smart') {
-        specialFields = `
-            <div class="ms-form-row">
-                <div class="ms-form-group ms-form-half">
-                    <label class="ms-label">Activity 1</label>
-                    <input type="text" id="modal-activity1" class="ms-input" placeholder="e.g., Swim">
-                </div>
-                <div class="ms-form-group ms-form-half">
-                    <label class="ms-label">Activity 2</label>
-                    <input type="text" id="modal-activity2" class="ms-input" placeholder="e.g., Art">
-                </div>
-            </div>
-            <div class="ms-form-row">
-                <div class="ms-form-group ms-form-half">
-                    <label class="ms-label">Fallback For</label>
-                    <select id="modal-fallback-for" class="ms-select">
-                        <option value="1">Activity 1</option>
-                        <option value="2">Activity 2</option>
-                    </select>
-                </div>
-                <div class="ms-form-group ms-form-half">
-                    <label class="ms-label">Fallback Activity</label>
-                    <input type="text" id="modal-fallback" class="ms-input" placeholder="e.g., Gaga">
-                </div>
-            </div>
-        `;
-    } else if (tileType === 'split') {
-        specialFields = `
-            <div class="ms-form-row">
-                <div class="ms-form-group ms-form-half">
-                    <label class="ms-label">First Activity</label>
-                    <input type="text" id="modal-split1" class="ms-input" placeholder="e.g., Swim">
-                </div>
-                <div class="ms-form-group ms-form-half">
-                    <label class="ms-label">Second Activity</label>
-                    <input type="text" id="modal-split2" class="ms-input" placeholder="e.g., Art">
-                </div>
-            </div>
-        `;
-    } else if (tileType === 'elective') {
-        const activities = [
-            ...allLocations.fields.map(f => f.name),
-            ...(window.loadGlobalSettings?.()?.app1?.specialActivities || []).filter(s => s.available !== false).map(s => s.name)
-        ];
-        const activityCheckboxes = activities.map(a => 
-            `<label class="ms-checkbox-item"><input type="checkbox" name="elective-activity" value="${escapeHtml(a)}"><span>${escapeHtml(a)}</span></label>`
-        ).join('');
-        
-        specialFields = `
-            <div class="ms-form-group">
-                <label class="ms-label">Elective Activities (select 2+)</label>
-                <div class="ms-checkbox-grid">
-                    ${activityCheckboxes}
-                </div>
-            </div>
-        `;
-    } else if (tileType === 'custom') {
-        specialFields = `
-            <div class="ms-form-group">
-                <label class="ms-label">Event Name</label>
-                <input type="text" id="modal-custom-name" class="ms-input" placeholder="e.g., Regroup, Assembly">
-            </div>
-        `;
-    }
-    
-    modal.innerHTML = `
-        <div class="ms-modal">
-            <div class="ms-modal-header">
-                <h3>${escapeHtml(tile.name)}</h3>
-                <button class="ms-modal-close" id="modal-close">&times;</button>
-            </div>
-            <div class="ms-modal-body">
-                <p class="ms-modal-desc">${escapeHtml(tile.description)}</p>
-                
-                ${specialFields}
-                
-                <div class="ms-form-group">
-                    <label class="ms-label">Time</label>
-                    <div class="ms-time-picker">
-                        <div class="ms-time-section">
-                            <span class="ms-time-label">Start</span>
-                            <div class="ms-time-control">
-                                <button type="button" class="ms-time-btn" data-action="start-down">-</button>
-                                <input type="text" id="modal-start-time" class="ms-time-input" value="${minutesToTime(startMin)}">
-                                <button type="button" class="ms-time-btn" data-action="start-up">+</button>
-                            </div>
-                        </div>
-                        <span class="ms-time-separator">to</span>
-                        <div class="ms-time-section">
-                            <span class="ms-time-label">End</span>
-                            <div class="ms-time-control">
-                                <button type="button" class="ms-time-btn" data-action="end-down">-</button>
-                                <input type="text" id="modal-end-time" class="ms-time-input" value="${minutesToTime(endMin)}">
-                                <button type="button" class="ms-time-btn" data-action="end-up">+</button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="ms-time-presets">
-                        <span class="ms-presets-label">Duration:</span>
-                        <button type="button" class="ms-preset-btn" data-duration="15">15 min</button>
-                        <button type="button" class="ms-preset-btn" data-duration="30">30 min</button>
-                        <button type="button" class="ms-preset-btn" data-duration="45">45 min</button>
-                        <button type="button" class="ms-preset-btn" data-duration="60">1 hour</button>
-                    </div>
-                </div>
-                
-                ${tileType === 'custom' ? locationCheckboxes : ''}
-            </div>
-            <div class="ms-modal-footer">
-                <button class="ms-btn ms-btn-secondary" id="modal-cancel">Cancel</button>
-                <button class="ms-btn ms-btn-primary" id="modal-confirm">Add to Schedule</button>
-            </div>
-        </div>
-    `;
-    
-    document.body.appendChild(modal);
-    
-    // Time control state
-    let currentStart = startMin;
-    let currentEnd = endMin;
-    
-    const startInput = document.getElementById('modal-start-time');
-    const endInput = document.getElementById('modal-end-time');
-    
-    const updateTimeDisplays = () => {
-        if (startInput) startInput.value = minutesToTime(currentStart);
-        if (endInput) endInput.value = minutesToTime(currentEnd);
+}
+
+// =================================================================
+// CLOUD SYNC & TAB VISIBILITY
+// =================================================================
+function setupTabListeners() {
+    _visibilityHandler = () => {
+        if (document.visibilityState === 'visible' && _isInitialized) {
+            clearTimeout(_refreshTimeout);
+            _refreshTimeout = setTimeout(refreshTemplateList, 200);
+        }
     };
+    document.addEventListener('visibilitychange', _visibilityHandler);
     
-    // Handle typing in time inputs
-    if (startInput) {
-        startInput.addEventListener('blur', () => {
-            const parsed = parseTimeToMinutes(startInput.value);
-            if (parsed !== null) {
-                currentStart = parsed;
-                if (currentStart >= currentEnd) {
-                    currentEnd = currentStart + 30;
-                }
-            }
-            updateTimeDisplays();
-        });
-        startInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                startInput.blur();
-            }
-        });
-    }
-    
-    if (endInput) {
-        endInput.addEventListener('blur', () => {
-            const parsed = parseTimeToMinutes(endInput.value);
-            if (parsed !== null && parsed > currentStart) {
-                currentEnd = parsed;
-            }
-            updateTimeDisplays();
-        });
-        endInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                endInput.blur();
-            }
-        });
-    }
-    
-    // Time button handlers
-    modal.querySelectorAll('.ms-time-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const action = btn.dataset.action;
-            const step = 5;
-            
-            if (action === 'start-up') {
-                currentStart = Math.min(currentStart + step, currentEnd - step);
-            } else if (action === 'start-down') {
-                currentStart = Math.max(currentStart - step, 0);
-            } else if (action === 'end-up') {
-                currentEnd = Math.min(currentEnd + step, 1440);
-            } else if (action === 'end-down') {
-                currentEnd = Math.max(currentEnd - step, currentStart + step);
-            }
-            
-            updateTimeDisplays();
-        });
-    });
-    
-    // Preset duration buttons
-    modal.querySelectorAll('.ms-preset-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const duration = parseInt(btn.dataset.duration, 10);
-            currentEnd = currentStart + duration;
-            updateTimeDisplays();
-        });
-    });
-    
-    // Close handlers
-    const closeModal = () => modal.remove();
-    
-    modal.querySelector('#modal-close').addEventListener('click', closeModal);
-    modal.querySelector('#modal-cancel').addEventListener('click', closeModal);
-    modal.addEventListener('click', (e) => {
-        if (e.target === modal) closeModal();
-    });
-    
-    // Confirm handler
-    modal.querySelector('#modal-confirm').addEventListener('click', () => {
-        // Build the event object
-        const newEvent = {
-            id: generateId(),
-            type: tileType,
-            event: tile.name,
-            division: divisionName,
-            startTime: minutesToTime(currentStart),
-            endTime: minutesToTime(currentEnd),
-            reservedFields: []
-        };
-        
-        // Get reserved locations
-        modal.querySelectorAll('input[name="reserved-location"]:checked').forEach(cb => {
-            newEvent.reservedFields.push(cb.value);
-        });
-        
-        // Handle special tile types
-        if (tileType === 'smart') {
-            const act1 = modal.querySelector('#modal-activity1')?.value.trim();
-            const act2 = modal.querySelector('#modal-activity2')?.value.trim();
-            const fallbackFor = modal.querySelector('#modal-fallback-for')?.value;
-            const fallback = modal.querySelector('#modal-fallback')?.value.trim();
-            
-            if (!act1 || !act2) {
-                alert('Please enter both activities.');
-                return;
-            }
-            if (!fallback) {
-                alert('Please enter a fallback activity.');
-                return;
-            }
-            
-            newEvent.smartData = {
-                activity1: act1,
-                activity2: act2,
-                fallbackFor: fallbackFor === '1' ? act1 : act2,
-                fallbackActivity: fallback
-            };
-        } else if (tileType === 'split') {
-            const split1 = modal.querySelector('#modal-split1')?.value.trim();
-            const split2 = modal.querySelector('#modal-split2')?.value.trim();
-            
-            if (!split1 || !split2) {
-                alert('Please enter both activities.');
-                return;
-            }
-            
-            const midMin = currentStart + Math.floor((currentEnd - currentStart) / 2);
-            newEvent.subEvents = [
-                { activity: split1, startTime: minutesToTime(currentStart), endTime: minutesToTime(midMin) },
-                { activity: split2, startTime: minutesToTime(midMin), endTime: minutesToTime(currentEnd) }
-            ];
-        } else if (tileType === 'elective') {
-            const selected = [];
-            modal.querySelectorAll('input[name="elective-activity"]:checked').forEach(cb => {
-                selected.push(cb.value);
-            });
-            
-            if (selected.length < 2) {
-                alert('Please select at least 2 activities for the elective.');
-                return;
-            }
-            
-            newEvent.electiveActivities = selected;
-        } else if (tileType === 'custom') {
-            const customName = modal.querySelector('#modal-custom-name')?.value.trim();
-            if (!customName) {
-                alert('Please enter an event name.');
-                return;
-            }
-            newEvent.event = customName;
+    _focusHandler = () => {
+        if (_isInitialized) {
+            clearTimeout(_refreshTimeout);
+            _refreshTimeout = setTimeout(refreshTemplateList, 250);
         }
-        
-        // Set default location if available
-        const defaultLocation = window.getPinnedTileDefaultLocation?.(newEvent.event);
-        if (defaultLocation) {
-            newEvent.location = defaultLocation;
-        }
-        
-        closeModal();
-        callback(newEvent);
-    });
-}
-
-// =================================================================
-// TILE EDIT MODAL
-// =================================================================
-function showTileEditModal(event) {
-    if (!event) return;
-    
-    const existingModal = document.getElementById('tile-edit-modal');
-    if (existingModal) existingModal.remove();
-    
-    const { earliestMin, latestMin } = getCampTimeRange();
-    let currentStart = parseTimeToMinutes(event.startTime) || earliestMin;
-    let currentEnd = parseTimeToMinutes(event.endTime) || (currentStart + 30);
-    
-    const modal = document.createElement('div');
-    modal.id = 'tile-edit-modal';
-    modal.className = 'ms-modal-overlay';
-    modal.innerHTML = `
-        <div class="ms-modal ms-modal-sm">
-            <div class="ms-modal-header">
-                <h3>Edit Tile</h3>
-                <button class="ms-modal-close" id="edit-modal-close">&times;</button>
-            </div>
-            <div class="ms-modal-body">
-                <div class="ms-form-group">
-                    <label class="ms-label">Event Name</label>
-                    <input type="text" id="edit-name" class="ms-input" value="${escapeHtml(event.event || '')}">
-                </div>
-                <div class="ms-form-group">
-                    <label class="ms-label">Time</label>
-                    <div class="ms-time-picker">
-                        <div class="ms-time-section">
-                            <span class="ms-time-label">Start</span>
-                            <div class="ms-time-control">
-                                <button type="button" class="ms-time-btn" data-action="start-down">-</button>
-                                <input type="text" id="edit-start-time" class="ms-time-input" value="${minutesToTime(currentStart)}">
-                                <button type="button" class="ms-time-btn" data-action="start-up">+</button>
-                            </div>
-                        </div>
-                        <span class="ms-time-separator">to</span>
-                        <div class="ms-time-section">
-                            <span class="ms-time-label">End</span>
-                            <div class="ms-time-control">
-                                <button type="button" class="ms-time-btn" data-action="end-down">-</button>
-                                <input type="text" id="edit-end-time" class="ms-time-input" value="${minutesToTime(currentEnd)}">
-                                <button type="button" class="ms-time-btn" data-action="end-up">+</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="ms-modal-footer">
-                <button class="ms-btn ms-btn-secondary" id="edit-modal-cancel">Cancel</button>
-                <button class="ms-btn ms-btn-primary" id="edit-modal-save">Save Changes</button>
-            </div>
-        </div>
-    `;
-    
-    document.body.appendChild(modal);
-    
-    const startInput = document.getElementById('edit-start-time');
-    const endInput = document.getElementById('edit-end-time');
-    
-    const updateTimeDisplays = () => {
-        if (startInput) startInput.value = minutesToTime(currentStart);
-        if (endInput) endInput.value = minutesToTime(currentEnd);
     };
+    window.addEventListener('focus', _focusHandler);
+}
+
+function refreshTemplateList() {
+    const select = document.getElementById('ms-template-select');
+    if (!select) return;
     
-    // Handle typing in time inputs
-    if (startInput) {
-        startInput.addEventListener('blur', () => {
-            const parsed = parseTimeToMinutes(startInput.value);
-            if (parsed !== null) {
-                currentStart = parsed;
-                if (currentStart >= currentEnd) {
-                    currentEnd = currentStart + 30;
-                }
-            }
-            updateTimeDisplays();
-        });
-    }
+    const saved = window.getSavedSkeletons?.() || {};
+    const names = Object.keys(saved).sort();
+    const currentVal = select.value;
     
-    if (endInput) {
-        endInput.addEventListener('blur', () => {
-            const parsed = parseTimeToMinutes(endInput.value);
-            if (parsed !== null && parsed > currentStart) {
-                currentEnd = parsed;
-            }
-            updateTimeDisplays();
-        });
-    }
-    
-    modal.querySelectorAll('.ms-time-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const action = btn.dataset.action;
-            const step = 5;
-            
-            if (action === 'start-up') currentStart = Math.min(currentStart + step, currentEnd - step);
-            else if (action === 'start-down') currentStart = Math.max(currentStart - step, 0);
-            else if (action === 'end-up') currentEnd = Math.min(currentEnd + step, 1440);
-            else if (action === 'end-down') currentEnd = Math.max(currentEnd - step, currentStart + step);
-            
-            updateTimeDisplays();
-        });
-    });
-    
-    const closeModal = () => modal.remove();
-    modal.querySelector('#edit-modal-close').addEventListener('click', closeModal);
-    modal.querySelector('#edit-modal-cancel').addEventListener('click', closeModal);
-    modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
-    
-    modal.querySelector('#edit-modal-save').addEventListener('click', () => {
-        const newName = modal.querySelector('#edit-name').value.trim();
-        if (!newName) {
-            alert('Event name is required.');
-            return;
+    select.innerHTML = `<option value="">Select template...</option>` + 
+        names.map(n => `<option value="${escapeHtml(n)}" ${n === currentVal ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('');
+}
+
+// =================================================================
+// KEYBOARD SHORTCUTS
+// =================================================================
+function setupKeyboardShortcuts() {
+    _keyboardHandler = (e) => {
+        const tab = document.getElementById('master-scheduler');
+        if (!tab || !tab.classList.contains('active')) return;
+        
+        const grid = document.getElementById('ms-grid');
+        const selected = grid?.querySelector('.ms-tile.selected');
+        
+        if ((e.ctrlKey || e.metaKey) && e.key === 'c' && selected) {
+            const ev = dailySkeleton.find(x => x.id === selected.dataset.id);
+            if (ev) { clipboardTile = { ...ev, id: null }; showToast('Copied to clipboard'); }
+            e.preventDefault();
         }
         
-        const idx = dailySkeleton.findIndex(ev => ev.id === event.id);
-        if (idx !== -1) {
-            dailySkeleton[idx].event = newName;
-            dailySkeleton[idx].startTime = minutesToTime(currentStart);
-            dailySkeleton[idx].endTime = minutesToTime(currentEnd);
-            scheduleAutoSave();
-            renderGrid();
-            showToast('Tile updated');
+        if ((e.ctrlKey || e.metaKey) && e.key === 'v' && clipboardTile && lastHoveredCell) {
+            pasteTile(lastHoveredCell);
+            showToast('Pasted from clipboard');
+            e.preventDefault();
         }
-        closeModal();
-    });
-}
-
-// =================================================================
-// CONTEXT MENU
-// =================================================================
-function showTileContextMenu(e, event) {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    removeContextMenu();
-    
-    const menu = document.createElement('div');
-    menu.id = 'tile-context-menu';
-    menu.className = 'ms-context-menu';
-    menu.innerHTML = `
-        <div class="ms-context-item" data-action="copy">Copy</div>
-        <div class="ms-context-item" data-action="edit">Edit</div>
-    `;
-    
-    menu.style.left = e.clientX + 'px';
-    menu.style.top = e.clientY + 'px';
-    document.body.appendChild(menu);
-    
-    const rect = menu.getBoundingClientRect();
-    if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 10) + 'px';
-    if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 10) + 'px';
-    
-    menu.addEventListener('click', (evt) => {
-        const action = evt.target.dataset.action;
-        if (action === 'copy') {
-            copyTileToClipboard(event);
-            showToast('Tile copied');
-        } else if (action === 'edit') {
-            showTileEditModal(event);
-        }
-        removeContextMenu();
-    });
-    
-    setTimeout(() => {
-        const closeHandler = (evt) => {
-            if (!menu.contains(evt.target)) {
-                removeContextMenu();
-                document.removeEventListener('click', closeHandler);
+        
+        if ((e.key === 'Delete' || e.key === 'Backspace') && selected && !e.target.matches('input, textarea, select')) {
+            const id = selected.dataset.id;
+            if (id) {
+                dailySkeleton = dailySkeleton.filter(x => x.id !== id);
+                scheduleAutoSave();
+                renderGrid();
             }
-        };
-        document.addEventListener('click', closeHandler);
-    }, 10);
+            e.preventDefault();
+        }
+    };
+    document.addEventListener('keydown', _keyboardHandler);
 }
 
-function removeContextMenu() {
-    const existing = document.getElementById('tile-context-menu');
-    if (existing) existing.remove();
+function pasteTile(cell) {
+    if (!clipboardTile || !cell) return;
+    
+    const divName = cell.dataset.div;
+    const { earliestMin } = getCampTimeRange();
+    const cellTop = parseInt(cell.dataset.startMin, 10) || earliestMin;
+    
+    const origStart = parseTimeToMinutes(clipboardTile.startTime);
+    const origEnd = parseTimeToMinutes(clipboardTile.endTime);
+    const duration = (origStart !== null && origEnd !== null) ? (origEnd - origStart) : 30;
+    
+    dailySkeleton.push({
+        ...clipboardTile,
+        id: generateId(),
+        division: divName,
+        startTime: minutesToTime(cellTop),
+        endTime: minutesToTime(cellTop + duration)
+    });
+    
+    scheduleAutoSave();
+    renderGrid();
 }
 
 // =================================================================
-// LOAD DATA
+// TOAST NOTIFICATIONS
 // =================================================================
-function loadDailySkeleton() {
+function showToast(message) {
+    let toast = document.getElementById('ms-toast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'ms-toast';
+        toast.className = 'ms-toast';
+        document.body.appendChild(toast);
+    }
+    
+    toast.textContent = message;
+    toast.classList.add('visible');
+    
+    setTimeout(() => toast.classList.remove('visible'), 2500);
+}
+
+// =================================================================
+// LOAD & SAVE TEMPLATES
+// =================================================================
+function loadDefaultSkeleton() {
     try {
         const assignments = window.getSkeletonAssignments?.() || {};
         const skeletons = window.getSavedSkeletons?.() || {};
@@ -1004,1304 +356,1556 @@ function loadDailySkeleton() {
         let dow = 0;
         if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
         const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-        const today = dayNames[dow];
-        let tmpl = assignments[today] || assignments["Default"];
+        const tmpl = assignments[dayNames[dow]] || assignments["Default"];
         dailySkeleton = (tmpl && skeletons[tmpl]) ? JSON.parse(JSON.stringify(skeletons[tmpl])) : [];
     } catch (e) {
-        console.error('[MasterScheduler] Failed to load skeleton:', e);
         dailySkeleton = [];
     }
 }
 
-function loadSkeletonToBuilder(name) {
-    try {
-        const all = window.getSavedSkeletons?.() || {};
-        if (all[name]) {
-            dailySkeleton = JSON.parse(JSON.stringify(all[name]));
-            currentLoadedTemplate = name;
-            clearDraftFromLocalStorage();
-        }
+function loadTemplate(name) {
+    const all = window.getSavedSkeletons?.() || {};
+    if (!all[name]) return;
+    
+    dailySkeleton = JSON.parse(JSON.stringify(all[name]));
+    currentLoadedTemplate = name;
+    clearDraft();
+    renderGrid();
+    updateStatusIndicator();
+    showToast(`Loaded "${name}"`);
+}
+
+function saveTemplate(name, isUpdate = false) {
+    if (!name) return;
+    if (!window.AccessControl?.checkSetupAccess?.(isUpdate ? 'update schedule templates' : 'save schedule templates')) return;
+    
+    window.saveSkeleton?.(name, dailySkeleton);
+    window.forceSyncToCloud?.();
+    currentLoadedTemplate = name;
+    clearDraft();
+    refreshTemplateList();
+    updateStatusIndicator();
+    showToast(isUpdate ? `Updated "${name}"` : `Saved "${name}"`);
+}
+
+function deleteTemplate(name) {
+    if (!name) return;
+    if (!window.AccessControl?.checkSetupAccess?.('delete schedule templates')) return;
+    
+    window.deleteSkeleton?.(name);
+    window.forceSyncToCloud?.();
+    
+    if (currentLoadedTemplate === name) {
+        currentLoadedTemplate = null;
+        dailySkeleton = [];
+        clearDraft();
         renderGrid();
-        renderTemplateUI();
-    } catch (e) {
-        console.error('[MasterScheduler] Failed to load skeleton:', name, e);
     }
+    
+    refreshTemplateList();
+    updateStatusIndicator();
+    showToast(`Deleted "${name}"`);
 }
 
 // =================================================================
-// TEMPLATE UI
+// TILE CONFIGURATION MODAL
 // =================================================================
-function renderTemplateUI() {
-    const ui = document.getElementById("scheduler-template-ui");
-    if (!ui) return;
+function showTileModal(tileType, division, startMin, existingEvent = null) {
+    const tile = TILES.find(t => t.type === tileType);
+    const theme = TILE_THEMES[tileType] || TILE_THEMES.custom;
+    if (!tile) return;
     
-    try {
-        const saved = window.getSavedSkeletons?.() || {};
-        const names = Object.keys(saved).sort();
-        const hasDraft = dailySkeleton.length > 0;
-        const isEditing = !!currentLoadedTemplate;
-        
-        const templateOptions = names.map(n => 
-            `<option value="${escapeHtml(n)}" ${currentLoadedTemplate === n ? 'selected' : ''}>${escapeHtml(n)}</option>`
-        ).join('');
-        
-        ui.innerHTML = `
-            <div class="ms-template-bar">
-                <div class="ms-template-status">
-                    ${isEditing 
-                        ? `<span class="ms-status-editing">Editing: <strong>${escapeHtml(currentLoadedTemplate)}</strong></span>` 
-                        : '<span class="ms-status-new">New Schedule</span>'}
-                    <span id="draft-indicator" class="ms-draft-indicator" style="display:${hasDraft ? 'inline' : 'none'}">Unsaved changes</span>
+    const { earliestMin, latestMin } = getCampTimeRange();
+    const locations = getAllFieldsAndLocations();
+    
+    let currentStart = existingEvent ? parseTimeToMinutes(existingEvent.startTime) : (startMin || earliestMin);
+    let currentEnd = existingEvent ? parseTimeToMinutes(existingEvent.endTime) : (currentStart + 30);
+    
+    const modal = document.createElement('div');
+    modal.id = 'ms-modal';
+    modal.className = 'ms-modal-overlay';
+    
+    // Build type-specific fields
+    let typeFields = '';
+    
+    if (tileType === 'custom') {
+        typeFields = `
+            <div class="ms-field">
+                <label>Event Name</label>
+                <input type="text" id="modal-event-name" class="ms-input-lg" placeholder="Enter event name..." value="${escapeHtml(existingEvent?.event || '')}">
+            </div>
+        `;
+    } else if (tileType === 'smart') {
+        typeFields = `
+            <div class="ms-field-row">
+                <div class="ms-field">
+                    <label>Activity 1</label>
+                    <input type="text" id="modal-act1" placeholder="e.g., Swim" value="${escapeHtml(existingEvent?.smartData?.activity1 || '')}">
                 </div>
-                
-                <div class="ms-template-actions">
-                    <div class="ms-action-group">
-                        <select id="template-select" class="ms-select">
-                            <option value="">Load Template...</option>
-                            ${templateOptions}
-                        </select>
-                    </div>
-                    
-                    ${isEditing ? `
-                    <button id="btn-update" class="ms-btn ms-btn-primary">Update</button>
-                    ` : ''}
-                    
-                    <div class="ms-action-group ms-save-group">
-                        <input type="text" id="save-name-input" class="ms-input ms-input-sm" placeholder="Template name..." value="">
-                        <button id="btn-save" class="ms-btn ms-btn-success">Save New</button>
-                    </div>
-                    
-                    <button id="btn-clear" class="ms-btn ms-btn-secondary">Clear</button>
-                    
-                    ${names.length > 0 ? `
-                    <div class="ms-action-group ms-delete-group">
-                        <select id="delete-select" class="ms-select ms-select-sm">
-                            <option value="">Delete...</option>
-                            ${templateOptions}
-                        </select>
-                        <button id="btn-delete" class="ms-btn ms-btn-danger">Delete</button>
-                    </div>
-                    ` : ''}
+                <div class="ms-field">
+                    <label>Activity 2</label>
+                    <input type="text" id="modal-act2" placeholder="e.g., Art" value="${escapeHtml(existingEvent?.smartData?.activity2 || '')}">
+                </div>
+            </div>
+            <div class="ms-field-row">
+                <div class="ms-field">
+                    <label>Fallback For</label>
+                    <select id="modal-fallback-for">
+                        <option value="1">Activity 1</option>
+                        <option value="2">Activity 2</option>
+                    </select>
+                </div>
+                <div class="ms-field">
+                    <label>Fallback Activity</label>
+                    <input type="text" id="modal-fallback" placeholder="e.g., Gaga" value="${escapeHtml(existingEvent?.smartData?.fallbackActivity || '')}">
                 </div>
             </div>
         `;
+    } else if (tileType === 'split') {
+        typeFields = `
+            <div class="ms-field-row">
+                <div class="ms-field">
+                    <label>First Activity</label>
+                    <input type="text" id="modal-split1" placeholder="First half" value="${escapeHtml(existingEvent?.subEvents?.[0]?.activity || '')}">
+                </div>
+                <div class="ms-field">
+                    <label>Second Activity</label>
+                    <input type="text" id="modal-split2" placeholder="Second half" value="${escapeHtml(existingEvent?.subEvents?.[1]?.activity || '')}">
+                </div>
+            </div>
+        `;
+    } else if (tileType === 'elective') {
+        const activities = [
+            ...(window.loadGlobalSettings?.()?.app1?.fields || []).filter(f => f.available !== false).map(f => f.name),
+            ...(window.loadGlobalSettings?.()?.app1?.specialActivities || []).filter(s => s.available !== false).map(s => s.name)
+        ];
+        const selected = existingEvent?.electiveActivities || [];
         
-        // Bind handlers
-        bindTemplateHandlers(saved);
-        
-    } catch (e) {
-        console.error('[MasterScheduler] Failed to render template UI:', e);
-    }
-}
-
-function bindTemplateHandlers(saved) {
-    // Load template
-    const selectEl = document.getElementById('template-select');
-    if (selectEl) {
-        selectEl.addEventListener('change', () => {
-            const name = selectEl.value;
-            if (name && saved[name]) {
-                if (dailySkeleton.length > 0) {
-                    if (!confirm(`Load "${name}"? Unsaved changes will be lost.`)) {
-                        selectEl.value = currentLoadedTemplate || '';
-                        return;
-                    }
-                }
-                loadSkeletonToBuilder(name);
-            }
-        });
-    }
-    
-    // Update button
-    const updateBtn = document.getElementById('btn-update');
-    if (updateBtn) {
-        updateBtn.addEventListener('click', () => {
-            if (!window.AccessControl?.checkSetupAccess?.('update schedule templates')) return;
-            
-            if (currentLoadedTemplate) {
-                window.saveSkeleton?.(currentLoadedTemplate, dailySkeleton);
-                window.forceSyncToCloud?.();
-                clearDraftFromLocalStorage();
-                showToast('Template updated');
-                renderTemplateUI();
-            }
-        });
+        typeFields = `
+            <div class="ms-field">
+                <label>Select Activities (2 or more)</label>
+                <div class="ms-checkbox-list">
+                    ${activities.map(a => `
+                        <label class="ms-checkbox-item">
+                            <input type="checkbox" name="elective-act" value="${escapeHtml(a)}" ${selected.includes(a) ? 'checked' : ''}>
+                            <span>${escapeHtml(a)}</span>
+                        </label>
+                    `).join('')}
+                </div>
+            </div>
+        `;
     }
     
-    // Save new button
-    const saveBtn = document.getElementById('btn-save');
-    const saveInput = document.getElementById('save-name-input');
-    if (saveBtn && saveInput) {
-        saveBtn.addEventListener('click', () => {
-            if (!window.AccessControl?.checkSetupAccess?.('save schedule templates')) return;
-            
-            const name = saveInput.value.trim();
-            if (!name) {
-                alert('Please enter a template name.');
-                saveInput.focus();
-                return;
-            }
-            
-            if (saved[name] && !confirm(`"${name}" already exists. Overwrite?`)) return;
-            
-            window.saveSkeleton?.(name, dailySkeleton);
-            window.forceSyncToCloud?.();
-            currentLoadedTemplate = name;
-            clearDraftFromLocalStorage();
-            showToast('Template saved');
-            renderTemplateUI();
-        });
+    // Location selection (custom only)
+    let locationFields = '';
+    if (tileType === 'custom' && locations.length > 0) {
+        const reserved = existingEvent?.reservedFields || [];
+        locationFields = `
+            <div class="ms-field">
+                <label>Reserve Locations</label>
+                <div class="ms-checkbox-list">
+                    ${locations.map(loc => `
+                        <label class="ms-checkbox-item">
+                            <input type="checkbox" name="reserved-loc" value="${escapeHtml(loc.name)}" ${reserved.includes(loc.name) ? 'checked' : ''}>
+                            <span>${escapeHtml(loc.name)}</span>
+                            <span class="ms-checkbox-meta">${escapeHtml(loc.type)}</span>
+                        </label>
+                    `).join('')}
+                </div>
+            </div>
+        `;
     }
     
-    // Clear button
-    const clearBtn = document.getElementById('btn-clear');
-    if (clearBtn) {
-        clearBtn.addEventListener('click', () => {
-            if (dailySkeleton.length > 0 && !confirm('Clear the schedule?')) return;
+    modal.innerHTML = `
+        <div class="ms-modal" style="--modal-accent: ${theme.border}; --modal-bg: ${theme.bg};">
+            <div class="ms-modal-header">
+                <div class="ms-modal-icon" style="background: ${theme.bg}; border-color: ${theme.border}; color: ${theme.text};">
+                    ${tile.name.charAt(0)}
+                </div>
+                <div class="ms-modal-title">
+                    <h2>${existingEvent ? 'Edit' : 'Add'} ${escapeHtml(tile.name)}</h2>
+                    <p>${escapeHtml(tile.description)}</p>
+                </div>
+                <button class="ms-modal-close" id="modal-close">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M15 5L5 15M5 5l10 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                </button>
+            </div>
             
-            dailySkeleton = [];
-            currentLoadedTemplate = null;
-            clearDraftFromLocalStorage();
-            renderGrid();
-            renderTemplateUI();
-        });
-    }
+            <div class="ms-modal-body">
+                ${typeFields}
+                
+                <div class="ms-field">
+                    <label>Time</label>
+                    <div class="ms-time-picker">
+                        <div class="ms-time-group">
+                            <span class="ms-time-label">Start</span>
+                            <div class="ms-time-control">
+                                <button type="button" class="ms-time-btn" data-action="start-down">
+                                    <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+                                </button>
+                                <input type="text" id="modal-start" class="ms-time-value" value="${minutesToTime(currentStart)}">
+                                <button type="button" class="ms-time-btn" data-action="start-up">
+                                    <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 8l4-4 4 4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="ms-time-divider"></div>
+                        <div class="ms-time-group">
+                            <span class="ms-time-label">End</span>
+                            <div class="ms-time-control">
+                                <button type="button" class="ms-time-btn" data-action="end-down">
+                                    <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+                                </button>
+                                <input type="text" id="modal-end" class="ms-time-value" value="${minutesToTime(currentEnd)}">
+                                <button type="button" class="ms-time-btn" data-action="end-up">
+                                    <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 8l4-4 4 4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="ms-duration-presets">
+                        <span>Quick:</span>
+                        <button type="button" data-mins="15">15m</button>
+                        <button type="button" data-mins="30">30m</button>
+                        <button type="button" data-mins="45">45m</button>
+                        <button type="button" data-mins="60">1h</button>
+                        <button type="button" data-mins="90">1.5h</button>
+                    </div>
+                </div>
+                
+                ${locationFields}
+            </div>
+            
+            <div class="ms-modal-footer">
+                <button class="ms-btn ms-btn-ghost" id="modal-cancel">Cancel</button>
+                <button class="ms-btn ms-btn-primary" id="modal-confirm" style="background: ${theme.border};">
+                    ${existingEvent ? 'Save Changes' : 'Add to Schedule'}
+                </button>
+            </div>
+        </div>
+    `;
     
-    // Delete button
-    const deleteBtn = document.getElementById('btn-delete');
-    const deleteSelect = document.getElementById('delete-select');
-    if (deleteBtn && deleteSelect) {
-        deleteBtn.addEventListener('click', () => {
-            if (!window.AccessControl?.checkSetupAccess?.('delete schedule templates')) return;
-            
-            const name = deleteSelect.value;
-            if (!name) {
-                alert('Please select a template to delete.');
-                return;
-            }
-            
-            if (!confirm(`Permanently delete "${name}"?`)) return;
-            
-            window.deleteSkeleton?.(name);
-            window.forceSyncToCloud?.();
-            
-            if (currentLoadedTemplate === name) {
-                currentLoadedTemplate = null;
-                dailySkeleton = [];
-                clearDraftFromLocalStorage();
-                renderGrid();
-            }
-            
-            showToast('Template deleted');
-            renderTemplateUI();
-        });
-    }
-}
-
-// =================================================================
-// RENDER PALETTE
-// =================================================================
-function renderPalette() {
-    if (!palette) return;
+    document.body.appendChild(modal);
     
-    palette.innerHTML = '';
+    // Time control logic
+    const startInput = document.getElementById('modal-start');
+    const endInput = document.getElementById('modal-end');
     
-    TILES.forEach(tile => {
-        const el = document.createElement('div');
-        el.className = 'ms-palette-tile';
-        el.textContent = tile.name;
-        el.style.cssText = getTileStyle(tile);
-        el.draggable = true;
-        el.title = tile.description;
-        
-        el.addEventListener('click', (e) => {
-            if (e.detail === 1 && !el.dragging) {
-                showToast(tile.description, 3000);
-            }
-        });
-        
-        el.addEventListener('dragstart', (e) => {
-            el.dragging = true;
-            e.dataTransfer.setData('application/json', JSON.stringify(tile));
-        });
-        el.addEventListener('dragend', () => { el.dragging = false; });
-        
-        // Mobile touch
-        let touchStartY = 0;
-        el.addEventListener('touchstart', (e) => {
-            touchStartY = e.touches[0].clientY;
-            el.dataset.tileData = JSON.stringify(tile);
-            el.style.opacity = '0.6';
-        });
-        
-        el.addEventListener('touchend', (e) => {
-            el.style.opacity = '1';
-            const touch = e.changedTouches[0];
-            
-            if (Math.abs(touch.clientY - touchStartY) < 10) {
-                showToast(tile.description, 3000);
-                return;
-            }
-            
-            const dropTarget = document.elementFromPoint(touch.clientX, touch.clientY);
-            const gridCell = dropTarget?.closest('.ms-grid-cell');
-            if (gridCell) {
-                handleTileDrop(tile, gridCell, touch.clientY);
-            }
-        });
-        
-        palette.appendChild(el);
+    const updateTimes = () => {
+        startInput.value = minutesToTime(currentStart);
+        endInput.value = minutesToTime(currentEnd);
+    };
+    
+    startInput.addEventListener('blur', () => {
+        const p = parseTimeToMinutes(startInput.value);
+        if (p !== null) { currentStart = p; if (currentStart >= currentEnd) currentEnd = currentStart + 30; }
+        updateTimes();
     });
+    
+    endInput.addEventListener('blur', () => {
+        const p = parseTimeToMinutes(endInput.value);
+        if (p !== null && p > currentStart) currentEnd = p;
+        updateTimes();
+    });
+    
+    modal.querySelectorAll('.ms-time-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const action = btn.dataset.action;
+            if (action === 'start-up') currentStart = Math.min(currentStart + 5, currentEnd - 5);
+            else if (action === 'start-down') currentStart = Math.max(currentStart - 5, 0);
+            else if (action === 'end-up') currentEnd = Math.min(currentEnd + 5, 1440);
+            else if (action === 'end-down') currentEnd = Math.max(currentEnd - 5, currentStart + 5);
+            updateTimes();
+        });
+    });
+    
+    modal.querySelectorAll('.ms-duration-presets button').forEach(btn => {
+        btn.addEventListener('click', () => {
+            currentEnd = currentStart + parseInt(btn.dataset.mins, 10);
+            updateTimes();
+        });
+    });
+    
+    // Close handlers
+    const closeModal = () => modal.remove();
+    modal.querySelector('#modal-close').addEventListener('click', closeModal);
+    modal.querySelector('#modal-cancel').addEventListener('click', closeModal);
+    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+    
+    // Confirm handler
+    modal.querySelector('#modal-confirm').addEventListener('click', () => {
+        const event = existingEvent ? { ...existingEvent } : {
+            id: generateId(),
+            type: tileType,
+            event: tile.name,
+            division: division,
+            reservedFields: []
+        };
+        
+        event.startTime = minutesToTime(currentStart);
+        event.endTime = minutesToTime(currentEnd);
+        
+        // Type-specific data
+        if (tileType === 'custom') {
+            const name = modal.querySelector('#modal-event-name')?.value.trim();
+            if (!name) { alert('Please enter an event name.'); return; }
+            event.event = name;
+            event.reservedFields = Array.from(modal.querySelectorAll('input[name="reserved-loc"]:checked')).map(cb => cb.value);
+        } else if (tileType === 'smart') {
+            const a1 = modal.querySelector('#modal-act1')?.value.trim();
+            const a2 = modal.querySelector('#modal-act2')?.value.trim();
+            const fb = modal.querySelector('#modal-fallback')?.value.trim();
+            if (!a1 || !a2 || !fb) { alert('Please fill in all fields.'); return; }
+            event.smartData = { activity1: a1, activity2: a2, fallbackFor: modal.querySelector('#modal-fallback-for').value === '1' ? a1 : a2, fallbackActivity: fb };
+        } else if (tileType === 'split') {
+            const s1 = modal.querySelector('#modal-split1')?.value.trim();
+            const s2 = modal.querySelector('#modal-split2')?.value.trim();
+            if (!s1 || !s2) { alert('Please fill in both activities.'); return; }
+            const mid = currentStart + Math.floor((currentEnd - currentStart) / 2);
+            event.subEvents = [
+                { activity: s1, startTime: minutesToTime(currentStart), endTime: minutesToTime(mid) },
+                { activity: s2, startTime: minutesToTime(mid), endTime: minutesToTime(currentEnd) }
+            ];
+        } else if (tileType === 'elective') {
+            const acts = Array.from(modal.querySelectorAll('input[name="elective-act"]:checked')).map(cb => cb.value);
+            if (acts.length < 2) { alert('Please select at least 2 activities.'); return; }
+            event.electiveActivities = acts;
+        }
+        
+        if (existingEvent) {
+            const idx = dailySkeleton.findIndex(e => e.id === existingEvent.id);
+            if (idx !== -1) dailySkeleton[idx] = event;
+        } else {
+            dailySkeleton.push(event);
+        }
+        
+        closeModal();
+        scheduleAutoSave();
+        renderGrid();
+    });
+    
+    // Focus first input
+    setTimeout(() => {
+        const firstInput = modal.querySelector('input:not([type="checkbox"])');
+        if (firstInput) firstInput.focus();
+    }, 100);
 }
 
 // =================================================================
-// RENDER GRID
+// RENDER FUNCTIONS
 // =================================================================
+function render() {
+    if (!container) return;
+    
+    container.innerHTML = `
+        <div class="ms-container">
+            ${renderHeader()}
+            ${renderToolbar()}
+            ${renderPalette()}
+            <div class="ms-grid-container">
+                <div id="ms-grid" class="ms-grid"></div>
+            </div>
+        </div>
+        ${getStyles()}
+    `;
+    
+    bindHeaderEvents();
+    renderGrid();
+    updateStatusIndicator();
+}
+
+function renderHeader() {
+    return `
+        <div class="ms-header">
+            <div class="ms-header-left">
+                <h1 class="ms-title">Schedule Builder</h1>
+                <div id="ms-status-indicator" class="ms-status"></div>
+            </div>
+            <div class="ms-header-right">
+                <div class="ms-template-controls">
+                    <select id="ms-template-select" class="ms-select">
+                        <option value="">Select template...</option>
+                    </select>
+                    <button id="ms-btn-load" class="ms-btn ms-btn-ghost">Load</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderToolbar() {
+    return `
+        <div class="ms-toolbar">
+            <div class="ms-toolbar-left">
+                <button id="ms-btn-clear" class="ms-btn ms-btn-ghost">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M5.333 4V2.667a1.333 1.333 0 011.334-1.334h2.666a1.333 1.333 0 011.334 1.334V4m2 0v9.333a1.333 1.333 0 01-1.334 1.334H4.667a1.333 1.333 0 01-1.334-1.334V4h9.334z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    Clear
+                </button>
+            </div>
+            <div class="ms-toolbar-right">
+                <div class="ms-save-group">
+                    <input type="text" id="ms-save-name" class="ms-input" placeholder="Template name...">
+                    <button id="ms-btn-save" class="ms-btn ms-btn-secondary">Save New</button>
+                </div>
+                <button id="ms-btn-update" class="ms-btn ms-btn-primary" style="display:none;">Update Template</button>
+                <div class="ms-delete-group">
+                    <select id="ms-delete-select" class="ms-select ms-select-sm">
+                        <option value="">Delete...</option>
+                    </select>
+                    <button id="ms-btn-delete" class="ms-btn ms-btn-danger">Delete</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderPalette() {
+    return `
+        <div class="ms-palette">
+            <div class="ms-palette-label">Drag to add:</div>
+            <div class="ms-palette-tiles">
+                ${TILES.map(tile => {
+                    const theme = TILE_THEMES[tile.type];
+                    return `
+                        <div class="ms-palette-tile" draggable="true" data-type="${tile.type}" 
+                             style="background: ${theme.bg}; border-color: ${theme.border}; color: ${theme.text}; ${theme.dashed ? 'border-style: dashed;' : ''}"
+                             title="${tile.description}">
+                            ${tile.name}
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+        </div>
+    `;
+}
+
 function renderGrid() {
+    const grid = document.getElementById('ms-grid');
     if (!grid) return;
     
-    try {
-        const divisions = window.divisions || {};
-        const availableDivisions = Object.keys(divisions).filter(d => divisions[d]?.bunks?.length > 0);
-        
-        if (availableDivisions.length === 0) {
-            grid.innerHTML = `<p class="ms-empty-message">No divisions configured. Please set up divisions in the Setup tab first.</p>`;
-            return;
-        }
-        
-        const { earliestMin, latestMin } = getCampTimeRange();
-        const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
-        
-        let html = `<div class="ms-grid" style="grid-template-columns:60px repeat(${availableDivisions.length}, 1fr);">`;
-        
-        // Header row
-        html += `<div class="ms-grid-corner"></div>`;
-        availableDivisions.forEach(divName => {
-            const color = divisions[divName]?.color || '#4a5568';
-            html += `<div class="ms-grid-header" style="background:${color};">${escapeHtml(divName)}</div>`;
-        });
-        
-        // Time column
-        html += `<div class="ms-time-column" style="height:${totalHeight}px;">`;
-        for (let m = earliestMin; m < latestMin; m += INCREMENT_MINS) {
-            const top = (m - earliestMin) * PIXELS_PER_MINUTE;
-            html += `<div class="ms-time-marker" style="top:${top}px;">${minutesToTime(m)}</div>`;
-        }
-        html += `</div>`;
-        
-        // Division columns
-        availableDivisions.forEach(divName => {
-            const div = divisions[divName];
-            const s = parseTimeToMinutes(div?.startTime);
-            const e = parseTimeToMinutes(div?.endTime);
-            
-            html += `<div class="ms-grid-cell" data-div="${escapeHtml(divName)}" data-start-min="${earliestMin}" style="height:${totalHeight}px;">`;
-            
-            // Grey out unavailable times
-            if (s !== null && s > earliestMin) {
-                html += `<div class="ms-disabled-zone" style="top:0;height:${(s - earliestMin) * PIXELS_PER_MINUTE}px;"></div>`;
-            }
-            if (e !== null && e < latestMin) {
-                html += `<div class="ms-disabled-zone" style="top:${(e - earliestMin) * PIXELS_PER_MINUTE}px;height:${(latestMin - e) * PIXELS_PER_MINUTE}px;"></div>`;
-            }
-            
-            // Render events
-            dailySkeleton.filter(ev => ev.division === divName).forEach(ev => {
-                const start = parseTimeToMinutes(ev.startTime);
-                const end = parseTimeToMinutes(ev.endTime);
-                if (start !== null && end !== null && end > start) {
-                    const top = (start - earliestMin) * PIXELS_PER_MINUTE;
-                    const height = (end - start) * PIXELS_PER_MINUTE;
-                    html += renderEventTile(ev, top, height);
-                }
-            });
-            
-            html += `<div class="ms-drop-preview"></div>`;
-            html += `</div>`;
-        });
-        
-        html += `</div>`;
-        grid.innerHTML = html;
-        grid.dataset.earliestMin = earliestMin;
-        
-        // Bind event listeners
-        bindGridListeners();
-        
-    } catch (e) {
-        console.error('[MasterScheduler] Failed to render grid:', e);
-        grid.innerHTML = '<p class="ms-error-message">Error rendering schedule grid</p>';
+    const divisions = window.divisions || {};
+    const availableDivs = Object.keys(divisions).filter(d => divisions[d]?.bunks?.length > 0);
+    
+    if (availableDivs.length === 0) {
+        grid.innerHTML = `<div class="ms-empty-state"><div class="ms-empty-icon">📅</div><h3>No Divisions Available</h3><p>Please configure divisions with bunks in the Setup tab first.</p></div>`;
+        return;
     }
+    
+    const { earliestMin, latestMin } = getCampTimeRange();
+    const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
+    
+    let html = `<div class="ms-grid-inner" style="grid-template-columns: 72px repeat(${availableDivs.length}, 1fr);">`;
+    
+    // Header row
+    html += `<div class="ms-grid-corner"></div>`;
+    availableDivs.forEach(d => {
+        const color = divisions[d]?.color || '#6366F1';
+        html += `<div class="ms-grid-header" style="--div-color: ${color};">${escapeHtml(d)}</div>`;
+    });
+    
+    // Time column
+    html += `<div class="ms-time-col" style="height: ${totalHeight}px;">`;
+    for (let m = earliestMin; m < latestMin; m += 30) {
+        const top = (m - earliestMin) * PIXELS_PER_MINUTE;
+        const isHour = m % 60 === 0;
+        html += `<div class="ms-time-mark ${isHour ? 'ms-time-hour' : ''}" style="top: ${top}px;">${minutesToTime(m)}</div>`;
+    }
+    html += `</div>`;
+    
+    // Division columns
+    availableDivs.forEach(d => {
+        const div = divisions[d];
+        const divStart = parseTimeToMinutes(div?.startTime);
+        const divEnd = parseTimeToMinutes(div?.endTime);
+        
+        html += `<div class="ms-grid-col" data-div="${escapeHtml(d)}" data-start-min="${earliestMin}" style="height: ${totalHeight}px;">`;
+        
+        // Disabled zones
+        if (divStart !== null && divStart > earliestMin) {
+            html += `<div class="ms-disabled-zone" style="top: 0; height: ${(divStart - earliestMin) * PIXELS_PER_MINUTE}px;"></div>`;
+        }
+        if (divEnd !== null && divEnd < latestMin) {
+            html += `<div class="ms-disabled-zone" style="top: ${(divEnd - earliestMin) * PIXELS_PER_MINUTE}px; height: ${(latestMin - divEnd) * PIXELS_PER_MINUTE}px;"></div>`;
+        }
+        
+        // Hour lines
+        for (let m = earliestMin; m < latestMin; m += 60) {
+            const top = (m - earliestMin) * PIXELS_PER_MINUTE;
+            html += `<div class="ms-hour-line" style="top: ${top}px;"></div>`;
+        }
+        
+        // Events
+        dailySkeleton.filter(ev => ev.division === d).forEach(ev => {
+            const start = parseTimeToMinutes(ev.startTime);
+            const end = parseTimeToMinutes(ev.endTime);
+            if (start !== null && end !== null && end > start) {
+                const top = (start - earliestMin) * PIXELS_PER_MINUTE;
+                const height = (end - start) * PIXELS_PER_MINUTE;
+                html += renderTile(ev, top, height);
+            }
+        });
+        
+        html += `</div>`;
+    });
+    
+    html += `</div>`;
+    grid.innerHTML = html;
+    
+    bindGridEvents();
+    bindPaletteEvents();
 }
 
-function renderEventTile(ev, top, height) {
-    const tile = getTileByType(ev.type);
-    
-    // Build inline style with tile colors
-    const borderStyle = tile.dashed ? 'dashed' : 'solid';
-    const bgColor = tile.color;
-    const borderColor = tile.border;
-    
-    const fontSize = height < 40 ? '0.7em' : '0.85em';
-    const showDetails = height >= 50;
-    const showResizeHandles = height >= 50;
-    
-    // For custom events, show the custom name prominently
-    const displayName = ev.event || tile.name;
-    
-    let content = `<strong>${escapeHtml(displayName)}</strong>`;
-    if (showDetails) {
-        content += `<span class="ms-tile-time">${ev.startTime} - ${ev.endTime}</span>`;
-    }
-    
-    if (ev.reservedFields?.length > 0 && height > 60) {
-        content += `<span class="ms-tile-fields">${ev.reservedFields.join(', ')}</span>`;
-    }
+function renderTile(ev, top, height) {
+    const theme = TILE_THEMES[ev.type] || TILE_THEMES.custom;
+    const isSmall = height < 50;
+    const displayName = ev.event || TILES.find(t => t.type === ev.type)?.name || 'Event';
     
     return `
-        <div class="ms-event ${height < 50 ? 'ms-event-small' : ''}" 
-             data-id="${ev.id}" 
-             draggable="true" 
-             title="Double-click to delete"
-             style="background:${bgColor}; border:2px ${borderStyle} ${borderColor}; top:${top}px; height:${height}px; font-size:${fontSize};">
-            ${showResizeHandles ? '<div class="ms-resize-handle ms-resize-top"></div>' : ''}
-            <div class="ms-event-content">${content}</div>
-            ${showResizeHandles ? '<div class="ms-resize-handle ms-resize-bottom"></div>' : ''}
+        <div class="ms-tile ${isSmall ? 'ms-tile-sm' : ''}" data-id="${ev.id}" draggable="true"
+             style="top: ${top}px; height: ${height}px; background: ${theme.bg}; border-color: ${theme.border}; color: ${theme.text}; ${theme.dashed ? 'border-style: dashed;' : ''}">
+            ${!isSmall ? '<div class="ms-tile-resize ms-tile-resize-top"></div>' : ''}
+            <div class="ms-tile-content">
+                <span class="ms-tile-name">${escapeHtml(displayName)}</span>
+                ${!isSmall ? `<span class="ms-tile-time">${ev.startTime} - ${ev.endTime}</span>` : ''}
+            </div>
+            ${!isSmall ? '<div class="ms-tile-resize ms-tile-resize-bottom"></div>' : ''}
         </div>
     `;
 }
 
 // =================================================================
-// GRID EVENT HANDLERS
+// EVENT BINDINGS
 // =================================================================
-function bindGridListeners() {
+function bindHeaderEvents() {
+    refreshTemplateList();
+    
+    // Populate delete select
+    const deleteSelect = document.getElementById('ms-delete-select');
+    const saved = window.getSavedSkeletons?.() || {};
+    deleteSelect.innerHTML = `<option value="">Delete...</option>` + 
+        Object.keys(saved).sort().map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+    
+    // Load button
+    document.getElementById('ms-btn-load')?.addEventListener('click', () => {
+        const name = document.getElementById('ms-template-select').value;
+        if (!name) { showToast('Select a template first'); return; }
+        if (dailySkeleton.length > 0 && !confirm(`Load "${name}"? Current changes will be lost.`)) return;
+        loadTemplate(name);
+    });
+    
+    // Clear button
+    document.getElementById('ms-btn-clear')?.addEventListener('click', () => {
+        if (dailySkeleton.length > 0 && !confirm('Clear the entire schedule?')) return;
+        dailySkeleton = [];
+        currentLoadedTemplate = null;
+        clearDraft();
+        renderGrid();
+        updateStatusIndicator();
+    });
+    
+    // Save button
+    document.getElementById('ms-btn-save')?.addEventListener('click', () => {
+        const name = document.getElementById('ms-save-name').value.trim();
+        if (!name) { showToast('Enter a template name'); return; }
+        const existing = window.getSavedSkeletons?.() || {};
+        if (existing[name] && !confirm(`"${name}" exists. Overwrite?`)) return;
+        saveTemplate(name, false);
+        document.getElementById('ms-save-name').value = '';
+    });
+    
+    // Update button
+    const updateBtn = document.getElementById('ms-btn-update');
+    if (currentLoadedTemplate) {
+        updateBtn.style.display = 'block';
+        updateBtn.addEventListener('click', () => saveTemplate(currentLoadedTemplate, true));
+    }
+    
+    // Delete button
+    document.getElementById('ms-btn-delete')?.addEventListener('click', () => {
+        const name = document.getElementById('ms-delete-select').value;
+        if (!name) { showToast('Select a template to delete'); return; }
+        if (!confirm(`Permanently delete "${name}"?`)) return;
+        deleteTemplate(name);
+    });
+}
+
+function bindPaletteEvents() {
+    document.querySelectorAll('.ms-palette-tile').forEach(tile => {
+        tile.addEventListener('dragstart', e => {
+            e.dataTransfer.setData('text/tile-type', tile.dataset.type);
+            tile.classList.add('dragging');
+        });
+        tile.addEventListener('dragend', () => tile.classList.remove('dragging'));
+    });
+}
+
+function bindGridEvents() {
+    const grid = document.getElementById('ms-grid');
     if (!grid) return;
     
-    // Cell hover tracking for paste
-    grid.querySelectorAll('.ms-grid-cell').forEach(cell => {
-        cell.addEventListener('mouseenter', () => { lastHoveredCell = cell; });
+    // Column drop handlers
+    grid.querySelectorAll('.ms-grid-col').forEach(col => {
+        col.addEventListener('mouseenter', () => { lastHoveredCell = col; });
         
-        // Drop handlers
-        cell.addEventListener('dragover', (e) => {
+        col.addEventListener('dragover', e => {
             e.preventDefault();
-            cell.classList.add('ms-cell-hover');
+            col.classList.add('ms-col-hover');
         });
         
-        cell.addEventListener('dragleave', (e) => {
-            if (!cell.contains(e.relatedTarget)) {
-                cell.classList.remove('ms-cell-hover');
-            }
+        col.addEventListener('dragleave', e => {
+            if (!col.contains(e.relatedTarget)) col.classList.remove('ms-col-hover');
         });
         
-        cell.addEventListener('drop', (e) => {
+        col.addEventListener('drop', e => {
             e.preventDefault();
-            cell.classList.remove('ms-cell-hover');
+            col.classList.remove('ms-col-hover');
             
-            // Handle tile move
-            if (e.dataTransfer?.types?.includes('text/event-move')) {
-                const eventId = e.dataTransfer.getData('text/event-move');
-                const event = dailySkeleton.find(ev => ev.id === eventId);
-                if (!event) return;
-                
-                const divName = cell.dataset.div;
-                const cellStartMin = parseInt(cell.dataset.startMin, 10) || 540;
-                const rect = cell.getBoundingClientRect();
-                const y = e.clientY - rect.top;
-                const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
-                
-                const duration = parseTimeToMinutes(event.endTime) - parseTimeToMinutes(event.startTime);
-                event.division = divName;
-                event.startTime = minutesToTime(cellStartMin + snapMin);
-                event.endTime = minutesToTime(cellStartMin + snapMin + duration);
-                
-                scheduleAutoSave();
-                renderGrid();
+            // Move existing tile
+            const moveId = e.dataTransfer.getData('text/tile-move');
+            if (moveId) {
+                const ev = dailySkeleton.find(x => x.id === moveId);
+                if (ev) {
+                    const { earliestMin } = getCampTimeRange();
+                    const rect = col.getBoundingClientRect();
+                    const y = e.clientY - rect.top;
+                    const newStart = earliestMin + Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
+                    const duration = parseTimeToMinutes(ev.endTime) - parseTimeToMinutes(ev.startTime);
+                    
+                    ev.division = col.dataset.div;
+                    ev.startTime = minutesToTime(newStart);
+                    ev.endTime = minutesToTime(newStart + duration);
+                    
+                    scheduleAutoSave();
+                    renderGrid();
+                }
                 return;
             }
             
-            // Handle new tile from palette
-            try {
-                const tileData = JSON.parse(e.dataTransfer?.getData('application/json') || '{}');
-                if (tileData.type) {
-                    handleTileDrop(tileData, cell, e.clientY);
-                }
-            } catch (err) {
-                // Ignore
+            // New tile from palette
+            const tileType = e.dataTransfer.getData('text/tile-type');
+            if (tileType) {
+                const { earliestMin } = getCampTimeRange();
+                const rect = col.getBoundingClientRect();
+                const y = e.clientY - rect.top;
+                const startMin = earliestMin + Math.round(y / PIXELS_PER_MINUTE / 15) * 15;
+                
+                showTileModal(tileType, col.dataset.div, startMin);
             }
         });
     });
     
-    // Event tile handlers
-    grid.querySelectorAll('.ms-event').forEach(tile => {
-        const eventId = tile.dataset.id;
-        const event = dailySkeleton.find(ev => ev.id === eventId);
+    // Tile handlers
+    grid.querySelectorAll('.ms-tile').forEach(tile => {
+        const id = tile.dataset.id;
+        const ev = dailySkeleton.find(x => x.id === id);
         
-        // Double-click to delete
-        tile.addEventListener('dblclick', (e) => {
-            if (e.target.classList.contains('ms-resize-handle')) return;
-            if (confirm("Delete this block?")) {
-                dailySkeleton = dailySkeleton.filter(x => x.id !== eventId);
-                scheduleAutoSave();
-                renderGrid();
-            }
-        });
-        
-        // Right-click context menu
-        tile.addEventListener('contextmenu', (e) => {
-            if (event) showTileContextMenu(e, event);
-        });
-        
-        // Click to select
-        tile.addEventListener('click', (e) => {
-            if (e.target.classList.contains('ms-resize-handle')) return;
-            grid.querySelectorAll('.ms-event.selected').forEach(t => t.classList.remove('selected'));
+        tile.addEventListener('click', e => {
+            if (e.target.classList.contains('ms-tile-resize')) return;
+            grid.querySelectorAll('.ms-tile.selected').forEach(t => t.classList.remove('selected'));
             tile.classList.add('selected');
         });
         
-        // Drag to move
-        tile.addEventListener('dragstart', (e) => {
-            if (e.target.classList.contains('ms-resize-handle')) {
-                e.preventDefault();
-                return;
-            }
-            e.dataTransfer.setData('text/event-move', eventId);
-            e.dataTransfer.effectAllowed = 'move';
-            tile.style.opacity = '0.4';
+        tile.addEventListener('dblclick', e => {
+            if (e.target.classList.contains('ms-tile-resize')) return;
+            if (ev) showTileModal(ev.type, ev.division, null, ev);
         });
         
-        tile.addEventListener('dragend', () => {
-            tile.style.opacity = '1';
+        tile.addEventListener('contextmenu', e => {
+            e.preventDefault();
+            if (confirm('Delete this tile?')) {
+                dailySkeleton = dailySkeleton.filter(x => x.id !== id);
+                scheduleAutoSave();
+                renderGrid();
+            }
         });
+        
+        tile.addEventListener('dragstart', e => {
+            if (e.target.classList.contains('ms-tile-resize')) { e.preventDefault(); return; }
+            e.dataTransfer.setData('text/tile-move', id);
+            tile.style.opacity = '0.5';
+        });
+        
+        tile.addEventListener('dragend', () => { tile.style.opacity = '1'; });
         
         // Resize handles
-        addResizeHandlers(tile, eventId);
-    });
-    
-    // Click outside to deselect
-    grid.addEventListener('click', (e) => {
-        if (!e.target.closest('.ms-event')) {
-            grid.querySelectorAll('.ms-event.selected').forEach(t => t.classList.remove('selected'));
-        }
-    });
-}
-
-function handleTileDrop(tileData, cell, clientY) {
-    const divName = cell.dataset.div;
-    const cellStartMin = parseInt(cell.dataset.startMin, 10) || 540;
-    const rect = cell.getBoundingClientRect();
-    const offsetY = clientY - rect.top;
-    const snapMin = Math.round(offsetY / PIXELS_PER_MINUTE / 15) * 15;
-    const startMin = cellStartMin + snapMin;
-    
-    showTileConfigModal(tileData.type, divName, startMin, (newEvent) => {
-        dailySkeleton.push(newEvent);
-        scheduleAutoSave();
-        renderGrid();
-    });
-}
-
-function addResizeHandlers(tile, eventId) {
-    const { earliestMin } = getCampTimeRange();
-    
-    tile.querySelectorAll('.ms-resize-handle').forEach(handle => {
-        const direction = handle.classList.contains('ms-resize-top') ? 'top' : 'bottom';
-        
-        let isResizing = false;
-        let startY = 0;
-        let startTop = 0;
-        let startHeight = 0;
-        
-        handle.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
+        tile.querySelectorAll('.ms-tile-resize').forEach(handle => {
+            const isTop = handle.classList.contains('ms-tile-resize-top');
+            let startY, startTop, startHeight;
             
-            isResizing = true;
-            startY = e.clientY;
-            startTop = parseInt(tile.style.top, 10) || 0;
-            startHeight = parseInt(tile.style.height, 10) || 60;
+            const onMouseDown = e => {
+                e.preventDefault();
+                e.stopPropagation();
+                startY = e.clientY;
+                startTop = parseInt(tile.style.top, 10);
+                startHeight = parseInt(tile.style.height, 10);
+                tile.classList.add('resizing');
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            };
             
-            tile.classList.add('resizing');
-            
-            const onMouseMove = (e) => {
-                if (!isResizing) return;
-                
-                const deltaY = e.clientY - startY;
-                let newTop = startTop;
-                let newHeight = startHeight;
-                
-                if (direction === 'top') {
-                    newTop = startTop + deltaY;
-                    newHeight = startHeight - deltaY;
+            const onMouseMove = e => {
+                const delta = e.clientY - startY;
+                if (isTop) {
+                    const newTop = Math.round((startTop + delta) / (SNAP_MINS * PIXELS_PER_MINUTE)) * (SNAP_MINS * PIXELS_PER_MINUTE);
+                    const newHeight = startHeight - (newTop - startTop);
+                    if (newHeight >= 20) {
+                        tile.style.top = newTop + 'px';
+                        tile.style.height = newHeight + 'px';
+                    }
                 } else {
-                    newHeight = startHeight + deltaY;
+                    const newHeight = Math.max(20, Math.round((startHeight + delta) / (SNAP_MINS * PIXELS_PER_MINUTE)) * (SNAP_MINS * PIXELS_PER_MINUTE));
+                    tile.style.height = newHeight + 'px';
                 }
-                
-                const snappedTop = Math.round(newTop / (SNAP_MINS * PIXELS_PER_MINUTE)) * (SNAP_MINS * PIXELS_PER_MINUTE);
-                const snappedHeight = Math.max(20, Math.round(newHeight / (SNAP_MINS * PIXELS_PER_MINUTE)) * (SNAP_MINS * PIXELS_PER_MINUTE));
-                
-                tile.style.top = snappedTop + 'px';
-                tile.style.height = snappedHeight + 'px';
             };
             
             const onMouseUp = () => {
-                if (!isResizing) return;
-                isResizing = false;
-                
                 document.removeEventListener('mousemove', onMouseMove);
                 document.removeEventListener('mouseup', onMouseUp);
                 tile.classList.remove('resizing');
                 
-                const event = dailySkeleton.find(ev => ev.id === eventId);
-                if (!event) return;
-                
-                const newTop = parseInt(tile.style.top, 10) || 0;
-                const newHeightPx = parseInt(tile.style.height, 10) || 60;
-                const newStartMin = earliestMin + (newTop / PIXELS_PER_MINUTE);
-                const newEndMin = newStartMin + (newHeightPx / PIXELS_PER_MINUTE);
-                
-                event.startTime = minutesToTime(Math.round(newStartMin / SNAP_MINS) * SNAP_MINS);
-                event.endTime = minutesToTime(Math.round(newEndMin / SNAP_MINS) * SNAP_MINS);
-                
-                scheduleAutoSave();
-                renderGrid();
+                if (ev) {
+                    const { earliestMin } = getCampTimeRange();
+                    const newTop = parseInt(tile.style.top, 10);
+                    const newHeight = parseInt(tile.style.height, 10);
+                    ev.startTime = minutesToTime(earliestMin + newTop / PIXELS_PER_MINUTE);
+                    ev.endTime = minutesToTime(earliestMin + (newTop + newHeight) / PIXELS_PER_MINUTE);
+                    scheduleAutoSave();
+                    renderGrid();
+                }
             };
             
-            document.addEventListener('mousemove', onMouseMove);
-            document.addEventListener('mouseup', onMouseUp);
+            handle.addEventListener('mousedown', onMouseDown);
         });
-        
-        handle.addEventListener('dragstart', (e) => { e.preventDefault(); });
+    });
+    
+    // Deselect on click outside
+    grid.addEventListener('click', e => {
+        if (!e.target.closest('.ms-tile')) {
+            grid.querySelectorAll('.ms-tile.selected').forEach(t => t.classList.remove('selected'));
+        }
     });
 }
 
 // =================================================================
-// INIT
+// PREMIUM STYLES
+// =================================================================
+function getStyles() {
+    return `<style>
+/* =================================================================
+   MASTER SCHEDULER - PREMIUM DESIGN SYSTEM v5.0
+   Enterprise-grade UI inspired by Linear, Notion, Figma
+   ================================================================= */
+
+.ms-container {
+    --ms-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, sans-serif;
+    --ms-bg: #FFFFFF;
+    --ms-bg-subtle: #F9FAFB;
+    --ms-bg-muted: #F3F4F6;
+    --ms-border: #E5E7EB;
+    --ms-border-strong: #D1D5DB;
+    --ms-text: #111827;
+    --ms-text-secondary: #6B7280;
+    --ms-text-muted: #9CA3AF;
+    --ms-primary: #6366F1;
+    --ms-primary-hover: #4F46E5;
+    --ms-danger: #EF4444;
+    --ms-success: #10B981;
+    --ms-radius-sm: 6px;
+    --ms-radius-md: 8px;
+    --ms-radius-lg: 12px;
+    --ms-shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+    --ms-shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
+    --ms-shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05);
+    --ms-shadow-xl: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
+    --ms-transition: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+    
+    font-family: var(--ms-font);
+    color: var(--ms-text);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* =================================================================
+   HEADER
+   ================================================================= */
+.ms-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 0;
+    border-bottom: 1px solid var(--ms-border);
+    margin-bottom: 20px;
+}
+
+.ms-header-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.ms-title {
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    margin: 0;
+    background: linear-gradient(135deg, var(--ms-text) 0%, var(--ms-text-secondary) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.ms-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+}
+
+.ms-status-badge {
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.ms-status-new { background: var(--ms-bg-muted); color: var(--ms-text-muted); }
+.ms-status-draft { background: #FEF3C7; color: #92400E; }
+.ms-status-editing { background: #DBEAFE; color: #1E40AF; }
+
+.ms-status-name {
+    font-weight: 500;
+    color: var(--ms-text-secondary);
+}
+
+.ms-template-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* =================================================================
+   TOOLBAR
+   ================================================================= */
+.ms-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    background: var(--ms-bg-subtle);
+    border: 1px solid var(--ms-border);
+    border-radius: var(--ms-radius-lg);
+    margin-bottom: 20px;
+}
+
+.ms-toolbar-left, .ms-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.ms-save-group, .ms-delete-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-left: 12px;
+    border-left: 1px solid var(--ms-border);
+}
+
+/* =================================================================
+   FORM CONTROLS
+   ================================================================= */
+.ms-input, .ms-select {
+    height: 36px;
+    padding: 0 12px;
+    font-size: 14px;
+    font-family: var(--ms-font);
+    color: var(--ms-text);
+    background: var(--ms-bg);
+    border: 1px solid var(--ms-border-strong);
+    border-radius: var(--ms-radius-sm);
+    transition: all var(--ms-transition);
+}
+
+.ms-input:focus, .ms-select:focus {
+    outline: none;
+    border-color: var(--ms-primary);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+.ms-input::placeholder { color: var(--ms-text-muted); }
+
+.ms-select { cursor: pointer; padding-right: 32px; }
+.ms-select-sm { height: 32px; font-size: 13px; }
+
+/* =================================================================
+   BUTTONS
+   ================================================================= */
+.ms-btn {
+    height: 36px;
+    padding: 0 16px;
+    font-size: 14px;
+    font-weight: 500;
+    font-family: var(--ms-font);
+    border: none;
+    border-radius: var(--ms-radius-sm);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all var(--ms-transition);
+    white-space: nowrap;
+}
+
+.ms-btn:active { transform: scale(0.98); }
+
+.ms-btn-primary {
+    background: var(--ms-primary);
+    color: white;
+}
+.ms-btn-primary:hover { background: var(--ms-primary-hover); }
+
+.ms-btn-secondary {
+    background: var(--ms-bg);
+    color: var(--ms-text);
+    border: 1px solid var(--ms-border-strong);
+}
+.ms-btn-secondary:hover { background: var(--ms-bg-muted); }
+
+.ms-btn-ghost {
+    background: transparent;
+    color: var(--ms-text-secondary);
+}
+.ms-btn-ghost:hover { background: var(--ms-bg-muted); color: var(--ms-text); }
+
+.ms-btn-danger {
+    background: var(--ms-danger);
+    color: white;
+}
+.ms-btn-danger:hover { background: #DC2626; }
+
+/* =================================================================
+   PALETTE
+   ================================================================= */
+.ms-palette {
+    background: var(--ms-bg);
+    border: 1px solid var(--ms-border);
+    border-radius: var(--ms-radius-lg);
+    padding: 16px;
+    margin-bottom: 20px;
+}
+
+.ms-palette-label {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ms-text-muted);
+    margin-bottom: 12px;
+}
+
+.ms-palette-tiles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.ms-palette-tile {
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    border: 2px solid;
+    border-radius: var(--ms-radius-sm);
+    cursor: grab;
+    user-select: none;
+    transition: all var(--ms-transition);
+}
+
+.ms-palette-tile:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--ms-shadow-md);
+}
+
+.ms-palette-tile:active, .ms-palette-tile.dragging {
+    cursor: grabbing;
+    transform: scale(0.95);
+    opacity: 0.8;
+}
+
+/* =================================================================
+   GRID
+   ================================================================= */
+.ms-grid-container {
+    background: var(--ms-bg);
+    border: 1px solid var(--ms-border);
+    border-radius: var(--ms-radius-lg);
+    overflow: hidden;
+    box-shadow: var(--ms-shadow-sm);
+}
+
+.ms-grid-inner {
+    display: grid;
+    min-width: fit-content;
+}
+
+.ms-grid-corner {
+    background: var(--ms-bg-subtle);
+    border-bottom: 1px solid var(--ms-border);
+    border-right: 1px solid var(--ms-border);
+}
+
+.ms-grid-header {
+    background: var(--div-color, var(--ms-primary));
+    color: white;
+    padding: 14px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    border-bottom: 1px solid var(--ms-border);
+}
+
+.ms-time-col {
+    position: relative;
+    background: var(--ms-bg-subtle);
+    border-right: 1px solid var(--ms-border);
+    min-width: 72px;
+}
+
+.ms-time-mark {
+    position: absolute;
+    left: 0;
+    right: 0;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--ms-text-muted);
+    background: var(--ms-bg-subtle);
+    border-top: 1px solid var(--ms-border);
+}
+
+.ms-time-hour {
+    font-weight: 600;
+    color: var(--ms-text-secondary);
+}
+
+.ms-grid-col {
+    position: relative;
+    background: var(--ms-bg);
+    border-right: 1px solid var(--ms-border);
+    transition: background-color var(--ms-transition);
+}
+
+.ms-grid-col:last-child { border-right: none; }
+
+.ms-col-hover { background: #F0FDF4; }
+
+.ms-hour-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--ms-border);
+    pointer-events: none;
+}
+
+.ms-disabled-zone {
+    position: absolute;
+    left: 0;
+    right: 0;
+    background: #E5E7EB;
+    background-image: repeating-linear-gradient(
+        -45deg,
+        transparent,
+        transparent 8px,
+        rgba(107, 114, 128, 0.15) 8px,
+        rgba(107, 114, 128, 0.15) 16px
+    );
+    z-index: 1;
+}
+
+/* =================================================================
+   TILES
+   ================================================================= */
+.ms-tile {
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    border: 2px solid;
+    border-radius: var(--ms-radius-sm);
+    cursor: pointer;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 6px 10px;
+    overflow: hidden;
+    transition: all var(--ms-transition);
+    box-shadow: var(--ms-shadow-sm);
+}
+
+.ms-tile:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--ms-shadow-md);
+    z-index: 3;
+}
+
+.ms-tile.selected {
+    box-shadow: 0 0 0 2px var(--ms-primary), var(--ms-shadow-lg);
+    z-index: 4;
+}
+
+.ms-tile.resizing {
+    z-index: 100;
+    box-shadow: 0 0 0 2px var(--ms-primary), var(--ms-shadow-xl);
+}
+
+.ms-tile-sm { padding: 2px 6px; }
+.ms-tile-sm:hover { box-shadow: 0 0 0 2px var(--ms-danger); }
+
+.ms-tile-content {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.ms-tile-name {
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ms-tile-time {
+    font-size: 11px;
+    opacity: 0.75;
+    font-weight: 500;
+}
+
+.ms-tile-resize {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 8px;
+    cursor: ns-resize;
+    opacity: 0;
+    transition: opacity var(--ms-transition);
+}
+
+.ms-tile-resize-top { top: -2px; }
+.ms-tile-resize-bottom { bottom: -2px; }
+
+.ms-tile:hover .ms-tile-resize {
+    opacity: 1;
+    background: linear-gradient(to bottom, rgba(99, 102, 241, 0.3), transparent);
+}
+
+.ms-tile-resize-bottom:hover,
+.ms-tile:hover .ms-tile-resize-bottom {
+    background: linear-gradient(to top, rgba(99, 102, 241, 0.3), transparent);
+}
+
+/* =================================================================
+   EMPTY STATE
+   ================================================================= */
+.ms-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 80px 40px;
+    text-align: center;
+}
+
+.ms-empty-icon {
+    font-size: 48px;
+    margin-bottom: 16px;
+    opacity: 0.5;
+}
+
+.ms-empty-state h3 {
+    margin: 0 0 8px 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--ms-text);
+}
+
+.ms-empty-state p {
+    margin: 0;
+    font-size: 14px;
+    color: var(--ms-text-secondary);
+}
+
+/* =================================================================
+   MODAL
+   ================================================================= */
+.ms-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(4px);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.ms-modal {
+    background: var(--ms-bg);
+    border-radius: var(--ms-radius-lg);
+    width: 100%;
+    max-width: 480px;
+    max-height: calc(100vh - 40px);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: var(--ms-shadow-xl);
+    animation: modalIn 200ms ease-out;
+}
+
+@keyframes modalIn {
+    from { opacity: 0; transform: scale(0.95) translateY(10px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.ms-modal-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--ms-border);
+}
+
+.ms-modal-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--ms-radius-md);
+    border: 2px solid;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.ms-modal-title {
+    flex: 1;
+    min-width: 0;
+}
+
+.ms-modal-title h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.ms-modal-title p {
+    margin: 4px 0 0 0;
+    font-size: 13px;
+    color: var(--ms-text-secondary);
+}
+
+.ms-modal-close {
+    width: 36px;
+    height: 36px;
+    border: none;
+    background: transparent;
+    border-radius: var(--ms-radius-sm);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ms-text-muted);
+    transition: all var(--ms-transition);
+}
+
+.ms-modal-close:hover {
+    background: var(--ms-bg-muted);
+    color: var(--ms-text);
+}
+
+.ms-modal-body {
+    padding: 24px;
+    overflow-y: auto;
+}
+
+.ms-modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 16px 24px;
+    border-top: 1px solid var(--ms-border);
+    background: var(--ms-bg-subtle);
+}
+
+/* Modal Form Fields */
+.ms-field {
+    margin-bottom: 20px;
+}
+
+.ms-field:last-child { margin-bottom: 0; }
+
+.ms-field label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ms-text);
+    margin-bottom: 8px;
+}
+
+.ms-field input:not([type="checkbox"]),
+.ms-field select {
+    width: 100%;
+    height: 40px;
+    padding: 0 12px;
+    font-size: 14px;
+    font-family: var(--ms-font);
+    color: var(--ms-text);
+    background: var(--ms-bg);
+    border: 1px solid var(--ms-border-strong);
+    border-radius: var(--ms-radius-sm);
+    transition: all var(--ms-transition);
+}
+
+.ms-field input:focus,
+.ms-field select:focus {
+    outline: none;
+    border-color: var(--ms-primary);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+.ms-input-lg {
+    height: 44px !important;
+    font-size: 15px !important;
+}
+
+.ms-field-row {
+    display: flex;
+    gap: 16px;
+}
+
+.ms-field-row .ms-field {
+    flex: 1;
+}
+
+/* Time Picker */
+.ms-time-picker {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: var(--ms-bg-subtle);
+    padding: 16px;
+    border-radius: var(--ms-radius-md);
+}
+
+.ms-time-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.ms-time-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ms-text-muted);
+}
+
+.ms-time-control {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--ms-bg);
+    padding: 4px;
+    border-radius: var(--ms-radius-sm);
+    border: 1px solid var(--ms-border);
+}
+
+.ms-time-btn {
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ms-text-secondary);
+    transition: all var(--ms-transition);
+}
+
+.ms-time-btn:hover {
+    background: var(--ms-bg-muted);
+    color: var(--ms-text);
+}
+
+.ms-time-value {
+    width: 80px;
+    height: 32px;
+    text-align: center;
+    font-size: 14px;
+    font-weight: 500;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+.ms-time-divider {
+    width: 16px;
+    height: 2px;
+    background: var(--ms-border-strong);
+    border-radius: 1px;
+}
+
+.ms-duration-presets {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--ms-text-muted);
+}
+
+.ms-duration-presets button {
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: var(--ms-font);
+    color: var(--ms-text-secondary);
+    background: var(--ms-bg);
+    border: 1px solid var(--ms-border);
+    border-radius: 20px;
+    cursor: pointer;
+    transition: all var(--ms-transition);
+}
+
+.ms-duration-presets button:hover {
+    background: var(--ms-bg-muted);
+    border-color: var(--ms-border-strong);
+    color: var(--ms-text);
+}
+
+/* Checkbox List */
+.ms-checkbox-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 8px;
+    max-height: 160px;
+    overflow-y: auto;
+    padding: 12px;
+    background: var(--ms-bg-subtle);
+    border: 1px solid var(--ms-border);
+    border-radius: var(--ms-radius-sm);
+}
+
+.ms-checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--ms-bg);
+    border: 1px solid var(--ms-border);
+    border-radius: var(--ms-radius-sm);
+    cursor: pointer;
+    font-size: 13px;
+    transition: all var(--ms-transition);
+}
+
+.ms-checkbox-item:hover {
+    border-color: var(--ms-border-strong);
+    background: var(--ms-bg-muted);
+}
+
+.ms-checkbox-item input {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--ms-primary);
+}
+
+.ms-checkbox-meta {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    color: var(--ms-text-muted);
+}
+
+/* =================================================================
+   TOAST
+   ================================================================= */
+.ms-toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--ms-text);
+    color: white;
+    padding: 12px 20px;
+    border-radius: var(--ms-radius-md);
+    font-size: 14px;
+    font-weight: 500;
+    font-family: var(--ms-font);
+    z-index: 10001;
+    opacity: 0;
+    pointer-events: none;
+    transition: all 300ms cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: var(--ms-shadow-lg);
+}
+
+.ms-toast.visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+/* =================================================================
+   RESPONSIVE
+   ================================================================= */
+@media (max-width: 768px) {
+    .ms-header { flex-direction: column; align-items: flex-start; gap: 16px; }
+    .ms-toolbar { flex-direction: column; gap: 12px; }
+    .ms-toolbar-left, .ms-toolbar-right { width: 100%; flex-wrap: wrap; }
+    .ms-save-group, .ms-delete-group { border-left: none; padding-left: 0; }
+    .ms-palette-tiles { gap: 6px; }
+    .ms-palette-tile { padding: 6px 10px; font-size: 12px; }
+}
+</style>`;
+}
+
+// =================================================================
+// INITIALIZATION
 // =================================================================
 function init() {
     container = document.getElementById("master-scheduler-content");
     if (!container) return;
     
-    cleanupEventListeners();
-    cleanupTabListeners();
+    cleanupListeners();
     
-    // Load data - first try draft, then default
-    const hasDraft = loadDraftFromLocalStorage();
-    if (!hasDraft) {
-        loadDailySkeleton();
+    if (!loadDraft()) {
+        loadDefaultSkeleton();
     }
     
-    // Inject HTML
-    container.innerHTML = `
-        <div id="scheduler-template-ui"></div>
-        <div id="scheduler-palette" class="ms-palette"></div>
-        <div id="scheduler-grid-wrapper" class="ms-grid-wrapper">
-            <div id="scheduler-grid"></div>
-        </div>
-        ${getStyles()}
-    `;
-    
-    palette = document.getElementById("scheduler-palette");
-    grid = document.getElementById("scheduler-grid");
-    
+    render();
     setupTabListeners();
     setupKeyboardShortcuts();
     
     _isInitialized = true;
-    
-    renderTemplateUI();
-    renderPalette();
-    renderGrid();
-    
-    console.log("[MASTER_SCHEDULER] Module v4.0 initialized");
+    console.log("[MASTER_SCHEDULER] Premium Edition v5.0 initialized");
 }
 
-function getStyles() {
-    return `<style>
-        /* ============================================================
-           MASTER SCHEDULER - PREMIUM DESIGN SYSTEM
-           ============================================================ */
-        
-        /* Base Variables */
-        #master-scheduler-content {
-            --ms-bg-primary: #ffffff;
-            --ms-bg-secondary: #f9fafb;
-            --ms-bg-tertiary: #f3f4f6;
-            --ms-border-light: #e5e7eb;
-            --ms-border-medium: #d1d5db;
-            --ms-text-primary: #111827;
-            --ms-text-secondary: #4b5563;
-            --ms-text-muted: #9ca3af;
-            --ms-accent: #2563eb;
-            --ms-accent-light: #dbeafe;
-            --ms-success: #059669;
-            --ms-danger: #dc2626;
-            --ms-radius-sm: 6px;
-            --ms-radius-md: 8px;
-            --ms-radius-lg: 12px;
-            --ms-shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
-            --ms-shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --ms-shadow-lg: 0 12px 40px rgba(0,0,0,0.12);
-            --ms-transition: 150ms cubic-bezier(0.4, 0, 0.2, 1);
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
-        }
-        
-        /* Toast Notification */
-        .ms-toast {
-            position: fixed;
-            bottom: 24px;
-            left: 50%;
-            transform: translateX(-50%) translateY(10px);
-            background: var(--ms-text-primary);
-            color: white;
-            padding: 12px 20px;
-            border-radius: var(--ms-radius-md);
-            font-size: 14px;
-            font-weight: 500;
-            z-index: 10003;
-            opacity: 0;
-            transition: opacity var(--ms-transition), transform var(--ms-transition);
-            pointer-events: none;
-            box-shadow: var(--ms-shadow-lg);
-        }
-        .ms-toast-show {
-            opacity: 1;
-            transform: translateX(-50%) translateY(0);
-        }
-        
-        /* ============================================================
-           TEMPLATE BAR
-           ============================================================ */
-        .ms-template-bar {
-            background: var(--ms-bg-primary);
-            border: 1px solid var(--ms-border-light);
-            border-radius: var(--ms-radius-lg);
-            padding: 16px 20px;
-            margin-bottom: 20px;
-            box-shadow: var(--ms-shadow-sm);
-        }
-        .ms-template-status {
-            margin-bottom: 14px;
-            font-size: 14px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        .ms-status-editing {
-            color: var(--ms-accent);
-            font-weight: 500;
-        }
-        .ms-status-editing strong {
-            font-weight: 600;
-        }
-        .ms-status-new {
-            color: var(--ms-success);
-            font-weight: 500;
-        }
-        .ms-draft-indicator {
-            background: #fef3c7;
-            color: #92400e;
-            padding: 4px 10px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 500;
-        }
-        
-        .ms-template-actions {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-            align-items: center;
-        }
-        .ms-action-group {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-        .ms-save-group {
-            padding-left: 12px;
-            border-left: 1px solid var(--ms-border-light);
-        }
-        .ms-delete-group {
-            padding-left: 12px;
-            border-left: 1px solid var(--ms-border-light);
-            margin-left: auto;
-        }
-        
-        /* Form Controls */
-        .ms-select, .ms-input {
-            padding: 8px 12px;
-            border: 1px solid var(--ms-border-medium);
-            border-radius: var(--ms-radius-sm);
-            font-size: 14px;
-            color: var(--ms-text-primary);
-            background: var(--ms-bg-primary);
-            transition: border-color var(--ms-transition), box-shadow var(--ms-transition);
-        }
-        .ms-select:focus, .ms-input:focus {
-            outline: none;
-            border-color: var(--ms-accent);
-            box-shadow: 0 0 0 3px var(--ms-accent-light);
-        }
-        .ms-select-sm, .ms-input-sm {
-            padding: 6px 10px;
-            font-size: 13px;
-        }
-        
-        /* Buttons */
-        .ms-btn {
-            padding: 8px 16px;
-            border: none;
-            border-radius: var(--ms-radius-sm);
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all var(--ms-transition);
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-        }
-        .ms-btn:active {
-            transform: scale(0.98);
-        }
-        .ms-btn-primary {
-            background: var(--ms-accent);
-            color: white;
-        }
-        .ms-btn-primary:hover {
-            background: #1d4ed8;
-        }
-        .ms-btn-success {
-            background: var(--ms-success);
-            color: white;
-        }
-        .ms-btn-success:hover {
-            background: #047857;
-        }
-        .ms-btn-secondary {
-            background: var(--ms-bg-tertiary);
-            color: var(--ms-text-primary);
-            border: 1px solid var(--ms-border-medium);
-        }
-        .ms-btn-secondary:hover {
-            background: var(--ms-border-light);
-        }
-        .ms-btn-danger {
-            background: var(--ms-danger);
-            color: white;
-        }
-        .ms-btn-danger:hover {
-            background: #b91c1c;
-        }
-        
-        /* ============================================================
-           PALETTE
-           ============================================================ */
-        .ms-palette {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            padding: 16px;
-            background: var(--ms-bg-secondary);
-            border: 1px solid var(--ms-border-light);
-            border-radius: var(--ms-radius-lg);
-            margin-bottom: 20px;
-        }
-        .ms-palette-tile {
-            padding: 10px 16px;
-            border-radius: var(--ms-radius-sm);
-            cursor: grab;
-            font-size: 13px;
-            font-weight: 500;
-            user-select: none;
-            transition: transform var(--ms-transition), box-shadow var(--ms-transition);
-        }
-        .ms-palette-tile:hover {
-            transform: translateY(-1px);
-            box-shadow: var(--ms-shadow-md);
-        }
-        .ms-palette-tile:active {
-            cursor: grabbing;
-            transform: scale(0.98);
-        }
-        
-        /* ============================================================
-           GRID - PREMIUM DESIGN
-           ============================================================ */
-        .ms-grid-wrapper {
-            overflow-x: auto;
-            border: 1px solid var(--ms-border-light);
-            border-radius: var(--ms-radius-lg);
-            background: var(--ms-bg-primary);
-            box-shadow: var(--ms-shadow-sm);
-        }
-        .ms-grid {
-            display: grid;
-            min-width: fit-content;
-        }
-        
-        /* Grid Header */
-        .ms-grid-corner {
-            background: var(--ms-bg-secondary);
-            border-bottom: 1px solid var(--ms-border-light);
-            border-right: 1px solid var(--ms-border-light);
-            min-width: 64px;
-        }
-        .ms-grid-header {
-            color: white;
-            padding: 14px 12px;
-            text-align: center;
-            font-weight: 600;
-            font-size: 13px;
-            letter-spacing: 0.01em;
-            border-bottom: 1px solid var(--ms-border-light);
-            text-transform: uppercase;
-        }
-        
-        /* Time Column */
-        .ms-time-column {
-            position: relative;
-            background: var(--ms-bg-secondary);
-            border-right: 1px solid var(--ms-border-light);
-            min-width: 64px;
-        }
-        .ms-time-marker {
-            position: absolute;
-            left: 0;
-            right: 0;
-            border-top: 1px solid var(--ms-border-light);
-            font-size: 11px;
-            font-weight: 500;
-            padding: 4px 8px;
-            color: var(--ms-text-muted);
-            background: var(--ms-bg-secondary);
-        }
-        
-        /* Grid Cells */
-        .ms-grid-cell {
-            position: relative;
-            border-right: 1px solid var(--ms-border-light);
-            background: var(--ms-bg-primary);
-            transition: background-color var(--ms-transition);
-        }
-        .ms-grid-cell:last-child {
-            border-right: none;
-        }
-        .ms-grid-cell::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-image: repeating-linear-gradient(
-                to bottom,
-                transparent,
-                transparent 59px,
-                var(--ms-border-light) 59px,
-                var(--ms-border-light) 60px
-            );
-            pointer-events: none;
-            z-index: 0;
-        }
-        .ms-cell-hover {
-            background: #f0fdf4;
-        }
-        
-        /* Disabled Zones */
-        .ms-disabled-zone {
-            position: absolute;
-            width: 100%;
-            background-color: #e5e7eb;
-            background-image: repeating-linear-gradient(
-                -45deg,
-                transparent,
-                transparent 6px,
-                rgba(156, 163, 175, 0.3) 6px,
-                rgba(156, 163, 175, 0.3) 12px
-            );
-            z-index: 1;
-            pointer-events: none;
-        }
-        
-        /* ============================================================
-           EVENT TILES - REFINED DESIGN
-           ============================================================ */
-        .ms-event {
-            position: absolute;
-            width: 92%;
-            left: 4%;
-            border-radius: var(--ms-radius-sm);
-            cursor: pointer;
-            box-sizing: border-box;
-            z-index: 2;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            padding: 6px 10px;
-            overflow: hidden;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
-            transition: box-shadow var(--ms-transition), transform var(--ms-transition);
-        }
-        .ms-event:hover {
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            transform: translateY(-1px);
-        }
-        .ms-event.selected {
-            box-shadow: 0 0 0 2px var(--ms-accent), 0 4px 12px rgba(37,99,235,0.25);
-        }
-        .ms-event.resizing {
-            z-index: 100;
-            box-shadow: 0 0 0 2px var(--ms-accent), 0 8px 24px rgba(37,99,235,0.3);
-        }
-        .ms-event-small {
-            padding: 2px 6px;
-        }
-        .ms-event-small:hover {
-            box-shadow: 0 0 0 2px var(--ms-danger), 0 4px 12px rgba(220,38,38,0.2);
-        }
-        
-        .ms-event-content {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-            line-height: 1.3;
-        }
-        .ms-event-content strong {
-            font-weight: 600;
-            color: inherit;
-        }
-        .ms-tile-time {
-            font-size: 0.8em;
-            opacity: 0.75;
-            font-weight: 500;
-        }
-        .ms-tile-fields {
-            font-size: 0.75em;
-            opacity: 0.65;
-            font-weight: 500;
-        }
-        
-        /* Resize Handles */
-        .ms-resize-handle {
-            position: absolute;
-            left: 0;
-            right: 0;
-            height: 8px;
-            cursor: ns-resize;
-            opacity: 0;
-            transition: opacity var(--ms-transition);
-        }
-        .ms-resize-top {
-            top: -2px;
-            border-radius: var(--ms-radius-sm) var(--ms-radius-sm) 0 0;
-        }
-        .ms-resize-bottom {
-            bottom: -2px;
-            border-radius: 0 0 var(--ms-radius-sm) var(--ms-radius-sm);
-        }
-        .ms-event:hover .ms-resize-handle {
-            opacity: 1;
-            background: linear-gradient(to bottom, rgba(37,99,235,0.4), rgba(37,99,235,0.2));
-        }
-        
-        .ms-drop-preview {
-            display: none;
-        }
-        
-        .ms-empty-message, .ms-error-message {
-            padding: 60px 40px;
-            text-align: center;
-            color: var(--ms-text-muted);
-            font-size: 15px;
-        }
-        .ms-error-message {
-            color: var(--ms-danger);
-        }
-        
-        /* ============================================================
-           CONTEXT MENU
-           ============================================================ */
-        .ms-context-menu {
-            position: fixed;
-            background: var(--ms-bg-primary);
-            border-radius: var(--ms-radius-md);
-            box-shadow: var(--ms-shadow-lg), 0 0 0 1px rgba(0,0,0,0.05);
-            overflow: hidden;
-            min-width: 140px;
-            z-index: 10005;
-            padding: 4px;
-        }
-        .ms-context-item {
-            padding: 10px 14px;
-            cursor: pointer;
-            font-size: 14px;
-            color: var(--ms-text-primary);
-            border-radius: var(--ms-radius-sm);
-            transition: background-color var(--ms-transition);
-        }
-        .ms-context-item:hover {
-            background: var(--ms-bg-tertiary);
-        }
-        
-        /* ============================================================
-           MODAL - REFINED
-           ============================================================ */
-        .ms-modal-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.4);
-            backdrop-filter: blur(4px);
-            z-index: 10004;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-        }
-        .ms-modal {
-            background: var(--ms-bg-primary);
-            border-radius: var(--ms-radius-lg);
-            width: 100%;
-            max-width: 480px;
-            max-height: calc(100vh - 40px);
-            overflow-y: auto;
-            box-shadow: var(--ms-shadow-lg);
-        }
-        .ms-modal-sm {
-            max-width: 400px;
-        }
-        .ms-modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 20px 24px;
-            border-bottom: 1px solid var(--ms-border-light);
-        }
-        .ms-modal-header h3 {
-            margin: 0;
-            font-size: 18px;
-            font-weight: 600;
-            color: var(--ms-text-primary);
-        }
-        .ms-modal-close {
-            background: none;
-            border: none;
-            width: 32px;
-            height: 32px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 20px;
-            cursor: pointer;
-            color: var(--ms-text-muted);
-            border-radius: var(--ms-radius-sm);
-            transition: all var(--ms-transition);
-        }
-        .ms-modal-close:hover {
-            background: var(--ms-bg-tertiary);
-            color: var(--ms-text-primary);
-        }
-        .ms-modal-body {
-            padding: 24px;
-        }
-        .ms-modal-desc {
-            color: var(--ms-text-secondary);
-            font-size: 14px;
-            margin: 0 0 20px 0;
-            line-height: 1.5;
-        }
-        .ms-modal-footer {
-            display: flex;
-            justify-content: flex-end;
-            gap: 12px;
-            padding: 16px 24px;
-            border-top: 1px solid var(--ms-border-light);
-            background: var(--ms-bg-secondary);
-            border-radius: 0 0 var(--ms-radius-lg) var(--ms-radius-lg);
-        }
-        
-        /* Form Elements */
-        .ms-form-group {
-            margin-bottom: 20px;
-        }
-        .ms-form-group:last-child {
-            margin-bottom: 0;
-        }
-        .ms-form-row {
-            display: flex;
-            gap: 16px;
-        }
-        .ms-form-half {
-            flex: 1;
-        }
-        .ms-label {
-            display: block;
-            font-size: 13px;
-            font-weight: 600;
-            color: var(--ms-text-primary);
-            margin-bottom: 8px;
-        }
-        
-        /* Time Picker */
-        .ms-time-picker {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            flex-wrap: wrap;
-        }
-        .ms-time-section {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 6px;
-        }
-        .ms-time-label {
-            font-size: 11px;
-            font-weight: 600;
-            color: var(--ms-text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-        .ms-time-control {
-            display: flex;
-            align-items: center;
-            gap: 2px;
-            background: var(--ms-bg-tertiary);
-            border-radius: var(--ms-radius-md);
-            padding: 2px;
-        }
-        .ms-time-btn {
-            width: 32px;
-            height: 36px;
-            border: none;
-            background: transparent;
-            border-radius: var(--ms-radius-sm);
-            cursor: pointer;
-            font-size: 16px;
-            font-weight: 600;
-            color: var(--ms-text-secondary);
-            transition: all var(--ms-transition);
-        }
-        .ms-time-btn:hover {
-            background: var(--ms-bg-primary);
-            color: var(--ms-text-primary);
-        }
-        .ms-time-input {
-            width: 88px;
-            text-align: center;
-            font-size: 15px;
-            font-weight: 500;
-            padding: 8px 4px;
-            background: var(--ms-bg-primary);
-            border: none;
-            border-radius: var(--ms-radius-sm);
-            color: var(--ms-text-primary);
-        }
-        .ms-time-input:focus {
-            outline: none;
-            box-shadow: 0 0 0 2px var(--ms-accent);
-        }
-        .ms-time-separator {
-            color: var(--ms-text-muted);
-            font-weight: 500;
-            font-size: 14px;
-        }
-        .ms-time-presets {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-top: 12px;
-            width: 100%;
-            padding-top: 12px;
-            border-top: 1px solid var(--ms-border-light);
-        }
-        .ms-presets-label {
-            font-size: 12px;
-            font-weight: 500;
-            color: var(--ms-text-muted);
-        }
-        .ms-preset-btn {
-            padding: 6px 12px;
-            border: 1px solid var(--ms-border-light);
-            background: var(--ms-bg-primary);
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 500;
-            color: var(--ms-text-secondary);
-            cursor: pointer;
-            transition: all var(--ms-transition);
-        }
-        .ms-preset-btn:hover {
-            background: var(--ms-bg-tertiary);
-            border-color: var(--ms-border-medium);
-            color: var(--ms-text-primary);
-        }
-        .ms-preset-btn:active {
-            transform: scale(0.96);
-        }
-        
-        /* Checkbox Grid */
-        .ms-checkbox-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-            gap: 8px;
-            max-height: 180px;
-            overflow-y: auto;
-            padding: 12px;
-            background: var(--ms-bg-secondary);
-            border: 1px solid var(--ms-border-light);
-            border-radius: var(--ms-radius-md);
-        }
-        .ms-checkbox-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 10px;
-            background: var(--ms-bg-primary);
-            border: 1px solid var(--ms-border-light);
-            border-radius: var(--ms-radius-sm);
-            cursor: pointer;
-            font-size: 13px;
-            transition: all var(--ms-transition);
-        }
-        .ms-checkbox-item:hover {
-            border-color: var(--ms-border-medium);
-            background: var(--ms-bg-tertiary);
-        }
-        .ms-checkbox-item input {
-            margin: 0;
-            width: 16px;
-            height: 16px;
-            accent-color: var(--ms-accent);
-        }
-        .ms-location-type {
-            margin-left: auto;
-            font-size: 10px;
-            font-weight: 500;
-            color: var(--ms-text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.03em;
-        }
-    </style>`;
-}
-
-// =================================================================
-// CLEANUP
-// =================================================================
 function cleanup() {
-    cleanupEventListeners();
-    cleanupTabListeners();
-    removeContextMenu();
-    
-    ['master-scheduler-toast', 'tile-config-modal', 'tile-edit-modal'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.remove();
-    });
-    
+    cleanupListeners();
+    document.getElementById('ms-modal')?.remove();
+    document.getElementById('ms-toast')?.remove();
     _isInitialized = false;
 }
 
@@ -2310,15 +1914,6 @@ function cleanup() {
 // =================================================================
 window.initMasterScheduler = init;
 window.cleanupMasterScheduler = cleanup;
-window.refreshMasterSchedulerFromCloud = refreshFromStorage;
-window.diagnoseMasterScheduler = function() {
-    return {
-        isInitialized: _isInitialized,
-        currentTemplate: currentLoadedTemplate,
-        skeletonLength: dailySkeleton.length,
-        hasClipboard: !!clipboardTile,
-        activeListeners: activeEventListeners.length
-    };
-};
+window.refreshMasterSchedulerFromCloud = refreshTemplateList;
 
 })();
