@@ -108,8 +108,8 @@ const modal = (type, div, start, existing) => {
             <div class="modal-body">
                 ${nameField}
                 <div class="mf-row">
-                    <div class="mf"><label>Start</label><div class="time-box"><button data-d="-5" data-t="s">−</button><input id="f-start" value="${toS(sM)}" readonly><button data-d="5" data-t="s">+</button></div></div>
-                    <div class="mf"><label>End</label><div class="time-box"><button data-d="-5" data-t="e">−</button><input id="f-end" value="${toS(eM)}" readonly><button data-d="5" data-t="e">+</button></div></div>
+                    <div class="mf"><label>Start</label><div class="time-box"><button data-d="-5" data-t="s">−</button><input id="f-start" value="${toS(sM)}" placeholder="e.g. 9:00 AM"><button data-d="5" data-t="s">+</button></div></div>
+                    <div class="mf"><label>End</label><div class="time-box"><button data-d="-5" data-t="e">−</button><input id="f-end" value="${toS(eM)}" placeholder="e.g. 10:00 AM"><button data-d="5" data-t="e">+</button></div></div>
                 </div>
                 <div class="dur-row"><button data-m="20">20m</button><button data-m="30">30m</button><button data-m="40">40m</button><button data-m="45">45m</button><button data-m="60">1h</button><button data-m="90">1.5h</button></div>
                 ${extra}
@@ -135,6 +135,19 @@ const modal = (type, div, start, existing) => {
             document.getElementById('f-end').value = toS(eM);
         };
     });
+    
+    // Allow typing time values
+    document.getElementById('f-start').onblur = e => {
+        const parsed = toM(e.target.value);
+        if (parsed != null) { sM = parsed; if (sM >= eM) eM = sM + 30; }
+        e.target.value = toS(sM);
+        document.getElementById('f-end').value = toS(eM);
+    };
+    document.getElementById('f-end').onblur = e => {
+        const parsed = toM(e.target.value);
+        if (parsed != null && parsed > sM) eM = parsed;
+        e.target.value = toS(eM);
+    };
     
     // Duration buttons
     box.querySelectorAll('.dur-row button').forEach(btn => {
@@ -963,13 +976,42 @@ select {
 }
 .modal-foot {
     display: flex;
-    gap: 12px;
-    padding: 18px 26px;
+    flex-direction: row;
+    gap: 16px;
+    padding: 20px 26px;
     background: #f8fafc;
     border-top: 1px solid var(--border);
     flex-shrink: 0;
 }
-.modal-foot .btn { flex: 1; padding: 14px 22px; font-size: 15px; }
+.modal-foot .btn { 
+    flex: 1; 
+    padding: 16px 24px; 
+    font-size: 16px; 
+    font-weight: 600;
+    min-width: 120px;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.modal-foot .btn-ghost {
+    background: #ffffff;
+    border: 2px solid var(--border);
+    color: var(--text);
+}
+.modal-foot .btn-ghost:hover {
+    background: var(--bg);
+    border-color: var(--border-strong);
+}
+.modal-foot .btn-primary {
+    background: #4f46e5;
+    border: 2px solid #4f46e5;
+    color: #ffffff !important;
+}
+.modal-foot .btn-primary:hover {
+    background: #4338ca;
+    border-color: #4338ca;
+}
 
 /* ═══════════ FORM ═══════════ */
 .mf { margin-bottom: 22px; }
@@ -1013,11 +1055,13 @@ select {
     flex: 1;
     height: 48px !important;
     border: none !important;
-    background: none !important;
+    background: #ffffff !important;
     text-align: center;
     font-weight: 600;
     font-size: 15px !important;
-    padding: 0 !important;
+    padding: 0 8px !important;
+    cursor: text;
+    color: var(--text);
 }
 .time-box button {
     width: 46px;
