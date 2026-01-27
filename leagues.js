@@ -1,6 +1,14 @@
 // =================================================================
-// leagues.js — PRODUCTION-READY v2.0
+// leagues.js — PRODUCTION-READY v2.2
 // =================================================================
+// v2.2 FIXES:
+// - ★ PREFER localStorage over loadGlobalSettings (prevents race conditions)
+// - ★ Deep clone data to prevent mutation issues
+// - ★ 5-second protection window after save
+// - ★ Validate league data quality, not just key count
+// v2.1 FIXES:
+// - ★ Write to localStorage immediately when saving
+// - ★ Safeguard against overwriting good data with empty
 // v2.0 PRODUCTION FIXES:
 // - ★ CLOUD SYNC: Proper cloud sync via saveGlobalSettings
 // - ★ TAB REFRESH: Refreshes data when tab becomes visible
@@ -15,7 +23,7 @@
 // =================================================================
 (function () {
     'use strict';
-    console.log("🏆 leagues.js v2.0 loading...");
+    console.log("🏆 leagues.js v2.2 loading...");
 
     // =========================================================================
     // GLOBAL LEAGUE STORAGE
@@ -344,6 +352,16 @@
 
     function loadLeaguesData() {
         try {
+            // ★ Helper to deep clone an object (prevents mutation issues)
+            function deepClone(obj) {
+                if (!obj) return {};
+                try {
+                    return JSON.parse(JSON.stringify(obj));
+                } catch (e) {
+                    return {};
+                }
+            }
+            
             // ★ Helper to count VALID leagues (not just keys)
             function countValidLeagues(obj) {
                 if (!obj || typeof obj !== 'object') return 0;
@@ -363,12 +381,7 @@
             let loadedData = {};
             let source = 'none';
             
-            // Source 1: loadGlobalSettings (may include cloud-synced data)
-            const global = window.loadGlobalSettings?.() || {};
-            const fromGlobal = global.leaguesByName || {};
-            const fromGlobalCount = countValidLeagues(fromGlobal);
-            
-            // Source 2: localStorage directly (most recent local writes)
+            // Source 1: localStorage directly (PREFERRED - most reliable, where we write)
             let fromLS = {};
             let fromLSCount = 0;
             try {
@@ -382,19 +395,25 @@
                 console.log("[LEAGUES] localStorage read failed:", lsErr);
             }
             
+            // Source 2: loadGlobalSettings (may have stale/cached data)
+            const global = window.loadGlobalSettings?.() || {};
+            const fromGlobal = global.leaguesByName || {};
+            const fromGlobalCount = countValidLeagues(fromGlobal);
+            
             // Source 3: app1 nested structure (legacy)
             const fromApp1 = global.app1?.leaguesByName || {};
             const fromApp1Count = countValidLeagues(fromApp1);
             
-            // ★ Use the source with the most VALID data
-            if (fromGlobalCount >= fromLSCount && fromGlobalCount >= fromApp1Count && fromGlobalCount > 0) {
-                loadedData = fromGlobal;
-                source = 'global';
-            } else if (fromLSCount >= fromApp1Count && fromLSCount > 0) {
-                loadedData = fromLS;
+            // ★ ALWAYS prefer localStorage first (it's our source of truth)
+            // Only use other sources if localStorage is empty
+            if (fromLSCount > 0) {
+                loadedData = deepClone(fromLS);  // ★ Deep clone to prevent mutations
                 source = 'localStorage';
+            } else if (fromGlobalCount > 0) {
+                loadedData = deepClone(fromGlobal);
+                source = 'global';
             } else if (fromApp1Count > 0) {
-                loadedData = fromApp1;
+                loadedData = deepClone(fromApp1);
                 source = 'app1';
             }
             
@@ -402,10 +421,11 @@
             const currentCount = Object.keys(leaguesByName).length;
 
             console.log("[LEAGUES] Load sources:", {
-                fromGlobal: fromGlobalCount,
                 fromLS: fromLSCount,
+                fromGlobal: fromGlobalCount,
                 fromApp1: fromApp1Count,
                 using: source,
+                loadedCount: loadedCount,
                 currentInMemory: currentCount
             });
 
@@ -450,10 +470,10 @@
             return;
         }
         
-        // ★ FIX: Also skip if we just saved (within last 2 seconds)
+        // ★ FIX: Also skip if we just saved (within last 5 seconds)
         // This prevents the focus event from loading stale data
         const timeSinceSave = Date.now() - _lastSaveTime;
-        if (timeSinceSave < 2000) {
+        if (timeSinceSave < 5000) {
             console.log("[LEAGUES] Skipping refresh - recent save (" + timeSinceSave + "ms ago)");
             return;
         }
@@ -1932,5 +1952,5 @@
     // Auto-load on script run
     window.loadLeagueGlobals();
 
-    console.log("🏆 leagues.js v2.0: window.initLeagues ready");
+    console.log("🏆 leagues.js v2.2: window.initLeagues ready");
 })();
