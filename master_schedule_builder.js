@@ -343,23 +343,23 @@ select { cursor: pointer; min-width: 140px; }
 .tile-info {
     position: fixed;
     z-index: 1000;
-    background: var(--surface);
+    background: #ffffff;
     border: 1px solid #d1d5db;
     border-radius: 12px;
-    padding: 16px 18px;
-    width: 280px;
-    box-shadow: 0 10px 40px rgba(15, 23, 42, 0.12);
+    padding: 18px 20px;
+    width: 290px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05), 0 12px 40px rgba(0, 0, 0, 0.15);
     opacity: 0;
     pointer-events: none;
     transform: translateX(-8px);
     transition: opacity 0.15s, transform 0.15s;
 }
 .tile-info.show { opacity: 1; pointer-events: auto; transform: translateX(0); }
-.tile-info-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.tile-info-dot { width: 18px; height: 18px; border-radius: 6px; }
-.tile-info-header strong { font-size: 1.05rem; font-weight: 600; color: var(--text); }
-.tile-info p { font-size: 0.95rem; color: var(--text2); line-height: 1.55; margin: 0 0 12px; }
-.tile-info small { font-size: 0.85rem; color: var(--text3); }
+.tile-info-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid #e5e7eb; }
+.tile-info-dot { width: 20px; height: 20px; border-radius: 6px; }
+.tile-info-header strong { font-size: 1.1rem; font-weight: 600; color: #111827; }
+.tile-info p { font-size: 0.95rem; color: #374151; line-height: 1.6; margin: 0 0 14px; }
+.tile-info small { font-size: 0.85rem; color: #6b7280; font-style: italic; }
 
 /* ═══════════ MAIN GRID ═══════════ */
 .main { flex: 1; overflow: auto; padding: 1rem; }
@@ -503,25 +503,26 @@ select { cursor: pointer; min-width: 140px; }
     font-weight: 600;
 }
 
-/* Tooltip for small events */
+/* Tooltip for small events - SOLID VISIBLE */
 .ev-sm::after {
     content: attr(data-time);
     position: absolute;
     bottom: 100%;
     left: 50%;
     transform: translateX(-50%) translateY(-8px);
-    background: #1f2937;
-    color: white;
-    padding: 8px 14px;
+    background: #111827;
+    color: #ffffff;
+    padding: 10px 16px;
     border-radius: 8px;
-    font-size: 0.85rem;
-    font-weight: 500;
+    font-size: 0.9rem;
+    font-weight: 600;
     white-space: nowrap;
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.15s, transform 0.15s;
     z-index: 100;
-    box-shadow: 0 6px 20px rgba(15, 23, 42, 0.25);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    border: 1px solid #374151;
 }
 .ev-sm::before {
     content: '';
@@ -529,8 +530,8 @@ select { cursor: pointer; min-width: 140px; }
     bottom: 100%;
     left: 50%;
     transform: translateX(-50%) translateY(-2px);
-    border: 6px solid transparent;
-    border-top-color: #1f2937;
+    border: 8px solid transparent;
+    border-top-color: #111827;
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.15s;
