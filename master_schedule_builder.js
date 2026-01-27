@@ -510,37 +510,37 @@ const css = () => `<style>
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 22px;
-    height: 76px;
+    padding: 0 24px;
+    height: 64px;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
 .top-left { display: flex; align-items: center; gap: 16px; }
-.top h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
-.top-right { display: flex; align-items: center; gap: 14px; }
+.top h1 { font-size: 16px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+.top-right { display: flex; align-items: center; gap: 12px; }
 
 .badge {
-    padding: 5px 14px;
+    padding: 4px 12px;
     border-radius: 100px;
-    font-size: 15px;
+    font-size: 13px;
     font-weight: 600;
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
 }
 .badge:empty { display: none; }
-.badge::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .badge.draft { background: var(--warning-light); color: var(--warning); }
 .badge.saved { background: var(--success-light); color: var(--success); }
 
-.status-name { font-size: 18px; color: var(--text-secondary); font-weight: 500; }
+.status-name { font-size: 14px; color: var(--text-secondary); font-weight: 500; }
 
 .tool-group {
     display: flex;
     align-items: center;
-    gap: 11px;
-    padding-left: 16px;
+    gap: 8px;
+    padding-left: 12px;
     border-left: 1px solid var(--border-light);
 }
 .tool-group:first-child { padding-left: 0; border-left: none; }
@@ -550,32 +550,32 @@ select, input[type="text"], .top input {
     background: var(--surface);
     border: 1px solid var(--border);
     font-family: inherit;
-    font-size: 18px;
+    font-size: 14px;
     font-weight: 500;
-    padding: 11px 16px;
-    border-radius: 11px;
+    padding: 10px 14px;
+    border-radius: 8px;
     color: var(--text);
     outline: none;
     transition: all 0.15s;
-    min-width: 190px;
+    min-width: 140px;
 }
 select:hover, input:hover { border-color: var(--border-strong); }
-select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-light); }
+select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); }
 select {
     cursor: pointer;
-    padding-right: 43px;
+    padding-right: 32px;
     background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 12 12' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%23475569' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
-    background-position: right 14px center;
+    background-position: right 10px center;
     appearance: none;
 }
 
 .btn {
-    padding: 11px 22px;
-    border-radius: 11px;
+    padding: 8px 16px;
+    border-radius: 8px;
     font-family: inherit;
     font-weight: 600;
-    font-size: 18px;
+    font-size: 13px;
     border: 1px solid var(--border);
     background: var(--surface);
     color: var(--text);
@@ -584,7 +584,7 @@ select {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    gap: 6px;
 }
 .btn:hover { background: var(--bg); border-color: var(--border-strong); }
 .btn:active { transform: scale(0.98); }
@@ -605,7 +605,7 @@ select {
 
 /* ═══════════ SIDEBAR (PERSISTENT BLOCKS PANEL) ═══════════ */
 .side {
-    width: 270px;
+    width: 200px;
     background: var(--surface);
     border-right: 1px solid var(--border);
     display: flex;
@@ -618,25 +618,25 @@ select {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 19px 19px 16px;
+    padding: 14px 14px 12px;
     border-bottom: 1px solid var(--border-light);
 }
 .side-head span:first-child {
-    font-size: 14px;
+    font-size: 10px;
     font-weight: 700;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.08em;
 }
-.side-hint { font-size: 14px; color: var(--text-muted); }
+.side-hint { font-size: 10px; color: var(--text-muted); }
 
 .blocks {
     flex: 1;
-    padding: 16px;
+    padding: 12px;
     overflow-y: auto;
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 11px;
+    gap: 8px;
     align-content: start;
 }
 
@@ -645,11 +645,11 @@ select {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 5px;
-    padding: 14px 8px;
+    gap: 4px;
+    padding: 10px 6px;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 11px;
+    border-radius: 8px;
     cursor: grab;
     transition: all 0.2s;
 }
@@ -663,9 +663,9 @@ select {
 .block.dragging { opacity: 0.5; }
 
 .block-dot {
-    width: 38px;
-    height: 38px;
-    border-radius: 11px;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
     border: 2px solid var(--c);
     background: var(--bg);
     display: flex;
@@ -673,10 +673,10 @@ select {
     justify-content: center;
     color: var(--c);
     font-weight: 700;
-    font-size: 16px;
+    font-size: 12px;
 }
 .block span:last-child {
-    font-size: 12px;
+    font-size: 9px;
     font-weight: 600;
     color: var(--text-secondary);
     text-align: center;
@@ -746,7 +746,7 @@ select {
 
 .calendar { 
     display: grid; 
-    grid-template-columns: 83px repeat(var(--cols), minmax(165px, 1fr));
+    grid-template-columns: 83px repeat(var(--cols), minmax(200px, 1fr));
     min-width: max-content;
 }
 .cal-corner {
@@ -1153,7 +1153,7 @@ select {
     .blocks { grid-template-columns: 1fr; }
 }
 @media (max-width: 768px) {
-    .side { width: 140px; }
+    .side { width: 120px; }
     .block { padding: 8px 4px; }
     .block-dot { width: 24px; height: 24px; font-size: 10px; }
 }
