@@ -1,6 +1,11 @@
 // ============================================================================
-// specialty_leagues.js — PRODUCTION-READY v2.2.2 (EMERALD CAMP THEME)
+// specialty_leagues.js — PRODUCTION-READY v2.2.3 (EMERALD CAMP THEME)
 // ============================================================================
+// v2.2.3 CLOUD SYNC FIXES:
+// - ★ STANDINGS SYNC: Force immediate cloud sync when standings change
+// - ★ DEEP CLONE: Uses JSON.parse(JSON.stringify()) to capture all nested data
+// - ★ DEBUG LOGGING: Shows standings being saved for verification
+//
 // v2.2.2 DATA PROTECTION FIXES:
 // - ★ DEFENSIVE LOADING: Won't wipe existing data if loadGlobalSettings returns empty
 // - ★ SAFE REFRESH: Checks source before clearing existing leagues
@@ -47,7 +52,7 @@
 (function() {
     'use strict';
 
-    console.log("[SPECIALTY_LEAGUES] Module v2.2.2 loading...");
+    console.log("[SPECIALTY_LEAGUES] Module v2.2.3 loading...");
 
     // =============================================================
     // STATE & GLOBALS
@@ -544,7 +549,7 @@
         }
     }
 
-    function saveData() {
+    function saveData(forceCloudSync = false) {
         // ✅ RBAC Check for modifications
         if (window.AccessControl?.canEditSetup && !window.AccessControl.canEditSetup()) {
             console.warn('[SPECIALTY_LEAGUES] Save blocked - insufficient permissions');
@@ -556,23 +561,61 @@
             _saveInProgress = true;
             _lastSaveTime = Date.now();
 
+            // ★ FIX v2.2.3: Debug logging for standings sync
+            console.log("[SPECIALTY_LEAGUES] Saving data...");
+            Object.entries(specialtyLeagues).forEach(([id, league]) => {
+                const standingsCount = Object.keys(league.standings || {}).length;
+                const gamesCount = (league.games || []).length;
+                if (standingsCount > 0) {
+                    console.log(`  - "${league.name}": ${standingsCount} team standings, ${gamesCount} games`);
+                    console.log(`    Standings:`, league.standings);
+                }
+            });
+
             // ★ FIX v2.1: Write to localStorage immediately (prevents race conditions)
+            // Use deep clone to capture all nested objects including standings
+            const dataToSave = JSON.parse(JSON.stringify(specialtyLeagues));
             try {
                 const lsKey = 'campistryGlobalSettings';
                 const lsRaw = localStorage.getItem(lsKey);
                 const lsData = lsRaw ? JSON.parse(lsRaw) : {};
-                lsData.specialtyLeagues = specialtyLeagues;
+                lsData.specialtyLeagues = dataToSave;
                 lsData.updated_at = new Date().toISOString();
                 localStorage.setItem(lsKey, JSON.stringify(lsData));
-                console.log("[SPECIALTY_LEAGUES] Data written to localStorage immediately");
+                console.log("[SPECIALTY_LEAGUES] ✅ Data written to localStorage");
             } catch (lsErr) {
                 console.warn("[SPECIALTY_LEAGUES] localStorage write failed:", lsErr);
             }
 
             // ★ Save via saveGlobalSettings (handles batching + cloud sync)
-            window.saveGlobalSettings?.("specialtyLeagues", specialtyLeagues);
-            
-            console.log("[SPECIALTY_LEAGUES] Data saved to cloud");
+            window.saveGlobalSettings?.("specialtyLeagues", dataToSave);
+            console.log("[SPECIALTY_LEAGUES] ✅ Data queued for cloud sync");
+
+            // ★ FIX v2.2.3: Force immediate cloud sync when requested (for standings changes)
+            if (forceCloudSync) {
+                setTimeout(() => {
+                    // Try forceSyncToCloud first
+                    if (typeof window.forceSyncToCloud === 'function') {
+                        window.forceSyncToCloud()
+                            .then(() => console.log("[SPECIALTY_LEAGUES] ✅ Cloud sync completed"))
+                            .catch(err => console.warn("[SPECIALTY_LEAGUES] Cloud sync error:", err));
+                    } 
+                    // Fallback: try setCloudState
+                    else if (typeof window.setCloudState === 'function') {
+                        const settings = window.loadGlobalSettings?.() || {};
+                        settings.specialtyLeagues = dataToSave;
+                        window.setCloudState(settings, true)
+                            .then(() => console.log("[SPECIALTY_LEAGUES] ✅ Cloud sync via setCloudState"))
+                            .catch(err => console.warn("[SPECIALTY_LEAGUES] setCloudState error:", err));
+                    }
+                    // Last resort: manual push to Supabase
+                    else if (window.SupabaseSync?.pushChanges) {
+                        window.SupabaseSync.pushChanges()
+                            .then(() => console.log("[SPECIALTY_LEAGUES] ✅ Cloud sync via SupabaseSync"))
+                            .catch(err => console.warn("[SPECIALTY_LEAGUES] SupabaseSync error:", err));
+                    }
+                }, 100);
+            }
 
             // ★ Clear protection flag after delay
             setTimeout(() => {
@@ -1397,7 +1440,7 @@
             if (confirm('Delete this game? This action cannot be undone.')) {
                 league.games.splice(game._idx, 1);
                 recalcStandings(league);
-                saveData();
+                saveData(true); // ★ Force cloud sync for standings change
                 renderGameEntryUI(league, parentContainer);
             }
         };
@@ -1548,7 +1591,7 @@
                 game.matches.splice(matchIdx, 1);
                 league.games[game._idx] = game;
                 recalcStandings(league);
-                saveData();
+                saveData(true); // ★ Force cloud sync for standings change
                 renderGameEntryUI(league, parentContainer);
             };
             row.appendChild(deleteMatchBtn);
@@ -1577,7 +1620,7 @@
                     
                     league.games[game._idx] = game;
                     recalcStandings(league);
-                    saveData();
+                    saveData(true); // ★ Force cloud sync for standings change
                     
                     // Show save indicator
                     const statusEl = document.getElementById('sl-save-status-' + game._idx);
@@ -1844,7 +1887,7 @@
             }
 
             recalcStandings(league);
-            saveData();
+            saveData(true); // ★ Force cloud sync for standings change
             renderDetailPane();
         } catch (e) {
             console.error("[SPECIALTY_LEAGUES] Error saving game results:", e);
@@ -1859,13 +1902,23 @@
         if (!league || !league.teams) return;
         
         try {
+            // Ensure standings object exists
+            if (!league.standings) {
+                league.standings = {};
+            }
+            
             // Reset all standings
             league.teams.forEach(t => {
                 league.standings[t] = { w: 0, l: 0, t: 0 };
             });
 
+            let gamesProcessed = 0;
+            let matchesProcessed = 0;
+            
             (league.games || []).forEach(g => {
+                gamesProcessed++;
                 (g.matches || []).forEach(m => {
+                    matchesProcessed++;
                     if (m.winner === 'tie') {
                         if (league.standings[m.teamA]) league.standings[m.teamA].t++;
                         if (league.standings[m.teamB]) league.standings[m.teamB].t++;
@@ -1875,6 +1928,12 @@
                         if (league.standings[loser]) league.standings[loser].l++;
                     }
                 });
+            });
+            
+            console.log(`[SPECIALTY_LEAGUES] Standings recalculated for "${league.name}":`, {
+                games: gamesProcessed,
+                matches: matchesProcessed,
+                standings: league.standings
             });
         } catch (e) {
             console.error("[SPECIALTY_LEAGUES] Error recalculating standings:", e);
@@ -1986,6 +2045,6 @@
     // ★ v2.1: Export diagnostics
     window.diagnoseSpecialtyLeagues = diagnoseSpecialtyLeagues;
 
-    console.log("[SPECIALTY_LEAGUES] Module v2.2.2 loaded");
+    console.log("[SPECIALTY_LEAGUES] Module v2.2.3 loaded");
 
 })();
