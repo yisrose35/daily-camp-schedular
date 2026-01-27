@@ -26,19 +26,19 @@ const PX = 1.6;
 const SNAP = 5;
 
 const BLOCKS = {
-    activity:         { name: 'Activity',    color: '#818CF8', bg: '#EEF2FF' },
-    sports:           { name: 'Sports',      color: '#6EE7B7', bg: '#ECFDF5' },
-    special:          { name: 'Special',     color: '#5EEAD4', bg: '#F0FDFA' },
-    smart:            { name: 'Smart',       color: '#A78BFA', bg: '#F5F3FF', dashed: true },
-    split:            { name: 'Split',       color: '#FCD34D', bg: '#FFFBEB' },
-    elective:         { name: 'Elective',    color: '#F9A8D4', bg: '#FDF2F8' },
-    league:           { name: 'League',      color: '#C4B5FD', bg: '#F5F3FF' },
-    specialty_league: { name: 'Specialty',   color: '#FDE047', bg: '#FEFCE8' },
-    swim:             { name: 'Swim',        color: '#7DD3FC', bg: '#F0F9FF' },
-    lunch:            { name: 'Lunch',       color: '#FCA5A5', bg: '#FEF2F2' },
-    snacks:           { name: 'Snacks',      color: '#FDBA74', bg: '#FFF7ED' },
-    dismissal:        { name: 'Dismissal',   color: '#FDA4AF', bg: '#FFF1F2' },
-    custom:           { name: 'Custom',      color: '#CBD5E1', bg: '#F8FAFC' }
+    activity:         { name: 'Activity',    color: '#6366F1', bg: '#E0E7FF' },
+    sports:           { name: 'Sports',      color: '#22C55E', bg: '#DCFCE7' },
+    special:          { name: 'Special',     color: '#14B8A6', bg: '#CCFBF1' },
+    smart:            { name: 'Smart',       color: '#8B5CF6', bg: '#EDE9FE', dashed: true },
+    split:            { name: 'Split',       color: '#F59E0B', bg: '#FEF3C7' },
+    elective:         { name: 'Elective',    color: '#EC4899', bg: '#FCE7F3' },
+    league:           { name: 'League',      color: '#8B5CF6', bg: '#EDE9FE' },
+    specialty_league: { name: 'Specialty',   color: '#EAB308', bg: '#FEF9C3' },
+    swim:             { name: 'Swim',        color: '#0EA5E9', bg: '#E0F2FE' },
+    lunch:            { name: 'Lunch',       color: '#EF4444', bg: '#FEE2E2' },
+    snacks:           { name: 'Snacks',      color: '#F97316', bg: '#FFEDD5' },
+    dismissal:        { name: 'Dismissal',   color: '#E11D48', bg: '#FFE4E6' },
+    custom:           { name: 'Custom',      color: '#64748B', bg: '#E2E8F0' }
 };
 
 // Utilities
@@ -118,7 +118,7 @@ const modal = (type, div, start, existing) => {
 // Render
 const render = () => {
     if (!container) return;
-    container.innerHTML = `<div class="sch">${css()}<div class="top"><div class="top-left"><h1>Schedule</h1><span id="status-badge" class="badge"></span><span id="status-name" class="status-name">New</span></div><div class="top-right"><select id="tpl-sel"></select><button class="btn btn-ghost" id="btn-load">Load</button><div class="sep"></div><input id="save-name" placeholder="Template name"><button class="btn btn-primary" id="btn-save">Save</button><button class="btn btn-ghost" id="btn-update" style="display:none">Update</button></div></div><div class="body"><div class="side"><div class="side-head"><span>Blocks</span><button class="icon-btn" id="btn-clear" title="Clear"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"/></svg></button></div><div class="blocks">${Object.entries(BLOCKS).map(([k, v]) => `<div class="block" draggable="true" data-type="${k}"><span class="block-dot" style="--c:${v.color};--bg:${v.bg}"></span><span>${v.name}</span></div>`).join('')}</div><div class="side-foot"><select id="del-sel"></select><button class="btn btn-danger" id="btn-del">Delete</button></div></div><div class="main"><div id="grid" class="grid"></div></div></div></div>`;
+    container.innerHTML = `<div class="sch">${css()}<div class="top"><div class="top-left"><h1>Schedule</h1><span id="status-badge" class="badge"></span><span id="status-name" class="status-name">New</span></div><div class="top-right"><select id="tpl-sel"></select><button class="btn btn-ghost" id="btn-load">Load</button><button class="btn btn-ghost" id="btn-update" style="display:none">Update</button><div class="sep"></div><input id="save-name" placeholder="Template name"><button class="btn btn-primary" id="btn-save">Save</button><div class="sep"></div><select id="del-sel"></select><button class="btn btn-danger" id="btn-del">Delete</button><div class="sep"></div><button class="icon-btn" id="btn-clear" title="Clear schedule"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"/></svg></button></div></div><div class="body"><div class="side"><div class="side-head"><span>Blocks</span></div><div class="blocks">${Object.entries(BLOCKS).map(([k, v]) => `<div class="block" draggable="true" data-type="${k}"><span class="block-dot" style="--c:${v.color};--bg:${v.bg}"></span><span>${v.name}</span></div>`).join('')}</div></div><div class="main"><div id="grid" class="grid"></div></div></div></div>`;
     bindUI(); fills(); draw(); sync();
 };
 
@@ -157,7 +157,8 @@ const draw = () => {
                 const top = (s - lo) * PX, height = (e - s) * PX;
                 const B = BLOCKS[ev.type] || BLOCKS.custom;
                 const small = height < 36;
-                html += `<div class="ev ${small ? 'ev-sm' : ''}" data-id="${ev.id}" draggable="true" style="top:${top}px;height:${Math.max(height, 22)}px;--c:${B.color};--bg:${B.bg};${B.dashed ? 'border-style:dashed;' : ''}"><div class="ev-body"><span class="ev-name">${h(ev.event || B.name)}</span>${small ? '' : `<span class="ev-time">${ev.startTime} – ${ev.endTime}</span>`}</div><div class="ev-handle ev-handle-t"></div><div class="ev-handle ev-handle-b"></div></div>`;
+                const timeStr = `${ev.startTime} – ${ev.endTime}`;
+                html += `<div class="ev ${small ? 'ev-sm' : ''}" data-id="${ev.id}" draggable="true" data-time="${timeStr}" style="top:${top}px;height:${Math.max(height, 22)}px;--c:${B.color};--bg:${B.bg};${B.dashed ? 'border-style:dashed;' : ''}"><div class="ev-body"><span class="ev-name">${h(ev.event || B.name)}</span>${small ? '' : `<span class="ev-time">${timeStr}</span>`}</div><div class="ev-handle ev-handle-t"></div><div class="ev-handle ev-handle-b"></div></div>`;
             }
         });
         html += `</div>`;
@@ -216,7 +217,7 @@ const bindGrid = () => {
 // CSS
 const css = () => `<style>
 /* ══════════════════════════════════════════════════════════════════════
-   SCHEDULE BUILDER — SOFT, LIGHT, FRIENDLY
+   SCHEDULE BUILDER — SOFT, FRIENDLY, PROFESSIONAL
    ══════════════════════════════════════════════════════════════════════ */
 
 .sch {
@@ -243,9 +244,11 @@ const css = () => `<style>
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 14px 20px;
+    padding: 12px 20px;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
+    gap: 16px;
+    flex-wrap: wrap;
 }
 .top-left { display: flex; align-items: center; gap: 12px; }
 .top h1 { font-size: 18px; font-weight: 500; margin: 0; color: var(--text); }
@@ -254,34 +257,34 @@ const css = () => `<style>
 .badge.draft { background: #FEF9C3; color: #A16207; }
 .badge.saved { background: #DCFCE7; color: #16A34A; }
 .status-name { font-size: 13px; color: var(--text3); font-weight: 400; }
-.top-right { display: flex; align-items: center; gap: 8px; }
-.sep { width: 1px; height: 20px; background: var(--border); margin: 0 6px; }
+.top-right { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
 
 /* ═══════════ CONTROLS ═══════════ */
 select, input[type="text"], .top input {
-    height: 34px;
+    height: 32px;
     padding: 0 10px;
     font: inherit;
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 400;
     background: var(--bg);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 6px;
     color: var(--text);
     transition: all 0.15s;
 }
 select:focus, input:focus { outline: none; border-color: var(--accent); background: var(--surface); }
-select { cursor: pointer; min-width: 140px; }
-.top input { width: 140px; }
+select { cursor: pointer; min-width: 130px; }
+.top input { width: 130px; }
 
 .btn {
-    height: 34px;
-    padding: 0 14px;
+    height: 32px;
+    padding: 0 12px;
     font: inherit;
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 500;
     border: none;
-    border-radius: 8px;
+    border-radius: 6px;
     cursor: pointer;
     transition: all 0.15s;
 }
@@ -290,32 +293,30 @@ select { cursor: pointer; min-width: 140px; }
 .btn-primary:hover { background: #4F46E5; }
 .btn-ghost { background: transparent; color: var(--text2); }
 .btn-ghost:hover { background: var(--bg); }
-.btn-danger { background: transparent; color: #EF4444; font-size: 12px; font-weight: 400; }
+.btn-danger { background: transparent; color: #EF4444; font-size: 11px; font-weight: 500; }
 .btn-danger:hover { background: #FEF2F2; }
-.icon-btn { width: 30px; height: 30px; padding: 0; background: none; border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text3); transition: all 0.15s; }
-.icon-btn:hover { background: var(--bg); color: var(--text2); }
+.icon-btn { width: 32px; height: 32px; padding: 0; background: var(--bg); border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text3); transition: all 0.15s; }
+.icon-btn:hover { background: var(--border); color: var(--text2); }
 .icon-btn svg { width: 16px; height: 16px; }
 
 /* ═══════════ LAYOUT ═══════════ */
 .body { display: flex; flex: 1; overflow: hidden; }
 
 /* ═══════════ SIDEBAR ═══════════ */
-.side { width: 180px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
-.side-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 12px; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text3); }
-.blocks { flex: 1; padding: 0 8px; overflow-y: auto; }
-.block { display: flex; align-items: center; gap: 10px; padding: 9px 10px; margin-bottom: 2px; border-radius: 8px; cursor: grab; transition: all 0.15s; }
+.side { width: 160px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+.side-head { padding: 14px 12px 10px; font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text3); }
+.blocks { flex: 1; padding: 0 8px 8px; overflow-y: auto; }
+.block { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin-bottom: 2px; border-radius: 6px; cursor: grab; transition: all 0.15s; }
 .block:hover { background: var(--bg); }
 .block.dragging { opacity: 0.5; cursor: grabbing; }
-.block-dot { width: 18px; height: 18px; border-radius: 5px; background: var(--bg); border: 2px solid var(--c); }
-.block span:last-child { font-size: 13px; font-weight: 400; color: var(--text2); }
-.side-foot { padding: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
-.side-foot select { width: 100%; min-width: 0; font-size: 12px; height: 32px; }
+.block-dot { width: 16px; height: 16px; border-radius: 4px; background: var(--bg); border: 2px solid var(--c); }
+.block span:last-child { font-size: 12px; font-weight: 400; color: var(--text2); }
 
 /* ═══════════ MAIN GRID ═══════════ */
 .main { flex: 1; overflow: auto; padding: 16px; }
 .grid { background: var(--surface); border-radius: 12px; border: 1px solid var(--border); overflow: hidden; }
 
-.calendar { display: grid; grid-template-columns: 52px repeat(var(--cols), minmax(110px, 1fr)); }
+.calendar { display: grid; grid-template-columns: 52px repeat(var(--cols), minmax(100px, 1fr)); }
 .cal-corner { background: #F3F4F6; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); position: sticky; left: 0; z-index: 3; }
 
 .cal-head {
@@ -335,7 +336,7 @@ select { cursor: pointer; min-width: 140px; }
     top: 0;
     z-index: 2;
 }
-.cal-head-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c); opacity: 0.8; }
+.cal-head-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
 
 .cal-times {
     position: relative;
@@ -365,42 +366,42 @@ select { cursor: pointer; min-width: 140px; }
 
 .cal-line { position: absolute; left: 0; right: 0; border-top: 1px solid #F3F4F6; pointer-events: none; }
 
-/* INACTIVE ZONES — MORE PROMINENT */
+/* INACTIVE ZONES — PROMINENT */
 .cal-off { 
     position: absolute; 
     left: 0; 
     right: 0; 
     top: 0; 
-    background: #E5E7EB;
+    background: #D1D5DB;
     background-image: repeating-linear-gradient(
         -45deg,
         transparent,
-        transparent 6px,
-        rgba(156, 163, 175, 0.3) 6px,
-        rgba(156, 163, 175, 0.3) 12px
+        transparent 5px,
+        rgba(107, 114, 128, 0.2) 5px,
+        rgba(107, 114, 128, 0.2) 10px
     );
 }
 .cal-off-b { top: auto; bottom: 0; }
 
-/* ═══════════ EVENTS — SOFT PASTEL FILLED ═══════════ */
+/* ═══════════ EVENTS — FILLED WITH DEPTH ═══════════ */
 .ev {
     position: absolute;
-    left: 4px;
-    right: 4px;
+    left: 3px;
+    right: 3px;
     min-height: 22px;
     background: var(--bg);
     border: 2px solid var(--c);
-    border-radius: 8px;
+    border-radius: 6px;
     cursor: pointer;
     z-index: 2;
-    overflow: hidden;
+    overflow: visible;
     transition: transform 0.12s, box-shadow 0.12s;
     display: flex;
     flex-direction: column;
 }
 .ev:hover {
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
     z-index: 5;
 }
 .ev.sel {
@@ -412,7 +413,7 @@ select { cursor: pointer; min-width: 140px; }
 
 .ev-body { 
     flex: 1;
-    padding: 5px 8px;
+    padding: 4px 8px;
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -420,7 +421,7 @@ select { cursor: pointer; min-width: 140px; }
 }
 .ev-name { 
     display: block;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 500;
     color: var(--text);
     white-space: nowrap;
@@ -431,16 +432,15 @@ select { cursor: pointer; min-width: 140px; }
 .ev-time { 
     display: block;
     font-size: 10px;
-    color: var(--text3);
+    color: var(--text2);
     margin-top: 1px;
     line-height: 1.2;
     font-weight: 400;
 }
 
-/* Small events - VISIBLE & CLEAR */
+/* Small events - TOOLTIP ON HOVER */
 .ev-sm {
-    min-height: 22px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    min-height: 20px;
 }
 .ev-sm .ev-body { 
     padding: 2px 6px;
@@ -451,15 +451,56 @@ select { cursor: pointer; min-width: 140px; }
     font-size: 10px;
     font-weight: 500;
 }
+
+/* Tooltip for small events */
+.ev-sm::after {
+    content: attr(data-time);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%) translateY(-4px);
+    background: var(--text);
+    color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 500;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s, transform 0.15s;
+    z-index: 100;
+}
+.ev-sm::before {
+    content: '';
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%) translateY(2px);
+    border: 4px solid transparent;
+    border-top-color: var(--text);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s;
+    z-index: 100;
+}
+.ev-sm:hover::after,
+.ev-sm:hover::before {
+    opacity: 1;
+}
+.ev-sm:hover::after {
+    transform: translateX(-50%) translateY(-6px);
+}
+
 .ev-sm:hover { 
-    transform: scale(1.03);
+    transform: scale(1.02);
     box-shadow: 0 0 0 2px var(--c), 0 4px 8px rgba(0,0,0,0.12);
-    z-index: 10;
+    z-index: 20;
 }
 
 .ev-handle { position: absolute; left: 0; right: 0; height: 6px; cursor: ns-resize; opacity: 0; transition: opacity 0.15s; }
-.ev-handle-t { top: 0; border-radius: 8px 8px 0 0; }
-.ev-handle-b { bottom: 0; border-radius: 0 0 8px 8px; }
+.ev-handle-t { top: 0; border-radius: 6px 6px 0 0; }
+.ev-handle-b { bottom: 0; border-radius: 0 0 6px 6px; }
 .ev:hover .ev-handle { opacity: 1; background: var(--c); opacity: 0.3; }
 
 /* ═══════════ EMPTY ═══════════ */
@@ -474,7 +515,7 @@ select { cursor: pointer; min-width: 140px; }
 @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } }
 .modal-accent { height: 3px; background: var(--c); }
 .modal-head { display: flex; align-items: center; gap: 12px; padding: 18px; border-bottom: 1px solid var(--border); }
-.modal-icon { width: 36px; height: 36px; border-radius: 8px; background: var(--c); color: white; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; opacity: 0.9; }
+.modal-icon { width: 36px; height: 36px; border-radius: 8px; background: var(--c); color: white; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; }
 .modal-head h2 { margin: 0; font-size: 16px; font-weight: 500; color: var(--text); }
 .modal-x { margin-left: auto; width: 28px; height: 28px; background: var(--bg); border: none; border-radius: 6px; cursor: pointer; font-size: 16px; color: var(--text3); transition: all 0.15s; display: flex; align-items: center; justify-content: center; }
 .modal-x:hover { background: var(--border); color: var(--text); }
@@ -509,6 +550,14 @@ select { cursor: pointer; min-width: 140px; }
 /* ═══════════ NOTIFY ═══════════ */
 #notify { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(12px); background: var(--text); color: white; padding: 10px 20px; border-radius: 8px; font-size: 13px; font-weight: 500; opacity: 0; transition: all 0.2s ease-out; z-index: 1001; }
 #notify.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ═══════════ RESPONSIVE ═══════════ */
+@media (max-width: 900px) {
+    .top { padding: 10px 12px; }
+    .top-right { gap: 4px; }
+    .sep { margin: 0 2px; }
+    select, .top input { min-width: 100px; width: 100px; }
+}
 </style>`;
 
 // Init
