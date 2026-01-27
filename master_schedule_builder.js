@@ -95,7 +95,29 @@ const bumpOverlappingTiles = (movedEvent) => {
 const notify = msg => { let t = document.getElementById('notify'); if (!t) { t = document.createElement('div'); t.id = 'notify'; document.body.appendChild(t); } t.textContent = msg; t.classList.add('on'); setTimeout(() => t.classList.remove('on'), 2000); };
 
 // Sync UI
-const sync = () => { const b = document.getElementById('status-badge'), n = document.getElementById('status-name'), u = document.getElementById('btn-update'); if (!b) return; if (template) { b.className = 'badge saved'; b.textContent = 'Saved'; n.textContent = template; if(u)u.style.display = ''; } else if (skeleton.length) { b.className = 'badge draft'; b.textContent = 'Draft'; n.textContent = 'Unsaved'; if(u)u.style.display = 'none'; } else { b.className = 'badge'; b.textContent = ''; n.textContent = 'New'; if(u)u.style.display = 'none'; } };
+const sync = () => { 
+    const b = document.getElementById('status-badge'), n = document.getElementById('status-name'), u = document.getElementById('btn-update'); 
+    if (!b) return; 
+    if (template) { 
+        b.className = 'badge saved'; 
+        b.textContent = 'Saved'; 
+        n.textContent = '📄 ' + template; 
+        n.style.display = ''; 
+        if(u) u.style.display = ''; 
+    } else if (skeleton.length) { 
+        b.className = 'badge draft'; 
+        b.textContent = 'Draft'; 
+        n.textContent = ''; 
+        n.style.display = 'none'; 
+        if(u) u.style.display = 'none'; 
+    } else { 
+        b.className = 'badge'; 
+        b.textContent = ''; 
+        n.textContent = ''; 
+        n.style.display = 'none'; 
+        if(u) u.style.display = 'none'; 
+    } 
+};
 
 // Keyboard
 const keys = () => { _keyHandler = e => { const t = document.getElementById('master-scheduler'); if (!t || !t.classList.contains('active')) return; const sel = document.querySelector('.ev.sel'); if ((e.ctrlKey || e.metaKey) && e.key === 'c' && sel) { const ev = skeleton.find(x => x.id === sel.dataset.id); if (ev) { clipboard = { ...ev, id: null }; notify('Copied'); } e.preventDefault(); } if ((e.ctrlKey || e.metaKey) && e.key === 'v' && clipboard && hoveredCol) { const { lo } = bounds(); const dur = toM(clipboard.endTime) - toM(clipboard.startTime); skeleton.push({ ...clipboard, id: id(), division: hoveredCol.dataset.d, startTime: toS(lo), endTime: toS(lo + dur) }); save(); draw(); notify('Pasted'); e.preventDefault(); } if ((e.key === 'Delete' || e.key === 'Backspace') && sel && !e.target.matches('input,textarea,select')) { skeleton = skeleton.filter(x => x.id !== sel.dataset.id); save(); draw(); e.preventDefault(); } }; document.addEventListener('keydown', _keyHandler); };
@@ -188,9 +210,15 @@ const modal = (type, div, start, existing) => {
         btn.onclick = () => { eM = sM + parseInt(btn.dataset.m); document.getElementById('f-end').value = toS(eM); };
     });
     
-    // Location buttons (for custom tiles - multi-select)
+    // Location buttons (for custom tiles - multi-select with persistent selection)
     box.querySelectorAll('.loc-btn').forEach(btn => {
-        btn.onclick = () => btn.classList.toggle('active');
+        btn.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            btn.classList.toggle('active');
+            // Force repaint to ensure CSS applies
+            btn.offsetHeight;
+        };
     });
     
     // Close
@@ -614,13 +642,13 @@ const render = () => {
                 <div class="top-left">
                     <h1>Schedule Builder</h1>
                     <span id="status-badge" class="badge"></span>
-                    <span id="status-name" class="status-name">New</span>
                 </div>
                 <div class="top-right">
-                    <div class="tool-group">
+                    <div class="tool-group tpl-group">
+                        <span id="status-name" class="status-name"></span>
                         <select id="tpl-sel"></select>
                         <button class="btn btn-load" id="btn-load">Load</button>
-                        <button class="btn btn-ghost" id="btn-update" style="display:none">Update</button>
+                        <button class="btn btn-update" id="btn-update" style="display:none">Update</button>
                     </div>
                     <div class="tool-group">
                         <input id="save-name" placeholder="Template name...">
@@ -754,8 +782,6 @@ const css = () => `<style>
 .badge.draft { background: var(--warning-light); color: var(--warning); }
 .badge.saved { background: var(--success-light); color: var(--success); }
 
-.status-name { font-size: 14px; color: var(--text-secondary); font-weight: 500; }
-
 .tool-group {
     display: flex;
     align-items: center;
@@ -764,6 +790,12 @@ const css = () => `<style>
     border-left: 1px solid var(--border-light);
 }
 .tool-group:first-child { padding-left: 0; border-left: none; }
+.tpl-group {
+    background: var(--bg);
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-light);
+}
 
 /* ═══════════ CONTROLS ═══════════ */
 select, input[type="text"], .top input {
@@ -816,8 +848,26 @@ select {
 .btn-danger:hover { background: #fee2e2; border-color: #fca5a5; }
 .btn-load { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
 .btn-load:hover { background: #bfdbfe; border-color: #60a5fa; }
+.btn-update { background: #d1fae5; color: #047857; border-color: #6ee7b7; }
+.btn-update:hover { background: #a7f3d0; border-color: #34d399; }
 .btn-clear { background: #fef3c7; color: #b45309; border-color: #fcd34d; }
 .btn-clear:hover { background: #fde68a; border-color: #fbbf24; }
+
+.status-name { 
+    font-size: 14px; 
+    font-weight: 600;
+    padding: 8px 14px;
+    background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%);
+    border-radius: 8px;
+    border: 2px solid var(--accent);
+    color: var(--accent);
+    display: none;
+}
+.status-name:not(:empty) {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
 
 /* ═══════════ LAYOUT ═══════════ */
 .body { 
@@ -1416,8 +1466,8 @@ select {
     align-items: center;
     gap: 3px;
     padding: 12px 16px;
-    background: #ffffff;
-    border: 2px solid var(--border);
+    background: #ffffff !important;
+    border: 2px solid var(--border) !important;
     border-radius: 9px;
     cursor: pointer;
     font-size: 14px;
@@ -1425,18 +1475,44 @@ select {
     color: var(--text);
     transition: all 0.15s;
     min-width: 92px;
+    position: relative;
+    outline: none !important;
 }
-.loc-btn:hover {
-    border-color: var(--accent);
-    background: var(--accent-light);
+.loc-btn:focus {
+    outline: none !important;
+}
+.loc-btn:hover:not(.active) {
+    border-color: var(--accent) !important;
+    background: var(--accent-light) !important;
 }
 .loc-btn.active {
-    border-color: var(--accent);
-    background: var(--accent);
+    border: 3px solid #16a34a !important;
+    background: #dcfce7 !important;
+    color: #15803d !important;
+    box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.25) !important;
+}
+.loc-btn.active::after {
+    content: '✓';
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    width: 20px;
+    height: 20px;
+    background: #16a34a;
     color: white;
+    border-radius: 50%;
+    font-size: 12px;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.loc-btn.active:hover {
+    background: #bbf7d0 !important;
+    border-color: #15803d !important;
 }
 .loc-btn.active .loc-type {
-    color: rgba(255,255,255,0.8);
+    color: #16a34a;
 }
 .loc-type {
     font-size: 11px;
