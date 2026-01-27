@@ -1,1919 +1,677 @@
 // =================================================================
-// master_schedule_builder.js (PREMIUM EDITION v5.0)
+// SCHEDULE BUILDER v7.0 — GOOGLE-LEVEL DESIGN
 // =================================================================
-// Complete UI overhaul - Enterprise-grade design system
-// Inspired by Linear, Notion, Figma, and Apple design principles
+// Design Philosophy:
+// - Content is king, UI fades into background
+// - Generous whitespace, everything breathes
+// - Subtle depth through refined shadows
+// - Purposeful color, mostly neutral
+// - Micro-interactions that delight
+// - Every pixel earns its place
 // =================================================================
 
-(function(){
+(function() {
 'use strict';
 
-console.log("[MASTER_SCHEDULER] Premium Edition v5.0 loading...");
-
-// =================================================================
-// STATE & CONFIGURATION
-// =================================================================
+// State
+let skeleton = [];
+let template = null;
 let container = null;
-let dailySkeleton = [];
-let currentLoadedTemplate = null;
-let _isInitialized = false;
-let _refreshTimeout = null;
-let _autoSaveTimeout = null;
-let clipboardTile = null;
-let lastHoveredCell = null;
-let activeEventListeners = [];
-let _visibilityHandler = null;
-let _focusHandler = null;
-let _keyboardHandler = null;
 
-const SKELETON_DRAFT_KEY = 'master-schedule-draft';
-const SKELETON_DRAFT_NAME_KEY = 'master-schedule-draft-name';
-const PIXELS_PER_MINUTE = 2;
-const SNAP_MINS = 5;
-const AUTO_SAVE_DELAY = 1500;
+const STORAGE_KEY = 'scheduleBuilderDraft_v7';
+const PX_MIN = 1.2;
+const SNAP = 5;
 
-// Premium color palette for tiles
-const TILE_THEMES = {
-    activity:        { bg: '#EEF2FF', border: '#6366F1', text: '#4338CA', accent: '#818CF8' },
-    sports:          { bg: '#ECFDF5', border: '#10B981', text: '#047857', accent: '#34D399' },
-    special:         { bg: '#F0FDF4', border: '#22C55E', text: '#15803D', accent: '#4ADE80' },
-    smart:           { bg: '#EFF6FF', border: '#3B82F6', text: '#1D4ED8', accent: '#60A5FA', dashed: true },
-    split:           { bg: '#FFF7ED', border: '#F97316', text: '#C2410C', accent: '#FB923C' },
-    elective:        { bg: '#FAF5FF', border: '#A855F7', text: '#7E22CE', accent: '#C084FC' },
-    league:          { bg: '#F5F3FF', border: '#8B5CF6', text: '#6D28D9', accent: '#A78BFA' },
-    specialty_league:{ bg: '#FFFBEB', border: '#F59E0B', text: '#B45309', accent: '#FBBF24' },
-    swim:            { bg: '#E0F2FE', border: '#0EA5E9', text: '#0369A1', accent: '#38BDF8' },
-    lunch:           { bg: '#FEF2F2', border: '#EF4444', text: '#B91C1C', accent: '#F87171' },
-    snacks:          { bg: '#FEFCE8', border: '#EAB308', text: '#A16207', accent: '#FACC15' },
-    dismissal:       { bg: '#FEE2E2', border: '#DC2626', text: '#991B1B', accent: '#F87171' },
-    custom:          { bg: '#F8FAFC', border: '#64748B', text: '#334155', accent: '#94A3B8' }
+// Refined color tokens - Google's muted palette
+const TYPES = {
+    activity:         { name: 'Activity',    hue: 210, sat: 90, desc: 'General activity slot' },
+    sports:           { name: 'Sports',      hue: 142, sat: 70, desc: 'Sports period' },
+    special:          { name: 'Special',     hue: 158, sat: 65, desc: 'Special activity' },
+    smart:            { name: 'Smart',       hue: 217, sat: 85, desc: 'Auto-balanced slot', dashed: true },
+    split:            { name: 'Split',       hue: 28,  sat: 85, desc: 'Divided time block' },
+    elective:         { name: 'Elective',    hue: 270, sat: 70, desc: 'Choice-based' },
+    league:           { name: 'League',      hue: 262, sat: 75, desc: 'League game' },
+    specialty_league: { name: 'Specialty',   hue: 43,  sat: 90, desc: 'Specialty league' },
+    swim:             { name: 'Swim',        hue: 199, sat: 85, desc: 'Swimming' },
+    lunch:            { name: 'Lunch',       hue: 0,   sat: 70, desc: 'Lunch break' },
+    snacks:           { name: 'Snacks',      hue: 35,  sat: 85, desc: 'Snack time' },
+    dismissal:        { name: 'Dismissal',   hue: 0,   sat: 65, desc: 'End of day' },
+    custom:           { name: 'Custom',      hue: 220, sat: 10, desc: 'Custom event' }
 };
 
-const TILES = [
-    { type: 'activity', name: 'Activity', description: 'Flexible slot for sports or special activities' },
-    { type: 'sports', name: 'Sports', description: 'Dedicated sports period' },
-    { type: 'special', name: 'Special Activity', description: 'Special activity period' },
-    { type: 'smart', name: 'Smart Tile', description: 'Balances two activities with fallback' },
-    { type: 'split', name: 'Split Activity', description: 'Two activities share this block' },
-    { type: 'elective', name: 'Elective', description: 'Multiple activity choices for division' },
-    { type: 'league', name: 'League Game', description: 'Scheduled league game slot' },
-    { type: 'specialty_league', name: 'Specialty League', description: 'Specialty league period' },
-    { type: 'swim', name: 'Swim', description: 'Swimming period' },
-    { type: 'lunch', name: 'Lunch', description: 'Lunch break' },
-    { type: 'snacks', name: 'Snacks', description: 'Snack time' },
-    { type: 'dismissal', name: 'Dismissal', description: 'End of day dismissal' },
-    { type: 'custom', name: 'Custom Event', description: 'Custom scheduled event' }
-];
+// Utilities
+const uid = () => Math.random().toString(36).slice(2, 10);
+const esc = s => { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; };
 
-// =================================================================
-// UTILITY FUNCTIONS
-// =================================================================
-function generateId() {
-    return Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
-}
+const toMin = s => {
+    if (!s) return null;
+    const t = s.toLowerCase().replace(/\s/g, '');
+    const pm = t.includes('pm'), am = t.includes('am');
+    let [h, m] = t.replace(/[ap]m/g, '').split(':').map(Number);
+    if (isNaN(h)) return null;
+    if (pm && h !== 12) h += 12;
+    if (am && h === 12) h = 0;
+    return h * 60 + (m || 0);
+};
 
-function parseTimeToMinutes(str) {
-    if (!str) return null;
+const toStr = m => {
+    if (m == null) return '';
+    let h = Math.floor(m / 60), mm = m % 60;
+    const a = h >= 12 ? 'PM' : 'AM';
+    return `${h % 12 || 12}:${String(mm).padStart(2, '0')} ${a}`;
+};
+
+const range = () => {
+    const divs = window.divisions || {};
+    let lo = null, hi = null;
+    Object.values(divs).filter(d => d?.bunks?.length).forEach(d => {
+        const s = toMin(d.startTime), e = toMin(d.endTime);
+        if (s != null && (lo == null || s < lo)) lo = s;
+        if (e != null && (hi == null || e > hi)) hi = e;
+    });
+    skeleton.forEach(ev => {
+        const s = toMin(ev.startTime), e = toMin(ev.endTime);
+        if (s != null && (lo == null || s < lo)) lo = s;
+        if (e != null && (hi == null || e > hi)) hi = e;
+    });
+    return { lo: lo ?? 480, hi: hi ?? 1020 };
+};
+
+// Storage
+const save = () => {
     try {
-        let s = str.toLowerCase().replace(/\s/g, '').replace(/am|pm/g, m => ' ' + m).trim();
-        const isPM = s.includes('pm');
-        const isAM = s.includes('am');
-        s = s.replace(/am|pm/g, '').trim();
-        let [h, m] = s.split(':').map(Number);
-        if (isNaN(h)) return null;
-        if (isPM && h !== 12) h += 12;
-        if (isAM && h === 12) h = 0;
-        return h * 60 + (m || 0);
-    } catch (e) {
-        return null;
-    }
-}
-
-function minutesToTime(min) {
-    if (min === null || min === undefined || isNaN(min)) return '';
-    let h = Math.floor(min / 60);
-    let m = min % 60;
-    const ap = h >= 12 ? 'PM' : 'AM';
-    h = h % 12 || 12;
-    return `${h}:${m.toString().padStart(2, '0')} ${ap}`;
-}
-
-function escapeHtml(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}
-
-function getCampTimeRange() {
-    const divisions = window.divisions || {};
-    const divNames = Object.keys(divisions).filter(d => divisions[d]?.bunks?.length > 0);
-    
-    let earliestMin = null;
-    let latestMin = null;
-    
-    divNames.forEach(d => {
-        const div = divisions[d];
-        const s = parseTimeToMinutes(div?.startTime);
-        const e = parseTimeToMinutes(div?.endTime);
-        if (s !== null && (earliestMin === null || s < earliestMin)) earliestMin = s;
-        if (e !== null && (latestMin === null || e > latestMin)) latestMin = e;
-    });
-    
-    dailySkeleton.forEach(ev => {
-        const s = parseTimeToMinutes(ev.startTime);
-        const e = parseTimeToMinutes(ev.endTime);
-        if (s !== null && (earliestMin === null || s < earliestMin)) earliestMin = s;
-        if (e !== null && (latestMin === null || e > latestMin)) latestMin = e;
-    });
-    
-    if (earliestMin === null) earliestMin = 540;
-    if (latestMin === null) latestMin = 960;
-    if (latestMin - earliestMin < 60) latestMin = earliestMin + 60;
-    
-    return { earliestMin, latestMin };
-}
-
-function getAllFieldsAndLocations() {
-    const globalSettings = window.loadGlobalSettings?.() || {};
-    const result = [];
-    
-    (globalSettings.app1?.fields || []).forEach(f => {
-        if (f.available !== false) result.push({ name: f.name, type: 'Field' });
-    });
-    
-    const zones = globalSettings.locationZones || {};
-    Object.values(zones).forEach(zone => {
-        if (zone.locations) {
-            Object.keys(zone.locations).forEach(locName => {
-                if (!result.find(x => x.name === locName)) {
-                    result.push({ name: locName, type: zone.name || 'Location' });
-                }
-            });
-        }
-    });
-    
-    return result;
-}
-
-// =================================================================
-// EVENT LISTENER MANAGEMENT
-// =================================================================
-function trackListener(type, handler, target = document) {
-    activeEventListeners.push({ type, handler, target });
-}
-
-function cleanupListeners() {
-    activeEventListeners.forEach(({ type, handler, target }) => {
-        try { (target || document).removeEventListener(type, handler); } catch (e) {}
-    });
-    activeEventListeners = [];
-    
-    if (_visibilityHandler) document.removeEventListener('visibilitychange', _visibilityHandler);
-    if (_focusHandler) window.removeEventListener('focus', _focusHandler);
-    if (_keyboardHandler) document.removeEventListener('keydown', _keyboardHandler);
-    
-    clearTimeout(_refreshTimeout);
-    clearTimeout(_autoSaveTimeout);
-}
-
-// =================================================================
-// AUTO-SAVE & DRAFT MANAGEMENT
-// =================================================================
-function scheduleAutoSave() {
-    clearTimeout(_autoSaveTimeout);
-    _autoSaveTimeout = setTimeout(saveDraft, AUTO_SAVE_DELAY);
-}
-
-function saveDraft() {
-    try {
-        if (dailySkeleton?.length > 0) {
-            localStorage.setItem(SKELETON_DRAFT_KEY, JSON.stringify(dailySkeleton));
-            if (currentLoadedTemplate) localStorage.setItem(SKELETON_DRAFT_NAME_KEY, currentLoadedTemplate);
-            else localStorage.removeItem(SKELETON_DRAFT_NAME_KEY);
-        } else {
-            localStorage.removeItem(SKELETON_DRAFT_KEY);
-            localStorage.removeItem(SKELETON_DRAFT_NAME_KEY);
-        }
-        updateStatusIndicator();
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ skeleton, template }));
     } catch (e) {}
-}
+    syncUI();
+};
 
-function loadDraft() {
+const load = () => {
     try {
-        const saved = localStorage.getItem(SKELETON_DRAFT_KEY);
-        const savedName = localStorage.getItem(SKELETON_DRAFT_NAME_KEY);
-        if (saved) {
-            dailySkeleton = JSON.parse(saved);
-            if (savedName) currentLoadedTemplate = savedName;
-            return true;
-        }
+        const d = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+        if (d.skeleton) { skeleton = d.skeleton; template = d.template || null; return true; }
     } catch (e) {}
     return false;
-}
+};
 
-function clearDraft() {
-    localStorage.removeItem(SKELETON_DRAFT_KEY);
-    localStorage.removeItem(SKELETON_DRAFT_NAME_KEY);
-    updateStatusIndicator();
-}
+const clear = () => { localStorage.removeItem(STORAGE_KEY); };
 
-function updateStatusIndicator() {
-    const indicator = document.getElementById('ms-status-indicator');
-    if (!indicator) return;
-    
-    const hasChanges = dailySkeleton.length > 0;
-    const isEditing = !!currentLoadedTemplate;
-    
-    if (isEditing) {
-        indicator.innerHTML = `<span class="ms-status-badge ms-status-editing">Editing</span><span class="ms-status-name">${escapeHtml(currentLoadedTemplate)}</span>`;
-    } else if (hasChanges) {
-        indicator.innerHTML = `<span class="ms-status-badge ms-status-draft">Draft</span><span class="ms-status-name">Unsaved Schedule</span>`;
-    } else {
-        indicator.innerHTML = `<span class="ms-status-badge ms-status-new">New</span><span class="ms-status-name">Empty Schedule</span>`;
-    }
-}
-
-// =================================================================
-// CLOUD SYNC & TAB VISIBILITY
-// =================================================================
-function setupTabListeners() {
-    _visibilityHandler = () => {
-        if (document.visibilityState === 'visible' && _isInitialized) {
-            clearTimeout(_refreshTimeout);
-            _refreshTimeout = setTimeout(refreshTemplateList, 200);
-        }
-    };
-    document.addEventListener('visibilitychange', _visibilityHandler);
-    
-    _focusHandler = () => {
-        if (_isInitialized) {
-            clearTimeout(_refreshTimeout);
-            _refreshTimeout = setTimeout(refreshTemplateList, 250);
-        }
-    };
-    window.addEventListener('focus', _focusHandler);
-}
-
-function refreshTemplateList() {
-    const select = document.getElementById('ms-template-select');
-    if (!select) return;
-    
-    const saved = window.getSavedSkeletons?.() || {};
-    const names = Object.keys(saved).sort();
-    const currentVal = select.value;
-    
-    select.innerHTML = `<option value="">Select template...</option>` + 
-        names.map(n => `<option value="${escapeHtml(n)}" ${n === currentVal ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('');
-}
-
-// =================================================================
-// KEYBOARD SHORTCUTS
-// =================================================================
-function setupKeyboardShortcuts() {
-    _keyboardHandler = (e) => {
-        const tab = document.getElementById('master-scheduler');
-        if (!tab || !tab.classList.contains('active')) return;
-        
-        const grid = document.getElementById('ms-grid');
-        const selected = grid?.querySelector('.ms-tile.selected');
-        
-        if ((e.ctrlKey || e.metaKey) && e.key === 'c' && selected) {
-            const ev = dailySkeleton.find(x => x.id === selected.dataset.id);
-            if (ev) { clipboardTile = { ...ev, id: null }; showToast('Copied to clipboard'); }
-            e.preventDefault();
-        }
-        
-        if ((e.ctrlKey || e.metaKey) && e.key === 'v' && clipboardTile && lastHoveredCell) {
-            pasteTile(lastHoveredCell);
-            showToast('Pasted from clipboard');
-            e.preventDefault();
-        }
-        
-        if ((e.key === 'Delete' || e.key === 'Backspace') && selected && !e.target.matches('input, textarea, select')) {
-            const id = selected.dataset.id;
-            if (id) {
-                dailySkeleton = dailySkeleton.filter(x => x.id !== id);
-                scheduleAutoSave();
-                renderGrid();
-            }
-            e.preventDefault();
-        }
-    };
-    document.addEventListener('keydown', _keyboardHandler);
-}
-
-function pasteTile(cell) {
-    if (!clipboardTile || !cell) return;
-    
-    const divName = cell.dataset.div;
-    const { earliestMin } = getCampTimeRange();
-    const cellTop = parseInt(cell.dataset.startMin, 10) || earliestMin;
-    
-    const origStart = parseTimeToMinutes(clipboardTile.startTime);
-    const origEnd = parseTimeToMinutes(clipboardTile.endTime);
-    const duration = (origStart !== null && origEnd !== null) ? (origEnd - origStart) : 30;
-    
-    dailySkeleton.push({
-        ...clipboardTile,
-        id: generateId(),
-        division: divName,
-        startTime: minutesToTime(cellTop),
-        endTime: minutesToTime(cellTop + duration)
-    });
-    
-    scheduleAutoSave();
-    renderGrid();
-}
-
-// =================================================================
-// TOAST NOTIFICATIONS
-// =================================================================
-function showToast(message) {
-    let toast = document.getElementById('ms-toast');
-    if (!toast) {
-        toast = document.createElement('div');
-        toast.id = 'ms-toast';
-        toast.className = 'ms-toast';
-        document.body.appendChild(toast);
-    }
-    
-    toast.textContent = message;
-    toast.classList.add('visible');
-    
-    setTimeout(() => toast.classList.remove('visible'), 2500);
-}
-
-// =================================================================
-// LOAD & SAVE TEMPLATES
-// =================================================================
-function loadDefaultSkeleton() {
-    try {
-        const assignments = window.getSkeletonAssignments?.() || {};
-        const skeletons = window.getSavedSkeletons?.() || {};
-        const dateStr = window.currentScheduleDate || "";
-        const [Y, M, D] = dateStr.split('-').map(Number);
-        let dow = 0;
-        if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
-        const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-        const tmpl = assignments[dayNames[dow]] || assignments["Default"];
-        dailySkeleton = (tmpl && skeletons[tmpl]) ? JSON.parse(JSON.stringify(skeletons[tmpl])) : [];
-    } catch (e) {
-        dailySkeleton = [];
-    }
-}
-
-function loadTemplate(name) {
+// Template ops
+const loadTpl = name => {
     const all = window.getSavedSkeletons?.() || {};
     if (!all[name]) return;
-    
-    dailySkeleton = JSON.parse(JSON.stringify(all[name]));
-    currentLoadedTemplate = name;
-    clearDraft();
-    renderGrid();
-    updateStatusIndicator();
-    showToast(`Loaded "${name}"`);
-}
+    skeleton = JSON.parse(JSON.stringify(all[name]));
+    template = name;
+    clear();
+    draw();
+    toast('Template loaded');
+};
 
-function saveTemplate(name, isUpdate = false) {
+const saveTpl = (name, update) => {
     if (!name) return;
-    if (!window.AccessControl?.checkSetupAccess?.(isUpdate ? 'update schedule templates' : 'save schedule templates')) return;
-    
-    window.saveSkeleton?.(name, dailySkeleton);
+    window.saveSkeleton?.(name, skeleton);
     window.forceSyncToCloud?.();
-    currentLoadedTemplate = name;
-    clearDraft();
-    refreshTemplateList();
-    updateStatusIndicator();
-    showToast(isUpdate ? `Updated "${name}"` : `Saved "${name}"`);
-}
+    template = name;
+    clear();
+    fillSelects();
+    syncUI();
+    toast(update ? 'Saved' : 'Template created');
+};
 
-function deleteTemplate(name) {
+const deleteTpl = name => {
     if (!name) return;
-    if (!window.AccessControl?.checkSetupAccess?.('delete schedule templates')) return;
-    
     window.deleteSkeleton?.(name);
     window.forceSyncToCloud?.();
+    if (template === name) { template = null; skeleton = []; clear(); draw(); }
+    fillSelects();
+    syncUI();
+    toast('Deleted');
+};
+
+// Toast
+const toast = msg => {
+    let t = document.getElementById('sb-toast');
+    if (!t) { t = document.createElement('div'); t.id = 'sb-toast'; document.body.appendChild(t); }
+    t.textContent = msg;
+    t.classList.add('on');
+    setTimeout(() => t.classList.remove('on'), 2200);
+};
+
+// Sync header UI
+const syncUI = () => {
+    const badge = document.getElementById('sb-badge');
+    const name = document.getElementById('sb-name');
+    const upd = document.getElementById('sb-update');
+    if (!badge) return;
     
-    if (currentLoadedTemplate === name) {
-        currentLoadedTemplate = null;
-        dailySkeleton = [];
-        clearDraft();
-        renderGrid();
+    if (template) {
+        badge.className = 'sb-badge sb-badge-saved';
+        badge.textContent = 'Saved';
+        name.textContent = template;
+        if (upd) upd.style.display = '';
+    } else if (skeleton.length) {
+        badge.className = 'sb-badge sb-badge-draft';
+        badge.textContent = 'Draft';
+        name.textContent = 'Unsaved changes';
+        if (upd) upd.style.display = 'none';
+    } else {
+        badge.className = 'sb-badge';
+        badge.textContent = '';
+        name.textContent = 'New schedule';
+        if (upd) upd.style.display = 'none';
     }
-    
-    refreshTemplateList();
-    updateStatusIndicator();
-    showToast(`Deleted "${name}"`);
-}
+};
+
+const fillSelects = () => {
+    const all = window.getSavedSkeletons?.() || {};
+    const opts = Object.keys(all).sort().map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+    const sel = document.getElementById('sb-tpl-select');
+    const del = document.getElementById('sb-del-select');
+    if (sel) sel.innerHTML = `<option value="">Choose template</option>${opts}`;
+    if (del) del.innerHTML = `<option value="">Select to delete</option>${opts}`;
+};
 
 // =================================================================
-// TILE CONFIGURATION MODAL
+// MODAL
 // =================================================================
-function showTileModal(tileType, division, startMin, existingEvent = null) {
-    const tile = TILES.find(t => t.type === tileType);
-    const theme = TILE_THEMES[tileType] || TILE_THEMES.custom;
-    if (!tile) return;
+const modal = (type, div, startM, existing) => {
+    const T = TYPES[type];
+    if (!T) return;
+    const { lo, hi } = range();
+    let sM = existing ? toMin(existing.startTime) : (startM ?? lo);
+    let eM = existing ? toMin(existing.endTime) : sM + 30;
     
-    const { earliestMin, latestMin } = getCampTimeRange();
-    const locations = getAllFieldsAndLocations();
+    const locs = [];
+    const gs = window.loadGlobalSettings?.() || {};
+    (gs.app1?.fields || []).forEach(f => f.available !== false && locs.push({ n: f.name, c: 'Field' }));
+    Object.values(gs.locationZones || {}).forEach(z => Object.keys(z.locations || {}).forEach(n => locs.find(l => l.n === n) || locs.push({ n, c: z.name || 'Zone' })));
     
-    let currentStart = existingEvent ? parseTimeToMinutes(existingEvent.startTime) : (startMin || earliestMin);
-    let currentEnd = existingEvent ? parseTimeToMinutes(existingEvent.endTime) : (currentStart + 30);
-    
-    const modal = document.createElement('div');
-    modal.id = 'ms-modal';
-    modal.className = 'ms-modal-overlay';
-    
-    // Build type-specific fields
-    let typeFields = '';
-    
-    if (tileType === 'custom') {
-        typeFields = `
-            <div class="ms-field">
-                <label>Event Name</label>
-                <input type="text" id="modal-event-name" class="ms-input-lg" placeholder="Enter event name..." value="${escapeHtml(existingEvent?.event || '')}">
-            </div>
+    // Build fields
+    let fields = '';
+    if (type === 'custom') {
+        fields = `<div class="sb-fg"><label>Event name</label><input id="mf-name" value="${esc(existing?.event || '')}" placeholder="Enter name" autofocus></div>`;
+    } else if (type === 'smart') {
+        fields = `
+            <div class="sb-fg sb-fg-row"><div class="sb-fg"><label>Activity 1</label><input id="mf-a1" value="${esc(existing?.smartData?.activity1 || '')}"></div><div class="sb-fg"><label>Activity 2</label><input id="mf-a2" value="${esc(existing?.smartData?.activity2 || '')}"></div></div>
+            <div class="sb-fg sb-fg-row"><div class="sb-fg"><label>Fallback for</label><select id="mf-ff"><option value="1">Activity 1</option><option value="2">Activity 2</option></select></div><div class="sb-fg"><label>Fallback</label><input id="mf-fb" value="${esc(existing?.smartData?.fallbackActivity || '')}"></div></div>
         `;
-    } else if (tileType === 'smart') {
-        typeFields = `
-            <div class="ms-field-row">
-                <div class="ms-field">
-                    <label>Activity 1</label>
-                    <input type="text" id="modal-act1" placeholder="e.g., Swim" value="${escapeHtml(existingEvent?.smartData?.activity1 || '')}">
-                </div>
-                <div class="ms-field">
-                    <label>Activity 2</label>
-                    <input type="text" id="modal-act2" placeholder="e.g., Art" value="${escapeHtml(existingEvent?.smartData?.activity2 || '')}">
-                </div>
-            </div>
-            <div class="ms-field-row">
-                <div class="ms-field">
-                    <label>Fallback For</label>
-                    <select id="modal-fallback-for">
-                        <option value="1">Activity 1</option>
-                        <option value="2">Activity 2</option>
-                    </select>
-                </div>
-                <div class="ms-field">
-                    <label>Fallback Activity</label>
-                    <input type="text" id="modal-fallback" placeholder="e.g., Gaga" value="${escapeHtml(existingEvent?.smartData?.fallbackActivity || '')}">
-                </div>
-            </div>
-        `;
-    } else if (tileType === 'split') {
-        typeFields = `
-            <div class="ms-field-row">
-                <div class="ms-field">
-                    <label>First Activity</label>
-                    <input type="text" id="modal-split1" placeholder="First half" value="${escapeHtml(existingEvent?.subEvents?.[0]?.activity || '')}">
-                </div>
-                <div class="ms-field">
-                    <label>Second Activity</label>
-                    <input type="text" id="modal-split2" placeholder="Second half" value="${escapeHtml(existingEvent?.subEvents?.[1]?.activity || '')}">
-                </div>
-            </div>
-        `;
-    } else if (tileType === 'elective') {
-        const activities = [
-            ...(window.loadGlobalSettings?.()?.app1?.fields || []).filter(f => f.available !== false).map(f => f.name),
-            ...(window.loadGlobalSettings?.()?.app1?.specialActivities || []).filter(s => s.available !== false).map(s => s.name)
-        ];
-        const selected = existingEvent?.electiveActivities || [];
-        
-        typeFields = `
-            <div class="ms-field">
-                <label>Select Activities (2 or more)</label>
-                <div class="ms-checkbox-list">
-                    ${activities.map(a => `
-                        <label class="ms-checkbox-item">
-                            <input type="checkbox" name="elective-act" value="${escapeHtml(a)}" ${selected.includes(a) ? 'checked' : ''}>
-                            <span>${escapeHtml(a)}</span>
-                        </label>
-                    `).join('')}
-                </div>
-            </div>
-        `;
+    } else if (type === 'split') {
+        fields = `<div class="sb-fg sb-fg-row"><div class="sb-fg"><label>First half</label><input id="mf-s1" value="${esc(existing?.subEvents?.[0]?.activity || '')}"></div><div class="sb-fg"><label>Second half</label><input id="mf-s2" value="${esc(existing?.subEvents?.[1]?.activity || '')}"></div></div>`;
+    } else if (type === 'elective') {
+        const acts = [...(gs.app1?.fields || []).filter(f => f.available !== false).map(f => f.name), ...(gs.app1?.specialActivities || []).filter(s => s.available !== false).map(s => s.name)];
+        const sel = existing?.electiveActivities || [];
+        fields = `<div class="sb-fg"><label>Select activities</label><div class="sb-checks">${acts.map(a => `<label><input type="checkbox" name="el" value="${esc(a)}" ${sel.includes(a) ? 'checked' : ''}><span>${esc(a)}</span></label>`).join('')}</div></div>`;
     }
     
-    // Location selection (custom only)
-    let locationFields = '';
-    if (tileType === 'custom' && locations.length > 0) {
-        const reserved = existingEvent?.reservedFields || [];
-        locationFields = `
-            <div class="ms-field">
-                <label>Reserve Locations</label>
-                <div class="ms-checkbox-list">
-                    ${locations.map(loc => `
-                        <label class="ms-checkbox-item">
-                            <input type="checkbox" name="reserved-loc" value="${escapeHtml(loc.name)}" ${reserved.includes(loc.name) ? 'checked' : ''}>
-                            <span>${escapeHtml(loc.name)}</span>
-                            <span class="ms-checkbox-meta">${escapeHtml(loc.type)}</span>
-                        </label>
-                    `).join('')}
-                </div>
-            </div>
-        `;
+    let locHTML = '';
+    if (type === 'custom' && locs.length) {
+        const res = existing?.reservedFields || [];
+        locHTML = `<div class="sb-fg"><label>Reserve locations</label><div class="sb-checks">${locs.map(l => `<label><input type="checkbox" name="loc" value="${esc(l.n)}" ${res.includes(l.n) ? 'checked' : ''}><span>${esc(l.n)}</span><em>${esc(l.c)}</em></label>`).join('')}</div></div>`;
     }
     
-    modal.innerHTML = `
-        <div class="ms-modal" style="--modal-accent: ${theme.border}; --modal-bg: ${theme.bg};">
-            <div class="ms-modal-header">
-                <div class="ms-modal-icon" style="background: ${theme.bg}; border-color: ${theme.border}; color: ${theme.text};">
-                    ${tile.name.charAt(0)}
-                </div>
-                <div class="ms-modal-title">
-                    <h2>${existingEvent ? 'Edit' : 'Add'} ${escapeHtml(tile.name)}</h2>
-                    <p>${escapeHtml(tile.description)}</p>
-                </div>
-                <button class="ms-modal-close" id="modal-close">
-                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M15 5L5 15M5 5l10 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-                </button>
+    const el = document.createElement('div');
+    el.id = 'sb-modal-wrap';
+    el.innerHTML = `
+<div class="sb-modal">
+    <header>
+        <div class="sb-modal-color" style="--h:${T.hue};--s:${T.sat}%"></div>
+        <div class="sb-modal-info"><h2>${existing ? 'Edit' : 'Add'} ${esc(T.name)}</h2><p>${esc(T.desc)}</p></div>
+        <button class="sb-modal-x" id="mx">✕</button>
+    </header>
+    <main>
+        ${fields}
+        <div class="sb-fg">
+            <label>Time</label>
+            <div class="sb-time">
+                <div class="sb-time-g"><button data-a="s-">−</button><input id="mf-s" value="${toStr(sM)}"><button data-a="s+">+</button></div>
+                <span>to</span>
+                <div class="sb-time-g"><button data-a="e-">−</button><input id="mf-e" value="${toStr(eM)}"><button data-a="e+">+</button></div>
             </div>
-            
-            <div class="ms-modal-body">
-                ${typeFields}
-                
-                <div class="ms-field">
-                    <label>Time</label>
-                    <div class="ms-time-picker">
-                        <div class="ms-time-group">
-                            <span class="ms-time-label">Start</span>
-                            <div class="ms-time-control">
-                                <button type="button" class="ms-time-btn" data-action="start-down">
-                                    <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
-                                </button>
-                                <input type="text" id="modal-start" class="ms-time-value" value="${minutesToTime(currentStart)}">
-                                <button type="button" class="ms-time-btn" data-action="start-up">
-                                    <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 8l4-4 4 4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
-                                </button>
-                            </div>
-                        </div>
-                        <div class="ms-time-divider"></div>
-                        <div class="ms-time-group">
-                            <span class="ms-time-label">End</span>
-                            <div class="ms-time-control">
-                                <button type="button" class="ms-time-btn" data-action="end-down">
-                                    <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
-                                </button>
-                                <input type="text" id="modal-end" class="ms-time-value" value="${minutesToTime(currentEnd)}">
-                                <button type="button" class="ms-time-btn" data-action="end-up">
-                                    <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 8l4-4 4 4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="ms-duration-presets">
-                        <span>Quick:</span>
-                        <button type="button" data-mins="15">15m</button>
-                        <button type="button" data-mins="30">30m</button>
-                        <button type="button" data-mins="45">45m</button>
-                        <button type="button" data-mins="60">1h</button>
-                        <button type="button" data-mins="90">1.5h</button>
-                    </div>
-                </div>
-                
-                ${locationFields}
-            </div>
-            
-            <div class="ms-modal-footer">
-                <button class="ms-btn ms-btn-ghost" id="modal-cancel">Cancel</button>
-                <button class="ms-btn ms-btn-primary" id="modal-confirm" style="background: ${theme.border};">
-                    ${existingEvent ? 'Save Changes' : 'Add to Schedule'}
-                </button>
-            </div>
+            <div class="sb-presets"><button data-d="15">15m</button><button data-d="30">30m</button><button data-d="45">45m</button><button data-d="60">1h</button></div>
         </div>
-    `;
+        ${locHTML}
+    </main>
+    <footer><button class="sb-btn-text" id="mc">Cancel</button><button class="sb-btn-fill" id="ms" style="--h:${T.hue};--s:${T.sat}%">${existing ? 'Save' : 'Add'}</button></footer>
+</div>`;
+    document.body.appendChild(el);
     
-    document.body.appendChild(modal);
+    const $s = document.getElementById('mf-s'), $e = document.getElementById('mf-e');
+    const sync = () => { $s.value = toStr(sM); $e.value = toStr(eM); };
+    $s.onblur = () => { const v = toMin($s.value); if (v != null) { sM = v; if (sM >= eM) eM = sM + 30; } sync(); };
+    $e.onblur = () => { const v = toMin($e.value); if (v != null && v > sM) eM = v; sync(); };
+    el.querySelectorAll('.sb-time button').forEach(b => b.onclick = () => {
+        const a = b.dataset.a;
+        if (a === 's+') sM = Math.min(sM + 5, eM - 5);
+        else if (a === 's-') sM = Math.max(sM - 5, 0);
+        else if (a === 'e+') eM = Math.min(eM + 5, 1439);
+        else if (a === 'e-') eM = Math.max(eM - 5, sM + 5);
+        sync();
+    });
+    el.querySelectorAll('.sb-presets button').forEach(b => b.onclick = () => { eM = sM + +b.dataset.d; sync(); });
     
-    // Time control logic
-    const startInput = document.getElementById('modal-start');
-    const endInput = document.getElementById('modal-end');
+    const close = () => el.remove();
+    document.getElementById('mx').onclick = close;
+    document.getElementById('mc').onclick = close;
+    el.onclick = e => e.target === el && close();
     
-    const updateTimes = () => {
-        startInput.value = minutesToTime(currentStart);
-        endInput.value = minutesToTime(currentEnd);
+    document.getElementById('ms').onclick = () => {
+        const ev = existing ? { ...existing } : { id: uid(), type, event: T.name, division: div, reservedFields: [] };
+        ev.startTime = toStr(sM); ev.endTime = toStr(eM);
+        
+        if (type === 'custom') {
+            const n = document.getElementById('mf-name')?.value.trim();
+            if (!n) return alert('Enter a name');
+            ev.event = n;
+            ev.reservedFields = [...el.querySelectorAll('input[name="loc"]:checked')].map(c => c.value);
+        } else if (type === 'smart') {
+            const a1 = document.getElementById('mf-a1')?.value.trim(), a2 = document.getElementById('mf-a2')?.value.trim(), fb = document.getElementById('mf-fb')?.value.trim();
+            if (!a1 || !a2 || !fb) return alert('Fill all fields');
+            ev.smartData = { activity1: a1, activity2: a2, fallbackFor: document.getElementById('mf-ff').value === '1' ? a1 : a2, fallbackActivity: fb };
+        } else if (type === 'split') {
+            const s1 = document.getElementById('mf-s1')?.value.trim(), s2 = document.getElementById('mf-s2')?.value.trim();
+            if (!s1 || !s2) return alert('Fill both');
+            const mid = sM + Math.floor((eM - sM) / 2);
+            ev.subEvents = [{ activity: s1, startTime: toStr(sM), endTime: toStr(mid) }, { activity: s2, startTime: toStr(mid), endTime: toStr(eM) }];
+        } else if (type === 'elective') {
+            const acts = [...el.querySelectorAll('input[name="el"]:checked')].map(c => c.value);
+            if (acts.length < 2) return alert('Select 2+');
+            ev.electiveActivities = acts;
+        }
+        
+        if (existing) { const i = skeleton.findIndex(x => x.id === existing.id); if (i >= 0) skeleton[i] = ev; }
+        else skeleton.push(ev);
+        close(); save(); draw();
     };
     
-    startInput.addEventListener('blur', () => {
-        const p = parseTimeToMinutes(startInput.value);
-        if (p !== null) { currentStart = p; if (currentStart >= currentEnd) currentEnd = currentStart + 30; }
-        updateTimes();
-    });
-    
-    endInput.addEventListener('blur', () => {
-        const p = parseTimeToMinutes(endInput.value);
-        if (p !== null && p > currentStart) currentEnd = p;
-        updateTimes();
-    });
-    
-    modal.querySelectorAll('.ms-time-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const action = btn.dataset.action;
-            if (action === 'start-up') currentStart = Math.min(currentStart + 5, currentEnd - 5);
-            else if (action === 'start-down') currentStart = Math.max(currentStart - 5, 0);
-            else if (action === 'end-up') currentEnd = Math.min(currentEnd + 5, 1440);
-            else if (action === 'end-down') currentEnd = Math.max(currentEnd - 5, currentStart + 5);
-            updateTimes();
-        });
-    });
-    
-    modal.querySelectorAll('.ms-duration-presets button').forEach(btn => {
-        btn.addEventListener('click', () => {
-            currentEnd = currentStart + parseInt(btn.dataset.mins, 10);
-            updateTimes();
-        });
-    });
-    
-    // Close handlers
-    const closeModal = () => modal.remove();
-    modal.querySelector('#modal-close').addEventListener('click', closeModal);
-    modal.querySelector('#modal-cancel').addEventListener('click', closeModal);
-    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
-    
-    // Confirm handler
-    modal.querySelector('#modal-confirm').addEventListener('click', () => {
-        const event = existingEvent ? { ...existingEvent } : {
-            id: generateId(),
-            type: tileType,
-            event: tile.name,
-            division: division,
-            reservedFields: []
-        };
-        
-        event.startTime = minutesToTime(currentStart);
-        event.endTime = minutesToTime(currentEnd);
-        
-        // Type-specific data
-        if (tileType === 'custom') {
-            const name = modal.querySelector('#modal-event-name')?.value.trim();
-            if (!name) { alert('Please enter an event name.'); return; }
-            event.event = name;
-            event.reservedFields = Array.from(modal.querySelectorAll('input[name="reserved-loc"]:checked')).map(cb => cb.value);
-        } else if (tileType === 'smart') {
-            const a1 = modal.querySelector('#modal-act1')?.value.trim();
-            const a2 = modal.querySelector('#modal-act2')?.value.trim();
-            const fb = modal.querySelector('#modal-fallback')?.value.trim();
-            if (!a1 || !a2 || !fb) { alert('Please fill in all fields.'); return; }
-            event.smartData = { activity1: a1, activity2: a2, fallbackFor: modal.querySelector('#modal-fallback-for').value === '1' ? a1 : a2, fallbackActivity: fb };
-        } else if (tileType === 'split') {
-            const s1 = modal.querySelector('#modal-split1')?.value.trim();
-            const s2 = modal.querySelector('#modal-split2')?.value.trim();
-            if (!s1 || !s2) { alert('Please fill in both activities.'); return; }
-            const mid = currentStart + Math.floor((currentEnd - currentStart) / 2);
-            event.subEvents = [
-                { activity: s1, startTime: minutesToTime(currentStart), endTime: minutesToTime(mid) },
-                { activity: s2, startTime: minutesToTime(mid), endTime: minutesToTime(currentEnd) }
-            ];
-        } else if (tileType === 'elective') {
-            const acts = Array.from(modal.querySelectorAll('input[name="elective-act"]:checked')).map(cb => cb.value);
-            if (acts.length < 2) { alert('Please select at least 2 activities.'); return; }
-            event.electiveActivities = acts;
-        }
-        
-        if (existingEvent) {
-            const idx = dailySkeleton.findIndex(e => e.id === existingEvent.id);
-            if (idx !== -1) dailySkeleton[idx] = event;
-        } else {
-            dailySkeleton.push(event);
-        }
-        
-        closeModal();
-        scheduleAutoSave();
-        renderGrid();
-    });
-    
-    // Focus first input
-    setTimeout(() => {
-        const firstInput = modal.querySelector('input:not([type="checkbox"])');
-        if (firstInput) firstInput.focus();
-    }, 100);
-}
+    setTimeout(() => el.querySelector('input:not([type="checkbox"])')?.focus(), 50);
+};
 
 // =================================================================
-// RENDER FUNCTIONS
+// RENDER
 // =================================================================
-function render() {
+const render = () => {
     if (!container) return;
-    
     container.innerHTML = `
-        <div class="ms-container">
-            ${renderHeader()}
-            ${renderToolbar()}
-            ${renderPalette()}
-            <div class="ms-grid-container">
-                <div id="ms-grid" class="ms-grid"></div>
-            </div>
+<div class="sb">
+    <header class="sb-header">
+        <div class="sb-header-l">
+            <h1>Schedule Builder</h1>
+            <span id="sb-badge" class="sb-badge"></span>
+            <span id="sb-name" class="sb-name">New schedule</span>
         </div>
-        ${getStyles()}
-    `;
-    
-    bindHeaderEvents();
-    renderGrid();
-    updateStatusIndicator();
-}
-
-function renderHeader() {
-    return `
-        <div class="ms-header">
-            <div class="ms-header-left">
-                <h1 class="ms-title">Schedule Builder</h1>
-                <div id="ms-status-indicator" class="ms-status"></div>
-            </div>
-            <div class="ms-header-right">
-                <div class="ms-template-controls">
-                    <select id="ms-template-select" class="ms-select">
-                        <option value="">Select template...</option>
-                    </select>
-                    <button id="ms-btn-load" class="ms-btn ms-btn-ghost">Load</button>
-                </div>
-            </div>
+        <div class="sb-header-r">
+            <select id="sb-tpl-select"></select>
+            <button class="sb-btn-text" id="sb-load">Load</button>
+            <button class="sb-btn-outline" id="sb-update" style="display:none">Update</button>
+            <span class="sb-sep"></span>
+            <input id="sb-save-input" placeholder="Template name...">
+            <button class="sb-btn-fill" id="sb-save">Save</button>
         </div>
-    `;
-}
-
-function renderToolbar() {
-    return `
-        <div class="ms-toolbar">
-            <div class="ms-toolbar-left">
-                <button id="ms-btn-clear" class="ms-btn ms-btn-ghost">
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M5.333 4V2.667a1.333 1.333 0 011.334-1.334h2.666a1.333 1.333 0 011.334 1.334V4m2 0v9.333a1.333 1.333 0 01-1.334 1.334H4.667a1.333 1.333 0 01-1.334-1.334V4h9.334z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                    Clear
+    </header>
+    <div class="sb-body">
+        <aside class="sb-side">
+            <div class="sb-side-top">
+                <span class="sb-side-label">Blocks</span>
+                <button class="sb-icon-btn" id="sb-clear" title="Clear all">
+                    <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
                 </button>
             </div>
-            <div class="ms-toolbar-right">
-                <div class="ms-save-group">
-                    <input type="text" id="ms-save-name" class="ms-input" placeholder="Template name...">
-                    <button id="ms-btn-save" class="ms-btn ms-btn-secondary">Save New</button>
-                </div>
-                <button id="ms-btn-update" class="ms-btn ms-btn-primary" style="display:none;">Update Template</button>
-                <div class="ms-delete-group">
-                    <select id="ms-delete-select" class="ms-select ms-select-sm">
-                        <option value="">Delete...</option>
-                    </select>
-                    <button id="ms-btn-delete" class="ms-btn ms-btn-danger">Delete</button>
-                </div>
+            <div class="sb-blocks">${Object.entries(TYPES).map(([k, v]) => `<div class="sb-block" draggable="true" data-t="${k}" style="--h:${v.hue};--s:${v.sat}%" title="${v.desc}"><span class="sb-block-dot"></span>${v.name}</div>`).join('')}</div>
+            <div class="sb-side-bot">
+                <select id="sb-del-select"></select>
+                <button class="sb-btn-danger" id="sb-del">Delete</button>
             </div>
-        </div>
-    `;
-}
+        </aside>
+        <div class="sb-main"><div id="sb-grid" class="sb-grid"></div></div>
+    </div>
+</div>
+${css()}`;
+    bindHeader();
+    fillSelects();
+    draw();
+    syncUI();
+};
 
-function renderPalette() {
-    return `
-        <div class="ms-palette">
-            <div class="ms-palette-label">Drag to add:</div>
-            <div class="ms-palette-tiles">
-                ${TILES.map(tile => {
-                    const theme = TILE_THEMES[tile.type];
-                    return `
-                        <div class="ms-palette-tile" draggable="true" data-type="${tile.type}" 
-                             style="background: ${theme.bg}; border-color: ${theme.border}; color: ${theme.text}; ${theme.dashed ? 'border-style: dashed;' : ''}"
-                             title="${tile.description}">
-                            ${tile.name}
-                        </div>
-                    `;
-                }).join('')}
-            </div>
-        </div>
-    `;
-}
-
-function renderGrid() {
-    const grid = document.getElementById('ms-grid');
-    if (!grid) return;
+const draw = () => {
+    const g = document.getElementById('sb-grid');
+    if (!g) return;
+    const divs = window.divisions || {};
+    const cols = Object.keys(divs).filter(d => divs[d]?.bunks?.length);
+    if (!cols.length) { g.innerHTML = `<div class="sb-empty"><p>No divisions</p><span>Configure divisions first</span></div>`; return; }
     
-    const divisions = window.divisions || {};
-    const availableDivs = Object.keys(divisions).filter(d => divisions[d]?.bunks?.length > 0);
+    const { lo, hi } = range();
+    const h = (hi - lo) * PX_MIN;
     
-    if (availableDivs.length === 0) {
-        grid.innerHTML = `<div class="ms-empty-state"><div class="ms-empty-icon">📅</div><h3>No Divisions Available</h3><p>Please configure divisions with bunks in the Setup tab first.</p></div>`;
-        return;
-    }
-    
-    const { earliestMin, latestMin } = getCampTimeRange();
-    const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
-    
-    let html = `<div class="ms-grid-inner" style="grid-template-columns: 72px repeat(${availableDivs.length}, 1fr);">`;
-    
-    // Header row
-    html += `<div class="ms-grid-corner"></div>`;
-    availableDivs.forEach(d => {
-        const color = divisions[d]?.color || '#6366F1';
-        html += `<div class="ms-grid-header" style="--div-color: ${color};">${escapeHtml(d)}</div>`;
-    });
-    
-    // Time column
-    html += `<div class="ms-time-col" style="height: ${totalHeight}px;">`;
-    for (let m = earliestMin; m < latestMin; m += 30) {
-        const top = (m - earliestMin) * PIXELS_PER_MINUTE;
-        const isHour = m % 60 === 0;
-        html += `<div class="ms-time-mark ${isHour ? 'ms-time-hour' : ''}" style="top: ${top}px;">${minutesToTime(m)}</div>`;
-    }
+    let html = `<div class="sb-cols" style="--n:${cols.length}">`;
+    // Corner
+    html += `<div class="sb-corner"></div>`;
+    // Headers
+    cols.forEach(c => { const clr = divs[c]?.color || '#5f6368'; html += `<div class="sb-head" style="--c:${clr}">${esc(c)}</div>`; });
+    // Time
+    html += `<div class="sb-time-col" style="height:${h}px">`;
+    for (let m = lo; m < hi; m += 30) html += `<div class="sb-tm ${m % 60 === 0 ? 'sb-tm-h' : ''}" style="top:${(m - lo) * PX_MIN}px">${toStr(m)}</div>`;
     html += `</div>`;
-    
-    // Division columns
-    availableDivs.forEach(d => {
-        const div = divisions[d];
-        const divStart = parseTimeToMinutes(div?.startTime);
-        const divEnd = parseTimeToMinutes(div?.endTime);
-        
-        html += `<div class="ms-grid-col" data-div="${escapeHtml(d)}" data-start-min="${earliestMin}" style="height: ${totalHeight}px;">`;
-        
-        // Disabled zones
-        if (divStart !== null && divStart > earliestMin) {
-            html += `<div class="ms-disabled-zone" style="top: 0; height: ${(divStart - earliestMin) * PIXELS_PER_MINUTE}px;"></div>`;
-        }
-        if (divEnd !== null && divEnd < latestMin) {
-            html += `<div class="ms-disabled-zone" style="top: ${(divEnd - earliestMin) * PIXELS_PER_MINUTE}px; height: ${(latestMin - divEnd) * PIXELS_PER_MINUTE}px;"></div>`;
-        }
-        
+    // Columns
+    cols.forEach(c => {
+        const dv = divs[c], ds = toMin(dv?.startTime), de = toMin(dv?.endTime);
+        html += `<div class="sb-col" data-d="${esc(c)}" style="height:${h}px">`;
+        // Inactive
+        if (ds != null && ds > lo) html += `<div class="sb-inactive" style="height:${(ds - lo) * PX_MIN}px"></div>`;
+        if (de != null && de < hi) html += `<div class="sb-inactive sb-inactive-b" style="height:${(hi - de) * PX_MIN}px"></div>`;
         // Hour lines
-        for (let m = earliestMin; m < latestMin; m += 60) {
-            const top = (m - earliestMin) * PIXELS_PER_MINUTE;
-            html += `<div class="ms-hour-line" style="top: ${top}px;"></div>`;
-        }
-        
+        for (let m = lo; m < hi; m += 60) html += `<div class="sb-hline" style="top:${(m - lo) * PX_MIN}px"></div>`;
         // Events
-        dailySkeleton.filter(ev => ev.division === d).forEach(ev => {
-            const start = parseTimeToMinutes(ev.startTime);
-            const end = parseTimeToMinutes(ev.endTime);
-            if (start !== null && end !== null && end > start) {
-                const top = (start - earliestMin) * PIXELS_PER_MINUTE;
-                const height = (end - start) * PIXELS_PER_MINUTE;
-                html += renderTile(ev, top, height);
+        skeleton.filter(e => e.division === c).forEach(ev => {
+            const s = toMin(ev.startTime), e = toMin(ev.endTime);
+            if (s != null && e != null && e > s) {
+                const top = (s - lo) * PX_MIN, ht = (e - s) * PX_MIN;
+                const T = TYPES[ev.type] || TYPES.custom;
+                const sm = ht < 36;
+                html += `<div class="sb-ev${sm ? ' sb-ev-sm' : ''}" data-id="${ev.id}" draggable="true" style="top:${top}px;height:${ht}px;--h:${T.hue};--s:${T.sat}%;${T.dashed ? 'border-style:dashed;' : ''}">
+                    ${sm ? '' : '<div class="sb-ev-r sb-ev-rt"></div>'}
+                    <div class="sb-ev-c"><strong>${esc(ev.event || T.name)}</strong>${sm ? '' : `<span>${ev.startTime} – ${ev.endTime}</span>`}</div>
+                    ${sm ? '' : '<div class="sb-ev-r sb-ev-rb"></div>'}
+                </div>`;
             }
         });
-        
         html += `</div>`;
     });
-    
     html += `</div>`;
-    grid.innerHTML = html;
-    
-    bindGridEvents();
-    bindPaletteEvents();
-}
-
-function renderTile(ev, top, height) {
-    const theme = TILE_THEMES[ev.type] || TILE_THEMES.custom;
-    const isSmall = height < 50;
-    const displayName = ev.event || TILES.find(t => t.type === ev.type)?.name || 'Event';
-    
-    return `
-        <div class="ms-tile ${isSmall ? 'ms-tile-sm' : ''}" data-id="${ev.id}" draggable="true"
-             style="top: ${top}px; height: ${height}px; background: ${theme.bg}; border-color: ${theme.border}; color: ${theme.text}; ${theme.dashed ? 'border-style: dashed;' : ''}">
-            ${!isSmall ? '<div class="ms-tile-resize ms-tile-resize-top"></div>' : ''}
-            <div class="ms-tile-content">
-                <span class="ms-tile-name">${escapeHtml(displayName)}</span>
-                ${!isSmall ? `<span class="ms-tile-time">${ev.startTime} - ${ev.endTime}</span>` : ''}
-            </div>
-            ${!isSmall ? '<div class="ms-tile-resize ms-tile-resize-bottom"></div>' : ''}
-        </div>
-    `;
-}
+    g.innerHTML = html;
+    bindGrid();
+};
 
 // =================================================================
-// EVENT BINDINGS
+// BINDINGS
 // =================================================================
-function bindHeaderEvents() {
-    refreshTemplateList();
-    
-    // Populate delete select
-    const deleteSelect = document.getElementById('ms-delete-select');
-    const saved = window.getSavedSkeletons?.() || {};
-    deleteSelect.innerHTML = `<option value="">Delete...</option>` + 
-        Object.keys(saved).sort().map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
-    
-    // Load button
-    document.getElementById('ms-btn-load')?.addEventListener('click', () => {
-        const name = document.getElementById('ms-template-select').value;
-        if (!name) { showToast('Select a template first'); return; }
-        if (dailySkeleton.length > 0 && !confirm(`Load "${name}"? Current changes will be lost.`)) return;
-        loadTemplate(name);
+const bindHeader = () => {
+    document.getElementById('sb-load')?.addEventListener('click', () => {
+        const n = document.getElementById('sb-tpl-select').value;
+        if (!n) return toast('Select a template');
+        if (skeleton.length && !confirm('Replace current?')) return;
+        loadTpl(n);
     });
-    
-    // Clear button
-    document.getElementById('ms-btn-clear')?.addEventListener('click', () => {
-        if (dailySkeleton.length > 0 && !confirm('Clear the entire schedule?')) return;
-        dailySkeleton = [];
-        currentLoadedTemplate = null;
-        clearDraft();
-        renderGrid();
-        updateStatusIndicator();
+    document.getElementById('sb-save')?.addEventListener('click', () => {
+        const n = document.getElementById('sb-save-input').value.trim();
+        if (!n) return toast('Enter name');
+        const all = window.getSavedSkeletons?.() || {};
+        if (all[n] && !confirm(`Overwrite "${n}"?`)) return;
+        saveTpl(n, !!all[n]);
+        document.getElementById('sb-save-input').value = '';
     });
-    
-    // Save button
-    document.getElementById('ms-btn-save')?.addEventListener('click', () => {
-        const name = document.getElementById('ms-save-name').value.trim();
-        if (!name) { showToast('Enter a template name'); return; }
-        const existing = window.getSavedSkeletons?.() || {};
-        if (existing[name] && !confirm(`"${name}" exists. Overwrite?`)) return;
-        saveTemplate(name, false);
-        document.getElementById('ms-save-name').value = '';
+    document.getElementById('sb-update')?.addEventListener('click', () => template && saveTpl(template, true));
+    document.getElementById('sb-clear')?.addEventListener('click', () => {
+        if (skeleton.length && !confirm('Clear?')) return;
+        skeleton = []; template = null; clear(); draw(); syncUI();
     });
-    
-    // Update button
-    const updateBtn = document.getElementById('ms-btn-update');
-    if (currentLoadedTemplate) {
-        updateBtn.style.display = 'block';
-        updateBtn.addEventListener('click', () => saveTemplate(currentLoadedTemplate, true));
-    }
-    
-    // Delete button
-    document.getElementById('ms-btn-delete')?.addEventListener('click', () => {
-        const name = document.getElementById('ms-delete-select').value;
-        if (!name) { showToast('Select a template to delete'); return; }
-        if (!confirm(`Permanently delete "${name}"?`)) return;
-        deleteTemplate(name);
+    document.getElementById('sb-del')?.addEventListener('click', () => {
+        const n = document.getElementById('sb-del-select').value;
+        if (!n || !confirm(`Delete "${n}"?`)) return;
+        deleteTpl(n);
     });
-}
+    // Block drag
+    document.querySelectorAll('.sb-block').forEach(b => {
+        b.addEventListener('dragstart', e => { e.dataTransfer.setData('type', b.dataset.t); b.classList.add('dragging'); });
+        b.addEventListener('dragend', () => b.classList.remove('dragging'));
+    });
+};
 
-function bindPaletteEvents() {
-    document.querySelectorAll('.ms-palette-tile').forEach(tile => {
-        tile.addEventListener('dragstart', e => {
-            e.dataTransfer.setData('text/tile-type', tile.dataset.type);
-            tile.classList.add('dragging');
-        });
-        tile.addEventListener('dragend', () => tile.classList.remove('dragging'));
-    });
-}
-
-function bindGridEvents() {
-    const grid = document.getElementById('ms-grid');
-    if (!grid) return;
-    
-    // Column drop handlers
-    grid.querySelectorAll('.ms-grid-col').forEach(col => {
-        col.addEventListener('mouseenter', () => { lastHoveredCell = col; });
-        
-        col.addEventListener('dragover', e => {
-            e.preventDefault();
-            col.classList.add('ms-col-hover');
-        });
-        
-        col.addEventListener('dragleave', e => {
-            if (!col.contains(e.relatedTarget)) col.classList.remove('ms-col-hover');
-        });
-        
+const bindGrid = () => {
+    const { lo } = range();
+    document.querySelectorAll('.sb-col').forEach(col => {
+        col.addEventListener('dragover', e => { e.preventDefault(); col.classList.add('over'); });
+        col.addEventListener('dragleave', e => { if (!col.contains(e.relatedTarget)) col.classList.remove('over'); });
         col.addEventListener('drop', e => {
-            e.preventDefault();
-            col.classList.remove('ms-col-hover');
-            
-            // Move existing tile
-            const moveId = e.dataTransfer.getData('text/tile-move');
-            if (moveId) {
-                const ev = dailySkeleton.find(x => x.id === moveId);
+            e.preventDefault(); col.classList.remove('over');
+            const move = e.dataTransfer.getData('move');
+            if (move) {
+                const ev = skeleton.find(x => x.id === move);
                 if (ev) {
-                    const { earliestMin } = getCampTimeRange();
-                    const rect = col.getBoundingClientRect();
-                    const y = e.clientY - rect.top;
-                    const newStart = earliestMin + Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
-                    const duration = parseTimeToMinutes(ev.endTime) - parseTimeToMinutes(ev.startTime);
-                    
-                    ev.division = col.dataset.div;
-                    ev.startTime = minutesToTime(newStart);
-                    ev.endTime = minutesToTime(newStart + duration);
-                    
-                    scheduleAutoSave();
-                    renderGrid();
+                    const rect = col.getBoundingClientRect(), y = e.clientY - rect.top;
+                    const ns = lo + Math.round(y / PX_MIN / SNAP) * SNAP;
+                    const dur = toMin(ev.endTime) - toMin(ev.startTime);
+                    ev.division = col.dataset.d; ev.startTime = toStr(ns); ev.endTime = toStr(ns + dur);
+                    save(); draw();
                 }
                 return;
             }
-            
-            // New tile from palette
-            const tileType = e.dataTransfer.getData('text/tile-type');
-            if (tileType) {
-                const { earliestMin } = getCampTimeRange();
-                const rect = col.getBoundingClientRect();
-                const y = e.clientY - rect.top;
-                const startMin = earliestMin + Math.round(y / PIXELS_PER_MINUTE / 15) * 15;
-                
-                showTileModal(tileType, col.dataset.div, startMin);
+            const type = e.dataTransfer.getData('type');
+            if (type) {
+                const rect = col.getBoundingClientRect(), y = e.clientY - rect.top;
+                modal(type, col.dataset.d, lo + Math.round(y / PX_MIN / 15) * 15);
             }
         });
     });
     
-    // Tile handlers
-    grid.querySelectorAll('.ms-tile').forEach(tile => {
-        const id = tile.dataset.id;
-        const ev = dailySkeleton.find(x => x.id === id);
+    document.querySelectorAll('.sb-ev').forEach(tile => {
+        const id = tile.dataset.id, ev = skeleton.find(x => x.id === id);
+        tile.addEventListener('click', e => { if (!e.target.classList.contains('sb-ev-r')) { document.querySelectorAll('.sb-ev.sel').forEach(t => t.classList.remove('sel')); tile.classList.add('sel'); } });
+        tile.addEventListener('dblclick', e => { if (!e.target.classList.contains('sb-ev-r') && ev) modal(ev.type, ev.division, null, ev); });
+        tile.addEventListener('contextmenu', e => { e.preventDefault(); if (confirm('Delete?')) { skeleton = skeleton.filter(x => x.id !== id); save(); draw(); } });
+        tile.addEventListener('dragstart', e => { if (e.target.classList.contains('sb-ev-r')) { e.preventDefault(); return; } e.dataTransfer.setData('move', id); tile.style.opacity = '0.4'; });
+        tile.addEventListener('dragend', () => tile.style.opacity = '1');
         
-        tile.addEventListener('click', e => {
-            if (e.target.classList.contains('ms-tile-resize')) return;
-            grid.querySelectorAll('.ms-tile.selected').forEach(t => t.classList.remove('selected'));
-            tile.classList.add('selected');
-        });
-        
-        tile.addEventListener('dblclick', e => {
-            if (e.target.classList.contains('ms-tile-resize')) return;
-            if (ev) showTileModal(ev.type, ev.division, null, ev);
-        });
-        
-        tile.addEventListener('contextmenu', e => {
-            e.preventDefault();
-            if (confirm('Delete this tile?')) {
-                dailySkeleton = dailySkeleton.filter(x => x.id !== id);
-                scheduleAutoSave();
-                renderGrid();
-            }
-        });
-        
-        tile.addEventListener('dragstart', e => {
-            if (e.target.classList.contains('ms-tile-resize')) { e.preventDefault(); return; }
-            e.dataTransfer.setData('text/tile-move', id);
-            tile.style.opacity = '0.5';
-        });
-        
-        tile.addEventListener('dragend', () => { tile.style.opacity = '1'; });
-        
-        // Resize handles
-        tile.querySelectorAll('.ms-tile-resize').forEach(handle => {
-            const isTop = handle.classList.contains('ms-tile-resize-top');
-            let startY, startTop, startHeight;
-            
-            const onMouseDown = e => {
-                e.preventDefault();
-                e.stopPropagation();
-                startY = e.clientY;
-                startTop = parseInt(tile.style.top, 10);
-                startHeight = parseInt(tile.style.height, 10);
-                tile.classList.add('resizing');
-                document.addEventListener('mousemove', onMouseMove);
-                document.addEventListener('mouseup', onMouseUp);
+        // Resize
+        tile.querySelectorAll('.sb-ev-r').forEach(h => {
+            const isT = h.classList.contains('sb-ev-rt');
+            let y0, t0, h0;
+            const move = e => {
+                const d = e.clientY - y0;
+                if (isT) { const nt = Math.round((t0 + d) / (SNAP * PX_MIN)) * (SNAP * PX_MIN), nh = h0 - (nt - t0); if (nh >= 12) { tile.style.top = nt + 'px'; tile.style.height = nh + 'px'; } }
+                else { const nh = Math.max(12, Math.round((h0 + d) / (SNAP * PX_MIN)) * (SNAP * PX_MIN)); tile.style.height = nh + 'px'; }
             };
-            
-            const onMouseMove = e => {
-                const delta = e.clientY - startY;
-                if (isTop) {
-                    const newTop = Math.round((startTop + delta) / (SNAP_MINS * PIXELS_PER_MINUTE)) * (SNAP_MINS * PIXELS_PER_MINUTE);
-                    const newHeight = startHeight - (newTop - startTop);
-                    if (newHeight >= 20) {
-                        tile.style.top = newTop + 'px';
-                        tile.style.height = newHeight + 'px';
-                    }
-                } else {
-                    const newHeight = Math.max(20, Math.round((startHeight + delta) / (SNAP_MINS * PIXELS_PER_MINUTE)) * (SNAP_MINS * PIXELS_PER_MINUTE));
-                    tile.style.height = newHeight + 'px';
-                }
+            const up = () => {
+                document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); tile.classList.remove('resizing');
+                if (ev) { const nt = parseFloat(tile.style.top), nh = parseFloat(tile.style.height); ev.startTime = toStr(lo + nt / PX_MIN); ev.endTime = toStr(lo + (nt + nh) / PX_MIN); save(); draw(); }
             };
-            
-            const onMouseUp = () => {
-                document.removeEventListener('mousemove', onMouseMove);
-                document.removeEventListener('mouseup', onMouseUp);
-                tile.classList.remove('resizing');
-                
-                if (ev) {
-                    const { earliestMin } = getCampTimeRange();
-                    const newTop = parseInt(tile.style.top, 10);
-                    const newHeight = parseInt(tile.style.height, 10);
-                    ev.startTime = minutesToTime(earliestMin + newTop / PIXELS_PER_MINUTE);
-                    ev.endTime = minutesToTime(earliestMin + (newTop + newHeight) / PIXELS_PER_MINUTE);
-                    scheduleAutoSave();
-                    renderGrid();
-                }
-            };
-            
-            handle.addEventListener('mousedown', onMouseDown);
+            h.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); y0 = e.clientY; t0 = parseFloat(tile.style.top); h0 = parseFloat(tile.style.height); tile.classList.add('resizing'); document.addEventListener('mousemove', move); document.addEventListener('mouseup', up); });
         });
     });
     
-    // Deselect on click outside
-    grid.addEventListener('click', e => {
-        if (!e.target.closest('.ms-tile')) {
-            grid.querySelectorAll('.ms-tile.selected').forEach(t => t.classList.remove('selected'));
-        }
-    });
-}
+    document.getElementById('sb-grid')?.addEventListener('click', e => { if (!e.target.closest('.sb-ev')) document.querySelectorAll('.sb-ev.sel').forEach(t => t.classList.remove('sel')); });
+};
 
 // =================================================================
-// PREMIUM STYLES
+// CSS
 // =================================================================
-function getStyles() {
-    return `<style>
-/* =================================================================
-   MASTER SCHEDULER - PREMIUM DESIGN SYSTEM v5.0
-   Enterprise-grade UI inspired by Linear, Notion, Figma
-   ================================================================= */
+const css = () => `<style>
+/* ═══════════════════════════════════════════════════════════════
+   GOOGLE-LEVEL DESIGN — SCHEDULE BUILDER
+   ═══════════════════════════════════════════════════════════════ */
 
-.ms-container {
-    --ms-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, sans-serif;
-    --ms-bg: #FFFFFF;
-    --ms-bg-subtle: #F9FAFB;
-    --ms-bg-muted: #F3F4F6;
-    --ms-border: #E5E7EB;
-    --ms-border-strong: #D1D5DB;
-    --ms-text: #111827;
-    --ms-text-secondary: #6B7280;
-    --ms-text-muted: #9CA3AF;
-    --ms-primary: #6366F1;
-    --ms-primary-hover: #4F46E5;
-    --ms-danger: #EF4444;
-    --ms-success: #10B981;
-    --ms-radius-sm: 6px;
-    --ms-radius-md: 8px;
-    --ms-radius-lg: 12px;
-    --ms-shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-    --ms-shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
-    --ms-shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05);
-    --ms-shadow-xl: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
-    --ms-transition: 150ms cubic-bezier(0.4, 0, 0.2, 1);
-    
-    font-family: var(--ms-font);
-    color: var(--ms-text);
+.sb {
+    --ff: 'Google Sans', 'Segoe UI', system-ui, sans-serif;
+    --bg: #fff;
+    --bg2: #f8f9fa;
+    --bg3: #f1f3f4;
+    --border: #e0e0e0;
+    --text: #202124;
+    --text2: #5f6368;
+    --text3: #80868b;
+    --blue: #1a73e8;
+    --red: #ea4335;
+    --radius: 8px;
+    --shadow: 0 1px 2px 0 rgba(60,64,67,.3), 0 1px 3px 1px rgba(60,64,67,.15);
+    --shadow-lg: 0 1px 3px 0 rgba(60,64,67,.3), 0 4px 8px 3px rgba(60,64,67,.15);
+    font-family: var(--ff);
+    background: var(--bg2);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    height: 100%;
     -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
 }
 
-/* =================================================================
-   HEADER
-   ================================================================= */
-.ms-header {
+/* HEADER */
+.sb-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 20px 0;
-    border-bottom: 1px solid var(--ms-border);
-    margin-bottom: 20px;
-}
-
-.ms-header-left {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-}
-
-.ms-title {
-    font-size: 24px;
-    font-weight: 700;
-    letter-spacing: -0.025em;
-    margin: 0;
-    background: linear-gradient(135deg, var(--ms-text) 0%, var(--ms-text-secondary) 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-}
-
-.ms-status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 14px;
-}
-
-.ms-status-badge {
-    padding: 4px 10px;
-    border-radius: 20px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-
-.ms-status-new { background: var(--ms-bg-muted); color: var(--ms-text-muted); }
-.ms-status-draft { background: #FEF3C7; color: #92400E; }
-.ms-status-editing { background: #DBEAFE; color: #1E40AF; }
-
-.ms-status-name {
-    font-weight: 500;
-    color: var(--ms-text-secondary);
-}
-
-.ms-template-controls {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-/* =================================================================
-   TOOLBAR
-   ================================================================= */
-.ms-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 16px;
-    background: var(--ms-bg-subtle);
-    border: 1px solid var(--ms-border);
-    border-radius: var(--ms-radius-lg);
-    margin-bottom: 20px;
-}
-
-.ms-toolbar-left, .ms-toolbar-right {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.ms-save-group, .ms-delete-group {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding-left: 12px;
-    border-left: 1px solid var(--ms-border);
-}
-
-/* =================================================================
-   FORM CONTROLS
-   ================================================================= */
-.ms-input, .ms-select {
-    height: 36px;
-    padding: 0 12px;
-    font-size: 14px;
-    font-family: var(--ms-font);
-    color: var(--ms-text);
-    background: var(--ms-bg);
-    border: 1px solid var(--ms-border-strong);
-    border-radius: var(--ms-radius-sm);
-    transition: all var(--ms-transition);
-}
-
-.ms-input:focus, .ms-select:focus {
-    outline: none;
-    border-color: var(--ms-primary);
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
-}
-
-.ms-input::placeholder { color: var(--ms-text-muted); }
-
-.ms-select { cursor: pointer; padding-right: 32px; }
-.ms-select-sm { height: 32px; font-size: 13px; }
-
-/* =================================================================
-   BUTTONS
-   ================================================================= */
-.ms-btn {
-    height: 36px;
-    padding: 0 16px;
-    font-size: 14px;
-    font-weight: 500;
-    font-family: var(--ms-font);
-    border: none;
-    border-radius: var(--ms-radius-sm);
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all var(--ms-transition);
-    white-space: nowrap;
-}
-
-.ms-btn:active { transform: scale(0.98); }
-
-.ms-btn-primary {
-    background: var(--ms-primary);
-    color: white;
-}
-.ms-btn-primary:hover { background: var(--ms-primary-hover); }
-
-.ms-btn-secondary {
-    background: var(--ms-bg);
-    color: var(--ms-text);
-    border: 1px solid var(--ms-border-strong);
-}
-.ms-btn-secondary:hover { background: var(--ms-bg-muted); }
-
-.ms-btn-ghost {
-    background: transparent;
-    color: var(--ms-text-secondary);
-}
-.ms-btn-ghost:hover { background: var(--ms-bg-muted); color: var(--ms-text); }
-
-.ms-btn-danger {
-    background: var(--ms-danger);
-    color: white;
-}
-.ms-btn-danger:hover { background: #DC2626; }
-
-/* =================================================================
-   PALETTE
-   ================================================================= */
-.ms-palette {
-    background: var(--ms-bg);
-    border: 1px solid var(--ms-border);
-    border-radius: var(--ms-radius-lg);
-    padding: 16px;
-    margin-bottom: 20px;
-}
-
-.ms-palette-label {
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--ms-text-muted);
-    margin-bottom: 12px;
-}
-
-.ms-palette-tiles {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.ms-palette-tile {
-    padding: 8px 14px;
-    font-size: 13px;
-    font-weight: 500;
-    border: 2px solid;
-    border-radius: var(--ms-radius-sm);
-    cursor: grab;
-    user-select: none;
-    transition: all var(--ms-transition);
-}
-
-.ms-palette-tile:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--ms-shadow-md);
-}
-
-.ms-palette-tile:active, .ms-palette-tile.dragging {
-    cursor: grabbing;
-    transform: scale(0.95);
-    opacity: 0.8;
-}
-
-/* =================================================================
-   GRID
-   ================================================================= */
-.ms-grid-container {
-    background: var(--ms-bg);
-    border: 1px solid var(--ms-border);
-    border-radius: var(--ms-radius-lg);
-    overflow: hidden;
-    box-shadow: var(--ms-shadow-sm);
-}
-
-.ms-grid-inner {
-    display: grid;
-    min-width: fit-content;
-}
-
-.ms-grid-corner {
-    background: var(--ms-bg-subtle);
-    border-bottom: 1px solid var(--ms-border);
-    border-right: 1px solid var(--ms-border);
-}
-
-.ms-grid-header {
-    background: var(--div-color, var(--ms-primary));
-    color: white;
-    padding: 14px 16px;
-    font-size: 13px;
-    font-weight: 600;
-    text-align: center;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    border-bottom: 1px solid var(--ms-border);
-}
-
-.ms-time-col {
-    position: relative;
-    background: var(--ms-bg-subtle);
-    border-right: 1px solid var(--ms-border);
-    min-width: 72px;
-}
-
-.ms-time-mark {
-    position: absolute;
-    left: 0;
-    right: 0;
-    padding: 2px 8px;
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--ms-text-muted);
-    background: var(--ms-bg-subtle);
-    border-top: 1px solid var(--ms-border);
-}
-
-.ms-time-hour {
-    font-weight: 600;
-    color: var(--ms-text-secondary);
-}
-
-.ms-grid-col {
-    position: relative;
-    background: var(--ms-bg);
-    border-right: 1px solid var(--ms-border);
-    transition: background-color var(--ms-transition);
-}
-
-.ms-grid-col:last-child { border-right: none; }
-
-.ms-col-hover { background: #F0FDF4; }
-
-.ms-hour-line {
-    position: absolute;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: var(--ms-border);
-    pointer-events: none;
-}
-
-.ms-disabled-zone {
-    position: absolute;
-    left: 0;
-    right: 0;
-    background: #E5E7EB;
-    background-image: repeating-linear-gradient(
-        -45deg,
-        transparent,
-        transparent 8px,
-        rgba(107, 114, 128, 0.15) 8px,
-        rgba(107, 114, 128, 0.15) 16px
-    );
-    z-index: 1;
-}
-
-/* =================================================================
-   TILES
-   ================================================================= */
-.ms-tile {
-    position: absolute;
-    left: 4px;
-    right: 4px;
-    border: 2px solid;
-    border-radius: var(--ms-radius-sm);
-    cursor: pointer;
-    z-index: 2;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    padding: 6px 10px;
-    overflow: hidden;
-    transition: all var(--ms-transition);
-    box-shadow: var(--ms-shadow-sm);
-}
-
-.ms-tile:hover {
-    transform: translateY(-1px);
-    box-shadow: var(--ms-shadow-md);
-    z-index: 3;
-}
-
-.ms-tile.selected {
-    box-shadow: 0 0 0 2px var(--ms-primary), var(--ms-shadow-lg);
-    z-index: 4;
-}
-
-.ms-tile.resizing {
-    z-index: 100;
-    box-shadow: 0 0 0 2px var(--ms-primary), var(--ms-shadow-xl);
-}
-
-.ms-tile-sm { padding: 2px 6px; }
-.ms-tile-sm:hover { box-shadow: 0 0 0 2px var(--ms-danger); }
-
-.ms-tile-content {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-}
-
-.ms-tile-name {
-    font-size: 13px;
-    font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.ms-tile-time {
-    font-size: 11px;
-    opacity: 0.75;
-    font-weight: 500;
-}
-
-.ms-tile-resize {
-    position: absolute;
-    left: 0;
-    right: 0;
-    height: 8px;
-    cursor: ns-resize;
-    opacity: 0;
-    transition: opacity var(--ms-transition);
-}
-
-.ms-tile-resize-top { top: -2px; }
-.ms-tile-resize-bottom { bottom: -2px; }
-
-.ms-tile:hover .ms-tile-resize {
-    opacity: 1;
-    background: linear-gradient(to bottom, rgba(99, 102, 241, 0.3), transparent);
-}
-
-.ms-tile-resize-bottom:hover,
-.ms-tile:hover .ms-tile-resize-bottom {
-    background: linear-gradient(to top, rgba(99, 102, 241, 0.3), transparent);
-}
-
-/* =================================================================
-   EMPTY STATE
-   ================================================================= */
-.ms-empty-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 80px 40px;
-    text-align: center;
-}
-
-.ms-empty-icon {
-    font-size: 48px;
-    margin-bottom: 16px;
-    opacity: 0.5;
-}
-
-.ms-empty-state h3 {
-    margin: 0 0 8px 0;
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--ms-text);
-}
-
-.ms-empty-state p {
-    margin: 0;
-    font-size: 14px;
-    color: var(--ms-text-secondary);
-}
-
-/* =================================================================
-   MODAL
-   ================================================================= */
-.ms-modal-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.4);
-    backdrop-filter: blur(4px);
-    z-index: 10000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-}
-
-.ms-modal {
-    background: var(--ms-bg);
-    border-radius: var(--ms-radius-lg);
-    width: 100%;
-    max-width: 480px;
-    max-height: calc(100vh - 40px);
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    box-shadow: var(--ms-shadow-xl);
-    animation: modalIn 200ms ease-out;
-}
-
-@keyframes modalIn {
-    from { opacity: 0; transform: scale(0.95) translateY(10px); }
-    to { opacity: 1; transform: scale(1) translateY(0); }
-}
-
-.ms-modal-header {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 20px 24px;
-    border-bottom: 1px solid var(--ms-border);
-}
-
-.ms-modal-icon {
-    width: 48px;
-    height: 48px;
-    border-radius: var(--ms-radius-md);
-    border: 2px solid;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 20px;
-    font-weight: 700;
-    flex-shrink: 0;
-}
-
-.ms-modal-title {
-    flex: 1;
-    min-width: 0;
-}
-
-.ms-modal-title h2 {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 600;
-}
-
-.ms-modal-title p {
-    margin: 4px 0 0 0;
-    font-size: 13px;
-    color: var(--ms-text-secondary);
-}
-
-.ms-modal-close {
-    width: 36px;
-    height: 36px;
-    border: none;
-    background: transparent;
-    border-radius: var(--ms-radius-sm);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--ms-text-muted);
-    transition: all var(--ms-transition);
-}
-
-.ms-modal-close:hover {
-    background: var(--ms-bg-muted);
-    color: var(--ms-text);
-}
-
-.ms-modal-body {
-    padding: 24px;
-    overflow-y: auto;
-}
-
-.ms-modal-footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 12px;
-    padding: 16px 24px;
-    border-top: 1px solid var(--ms-border);
-    background: var(--ms-bg-subtle);
-}
-
-/* Modal Form Fields */
-.ms-field {
-    margin-bottom: 20px;
-}
-
-.ms-field:last-child { margin-bottom: 0; }
-
-.ms-field label {
-    display: block;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--ms-text);
-    margin-bottom: 8px;
-}
-
-.ms-field input:not([type="checkbox"]),
-.ms-field select {
-    width: 100%;
-    height: 40px;
-    padding: 0 12px;
-    font-size: 14px;
-    font-family: var(--ms-font);
-    color: var(--ms-text);
-    background: var(--ms-bg);
-    border: 1px solid var(--ms-border-strong);
-    border-radius: var(--ms-radius-sm);
-    transition: all var(--ms-transition);
-}
-
-.ms-field input:focus,
-.ms-field select:focus {
-    outline: none;
-    border-color: var(--ms-primary);
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
-}
-
-.ms-input-lg {
-    height: 44px !important;
-    font-size: 15px !important;
-}
-
-.ms-field-row {
-    display: flex;
-    gap: 16px;
-}
-
-.ms-field-row .ms-field {
-    flex: 1;
-}
-
-/* Time Picker */
-.ms-time-picker {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    background: var(--ms-bg-subtle);
-    padding: 16px;
-    border-radius: var(--ms-radius-md);
-}
-
-.ms-time-group {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-}
-
-.ms-time-label {
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--ms-text-muted);
-}
-
-.ms-time-control {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    background: var(--ms-bg);
-    padding: 4px;
-    border-radius: var(--ms-radius-sm);
-    border: 1px solid var(--ms-border);
-}
-
-.ms-time-btn {
-    width: 28px;
-    height: 28px;
-    border: none;
-    background: transparent;
+    gap: 24px;
+    padding: 12px 24px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+}
+.sb-header-l { display: flex; align-items: center; gap: 12px; }
+.sb-header h1 { font-size: 22px; font-weight: 400; margin: 0; }
+.sb-badge { font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 4px; background: var(--bg3); color: var(--text3); text-transform: uppercase; letter-spacing: .3px; }
+.sb-badge-draft { background: #fef7e0; color: #b06000; }
+.sb-badge-saved { background: #e6f4ea; color: #137333; }
+.sb-name { font-size: 14px; color: var(--text2); }
+.sb-header-r { display: flex; align-items: center; gap: 8px; }
+.sb-sep { width: 1px; height: 20px; background: var(--border); margin: 0 8px; }
+
+/* INPUTS */
+.sb select, .sb input[type="text"], .sb-header input {
+    height: 36px; padding: 0 12px; font: inherit; font-size: 14px;
+    border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg);
+    transition: border-color .2s, box-shadow .2s;
+}
+.sb select:focus, .sb input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px rgba(26,115,232,.2); }
+.sb select { cursor: pointer; }
+.sb-header input { width: 160px; }
+
+/* BUTTONS */
+.sb-btn-fill, .sb-btn-outline, .sb-btn-text, .sb-btn-danger {
+    height: 36px; padding: 0 16px; font: inherit; font-size: 14px; font-weight: 500;
+    border: none; border-radius: var(--radius); cursor: pointer; transition: all .2s;
+}
+.sb-btn-fill { background: var(--blue); color: #fff; }
+.sb-btn-fill:hover { background: #1557b0; box-shadow: var(--shadow); }
+.sb-btn-outline { background: transparent; color: var(--blue); border: 1px solid var(--border); }
+.sb-btn-outline:hover { background: rgba(26,115,232,.04); border-color: var(--blue); }
+.sb-btn-text { background: transparent; color: var(--text2); }
+.sb-btn-text:hover { background: var(--bg3); }
+.sb-btn-danger { background: transparent; color: var(--red); font-size: 13px; }
+.sb-btn-danger:hover { background: rgba(234,67,53,.08); }
+.sb-icon-btn { width: 32px; height: 32px; padding: 0; background: none; border: none; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text2); transition: background .2s; }
+.sb-icon-btn:hover { background: var(--bg3); }
+.sb-icon-btn svg { width: 18px; height: 18px; }
+
+/* BODY */
+.sb-body { display: flex; flex: 1; overflow: hidden; }
+
+/* SIDEBAR */
+.sb-side { width: 180px; background: var(--bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+.sb-side-top { display: flex; align-items: center; justify-content: space-between; padding: 16px 12px 8px; }
+.sb-side-label { font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: .5px; color: var(--text3); }
+.sb-blocks { flex: 1; overflow-y: auto; padding: 4px 8px; }
+.sb-block { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; cursor: grab; font-size: 13px; color: var(--text); transition: background .15s; user-select: none; }
+.sb-block:hover { background: var(--bg3); }
+.sb-block.dragging { opacity: .5; }
+.sb-block-dot { width: 8px; height: 8px; border-radius: 2px; background: hsl(var(--h), var(--s), 45%); flex-shrink: 0; }
+.sb-side-bot { padding: 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+.sb-side-bot select { font-size: 13px; height: 32px; }
+
+/* MAIN */
+.sb-main { flex: 1; overflow: auto; }
+.sb-grid { min-width: 100%; }
+.sb-cols { display: grid; grid-template-columns: 56px repeat(var(--n), minmax(100px, 1fr)); }
+.sb-corner { background: var(--bg2); border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); position: sticky; left: 0; z-index: 3; }
+.sb-head { padding: 10px 8px; font-size: 11px; font-weight: 500; text-align: center; text-transform: uppercase; letter-spacing: .5px; color: #fff; background: var(--c); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 2; }
+.sb-time-col { position: relative; background: var(--bg2); border-right: 1px solid var(--border); position: sticky; left: 0; z-index: 1; }
+.sb-tm { position: absolute; right: 8px; font-size: 10px; color: var(--text3); transform: translateY(-50%); }
+.sb-tm-h { font-weight: 500; color: var(--text2); }
+.sb-col { position: relative; border-right: 1px solid var(--border); background: var(--bg); transition: background .15s; }
+.sb-col:last-child { border-right: none; }
+.sb-col.over { background: rgba(26,115,232,.04); }
+.sb-hline { position: absolute; left: 0; right: 0; border-top: 1px solid var(--bg3); }
+.sb-inactive { position: absolute; left: 0; right: 0; top: 0; background: var(--bg3); }
+.sb-inactive-b { top: auto; bottom: 0; }
+
+/* EVENTS */
+.sb-ev {
+    position: absolute; left: 3px; right: 3px;
+    background: hsl(var(--h), calc(var(--s) * .3), 95%);
+    border-left: 3px solid hsl(var(--h), var(--s), 50%);
     border-radius: 4px;
     cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--ms-text-secondary);
-    transition: all var(--ms-transition);
+    z-index: 2;
+    transition: box-shadow .15s, transform .15s;
 }
+.sb-ev:hover { box-shadow: var(--shadow); transform: translateX(1px); z-index: 3; }
+.sb-ev.sel { box-shadow: 0 0 0 2px var(--blue); z-index: 4; }
+.sb-ev.resizing { z-index: 10; box-shadow: var(--shadow-lg); }
+.sb-ev-sm { padding: 1px 6px; }
+.sb-ev-sm:hover { box-shadow: 0 0 0 2px var(--red); }
+.sb-ev-c { padding: 4px 8px; overflow: hidden; }
+.sb-ev-c strong { display: block; font-size: 12px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sb-ev-c span { display: block; font-size: 10px; color: var(--text2); margin-top: 1px; }
+.sb-ev-r { position: absolute; left: 0; right: 0; height: 6px; cursor: ns-resize; opacity: 0; transition: opacity .15s; }
+.sb-ev-rt { top: 0; }
+.sb-ev-rb { bottom: 0; }
+.sb-ev:hover .sb-ev-r { opacity: 1; background: rgba(26,115,232,.15); }
 
-.ms-time-btn:hover {
-    background: var(--ms-bg-muted);
-    color: var(--ms-text);
-}
+/* EMPTY */
+.sb-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: var(--text3); }
+.sb-empty p { font-size: 16px; margin: 0; color: var(--text2); }
+.sb-empty span { font-size: 13px; margin-top: 4px; }
 
-.ms-time-value {
-    width: 80px;
-    height: 32px;
-    text-align: center;
-    font-size: 14px;
-    font-weight: 500;
-    border: none !important;
-    background: transparent !important;
-    box-shadow: none !important;
-}
+/* MODAL */
+#sb-modal-wrap { position: fixed; inset: 0; background: rgba(0,0,0,.32); display: flex; align-items: center; justify-content: center; z-index: 100; animation: fadeIn .15s; }
+@keyframes fadeIn { from { opacity: 0 } }
+.sb-modal { background: var(--bg); border-radius: 8px; width: 400px; max-width: calc(100vw - 32px); box-shadow: var(--shadow-lg); animation: slideUp .2s ease; overflow: hidden; }
+@keyframes slideUp { from { opacity: 0; transform: translateY(8px) } }
+.sb-modal header { display: flex; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
+.sb-modal-color { width: 4px; height: 32px; border-radius: 2px; background: hsl(var(--h), var(--s), 50%); }
+.sb-modal-info h2 { margin: 0; font-size: 16px; font-weight: 500; }
+.sb-modal-info p { margin: 2px 0 0; font-size: 12px; color: var(--text2); }
+.sb-modal-x { margin-left: auto; width: 32px; height: 32px; background: none; border: none; border-radius: 50%; cursor: pointer; font-size: 18px; color: var(--text3); transition: background .15s; display: flex; align-items: center; justify-content: center; }
+.sb-modal-x:hover { background: var(--bg3); }
+.sb-modal main { padding: 20px; }
+.sb-modal footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; background: var(--bg2); }
 
-.ms-time-divider {
-    width: 16px;
-    height: 2px;
-    background: var(--ms-border-strong);
-    border-radius: 1px;
-}
+/* FORM */
+.sb-fg { margin-bottom: 16px; }
+.sb-fg:last-child { margin-bottom: 0; }
+.sb-fg label { display: block; font-size: 12px; font-weight: 500; color: var(--text2); margin-bottom: 6px; }
+.sb-fg input, .sb-fg select { width: 100%; height: 36px; }
+.sb-fg-row { display: flex; gap: 12px; }
+.sb-fg-row .sb-fg { flex: 1; margin-bottom: 16px; }
 
-.ms-duration-presets {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 12px;
-    font-size: 13px;
-    color: var(--ms-text-muted);
-}
+/* TIME */
+.sb-time { display: flex; align-items: center; gap: 8px; }
+.sb-time-g { display: flex; background: var(--bg2); border-radius: 6px; overflow: hidden; }
+.sb-time-g input { width: 72px; border: none !important; background: transparent; text-align: center; font-weight: 500; }
+.sb-time-g button { width: 32px; height: 36px; border: none; background: transparent; cursor: pointer; font-size: 16px; color: var(--text2); transition: background .15s; }
+.sb-time-g button:hover { background: var(--bg3); }
+.sb-time > span { color: var(--text3); font-size: 13px; }
+.sb-presets { display: flex; gap: 6px; margin-top: 10px; }
+.sb-presets button { padding: 4px 10px; font: inherit; font-size: 12px; background: var(--bg2); border: none; border-radius: 12px; cursor: pointer; color: var(--text2); transition: background .15s; }
+.sb-presets button:hover { background: var(--bg3); color: var(--text); }
 
-.ms-duration-presets button {
-    padding: 6px 12px;
-    font-size: 12px;
-    font-weight: 500;
-    font-family: var(--ms-font);
-    color: var(--ms-text-secondary);
-    background: var(--ms-bg);
-    border: 1px solid var(--ms-border);
-    border-radius: 20px;
-    cursor: pointer;
-    transition: all var(--ms-transition);
-}
+/* CHECKS */
+.sb-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; max-height: 140px; overflow-y: auto; padding: 8px; background: var(--bg2); border-radius: 6px; }
+.sb-checks label { display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--bg); border-radius: 4px; cursor: pointer; font-size: 12px; transition: background .15s; }
+.sb-checks label:hover { background: var(--bg3); }
+.sb-checks input { margin: 0; accent-color: var(--blue); }
+.sb-checks em { margin-left: auto; font-style: normal; font-size: 10px; color: var(--text3); }
 
-.ms-duration-presets button:hover {
-    background: var(--ms-bg-muted);
-    border-color: var(--ms-border-strong);
-    color: var(--ms-text);
-}
-
-/* Checkbox List */
-.ms-checkbox-list {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 8px;
-    max-height: 160px;
-    overflow-y: auto;
-    padding: 12px;
-    background: var(--ms-bg-subtle);
-    border: 1px solid var(--ms-border);
-    border-radius: var(--ms-radius-sm);
-}
-
-.ms-checkbox-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
-    background: var(--ms-bg);
-    border: 1px solid var(--ms-border);
-    border-radius: var(--ms-radius-sm);
-    cursor: pointer;
-    font-size: 13px;
-    transition: all var(--ms-transition);
-}
-
-.ms-checkbox-item:hover {
-    border-color: var(--ms-border-strong);
-    background: var(--ms-bg-muted);
-}
-
-.ms-checkbox-item input {
-    width: 16px;
-    height: 16px;
-    margin: 0;
-    accent-color: var(--ms-primary);
-}
-
-.ms-checkbox-meta {
-    margin-left: auto;
-    font-size: 10px;
-    font-weight: 500;
-    text-transform: uppercase;
-    color: var(--ms-text-muted);
-}
-
-/* =================================================================
-   TOAST
-   ================================================================= */
-.ms-toast {
-    position: fixed;
-    bottom: 24px;
-    left: 50%;
-    transform: translateX(-50%) translateY(20px);
-    background: var(--ms-text);
-    color: white;
-    padding: 12px 20px;
-    border-radius: var(--ms-radius-md);
-    font-size: 14px;
-    font-weight: 500;
-    font-family: var(--ms-font);
-    z-index: 10001;
-    opacity: 0;
-    pointer-events: none;
-    transition: all 300ms cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: var(--ms-shadow-lg);
-}
-
-.ms-toast.visible {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-}
-
-/* =================================================================
-   RESPONSIVE
-   ================================================================= */
-@media (max-width: 768px) {
-    .ms-header { flex-direction: column; align-items: flex-start; gap: 16px; }
-    .ms-toolbar { flex-direction: column; gap: 12px; }
-    .ms-toolbar-left, .ms-toolbar-right { width: 100%; flex-wrap: wrap; }
-    .ms-save-group, .ms-delete-group { border-left: none; padding-left: 0; }
-    .ms-palette-tiles { gap: 6px; }
-    .ms-palette-tile { padding: 6px 10px; font-size: 12px; }
-}
+/* TOAST */
+#sb-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(8px); background: #323232; color: #fff; padding: 10px 20px; border-radius: 6px; font-size: 14px; opacity: 0; transition: all .2s; z-index: 200; }
+#sb-toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
 </style>`;
-}
 
 // =================================================================
-// INITIALIZATION
+// INIT
 // =================================================================
-function init() {
-    container = document.getElementById("master-scheduler-content");
+const init = () => {
+    container = document.getElementById('master-scheduler-content');
     if (!container) return;
-    
-    cleanupListeners();
-    
-    if (!loadDraft()) {
-        loadDefaultSkeleton();
+    if (!load()) {
+        try {
+            const asgn = window.getSkeletonAssignments?.() || {}, skels = window.getSavedSkeletons?.() || {};
+            const dt = window.currentScheduleDate || '', [y, m, d] = dt.split('-').map(Number);
+            const dow = y && m && d ? new Date(y, m - 1, d).getDay() : 0;
+            const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+            const tpl = asgn[days[dow]] || asgn['Default'];
+            skeleton = tpl && skels[tpl] ? JSON.parse(JSON.stringify(skels[tpl])) : [];
+        } catch (e) { skeleton = []; }
     }
-    
     render();
-    setupTabListeners();
-    setupKeyboardShortcuts();
-    
-    _isInitialized = true;
-    console.log("[MASTER_SCHEDULER] Premium Edition v5.0 initialized");
-}
+};
 
-function cleanup() {
-    cleanupListeners();
-    document.getElementById('ms-modal')?.remove();
-    document.getElementById('ms-toast')?.remove();
-    _isInitialized = false;
-}
-
-// =================================================================
-// PUBLIC API
-// =================================================================
 window.initMasterScheduler = init;
-window.cleanupMasterScheduler = cleanup;
-window.refreshMasterSchedulerFromCloud = refreshTemplateList;
+window.cleanupMasterScheduler = () => { document.getElementById('sb-modal-wrap')?.remove(); document.getElementById('sb-toast')?.remove(); };
+window.refreshMasterSchedulerFromCloud = fillSelects;
 
 })();
