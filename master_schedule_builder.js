@@ -26,19 +26,19 @@ const PX = 1.6;
 const SNAP = 5;
 
 const BLOCKS = {
-    activity:         { name: 'Activity',    color: '#6366F1', bg: '#E0E7FF', desc: 'General activity slot. The scheduler will assign any available activity.' },
-    sports:           { name: 'Sports',      color: '#34D399', bg: '#D1FAE5', desc: 'Dedicated sports period. Assigns outdoor field activities and team sports.' },
-    special:          { name: 'Special',     color: '#22D3EE', bg: '#CFFAFE', desc: 'Special activity slot. For unique camp-wide events or guest activities.' },
-    smart:            { name: 'Smart',       color: '#8B5CF6', bg: '#EDE9FE', dashed: true, desc: 'Smart balanced slot. Automatically balances two activities with a fallback option.' },
-    split:            { name: 'Split',       color: '#FBBF24', bg: '#FEF3C7', desc: 'Split time block. Divides the period into two different activities.' },
-    elective:         { name: 'Elective',    color: '#F472B6', bg: '#FCE7F3', desc: 'Elective choice period. Campers choose from a set of available activities.' },
-    league:           { name: 'League',      color: '#A78BFA', bg: '#EDE9FE', desc: 'League game slot. Scheduled competitive games between bunks or teams.' },
-    specialty_league: { name: 'Specialty',   color: '#FACC15', bg: '#FEF9C3', desc: 'Specialty league. Tournament or bracket-style competition events.' },
-    swim:             { name: 'Swim',        color: '#38BDF8', bg: '#E0F2FE', desc: 'Swimming period. Pool or lake activities with lifeguard supervision.' },
-    lunch:            { name: 'Lunch',       color: '#F87171', bg: '#FEE2E2', desc: 'Lunch break. Meal time - no activities scheduled.' },
-    snacks:           { name: 'Snacks',      color: '#FB923C', bg: '#FFEDD5', desc: 'Snack time. Short break for refreshments between activities.' },
-    dismissal:        { name: 'Dismissal',   color: '#FB7185', bg: '#FFE4E6', desc: 'End of day dismissal. Wrap-up and departure time.' },
-    custom:           { name: 'Custom',      color: '#94A3B8', bg: '#F1F5F9', desc: 'Custom event. Define your own activity with optional location reservations.' }
+    activity:         { name: 'Activity',    color: '#4F46E5', bg: '#C7D2FE', desc: 'General activity slot. The scheduler will assign any available activity.' },
+    sports:           { name: 'Sports',      color: '#10B981', bg: '#A7F3D0', desc: 'Dedicated sports period. Assigns outdoor field activities and team sports.' },
+    special:          { name: 'Special',     color: '#06B6D4', bg: '#A5F3FC', desc: 'Special activity slot. For unique camp-wide events or guest activities.' },
+    smart:            { name: 'Smart',       color: '#7C3AED', bg: '#DDD6FE', dashed: true, desc: 'Smart balanced slot. Automatically balances two activities with a fallback option.' },
+    split:            { name: 'Split',       color: '#F59E0B', bg: '#FDE68A', desc: 'Split time block. Divides the period into two different activities.' },
+    elective:         { name: 'Elective',    color: '#EC4899', bg: '#FBCFE8', desc: 'Elective choice period. Campers choose from a set of available activities.' },
+    league:           { name: 'League',      color: '#8B5CF6', bg: '#DDD6FE', desc: 'League game slot. Scheduled competitive games between bunks or teams.' },
+    specialty_league: { name: 'Specialty',   color: '#EAB308', bg: '#FEF08A', desc: 'Specialty league. Tournament or bracket-style competition events.' },
+    swim:             { name: 'Swim',        color: '#0EA5E9', bg: '#BAE6FD', desc: 'Swimming period. Pool or lake activities with lifeguard supervision.' },
+    lunch:            { name: 'Lunch',       color: '#EF4444', bg: '#FECACA', desc: 'Lunch break. Meal time - no activities scheduled.' },
+    snacks:           { name: 'Snacks',      color: '#F97316', bg: '#FED7AA', desc: 'Snack time. Short break for refreshments between activities.' },
+    dismissal:        { name: 'Dismissal',   color: '#F43F5E', bg: '#FECDD3', desc: 'End of day dismissal. Wrap-up and departure time.' },
+    custom:           { name: 'Custom',      color: '#64748B', bg: '#E2E8F0', desc: 'Custom event. Define your own activity with optional location reservations.' }
 };
 
 // Utilities
