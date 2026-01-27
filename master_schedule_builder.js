@@ -597,6 +597,8 @@ function showTileConfigModal(tileType, divisionName, initialStartMin, callback) 
             <div class="ms-modal-body">
                 <p class="ms-modal-desc">${escapeHtml(tile.description)}</p>
                 
+                ${specialFields}
+                
                 <div class="ms-form-group">
                     <label class="ms-label">Time</label>
                     <div class="ms-time-picker">
@@ -627,8 +629,7 @@ function showTileConfigModal(tileType, divisionName, initialStartMin, callback) 
                     </div>
                 </div>
                 
-                ${specialFields}
-                ${!['smart', 'split', 'elective'].includes(tileType) ? locationCheckboxes : ''}
+                ${tileType === 'custom' ? locationCheckboxes : ''}
             </div>
             <div class="ms-modal-footer">
                 <button class="ms-btn ms-btn-secondary" id="modal-cancel">Cancel</button>
@@ -1615,123 +1616,676 @@ function init() {
 
 function getStyles() {
     return `<style>
-        /* Toast */
-        .ms-toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#1f2937; color:white; padding:12px 24px; border-radius:8px; font-size:0.9rem; z-index:10003; opacity:0; transition:opacity 0.3s; pointer-events:none; }
-        .ms-toast-show { opacity:1; }
+        /* ============================================================
+           MASTER SCHEDULER - PREMIUM DESIGN SYSTEM
+           ============================================================ */
         
-        /* Template Bar */
-        .ms-template-bar { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px 16px; margin-bottom:16px; }
-        .ms-template-status { margin-bottom:12px; font-size:0.9rem; }
-        .ms-status-editing { color:#0369a1; }
-        .ms-status-new { color:#059669; }
-        .ms-draft-indicator { background:#fef3c7; color:#92400e; padding:2px 8px; border-radius:4px; font-size:0.8rem; margin-left:12px; }
+        /* Base Variables */
+        #master-scheduler-content {
+            --ms-bg-primary: #ffffff;
+            --ms-bg-secondary: #f9fafb;
+            --ms-bg-tertiary: #f3f4f6;
+            --ms-border-light: #e5e7eb;
+            --ms-border-medium: #d1d5db;
+            --ms-text-primary: #111827;
+            --ms-text-secondary: #4b5563;
+            --ms-text-muted: #9ca3af;
+            --ms-accent: #2563eb;
+            --ms-accent-light: #dbeafe;
+            --ms-success: #059669;
+            --ms-danger: #dc2626;
+            --ms-radius-sm: 6px;
+            --ms-radius-md: 8px;
+            --ms-radius-lg: 12px;
+            --ms-shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+            --ms-shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --ms-shadow-lg: 0 12px 40px rgba(0,0,0,0.12);
+            --ms-transition: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
         
-        .ms-template-actions { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
-        .ms-action-group { display:flex; gap:8px; align-items:center; }
-        .ms-save-group { border-left:1px solid #e2e8f0; padding-left:12px; }
-        .ms-delete-group { border-left:1px solid #e2e8f0; padding-left:12px; margin-left:auto; }
+        /* Toast Notification */
+        .ms-toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(10px);
+            background: var(--ms-text-primary);
+            color: white;
+            padding: 12px 20px;
+            border-radius: var(--ms-radius-md);
+            font-size: 14px;
+            font-weight: 500;
+            z-index: 10003;
+            opacity: 0;
+            transition: opacity var(--ms-transition), transform var(--ms-transition);
+            pointer-events: none;
+            box-shadow: var(--ms-shadow-lg);
+        }
+        .ms-toast-show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
         
-        .ms-select, .ms-input { padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:0.9rem; }
-        .ms-select:focus, .ms-input:focus { outline:none; border-color:#3b82f6; }
-        .ms-select-sm, .ms-input-sm { padding:6px 10px; font-size:0.85rem; }
+        /* ============================================================
+           TEMPLATE BAR
+           ============================================================ */
+        .ms-template-bar {
+            background: var(--ms-bg-primary);
+            border: 1px solid var(--ms-border-light);
+            border-radius: var(--ms-radius-lg);
+            padding: 16px 20px;
+            margin-bottom: 20px;
+            box-shadow: var(--ms-shadow-sm);
+        }
+        .ms-template-status {
+            margin-bottom: 14px;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .ms-status-editing {
+            color: var(--ms-accent);
+            font-weight: 500;
+        }
+        .ms-status-editing strong {
+            font-weight: 600;
+        }
+        .ms-status-new {
+            color: var(--ms-success);
+            font-weight: 500;
+        }
+        .ms-draft-indicator {
+            background: #fef3c7;
+            color: #92400e;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+        }
         
-        .ms-btn { padding:8px 16px; border:none; border-radius:6px; font-size:0.9rem; font-weight:500; cursor:pointer; transition:all 0.15s; }
-        .ms-btn-primary { background:#3b82f6; color:white; }
-        .ms-btn-primary:hover { background:#2563eb; }
-        .ms-btn-success { background:#10b981; color:white; }
-        .ms-btn-success:hover { background:#059669; }
-        .ms-btn-secondary { background:#e5e7eb; color:#374151; }
-        .ms-btn-secondary:hover { background:#d1d5db; }
-        .ms-btn-danger { background:#ef4444; color:white; }
-        .ms-btn-danger:hover { background:#dc2626; }
+        .ms-template-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: center;
+        }
+        .ms-action-group {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .ms-save-group {
+            padding-left: 12px;
+            border-left: 1px solid var(--ms-border-light);
+        }
+        .ms-delete-group {
+            padding-left: 12px;
+            border-left: 1px solid var(--ms-border-light);
+            margin-left: auto;
+        }
         
-        /* Palette */
-        .ms-palette { display:flex; flex-wrap:wrap; gap:8px; padding:12px; background:#f4f4f4; border-radius:8px; margin-bottom:16px; }
-        .ms-palette-tile { padding:8px 14px; border-radius:6px; cursor:grab; font-size:0.85rem; font-weight:500; user-select:none; }
-        .ms-palette-tile:hover { filter:brightness(0.95); }
+        /* Form Controls */
+        .ms-select, .ms-input {
+            padding: 8px 12px;
+            border: 1px solid var(--ms-border-medium);
+            border-radius: var(--ms-radius-sm);
+            font-size: 14px;
+            color: var(--ms-text-primary);
+            background: var(--ms-bg-primary);
+            transition: border-color var(--ms-transition), box-shadow var(--ms-transition);
+        }
+        .ms-select:focus, .ms-input:focus {
+            outline: none;
+            border-color: var(--ms-accent);
+            box-shadow: 0 0 0 3px var(--ms-accent-light);
+        }
+        .ms-select-sm, .ms-input-sm {
+            padding: 6px 10px;
+            font-size: 13px;
+        }
         
-        /* Grid */
-        .ms-grid-wrapper { overflow-x:auto; border:1px solid #d1d5db; border-radius:8px; background:#fff; }
-        .ms-grid { display:grid; }
-        .ms-grid-corner { background:#f1f5f9; border-bottom:1px solid #d1d5db; border-right:1px solid #d1d5db; }
-        .ms-grid-header { color:#fff; padding:10px 8px; text-align:center; font-weight:600; font-size:0.9rem; border-bottom:1px solid #d1d5db; }
+        /* Buttons */
+        .ms-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: var(--ms-radius-sm);
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all var(--ms-transition);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+        .ms-btn:active {
+            transform: scale(0.98);
+        }
+        .ms-btn-primary {
+            background: var(--ms-accent);
+            color: white;
+        }
+        .ms-btn-primary:hover {
+            background: #1d4ed8;
+        }
+        .ms-btn-success {
+            background: var(--ms-success);
+            color: white;
+        }
+        .ms-btn-success:hover {
+            background: #047857;
+        }
+        .ms-btn-secondary {
+            background: var(--ms-bg-tertiary);
+            color: var(--ms-text-primary);
+            border: 1px solid var(--ms-border-medium);
+        }
+        .ms-btn-secondary:hover {
+            background: var(--ms-border-light);
+        }
+        .ms-btn-danger {
+            background: var(--ms-danger);
+            color: white;
+        }
+        .ms-btn-danger:hover {
+            background: #b91c1c;
+        }
         
-        .ms-time-column { position:relative; background:#f9fafb; border-right:1px solid #d1d5db; }
-        .ms-time-marker { position:absolute; left:0; width:100%; border-top:1px dashed #e5e7eb; font-size:0.7rem; padding:2px 4px; color:#6b7280; }
+        /* ============================================================
+           PALETTE
+           ============================================================ */
+        .ms-palette {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 16px;
+            background: var(--ms-bg-secondary);
+            border: 1px solid var(--ms-border-light);
+            border-radius: var(--ms-radius-lg);
+            margin-bottom: 20px;
+        }
+        .ms-palette-tile {
+            padding: 10px 16px;
+            border-radius: var(--ms-radius-sm);
+            cursor: grab;
+            font-size: 13px;
+            font-weight: 500;
+            user-select: none;
+            transition: transform var(--ms-transition), box-shadow var(--ms-transition);
+        }
+        .ms-palette-tile:hover {
+            transform: translateY(-1px);
+            box-shadow: var(--ms-shadow-md);
+        }
+        .ms-palette-tile:active {
+            cursor: grabbing;
+            transform: scale(0.98);
+        }
         
-        .ms-grid-cell { position:relative; border-right:1px solid #e5e7eb; background:#fff; }
-        .ms-grid-cell:last-child { border-right:none; }
-        .ms-cell-hover { background:#f0fdf4; }
+        /* ============================================================
+           GRID - PREMIUM DESIGN
+           ============================================================ */
+        .ms-grid-wrapper {
+            overflow-x: auto;
+            border: 1px solid var(--ms-border-light);
+            border-radius: var(--ms-radius-lg);
+            background: var(--ms-bg-primary);
+            box-shadow: var(--ms-shadow-sm);
+        }
+        .ms-grid {
+            display: grid;
+            min-width: fit-content;
+        }
         
-        /* Disabled zones - dark grey with diagonal stripes */
-        .ms-disabled-zone { position:absolute; width:100%; background-color:#9ca3af; background-image:repeating-linear-gradient(-45deg, transparent, transparent 4px, rgba(0,0,0,0.15) 4px, rgba(0,0,0,0.15) 8px); z-index:1; pointer-events:none; }
+        /* Grid Header */
+        .ms-grid-corner {
+            background: var(--ms-bg-secondary);
+            border-bottom: 1px solid var(--ms-border-light);
+            border-right: 1px solid var(--ms-border-light);
+            min-width: 64px;
+        }
+        .ms-grid-header {
+            color: white;
+            padding: 14px 12px;
+            text-align: center;
+            font-weight: 600;
+            font-size: 13px;
+            letter-spacing: 0.01em;
+            border-bottom: 1px solid var(--ms-border-light);
+            text-transform: uppercase;
+        }
         
-        /* Events */
-        .ms-event { position:absolute; width:94%; left:3%; border-radius:4px; cursor:pointer; box-sizing:border-box; z-index:2; display:flex; flex-direction:column; justify-content:center; padding:4px 8px; overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,0.1); transition:box-shadow 0.15s; }
-        .ms-event:hover { box-shadow:0 2px 8px rgba(0,0,0,0.15); }
-        .ms-event.selected { box-shadow:0 0 0 2px #3b82f6; }
-        .ms-event.resizing { z-index:100; box-shadow:0 0 0 2px #3b82f6, 0 4px 12px rgba(59,130,246,0.3); }
-        .ms-event-small:hover { box-shadow:0 0 0 2px #ef4444; }
+        /* Time Column */
+        .ms-time-column {
+            position: relative;
+            background: var(--ms-bg-secondary);
+            border-right: 1px solid var(--ms-border-light);
+            min-width: 64px;
+        }
+        .ms-time-marker {
+            position: absolute;
+            left: 0;
+            right: 0;
+            border-top: 1px solid var(--ms-border-light);
+            font-size: 11px;
+            font-weight: 500;
+            padding: 4px 8px;
+            color: var(--ms-text-muted);
+            background: var(--ms-bg-secondary);
+        }
         
-        .ms-event-content { display:flex; flex-direction:column; gap:2px; }
-        .ms-tile-time { font-size:0.75em; opacity:0.8; }
-        .ms-tile-fields { font-size:0.7em; opacity:0.7; }
+        /* Grid Cells */
+        .ms-grid-cell {
+            position: relative;
+            border-right: 1px solid var(--ms-border-light);
+            background: var(--ms-bg-primary);
+            transition: background-color var(--ms-transition);
+        }
+        .ms-grid-cell:last-child {
+            border-right: none;
+        }
+        .ms-grid-cell::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: repeating-linear-gradient(
+                to bottom,
+                transparent,
+                transparent 59px,
+                var(--ms-border-light) 59px,
+                var(--ms-border-light) 60px
+            );
+            pointer-events: none;
+            z-index: 0;
+        }
+        .ms-cell-hover {
+            background: #f0fdf4;
+        }
         
-        .ms-resize-handle { position:absolute; left:0; right:0; height:6px; cursor:ns-resize; opacity:0; transition:opacity 0.15s; }
-        .ms-resize-top { top:0; }
-        .ms-resize-bottom { bottom:0; }
-        .ms-event:hover .ms-resize-handle { opacity:1; background:rgba(59,130,246,0.3); }
+        /* Disabled Zones */
+        .ms-disabled-zone {
+            position: absolute;
+            width: 100%;
+            background-color: #e5e7eb;
+            background-image: repeating-linear-gradient(
+                -45deg,
+                transparent,
+                transparent 6px,
+                rgba(156, 163, 175, 0.3) 6px,
+                rgba(156, 163, 175, 0.3) 12px
+            );
+            z-index: 1;
+            pointer-events: none;
+        }
         
-        .ms-drop-preview { display:none; position:absolute; left:3%; width:94%; background:rgba(59,130,246,0.1); border:2px dashed #3b82f6; border-radius:4px; pointer-events:none; z-index:5; }
+        /* ============================================================
+           EVENT TILES - REFINED DESIGN
+           ============================================================ */
+        .ms-event {
+            position: absolute;
+            width: 92%;
+            left: 4%;
+            border-radius: var(--ms-radius-sm);
+            cursor: pointer;
+            box-sizing: border-box;
+            z-index: 2;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 6px 10px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+            transition: box-shadow var(--ms-transition), transform var(--ms-transition);
+        }
+        .ms-event:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            transform: translateY(-1px);
+        }
+        .ms-event.selected {
+            box-shadow: 0 0 0 2px var(--ms-accent), 0 4px 12px rgba(37,99,235,0.25);
+        }
+        .ms-event.resizing {
+            z-index: 100;
+            box-shadow: 0 0 0 2px var(--ms-accent), 0 8px 24px rgba(37,99,235,0.3);
+        }
+        .ms-event-small {
+            padding: 2px 6px;
+        }
+        .ms-event-small:hover {
+            box-shadow: 0 0 0 2px var(--ms-danger), 0 4px 12px rgba(220,38,38,0.2);
+        }
         
-        .ms-empty-message, .ms-error-message { padding:40px; text-align:center; color:#6b7280; }
-        .ms-error-message { color:#dc2626; }
+        .ms-event-content {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            line-height: 1.3;
+        }
+        .ms-event-content strong {
+            font-weight: 600;
+            color: inherit;
+        }
+        .ms-tile-time {
+            font-size: 0.8em;
+            opacity: 0.75;
+            font-weight: 500;
+        }
+        .ms-tile-fields {
+            font-size: 0.75em;
+            opacity: 0.65;
+            font-weight: 500;
+        }
         
-        /* Context Menu */
-        .ms-context-menu { position:fixed; background:white; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.15); overflow:hidden; min-width:120px; z-index:10005; }
-        .ms-context-item { padding:10px 16px; cursor:pointer; font-size:0.9rem; color:#374151; }
-        .ms-context-item:hover { background:#f3f4f6; }
+        /* Resize Handles */
+        .ms-resize-handle {
+            position: absolute;
+            left: 0;
+            right: 0;
+            height: 8px;
+            cursor: ns-resize;
+            opacity: 0;
+            transition: opacity var(--ms-transition);
+        }
+        .ms-resize-top {
+            top: -2px;
+            border-radius: var(--ms-radius-sm) var(--ms-radius-sm) 0 0;
+        }
+        .ms-resize-bottom {
+            bottom: -2px;
+            border-radius: 0 0 var(--ms-radius-sm) var(--ms-radius-sm);
+        }
+        .ms-event:hover .ms-resize-handle {
+            opacity: 1;
+            background: linear-gradient(to bottom, rgba(37,99,235,0.4), rgba(37,99,235,0.2));
+        }
         
-        /* Modal */
-        .ms-modal-overlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:10004; display:flex; align-items:center; justify-content:center; }
-        .ms-modal { background:white; border-radius:12px; width:90%; max-width:500px; max-height:90vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.3); }
-        .ms-modal-sm { max-width:380px; }
-        .ms-modal-header { display:flex; justify-content:space-between; align-items:center; padding:16px 20px; border-bottom:1px solid #e5e7eb; }
-        .ms-modal-header h3 { margin:0; font-size:1.1rem; font-weight:600; }
-        .ms-modal-close { background:none; border:none; font-size:1.5rem; cursor:pointer; color:#9ca3af; line-height:1; padding:0; }
-        .ms-modal-close:hover { color:#374151; }
-        .ms-modal-body { padding:20px; }
-        .ms-modal-desc { color:#6b7280; font-size:0.9rem; margin:0 0 16px 0; }
-        .ms-modal-footer { display:flex; justify-content:flex-end; gap:12px; padding:16px 20px; border-top:1px solid #e5e7eb; background:#f9fafb; }
+        .ms-drop-preview {
+            display: none;
+        }
         
-        .ms-form-group { margin-bottom:16px; }
-        .ms-form-row { display:flex; gap:12px; }
-        .ms-form-half { flex:1; }
-        .ms-label { display:block; font-size:0.85rem; font-weight:500; color:#374151; margin-bottom:6px; }
+        .ms-empty-message, .ms-error-message {
+            padding: 60px 40px;
+            text-align: center;
+            color: var(--ms-text-muted);
+            font-size: 15px;
+        }
+        .ms-error-message {
+            color: var(--ms-danger);
+        }
+        
+        /* ============================================================
+           CONTEXT MENU
+           ============================================================ */
+        .ms-context-menu {
+            position: fixed;
+            background: var(--ms-bg-primary);
+            border-radius: var(--ms-radius-md);
+            box-shadow: var(--ms-shadow-lg), 0 0 0 1px rgba(0,0,0,0.05);
+            overflow: hidden;
+            min-width: 140px;
+            z-index: 10005;
+            padding: 4px;
+        }
+        .ms-context-item {
+            padding: 10px 14px;
+            cursor: pointer;
+            font-size: 14px;
+            color: var(--ms-text-primary);
+            border-radius: var(--ms-radius-sm);
+            transition: background-color var(--ms-transition);
+        }
+        .ms-context-item:hover {
+            background: var(--ms-bg-tertiary);
+        }
+        
+        /* ============================================================
+           MODAL - REFINED
+           ============================================================ */
+        .ms-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(4px);
+            z-index: 10004;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .ms-modal {
+            background: var(--ms-bg-primary);
+            border-radius: var(--ms-radius-lg);
+            width: 100%;
+            max-width: 480px;
+            max-height: calc(100vh - 40px);
+            overflow-y: auto;
+            box-shadow: var(--ms-shadow-lg);
+        }
+        .ms-modal-sm {
+            max-width: 400px;
+        }
+        .ms-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--ms-border-light);
+        }
+        .ms-modal-header h3 {
+            margin: 0;
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--ms-text-primary);
+        }
+        .ms-modal-close {
+            background: none;
+            border: none;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            cursor: pointer;
+            color: var(--ms-text-muted);
+            border-radius: var(--ms-radius-sm);
+            transition: all var(--ms-transition);
+        }
+        .ms-modal-close:hover {
+            background: var(--ms-bg-tertiary);
+            color: var(--ms-text-primary);
+        }
+        .ms-modal-body {
+            padding: 24px;
+        }
+        .ms-modal-desc {
+            color: var(--ms-text-secondary);
+            font-size: 14px;
+            margin: 0 0 20px 0;
+            line-height: 1.5;
+        }
+        .ms-modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            padding: 16px 24px;
+            border-top: 1px solid var(--ms-border-light);
+            background: var(--ms-bg-secondary);
+            border-radius: 0 0 var(--ms-radius-lg) var(--ms-radius-lg);
+        }
+        
+        /* Form Elements */
+        .ms-form-group {
+            margin-bottom: 20px;
+        }
+        .ms-form-group:last-child {
+            margin-bottom: 0;
+        }
+        .ms-form-row {
+            display: flex;
+            gap: 16px;
+        }
+        .ms-form-half {
+            flex: 1;
+        }
+        .ms-label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--ms-text-primary);
+            margin-bottom: 8px;
+        }
         
         /* Time Picker */
-        .ms-time-picker { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
-        .ms-time-section { display:flex; flex-direction:column; align-items:center; gap:4px; }
-        .ms-time-label { font-size:0.75rem; color:#6b7280; text-transform:uppercase; }
-        .ms-time-control { display:flex; align-items:center; gap:4px; }
-        .ms-time-btn { width:32px; height:32px; border:1px solid #d1d5db; background:#fff; border-radius:6px; cursor:pointer; font-size:1.1rem; font-weight:600; color:#374151; }
-        .ms-time-btn:hover { background:#f3f4f6; }
-        .ms-time-input { width:90px; text-align:center; font-size:1rem; font-weight:500; padding:6px 8px; background:#fff; border:1px solid #d1d5db; border-radius:4px; }
-        .ms-time-input:focus { outline:none; border-color:#3b82f6; box-shadow:0 0 0 2px rgba(59,130,246,0.2); }
-        .ms-time-display { min-width:90px; text-align:center; font-size:1rem; font-weight:500; padding:6px 8px; background:#f3f4f6; border-radius:4px; }
-        .ms-time-separator { color:#9ca3af; font-weight:500; }
-        .ms-time-presets { display:flex; align-items:center; gap:6px; margin-top:8px; width:100%; }
-        .ms-presets-label { font-size:0.8rem; color:#6b7280; margin-right:4px; }
-        .ms-preset-btn { padding:6px 12px; border:1px solid #e5e7eb; background:#fff; border-radius:4px; font-size:0.8rem; cursor:pointer; }
-        .ms-preset-btn:hover { background:#f3f4f6; border-color:#d1d5db; }
-        .ms-preset-btn:active { background:#e5e7eb; }
+        .ms-time-picker {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+        .ms-time-section {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        }
+        .ms-time-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--ms-text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .ms-time-control {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            background: var(--ms-bg-tertiary);
+            border-radius: var(--ms-radius-md);
+            padding: 2px;
+        }
+        .ms-time-btn {
+            width: 32px;
+            height: 36px;
+            border: none;
+            background: transparent;
+            border-radius: var(--ms-radius-sm);
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--ms-text-secondary);
+            transition: all var(--ms-transition);
+        }
+        .ms-time-btn:hover {
+            background: var(--ms-bg-primary);
+            color: var(--ms-text-primary);
+        }
+        .ms-time-input {
+            width: 88px;
+            text-align: center;
+            font-size: 15px;
+            font-weight: 500;
+            padding: 8px 4px;
+            background: var(--ms-bg-primary);
+            border: none;
+            border-radius: var(--ms-radius-sm);
+            color: var(--ms-text-primary);
+        }
+        .ms-time-input:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px var(--ms-accent);
+        }
+        .ms-time-separator {
+            color: var(--ms-text-muted);
+            font-weight: 500;
+            font-size: 14px;
+        }
+        .ms-time-presets {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 12px;
+            width: 100%;
+            padding-top: 12px;
+            border-top: 1px solid var(--ms-border-light);
+        }
+        .ms-presets-label {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--ms-text-muted);
+        }
+        .ms-preset-btn {
+            padding: 6px 12px;
+            border: 1px solid var(--ms-border-light);
+            background: var(--ms-bg-primary);
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--ms-text-secondary);
+            cursor: pointer;
+            transition: all var(--ms-transition);
+        }
+        .ms-preset-btn:hover {
+            background: var(--ms-bg-tertiary);
+            border-color: var(--ms-border-medium);
+            color: var(--ms-text-primary);
+        }
+        .ms-preset-btn:active {
+            transform: scale(0.96);
+        }
         
         /* Checkbox Grid */
-        .ms-checkbox-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:8px; max-height:200px; overflow-y:auto; padding:8px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; }
-        .ms-checkbox-item { display:flex; align-items:center; gap:6px; padding:4px 8px; background:#fff; border:1px solid #e5e7eb; border-radius:4px; cursor:pointer; font-size:0.85rem; }
-        .ms-checkbox-item:hover { border-color:#d1d5db; }
-        .ms-checkbox-item input { margin:0; }
-        .ms-location-type { margin-left:auto; font-size:0.7rem; color:#9ca3af; }
+        .ms-checkbox-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 8px;
+            max-height: 180px;
+            overflow-y: auto;
+            padding: 12px;
+            background: var(--ms-bg-secondary);
+            border: 1px solid var(--ms-border-light);
+            border-radius: var(--ms-radius-md);
+        }
+        .ms-checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            background: var(--ms-bg-primary);
+            border: 1px solid var(--ms-border-light);
+            border-radius: var(--ms-radius-sm);
+            cursor: pointer;
+            font-size: 13px;
+            transition: all var(--ms-transition);
+        }
+        .ms-checkbox-item:hover {
+            border-color: var(--ms-border-medium);
+            background: var(--ms-bg-tertiary);
+        }
+        .ms-checkbox-item input {
+            margin: 0;
+            width: 16px;
+            height: 16px;
+            accent-color: var(--ms-accent);
+        }
+        .ms-location-type {
+            margin-left: auto;
+            font-size: 10px;
+            font-weight: 500;
+            color: var(--ms-text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
     </style>`;
 }
 
