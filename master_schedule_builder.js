@@ -1,45 +1,54 @@
 // =================================================================
-// SCHEDULE BUILDER v7.0 — GOOGLE-LEVEL DESIGN
+// SCHEDULE BUILDER v8.0 — APPLE DESIGN LANGUAGE
 // =================================================================
 // Design Philosophy:
-// - Content is king, UI fades into background
-// - Generous whitespace, everything breathes
-// - Subtle depth through refined shadows
-// - Purposeful color, mostly neutral
-// - Micro-interactions that delight
-// - Every pixel earns its place
+// - SF Pro typography, clean and legible
+// - Generous whitespace, content breathes
+// - Soft corners, subtle depth
+// - Vibrancy and blur effects
+// - Restrained color, purposeful accents
+// - Micro-interactions that feel tactile
 // =================================================================
 
 (function() {
 'use strict';
 
-// State
+// =================================================================
+// STATE
+// =================================================================
 let skeleton = [];
 let template = null;
 let container = null;
+let clipboard = null;
+let hoveredCol = null;
+let _keyHandler = null;
+let _visHandler = null;
+let _focusHandler = null;
 
-const STORAGE_KEY = 'scheduleBuilderDraft_v7';
-const PX_MIN = 1.2;
+const STORAGE_KEY = 'scheduleBuilder_v8';
+const PX_MIN = 1.4;
 const SNAP = 5;
 
-// Refined color tokens - Google's muted palette
+// Apple-inspired muted colors
 const TYPES = {
-    activity:         { name: 'Activity',    hue: 210, sat: 90, desc: 'General activity slot' },
-    sports:           { name: 'Sports',      hue: 142, sat: 70, desc: 'Sports period' },
-    special:          { name: 'Special',     hue: 158, sat: 65, desc: 'Special activity' },
-    smart:            { name: 'Smart',       hue: 217, sat: 85, desc: 'Auto-balanced slot', dashed: true },
-    split:            { name: 'Split',       hue: 28,  sat: 85, desc: 'Divided time block' },
-    elective:         { name: 'Elective',    hue: 270, sat: 70, desc: 'Choice-based' },
-    league:           { name: 'League',      hue: 262, sat: 75, desc: 'League game' },
-    specialty_league: { name: 'Specialty',   hue: 43,  sat: 90, desc: 'Specialty league' },
-    swim:             { name: 'Swim',        hue: 199, sat: 85, desc: 'Swimming' },
-    lunch:            { name: 'Lunch',       hue: 0,   sat: 70, desc: 'Lunch break' },
-    snacks:           { name: 'Snacks',      hue: 35,  sat: 85, desc: 'Snack time' },
-    dismissal:        { name: 'Dismissal',   hue: 0,   sat: 65, desc: 'End of day' },
-    custom:           { name: 'Custom',      hue: 220, sat: 10, desc: 'Custom event' }
+    activity:         { name: 'Activity',    color: '#007AFF', desc: 'General activity slot' },
+    sports:           { name: 'Sports',      color: '#34C759', desc: 'Sports period' },
+    special:          { name: 'Special',     color: '#30B650', desc: 'Special activity' },
+    smart:            { name: 'Smart',       color: '#5856D6', desc: 'Auto-balanced slot', dashed: true },
+    split:            { name: 'Split',       color: '#FF9500', desc: 'Divided time block' },
+    elective:         { name: 'Elective',    color: '#AF52DE', desc: 'Choice-based' },
+    league:           { name: 'League',      color: '#5856D6', desc: 'League game' },
+    specialty_league: { name: 'Specialty',   color: '#FFCC00', desc: 'Specialty league' },
+    swim:             { name: 'Swim',        color: '#32ADE6', desc: 'Swimming' },
+    lunch:            { name: 'Lunch',       color: '#FF3B30', desc: 'Lunch break' },
+    snacks:           { name: 'Snacks',      color: '#FF9500', desc: 'Snack time' },
+    dismissal:        { name: 'Dismissal',   color: '#FF2D55', desc: 'End of day' },
+    custom:           { name: 'Custom',      color: '#8E8E93', desc: 'Custom event' }
 };
 
-// Utilities
+// =================================================================
+// UTILITIES
+// =================================================================
 const uid = () => Math.random().toString(36).slice(2, 10);
 const esc = s => { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; };
 
@@ -77,7 +86,21 @@ const range = () => {
     return { lo: lo ?? 480, hi: hi ?? 1020 };
 };
 
-// Storage
+const getLocations = () => {
+    const gs = window.loadGlobalSettings?.() || {};
+    const locs = [];
+    (gs.app1?.fields || []).forEach(f => f.available !== false && locs.push({ n: f.name, c: 'Field' }));
+    Object.values(gs.locationZones || {}).forEach(z => {
+        Object.keys(z.locations || {}).forEach(n => {
+            if (!locs.find(l => l.n === n)) locs.push({ n, c: z.name || 'Zone' });
+        });
+    });
+    return locs;
+};
+
+// =================================================================
+// STORAGE
+// =================================================================
 const save = () => {
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({ skeleton, template }));
@@ -93,15 +116,17 @@ const load = () => {
     return false;
 };
 
-const clear = () => { localStorage.removeItem(STORAGE_KEY); };
+const clearStorage = () => localStorage.removeItem(STORAGE_KEY);
 
-// Template ops
+// =================================================================
+// TEMPLATE OPERATIONS
+// =================================================================
 const loadTpl = name => {
     const all = window.getSavedSkeletons?.() || {};
     if (!all[name]) return;
     skeleton = JSON.parse(JSON.stringify(all[name]));
     template = name;
-    clear();
+    clearStorage();
     draw();
     toast('Template loaded');
 };
@@ -111,63 +136,133 @@ const saveTpl = (name, update) => {
     window.saveSkeleton?.(name, skeleton);
     window.forceSyncToCloud?.();
     template = name;
-    clear();
+    clearStorage();
     fillSelects();
     syncUI();
-    toast(update ? 'Saved' : 'Template created');
+    toast(update ? 'Changes saved' : 'Template created');
 };
 
 const deleteTpl = name => {
     if (!name) return;
     window.deleteSkeleton?.(name);
     window.forceSyncToCloud?.();
-    if (template === name) { template = null; skeleton = []; clear(); draw(); }
+    if (template === name) { template = null; skeleton = []; clearStorage(); draw(); }
     fillSelects();
     syncUI();
-    toast('Deleted');
-};
-
-// Toast
-const toast = msg => {
-    let t = document.getElementById('sb-toast');
-    if (!t) { t = document.createElement('div'); t.id = 'sb-toast'; document.body.appendChild(t); }
-    t.textContent = msg;
-    t.classList.add('on');
-    setTimeout(() => t.classList.remove('on'), 2200);
-};
-
-// Sync header UI
-const syncUI = () => {
-    const badge = document.getElementById('sb-badge');
-    const name = document.getElementById('sb-name');
-    const upd = document.getElementById('sb-update');
-    if (!badge) return;
-    
-    if (template) {
-        badge.className = 'sb-badge sb-badge-saved';
-        badge.textContent = 'Saved';
-        name.textContent = template;
-        if (upd) upd.style.display = '';
-    } else if (skeleton.length) {
-        badge.className = 'sb-badge sb-badge-draft';
-        badge.textContent = 'Draft';
-        name.textContent = 'Unsaved changes';
-        if (upd) upd.style.display = 'none';
-    } else {
-        badge.className = 'sb-badge';
-        badge.textContent = '';
-        name.textContent = 'New schedule';
-        if (upd) upd.style.display = 'none';
-    }
+    toast('Template deleted');
 };
 
 const fillSelects = () => {
     const all = window.getSavedSkeletons?.() || {};
     const opts = Object.keys(all).sort().map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
-    const sel = document.getElementById('sb-tpl-select');
-    const del = document.getElementById('sb-del-select');
-    if (sel) sel.innerHTML = `<option value="">Choose template</option>${opts}`;
-    if (del) del.innerHTML = `<option value="">Select to delete</option>${opts}`;
+    const sel = document.getElementById('ap-tpl-select');
+    const del = document.getElementById('ap-del-select');
+    if (sel) sel.innerHTML = `<option value="">Select Template</option>${opts}`;
+    if (del) del.innerHTML = `<option value="">Select to delete...</option>${opts}`;
+};
+
+// =================================================================
+// TOAST
+// =================================================================
+const toast = msg => {
+    let t = document.getElementById('ap-toast');
+    if (!t) { t = document.createElement('div'); t.id = 'ap-toast'; document.body.appendChild(t); }
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2200);
+};
+
+// =================================================================
+// UI SYNC
+// =================================================================
+const syncUI = () => {
+    const badge = document.getElementById('ap-badge');
+    const name = document.getElementById('ap-tpl-name');
+    const upd = document.getElementById('ap-update');
+    if (!badge) return;
+    
+    if (template) {
+        badge.className = 'ap-badge ap-badge-saved';
+        badge.textContent = 'Saved';
+        name.textContent = template;
+        if (upd) upd.style.display = '';
+    } else if (skeleton.length) {
+        badge.className = 'ap-badge ap-badge-draft';
+        badge.textContent = 'Draft';
+        name.textContent = 'Unsaved changes';
+        if (upd) upd.style.display = 'none';
+    } else {
+        badge.className = 'ap-badge';
+        badge.textContent = '';
+        name.textContent = 'New Schedule';
+        if (upd) upd.style.display = 'none';
+    }
+};
+
+// =================================================================
+// KEYBOARD SHORTCUTS
+// =================================================================
+const setupKeyboard = () => {
+    _keyHandler = e => {
+        const tab = document.getElementById('master-scheduler');
+        if (!tab || !tab.classList.contains('active')) return;
+        
+        const grid = document.getElementById('ap-grid');
+        const selected = grid?.querySelector('.ap-ev.selected');
+        
+        // Ctrl/Cmd + C - Copy
+        if ((e.ctrlKey || e.metaKey) && e.key === 'c' && selected) {
+            const ev = skeleton.find(x => x.id === selected.dataset.id);
+            if (ev) {
+                clipboard = { ...ev, id: null };
+                toast('Copied');
+            }
+            e.preventDefault();
+        }
+        
+        // Ctrl/Cmd + V - Paste
+        if ((e.ctrlKey || e.metaKey) && e.key === 'v' && clipboard && hoveredCol) {
+            const { lo } = range();
+            const dur = toMin(clipboard.endTime) - toMin(clipboard.startTime);
+            const start = lo;
+            
+            skeleton.push({
+                ...clipboard,
+                id: uid(),
+                division: hoveredCol.dataset.d,
+                startTime: toStr(start),
+                endTime: toStr(start + dur)
+            });
+            save();
+            draw();
+            toast('Pasted');
+            e.preventDefault();
+        }
+        
+        // Delete/Backspace - Remove selected
+        if ((e.key === 'Delete' || e.key === 'Backspace') && selected && !e.target.matches('input, textarea, select')) {
+            skeleton = skeleton.filter(x => x.id !== selected.dataset.id);
+            save();
+            draw();
+            e.preventDefault();
+        }
+    };
+    document.addEventListener('keydown', _keyHandler);
+};
+
+// =================================================================
+// TAB VISIBILITY
+// =================================================================
+const setupVisibility = () => {
+    _visHandler = () => {
+        if (document.visibilityState === 'visible') {
+            setTimeout(fillSelects, 200);
+        }
+    };
+    document.addEventListener('visibilitychange', _visHandler);
+    
+    _focusHandler = () => setTimeout(fillSelects, 250);
+    window.addEventListener('focus', _focusHandler);
 };
 
 // =================================================================
@@ -176,69 +271,95 @@ const fillSelects = () => {
 const modal = (type, div, startM, existing) => {
     const T = TYPES[type];
     if (!T) return;
-    const { lo, hi } = range();
+    const { lo } = range();
     let sM = existing ? toMin(existing.startTime) : (startM ?? lo);
     let eM = existing ? toMin(existing.endTime) : sM + 30;
     
-    const locs = [];
-    const gs = window.loadGlobalSettings?.() || {};
-    (gs.app1?.fields || []).forEach(f => f.available !== false && locs.push({ n: f.name, c: 'Field' }));
-    Object.values(gs.locationZones || {}).forEach(z => Object.keys(z.locations || {}).forEach(n => locs.find(l => l.n === n) || locs.push({ n, c: z.name || 'Zone' })));
+    const locs = getLocations();
     
-    // Build fields
     let fields = '';
     if (type === 'custom') {
-        fields = `<div class="sb-fg"><label>Event name</label><input id="mf-name" value="${esc(existing?.event || '')}" placeholder="Enter name" autofocus></div>`;
+        fields = `<div class="ap-field"><label>Event Name</label><input id="mf-name" value="${esc(existing?.event || '')}" placeholder="Enter name..." autofocus></div>`;
     } else if (type === 'smart') {
         fields = `
-            <div class="sb-fg sb-fg-row"><div class="sb-fg"><label>Activity 1</label><input id="mf-a1" value="${esc(existing?.smartData?.activity1 || '')}"></div><div class="sb-fg"><label>Activity 2</label><input id="mf-a2" value="${esc(existing?.smartData?.activity2 || '')}"></div></div>
-            <div class="sb-fg sb-fg-row"><div class="sb-fg"><label>Fallback for</label><select id="mf-ff"><option value="1">Activity 1</option><option value="2">Activity 2</option></select></div><div class="sb-fg"><label>Fallback</label><input id="mf-fb" value="${esc(existing?.smartData?.fallbackActivity || '')}"></div></div>
+            <div class="ap-field-row">
+                <div class="ap-field"><label>Activity 1</label><input id="mf-a1" value="${esc(existing?.smartData?.activity1 || '')}"></div>
+                <div class="ap-field"><label>Activity 2</label><input id="mf-a2" value="${esc(existing?.smartData?.activity2 || '')}"></div>
+            </div>
+            <div class="ap-field-row">
+                <div class="ap-field"><label>Fallback For</label><select id="mf-ff"><option value="1">Activity 1</option><option value="2">Activity 2</option></select></div>
+                <div class="ap-field"><label>Fallback Activity</label><input id="mf-fb" value="${esc(existing?.smartData?.fallbackActivity || '')}"></div>
+            </div>
         `;
     } else if (type === 'split') {
-        fields = `<div class="sb-fg sb-fg-row"><div class="sb-fg"><label>First half</label><input id="mf-s1" value="${esc(existing?.subEvents?.[0]?.activity || '')}"></div><div class="sb-fg"><label>Second half</label><input id="mf-s2" value="${esc(existing?.subEvents?.[1]?.activity || '')}"></div></div>`;
+        fields = `<div class="ap-field-row"><div class="ap-field"><label>First Half</label><input id="mf-s1" value="${esc(existing?.subEvents?.[0]?.activity || '')}"></div><div class="ap-field"><label>Second Half</label><input id="mf-s2" value="${esc(existing?.subEvents?.[1]?.activity || '')}"></div></div>`;
     } else if (type === 'elective') {
+        const gs = window.loadGlobalSettings?.() || {};
         const acts = [...(gs.app1?.fields || []).filter(f => f.available !== false).map(f => f.name), ...(gs.app1?.specialActivities || []).filter(s => s.available !== false).map(s => s.name)];
         const sel = existing?.electiveActivities || [];
-        fields = `<div class="sb-fg"><label>Select activities</label><div class="sb-checks">${acts.map(a => `<label><input type="checkbox" name="el" value="${esc(a)}" ${sel.includes(a) ? 'checked' : ''}><span>${esc(a)}</span></label>`).join('')}</div></div>`;
+        fields = `<div class="ap-field"><label>Choose Activities</label><div class="ap-checks">${acts.map(a => `<label><input type="checkbox" name="el" value="${esc(a)}" ${sel.includes(a) ? 'checked' : ''}><span>${esc(a)}</span></label>`).join('')}</div></div>`;
     }
     
     let locHTML = '';
     if (type === 'custom' && locs.length) {
         const res = existing?.reservedFields || [];
-        locHTML = `<div class="sb-fg"><label>Reserve locations</label><div class="sb-checks">${locs.map(l => `<label><input type="checkbox" name="loc" value="${esc(l.n)}" ${res.includes(l.n) ? 'checked' : ''}><span>${esc(l.n)}</span><em>${esc(l.c)}</em></label>`).join('')}</div></div>`;
+        locHTML = `<div class="ap-field"><label>Reserve Locations</label><div class="ap-checks">${locs.map(l => `<label><input type="checkbox" name="loc" value="${esc(l.n)}" ${res.includes(l.n) ? 'checked' : ''}><span>${esc(l.n)}</span><small>${esc(l.c)}</small></label>`).join('')}</div></div>`;
     }
     
     const el = document.createElement('div');
-    el.id = 'sb-modal-wrap';
+    el.id = 'ap-modal-wrap';
     el.innerHTML = `
-<div class="sb-modal">
-    <header>
-        <div class="sb-modal-color" style="--h:${T.hue};--s:${T.sat}%"></div>
-        <div class="sb-modal-info"><h2>${existing ? 'Edit' : 'Add'} ${esc(T.name)}</h2><p>${esc(T.desc)}</p></div>
-        <button class="sb-modal-x" id="mx">✕</button>
+<div class="ap-modal">
+    <div class="ap-modal-bar" style="background: ${T.color}"></div>
+    <header class="ap-modal-head">
+        <div>
+            <h2>${existing ? 'Edit' : 'New'} ${esc(T.name)}</h2>
+            <p>${esc(T.desc)}</p>
+        </div>
+        <button class="ap-modal-close" id="mx">
+            <svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
     </header>
-    <main>
+    <main class="ap-modal-body">
         ${fields}
-        <div class="sb-fg">
+        <div class="ap-field">
             <label>Time</label>
-            <div class="sb-time">
-                <div class="sb-time-g"><button data-a="s-">−</button><input id="mf-s" value="${toStr(sM)}"><button data-a="s+">+</button></div>
-                <span>to</span>
-                <div class="sb-time-g"><button data-a="e-">−</button><input id="mf-e" value="${toStr(eM)}"><button data-a="e+">+</button></div>
+            <div class="ap-time">
+                <div class="ap-time-input">
+                    <button type="button" data-a="s-">−</button>
+                    <input id="mf-s" value="${toStr(sM)}">
+                    <button type="button" data-a="s+">+</button>
+                </div>
+                <span class="ap-time-sep">to</span>
+                <div class="ap-time-input">
+                    <button type="button" data-a="e-">−</button>
+                    <input id="mf-e" value="${toStr(eM)}">
+                    <button type="button" data-a="e+">+</button>
+                </div>
             </div>
-            <div class="sb-presets"><button data-d="15">15m</button><button data-d="30">30m</button><button data-d="45">45m</button><button data-d="60">1h</button></div>
+            <div class="ap-presets">
+                <button type="button" data-d="15">15 min</button>
+                <button type="button" data-d="30">30 min</button>
+                <button type="button" data-d="45">45 min</button>
+                <button type="button" data-d="60">1 hour</button>
+            </div>
         </div>
         ${locHTML}
     </main>
-    <footer><button class="sb-btn-text" id="mc">Cancel</button><button class="sb-btn-fill" id="ms" style="--h:${T.hue};--s:${T.sat}%">${existing ? 'Save' : 'Add'}</button></footer>
+    <footer class="ap-modal-foot">
+        <button class="ap-btn ap-btn-secondary" id="mc">Cancel</button>
+        <button class="ap-btn ap-btn-primary" id="ms">${existing ? 'Save Changes' : 'Add to Schedule'}</button>
+    </footer>
 </div>`;
     document.body.appendChild(el);
     
     const $s = document.getElementById('mf-s'), $e = document.getElementById('mf-e');
     const sync = () => { $s.value = toStr(sM); $e.value = toStr(eM); };
+    
     $s.onblur = () => { const v = toMin($s.value); if (v != null) { sM = v; if (sM >= eM) eM = sM + 30; } sync(); };
     $e.onblur = () => { const v = toMin($e.value); if (v != null && v > sM) eM = v; sync(); };
-    el.querySelectorAll('.sb-time button').forEach(b => b.onclick = () => {
+    
+    el.querySelectorAll('.ap-time button').forEach(b => b.onclick = () => {
         const a = b.dataset.a;
         if (a === 's+') sM = Math.min(sM + 5, eM - 5);
         else if (a === 's-') sM = Math.max(sM - 5, 0);
@@ -246,7 +367,8 @@ const modal = (type, div, startM, existing) => {
         else if (a === 'e-') eM = Math.max(eM - 5, sM + 5);
         sync();
     });
-    el.querySelectorAll('.sb-presets button').forEach(b => b.onclick = () => { eM = sM + +b.dataset.d; sync(); });
+    
+    el.querySelectorAll('.ap-presets button').forEach(b => b.onclick = () => { eM = sM + +b.dataset.d; sync(); });
     
     const close = () => el.remove();
     document.getElementById('mx').onclick = close;
@@ -255,31 +377,42 @@ const modal = (type, div, startM, existing) => {
     
     document.getElementById('ms').onclick = () => {
         const ev = existing ? { ...existing } : { id: uid(), type, event: T.name, division: div, reservedFields: [] };
-        ev.startTime = toStr(sM); ev.endTime = toStr(eM);
+        ev.startTime = toStr(sM);
+        ev.endTime = toStr(eM);
         
         if (type === 'custom') {
             const n = document.getElementById('mf-name')?.value.trim();
-            if (!n) return alert('Enter a name');
+            if (!n) return alert('Please enter a name');
             ev.event = n;
             ev.reservedFields = [...el.querySelectorAll('input[name="loc"]:checked')].map(c => c.value);
         } else if (type === 'smart') {
-            const a1 = document.getElementById('mf-a1')?.value.trim(), a2 = document.getElementById('mf-a2')?.value.trim(), fb = document.getElementById('mf-fb')?.value.trim();
-            if (!a1 || !a2 || !fb) return alert('Fill all fields');
+            const a1 = document.getElementById('mf-a1')?.value.trim();
+            const a2 = document.getElementById('mf-a2')?.value.trim();
+            const fb = document.getElementById('mf-fb')?.value.trim();
+            if (!a1 || !a2 || !fb) return alert('Please fill in all fields');
             ev.smartData = { activity1: a1, activity2: a2, fallbackFor: document.getElementById('mf-ff').value === '1' ? a1 : a2, fallbackActivity: fb };
         } else if (type === 'split') {
-            const s1 = document.getElementById('mf-s1')?.value.trim(), s2 = document.getElementById('mf-s2')?.value.trim();
-            if (!s1 || !s2) return alert('Fill both');
+            const s1 = document.getElementById('mf-s1')?.value.trim();
+            const s2 = document.getElementById('mf-s2')?.value.trim();
+            if (!s1 || !s2) return alert('Please fill in both activities');
             const mid = sM + Math.floor((eM - sM) / 2);
             ev.subEvents = [{ activity: s1, startTime: toStr(sM), endTime: toStr(mid) }, { activity: s2, startTime: toStr(mid), endTime: toStr(eM) }];
         } else if (type === 'elective') {
             const acts = [...el.querySelectorAll('input[name="el"]:checked')].map(c => c.value);
-            if (acts.length < 2) return alert('Select 2+');
+            if (acts.length < 2) return alert('Please select at least 2 activities');
             ev.electiveActivities = acts;
         }
         
-        if (existing) { const i = skeleton.findIndex(x => x.id === existing.id); if (i >= 0) skeleton[i] = ev; }
-        else skeleton.push(ev);
-        close(); save(); draw();
+        if (existing) {
+            const i = skeleton.findIndex(x => x.id === existing.id);
+            if (i >= 0) skeleton[i] = ev;
+        } else {
+            skeleton.push(ev);
+        }
+        
+        close();
+        save();
+        draw();
     };
     
     setTimeout(() => el.querySelector('input:not([type="checkbox"])')?.focus(), 50);
@@ -291,40 +424,58 @@ const modal = (type, div, startM, existing) => {
 const render = () => {
     if (!container) return;
     container.innerHTML = `
-<div class="sb">
-    <header class="sb-header">
-        <div class="sb-header-l">
+<div class="ap">
+    <header class="ap-header">
+        <div class="ap-header-title">
             <h1>Schedule Builder</h1>
-            <span id="sb-badge" class="sb-badge"></span>
-            <span id="sb-name" class="sb-name">New schedule</span>
+            <div class="ap-status">
+                <span id="ap-badge" class="ap-badge"></span>
+                <span id="ap-tpl-name" class="ap-tpl-name">New Schedule</span>
+            </div>
         </div>
-        <div class="sb-header-r">
-            <select id="sb-tpl-select"></select>
-            <button class="sb-btn-text" id="sb-load">Load</button>
-            <button class="sb-btn-outline" id="sb-update" style="display:none">Update</button>
-            <span class="sb-sep"></span>
-            <input id="sb-save-input" placeholder="Template name...">
-            <button class="sb-btn-fill" id="sb-save">Save</button>
+        <div class="ap-header-actions">
+            <div class="ap-action-group">
+                <select id="ap-tpl-select"></select>
+                <button class="ap-btn ap-btn-secondary" id="ap-load">Load</button>
+            </div>
+            <div class="ap-divider"></div>
+            <div class="ap-action-group">
+                <input id="ap-save-name" placeholder="Template name...">
+                <button class="ap-btn ap-btn-primary" id="ap-save">Save</button>
+                <button class="ap-btn ap-btn-secondary" id="ap-update" style="display:none">Update</button>
+            </div>
         </div>
     </header>
-    <div class="sb-body">
-        <aside class="sb-side">
-            <div class="sb-side-top">
-                <span class="sb-side-label">Blocks</span>
-                <button class="sb-icon-btn" id="sb-clear" title="Clear all">
-                    <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+    
+    <div class="ap-content">
+        <aside class="ap-sidebar">
+            <div class="ap-sidebar-header">
+                <span>Blocks</span>
+                <button class="ap-icon-btn" id="ap-clear" title="Clear schedule">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M5.33 4V2.67c0-.74.6-1.34 1.34-1.34h2.66c.74 0 1.34.6 1.34 1.34V4m2 0v9.33c0 .74-.6 1.34-1.34 1.34H4.67c-.74 0-1.34-.6-1.34-1.34V4h9.34z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
             </div>
-            <div class="sb-blocks">${Object.entries(TYPES).map(([k, v]) => `<div class="sb-block" draggable="true" data-t="${k}" style="--h:${v.hue};--s:${v.sat}%" title="${v.desc}"><span class="sb-block-dot"></span>${v.name}</div>`).join('')}</div>
-            <div class="sb-side-bot">
-                <select id="sb-del-select"></select>
-                <button class="sb-btn-danger" id="sb-del">Delete</button>
+            <div class="ap-blocks">
+                ${Object.entries(TYPES).map(([k, v]) => `
+                    <div class="ap-block" draggable="true" data-type="${k}" title="${v.desc}">
+                        <span class="ap-block-indicator" style="background: ${v.color}"></span>
+                        <span class="ap-block-name">${v.name}</span>
+                    </div>
+                `).join('')}
+            </div>
+            <div class="ap-sidebar-footer">
+                <select id="ap-del-select"></select>
+                <button class="ap-btn ap-btn-danger" id="ap-delete">Delete</button>
             </div>
         </aside>
-        <div class="sb-main"><div id="sb-grid" class="sb-grid"></div></div>
+        
+        <main class="ap-main">
+            <div id="ap-grid" class="ap-grid"></div>
+        </main>
     </div>
 </div>
-${css()}`;
+${getStyles()}`;
+    
     bindHeader();
     fillSelects();
     draw();
@@ -332,346 +483,1134 @@ ${css()}`;
 };
 
 const draw = () => {
-    const g = document.getElementById('sb-grid');
-    if (!g) return;
+    const grid = document.getElementById('ap-grid');
+    if (!grid) return;
+    
     const divs = window.divisions || {};
     const cols = Object.keys(divs).filter(d => divs[d]?.bunks?.length);
-    if (!cols.length) { g.innerHTML = `<div class="sb-empty"><p>No divisions</p><span>Configure divisions first</span></div>`; return; }
+    
+    if (!cols.length) {
+        grid.innerHTML = `<div class="ap-empty"><div class="ap-empty-icon">📅</div><h3>No Divisions</h3><p>Configure divisions in Setup first</p></div>`;
+        return;
+    }
     
     const { lo, hi } = range();
     const h = (hi - lo) * PX_MIN;
     
-    let html = `<div class="sb-cols" style="--n:${cols.length}">`;
+    let html = `<div class="ap-schedule" style="--cols: ${cols.length}">`;
+    
     // Corner
-    html += `<div class="sb-corner"></div>`;
+    html += `<div class="ap-corner"></div>`;
+    
     // Headers
-    cols.forEach(c => { const clr = divs[c]?.color || '#5f6368'; html += `<div class="sb-head" style="--c:${clr}">${esc(c)}</div>`; });
-    // Time
-    html += `<div class="sb-time-col" style="height:${h}px">`;
-    for (let m = lo; m < hi; m += 30) html += `<div class="sb-tm ${m % 60 === 0 ? 'sb-tm-h' : ''}" style="top:${(m - lo) * PX_MIN}px">${toStr(m)}</div>`;
-    html += `</div>`;
-    // Columns
     cols.forEach(c => {
-        const dv = divs[c], ds = toMin(dv?.startTime), de = toMin(dv?.endTime);
-        html += `<div class="sb-col" data-d="${esc(c)}" style="height:${h}px">`;
-        // Inactive
-        if (ds != null && ds > lo) html += `<div class="sb-inactive" style="height:${(ds - lo) * PX_MIN}px"></div>`;
-        if (de != null && de < hi) html += `<div class="sb-inactive sb-inactive-b" style="height:${(hi - de) * PX_MIN}px"></div>`;
+        const color = divs[c]?.color || '#007AFF';
+        html += `<div class="ap-col-header" style="--col-color: ${color}">${esc(c)}</div>`;
+    });
+    
+    // Time column
+    html += `<div class="ap-time-col" style="height: ${h}px">`;
+    for (let m = lo; m < hi; m += 30) {
+        const top = (m - lo) * PX_MIN;
+        const isHour = m % 60 === 0;
+        html += `<div class="ap-time-label ${isHour ? 'ap-time-hour' : ''}" style="top: ${top}px">${toStr(m)}</div>`;
+    }
+    html += `</div>`;
+    
+    // Division columns
+    cols.forEach(c => {
+        const dv = divs[c];
+        const ds = toMin(dv?.startTime), de = toMin(dv?.endTime);
+        
+        html += `<div class="ap-col" data-d="${esc(c)}" style="height: ${h}px">`;
+        
+        // Inactive zones
+        if (ds != null && ds > lo) {
+            html += `<div class="ap-inactive" style="top: 0; height: ${(ds - lo) * PX_MIN}px"></div>`;
+        }
+        if (de != null && de < hi) {
+            html += `<div class="ap-inactive" style="top: ${(de - lo) * PX_MIN}px; height: ${(hi - de) * PX_MIN}px"></div>`;
+        }
+        
         // Hour lines
-        for (let m = lo; m < hi; m += 60) html += `<div class="sb-hline" style="top:${(m - lo) * PX_MIN}px"></div>`;
+        for (let m = lo; m < hi; m += 60) {
+            html += `<div class="ap-hour-line" style="top: ${(m - lo) * PX_MIN}px"></div>`;
+        }
+        
         // Events
         skeleton.filter(e => e.division === c).forEach(ev => {
             const s = toMin(ev.startTime), e = toMin(ev.endTime);
             if (s != null && e != null && e > s) {
-                const top = (s - lo) * PX_MIN, ht = (e - s) * PX_MIN;
+                const top = (s - lo) * PX_MIN;
+                const ht = (e - s) * PX_MIN;
                 const T = TYPES[ev.type] || TYPES.custom;
-                const sm = ht < 36;
-                html += `<div class="sb-ev${sm ? ' sb-ev-sm' : ''}" data-id="${ev.id}" draggable="true" style="top:${top}px;height:${ht}px;--h:${T.hue};--s:${T.sat}%;${T.dashed ? 'border-style:dashed;' : ''}">
-                    ${sm ? '' : '<div class="sb-ev-r sb-ev-rt"></div>'}
-                    <div class="sb-ev-c"><strong>${esc(ev.event || T.name)}</strong>${sm ? '' : `<span>${ev.startTime} – ${ev.endTime}</span>`}</div>
-                    ${sm ? '' : '<div class="sb-ev-r sb-ev-rb"></div>'}
-                </div>`;
+                const small = ht < 36;
+                const name = ev.event || T.name;
+                
+                html += `
+                    <div class="ap-ev ${small ? 'ap-ev-small' : ''}" data-id="${ev.id}" draggable="true"
+                         style="top: ${top}px; height: ${ht}px; --ev-color: ${T.color}; ${T.dashed ? 'border-style: dashed;' : ''}">
+                        ${small ? '' : '<div class="ap-ev-handle ap-ev-handle-top"></div>'}
+                        <div class="ap-ev-content">
+                            <span class="ap-ev-name">${esc(name)}</span>
+                            ${small ? '' : `<span class="ap-ev-time">${ev.startTime} – ${ev.endTime}</span>`}
+                        </div>
+                        ${small ? '' : '<div class="ap-ev-handle ap-ev-handle-bottom"></div>'}
+                    </div>
+                `;
             }
         });
+        
         html += `</div>`;
     });
+    
     html += `</div>`;
-    g.innerHTML = html;
+    grid.innerHTML = html;
+    
     bindGrid();
 };
 
 // =================================================================
-// BINDINGS
+// EVENT BINDINGS
 // =================================================================
 const bindHeader = () => {
-    document.getElementById('sb-load')?.addEventListener('click', () => {
-        const n = document.getElementById('sb-tpl-select').value;
-        if (!n) return toast('Select a template');
-        if (skeleton.length && !confirm('Replace current?')) return;
+    document.getElementById('ap-load')?.addEventListener('click', () => {
+        const n = document.getElementById('ap-tpl-select').value;
+        if (!n) return toast('Select a template first');
+        if (skeleton.length && !confirm('This will replace your current schedule. Continue?')) return;
         loadTpl(n);
     });
-    document.getElementById('sb-save')?.addEventListener('click', () => {
-        const n = document.getElementById('sb-save-input').value.trim();
-        if (!n) return toast('Enter name');
+    
+    document.getElementById('ap-save')?.addEventListener('click', () => {
+        const n = document.getElementById('ap-save-name').value.trim();
+        if (!n) return toast('Enter a template name');
         const all = window.getSavedSkeletons?.() || {};
-        if (all[n] && !confirm(`Overwrite "${n}"?`)) return;
+        if (all[n] && !confirm(`"${n}" already exists. Replace it?`)) return;
         saveTpl(n, !!all[n]);
-        document.getElementById('sb-save-input').value = '';
+        document.getElementById('ap-save-name').value = '';
     });
-    document.getElementById('sb-update')?.addEventListener('click', () => template && saveTpl(template, true));
-    document.getElementById('sb-clear')?.addEventListener('click', () => {
-        if (skeleton.length && !confirm('Clear?')) return;
-        skeleton = []; template = null; clear(); draw(); syncUI();
+    
+    document.getElementById('ap-update')?.addEventListener('click', () => {
+        if (template) saveTpl(template, true);
     });
-    document.getElementById('sb-del')?.addEventListener('click', () => {
-        const n = document.getElementById('sb-del-select').value;
-        if (!n || !confirm(`Delete "${n}"?`)) return;
+    
+    document.getElementById('ap-clear')?.addEventListener('click', () => {
+        if (skeleton.length && !confirm('Clear entire schedule?')) return;
+        skeleton = [];
+        template = null;
+        clearStorage();
+        draw();
+        syncUI();
+    });
+    
+    document.getElementById('ap-delete')?.addEventListener('click', () => {
+        const n = document.getElementById('ap-del-select').value;
+        if (!n) return toast('Select a template to delete');
+        if (!confirm(`Delete "${n}" permanently?`)) return;
         deleteTpl(n);
     });
-    // Block drag
-    document.querySelectorAll('.sb-block').forEach(b => {
-        b.addEventListener('dragstart', e => { e.dataTransfer.setData('type', b.dataset.t); b.classList.add('dragging'); });
+    
+    // Block drag from sidebar
+    document.querySelectorAll('.ap-block').forEach(b => {
+        b.addEventListener('dragstart', e => {
+            e.dataTransfer.setData('block-type', b.dataset.type);
+            b.classList.add('dragging');
+        });
         b.addEventListener('dragend', () => b.classList.remove('dragging'));
     });
 };
 
 const bindGrid = () => {
     const { lo } = range();
-    document.querySelectorAll('.sb-col').forEach(col => {
-        col.addEventListener('dragover', e => { e.preventDefault(); col.classList.add('over'); });
-        col.addEventListener('dragleave', e => { if (!col.contains(e.relatedTarget)) col.classList.remove('over'); });
+    
+    // Column events
+    document.querySelectorAll('.ap-col').forEach(col => {
+        col.addEventListener('mouseenter', () => { hoveredCol = col; });
+        col.addEventListener('mouseleave', () => { if (hoveredCol === col) hoveredCol = null; });
+        
+        col.addEventListener('dragover', e => {
+            e.preventDefault();
+            col.classList.add('ap-col-dragover');
+        });
+        
+        col.addEventListener('dragleave', e => {
+            if (!col.contains(e.relatedTarget)) col.classList.remove('ap-col-dragover');
+        });
+        
         col.addEventListener('drop', e => {
-            e.preventDefault(); col.classList.remove('over');
-            const move = e.dataTransfer.getData('move');
-            if (move) {
-                const ev = skeleton.find(x => x.id === move);
+            e.preventDefault();
+            col.classList.remove('ap-col-dragover');
+            
+            // Move existing tile
+            const moveId = e.dataTransfer.getData('move-id');
+            if (moveId) {
+                const ev = skeleton.find(x => x.id === moveId);
                 if (ev) {
-                    const rect = col.getBoundingClientRect(), y = e.clientY - rect.top;
-                    const ns = lo + Math.round(y / PX_MIN / SNAP) * SNAP;
+                    const rect = col.getBoundingClientRect();
+                    const y = e.clientY - rect.top;
+                    const newStart = lo + Math.round(y / PX_MIN / SNAP) * SNAP;
                     const dur = toMin(ev.endTime) - toMin(ev.startTime);
-                    ev.division = col.dataset.d; ev.startTime = toStr(ns); ev.endTime = toStr(ns + dur);
-                    save(); draw();
+                    ev.division = col.dataset.d;
+                    ev.startTime = toStr(newStart);
+                    ev.endTime = toStr(newStart + dur);
+                    save();
+                    draw();
                 }
                 return;
             }
-            const type = e.dataTransfer.getData('type');
-            if (type) {
-                const rect = col.getBoundingClientRect(), y = e.clientY - rect.top;
-                modal(type, col.dataset.d, lo + Math.round(y / PX_MIN / 15) * 15);
+            
+            // New tile from palette
+            const blockType = e.dataTransfer.getData('block-type');
+            if (blockType) {
+                const rect = col.getBoundingClientRect();
+                const y = e.clientY - rect.top;
+                const startMin = lo + Math.round(y / PX_MIN / 15) * 15;
+                modal(blockType, col.dataset.d, startMin);
             }
         });
     });
     
-    document.querySelectorAll('.sb-ev').forEach(tile => {
-        const id = tile.dataset.id, ev = skeleton.find(x => x.id === id);
-        tile.addEventListener('click', e => { if (!e.target.classList.contains('sb-ev-r')) { document.querySelectorAll('.sb-ev.sel').forEach(t => t.classList.remove('sel')); tile.classList.add('sel'); } });
-        tile.addEventListener('dblclick', e => { if (!e.target.classList.contains('sb-ev-r') && ev) modal(ev.type, ev.division, null, ev); });
-        tile.addEventListener('contextmenu', e => { e.preventDefault(); if (confirm('Delete?')) { skeleton = skeleton.filter(x => x.id !== id); save(); draw(); } });
-        tile.addEventListener('dragstart', e => { if (e.target.classList.contains('sb-ev-r')) { e.preventDefault(); return; } e.dataTransfer.setData('move', id); tile.style.opacity = '0.4'; });
-        tile.addEventListener('dragend', () => tile.style.opacity = '1');
+    // Event tile interactions
+    document.querySelectorAll('.ap-ev').forEach(tile => {
+        const id = tile.dataset.id;
+        const ev = skeleton.find(x => x.id === id);
         
-        // Resize
-        tile.querySelectorAll('.sb-ev-r').forEach(h => {
-            const isT = h.classList.contains('sb-ev-rt');
-            let y0, t0, h0;
-            const move = e => {
-                const d = e.clientY - y0;
-                if (isT) { const nt = Math.round((t0 + d) / (SNAP * PX_MIN)) * (SNAP * PX_MIN), nh = h0 - (nt - t0); if (nh >= 12) { tile.style.top = nt + 'px'; tile.style.height = nh + 'px'; } }
-                else { const nh = Math.max(12, Math.round((h0 + d) / (SNAP * PX_MIN)) * (SNAP * PX_MIN)); tile.style.height = nh + 'px'; }
+        // Select
+        tile.addEventListener('click', e => {
+            if (e.target.classList.contains('ap-ev-handle')) return;
+            document.querySelectorAll('.ap-ev.selected').forEach(t => t.classList.remove('selected'));
+            tile.classList.add('selected');
+        });
+        
+        // Edit on double-click
+        tile.addEventListener('dblclick', e => {
+            if (e.target.classList.contains('ap-ev-handle')) return;
+            if (ev) modal(ev.type, ev.division, null, ev);
+        });
+        
+        // Delete on right-click
+        tile.addEventListener('contextmenu', e => {
+            e.preventDefault();
+            if (confirm('Delete this event?')) {
+                skeleton = skeleton.filter(x => x.id !== id);
+                save();
+                draw();
+            }
+        });
+        
+        // Drag to move
+        tile.addEventListener('dragstart', e => {
+            if (e.target.classList.contains('ap-ev-handle')) {
+                e.preventDefault();
+                return;
+            }
+            e.dataTransfer.setData('move-id', id);
+            tile.style.opacity = '0.5';
+        });
+        
+        tile.addEventListener('dragend', () => {
+            tile.style.opacity = '1';
+        });
+        
+        // Resize handles
+        tile.querySelectorAll('.ap-ev-handle').forEach(handle => {
+            const isTop = handle.classList.contains('ap-ev-handle-top');
+            let startY, startTop, startHeight;
+            
+            const onMouseMove = e => {
+                const delta = e.clientY - startY;
+                if (isTop) {
+                    const newTop = Math.round((startTop + delta) / (SNAP * PX_MIN)) * (SNAP * PX_MIN);
+                    const newHeight = startHeight - (newTop - startTop);
+                    if (newHeight >= 15) {
+                        tile.style.top = newTop + 'px';
+                        tile.style.height = newHeight + 'px';
+                    }
+                } else {
+                    const newHeight = Math.max(15, Math.round((startHeight + delta) / (SNAP * PX_MIN)) * (SNAP * PX_MIN));
+                    tile.style.height = newHeight + 'px';
+                }
             };
-            const up = () => {
-                document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); tile.classList.remove('resizing');
-                if (ev) { const nt = parseFloat(tile.style.top), nh = parseFloat(tile.style.height); ev.startTime = toStr(lo + nt / PX_MIN); ev.endTime = toStr(lo + (nt + nh) / PX_MIN); save(); draw(); }
+            
+            const onMouseUp = () => {
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+                tile.classList.remove('resizing');
+                
+                if (ev) {
+                    const newTop = parseFloat(tile.style.top);
+                    const newHeight = parseFloat(tile.style.height);
+                    ev.startTime = toStr(lo + newTop / PX_MIN);
+                    ev.endTime = toStr(lo + (newTop + newHeight) / PX_MIN);
+                    save();
+                    draw();
+                }
             };
-            h.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); y0 = e.clientY; t0 = parseFloat(tile.style.top); h0 = parseFloat(tile.style.height); tile.classList.add('resizing'); document.addEventListener('mousemove', move); document.addEventListener('mouseup', up); });
+            
+            handle.addEventListener('mousedown', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                startY = e.clientY;
+                startTop = parseFloat(tile.style.top);
+                startHeight = parseFloat(tile.style.height);
+                tile.classList.add('resizing');
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            });
         });
     });
     
-    document.getElementById('sb-grid')?.addEventListener('click', e => { if (!e.target.closest('.sb-ev')) document.querySelectorAll('.sb-ev.sel').forEach(t => t.classList.remove('sel')); });
+    // Deselect on click outside
+    document.getElementById('ap-grid')?.addEventListener('click', e => {
+        if (!e.target.closest('.ap-ev')) {
+            document.querySelectorAll('.ap-ev.selected').forEach(t => t.classList.remove('selected'));
+        }
+    });
 };
 
 // =================================================================
-// CSS
+// STYLES - APPLE DESIGN
 // =================================================================
-const css = () => `<style>
+const getStyles = () => `<style>
 /* ═══════════════════════════════════════════════════════════════
-   GOOGLE-LEVEL DESIGN — SCHEDULE BUILDER
+   APPLE DESIGN LANGUAGE
    ═══════════════════════════════════════════════════════════════ */
 
-.sb {
-    --ff: 'Google Sans', 'Segoe UI', system-ui, sans-serif;
-    --bg: #fff;
-    --bg2: #f8f9fa;
-    --bg3: #f1f3f4;
-    --border: #e0e0e0;
-    --text: #202124;
-    --text2: #5f6368;
-    --text3: #80868b;
-    --blue: #1a73e8;
-    --red: #ea4335;
-    --radius: 8px;
-    --shadow: 0 1px 2px 0 rgba(60,64,67,.3), 0 1px 3px 1px rgba(60,64,67,.15);
-    --shadow-lg: 0 1px 3px 0 rgba(60,64,67,.3), 0 4px 8px 3px rgba(60,64,67,.15);
-    font-family: var(--ff);
-    background: var(--bg2);
-    color: var(--text);
+.ap {
+    --font: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', sans-serif;
+    --bg: #ffffff;
+    --bg-secondary: #f5f5f7;
+    --bg-tertiary: #e8e8ed;
+    --text-primary: #1d1d1f;
+    --text-secondary: #86868b;
+    --text-tertiary: #aeaeb2;
+    --border: rgba(0, 0, 0, 0.08);
+    --border-strong: rgba(0, 0, 0, 0.12);
+    --accent: #007AFF;
+    --danger: #FF3B30;
+    --success: #34C759;
+    --warning: #FF9500;
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.12);
+    --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.16);
+    --transition: 200ms ease;
+    
+    font-family: var(--font);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
     display: flex;
     flex-direction: column;
     height: 100%;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
-/* HEADER */
-.sb-header {
+/* ═══════════════════════════════════════════════════════════════
+   HEADER
+   ═══════════════════════════════════════════════════════════════ */
+.ap-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 24px;
-    padding: 12px 24px;
-    background: var(--bg);
+    padding: 16px 24px;
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
     border-bottom: 1px solid var(--border);
 }
-.sb-header-l { display: flex; align-items: center; gap: 12px; }
-.sb-header h1 { font-size: 22px; font-weight: 400; margin: 0; }
-.sb-badge { font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 4px; background: var(--bg3); color: var(--text3); text-transform: uppercase; letter-spacing: .3px; }
-.sb-badge-draft { background: #fef7e0; color: #b06000; }
-.sb-badge-saved { background: #e6f4ea; color: #137333; }
-.sb-name { font-size: 14px; color: var(--text2); }
-.sb-header-r { display: flex; align-items: center; gap: 8px; }
-.sb-sep { width: 1px; height: 20px; background: var(--border); margin: 0 8px; }
 
-/* INPUTS */
-.sb select, .sb input[type="text"], .sb-header input {
-    height: 36px; padding: 0 12px; font: inherit; font-size: 14px;
-    border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg);
-    transition: border-color .2s, box-shadow .2s;
+.ap-header-title h1 {
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin: 0;
 }
-.sb select:focus, .sb input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px rgba(26,115,232,.2); }
-.sb select { cursor: pointer; }
-.sb-header input { width: 160px; }
 
-/* BUTTONS */
-.sb-btn-fill, .sb-btn-outline, .sb-btn-text, .sb-btn-danger {
-    height: 36px; padding: 0 16px; font: inherit; font-size: 14px; font-weight: 500;
-    border: none; border-radius: var(--radius); cursor: pointer; transition: all .2s;
+.ap-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
 }
-.sb-btn-fill { background: var(--blue); color: #fff; }
-.sb-btn-fill:hover { background: #1557b0; box-shadow: var(--shadow); }
-.sb-btn-outline { background: transparent; color: var(--blue); border: 1px solid var(--border); }
-.sb-btn-outline:hover { background: rgba(26,115,232,.04); border-color: var(--blue); }
-.sb-btn-text { background: transparent; color: var(--text2); }
-.sb-btn-text:hover { background: var(--bg3); }
-.sb-btn-danger { background: transparent; color: var(--red); font-size: 13px; }
-.sb-btn-danger:hover { background: rgba(234,67,53,.08); }
-.sb-icon-btn { width: 32px; height: 32px; padding: 0; background: none; border: none; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text2); transition: background .2s; }
-.sb-icon-btn:hover { background: var(--bg3); }
-.sb-icon-btn svg { width: 18px; height: 18px; }
 
-/* BODY */
-.sb-body { display: flex; flex: 1; overflow: hidden; }
+.ap-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
 
-/* SIDEBAR */
-.sb-side { width: 180px; background: var(--bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
-.sb-side-top { display: flex; align-items: center; justify-content: space-between; padding: 16px 12px 8px; }
-.sb-side-label { font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: .5px; color: var(--text3); }
-.sb-blocks { flex: 1; overflow-y: auto; padding: 4px 8px; }
-.sb-block { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; cursor: grab; font-size: 13px; color: var(--text); transition: background .15s; user-select: none; }
-.sb-block:hover { background: var(--bg3); }
-.sb-block.dragging { opacity: .5; }
-.sb-block-dot { width: 8px; height: 8px; border-radius: 2px; background: hsl(var(--h), var(--s), 45%); flex-shrink: 0; }
-.sb-side-bot { padding: 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
-.sb-side-bot select { font-size: 13px; height: 32px; }
+.ap-badge:empty { display: none; }
+.ap-badge-draft { background: #FFF3E0; color: #E65100; }
+.ap-badge-saved { background: #E8F5E9; color: #2E7D32; }
 
-/* MAIN */
-.sb-main { flex: 1; overflow: auto; }
-.sb-grid { min-width: 100%; }
-.sb-cols { display: grid; grid-template-columns: 56px repeat(var(--n), minmax(100px, 1fr)); }
-.sb-corner { background: var(--bg2); border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); position: sticky; left: 0; z-index: 3; }
-.sb-head { padding: 10px 8px; font-size: 11px; font-weight: 500; text-align: center; text-transform: uppercase; letter-spacing: .5px; color: #fff; background: var(--c); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 2; }
-.sb-time-col { position: relative; background: var(--bg2); border-right: 1px solid var(--border); position: sticky; left: 0; z-index: 1; }
-.sb-tm { position: absolute; right: 8px; font-size: 10px; color: var(--text3); transform: translateY(-50%); }
-.sb-tm-h { font-weight: 500; color: var(--text2); }
-.sb-col { position: relative; border-right: 1px solid var(--border); background: var(--bg); transition: background .15s; }
-.sb-col:last-child { border-right: none; }
-.sb-col.over { background: rgba(26,115,232,.04); }
-.sb-hline { position: absolute; left: 0; right: 0; border-top: 1px solid var(--bg3); }
-.sb-inactive { position: absolute; left: 0; right: 0; top: 0; background: var(--bg3); }
-.sb-inactive-b { top: auto; bottom: 0; }
+.ap-tpl-name {
+    font-size: 14px;
+    color: var(--text-secondary);
+}
 
-/* EVENTS */
-.sb-ev {
-    position: absolute; left: 3px; right: 3px;
-    background: hsl(var(--h), calc(var(--s) * .3), 95%);
-    border-left: 3px solid hsl(var(--h), var(--s), 50%);
+.ap-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.ap-action-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ap-divider {
+    width: 1px;
+    height: 24px;
+    background: var(--border-strong);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   FORM CONTROLS
+   ═══════════════════════════════════════════════════════════════ */
+.ap select,
+.ap input[type="text"],
+.ap-header input {
+    height: 36px;
+    padding: 0 12px;
+    font: inherit;
+    font-size: 14px;
+    color: var(--text-primary);
+    background: var(--bg);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    transition: all var(--transition);
+}
+
+.ap select:focus,
+.ap input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.2);
+}
+
+.ap select {
+    cursor: pointer;
+    min-width: 160px;
+}
+
+.ap-header input {
+    width: 180px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   BUTTONS
+   ═══════════════════════════════════════════════════════════════ */
+.ap-btn {
+    height: 36px;
+    padding: 0 18px;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all var(--transition);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+.ap-btn:active {
+    transform: scale(0.97);
+}
+
+.ap-btn-primary {
+    background: var(--accent);
+    color: white;
+}
+
+.ap-btn-primary:hover {
+    background: #0066CC;
+}
+
+.ap-btn-secondary {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.ap-btn-secondary:hover {
+    background: #d8d8dc;
+}
+
+.ap-btn-danger {
+    background: transparent;
+    color: var(--danger);
+}
+
+.ap-btn-danger:hover {
+    background: rgba(255, 59, 48, 0.1);
+}
+
+.ap-icon-btn {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    transition: all var(--transition);
+}
+
+.ap-icon-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   LAYOUT
+   ═══════════════════════════════════════════════════════════════ */
+.ap-content {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SIDEBAR
+   ═══════════════════════════════════════════════════════════════ */
+.ap-sidebar {
+    width: 200px;
+    background: var(--bg);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+}
+
+.ap-sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.ap-blocks {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 8px 8px;
+}
+
+.ap-block {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    margin-bottom: 2px;
+    border-radius: var(--radius-sm);
+    cursor: grab;
+    transition: all var(--transition);
+    user-select: none;
+}
+
+.ap-block:hover {
+    background: var(--bg-secondary);
+}
+
+.ap-block:active,
+.ap-block.dragging {
+    cursor: grabbing;
+    background: var(--bg-tertiary);
+    transform: scale(0.98);
+}
+
+.ap-block-indicator {
+    width: 12px;
+    height: 12px;
     border-radius: 4px;
+    flex-shrink: 0;
+}
+
+.ap-block-name {
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.ap-sidebar-footer {
+    padding: 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.ap-sidebar-footer select {
+    width: 100%;
+    min-width: auto;
+    font-size: 13px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MAIN / GRID
+   ═══════════════════════════════════════════════════════════════ */
+.ap-main {
+    flex: 1;
+    overflow: auto;
+    padding: 20px;
+}
+
+.ap-grid {
+    background: var(--bg);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+}
+
+.ap-schedule {
+    display: grid;
+    grid-template-columns: 60px repeat(var(--cols), minmax(120px, 1fr));
+}
+
+.ap-corner {
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    position: sticky;
+    left: 0;
+    z-index: 3;
+}
+
+.ap-col-header {
+    padding: 14px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: white;
+    background: var(--col-color);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 2;
+}
+
+.ap-time-col {
+    position: relative;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    position: sticky;
+    left: 0;
+    z-index: 1;
+}
+
+.ap-time-label {
+    position: absolute;
+    right: 8px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    transform: translateY(-50%);
+}
+
+.ap-time-hour {
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.ap-col {
+    position: relative;
+    background: var(--bg);
+    border-right: 1px solid var(--border);
+    transition: background var(--transition);
+}
+
+.ap-col:last-child {
+    border-right: none;
+}
+
+.ap-col-dragover {
+    background: rgba(0, 122, 255, 0.05);
+}
+
+.ap-hour-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    border-top: 1px solid var(--bg-secondary);
+}
+
+.ap-inactive {
+    position: absolute;
+    left: 0;
+    right: 0;
+    background: var(--bg-secondary);
+    background-image: repeating-linear-gradient(
+        -45deg,
+        transparent,
+        transparent 8px,
+        rgba(0, 0, 0, 0.03) 8px,
+        rgba(0, 0, 0, 0.03) 16px
+    );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   EVENTS
+   ═══════════════════════════════════════════════════════════════ */
+.ap-ev {
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    background: color-mix(in srgb, var(--ev-color) 15%, white);
+    border: 2px solid var(--ev-color);
+    border-radius: var(--radius-sm);
     cursor: pointer;
     z-index: 2;
-    transition: box-shadow .15s, transform .15s;
+    overflow: hidden;
+    transition: box-shadow var(--transition), transform var(--transition);
 }
-.sb-ev:hover { box-shadow: var(--shadow); transform: translateX(1px); z-index: 3; }
-.sb-ev.sel { box-shadow: 0 0 0 2px var(--blue); z-index: 4; }
-.sb-ev.resizing { z-index: 10; box-shadow: var(--shadow-lg); }
-.sb-ev-sm { padding: 1px 6px; }
-.sb-ev-sm:hover { box-shadow: 0 0 0 2px var(--red); }
-.sb-ev-c { padding: 4px 8px; overflow: hidden; }
-.sb-ev-c strong { display: block; font-size: 12px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sb-ev-c span { display: block; font-size: 10px; color: var(--text2); margin-top: 1px; }
-.sb-ev-r { position: absolute; left: 0; right: 0; height: 6px; cursor: ns-resize; opacity: 0; transition: opacity .15s; }
-.sb-ev-rt { top: 0; }
-.sb-ev-rb { bottom: 0; }
-.sb-ev:hover .sb-ev-r { opacity: 1; background: rgba(26,115,232,.15); }
 
-/* EMPTY */
-.sb-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: var(--text3); }
-.sb-empty p { font-size: 16px; margin: 0; color: var(--text2); }
-.sb-empty span { font-size: 13px; margin-top: 4px; }
+.ap-ev:hover {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+    z-index: 3;
+}
 
-/* MODAL */
-#sb-modal-wrap { position: fixed; inset: 0; background: rgba(0,0,0,.32); display: flex; align-items: center; justify-content: center; z-index: 100; animation: fadeIn .15s; }
-@keyframes fadeIn { from { opacity: 0 } }
-.sb-modal { background: var(--bg); border-radius: 8px; width: 400px; max-width: calc(100vw - 32px); box-shadow: var(--shadow-lg); animation: slideUp .2s ease; overflow: hidden; }
-@keyframes slideUp { from { opacity: 0; transform: translateY(8px) } }
-.sb-modal header { display: flex; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
-.sb-modal-color { width: 4px; height: 32px; border-radius: 2px; background: hsl(var(--h), var(--s), 50%); }
-.sb-modal-info h2 { margin: 0; font-size: 16px; font-weight: 500; }
-.sb-modal-info p { margin: 2px 0 0; font-size: 12px; color: var(--text2); }
-.sb-modal-x { margin-left: auto; width: 32px; height: 32px; background: none; border: none; border-radius: 50%; cursor: pointer; font-size: 18px; color: var(--text3); transition: background .15s; display: flex; align-items: center; justify-content: center; }
-.sb-modal-x:hover { background: var(--bg3); }
-.sb-modal main { padding: 20px; }
-.sb-modal footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; background: var(--bg2); }
+.ap-ev.selected {
+    box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.4);
+    z-index: 4;
+}
 
-/* FORM */
-.sb-fg { margin-bottom: 16px; }
-.sb-fg:last-child { margin-bottom: 0; }
-.sb-fg label { display: block; font-size: 12px; font-weight: 500; color: var(--text2); margin-bottom: 6px; }
-.sb-fg input, .sb-fg select { width: 100%; height: 36px; }
-.sb-fg-row { display: flex; gap: 12px; }
-.sb-fg-row .sb-fg { flex: 1; margin-bottom: 16px; }
+.ap-ev.resizing {
+    z-index: 10;
+    box-shadow: var(--shadow-lg);
+}
 
-/* TIME */
-.sb-time { display: flex; align-items: center; gap: 8px; }
-.sb-time-g { display: flex; background: var(--bg2); border-radius: 6px; overflow: hidden; }
-.sb-time-g input { width: 72px; border: none !important; background: transparent; text-align: center; font-weight: 500; }
-.sb-time-g button { width: 32px; height: 36px; border: none; background: transparent; cursor: pointer; font-size: 16px; color: var(--text2); transition: background .15s; }
-.sb-time-g button:hover { background: var(--bg3); }
-.sb-time > span { color: var(--text3); font-size: 13px; }
-.sb-presets { display: flex; gap: 6px; margin-top: 10px; }
-.sb-presets button { padding: 4px 10px; font: inherit; font-size: 12px; background: var(--bg2); border: none; border-radius: 12px; cursor: pointer; color: var(--text2); transition: background .15s; }
-.sb-presets button:hover { background: var(--bg3); color: var(--text); }
+.ap-ev-small {
+    padding: 2px 6px;
+}
 
-/* CHECKS */
-.sb-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; max-height: 140px; overflow-y: auto; padding: 8px; background: var(--bg2); border-radius: 6px; }
-.sb-checks label { display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--bg); border-radius: 4px; cursor: pointer; font-size: 12px; transition: background .15s; }
-.sb-checks label:hover { background: var(--bg3); }
-.sb-checks input { margin: 0; accent-color: var(--blue); }
-.sb-checks em { margin-left: auto; font-style: normal; font-size: 10px; color: var(--text3); }
+.ap-ev-small:hover {
+    box-shadow: 0 0 0 2px var(--danger);
+}
 
-/* TOAST */
-#sb-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(8px); background: #323232; color: #fff; padding: 10px 20px; border-radius: 6px; font-size: 14px; opacity: 0; transition: all .2s; z-index: 200; }
-#sb-toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+.ap-ev-content {
+    padding: 6px 10px;
+}
+
+.ap-ev-name {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ap-ev-time {
+    display: block;
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+}
+
+.ap-ev-handle {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 8px;
+    cursor: ns-resize;
+    opacity: 0;
+    transition: opacity var(--transition);
+}
+
+.ap-ev-handle-top { top: 0; }
+.ap-ev-handle-bottom { bottom: 0; }
+
+.ap-ev:hover .ap-ev-handle {
+    opacity: 1;
+    background: linear-gradient(to bottom, rgba(0, 122, 255, 0.2), transparent);
+}
+
+.ap-ev:hover .ap-ev-handle-bottom {
+    background: linear-gradient(to top, rgba(0, 122, 255, 0.2), transparent);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   EMPTY STATE
+   ═══════════════════════════════════════════════════════════════ */
+.ap-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 80px 40px;
+    text-align: center;
+}
+
+.ap-empty-icon {
+    font-size: 48px;
+    margin-bottom: 16px;
+    opacity: 0.4;
+}
+
+.ap-empty h3 {
+    margin: 0 0 8px;
+    font-size: 20px;
+    font-weight: 600;
+}
+
+.ap-empty p {
+    margin: 0;
+    color: var(--text-secondary);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MODAL
+   ═══════════════════════════════════════════════════════════════ */
+#ap-modal-wrap {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: apFadeIn 200ms ease;
+}
+
+@keyframes apFadeIn {
+    from { opacity: 0; }
+}
+
+.ap-modal {
+    background: var(--bg);
+    border-radius: var(--radius-lg);
+    width: 420px;
+    max-width: calc(100vw - 40px);
+    max-height: calc(100vh - 40px);
+    overflow: hidden;
+    box-shadow: var(--shadow-lg);
+    animation: apSlideUp 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes apSlideUp {
+    from { opacity: 0; transform: scale(0.95) translateY(20px); }
+}
+
+.ap-modal-bar {
+    height: 4px;
+}
+
+.ap-modal-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+}
+
+.ap-modal-head h2 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 600;
+}
+
+.ap-modal-head p {
+    margin: 4px 0 0;
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.ap-modal-close {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    background: var(--bg-tertiary);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    transition: all var(--transition);
+}
+
+.ap-modal-close:hover {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+.ap-modal-body {
+    padding: 24px;
+    overflow-y: auto;
+    max-height: 60vh;
+}
+
+.ap-modal-foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 16px 24px;
+    background: var(--bg-secondary);
+}
+
+/* Form Fields */
+.ap-field {
+    margin-bottom: 20px;
+}
+
+.ap-field:last-child {
+    margin-bottom: 0;
+}
+
+.ap-field label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+.ap-field input:not([type="checkbox"]),
+.ap-field select {
+    width: 100%;
+    height: 44px;
+    padding: 0 14px;
+    font-size: 15px;
+}
+
+.ap-field-row {
+    display: flex;
+    gap: 16px;
+}
+
+.ap-field-row .ap-field {
+    flex: 1;
+}
+
+/* Time Picker */
+.ap-time {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.ap-time-input {
+    display: flex;
+    align-items: center;
+    background: var(--bg-secondary);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+}
+
+.ap-time-input input {
+    width: 90px !important;
+    height: 44px;
+    border: none !important;
+    background: transparent !important;
+    text-align: center;
+    font-size: 15px !important;
+    font-weight: 500;
+}
+
+.ap-time-input button {
+    width: 40px;
+    height: 44px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 20px;
+    font-weight: 300;
+    color: var(--text-secondary);
+    transition: all var(--transition);
+}
+
+.ap-time-input button:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.ap-time-sep {
+    color: var(--text-tertiary);
+    font-size: 14px;
+}
+
+.ap-presets {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.ap-presets button {
+    padding: 8px 14px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+    border: none;
+    border-radius: 20px;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+
+.ap-presets button:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+/* Checkboxes */
+.ap-checks {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+    max-height: 160px;
+    overflow-y: auto;
+    padding: 12px;
+    background: var(--bg-secondary);
+    border-radius: var(--radius-sm);
+}
+
+.ap-checks label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--bg);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--text-primary);
+    transition: all var(--transition);
+}
+
+.ap-checks label:hover {
+    background: var(--bg-tertiary);
+}
+
+.ap-checks input {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    accent-color: var(--accent);
+}
+
+.ap-checks small {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-tertiary);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TOAST
+   ═══════════════════════════════════════════════════════════════ */
+#ap-toast {
+    position: fixed;
+    bottom: 32px;
+    left: 50%;
+    transform: translateX(-50%) translateY(16px);
+    background: var(--text-primary);
+    color: white;
+    padding: 14px 24px;
+    border-radius: var(--radius-md);
+    font-size: 15px;
+    font-weight: 500;
+    opacity: 0;
+    pointer-events: none;
+    transition: all 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    z-index: 1001;
+}
+
+#ap-toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   RESPONSIVE
+   ═══════════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+    .ap-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 16px;
+    }
+    
+    .ap-header-actions {
+        width: 100%;
+        flex-wrap: wrap;
+    }
+    
+    .ap-sidebar {
+        width: 160px;
+    }
+    
+    .ap-main {
+        padding: 12px;
+    }
+}
 </style>`;
 
 // =================================================================
-// INIT
+// INITIALIZATION
 // =================================================================
 const init = () => {
     container = document.getElementById('master-scheduler-content');
     if (!container) return;
+    
+    // Load saved draft or default
     if (!load()) {
         try {
-            const asgn = window.getSkeletonAssignments?.() || {}, skels = window.getSavedSkeletons?.() || {};
-            const dt = window.currentScheduleDate || '', [y, m, d] = dt.split('-').map(Number);
+            const assigns = window.getSkeletonAssignments?.() || {};
+            const skels = window.getSavedSkeletons?.() || {};
+            const dt = window.currentScheduleDate || '';
+            const [y, m, d] = dt.split('-').map(Number);
             const dow = y && m && d ? new Date(y, m - 1, d).getDay() : 0;
-            const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-            const tpl = asgn[days[dow]] || asgn['Default'];
+            const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            const tpl = assigns[days[dow]] || assigns['Default'];
             skeleton = tpl && skels[tpl] ? JSON.parse(JSON.stringify(skels[tpl])) : [];
-        } catch (e) { skeleton = []; }
+        } catch (e) {
+            skeleton = [];
+        }
     }
+    
     render();
+    setupKeyboard();
+    setupVisibility();
 };
 
+const cleanup = () => {
+    if (_keyHandler) document.removeEventListener('keydown', _keyHandler);
+    if (_visHandler) document.removeEventListener('visibilitychange', _visHandler);
+    if (_focusHandler) window.removeEventListener('focus', _focusHandler);
+    document.getElementById('ap-modal-wrap')?.remove();
+    document.getElementById('ap-toast')?.remove();
+};
+
+// Public API
 window.initMasterScheduler = init;
-window.cleanupMasterScheduler = () => { document.getElementById('sb-modal-wrap')?.remove(); document.getElementById('sb-toast')?.remove(); };
+window.cleanupMasterScheduler = cleanup;
 window.refreshMasterSchedulerFromCloud = fillSelects;
 
 })();
