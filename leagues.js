@@ -1,30 +1,26 @@
 // =================================================================
-// leagues.js — PRODUCTION-READY v2.4
+// leagues.js — PRODUCTION-READY v2.5
 // =================================================================
+// v2.5 UI/UX REDESIGN:
+// - ★ CARD-BASED UI: All games shown as cards (no dropdown)
+// - ★ TODAY'S GAMES: Prominently displayed at top
+// - ★ INLINE EDITING: Enter scores directly, auto-saves
+// - ★ WINNER HIGHLIGHTING: Green highlight for winning team
+// - ★ PAST GAMES: Collapsible section for history
+// - ★ BETTER IMPORT: Shows all imported games immediately
 // v2.4 FIXES:
 // - ★ IMPORT: Now imports ALL games from the day (Game 11, Game 12, etc.)
-// - ★ GAME NUMBERS: Preserves game numbers from schedule (Game 11 stays Game 11)
-// - ★ AUTO-EDIT: After import, automatically shows games for score entry
-// - ★ GAME LABEL: Added editable game label field in form
+// - ★ GAME NUMBERS: Preserves game numbers from schedule
 // v2.3 FIXES:
-// - ★ CROSS-DEVICE SYNC: Now works! Uses best source outside protection window
-// - ★ RACE CONDITION: Still protected - prefers localStorage for 5s after save
-// v2.2 FIXES:
-// - ★ PREFER localStorage over loadGlobalSettings (prevents race conditions)
-// - ★ Deep clone data to prevent mutation issues
-// - ★ 5-second protection window after save
-// - ★ Validate league data quality, not just key count
+// - ★ CROSS-DEVICE SYNC: Uses best source outside protection window
+// - ★ RACE CONDITION: Prefers localStorage for 5s after save
 // v2.0 PRODUCTION FIXES:
-// - ★ CLOUD SYNC: Proper cloud sync via saveGlobalSettings
-// - ★ TAB REFRESH: Refreshes data when tab becomes visible
-// - ★ MEMORY LEAK FIX: Proper cleanup of all event listeners
-// - ★ DATA VALIDATION: Validates structure on load
-// - ★ XSS PREVENTION: Added escapeHtml for user content
-// - ★ RBAC: Added permission checks for add/delete operations
+// - ★ CLOUD SYNC, TAB REFRESH, MEMORY LEAK FIX
+// - ★ DATA VALIDATION, XSS PREVENTION, RBAC
 // =================================================================
 (function () {
     'use strict';
-    console.log("🏆 leagues.js v2.4 loading...");
+    console.log("🏆 leagues.js v2.5 loading...");
 
     // =========================================================================
     // GLOBAL LEAGUE STORAGE
@@ -1245,287 +1241,391 @@
     }
 
     // =========================================================================
-    // GAME ENTRY + IMPORT
+    // GAME ENTRY + IMPORT - REDESIGNED UI/UX v2.4
     // =========================================================================
     
     /**
-     * Render game entry UI with optional pre-selected game
+     * Render the main game entry UI with improved UX
+     * Shows all games as cards, grouped by date
      */
-    function renderGameEntryUIWithSelection(league, container, selectedGameIdx) {
-        if (!container) return;
-
-        container.innerHTML = '';
-        
-        // ★ Add data attribute for scrolling
-        container.setAttribute('data-section', 'games');
-
-        const controls = document.createElement('div');
-        Object.assign(controls.style, {
-            marginBottom: '15px',
-            padding: '12px',
-            background: '#F9FAFB',
-            borderRadius: '12px',
-            border: '1px solid #E5E7EB',
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: '10px',
-            alignItems: 'center'
-        });
-
-        const select = document.createElement('select');
-        select.style.flex = "1";
-        select.style.padding = "8px";
-        select.style.border = "1px solid #D1D5DB";
-        select.style.borderRadius = "8px";
-        
-        const defaultOpt = document.createElement('option');
-        defaultOpt.value = 'new';
-        defaultOpt.textContent = '-- Enter New Game --';
-        select.appendChild(defaultOpt);
-        
-        // ★ Sort games by date and game number, show game label
-        const sortedGames = (league.games || []).map((g, i) => ({ ...g, _originalIndex: i }));
-        sortedGames.sort((a, b) => {
-            if (a.date !== b.date) return (a.date || '').localeCompare(b.date || '');
-            const numA = a.gameNumber || 0;
-            const numB = b.gameNumber || 0;
-            return numA - numB;
-        });
-        
-        sortedGames.forEach(function (g) {
-            const opt = document.createElement('option');
-            opt.value = String(g._originalIndex);
-            const displayLabel = g.gameLabel || ('Game ' + (g._originalIndex + 1));
-            const dateStr = g.date || 'no date';
-            opt.textContent = displayLabel + ' (' + dateStr + ')';
-            // ★ Auto-select the specified game
-            if (selectedGameIdx != null && g._originalIndex === selectedGameIdx) {
-                opt.selected = true;
-            }
-            select.appendChild(opt);
-        });
-        controls.appendChild(select);
-
-        const importBtn = document.createElement('button');
-        importBtn.textContent = '📥 Import from Schedule';
-        importBtn.style.cssText = 'padding:8px 12px; border-radius:8px; background:#3B82F6; color:white; border:none; cursor:pointer; font-weight:500;';
-        importBtn.onclick = function () {
-            importGamesFromSchedule(league);
-        };
-        controls.appendChild(importBtn);
-
-        container.appendChild(controls);
-
-        const formArea = document.createElement('div');
-        container.appendChild(formArea);
-
-        // ★ Use selected game idx or fallback to 'new'
-        const initialIdx = selectedGameIdx != null ? selectedGameIdx : (select.value === 'new' ? null : parseInt(select.value, 10));
-        renderGameForm(league, formArea, initialIdx);
-
-        select.onchange = function () {
-            renderGameForm(league, formArea, select.value === 'new' ? null : parseInt(select.value, 10));
-        };
-    }
-    
     function renderGameEntryUI(league, container) {
-        // ★ Call the new function with no pre-selection
         renderGameEntryUIWithSelection(league, container, null);
     }
-
-    function renderGameForm(league, container, gameIdx) {
+    
+    function renderGameEntryUIWithSelection(league, container, highlightGameIdx) {
         if (!container) return;
 
         container.innerHTML = '';
-        const game = gameIdx != null ? league.games[gameIdx] : { date: '', gameLabel: '', matches: [] };
+        container.setAttribute('data-section', 'games');
 
-        // ★ Show game title/label if editing an existing game
-        if (gameIdx != null && game.gameLabel) {
-            const gameTitle = document.createElement('div');
-            gameTitle.style.cssText = 'font-size:1.1rem; font-weight:600; color:#111827; margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid #E5E7EB;';
-            gameTitle.textContent = '📋 ' + game.gameLabel;
-            container.appendChild(gameTitle);
-        }
-
-        // Date input
-        const dateRow = document.createElement('div');
-        dateRow.style.marginBottom = '12px';
-        const dateLabel = document.createElement('label');
-        dateLabel.style.cssText = 'font-weight:500; display:block; margin-bottom:4px;';
-        dateLabel.textContent = 'Date:';
-        dateRow.appendChild(dateLabel);
+        // ★ Header with Import button
+        const header = document.createElement('div');
+        Object.assign(header.style, {
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '16px',
+            padding: '12px 16px',
+            background: 'linear-gradient(135deg, #3B82F6 0%, #2563EB 100%)',
+            borderRadius: '12px',
+            color: 'white'
+        });
         
-        const dateInput = document.createElement('input');
-        dateInput.type = 'date';
-        dateInput.value = game.date || '';
-        dateInput.style.cssText = 'padding:8px; border:1px solid #D1D5DB; border-radius:8px; width:100%;';
-        dateRow.appendChild(dateInput);
-        container.appendChild(dateRow);
-
-        // ★ Game label input (for new games or editing)
-        const labelRow = document.createElement('div');
-        labelRow.style.marginBottom = '12px';
-        const labelLabel = document.createElement('label');
-        labelLabel.style.cssText = 'font-weight:500; display:block; margin-bottom:4px;';
-        labelLabel.textContent = 'Game Label (e.g., Game 11):';
-        labelRow.appendChild(labelLabel);
+        const headerTitle = document.createElement('div');
+        headerTitle.innerHTML = '<span style="font-weight:600; font-size:1rem;">📊 Game Results</span><br><span style="font-size:0.8rem; opacity:0.9;">Enter scores to update standings</span>';
+        header.appendChild(headerTitle);
         
-        const labelInput = document.createElement('input');
-        labelInput.type = 'text';
-        labelInput.placeholder = 'Game 1';
-        labelInput.value = game.gameLabel || '';
-        labelInput.style.cssText = 'padding:8px; border:1px solid #D1D5DB; border-radius:8px; width:100%;';
-        labelRow.appendChild(labelInput);
-        container.appendChild(labelRow);
+        const importBtn = document.createElement('button');
+        importBtn.innerHTML = '📥 Import Today\'s Games';
+        Object.assign(importBtn.style, {
+            padding: '10px 16px',
+            borderRadius: '8px',
+            background: 'white',
+            color: '#2563EB',
+            border: 'none',
+            cursor: 'pointer',
+            fontWeight: '600',
+            fontSize: '0.9rem',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+        });
+        importBtn.onclick = () => importGamesFromSchedule(league);
+        header.appendChild(importBtn);
+        container.appendChild(header);
 
-        // Matches section
-        const matchesLabel = document.createElement('label');
-        matchesLabel.textContent = 'Matches:';
-        matchesLabel.style.cssText = 'font-weight:500; display:block; margin-bottom:8px; margin-top:16px;';
-        container.appendChild(matchesLabel);
+        // ★ Get and group games by date
+        const games = league.games || [];
+        const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        
+        // Separate today's games from past games
+        const todaysGames = [];
+        const pastGames = [];
+        
+        games.forEach((g, idx) => {
+            const gameWithIdx = { ...g, _idx: idx };
+            if (g.date === currentDate) {
+                todaysGames.push(gameWithIdx);
+            } else {
+                pastGames.push(gameWithIdx);
+            }
+        });
+        
+        // Sort by game number
+        const sortByGameNum = (a, b) => (a.gameNumber || 0) - (b.gameNumber || 0);
+        todaysGames.sort(sortByGameNum);
+        pastGames.sort((a, b) => {
+            // Sort by date descending, then game number
+            if (a.date !== b.date) return (b.date || '').localeCompare(a.date || '');
+            return sortByGameNum(a, b);
+        });
 
-        // Only show "no matches" message if this is a new game with no matches
-        if (gameIdx == null && (!game.matches || game.matches.length === 0)) {
-            const noMatchesMsg = document.createElement('p');
-            noMatchesMsg.className = 'muted';
-            noMatchesMsg.style.cssText = 'text-align:center; padding:12px; background:#F9FAFB; border-radius:8px; margin-bottom:12px;';
-            noMatchesMsg.textContent = 'Click "+ Add Match" to add matchups, or use "Import from Schedule" to pull today\'s games.';
-            container.appendChild(noMatchesMsg);
-        }
-
-        const matchesDiv = document.createElement('div');
-        matchesDiv.id = 'matches-container';
-        container.appendChild(matchesDiv);
-
-        function renderMatches() {
-            matchesDiv.innerHTML = '';
-            
-            // Only render rows for matches that have teams assigned
-            (game.matches || []).forEach(function (m, i) {
-                const row = document.createElement('div');
-                row.style.cssText = 'display:flex; gap:8px; margin-bottom:10px; align-items:center; padding:10px 12px; background:#FFFFFF; border:1px solid #E5E7EB; border-radius:10px;';
-
-                // Team A selector
-                const teamASelect = document.createElement('select');
-                teamASelect.style.cssText = 'flex:1; padding:8px; border:1px solid #D1D5DB; border-radius:6px;';
-                const teamADefault = document.createElement('option');
-                teamADefault.value = '';
-                teamADefault.textContent = '-- Select Team --';
-                teamASelect.appendChild(teamADefault);
-                league.teams.forEach(function (t) {
-                    const opt = document.createElement('option');
-                    opt.value = t;
-                    opt.textContent = t;
-                    if (t === m.teamA) opt.selected = true;
-                    teamASelect.appendChild(opt);
-                });
-                teamASelect.onchange = function () { m.teamA = teamASelect.value; };
-
-                // Score A input
-                const scoreAInput = document.createElement('input');
-                scoreAInput.type = 'number';
-                scoreAInput.min = '0';
-                scoreAInput.placeholder = '0';
-                scoreAInput.value = m.scoreA != null ? m.scoreA : '';
-                scoreAInput.style.cssText = 'width:50px; text-align:center; padding:8px; border:1px solid #D1D5DB; border-radius:6px; font-weight:600;';
-                scoreAInput.onchange = function () { 
-                    m.scoreA = scoreAInput.value !== '' ? parseInt(scoreAInput.value, 10) : null; 
-                };
-
-                // VS label
-                const vs = document.createElement('span');
-                vs.textContent = '-';
-                vs.style.cssText = 'color:#6B7280; font-weight:600; padding:0 4px;';
-
-                // Score B input
-                const scoreBInput = document.createElement('input');
-                scoreBInput.type = 'number';
-                scoreBInput.min = '0';
-                scoreBInput.placeholder = '0';
-                scoreBInput.value = m.scoreB != null ? m.scoreB : '';
-                scoreBInput.style.cssText = 'width:50px; text-align:center; padding:8px; border:1px solid #D1D5DB; border-radius:6px; font-weight:600;';
-                scoreBInput.onchange = function () { 
-                    m.scoreB = scoreBInput.value !== '' ? parseInt(scoreBInput.value, 10) : null; 
-                };
-
-                // Team B selector
-                const teamBSelect = document.createElement('select');
-                teamBSelect.style.cssText = 'flex:1; padding:8px; border:1px solid #D1D5DB; border-radius:6px;';
-                const teamBDefault = document.createElement('option');
-                teamBDefault.value = '';
-                teamBDefault.textContent = '-- Select Team --';
-                teamBSelect.appendChild(teamBDefault);
-                league.teams.forEach(function (t) {
-                    const opt = document.createElement('option');
-                    opt.value = t;
-                    opt.textContent = t;
-                    if (t === m.teamB) opt.selected = true;
-                    teamBSelect.appendChild(opt);
-                });
-                teamBSelect.onchange = function () { m.teamB = teamBSelect.value; };
-
-                // Remove button
-                const removeBtn = document.createElement('button');
-                removeBtn.textContent = '×';
-                removeBtn.style.cssText = 'background:#FEE2E2; color:#DC2626; border:none; border-radius:6px; padding:8px 12px; cursor:pointer; font-weight:600;';
-                removeBtn.onclick = function () {
-                    game.matches.splice(i, 1);
-                    renderMatches();
-                };
-
-                row.append(teamASelect, scoreAInput, vs, scoreBInput, teamBSelect, removeBtn);
-                matchesDiv.appendChild(row);
+        // ★ TODAY'S GAMES SECTION
+        const todaySection = document.createElement('div');
+        todaySection.style.marginBottom = '20px';
+        
+        const todayHeader = document.createElement('div');
+        todayHeader.style.cssText = 'font-weight:600; font-size:1rem; color:#111827; margin-bottom:12px; display:flex; align-items:center; gap:8px;';
+        todayHeader.innerHTML = '<span style="font-size:1.2rem;">📅</span> Today\'s Games <span style="font-size:0.8rem; color:#6B7280; font-weight:400;">(' + currentDate + ')</span>';
+        todaySection.appendChild(todayHeader);
+        
+        if (todaysGames.length === 0) {
+            const emptyMsg = document.createElement('div');
+            emptyMsg.style.cssText = 'padding:24px; text-align:center; background:#F9FAFB; border-radius:12px; border:2px dashed #D1D5DB;';
+            emptyMsg.innerHTML = '<div style="font-size:2rem; margin-bottom:8px;">🏟️</div>' +
+                '<div style="font-weight:500; color:#374151; margin-bottom:4px;">No games imported yet</div>' +
+                '<div style="font-size:0.85rem; color:#6B7280;">Click "Import Today\'s Games" to pull matchups from the schedule</div>';
+            todaySection.appendChild(emptyMsg);
+        } else {
+            // ★ Render each game as a card
+            todaysGames.forEach(game => {
+                const isHighlighted = highlightGameIdx != null && game._idx === highlightGameIdx;
+                const card = renderGameCard(league, game, isHighlighted);
+                todaySection.appendChild(card);
             });
         }
-
-        renderMatches();
-
+        
+        container.appendChild(todaySection);
+        
+        // ★ PAST GAMES SECTION (collapsible)
+        if (pastGames.length > 0) {
+            const pastSection = document.createElement('div');
+            
+            const pastHeader = document.createElement('div');
+            pastHeader.style.cssText = 'font-weight:600; font-size:0.95rem; color:#6B7280; margin-bottom:12px; cursor:pointer; display:flex; align-items:center; gap:8px; padding:8px; background:#F3F4F6; border-radius:8px;';
+            pastHeader.innerHTML = '<span id="past-arrow">▶</span> Past Games <span style="font-size:0.8rem; font-weight:400;">(' + pastGames.length + ' games)</span>';
+            
+            const pastContent = document.createElement('div');
+            pastContent.style.display = 'none';
+            pastContent.id = 'past-games-content';
+            
+            pastHeader.onclick = () => {
+                const isHidden = pastContent.style.display === 'none';
+                pastContent.style.display = isHidden ? 'block' : 'none';
+                pastHeader.querySelector('#past-arrow').textContent = isHidden ? '▼' : '▶';
+            };
+            
+            pastGames.forEach(game => {
+                const card = renderGameCard(league, game, false, true);
+                pastContent.appendChild(card);
+            });
+            
+            pastSection.appendChild(pastHeader);
+            pastSection.appendChild(pastContent);
+            container.appendChild(pastSection);
+        }
+        
+        // ★ ADD NEW GAME BUTTON
+        const addNewSection = document.createElement('div');
+        addNewSection.style.cssText = 'margin-top:16px; padding-top:16px; border-top:1px solid #E5E7EB;';
+        
+        const addNewBtn = document.createElement('button');
+        addNewBtn.innerHTML = '➕ Add Game Manually';
+        addNewBtn.style.cssText = 'padding:10px 16px; border:1px dashed #D1D5DB; border-radius:8px; background:#fff; cursor:pointer; color:#6B7280; font-weight:500; width:100%;';
+        addNewBtn.onclick = () => {
+            // Add empty game and show form
+            if (!league.games) league.games = [];
+            const newIdx = league.games.length;
+            league.games.push({
+                date: currentDate,
+                gameLabel: 'Game ' + (newIdx + 1),
+                matches: []
+            });
+            saveLeaguesData();
+            renderGameEntryUIWithSelection(league, container, newIdx);
+        };
+        addNewSection.appendChild(addNewBtn);
+        container.appendChild(addNewSection);
+    }
+    
+    /**
+     * Render a single game as a card with inline score editing
+     */
+    function renderGameCard(league, game, isHighlighted, isPast) {
+        const card = document.createElement('div');
+        Object.assign(card.style, {
+            background: isHighlighted ? '#EFF6FF' : '#fff',
+            border: isHighlighted ? '2px solid #3B82F6' : '1px solid #E5E7EB',
+            borderRadius: '12px',
+            padding: '16px',
+            marginBottom: '12px',
+            boxShadow: isHighlighted ? '0 4px 12px rgba(59, 130, 246, 0.15)' : '0 1px 3px rgba(0,0,0,0.05)'
+        });
+        
+        // ★ Card Header
+        const cardHeader = document.createElement('div');
+        cardHeader.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid #F3F4F6;';
+        
+        const gameTitle = document.createElement('div');
+        gameTitle.style.cssText = 'font-weight:600; font-size:1rem; color:#111827;';
+        gameTitle.textContent = game.gameLabel || ('Game ' + (game._idx + 1));
+        
+        const gameDate = document.createElement('div');
+        gameDate.style.cssText = 'font-size:0.8rem; color:#6B7280;';
+        gameDate.textContent = game.date || 'No date';
+        
+        const deleteBtn = document.createElement('button');
+        deleteBtn.innerHTML = '🗑️';
+        deleteBtn.title = 'Delete this game';
+        deleteBtn.style.cssText = 'background:none; border:none; cursor:pointer; font-size:1rem; opacity:0.5; padding:4px;';
+        deleteBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (confirm('Delete this game? This cannot be undone.')) {
+                league.games.splice(game._idx, 1);
+                recalcStandings(league);
+                saveLeaguesData();
+                renderGameEntryUI(league, card.parentElement.parentElement);
+            }
+        };
+        
+        const headerLeft = document.createElement('div');
+        headerLeft.style.cssText = 'display:flex; align-items:center; gap:12px;';
+        headerLeft.appendChild(gameTitle);
+        headerLeft.appendChild(gameDate);
+        
+        cardHeader.appendChild(headerLeft);
+        cardHeader.appendChild(deleteBtn);
+        card.appendChild(cardHeader);
+        
+        // ★ Matchups Grid
+        const matchupsGrid = document.createElement('div');
+        matchupsGrid.style.cssText = 'display:flex; flex-direction:column; gap:8px;';
+        
+        if (!game.matches || game.matches.length === 0) {
+            const noMatches = document.createElement('div');
+            noMatches.style.cssText = 'text-align:center; padding:12px; color:#9CA3AF; font-size:0.9rem;';
+            noMatches.textContent = 'No matchups - click edit to add';
+            matchupsGrid.appendChild(noMatches);
+        } else {
+            game.matches.forEach((match, mIdx) => {
+                const matchRow = renderMatchRow(league, game, match, mIdx, isPast);
+                matchupsGrid.appendChild(matchRow);
+            });
+        }
+        
+        card.appendChild(matchupsGrid);
+        
+        // ★ Card Footer - Save indicator
+        const footer = document.createElement('div');
+        footer.style.cssText = 'margin-top:12px; padding-top:8px; border-top:1px solid #F3F4F6; display:flex; justify-content:flex-end; gap:8px;';
+        
         const addMatchBtn = document.createElement('button');
-        addMatchBtn.textContent = '+ Add Match';
-        addMatchBtn.style.cssText = 'margin-top:8px; padding:8px 16px; border:1px dashed #D1D5DB; border-radius:8px; background:#fff; cursor:pointer;';
-        addMatchBtn.onclick = function () {
+        addMatchBtn.innerHTML = '+ Add Match';
+        addMatchBtn.style.cssText = 'padding:6px 12px; border:1px dashed #D1D5DB; border-radius:6px; background:#fff; cursor:pointer; color:#6B7280; font-size:0.85rem;';
+        addMatchBtn.onclick = () => {
             if (!game.matches) game.matches = [];
             game.matches.push({ teamA: '', teamB: '', scoreA: null, scoreB: null });
-            renderMatches();
+            league.games[game._idx] = game;
+            saveLeaguesData();
+            renderGameEntryUI(league, card.parentElement.parentElement);
         };
-        container.appendChild(addMatchBtn);
-
-        const saveBtn = document.createElement('button');
-        saveBtn.textContent = gameIdx != null ? 'Update Game' : 'Save Game';
-        saveBtn.style.cssText = 'margin-top:16px; padding:10px 20px; background:#10B981; color:#fff; border:none; border-radius:8px; cursor:pointer; font-weight:500; display:block;';
-        saveBtn.onclick = function () {
-            game.date = dateInput.value;
-            game.gameLabel = labelInput.value.trim() || null;  // ★ Save game label
+        
+        const saveStatus = document.createElement('span');
+        saveStatus.id = 'save-status-' + game._idx;
+        saveStatus.style.cssText = 'font-size:0.8rem; color:#10B981; display:none;';
+        saveStatus.textContent = '✓ Saved';
+        
+        footer.appendChild(addMatchBtn);
+        footer.appendChild(saveStatus);
+        card.appendChild(footer);
+        
+        return card;
+    }
+    
+    /**
+     * Render a single match row with inline score editing
+     */
+    function renderMatchRow(league, game, match, matchIdx, isPast) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex; align-items:center; gap:8px; padding:8px 12px; background:#F9FAFB; border-radius:8px;';
+        
+        // Team A
+        const teamALabel = document.createElement('div');
+        teamALabel.style.cssText = 'flex:1; font-weight:500; text-align:right; color:#111827;';
+        teamALabel.textContent = match.teamA || '—';
+        
+        // Score A input
+        const scoreAInput = document.createElement('input');
+        scoreAInput.type = 'number';
+        scoreAInput.min = '0';
+        scoreAInput.value = match.scoreA != null ? match.scoreA : '';
+        scoreAInput.placeholder = '-';
+        scoreAInput.style.cssText = 'width:45px; text-align:center; padding:6px; border:1px solid #D1D5DB; border-radius:6px; font-weight:600; font-size:1rem;';
+        if (isPast) scoreAInput.disabled = true;
+        
+        // Highlight winner
+        if (match.scoreA != null && match.scoreB != null) {
+            if (match.scoreA > match.scoreB) {
+                teamALabel.style.color = '#059669';
+                scoreAInput.style.background = '#D1FAE5';
+                scoreAInput.style.borderColor = '#059669';
+            } else if (match.scoreA < match.scoreB) {
+                teamALabel.style.color = '#6B7280';
+            }
+        }
+        
+        // VS divider
+        const vs = document.createElement('span');
+        vs.style.cssText = 'color:#9CA3AF; font-weight:600; font-size:0.9rem;';
+        vs.textContent = ':';
+        
+        // Score B input
+        const scoreBInput = document.createElement('input');
+        scoreBInput.type = 'number';
+        scoreBInput.min = '0';
+        scoreBInput.value = match.scoreB != null ? match.scoreB : '';
+        scoreBInput.placeholder = '-';
+        scoreBInput.style.cssText = 'width:45px; text-align:center; padding:6px; border:1px solid #D1D5DB; border-radius:6px; font-weight:600; font-size:1rem;';
+        if (isPast) scoreBInput.disabled = true;
+        
+        // Team B
+        const teamBLabel = document.createElement('div');
+        teamBLabel.style.cssText = 'flex:1; font-weight:500; text-align:left; color:#111827;';
+        teamBLabel.textContent = match.teamB || '—';
+        
+        // Highlight winner
+        if (match.scoreA != null && match.scoreB != null) {
+            if (match.scoreB > match.scoreA) {
+                teamBLabel.style.color = '#059669';
+                scoreBInput.style.background = '#D1FAE5';
+                scoreBInput.style.borderColor = '#059669';
+            } else if (match.scoreB < match.scoreA) {
+                teamBLabel.style.color = '#6B7280';
+            }
+        }
+        
+        // ★ Auto-save on score change
+        const handleScoreChange = () => {
+            const newScoreA = scoreAInput.value !== '' ? parseInt(scoreAInput.value, 10) : null;
+            const newScoreB = scoreBInput.value !== '' ? parseInt(scoreBInput.value, 10) : null;
             
-            // ★ Extract game number from label if provided
-            if (game.gameLabel) {
-                const numMatch = game.gameLabel.match(/Game\s*(\d+)/i);
-                if (numMatch) {
-                    game.gameNumber = parseInt(numMatch[1], 10);
-                }
-            }
-
-            // Filter out matches without both teams selected
-            game.matches = (game.matches || []).filter(m => m.teamA && m.teamB);
-
-            if (game.matches.length === 0) {
-                alert('Please add at least one match with both teams selected.');
-                return;
-            }
-
-            if (gameIdx != null) {
-                league.games[gameIdx] = game;
-            } else {
-                if (!league.games) league.games = [];
-                league.games.push(game);
-            }
-
+            match.scoreA = newScoreA;
+            match.scoreB = newScoreB;
+            league.games[game._idx].matches[matchIdx] = match;
+            
             recalcStandings(league);
             saveLeaguesData();
-            renderDetailPane();
+            
+            // Show save indicator
+            const saveStatus = document.getElementById('save-status-' + game._idx);
+            if (saveStatus) {
+                saveStatus.style.display = 'inline';
+                setTimeout(() => { saveStatus.style.display = 'none'; }, 2000);
+            }
+            
+            // Update winner highlighting
+            if (newScoreA != null && newScoreB != null) {
+                if (newScoreA > newScoreB) {
+                    teamALabel.style.color = '#059669';
+                    scoreAInput.style.background = '#D1FAE5';
+                    scoreAInput.style.borderColor = '#059669';
+                    teamBLabel.style.color = '#6B7280';
+                    scoreBInput.style.background = '';
+                    scoreBInput.style.borderColor = '#D1D5DB';
+                } else if (newScoreB > newScoreA) {
+                    teamBLabel.style.color = '#059669';
+                    scoreBInput.style.background = '#D1FAE5';
+                    scoreBInput.style.borderColor = '#059669';
+                    teamALabel.style.color = '#6B7280';
+                    scoreAInput.style.background = '';
+                    scoreAInput.style.borderColor = '#D1D5DB';
+                } else {
+                    // Tie
+                    teamALabel.style.color = '#111827';
+                    teamBLabel.style.color = '#111827';
+                    scoreAInput.style.background = '#FEF3C7';
+                    scoreBInput.style.background = '#FEF3C7';
+                    scoreAInput.style.borderColor = '#F59E0B';
+                    scoreBInput.style.borderColor = '#F59E0B';
+                }
+            }
         };
-        container.appendChild(saveBtn);
+        
+        scoreAInput.onchange = handleScoreChange;
+        scoreBInput.onchange = handleScoreChange;
+        
+        // Delete match button
+        const deleteMatchBtn = document.createElement('button');
+        deleteMatchBtn.innerHTML = '×';
+        deleteMatchBtn.title = 'Remove match';
+        deleteMatchBtn.style.cssText = 'background:#FEE2E2; color:#DC2626; border:none; border-radius:4px; padding:4px 8px; cursor:pointer; font-weight:600; font-size:0.9rem;';
+        deleteMatchBtn.onclick = () => {
+            game.matches.splice(matchIdx, 1);
+            league.games[game._idx] = game;
+            recalcStandings(league);
+            saveLeaguesData();
+            renderGameEntryUI(league, row.parentElement.parentElement.parentElement);
+        };
+        if (isPast) deleteMatchBtn.style.display = 'none';
+        
+        row.appendChild(teamALabel);
+        row.appendChild(scoreAInput);
+        row.appendChild(vs);
+        row.appendChild(scoreBInput);
+        row.appendChild(teamBLabel);
+        row.appendChild(deleteMatchBtn);
+        
+        return row;
     }
+
 
     // =========================================================================
     // ★ SMART DIVISION MATCHING
@@ -1848,35 +1948,22 @@
                 summary += '\n';
             });
             
-            summary += 'You can now enter the scores below.';
+            summary += 'Enter the scores below - they auto-save!';
             
             alert(summary);
             
-            // ★ Find the container where games are rendered and refresh it
-            // We need to find the games div container and re-render with the imported game selected
+            // ★ Refresh the games section - all imported games will show automatically
+            // The new UI shows all today's games as cards
             const gamesContainer = detailPaneEl?.querySelector('[data-section="games"]');
-            
             if (gamesContainer) {
-                // Find the index of the first imported game to auto-select it
-                const firstImportedLabel = importedGames[0];
-                const firstImportedIdx = league.games.findIndex(g => 
-                    g.date === currentDate && g.gameLabel === firstImportedLabel
-                );
-                
-                // Re-render the game entry UI
-                renderGameEntryUIWithSelection(league, gamesContainer, firstImportedIdx >= 0 ? firstImportedIdx : null);
-                
-                // Scroll to the games section
+                renderGameEntryUI(league, gamesContainer);
                 gamesContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
             } else {
-                // Fallback: re-render the whole detail pane and try to switch to games tab
+                // Fallback - re-render detail pane and switch to games tab
                 renderDetailPane();
-                
                 setTimeout(() => {
                     const gamesTab = detailPaneEl?.querySelector('#tab-games');
-                    if (gamesTab) {
-                        gamesTab.click();
-                    }
+                    if (gamesTab) gamesTab.click();
                 }, 100);
             }
 
@@ -1987,5 +2074,5 @@
     // Auto-load on script run
     window.loadLeagueGlobals();
 
-    console.log("🏆 leagues.js v2.4: window.initLeagues ready");
+    console.log("🏆 leagues.js v2.5: window.initLeagues ready");
 })();
