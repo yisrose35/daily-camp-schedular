@@ -1,113 +1,118 @@
-// =================================================================
-// SCHEDULE BUILDER v9.0 — ULTIMATE DESIGN
-// =================================================================
-// Principles:
-// 1. Content is everything - chrome disappears
-// 2. Every interaction feels tactile
-// 3. Whitespace is a feature
-// 4. Simplicity is the ultimate sophistication
-// 5. Details matter at every level
-// =================================================================
+// =============================================================================
+// master_schedule_builder.js v2.0 — PREMIUM SCHEDULE BUILDER
+// =============================================================================
+// Sleek, professional schedule builder interface
+// Enterprise-grade design system
+// =============================================================================
 
 (function() {
 'use strict';
 
-let skeleton = [];
-let template = null;
-let container = null;
-let clipboard = null;
-let hoveredCol = null;
-let dragGhost = null;
-let _keyHandler = null;
-let _visHandler = null;
+let container, skeleton = [], template = null, _keyHandler, _visHandler;
+const PX = 1.2, SNAP = 5;
 
-const STORE = 'sched_v9';
-const PX = 1.6;
-const SNAP = 5;
-
+// Premium Block Types with refined colors
 const BLOCKS = {
-    activity:         { name: 'Activity',    color: '#4F46E5', bg: '#E0E7FF', desc: 'General activity slot. The scheduler will assign any available activity.' },
-    sports:           { name: 'Sports',      color: '#16A34A', bg: '#DCFCE7', desc: 'Dedicated sports period. Assigns outdoor field activities and team sports.' },
-    special:          { name: 'Special',     color: '#0D9488', bg: '#CCFBF1', desc: 'Special activity slot. For unique camp-wide events or guest activities.' },
-    smart:            { name: 'Smart',       color: '#7C3AED', bg: '#EDE9FE', dashed: true, desc: 'Smart balanced slot. Automatically balances two activities with a fallback option.' },
-    split:            { name: 'Split',       color: '#D97706', bg: '#FEF3C7', desc: 'Split time block. Divides the period into two different activities.' },
-    elective:         { name: 'Elective',    color: '#DB2777', bg: '#FCE7F3', desc: 'Elective choice period. Campers choose from a set of available activities.' },
-    league:           { name: 'League',      color: '#9333EA', bg: '#F3E8FF', desc: 'League game slot. Scheduled competitive games between bunks or teams.' },
-    specialty_league: { name: 'Specialty',   color: '#CA8A04', bg: '#FEF9C3', desc: 'Specialty league. Tournament or bracket-style competition events.' },
-    swim:             { name: 'Swim',        color: '#0284C7', bg: '#E0F2FE', desc: 'Swimming period. Pool or lake activities with lifeguard supervision.' },
-    lunch:            { name: 'Lunch',       color: '#DC2626', bg: '#FEE2E2', desc: 'Lunch break. Meal time - no activities scheduled.' },
-    snacks:           { name: 'Snacks',      color: '#EA580C', bg: '#FFEDD5', desc: 'Snack time. Short break for refreshments between activities.' },
-    dismissal:        { name: 'Dismissal',   color: '#E11D48', bg: '#FCE7F3', desc: 'End of day dismissal. Wrap-up and departure time.' },
-    custom:           { name: 'Custom',      color: '#475569', bg: '#F1F5F9', desc: 'Custom event. Define your own activity with optional location reservations.' }
+    general:    { name: 'General',    color: '#475569', bg: '#f8fafc',   desc: 'Standard activity block' },
+    rotation:   { name: 'Rotation',   color: '#4f46e5', bg: '#eef2ff',   desc: 'Rotating activity slot' },
+    specialty:  { name: 'Specialty',  color: '#7c3aed', bg: '#f5f3ff',   desc: 'Specialized program' },
+    split:      { name: 'Split',      color: '#0891b2', bg: '#ecfeff',   desc: 'Divided time block' },
+    conditional:{ name: 'Conditional',color: '#ea580c', bg: '#fff7ed',   desc: 'Weather-dependent block' },
+    elective:   { name: 'Elective',   color: '#059669', bg: '#ecfdf5',   desc: 'Camper choice activity' },
+    league:     { name: 'League',     color: '#dc2626', bg: '#fef2f2',   desc: 'Competitive league slot' },
+    lineup:     { name: 'Lineup',     color: '#64748b', bg: '#f1f5f9',   desc: 'Assembly/preparation', dashed: true },
+    custom:     { name: 'Custom',     color: '#78716c', bg: '#fafaf9',   desc: 'Custom event type' }
 };
 
-// Utilities
-const id = () => Math.random().toString(36).slice(2, 9);
-const h = s => { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; };
-const toM = s => { if (!s) return null; const t = s.toLowerCase().replace(/\s/g, ''); const pm = t.includes('pm'), am = t.includes('am'); let [hr, mn] = t.replace(/[ap]m/g, '').split(':').map(Number); if (isNaN(hr)) return null; if (pm && hr !== 12) hr += 12; if (am && hr === 12) hr = 0; return hr * 60 + (mn || 0); };
-const toS = m => { if (m == null) return ''; let hr = Math.floor(m / 60), mn = m % 60; return `${hr % 12 || 12}:${String(mn).padStart(2, '0')} ${hr >= 12 ? 'PM' : 'AM'}`; };
-const bounds = () => { const D = window.divisions || {}; let lo = null, hi = null; Object.values(D).filter(d => d?.bunks?.length).forEach(d => { const s = toM(d.startTime), e = toM(d.endTime); if (s != null && (lo == null || s < lo)) lo = s; if (e != null && (hi == null || e > hi)) hi = e; }); skeleton.forEach(ev => { const s = toM(ev.startTime), e = toM(ev.endTime); if (s != null && (lo == null || s < lo)) lo = s; if (e != null && (hi == null || e > hi)) hi = e; }); return { lo: lo ?? 480, hi: hi ?? 1020 }; };
-const locs = () => { const g = window.loadGlobalSettings?.() || {}, r = []; (g.app1?.fields || []).forEach(f => f.available !== false && r.push({ n: f.name, t: 'Field' })); Object.values(g.locationZones || {}).forEach(z => Object.keys(z.locations || {}).forEach(n => r.find(x => x.n === n) || r.push({ n, t: z.name || 'Zone' }))); return r; };
+// Helpers
+const h = s => String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'": '&#39;'})[c]);
+const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+const toM = t => { if (!t) return null; const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+const toS = m => { const hh = Math.floor(m / 60) % 24, mm = m % 60; return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`; };
+const notify = msg => { const el = document.getElementById('notify'); if (el) { el.textContent = msg; el.classList.add('on'); setTimeout(() => el.classList.remove('on'), 2500); } };
 
-// Storage
-const save = () => { try { localStorage.setItem(STORE, JSON.stringify({ skeleton, template })); } catch(e){} sync(); };
-const load = () => { try { const d = JSON.parse(localStorage.getItem(STORE) || '{}'); if (d.skeleton) { skeleton = d.skeleton; template = d.template; return true; } } catch(e){} return false; };
-const clear = () => localStorage.removeItem(STORE);
+// Persistence
+const load = () => { try { const d = localStorage.getItem('_msb_'); if (d) { const p = JSON.parse(d); skeleton = p.skeleton || []; template = p.template || null; return true; } } catch (e) {} return false; };
+const save = () => { try { localStorage.setItem('_msb_', JSON.stringify({ skeleton, template })); } catch (e) {} sync(); };
+const sync = () => { const b = document.getElementById('status-badge'), n = document.getElementById('status-name'), u = document.getElementById('btn-update'); if (b) { b.className = template ? 'badge saved' : 'badge draft'; b.textContent = template ? 'Saved' : 'Draft'; } if (n) n.textContent = template || 'Untitled'; if (u) u.style.display = template ? '' : 'none'; };
 
 // Templates
-const loadT = n => { const all = window.getSavedSkeletons?.() || {}; if (!all[n]) return; skeleton = JSON.parse(JSON.stringify(all[n])); template = n; clear(); draw(); notify('Loaded'); };
-const saveT = (n, u) => { if (!n) return; window.saveSkeleton?.(n, skeleton); window.forceSyncToCloud?.(); template = n; clear(); fills(); sync(); notify(u ? 'Updated' : 'Saved'); };
-const delT = n => { if (!n) return; window.deleteSkeleton?.(n); window.forceSyncToCloud?.(); if (template === n) { template = null; skeleton = []; clear(); draw(); } fills(); sync(); notify('Deleted'); };
-const fills = () => { const all = window.getSavedSkeletons?.() || {}, opts = Object.keys(all).sort().map(n => `<option value="${h(n)}">${h(n)}</option>`).join(''); const s1 = document.getElementById('tpl-sel'), s2 = document.getElementById('del-sel'); if (s1) s1.innerHTML = '<option value="">Load template...</option>' + opts; if (s2) s2.innerHTML = '<option value="">Delete...</option>' + opts; };
+const fills = () => { const all = window.getSavedSkeletons?.() || {}, names = Object.keys(all).sort(); ['tpl-sel', 'del-sel'].forEach(id => { const sel = document.getElementById(id); if (sel) { sel.innerHTML = '<option value="">— Select —</option>' + names.map(n => `<option value="${h(n)}">${h(n)}</option>`).join(''); } }); };
+const loadT = n => { const all = window.getSavedSkeletons?.() || {}; if (all[n]) { skeleton = JSON.parse(JSON.stringify(all[n])); template = n; save(); draw(); notify(`Loaded "${n}"`); } };
+const saveT = (n, upd) => { const all = window.getSavedSkeletons?.() || {}; all[n] = JSON.parse(JSON.stringify(skeleton)); window.setSavedSkeletons?.(all); template = n; save(); fills(); notify(upd ? `Updated "${n}"` : `Saved "${n}"`); };
+const delT = () => { const n = document.getElementById('del-sel')?.value; if (!n || !confirm(`Delete template "${n}"?`)) return; const all = window.getSavedSkeletons?.() || {}; delete all[n]; window.setSavedSkeletons?.(all); if (template === n) template = null; save(); fills(); notify(`Deleted "${n}"`); };
 
-// Notify
-const notify = msg => { let t = document.getElementById('notify'); if (!t) { t = document.createElement('div'); t.id = 'notify'; document.body.appendChild(t); } t.textContent = msg; t.classList.add('on'); setTimeout(() => t.classList.remove('on'), 2000); };
-
-// Sync UI
-const sync = () => { const b = document.getElementById('status-badge'), n = document.getElementById('status-name'), u = document.getElementById('btn-update'); if (!b) return; if (template) { b.className = 'badge saved'; b.textContent = 'Saved'; n.textContent = template; if(u)u.style.display = ''; } else if (skeleton.length) { b.className = 'badge draft'; b.textContent = 'Draft'; n.textContent = 'Unsaved'; if(u)u.style.display = 'none'; } else { b.className = 'badge'; b.textContent = ''; n.textContent = 'New'; if(u)u.style.display = 'none'; } };
+// Bounds
+const bounds = () => { const D = window.divisions || {}, times = Object.values(D).flatMap(d => [toM(d.startTime), toM(d.endTime)]).filter(t => t != null); if (!times.length) times.push(480, 1020); return { lo: Math.floor(Math.min(...times) / 60) * 60, hi: Math.ceil(Math.max(...times) / 60) * 60 }; };
 
 // Keyboard
-const keys = () => { _keyHandler = e => { const t = document.getElementById('master-scheduler'); if (!t || !t.classList.contains('active')) return; const sel = document.querySelector('.ev.sel'); if ((e.ctrlKey || e.metaKey) && e.key === 'c' && sel) { const ev = skeleton.find(x => x.id === sel.dataset.id); if (ev) { clipboard = { ...ev, id: null }; notify('Copied'); } e.preventDefault(); } if ((e.ctrlKey || e.metaKey) && e.key === 'v' && clipboard && hoveredCol) { const { lo } = bounds(); const dur = toM(clipboard.endTime) - toM(clipboard.startTime); skeleton.push({ ...clipboard, id: id(), division: hoveredCol.dataset.d, startTime: toS(lo), endTime: toS(lo + dur) }); save(); draw(); notify('Pasted'); e.preventDefault(); } if ((e.key === 'Delete' || e.key === 'Backspace') && sel && !e.target.matches('input,textarea,select')) { skeleton = skeleton.filter(x => x.id !== sel.dataset.id); save(); draw(); e.preventDefault(); } }; document.addEventListener('keydown', _keyHandler); };
-const vis = () => { _visHandler = () => { if (document.visibilityState === 'visible') setTimeout(fills, 200); }; document.addEventListener('visibilitychange', _visHandler); window.addEventListener('focus', () => setTimeout(fills, 200)); };
+const keys = () => { if (_keyHandler) document.removeEventListener('keydown', _keyHandler); _keyHandler = e => { if (e.key === 'Delete' || e.key === 'Backspace') { const sel = document.querySelector('.ev.sel'); if (sel && !e.target.matches('input, textarea, select')) { e.preventDefault(); const id = sel.dataset.id; if (id && confirm('Delete this event?')) { skeleton = skeleton.filter(x => x.id !== id); save(); draw(); } } } }; document.addEventListener('keydown', _keyHandler); };
+const vis = () => { if (_visHandler) document.removeEventListener('visibilitychange', _visHandler); _visHandler = () => { if (!document.hidden) { load(); draw(); fills(); } }; document.addEventListener('visibilitychange', _visHandler); };
+
+// Drag & Drop
+const bindGrid = () => {
+    document.querySelectorAll('.block').forEach(bl => {
+        bl.addEventListener('dragstart', e => { e.dataTransfer.setData('type', bl.dataset.type); bl.classList.add('dragging'); });
+        bl.addEventListener('dragend', () => bl.classList.remove('dragging'));
+        bl.addEventListener('click', e => { const info = document.getElementById('tile-info'); if (info) { const B = BLOCKS[bl.dataset.type]; info.innerHTML = `<div class="tile-info-header"><span class="tile-info-dot" style="background:${B.bg};border:2px solid ${B.color}"></span><strong>${B.name}</strong></div><p>${B.desc}</p><small>Drag onto calendar to add</small>`; const r = bl.getBoundingClientRect(); info.style.top = `${r.top}px`; info.style.left = `${r.right + 12}px`; info.classList.add('show'); setTimeout(() => info.classList.remove('show'), 2500); } });
+    });
+    
+    document.querySelectorAll('.cal-col').forEach(col => {
+        col.addEventListener('dragover', e => { e.preventDefault(); col.classList.add('over'); });
+        col.addEventListener('dragleave', () => col.classList.remove('over'));
+        col.addEventListener('drop', e => { e.preventDefault(); col.classList.remove('over'); const type = e.dataTransfer.getData('type'), move = e.dataTransfer.getData('move'); const { lo } = bounds(), y = e.offsetY, m = lo + Math.round(y / PX / SNAP) * SNAP, div = col.dataset.d; if (move) { const ev = skeleton.find(x => x.id === move); if (ev) { const dur = toM(ev.endTime) - toM(ev.startTime); ev.division = div; ev.startTime = toS(m); ev.endTime = toS(m + dur); save(); draw(); } } else if (type) { openModal(type, div, toS(m), toS(m + 40)); } });
+    });
+    
+    document.querySelectorAll('.ev').forEach(tile => {
+        const ev = skeleton.find(x => x.id === tile.dataset.id);
+        tile.addEventListener('click', e => { if (!e.target.classList.contains('ev-handle')) { document.querySelectorAll('.ev.sel').forEach(t => t.classList.remove('sel')); tile.classList.add('sel'); } });
+        tile.addEventListener('dblclick', () => { if (ev) openModal(ev.type, ev.division, ev.startTime, ev.endTime, ev); });
+        tile.addEventListener('contextmenu', e => { e.preventDefault(); const eid = tile.dataset.id; if (eid && confirm('Delete this event?')) { skeleton = skeleton.filter(x => x.id !== eid); save(); draw(); } });
+        tile.addEventListener('dragstart', e => { if (e.target.classList.contains('ev-handle')) { e.preventDefault(); return; } e.dataTransfer.setData('move', ev?.id); tile.classList.add('moving'); });
+        tile.addEventListener('dragend', () => tile.classList.remove('moving'));
+        
+        tile.querySelectorAll('.ev-handle').forEach(hndl => {
+            const isT = hndl.classList.contains('ev-handle-t');
+            let y0, t0, h0;
+            const move = e => { const d = e.clientY - y0; if (isT) { const nt = Math.round((t0 + d) / (SNAP * PX)) * (SNAP * PX), nh = h0 - (nt - t0); if (nh >= 20) { tile.style.top = nt + 'px'; tile.style.height = nh + 'px'; } } else { const nh = Math.max(20, Math.round((h0 + d) / (SNAP * PX)) * (SNAP * PX)); tile.style.height = nh + 'px'; } };
+            const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); tile.classList.remove('resizing'); if (ev) { const nt = parseFloat(tile.style.top), nh = parseFloat(tile.style.height); ev.startTime = toS(bounds().lo + nt / PX); ev.endTime = toS(bounds().lo + (nt + nh) / PX); save(); draw(); } };
+            hndl.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); y0 = e.clientY; t0 = parseFloat(tile.style.top); h0 = parseFloat(tile.style.height); tile.classList.add('resizing'); document.addEventListener('mousemove', move); document.addEventListener('mouseup', up); });
+        });
+    });
+    
+    document.getElementById('grid')?.addEventListener('click', e => { if (!e.target.closest('.ev')) document.querySelectorAll('.ev.sel').forEach(t => t.classList.remove('sel')); });
+};
 
 // Modal
-const modal = (type, div, start, existing) => {
-    const B = BLOCKS[type]; if (!B) return;
-    const { lo } = bounds();
-    let sM = existing ? toM(existing.startTime) : (start ?? lo);
-    let eM = existing ? toM(existing.endTime) : sM + 30;
+const openModal = (type, division, start, end, existing) => {
+    const B = BLOCKS[type] || BLOCKS.custom, sM = toM(start), eM = toM(end);
+    document.getElementById('modal-wrap')?.remove();
+    const wrap = document.createElement('div'); wrap.id = 'modal-wrap'; wrap.className = 'modal-wrap';
+    const el = document.createElement('div'); el.className = 'modal';
     
-    let fields = '';
-    if (type === 'custom') fields = `<div class="mf"><label>Name</label><input id="f-name" value="${h(existing?.event || '')}" placeholder="Event name" autofocus></div>`;
-    else if (type === 'smart') fields = `<div class="mf mf-row"><div class="mf"><label>Activity 1</label><input id="f-a1" value="${h(existing?.smartData?.activity1 || '')}"></div><div class="mf"><label>Activity 2</label><input id="f-a2" value="${h(existing?.smartData?.activity2 || '')}"></div></div><div class="mf mf-row"><div class="mf"><label>Fallback for</label><select id="f-ff"><option value="1">Activity 1</option><option value="2">Activity 2</option></select></div><div class="mf"><label>Fallback</label><input id="f-fb" value="${h(existing?.smartData?.fallbackActivity || '')}"></div></div>`;
-    else if (type === 'split') fields = `<div class="mf mf-row"><div class="mf"><label>First half</label><input id="f-s1" value="${h(existing?.subEvents?.[0]?.activity || '')}"></div><div class="mf"><label>Second half</label><input id="f-s2" value="${h(existing?.subEvents?.[1]?.activity || '')}"></div></div>`;
-    else if (type === 'elective') { const g = window.loadGlobalSettings?.() || {}, acts = [...(g.app1?.fields || []).filter(f => f.available !== false).map(f => f.name), ...(g.app1?.specialActivities || []).filter(s => s.available !== false).map(s => s.name)], sel = existing?.electiveActivities || []; fields = `<div class="mf"><label>Activities</label><div class="checks">${acts.map(a => `<label><input type="checkbox" name="el" value="${h(a)}" ${sel.includes(a) ? 'checked' : ''}><span>${h(a)}</span></label>`).join('')}</div></div>`; }
+    let extra = '';
+    if (type === 'conditional') { const a1 = existing?.primaryActivity || '', a2 = existing?.secondaryActivity || '', fb = existing?.fallbackActivity || ''; extra = `<div class="mf"><label>Primary (Outdoor)</label><input id="f-a1" value="${h(a1)}" placeholder="e.g., Swimming"></div><div class="mf"><label>Secondary (Indoor)</label><input id="f-a2" value="${h(a2)}" placeholder="e.g., Arts"></div><div class="mf"><label>Fallback Activity</label><input id="f-fb" value="${h(fb)}" placeholder="Optional"></div>`; }
+    else if (type === 'split') { const s1 = existing?.subEvents?.[0]?.activity || '', s2 = existing?.subEvents?.[1]?.activity || ''; extra = `<div class="mf"><label>First Half</label><input id="f-s1" value="${h(s1)}" placeholder="Activity 1"></div><div class="mf"><label>Second Half</label><input id="f-s2" value="${h(s2)}" placeholder="Activity 2"></div>`; }
+    else if (type === 'elective') { const sp = window.loadGlobalSettings?.()?.sports || [], sel = existing?.electiveActivities || []; extra = `<div class="mf"><label>Available Activities</label><div class="checks">${sp.map(s => `<label><input type="checkbox" name="el" value="${h(s)}" ${sel.includes(s) ? 'checked' : ''}>${h(s)}</label>`).join('')}</div></div>`; }
     
-    let locHTML = '';
-    if (type === 'custom') { const L = locs(), res = existing?.reservedFields || []; if (L.length) locHTML = `<div class="mf"><label>Locations</label><div class="checks">${L.map(l => `<label><input type="checkbox" name="loc" value="${h(l.n)}" ${res.includes(l.n) ? 'checked' : ''}><span>${h(l.n)}</span></label>`).join('')}</div></div>`; }
+    el.innerHTML = `<div class="modal-head"><span class="modal-icon" style="--c:${B.color}">${B.name[0]}</span><h2>${existing ? 'Edit' : 'Add'} ${B.name}</h2><button class="modal-x">×</button></div><div class="modal-body"><div class="mf"><label>Event Name</label><input id="f-name" value="${h(existing?.event || '')}" placeholder="${B.name}"></div><div class="mf-row"><div class="mf"><label>Start Time</label><div class="time-row"><div class="time-box"><button data-d="-5">−</button><input id="f-start" type="text" value="${start}"><button data-d="5">+</button></div></div></div><div class="mf"><label>End Time</label><div class="time-row"><div class="time-box"><button data-d="-5">−</button><input id="f-end" type="text" value="${end}"><button data-d="5">+</button></div></div></div></div><div class="dur-row"><button data-m="20">20m</button><button data-m="30">30m</button><button data-m="40">40m</button><button data-m="45">45m</button><button data-m="60">1h</button><button data-m="90">1.5h</button></div>${extra}</div><div class="modal-foot"><button class="btn btn-ghost" id="modal-cancel">Cancel</button><button class="btn btn-primary" id="modal-save">${existing ? 'Update' : 'Add'}</button></div>`;
+    wrap.appendChild(el);
+    document.body.appendChild(wrap);
     
-    const el = document.createElement('div'); el.id = 'modal-wrap';
-    el.innerHTML = `<div class="modal"><div class="modal-accent" style="--c:${B.color}"></div><div class="modal-head"><div class="modal-icon" style="--c:${B.color}">${B.name[0]}</div><div><h2>${existing ? 'Edit' : 'Add'} ${h(B.name)}</h2></div><button class="modal-x" id="mx">×</button></div><div class="modal-body">${fields}<div class="mf"><label>Time</label><div class="time-row"><div class="time-box"><button data-a="s-">−</button><input id="f-s" value="${toS(sM)}"><button data-a="s+">+</button></div><span>→</span><div class="time-box"><button data-a="e-">−</button><input id="f-e" value="${toS(eM)}"><button data-a="e+">+</button></div></div><div class="dur-row"><button data-d="15">15m</button><button data-d="30">30m</button><button data-d="45">45m</button><button data-d="60">1h</button></div></div>${locHTML}</div><div class="modal-foot"><button class="btn btn-ghost" id="mc">Cancel</button><button class="btn btn-primary" id="ms" style="--c:${B.color}">${existing ? 'Save' : 'Add'}</button></div></div>`;
-    document.body.appendChild(el);
+    const close = () => wrap.remove();
+    wrap.addEventListener('click', e => { if (e.target === wrap) close(); });
+    el.querySelector('.modal-x').onclick = close;
+    document.getElementById('modal-cancel').onclick = close;
     
-    const $s = document.getElementById('f-s'), $e = document.getElementById('f-e');
-    const sy = () => { $s.value = toS(sM); $e.value = toS(eM); };
-    $s.onblur = () => { const v = toM($s.value); if (v != null) { sM = v; if (sM >= eM) eM = sM + 30; } sy(); };
-    $e.onblur = () => { const v = toM($e.value); if (v != null && v > sM) eM = v; sy(); };
-    el.querySelectorAll('.time-box button').forEach(b => b.onclick = () => { const a = b.dataset.a; if (a === 's+') sM = Math.min(sM + 5, eM - 5); else if (a === 's-') sM = Math.max(sM - 5, 0); else if (a === 'e+') eM = Math.min(eM + 5, 1439); else if (a === 'e-') eM = Math.max(eM - 5, sM + 5); sy(); });
-    el.querySelectorAll('.dur-row button').forEach(b => b.onclick = () => { eM = sM + +b.dataset.d; sy(); });
+    el.querySelectorAll('.time-box button').forEach(btn => btn.onclick = () => { const inp = btn.parentElement.querySelector('input'), d = parseInt(btn.dataset.d), cur = toM(inp.value) || sM; inp.value = toS(Math.max(0, cur + d)); });
+    el.querySelectorAll('.dur-row button').forEach(btn => btn.onclick = () => { const m = parseInt(btn.dataset.m), sInp = document.getElementById('f-start'), eInp = document.getElementById('f-end'), sVal = toM(sInp.value) || sM; eInp.value = toS(sVal + m); });
     
-    const close = () => el.remove();
-    document.getElementById('mx').onclick = close;
-    document.getElementById('mc').onclick = close;
-    el.onclick = e => e.target === el && close();
-    
-    document.getElementById('ms').onclick = () => {
-        const ev = existing ? { ...existing } : { id: id(), type, event: B.name, division: div, reservedFields: [] };
-        ev.startTime = toS(sM); ev.endTime = toS(eM);
-        if (type === 'custom') { const n = document.getElementById('f-name')?.value.trim(); if (!n) return alert('Enter name'); ev.event = n; ev.reservedFields = [...el.querySelectorAll('input[name="loc"]:checked')].map(c => c.value); }
-        else if (type === 'smart') { const a1 = document.getElementById('f-a1')?.value.trim(), a2 = document.getElementById('f-a2')?.value.trim(), fb = document.getElementById('f-fb')?.value.trim(); if (!a1 || !a2 || !fb) return alert('Fill all fields'); ev.smartData = { activity1: a1, activity2: a2, fallbackFor: document.getElementById('f-ff').value === '1' ? a1 : a2, fallbackActivity: fb }; }
-        else if (type === 'split') { const s1 = document.getElementById('f-s1')?.value.trim(), s2 = document.getElementById('f-s2')?.value.trim(); if (!s1 || !s2) return alert('Fill both'); const mid = sM + Math.floor((eM - sM) / 2); ev.subEvents = [{ activity: s1, startTime: toS(sM), endTime: toS(mid) }, { activity: s2, startTime: toS(mid), endTime: toS(eM) }]; }
+    document.getElementById('modal-save').onclick = () => {
+        const name = document.getElementById('f-name').value.trim() || B.name, sT = document.getElementById('f-start').value, eT = document.getElementById('f-end').value, sMn = toM(sT), eMn = toM(eT);
+        if (sMn == null || eMn == null || eMn <= sMn) return alert('Invalid times');
+        const ev = existing ? { ...existing, event: name, startTime: sT, endTime: eT } : { id: uid(), type, division, event: name, startTime: sT, endTime: eT };
+        if (type === 'conditional') { const a1 = document.getElementById('f-a1')?.value.trim(), a2 = document.getElementById('f-a2')?.value.trim(), fb = document.getElementById('f-fb')?.value.trim(); if (!a1 || !a2) return alert('Fill both activities'); ev.primaryActivity = a1; ev.secondaryActivity = a2; ev.conditionalType = 'weather'; ev.resolvedActivity = a1; ev.activities = fb ? [a1, a2, fb] : [a1, a2]; if (fb) ev.fallbackActivity = fb; }
+        else if (type === 'split') { const s1 = document.getElementById('f-s1')?.value.trim(), s2 = document.getElementById('f-s2')?.value.trim(); if (!s1 || !s2) return alert('Fill both'); const mid = sMn + Math.floor((eMn - sMn) / 2); ev.subEvents = [{ activity: s1, startTime: toS(sMn), endTime: toS(mid) }, { activity: s2, startTime: toS(mid), endTime: toS(eMn) }]; }
         else if (type === 'elective') { const acts = [...el.querySelectorAll('input[name="el"]:checked')].map(c => c.value); if (acts.length < 2) return alert('Select 2+'); ev.electiveActivities = acts; }
         if (existing) { const i = skeleton.findIndex(x => x.id === existing.id); if (i >= 0) skeleton[i] = ev; } else skeleton.push(ev);
         close(); save(); draw();
@@ -118,20 +123,20 @@ const modal = (type, div, start, existing) => {
 // Render
 const render = () => {
     if (!container) return;
-    container.innerHTML = `<div class="sch">${css()}<div class="top"><div class="top-left"><h1>Schedule Builder</h1><span id="status-badge" class="badge"></span><span id="status-name" class="status-name">New</span></div><div class="top-right"><div class="tool-group"><label>Load</label><select id="tpl-sel"></select><button class="btn btn-ghost" id="btn-load">Load</button><button class="btn btn-ghost" id="btn-update" style="display:none">Update</button></div><div class="tool-group"><label>Save</label><input id="save-name" placeholder="Template name"><button class="btn btn-primary" id="btn-save">Save</button></div><div class="tool-group"><label>Manage</label><select id="del-sel"></select><button class="btn btn-danger" id="btn-del">Delete</button><button class="btn btn-ghost" id="btn-clear">Clear All</button></div></div></div><div class="body"><div class="side"><div class="side-head"><span>Tiles</span><span class="side-hint">Click for info</span></div><div class="blocks">${Object.entries(BLOCKS).map(([k, v]) => `<div class="block" draggable="true" data-type="${k}" data-desc="${h(v.desc)}"><span class="block-dot" style="--c:${v.color};--bg:${v.bg}">${v.name[0]}</span><span>${v.name}</span></div>`).join('')}</div></div><div class="main"><div id="grid" class="grid"></div></div></div><div id="tile-info" class="tile-info"></div></div>`;
+    container.innerHTML = `<div class="sch">${css()}<div class="top"><div class="top-left"><h1>Schedule Builder</h1><span id="status-badge" class="badge"></span><span id="status-name" class="status-name">New</span></div><div class="top-right"><div class="tool-group"><label>Load</label><select id="tpl-sel"></select><button class="btn btn-ghost" id="btn-load">Load</button><button class="btn btn-ghost" id="btn-update" style="display:none">Update</button></div><div class="tool-group"><label>Save</label><input id="save-name" placeholder="Template name"><button class="btn btn-primary" id="btn-save">Save</button></div><div class="tool-group"><label>Manage</label><select id="del-sel"></select><button class="btn btn-danger" id="btn-del">Delete</button><button class="btn btn-ghost" id="btn-clear">Clear All</button></div></div></div><div class="body"><div class="side"><div class="side-head"><span>Block Types</span><span class="side-hint">Drag to calendar</span></div><div class="blocks">${Object.entries(BLOCKS).map(([k, v]) => `<div class="block" draggable="true" data-type="${k}" data-desc="${h(v.desc)}"><span class="block-dot" style="--c:${v.color};--bg:${v.bg}">${v.name[0]}</span><span>${v.name}</span></div>`).join('')}</div></div><div class="main"><div id="grid" class="grid"></div></div></div><div id="tile-info" class="tile-info"></div></div>`;
     bindUI(); fills(); draw(); sync();
 };
 
 const draw = () => {
     const g = document.getElementById('grid'); if (!g) return;
     const D = window.divisions || {}, cols = Object.keys(D).filter(d => D[d]?.bunks?.length);
-    if (!cols.length) { g.innerHTML = `<div class="empty"><div class="empty-icon">📅</div><p>No divisions configured</p></div>`; return; }
+    if (!cols.length) { g.innerHTML = `<div class="empty"><svg width="48" height="48" fill="none" stroke="#94a3b8" stroke-width="1.5" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg><p>No divisions configured</p><small>Add divisions in Setup to begin</small></div>`; return; }
     
     const { lo, hi } = bounds(), ht = (hi - lo) * PX;
     let html = `<div class="calendar" style="--cols:${cols.length}"><div class="cal-corner"></div>`;
     
     // Headers
-    cols.forEach(c => { const clr = D[c]?.color || '#6366F1'; html += `<div class="cal-head"><span class="cal-head-dot" style="--c:${clr}"></span><span>${h(c)}</span></div>`; });
+    cols.forEach(c => { const clr = D[c]?.color || '#64748b'; html += `<div class="cal-head"><span class="cal-head-dot" style="--c:${clr}"></span><span>${h(c)}</span></div>`; });
     
     // Time rail
     html += `<div class="cal-times" style="height:${ht}px">`;
@@ -173,129 +178,166 @@ const bindUI = () => {
     document.getElementById('btn-load')?.addEventListener('click', () => { const n = document.getElementById('tpl-sel').value; if (!n) return notify('Select template'); if (skeleton.length && !confirm('Replace current?')) return; loadT(n); });
     document.getElementById('btn-save')?.addEventListener('click', () => { const n = document.getElementById('save-name').value.trim(); if (!n) return notify('Enter name'); const all = window.getSavedSkeletons?.() || {}; if (all[n] && !confirm(`Replace "${n}"?`)) return; saveT(n, !!all[n]); document.getElementById('save-name').value = ''; });
     document.getElementById('btn-update')?.addEventListener('click', () => template && saveT(template, true));
-    document.getElementById('btn-clear')?.addEventListener('click', () => { if (skeleton.length && !confirm('Clear entire schedule?')) return; skeleton = []; template = null; clear(); draw(); sync(); });
-    document.getElementById('btn-del')?.addEventListener('click', () => { const n = document.getElementById('del-sel').value; if (!n || !confirm(`Delete "${n}"?`)) return; delT(n); });
-    
-    // Tile drag and click for info
-    document.querySelectorAll('.block').forEach(b => {
-        b.addEventListener('dragstart', e => { e.dataTransfer.setData('type', b.dataset.type); b.classList.add('dragging'); });
-        b.addEventListener('dragend', () => b.classList.remove('dragging'));
-        b.addEventListener('click', e => {
-            if (e.detail === 1) { // Single click - show info
-                const info = document.getElementById('tile-info');
-                const rect = b.getBoundingClientRect();
-                const type = b.dataset.type;
-                const B = BLOCKS[type];
-                info.innerHTML = `<div class="tile-info-header" style="--c:${B.color}"><span class="tile-info-dot" style="background:${B.color}"></span><strong>${B.name}</strong></div><p>${B.desc}</p><small>Drag to add to schedule</small>`;
-                info.style.top = rect.top + 'px';
-                info.style.left = (rect.right + 12) + 'px';
-                info.classList.add('show');
-                
-                const hideInfo = () => { info.classList.remove('show'); document.removeEventListener('click', hideInfo); };
-                setTimeout(() => document.addEventListener('click', hideInfo), 10);
-            }
-        });
-    });
+    document.getElementById('btn-clear')?.addEventListener('click', () => { if (skeleton.length && !confirm('Clear entire schedule?')) return; skeleton = []; template = null; save(); draw(); notify('Cleared'); });
+    document.getElementById('btn-del')?.addEventListener('click', delT);
 };
 
-const bindGrid = () => {
-    const { lo } = bounds();
-    document.querySelectorAll('.cal-col').forEach(col => {
-        col.addEventListener('mouseenter', () => hoveredCol = col);
-        col.addEventListener('mouseleave', () => { if (hoveredCol === col) hoveredCol = null; });
-        col.addEventListener('dragover', e => { e.preventDefault(); col.classList.add('over'); });
-        col.addEventListener('dragleave', e => { if (!col.contains(e.relatedTarget)) col.classList.remove('over'); });
-        col.addEventListener('drop', e => {
-            e.preventDefault(); col.classList.remove('over');
-            const mv = e.dataTransfer.getData('move');
-            if (mv) { const ev = skeleton.find(x => x.id === mv); if (ev) { const r = col.getBoundingClientRect(), y = e.clientY - r.top, ns = lo + Math.round(y / PX / SNAP) * SNAP, dur = toM(ev.endTime) - toM(ev.startTime); ev.division = col.dataset.d; ev.startTime = toS(ns); ev.endTime = toS(ns + dur); save(); draw(); } return; }
-            const type = e.dataTransfer.getData('type');
-            if (type) { const r = col.getBoundingClientRect(), y = e.clientY - r.top; modal(type, col.dataset.d, lo + Math.round(y / PX / 15) * 15); }
-        });
-    });
-    
-    document.querySelectorAll('.ev').forEach(tile => {
-        const eid = tile.dataset.id, ev = skeleton.find(x => x.id === eid);
-        tile.addEventListener('click', e => { if (e.target.classList.contains('ev-handle')) return; document.querySelectorAll('.ev.sel').forEach(t => t.classList.remove('sel')); tile.classList.add('sel'); });
-        tile.addEventListener('dblclick', e => { if (!e.target.classList.contains('ev-handle') && ev) modal(ev.type, ev.division, null, ev); });
-        tile.addEventListener('contextmenu', e => { e.preventDefault(); if (confirm('Delete?')) { skeleton = skeleton.filter(x => x.id !== eid); save(); draw(); } });
-        tile.addEventListener('dragstart', e => { if (e.target.classList.contains('ev-handle')) { e.preventDefault(); return; } e.dataTransfer.setData('move', eid); tile.classList.add('moving'); });
-        tile.addEventListener('dragend', () => tile.classList.remove('moving'));
-        
-        tile.querySelectorAll('.ev-handle').forEach(hndl => {
-            const isT = hndl.classList.contains('ev-handle-t');
-            let y0, t0, h0;
-            const move = e => { const d = e.clientY - y0; if (isT) { const nt = Math.round((t0 + d) / (SNAP * PX)) * (SNAP * PX), nh = h0 - (nt - t0); if (nh >= 20) { tile.style.top = nt + 'px'; tile.style.height = nh + 'px'; } } else { const nh = Math.max(20, Math.round((h0 + d) / (SNAP * PX)) * (SNAP * PX)); tile.style.height = nh + 'px'; } };
-            const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); tile.classList.remove('resizing'); if (ev) { const nt = parseFloat(tile.style.top), nh = parseFloat(tile.style.height); ev.startTime = toS(lo + nt / PX); ev.endTime = toS(lo + (nt + nh) / PX); save(); draw(); } };
-            hndl.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); y0 = e.clientY; t0 = parseFloat(tile.style.top); h0 = parseFloat(tile.style.height); tile.classList.add('resizing'); document.addEventListener('mousemove', move); document.addEventListener('mouseup', up); });
-        });
-    });
-    
-    document.getElementById('grid')?.addEventListener('click', e => { if (!e.target.closest('.ev')) document.querySelectorAll('.ev.sel').forEach(t => t.classList.remove('sel')); });
-};
+// ═══════════════════════════════════════════════════════════════════════════
+// PREMIUM CSS — SLEEK, PROFESSIONAL, ENTERPRISE-GRADE
+// ═══════════════════════════════════════════════════════════════════════════
 
-// CSS
 const css = () => `<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-/* ══════════════════════════════════════════════════════════════════════
-   SCHEDULE BUILDER — MODERN DASHBOARD STYLE
-   ══════════════════════════════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════════════════════════════════
+   SCHEDULE BUILDER — PREMIUM ENTERPRISE DESIGN SYSTEM
+   A refined, sophisticated interface for professional schedule management
+   ══════════════════════════════════════════════════════════════════════════════ */
 
 .sch {
-    --bg: #f8fafc;
+    /* Premium color system - sophisticated neutrals with depth */
+    --bg: #fafbfc;
     --surface: #ffffff;
-    --border: #e2e8f0;
-    --border-light: #f1f5f9;
-    --text: #1e293b;
-    --text-secondary: #64748b;
-    --text-muted: #94a3b8;
-    --accent: #14b8a6;
-    --accent-light: #ccfbf1;
-    --accent-dark: #0d9488;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --surface-elevated: #ffffff;
+    --border: #e8ecf0;
+    --border-subtle: #f0f3f5;
+    --border-strong: #d0d6dc;
+    
+    /* Text hierarchy with proper contrast */
+    --text-primary: #0f1419;
+    --text-secondary: #536471;
+    --text-tertiary: #8899a6;
+    --text-placeholder: #a3b1bf;
+    
+    /* Premium accent - refined indigo */
+    --accent: #4f46e5;
+    --accent-hover: #4338ca;
+    --accent-light: #eef2ff;
+    --accent-subtle: #f5f7ff;
+    
+    /* Status colors - muted, professional */
+    --success: #059669;
+    --success-light: #ecfdf5;
+    --warning: #d97706;
+    --warning-light: #fffbeb;
+    --danger: #dc2626;
+    --danger-light: #fef2f2;
+    
+    /* Premium shadows - layered for depth */
+    --shadow-xs: 0 1px 2px rgba(15, 20, 25, 0.04);
+    --shadow-sm: 0 1px 3px rgba(15, 20, 25, 0.06), 0 1px 2px rgba(15, 20, 25, 0.04);
+    --shadow-md: 0 4px 6px -1px rgba(15, 20, 25, 0.06), 0 2px 4px -1px rgba(15, 20, 25, 0.04);
+    --shadow-lg: 0 10px 15px -3px rgba(15, 20, 25, 0.08), 0 4px 6px -2px rgba(15, 20, 25, 0.04);
+    --shadow-xl: 0 20px 25px -5px rgba(15, 20, 25, 0.08), 0 10px 10px -5px rgba(15, 20, 25, 0.02);
+    --shadow-focus: 0 0 0 3px rgba(79, 70, 229, 0.12);
+    
+    /* Typography */
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    
     background: var(--bg);
-    color: var(--text);
+    color: var(--text-primary);
     height: 100%;
     display: flex;
     flex-direction: column;
-    -webkit-font-smoothing: antialiased;
     position: relative;
     z-index: 1;
 }
 
-/* Custom Scrollbar */
-.sch ::-webkit-scrollbar { width: 6px; height: 6px; }
+/* Premium Scrollbar */
+.sch ::-webkit-scrollbar { width: 8px; height: 8px; }
 .sch ::-webkit-scrollbar-track { background: transparent; }
-.sch ::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
-.sch ::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
+.sch ::-webkit-scrollbar-thumb { 
+    background: var(--border-strong); 
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+.sch ::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); background-clip: content-box; }
 
-/* ═══════════ TOP BAR ═══════════ */
+/* ═══════════ TOP BAR — Executive Header ═══════════ */
 .top {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 20px;
-    height: 60px;
+    padding: 0 24px;
+    height: 64px;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
     position: relative;
     z-index: 100;
 }
-.top-left { display: flex; align-items: center; gap: 16px; }
-.top h1 { font-size: 15px; font-weight: 600; margin: 0; color: var(--text); }
-.badge { padding: 5px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
-.badge:empty { display: none; }
-.badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.badge.draft { background: #fef3c7; color: #b45309; }
-.badge.saved { background: var(--accent-light); color: var(--accent-dark); }
-.status-name { font-size: 13px; color: var(--text-secondary); font-weight: 500; }
 
-.top-right { display: flex; align-items: center; gap: 10px; }
-.tool-group { display: flex; align-items: center; gap: 6px; }
+.top-left { 
+    display: flex; 
+    align-items: center; 
+    gap: 16px; 
+}
+
+.top h1 { 
+    font-size: 16px; 
+    font-weight: 600; 
+    margin: 0; 
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+}
+
+.badge { 
+    padding: 4px 10px; 
+    border-radius: 100px; 
+    font-size: 11px; 
+    font-weight: 600; 
+    display: inline-flex; 
+    align-items: center; 
+    gap: 6px;
+    letter-spacing: 0.01em;
+}
+.badge:empty { display: none; }
+.badge::before { 
+    content: ''; 
+    width: 6px; 
+    height: 6px; 
+    border-radius: 50%; 
+    background: currentColor;
+    flex-shrink: 0;
+}
+.badge.draft { 
+    background: var(--warning-light); 
+    color: var(--warning); 
+}
+.badge.saved { 
+    background: var(--success-light); 
+    color: var(--success); 
+}
+
+.status-name { 
+    font-size: 13px; 
+    color: var(--text-secondary); 
+    font-weight: 500;
+}
+
+.top-right { 
+    display: flex; 
+    align-items: center; 
+    gap: 12px; 
+}
+
+.tool-group { 
+    display: flex; 
+    align-items: center; 
+    gap: 8px;
+    padding-left: 12px;
+    border-left: 1px solid var(--border-subtle);
+}
+.tool-group:first-child {
+    padding-left: 0;
+    border-left: none;
+}
 .tool-group label { display: none; }
 
-/* ═══════════ CONTROLS ═══════════ */
+/* ═══════════ CONTROLS — Refined Inputs ═══════════ */
 select, input[type="text"], .top input {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -304,147 +346,284 @@ select, input[type="text"], .top input {
     font-weight: 500;
     padding: 8px 12px;
     border-radius: 8px;
-    color: var(--text);
+    color: var(--text-primary);
     outline: none;
-    transition: all 0.15s;
-    min-width: 130px;
+    transition: all 0.15s ease;
+    min-width: 140px;
 }
-select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); }
-select { cursor: pointer; }
+select:hover, input:hover { 
+    border-color: var(--border-strong); 
+}
+select:focus, input:focus { 
+    border-color: var(--accent); 
+    box-shadow: var(--shadow-focus); 
+}
+select { 
+    cursor: pointer;
+    padding-right: 32px;
+    background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 12 12' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%23536471' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    appearance: none;
+}
 
 .btn {
     padding: 8px 16px;
-    border-radius: 6px;
+    border-radius: 8px;
     font-family: inherit;
     font-weight: 600;
     font-size: 13px;
     border: 1px solid var(--border);
     background: var(--surface);
-    color: var(--text);
+    color: var(--text-primary);
     cursor: pointer;
-    transition: all 0.15s;
-    display: flex;
+    transition: all 0.15s ease;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 6px;
+    white-space: nowrap;
 }
-.btn:hover { background: #f1f5f9; }
-.btn:active { transform: scale(0.98); }
-.btn-primary { background: var(--accent); color: white; border-color: var(--accent); }
-.btn-primary:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
-.btn-ghost { background: transparent; border-color: transparent; }
-.btn-ghost:hover { background: #f1f5f9; border-color: var(--border); }
-.btn-danger { background: #fef2f2; color: #dc2626; border-color: #fecaca; }
-.btn-danger:hover { background: #fee2e2; }
+.btn:hover { 
+    background: var(--bg);
+    border-color: var(--border-strong);
+}
+.btn:active { 
+    transform: scale(0.98); 
+}
+
+.btn-primary { 
+    background: var(--accent); 
+    color: white; 
+    border-color: var(--accent);
+    box-shadow: var(--shadow-sm);
+}
+.btn-primary:hover { 
+    background: var(--accent-hover); 
+    border-color: var(--accent-hover);
+    box-shadow: var(--shadow-md);
+}
+
+.btn-ghost { 
+    background: transparent; 
+    border-color: transparent; 
+}
+.btn-ghost:hover { 
+    background: var(--bg); 
+    border-color: var(--border); 
+}
+
+.btn-danger { 
+    background: var(--danger-light); 
+    color: var(--danger); 
+    border-color: #fecaca; 
+}
+.btn-danger:hover { 
+    background: #fee2e2;
+    border-color: #fca5a5;
+}
 
 /* ═══════════ LAYOUT ═══════════ */
-.body { display: flex; flex: 1; overflow: hidden; }
+.body { 
+    display: flex; 
+    flex: 1; 
+    overflow: hidden; 
+}
 
-/* ═══════════ SIDEBAR ═══════════ */
+/* ═══════════ SIDEBAR — Premium Tile Palette ═══════════ */
 .side { 
-    width: 220px; 
+    width: 240px; 
     background: var(--surface); 
     border-right: 1px solid var(--border); 
     display: flex; 
     flex-direction: column;
     overflow: hidden;
 }
+
 .side-head { 
     display: flex; 
     align-items: center; 
     justify-content: space-between; 
-    padding: 16px 16px 12px;
-    border-bottom: 1px solid var(--border-light);
+    padding: 20px 20px 16px;
+    border-bottom: 1px solid var(--border-subtle);
 }
 .side-head span:first-child { 
     font-size: 11px; 
     font-weight: 700; 
-    color: var(--text-muted);
+    color: var(--text-tertiary);
     text-transform: uppercase; 
-    letter-spacing: 0.05em; 
+    letter-spacing: 0.08em; 
 }
-.side-hint { font-size: 10px; color: var(--text-muted); }
+.side-hint { 
+    font-size: 11px; 
+    color: var(--text-placeholder);
+    font-weight: 500;
+}
+
 .blocks { 
     flex: 1; 
-    padding: 12px; 
+    padding: 16px; 
     overflow-y: auto; 
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 8px;
+    gap: 10px;
     align-content: start;
 }
+
 .block { 
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    padding: 12px 8px;
+    gap: 8px;
+    padding: 16px 12px;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 10px;
     cursor: grab;
-    transition: all 0.15s;
+    transition: all 0.2s ease;
 }
 .block:hover { 
     border-color: var(--accent);
-    background: var(--accent-light);
+    background: var(--accent-subtle);
+    box-shadow: var(--shadow-sm);
+    transform: translateY(-1px);
 }
-.block:active { cursor: grabbing; transform: scale(0.96); }
-.block.dragging { opacity: 0.5; }
+.block:active { 
+    cursor: grabbing; 
+    transform: scale(0.97);
+    box-shadow: none;
+}
+.block.dragging { 
+    opacity: 0.5; 
+}
+
 .block-dot { 
-    width: 32px; 
-    height: 32px; 
-    border-radius: 6px;
+    width: 36px; 
+    height: 36px; 
+    border-radius: 10px;
     border: 2px solid var(--c);
-    background: transparent;
+    background: var(--bg);
     display: flex;
     align-items: center;
     justify-content: center;
     color: var(--c);
     font-weight: 700;
-    font-size: 13px;
+    font-size: 14px;
+    transition: all 0.15s ease;
 }
+.block:hover .block-dot {
+    background: white;
+    box-shadow: var(--shadow-xs);
+}
+
 .block span:last-child { 
-    font-size: 10px; 
+    font-size: 11px; 
     font-weight: 600; 
     color: var(--text-secondary);
     text-align: center;
+    line-height: 1.3;
 }
 
-/* ═══════════ TILE INFO POPUP ═══════════ */
+/* ═══════════ EMPTY STATE — Elegant Placeholder ═══════════ */
+.empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    padding: 48px;
+    color: var(--text-tertiary);
+    text-align: center;
+}
+.empty svg {
+    margin-bottom: 16px;
+    opacity: 0.5;
+}
+.empty p {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin: 0 0 4px;
+}
+.empty small {
+    font-size: 13px;
+    color: var(--text-tertiary);
+}
+
+/* ═══════════ TILE INFO POPUP — Premium Tooltip ═══════════ */
 .tile-info {
     position: fixed;
     z-index: 9000;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 14px;
-    width: 240px;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);
+    border-radius: 12px;
+    padding: 16px;
+    width: 260px;
+    box-shadow: var(--shadow-xl);
     opacity: 0;
     pointer-events: none;
     transform: translateX(-8px);
-    transition: all 0.2s;
+    transition: all 0.2s ease;
 }
-.tile-info.show { opacity: 1; pointer-events: auto; transform: translateX(0); }
-.tile-info-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border-light); }
-.tile-info-dot { width: 18px; height: 18px; border-radius: 4px; }
-.tile-info-header strong { font-size: 13px; font-weight: 600; color: var(--text); }
-.tile-info p { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin: 0 0 10px; }
-.tile-info small { font-size: 10px; color: var(--text-muted); }
+.tile-info.show { 
+    opacity: 1; 
+    pointer-events: auto; 
+    transform: translateX(0); 
+}
+.tile-info-header { 
+    display: flex; 
+    align-items: center; 
+    gap: 12px; 
+    margin-bottom: 12px; 
+    padding-bottom: 12px; 
+    border-bottom: 1px solid var(--border-subtle); 
+}
+.tile-info-dot { 
+    width: 20px; 
+    height: 20px; 
+    border-radius: 6px;
+    flex-shrink: 0;
+}
+.tile-info-header strong { 
+    font-size: 14px; 
+    font-weight: 600; 
+    color: var(--text-primary); 
+}
+.tile-info p { 
+    font-size: 13px; 
+    color: var(--text-secondary); 
+    line-height: 1.5; 
+    margin: 0 0 12px; 
+}
+.tile-info small { 
+    font-size: 11px; 
+    color: var(--text-tertiary);
+    font-weight: 500;
+}
 
 /* ═══════════ MAIN GRID ═══════════ */
-.main { flex: 1; overflow: auto; padding: 16px; }
+.main { 
+    flex: 1; 
+    overflow: auto; 
+    padding: 20px;
+    background: var(--bg);
+}
+
 .grid { 
     background: var(--surface); 
-    border-radius: 8px; 
+    border-radius: 12px; 
     border: 1px solid var(--border); 
     overflow: hidden; 
     min-height: 100%;
+    box-shadow: var(--shadow-sm);
 }
 
-.calendar { display: grid; grid-template-columns: 90px repeat(var(--cols), minmax(140px, 1fr)); }
+.calendar { 
+    display: grid; 
+    grid-template-columns: 72px repeat(var(--cols), minmax(160px, 1fr)); 
+}
+
 .cal-corner { 
     background: var(--bg); 
     border-bottom: 1px solid var(--border); 
@@ -453,7 +632,7 @@ select { cursor: pointer; }
     left: 0; 
     top: 0;
     z-index: 50;
-    width: 90px;
+    width: 72px;
 }
 
 .cal-head {
@@ -462,16 +641,24 @@ select { cursor: pointer; }
     z-index: 40;
     background: var(--bg);
     border-bottom: 1px solid var(--border);
-    border-right: 1px solid var(--border-light);
-    padding: 14px 10px;
+    border-right: 1px solid var(--border-subtle);
+    padding: 16px 12px;
     display: flex;
     align-items: center;
     justify-content: center;
+    gap: 8px;
     font-size: 13px;
     font-weight: 600;
-    color: var(--text);
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
 }
-.cal-head-dot { display: none; }
+.cal-head-dot { 
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--c);
+    flex-shrink: 0;
+}
 
 /* TIME AXIS */
 .cal-times {
@@ -480,31 +667,38 @@ select { cursor: pointer; }
     z-index: 30;
     background: var(--bg);
     border-right: 1px solid var(--border);
-    width: 90px;
-    min-width: 90px;
+    width: 72px;
+    min-width: 72px;
 }
 .cal-time {
     position: absolute;
-    left: 8px;
-    right: 8px;
+    left: 0;
+    right: 12px;
     transform: translateY(-50%);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
-    color: var(--text-muted);
+    color: var(--text-tertiary);
     white-space: nowrap;
     text-align: right;
+    letter-spacing: 0.02em;
 }
 
 .cal-col {
     position: relative;
     background: var(--surface);
-    border-right: 1px solid var(--border-light);
-    transition: background 0.15s;
+    border-right: 1px solid var(--border-subtle);
+    transition: background 0.15s ease;
 }
 .cal-col:last-child { border-right: none; }
 .cal-col.over { background: var(--accent-light); }
 
-.cal-line { position: absolute; left: 0; right: 0; border-top: 1px solid var(--border-light); pointer-events: none; }
+.cal-line { 
+    position: absolute; 
+    left: 0; 
+    right: 0; 
+    border-top: 1px solid var(--border-subtle); 
+    pointer-events: none; 
+}
 
 /* INACTIVE ZONES */
 .cal-off { 
@@ -512,47 +706,48 @@ select { cursor: pointer; }
     left: 0; 
     right: 0; 
     top: 0; 
-    background: #f1f5f9;
+    background: var(--bg);
     background-image: repeating-linear-gradient(
         -45deg,
         transparent,
         transparent 4px,
-        #e2e8f0 4px,
-        #e2e8f0 5px
+        var(--border-subtle) 4px,
+        var(--border-subtle) 5px
     );
     pointer-events: none;
-    border-bottom: 1px solid #cbd5e1;
+    border-bottom: 1px solid var(--border);
 }
 .cal-off-b { 
     top: auto; 
     bottom: 0; 
     border-bottom: none;
-    border-top: 1px solid #cbd5e1;
+    border-top: 1px solid var(--border);
 }
 
-/* ═══════════ EVENTS ═══════════ */
+/* ═══════════ EVENTS — Premium Event Cards ═══════════ */
 .ev {
     position: absolute;
     left: 4px;
     right: 4px;
-    min-height: 22px;
-    border-radius: 4px;
+    min-height: 24px;
+    border-radius: 6px;
     background: var(--bg);
     border: 1px solid var(--c);
     cursor: pointer;
     z-index: 10;
     display: flex;
     flex-direction: column;
-    transition: all 0.15s;
+    transition: all 0.15s ease;
     overflow: hidden;
     box-sizing: border-box;
 }
 .ev:hover {
     z-index: 20;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
 }
 .ev.sel {
-    box-shadow: 0 0 0 2px var(--accent), 0 2px 8px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 0 0 2px var(--accent), var(--shadow-md);
     z-index: 30;
 }
 .ev.moving { opacity: 0.6; }
@@ -560,7 +755,7 @@ select { cursor: pointer; }
 
 .ev-body { 
     flex: 1;
-    padding: 3px 6px;
+    padding: 4px 8px;
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -569,285 +764,355 @@ select { cursor: pointer; }
 .ev-name { 
     font-size: 11px; 
     font-weight: 600; 
-    color: var(--text); 
-    line-height: 1.2; 
+    color: var(--text-primary); 
+    line-height: 1.3; 
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 .ev-time { 
-    font-size: 9px; 
+    font-size: 10px; 
     font-weight: 500; 
     color: var(--text-secondary);
-    margin-top: 1px;
+    margin-top: 2px;
 }
 
 /* Small events */
-.ev-sm { padding: 1px 4px; min-height: 18px; }
-.ev-sm .ev-body { flex-direction: row; align-items: center; gap: 4px; padding: 0; }
-.ev-sm .ev-name { font-size: 9px; }
+.ev-sm { padding: 2px 6px; min-height: 20px; }
+.ev-sm .ev-body { flex-direction: row; align-items: center; gap: 6px; padding: 0; }
+.ev-sm .ev-name { font-size: 10px; }
 
 /* Tooltip for small events */
 .ev-sm::after {
     content: attr(data-time);
     position: absolute;
-    bottom: calc(100% + 4px);
+    bottom: calc(100% + 6px);
     left: 50%;
     transform: translateX(-50%);
-    background: #1e293b;
+    background: var(--text-primary);
     color: white;
-    padding: 5px 8px;
-    border-radius: 4px;
-    font-size: 10px;
-    font-weight: 600;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 500;
     white-space: nowrap;
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.15s;
-    z-index: 100;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    transition: all 0.15s ease;
+    box-shadow: var(--shadow-lg);
 }
-.ev-sm::before {
-    content: '';
+.ev-sm:hover::after { opacity: 1; }
+
+/* Resize handles */
+.ev-handle {
     position: absolute;
-    bottom: 100%;
-    left: 50%;
-    transform: translateX(-50%);
-    border: 4px solid transparent;
-    border-top-color: #1e293b;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.15s;
-    z-index: 100;
+    left: 0;
+    right: 0;
+    height: 8px;
+    cursor: ns-resize;
+    background: transparent;
+    transition: background 0.15s ease;
+    z-index: 5;
 }
-.ev-sm:hover::after,
-.ev-sm:hover::before {
-    opacity: 1;
+.ev-handle-t { top: 0; border-radius: 6px 6px 0 0; }
+.ev-handle-b { bottom: 0; border-radius: 0 0 6px 6px; }
+.ev-handle:hover { background: rgba(79, 70, 229, 0.1); }
+.ev.resizing .ev-handle { background: rgba(79, 70, 229, 0.15); }
+
+/* ═══════════ MODAL — Premium Dialog ═══════════ */
+.modal-wrap {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 20, 25, 0.5);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: modalFadeIn 0.2s ease;
 }
 
-.ev-handle { position: absolute; left: 0; right: 0; height: 4px; cursor: ns-resize; opacity: 0; transition: opacity 0.15s; z-index: 5; }
-.ev-handle:hover { opacity: 1; background: rgba(0,0,0,0.1); }
-.ev-handle-t { top: 0; border-radius: 4px 4px 0 0; }
-.ev-handle-b { bottom: 0; border-radius: 0 0 4px 4px; }
-
-/* ═══════════ EMPTY ═══════════ */
-.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 40px; }
-.empty-icon { font-size: 40px; margin-bottom: 12px; opacity: 0.3; }
-.empty p { margin: 0; color: var(--text-muted); font-size: 14px; font-weight: 500; }
-
-/* ═══════════ MODAL ═══════════ */
-#modal-wrap { 
-    position: fixed; 
-    inset: 0; 
-    background: rgba(15, 23, 42, 0.6); 
-    backdrop-filter: blur(4px); 
-    -webkit-backdrop-filter: blur(4px); 
-    display: flex; 
-    align-items: center; 
-    justify-content: center; 
-    z-index: 9999; 
-    animation: fadeIn 0.15s; 
+@keyframes modalFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
-@keyframes fadeIn { from { opacity: 0; } }
-.modal { 
-    background: #ffffff; 
-    border-radius: 8px; 
-    width: 380px; 
-    max-width: calc(100vw - 40px); 
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); 
-    animation: slideUp 0.2s ease-out;
+
+.modal {
+    background: var(--surface);
+    border-radius: 16px;
+    width: 420px;
+    max-width: calc(100vw - 48px);
+    max-height: calc(100vh - 48px);
     overflow: hidden;
+    box-shadow: var(--shadow-xl);
+    animation: modalSlideIn 0.25s ease;
 }
-@keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
-.modal-accent { height: 3px; background: var(--c); }
-.modal-head { 
-    display: flex; 
-    align-items: center; 
-    gap: 12px; 
-    padding: 16px 20px;
-    border-bottom: 1px solid #e2e8f0;
-    background: #f8fafc;
+
+@keyframes modalSlideIn {
+    from { transform: translateY(16px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
 }
-.modal-icon { 
-    width: 36px; 
-    height: 36px; 
-    border-radius: 6px; 
-    background: var(--c); 
-    color: white; 
-    display: flex; 
-    align-items: center; 
-    justify-content: center; 
-    font-size: 14px; 
+
+.modal-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+}
+.modal-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, var(--c), color-mix(in srgb, var(--c) 80%, black));
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
     font-weight: 700;
+    box-shadow: var(--shadow-sm);
 }
-.modal-head h2 { margin: 0; font-size: 15px; font-weight: 600; color: #1e293b; flex: 1; }
+.modal-head h2 { 
+    margin: 0; 
+    font-size: 16px; 
+    font-weight: 600; 
+    color: var(--text-primary); 
+    flex: 1;
+    letter-spacing: -0.01em;
+}
 .modal-x { 
-    width: 28px; 
-    height: 28px; 
+    width: 32px; 
+    height: 32px; 
     background: transparent;
     border: none; 
-    border-radius: 4px; 
+    border-radius: 8px; 
     cursor: pointer; 
-    font-size: 18px; 
-    color: #94a3b8; 
-    transition: all 0.15s; 
+    font-size: 20px; 
+    color: var(--text-tertiary); 
+    transition: all 0.15s ease; 
     display: flex; 
     align-items: center; 
     justify-content: center; 
 }
-.modal-x:hover { background: #e2e8f0; color: #475569; }
-.modal-body { padding: 20px; }
+.modal-x:hover { 
+    background: var(--bg); 
+    color: var(--text-secondary); 
+}
+
+.modal-body { padding: 24px; }
+
 .modal-foot { 
     display: flex; 
-    gap: 8px; 
-    padding: 16px 20px; 
-    background: #f8fafc; 
-    border-top: 1px solid #e2e8f0; 
+    gap: 10px; 
+    padding: 16px 24px; 
+    background: var(--bg); 
+    border-top: 1px solid var(--border); 
 }
-.modal-foot .btn { flex: 1; padding: 10px 16px; font-size: 13px; }
+.modal-foot .btn { 
+    flex: 1; 
+    padding: 12px 20px; 
+    font-size: 14px; 
+}
 
-/* ═══════════ FORM ═══════════ */
-.mf { margin-bottom: 16px; }
+/* ═══════════ FORM — Refined Inputs ═══════════ */
+.mf { margin-bottom: 20px; }
 .mf:last-child { margin-bottom: 0; }
 .mf label { 
     display: block; 
-    font-size: 11px; 
+    font-size: 12px; 
     font-weight: 600; 
-    color: #64748b; 
-    margin-bottom: 6px; 
-    text-transform: uppercase; 
-    letter-spacing: 0.04em; 
+    color: var(--text-secondary); 
+    margin-bottom: 8px; 
+    letter-spacing: 0.02em;
 }
 .mf input:not([type="checkbox"]), .mf select { 
     width: 100%; 
-    height: 38px; 
-    font-size: 13px; 
-    background: #ffffff; 
-    border: 1px solid #d1d5db;
-    border-radius: 6px; 
-    padding: 0 12px;
-    color: #1e293b;
+    height: 42px; 
+    font-size: 14px; 
+    background: var(--surface); 
+    border: 1px solid var(--border);
+    border-radius: 8px; 
+    padding: 0 14px;
+    color: var(--text-primary);
     font-family: inherit;
+    transition: all 0.15s ease;
 }
 .mf input:focus, .mf select:focus { 
     border-color: var(--accent); 
-    box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.15); 
+    box-shadow: var(--shadow-focus); 
     outline: none; 
 }
-.mf-row { display: flex; gap: 12px; }
+.mf-row { display: flex; gap: 16px; }
 .mf-row .mf { flex: 1; }
 
-.time-row { display: flex; align-items: center; gap: 8px; }
+.time-row { display: flex; align-items: center; gap: 12px; }
 .time-box { 
     display: flex; 
     align-items: center; 
-    background: #ffffff; 
-    border: 1px solid #d1d5db; 
-    border-radius: 6px; 
-    overflow: hidden; 
+    background: var(--surface); 
+    border: 1px solid var(--border); 
+    border-radius: 8px; 
+    overflow: hidden;
+    transition: all 0.15s ease;
 }
 .time-box:focus-within { 
     border-color: var(--accent); 
-    box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.15); 
+    box-shadow: var(--shadow-focus); 
 }
 .time-box input { 
-    width: 72px !important; 
-    height: 38px !important; 
+    width: 80px !important; 
+    height: 42px !important; 
     border: none !important; 
     background: none !important; 
     text-align: center; 
     font-weight: 600; 
-    font-size: 13px !important; 
+    font-size: 14px !important; 
     padding: 0 !important; 
-    color: #1e293b; 
+    color: var(--text-primary); 
 }
 .time-box button { 
-    width: 30px; 
-    height: 38px; 
+    width: 36px; 
+    height: 42px; 
     border: none; 
-    background: #f8fafc; 
+    background: var(--bg); 
     cursor: pointer; 
-    font-size: 14px; 
-    color: #64748b; 
-    transition: all 0.1s; 
+    font-size: 16px; 
+    color: var(--text-tertiary); 
+    transition: all 0.15s ease; 
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
-.time-box button:hover { background: #e2e8f0; color: #1e293b; }
-.time-box button:first-child { border-right: 1px solid #e2e8f0; }
-.time-box button:last-child { border-left: 1px solid #e2e8f0; }
-.time-row > span { color: #94a3b8; font-size: 12px; font-weight: 500; }
+.time-box button:hover { 
+    background: var(--border-subtle); 
+    color: var(--text-primary); 
+}
+.time-box button:first-child { border-right: 1px solid var(--border-subtle); }
+.time-box button:last-child { border-left: 1px solid var(--border-subtle); }
+.time-row > span { 
+    color: var(--text-tertiary); 
+    font-size: 13px; 
+    font-weight: 500; 
+}
 
-.dur-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.dur-row { 
+    display: flex; 
+    flex-wrap: wrap; 
+    gap: 8px; 
+    margin-top: 12px; 
+}
 .dur-row button { 
-    padding: 6px 10px; 
+    padding: 8px 14px; 
     font: inherit; 
-    font-size: 11px; 
+    font-size: 12px; 
     font-weight: 600; 
-    background: #f1f5f9; 
-    border: 1px solid #e2e8f0; 
-    border-radius: 4px; 
+    background: var(--bg); 
+    border: 1px solid var(--border); 
+    border-radius: 6px; 
     cursor: pointer; 
-    color: #475569; 
-    transition: all 0.1s; 
+    color: var(--text-secondary); 
+    transition: all 0.15s ease; 
 }
 .dur-row button:hover { 
     border-color: var(--accent); 
     color: var(--accent); 
-    background: #f0fdfa; 
+    background: var(--accent-subtle); 
 }
 
 .checks { 
     display: grid; 
     grid-template-columns: repeat(2, 1fr); 
-    gap: 4px; 
-    max-height: 120px; 
+    gap: 6px; 
+    max-height: 140px; 
     overflow-y: auto; 
-    padding: 8px; 
-    background: #f8fafc; 
-    border-radius: 6px; 
-    border: 1px solid #e2e8f0; 
+    padding: 12px; 
+    background: var(--bg); 
+    border-radius: 8px; 
+    border: 1px solid var(--border); 
 }
 .checks label { 
     display: flex; 
     align-items: center; 
-    gap: 8px; 
-    padding: 8px; 
-    background: #ffffff; 
-    border-radius: 4px; 
+    gap: 10px; 
+    padding: 10px 12px; 
+    background: var(--surface); 
+    border-radius: 6px; 
     cursor: pointer; 
-    font-size: 12px; 
+    font-size: 13px; 
     font-weight: 500; 
-    color: #475569;
-    transition: all 0.1s; 
+    color: var(--text-secondary);
+    transition: all 0.15s ease;
+    border: 1px solid transparent;
 }
-.checks label:hover { background: #f0fdfa; }
-.checks input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
+.checks label:hover { 
+    background: var(--accent-subtle);
+    border-color: var(--accent-light);
+}
+.checks input { 
+    width: 16px; 
+    height: 16px; 
+    margin: 0; 
+    accent-color: var(--accent);
+    cursor: pointer;
+}
 
-/* ═══════════ NOTIFY ═══════════ */
+/* ═══════════ NOTIFICATIONS — Premium Toast ═══════════ */
 #notify { 
     position: fixed; 
-    bottom: 24px; 
+    bottom: 28px; 
     left: 50%; 
-    transform: translateX(-50%) translateY(10px); 
-    background: var(--text); 
+    transform: translateX(-50%) translateY(8px); 
+    background: var(--text-primary); 
     color: white; 
-    padding: 12px 24px; 
-    border-radius: 10px; 
-    font-size: 13px; 
+    padding: 14px 28px; 
+    border-radius: 12px; 
+    font-size: 14px; 
     font-weight: 600; 
     opacity: 0; 
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15); 
-    transition: all 0.2s; 
-    z-index: 1001; 
+    box-shadow: var(--shadow-xl); 
+    transition: all 0.25s ease; 
+    z-index: 1001;
+    letter-spacing: -0.01em;
 }
-#notify.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+#notify.on { 
+    opacity: 1; 
+    transform: translateX(-50%) translateY(0); 
+}
 
 /* ═══════════ RESPONSIVE ═══════════ */
 @media (max-width: 1100px) {
-    .top { flex-wrap: wrap; height: auto; padding: 12px 16px; gap: 10px; }
-    .top-right { flex-wrap: wrap; gap: 8px; }
-    .tool-group { flex-wrap: wrap; }
-    .side { width: 180px; }
+    .top { 
+        flex-wrap: wrap; 
+        height: auto; 
+        padding: 16px 20px; 
+        gap: 12px; 
+    }
+    .top-right { 
+        flex-wrap: wrap; 
+        gap: 10px; 
+    }
+    .tool-group { 
+        flex-wrap: wrap;
+        padding-left: 0;
+        border-left: none;
+    }
+    .side { width: 200px; }
     .blocks { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 768px) {
+    .body { flex-direction: column; }
+    .side { 
+        width: 100%; 
+        max-height: 200px;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+    }
+    .blocks { 
+        grid-template-columns: repeat(4, 1fr);
+    }
+    .main { padding: 12px; }
 }
 </style>`;
 
