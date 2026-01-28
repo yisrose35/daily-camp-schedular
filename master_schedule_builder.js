@@ -51,28 +51,28 @@ function markUnsavedChanges() {
   updateToolbarStatus();
 }
 
-// --- Tiles (Professional Solid Color Palette) ---
+// --- Tiles (Soft Pastel Color Palette) ---
 const TILES=[
-  // Scheduling Slots - Vibrant but professional
-  {type:'activity', name:'Activity', style:'background:#3b82f6;color:#fff;', description:'Flexible slot (Sport or Special).'},
-  {type:'sports', name:'Sports', style:'background:#10b981;color:#fff;', description:'Sports slot only.'},
-  {type:'special', name:'Special Activity', style:'background:#8b5cf6;color:#fff;', description:'Special Activity slot only.'},
+  // Scheduling Slots - Soft blues and greens
+  {type:'activity', name:'Activity', style:'background:#93c5fd;color:#1e3a5f;', description:'Flexible slot (Sport or Special).'},
+  {type:'sports', name:'Sports', style:'background:#86efac;color:#14532d;', description:'Sports slot only.'},
+  {type:'special', name:'Special Activity', style:'background:#c4b5fd;color:#3b1f6b;', description:'Special Activity slot only.'},
   
   // Advanced Tiles
-  {type:'smart', name:'Smart Tile', style:'background:#0ea5e9;color:#fff;border:2px dashed #0369a1;', description:'Balances 2 activities with a fallback.'},
-  {type:'split', name:'Split Activity', style:'background:#f97316;color:#fff;', description:'Two activities share the block (Switch halfway).'},
-  {type:'elective', name:'Elective', style:'background:#d946ef;color:#fff;', description:'Reserve multiple activities for this division only.'},
+  {type:'smart', name:'Smart Tile', style:'background:#7dd3fc;color:#0c4a6e;border:2px dashed #0284c7;', description:'Balances 2 activities with a fallback.'},
+  {type:'split', name:'Split Activity', style:'background:#fdba74;color:#7c2d12;', description:'Two activities share the block (Switch halfway).'},
+  {type:'elective', name:'Elective', style:'background:#f0abfc;color:#701a75;', description:'Reserve multiple activities for this division only.'},
   
   // Leagues
-  {type:'league', name:'League Game', style:'background:#6366f1;color:#fff;', description:'Regular League slot (Full Buyout).'},
-  {type:'specialty_league', name:'Specialty League', style:'background:#a855f7;color:#fff;', description:'Specialty League slot (Full Buyout).'},
+  {type:'league', name:'League Game', style:'background:#a5b4fc;color:#312e81;', description:'Regular League slot (Full Buyout).'},
+  {type:'specialty_league', name:'Specialty League', style:'background:#d8b4fe;color:#581c87;', description:'Specialty League slot (Full Buyout).'},
   
   // Pinned Events
-  {type:'swim', name:'Swim', style:'background:#06b6d4;color:#fff;', description:'Pinned.'},
-  {type:'lunch', name:'Lunch', style:'background:#ef4444;color:#fff;', description:'Pinned.'},
-  {type:'snacks', name:'Snacks', style:'background:#f59e0b;color:#fff;', description:'Pinned.'},
-  {type:'dismissal', name:'Dismissal', style:'background:#dc2626;color:#fff;', description:'Pinned.'},
-  {type:'custom', name:'Custom Pinned', style:'background:#6b7280;color:#fff;', description:'Pinned custom (e.g., Regroup).'}
+  {type:'swim', name:'Swim', style:'background:#67e8f9;color:#155e75;', description:'Pinned.'},
+  {type:'lunch', name:'Lunch', style:'background:#fca5a5;color:#7f1d1d;', description:'Pinned.'},
+  {type:'snacks', name:'Snacks', style:'background:#fde047;color:#713f12;', description:'Pinned.'},
+  {type:'dismissal', name:'Dismissal', style:'background:#f87171;color:#fff;', description:'Pinned.'},
+  {type:'custom', name:'Custom Pinned', style:'background:#cbd5e1;color:#334155;', description:'Pinned custom (e.g., Regroup).'}
 ];
 
 function mapEventNameForOptimizer(name){
@@ -258,11 +258,24 @@ function getAllLocations() {
   const globalSettings = window.loadGlobalSettings?.() || {};
   const app1 = globalSettings.app1 || {};
   
-  const fields = (app1.fields || []).map(f => f.name);
-  const specialActivities = (app1.specialActivities || []).map(s => s.name);
-  const facilities = (app1.facilities || []).map(f => f.name || f);
+  // Get fields
+  const fields = (app1.fields || []).map(f => typeof f === 'string' ? f : f.name).filter(Boolean);
   
-  return [...new Set([...fields, ...facilities, ...specialActivities])].sort();
+  // Get special activities
+  const specialActivities = (app1.specialActivities || []).map(s => typeof s === 'string' ? s : s.name).filter(Boolean);
+  
+  // Get facilities - handle both array of strings and array of objects
+  const facilities = (app1.facilities || []).map(f => typeof f === 'string' ? f : (f.name || f)).filter(Boolean);
+  
+  // Get locations if stored separately
+  const locations = (app1.locations || []).map(l => typeof l === 'string' ? l : (l.name || l)).filter(Boolean);
+  
+  // Combine all and remove duplicates
+  const all = [...new Set([...fields, ...facilities, ...locations, ...specialActivities])].filter(Boolean).sort();
+  
+  console.log('[getAllLocations] Found:', { fields, facilities, locations, specialActivities, combined: all });
+  
+  return all;
 }
 
 // =================================================================
@@ -485,17 +498,41 @@ function renderToolbar() {
   const saved = window.getSavedSkeletons?.() || {};
   const names = Object.keys(saved).sort();
   const loadOptions = names.map(n => `<option value="${n}">${n}</option>`).join('');
+  const assignments = window.getSkeletonAssignments?.() || {};
+  
+  // Get today's day name
+  const dateStr = window.currentScheduleDate || "";
+  const [Y, M, D] = dateStr.split('-').map(Number);
+  let dow = 0; 
+  if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const todayName = dayNames[dow];
+  
+  // Get the default template for today
+  const todayDefault = assignments[todayName] || assignments["Default"] || null;
   
   const isEditing = !!currentLoadedTemplate;
   const statusClass = hasUnsavedChanges ? 'has-changes' : '';
-  const statusText = isEditing ? currentLoadedTemplate : 'Unsaved';
+  
+  // Status text logic: show current loaded, or day's default, or "No Template"
+  let statusText;
+  let statusSubtext = '';
+  if (isEditing) {
+    statusText = currentLoadedTemplate;
+  } else if (todayDefault) {
+    statusText = todayDefault;
+    statusSubtext = `<span style="font-size:10px;color:#64748b;margin-left:4px;">(${todayName} default)</span>`;
+  } else {
+    statusText = 'No Template';
+  }
+  
   const changesBadge = hasUnsavedChanges ? '<span class="ms-status-badge">Unsaved</span>' : '';
   
   toolbar.innerHTML = `
     <!-- Status + Update -->
     <div class="ms-toolbar-group status ${statusClass}">
       <span class="ms-status-label">Current:</span>
-      <span class="ms-status-name">${statusText}</span>
+      <span class="ms-status-name">${statusText}</span>${statusSubtext}
       ${changesBadge}
     </div>
     <button id="tb-update-btn" class="ms-btn ms-btn-success" ${!isEditing ? 'disabled' : ''}>
@@ -1077,19 +1114,22 @@ function addDropListeners(selector) {
           title: 'Custom Pinned Event',
           description: 'Create a fixed event. Optionally reserve locations.',
           fields: [
-            { name: 'eventName', label: 'Event Name', type: 'text', default: 'Regroup', placeholder: 'e.g., Assembly, Special Program' },
+            { name: 'eventName', label: 'Event Name', type: 'text', default: '', placeholder: 'e.g., Regroup, Assembly, Special Program' },
             { name: 'startTime', label: 'Start Time', type: 'text', default: startStr },
             { name: 'endTime', label: 'End Time', type: 'text', default: endStr },
             ...(locations.length > 0 ? [{ name: 'reservedFields', label: 'Reserve Locations (optional)', type: 'checkbox-group', options: locations }] : [])
           ]
         });
-        if (!result || !result.eventName) return;
+        if (!result || !result.eventName?.trim()) {
+          if (result) await showAlert('Please enter an event name.');
+          return;
+        }
         
         const reservedFields = result.reservedFields || [];
         newEvent = {
           id: Date.now().toString(),
           type: 'pinned',
-          event: result.eventName,
+          event: result.eventName.trim(),
           division: divName,
           startTime: result.startTime,
           endTime: result.endTime,
