@@ -921,58 +921,50 @@ function getMainStyles() {
       box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
     }
     
-    /* Grid Area - CSS Grid Layout (matches master builder) */
+    /* Grid Area - FLEXBOX Layout */
     .da-grid-wrapper {
       flex: 1;
       overflow: auto;
       background: var(--da-bg);
     }
     
-    .da-grid-container {
-      min-width: 700px;
-    }
-    
-    /* Grid Headers */
-    .da-grid-header-time {
-      grid-row: 1;
-      position: sticky;
-      top: 0;
-      background: var(--da-surface);
-      z-index: 10;
-      border-bottom: 1px solid var(--da-border);
-      padding: 12px 8px;
-      font-weight: 600;
-      font-size: 11px;
-      color: var(--da-text3);
-      text-align: center;
-    }
-    
-    .da-grid-header-div {
-      grid-row: 1;
-      position: sticky;
-      top: 0;
-      z-index: 10;
-      border-bottom: 1px solid var(--da-border);
-      border-left: 1px solid var(--da-border);
-      padding: 12px 8px;
-      text-align: center;
-      font-weight: 600;
-      font-size: 13px;
-      color: var(--da-text);
+    .da-grid-flex {
+      display: flex;
+      min-width: max-content;
     }
     
     /* Time Column */
-    .da-grid-time-col {
-      grid-row: 2;
-      position: relative;
+    .da-time-column {
+      width: 60px;
+      min-width: 60px;
+      flex-shrink: 0;
       background: var(--da-surface);
       border-right: 1px solid var(--da-border);
     }
     
-    .da-grid-time-label {
+    .da-time-header {
+      height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--da-text3);
+      border-bottom: 1px solid var(--da-border);
+      position: sticky;
+      top: 0;
+      background: var(--da-surface);
+      z-index: 20;
+    }
+    
+    .da-time-body {
+      position: relative;
+    }
+    
+    .da-time-tick {
       position: absolute;
       left: 0;
-      width: 100%;
+      right: 0;
       padding: 2px 6px;
       font-size: 10px;
       color: var(--da-text3);
@@ -980,30 +972,38 @@ function getMainStyles() {
       box-sizing: border-box;
     }
     
-    /* Division Cells */
-    .da-grid-cell {
-      grid-row: 2;
+    /* Division Columns */
+    .da-div-column {
+      flex: 1;
+      min-width: 120px;
+      border-right: 1px solid var(--da-border);
+    }
+    
+    .da-div-column:last-child {
+      border-right: none;
+    }
+    
+    .da-div-header {
+      height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--da-text);
+      border-bottom: 1px solid var(--da-border);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+    
+    .da-div-body {
       position: relative;
-      border-left: 1px solid var(--da-border);
       background: var(--da-bg);
     }
     
-    /* Grid Lines */
-    .da-grid-line {
-      position: absolute;
-      left: 0;
-      right: 0;
-      height: 1px;
-      background: #f1f5f9;
-      pointer-events: none;
-    }
-    
-    .da-grid-line.hour {
-      background: var(--da-border);
-    }
-    
-    /* Disabled/Off-hours zones */
-    .da-grid-disabled {
+    /* Off-hours zones */
+    .da-off-zone {
       position: absolute;
       left: 0;
       right: 0;
@@ -1014,11 +1014,28 @@ function getMainStyles() {
       pointer-events: none;
     }
     
-    /* Grid Events/Tiles */
-    .da-grid-event {
+    /* Grid Lines */
+    .da-hour-line, .da-half-line {
       position: absolute;
-      left: 3px;
-      right: 3px;
+      left: 0;
+      right: 0;
+      height: 1px;
+      pointer-events: none;
+    }
+    
+    .da-hour-line {
+      background: var(--da-border);
+    }
+    
+    .da-half-line {
+      background: #f1f5f9;
+    }
+    
+    /* Events */
+    .da-event {
+      position: absolute;
+      left: 4px;
+      right: 4px;
       border-radius: 6px;
       padding: 6px 8px;
       font-size: 11px;
@@ -1031,19 +1048,19 @@ function getMainStyles() {
       transition: box-shadow 0.15s, outline 0.15s;
     }
     
-    .da-grid-event:hover {
+    .da-event:hover {
       box-shadow: 0 4px 12px rgba(0,0,0,0.15);
       z-index: 6;
     }
     
-    .da-grid-event.selected {
+    .da-event.selected {
       outline: 3px solid var(--da-accent);
       outline-offset: -1px;
       box-shadow: 0 0 0 4px rgba(59,130,246,0.2);
       z-index: 7;
     }
     
-    .da-tile-name {
+    .da-event-label {
       font-weight: 600;
       font-size: 11px;
       white-space: nowrap;
@@ -1051,13 +1068,13 @@ function getMainStyles() {
       text-overflow: ellipsis;
     }
     
-    .da-tile-time {
+    .da-event-time {
       font-size: 10px;
       opacity: 0.85;
       margin-top: 1px;
     }
     
-    .da-tile-detail {
+    .da-event-detail {
       font-size: 9px;
       opacity: 0.8;
       margin-top: 2px;
@@ -1081,12 +1098,12 @@ function getMainStyles() {
     .da-resize-top { top: -2px; }
     .da-resize-bottom { bottom: -2px; }
     
-    .da-grid-event:hover .da-resize-handle {
+    .da-event:hover .da-resize-handle {
       opacity: 1;
       background: rgba(59,130,246,0.4);
     }
     
-    .da-grid-event.resizing {
+    .da-event.resizing {
       box-shadow: 0 0 0 2px var(--da-accent) !important;
       z-index: 100 !important;
     }
@@ -1095,8 +1112,8 @@ function getMainStyles() {
     .da-drop-preview {
       display: none;
       position: absolute;
-      left: 3px;
-      right: 3px;
+      left: 4px;
+      right: 4px;
       background: rgba(59,130,246,0.15);
       border: 2px dashed var(--da-accent);
       border-radius: 6px;
@@ -1877,9 +1894,10 @@ function renderPalette() {
           return;
         }
         const elementAtPoint = document.elementFromPoint(touch.clientX, touch.clientY);
-        const cell = elementAtPoint?.closest('.da-col-body');
+        const cell = elementAtPoint?.closest('.da-div-body');
         if (cell) {
-          handleDrop(cell, tile, touch.clientY);
+          const bounds = getGridBounds();
+          handleDrop(cell, tile, touch.clientY, bounds);
         }
       });
       
@@ -2026,57 +2044,57 @@ function renderGrid() {
   if (latestMin <= earliestMin) latestMin = earliestMin + 60;
   
   const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
-  const numCols = divs.length;
   
-  // Build the grid using CSS Grid (matching master builder)
-  let html = `<div class="da-grid-container" data-earliest="${earliestMin}" style="display:grid; grid-template-columns:60px repeat(${numCols}, 1fr); position:relative; min-width:${Math.max(700, 60 + numCols * 120)}px;">`;
+  // Build grid using FLEXBOX (more reliable than CSS grid)
+  let html = `<div class="da-grid-flex" data-earliest="${earliestMin}">`;
   
-  // === ROW 1: Headers ===
-  html += `<div class="da-grid-header-time">Time</div>`;
-  divs.forEach(([divName, divData]) => {
-    const color = divData.color || '#475569';
-    html += `<div class="da-grid-header-div" style="background:${softenColor(color)};">${escapeHtml(divName)}</div>`;
-  });
-  
-  // === ROW 2: Time column ===
-  html += `<div class="da-grid-time-col" style="height:${totalHeight}px;">`;
+  // === TIME COLUMN ===
+  html += `<div class="da-time-column">`;
+  html += `<div class="da-time-header">Time</div>`;
+  html += `<div class="da-time-body" style="height:${totalHeight}px;">`;
   for (let m = earliestMin; m < latestMin; m += INCREMENT_MINS) {
     const top = (m - earliestMin) * PIXELS_PER_MINUTE;
-    html += `<div class="da-grid-time-label" style="top:${top}px;">${minutesToTime(m)}</div>`;
+    html += `<div class="da-time-tick" style="top:${top}px;">${minutesToTime(m)}</div>`;
   }
-  html += `</div>`;
+  html += `</div></div>`;
   
-  // === ROW 2: Division columns ===
+  // === DIVISION COLUMNS ===
   divs.forEach(([divName, divData]) => {
     const divStart = parseTimeToMinutes(divData.startTime) || earliestMin;
     const divEnd = parseTimeToMinutes(divData.endTime) || latestMin;
+    const color = divData.color || '#475569';
     
-    html += `<div class="da-grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="height:${totalHeight}px;">`;
+    html += `<div class="da-div-column" data-div="${escapeHtml(divName)}" data-start-min="${earliestMin}">`;
     
-    // Off-hours (before division start)
+    // Header
+    html += `<div class="da-div-header" style="background:${softenColor(color)};">${escapeHtml(divName)}</div>`;
+    
+    // Body with events
+    html += `<div class="da-div-body" style="height:${totalHeight}px;">`;
+    
+    // Off-hours zones
     if (divStart > earliestMin) {
       const h = (divStart - earliestMin) * PIXELS_PER_MINUTE;
-      html += `<div class="da-grid-disabled" style="top:0;height:${h}px;"></div>`;
+      html += `<div class="da-off-zone" style="top:0;height:${h}px;"></div>`;
     }
-    
-    // Off-hours (after division end)
     if (divEnd < latestMin) {
       const t = (divEnd - earliestMin) * PIXELS_PER_MINUTE;
       const h = (latestMin - divEnd) * PIXELS_PER_MINUTE;
-      html += `<div class="da-grid-disabled" style="top:${t}px;height:${h}px;"></div>`;
+      html += `<div class="da-off-zone" style="top:${t}px;height:${h}px;"></div>`;
     }
     
-    // Time lines every 30 min
+    // Hour lines
     for (let m = earliestMin; m < latestMin; m += 30) {
       const top = (m - earliestMin) * PIXELS_PER_MINUTE;
-      const isHour = m % 60 === 0;
-      html += `<div class="da-grid-line ${isHour ? 'hour' : ''}" style="top:${top}px;"></div>`;
+      const cls = m % 60 === 0 ? 'da-hour-line' : 'da-half-line';
+      html += `<div class="${cls}" style="top:${top}px;"></div>`;
     }
     
-    // Events for this division
+    // Events for THIS DIVISION ONLY
     const divEvents = dailyOverrideSkeleton.filter(ev => {
-      if (!ev.divisions || ev.divisions.length === 0) return true;
-      return ev.divisions.includes(divName);
+      if (ev.division) return ev.division === divName;
+      if (ev.divisions && ev.divisions.length > 0) return ev.divisions.includes(divName);
+      return true; // No division = show in all
     });
     
     divEvents.forEach(ev => {
@@ -2091,26 +2109,27 @@ function renderGrid() {
       const borderStyle = block.dashed ? `border:2px dashed ${block.color};` : `border-left:3px solid ${block.color};`;
       const selectedClass = selectedTileId === ev.id ? ' selected' : '';
       
-      // Build inner content
-      let innerContent = `<strong class="da-tile-name">${escapeHtml(ev.name || block.name)}</strong>`;
-      innerContent += `<span class="da-tile-time">${minutesToTime(startMin)} - ${minutesToTime(endMin)}</span>`;
+      let label = ev.name || ev.event || block.name;
+      let detail = '';
       
-      // Show smart tile info
-      if (ev.type === 'smart' && ev.smartConfig) {
-        innerContent += `<span class="da-tile-detail">${ev.smartConfig.activity1} / ${ev.smartConfig.activity2}</span>`;
+      if (ev.type === 'smart' && (ev.smartConfig || ev.smartData)) {
+        const cfg = ev.smartConfig || ev.smartData;
+        detail = `${cfg.activity1 || ''} / ${cfg.activity2 || ''}`;
       }
-      
-      // Show elective info
-      if (ev.type === 'elective' && ev.reservedActivities?.length > 0) {
-        const actList = ev.reservedActivities.slice(0, 2).join(', ');
-        const more = ev.reservedActivities.length > 2 ? ` +${ev.reservedActivities.length - 2}` : '';
-        innerContent += `<span class="da-tile-detail">🎯 ${actList}${more}</span>`;
+      if (ev.type === 'elective') {
+        const acts = ev.reservedActivities || ev.electiveActivities || [];
+        if (acts.length > 0) detail = '🎯 ' + acts.slice(0, 2).join(', ') + (acts.length > 2 ? ' +' + (acts.length - 2) : '');
+      }
+      if (ev.location) {
+        detail = detail ? detail + ' · 📍' + ev.location : '📍 ' + ev.location;
       }
       
       html += `
-        <div class="da-grid-event${selectedClass}" data-id="${ev.id}" draggable="true"
+        <div class="da-event${selectedClass}" data-id="${ev.id}" data-div="${escapeHtml(divName)}" draggable="true"
              style="top:${top}px;height:${height}px;background:${block.bg};color:${block.color};${borderStyle}">
-          ${innerContent}
+          <div class="da-event-label">${escapeHtml(label)}</div>
+          <div class="da-event-time">${minutesToTime(startMin)} - ${minutesToTime(endMin)}</div>
+          ${detail ? `<div class="da-event-detail">${escapeHtml(detail)}</div>` : ''}
           <div class="da-resize-handle da-resize-top"></div>
           <div class="da-resize-handle da-resize-bottom"></div>
         </div>
@@ -2119,10 +2138,10 @@ function renderGrid() {
     
     // Drop preview
     html += `<div class="da-drop-preview"><div class="da-preview-label"></div></div>`;
-    html += `</div>`;
+    html += `</div></div>`; // Close body and column
   });
   
-  html += `</div>`;
+  html += `</div>`; // Close grid
   gridContainer.innerHTML = html;
   
   // Bind event handlers
@@ -2153,7 +2172,7 @@ function bindGridEvents(bounds) {
   const earliestMin = bounds.lo;
   
   // Click to select events
-  grid.querySelectorAll('.da-grid-event').forEach(el => {
+  grid.querySelectorAll('.da-event').forEach(el => {
     el.onclick = (e) => {
       if (e.target.classList.contains('da-resize-handle')) return;
       e.stopPropagation();
@@ -2202,12 +2221,12 @@ function bindGridEvents(bounds) {
       const ghost = document.getElementById('da-drag-ghost');
       if (ghost) ghost.style.display = 'none';
       grid.querySelectorAll('.da-drop-preview').forEach(p => { p.style.display = 'none'; });
-      grid.querySelectorAll('.da-grid-cell').forEach(c => c.style.background = '');
+      grid.querySelectorAll('.da-div-body').forEach(c => c.style.background = '');
     });
   });
   
   // Click grid background to deselect
-  grid.querySelectorAll('.da-grid-cell').forEach(cell => {
+  grid.querySelectorAll('.da-div-body').forEach(cell => {
     cell.onclick = (e) => {
       if (e.target === cell) deselectAllTiles();
     };
@@ -2262,7 +2281,10 @@ function bindGridEvents(bounds) {
       const preview = cell.querySelector('.da-drop-preview');
       if (preview) preview.style.display = 'none';
       
-      const divName = cell.dataset.div;
+      // Get division name from parent column
+      const divColumn = cell.closest('.da-div-column');
+      const divName = divColumn?.dataset.div;
+      
       const rect = cell.getBoundingClientRect();
       const y = e.clientY - rect.top;
       const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
@@ -2313,13 +2335,13 @@ function bindGridEvents(bounds) {
 function selectTile(id) {
   deselectAllTiles();
   selectedTileId = id;
-  const el = document.querySelector(`.da-grid-event[data-id="${id}"]`);
+  const el = document.querySelector(`.da-event[data-id="${id}"]`);
   if (el) el.classList.add('selected');
 }
 
 function deselectAllTiles() {
   selectedTileId = null;
-  document.querySelectorAll('.da-grid-event.selected').forEach(el => el.classList.remove('selected'));
+  document.querySelectorAll('.da-event.selected').forEach(el => el.classList.remove('selected'));
 }
 
 async function deleteTile(id) {
@@ -2380,7 +2402,12 @@ async function handleDrop(cell, tileData, clientY, bounds) {
   const startMinutes = earliestMin + snapMin;
   const endMinutes = startMinutes + INCREMENT_MINS;
   
-  const divName = cell.dataset.div;
+  // Get division name - might be on cell or on parent column
+  let divName = cell.dataset?.div;
+  if (!divName) {
+    const divColumn = cell.closest?.('.da-div-column');
+    divName = divColumn?.dataset?.div;
+  }
   
   // Handle special tile types
   if (tileData.type === 'smart') {
@@ -2536,7 +2563,7 @@ async function handleCustomTileDrop(startMin, endMin, divName) {
 }
 
 function startResize(handle, e, bounds) {
-  const eventEl = handle.closest('.da-grid-event');
+  const eventEl = handle.closest('.da-event');
   if (!eventEl) return;
   
   const id = eventEl.dataset.id;
