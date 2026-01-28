@@ -301,6 +301,9 @@ function init(){
   if(!container) return;
     
   loadDailySkeleton();
+  
+  // Reset unsaved changes since we just loaded fresh
+  hasUnsavedChanges = false;
 
   // Silently restore draft without prompting
   const savedDraft = localStorage.getItem(SKELETON_DRAFT_KEY);
@@ -309,6 +312,8 @@ function init(){
     try {
       dailySkeleton = JSON.parse(savedDraft);
       if(savedDraftName) currentLoadedTemplate = savedDraftName;
+      // Draft means there might be unsaved changes
+      hasUnsavedChanges = true;
     } catch(e) {
       clearDraftFromLocalStorage();
     }
@@ -321,9 +326,14 @@ function init(){
       .ms-container { display:flex; gap:0; min-height:600px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; }
       
       /* Left Sidebar */
-      .ms-sidebar { width:180px; min-width:180px; background:#f8fafc; border-right:1px solid #e2e8f0; display:flex; flex-direction:column; }
-      .ms-sidebar-header { padding:14px 12px; border-bottom:1px solid #e2e8f0; background:#fff; }
+      .ms-sidebar { width:180px; min-width:180px; background:#f8fafc; border-right:1px solid #e2e8f0; display:flex; flex-direction:column; transition:width 0.2s, min-width 0.2s; }
+      .ms-sidebar-header { padding:14px 12px; border-bottom:1px solid #e2e8f0; background:#fff; cursor:pointer; display:flex; align-items:center; justify-content:space-between; user-select:none; }
+      .ms-sidebar-header:hover { background:#f8fafc; }
       .ms-sidebar-header h3 { margin:0; font-size:13px; font-weight:600; color:#475569; }
+      .ms-collapse-icon { transition:transform 0.2s; color:#94a3b8; }
+      .ms-sidebar-header.collapsed .ms-collapse-icon { transform:rotate(-90deg); }
+      .ms-palette { flex:1; overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:6px; transition:opacity 0.2s, max-height 0.3s; }
+      .ms-palette.collapsed { opacity:0; max-height:0; overflow:hidden; padding:0 10px; }
       .ms-palette { flex:1; overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:6px; }
       .ms-tile { padding:10px 12px; border-radius:6px; cursor:grab; font-size:12px; font-weight:600; transition:transform 0.15s, box-shadow 0.15s; text-shadow:0 1px 2px rgba(0,0,0,0.2); }
       .ms-tile:hover { transform:translateX(3px); box-shadow:0 4px 12px rgba(0,0,0,0.15); }
@@ -422,8 +432,9 @@ function init(){
     <div class="ms-container">
       <!-- Left Sidebar -->
       <div class="ms-sidebar">
-        <div class="ms-sidebar-header">
-          <h3>Block Types</h3>
+        <div class="ms-sidebar-header" onclick="document.getElementById('scheduler-palette').classList.toggle('collapsed'); this.classList.toggle('collapsed');">
+          <h3>Tile Types</h3>
+          <svg class="ms-collapse-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
         </div>
         <div id="scheduler-palette" class="ms-palette"></div>
       </div>
@@ -511,13 +522,17 @@ function renderToolbar() {
   // Get the default template for today
   const todayDefault = assignments[todayName] || assignments["Default"] || null;
   
-  const isEditing = !!currentLoadedTemplate;
+  // If no template is explicitly loaded but there's a default, use that as current
+  const effectiveTemplate = currentLoadedTemplate || todayDefault;
+  const isFromDefault = !currentLoadedTemplate && todayDefault;
+  
+  const canUpdate = !!effectiveTemplate;
   const statusClass = hasUnsavedChanges ? 'has-changes' : '';
   
-  // Status text logic: show current loaded, or day's default, or "No Template"
+  // Status text logic
   let statusText;
   let statusSubtext = '';
-  if (isEditing) {
+  if (currentLoadedTemplate) {
     statusText = currentLoadedTemplate;
   } else if (todayDefault) {
     statusText = todayDefault;
@@ -535,7 +550,7 @@ function renderToolbar() {
       <span class="ms-status-name">${statusText}</span>${statusSubtext}
       ${changesBadge}
     </div>
-    <button id="tb-update-btn" class="ms-btn ms-btn-success" ${!isEditing ? 'disabled' : ''}>
+    <button id="tb-update-btn" class="ms-btn ms-btn-success" ${!canUpdate ? 'disabled' : ''}>
       Update
     </button>
     
@@ -586,13 +601,15 @@ function renderToolbar() {
   };
   
   document.getElementById('tb-update-btn').onclick = async () => {
-    if (!currentLoadedTemplate) return;
+    const templateToUpdate = currentLoadedTemplate || todayDefault;
+    if (!templateToUpdate) return;
     if (!window.AccessControl?.checkSetupAccess('update schedule templates')) return;
     
-    const ok = await showConfirm(`Overwrite "${currentLoadedTemplate}" with current grid?`);
+    const ok = await showConfirm(`Overwrite "${templateToUpdate}" with current grid?`);
     if (ok) {
-      window.saveSkeleton?.(currentLoadedTemplate, dailySkeleton);
+      window.saveSkeleton?.(templateToUpdate, dailySkeleton);
       window.forceSyncToCloud?.();
+      currentLoadedTemplate = templateToUpdate; // Set it as explicitly loaded now
       hasUnsavedChanges = false;
       clearDraftFromLocalStorage();
       await showAlert('Template updated successfully.');
@@ -830,6 +847,38 @@ function showTileInfo(tile) {
   showAlert(descriptions[tile.type] || tile.description);
 }
 
+// =================================================================
+// Color Softening Helper - Makes division colors match soft palette
+// =================================================================
+function softenColor(hexColor) {
+  if (!hexColor) return '#94a3b8';
+  
+  // Remove # if present
+  let hex = hexColor.replace('#', '');
+  
+  // Parse RGB
+  let r = parseInt(hex.substring(0, 2), 16);
+  let g = parseInt(hex.substring(2, 4), 16);
+  let b = parseInt(hex.substring(4, 6), 16);
+  
+  // If parsing failed, return a default soft color
+  if (isNaN(r) || isNaN(g) || isNaN(b)) return '#94a3b8';
+  
+  // Soften by blending with white (increase lightness) and reduce saturation
+  // Mix with white at about 30-40% to soften
+  const mixRatio = 0.35;
+  r = Math.round(r + (255 - r) * mixRatio);
+  g = Math.round(g + (255 - g) * mixRatio);
+  b = Math.round(b + (255 - b) * mixRatio);
+  
+  // Ensure values stay within bounds
+  r = Math.min(255, Math.max(0, r));
+  g = Math.min(255, Math.max(0, g));
+  b = Math.min(255, Math.max(0, b));
+  
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+}
+
 // --- RENDER GRID ---
 function renderGrid() {
   const divisions = window.divisions || {};
@@ -863,8 +912,11 @@ function renderGrid() {
   // Header
   html += `<div style="grid-row:1; position:sticky; top:0; background:#f8fafc; z-index:10; border-bottom:1px solid #e2e8f0; padding:10px 6px; font-weight:600; font-size:11px; color:#64748b;">Time</div>`;
   availableDivisions.forEach((divName, i) => {
-    const color = divisions[divName]?.color || '#475569';
-    html += `<div style="grid-row:1; grid-column:${i+2}; position:sticky; top:0; background:${color}; color:#fff; z-index:10; border-bottom:1px solid ${color}; padding:10px 6px; text-align:center; font-weight:600; font-size:12px;">${divName}</div>`;
+    const rawColor = divisions[divName]?.color || '#475569';
+    const color = softenColor(rawColor);
+    // Use darker text for light backgrounds
+    const textColor = '#fff';
+    html += `<div style="grid-row:1; grid-column:${i+2}; position:sticky; top:0; background:${color}; color:${textColor}; z-index:10; border-bottom:1px solid ${color}; padding:10px 6px; text-align:center; font-weight:600; font-size:12px; text-shadow:0 1px 2px rgba(0,0,0,0.15);">${divName}</div>`;
   });
 
   // Time Column
