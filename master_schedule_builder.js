@@ -59,8 +59,8 @@ const TILES=[
   {type:'special', name:'Special Activity', style:'background:#c4b5fd;color:#3b1f6b;', description:'Special Activity slot only.'},
   
   // Advanced Tiles
-  {type:'smart', name:'Smart Tile', style:'background:#7dd3fc;color:#0c4a6e;border:2px dashed #0284c7;', description:'Balances 2 activities with a fallback.'},
-  {type:'split', name:'Split Activity', style:'background:#fdba74;color:#7c2d12;', description:'Two activities share the block (Switch halfway).'},
+  {type:'smart', name:'Smart Tile', style:'background:#7dd3fc;color:#0c4a6e;border:2px dashed #0284c7;', description:'Calculates Main 1 capacity, assigns rest to Main 2, then swaps.'},
+  {type:'split', name:'Split Activity', style:'background:#fdba74;color:#7c2d12;', description:'Splits division between two tile types, swap midway.'},
   {type:'elective', name:'Elective', style:'background:#f0abfc;color:#701a75;', description:'Reserve multiple activities for this division only.'},
   
   // Leagues
@@ -252,28 +252,71 @@ function showAlert(message) {
 }
 
 // =================================================================
-// Get all available locations (fields + facilities + special activities)
+// Get all available locations (fields + facilities + locations + special activities)
 // =================================================================
 function getAllLocations() {
   const globalSettings = window.loadGlobalSettings?.() || {};
   const app1 = globalSettings.app1 || {};
   
-  // Get fields
-  const fields = (app1.fields || []).map(f => typeof f === 'string' ? f : f.name).filter(Boolean);
+  // Helper to extract names from array (handles strings and objects)
+  const extractNames = (arr) => {
+    if (!Array.isArray(arr)) return [];
+    return arr.map(item => {
+      if (typeof item === 'string') return item;
+      if (item && typeof item === 'object') return item.name || item.label || item.title || item.location || null;
+      return null;
+    }).filter(Boolean);
+  };
   
-  // Get special activities
-  const specialActivities = (app1.specialActivities || []).map(s => typeof s === 'string' ? s : s.name).filter(Boolean);
+  // Get from all possible sources in app1
+  const fields = extractNames(app1.fields);
+  const specialActivities = extractNames(app1.specialActivities);
+  const facilities = extractNames(app1.facilities);
+  const locations = extractNames(app1.locations);
   
-  // Get facilities - handle both array of strings and array of objects
-  const facilities = (app1.facilities || []).map(f => typeof f === 'string' ? f : (f.name || f)).filter(Boolean);
+  // Also check for top-level in globalSettings
+  const topLevelLocations = extractNames(globalSettings.locations);
+  const topLevelFacilities = extractNames(globalSettings.facilities);
   
-  // Get locations if stored separately
-  const locations = (app1.locations || []).map(l => typeof l === 'string' ? l : (l.name || l)).filter(Boolean);
+  // Check window.locations if it exists
+  const windowLocations = extractNames(window.locations);
+  
+  // Check if there's a getLocations function
+  const funcLocations = extractNames(window.getLocations?.());
+  
+  // Check window.globalSettings directly
+  const directSettings = window.globalSettings || {};
+  const directLocations = extractNames(directSettings.locations);
+  const directFacilities = extractNames(directSettings.facilities);
+  const directApp1Locations = extractNames(directSettings.app1?.locations);
+  const directApp1Facilities = extractNames(directSettings.app1?.facilities);
   
   // Combine all and remove duplicates
-  const all = [...new Set([...fields, ...facilities, ...locations, ...specialActivities])].filter(Boolean).sort();
+  const all = [...new Set([
+    ...fields, 
+    ...facilities, 
+    ...locations, 
+    ...topLevelLocations,
+    ...topLevelFacilities,
+    ...windowLocations,
+    ...funcLocations,
+    ...directLocations,
+    ...directFacilities,
+    ...directApp1Locations,
+    ...directApp1Facilities,
+    ...specialActivities
+  ])].filter(Boolean).sort();
   
-  console.log('[getAllLocations] Found:', { fields, facilities, locations, specialActivities, combined: all });
+  console.log('[getAllLocations] Searched sources:', { 
+    'app1.fields': fields,
+    'app1.facilities': facilities, 
+    'app1.locations': locations, 
+    'globalSettings.locations': topLevelLocations,
+    'window.locations': windowLocations,
+    'getLocations()': funcLocations,
+    'app1.specialActivities': specialActivities, 
+    'COMBINED': all 
+  });
   
   return all;
 }
@@ -323,7 +366,7 @@ function init(){
   container.innerHTML = `
     <style>
       /* === MASTER SCHEDULER STYLES === */
-      .ms-container { display:flex; gap:0; height:calc(100vh - 200px); min-height:500px; max-height:800px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; }
+      .ms-container { display:flex; gap:0; height:calc(100vh - 120px); min-height:500px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; }
       
       /* Left Sidebar - Scrollable */
       .ms-sidebar { width:180px; min-width:180px; background:#f8fafc; border-right:1px solid #e2e8f0; display:flex; flex-direction:column; height:100%; max-height:100%; }
@@ -833,8 +876,8 @@ function showTileInfo(tile) {
     'activity': 'ACTIVITY SLOT\n\nA flexible time block where the scheduler assigns either a sport or special activity based on availability and fairness rules.',
     'sports': 'SPORTS SLOT\n\nDedicated time for sports activities only. The scheduler will assign an available field and sport.',
     'special': 'SPECIAL ACTIVITY\n\nTime reserved for special activities like Art, Music, Drama, etc.',
-    'smart': 'SMART TILE\n\nBalances two activities across bunks. One group gets Activity A while another gets Activity B, then they swap.',
-    'split': 'SPLIT ACTIVITY\n\nDivides the time block in half. First half is one activity, second half is another.',
+    'smart': 'SMART TILE\n\nSmartly calculates capacity for Main 1 and distributes bunks:\n\n1. Calculates how many bunks can fit in Main 1\n2. Assigns those bunks to Main 1, everyone else gets Main 2\n3. Next activity period: They SWAP\n   • Main 1 bunks → now get Main 2\n   • Main 2 bunks → now get Main 1\n4. If Main 1 capacity is insufficient, Fallback is used\n\nNote: Enter tile types (Sports, Special, Activity) not specific activities.',
+    'split': 'SPLIT ACTIVITY\n\nSplits the division into two groups for the time block:\n\n• First half of time:\n   - Group 1 does Tile A\n   - Group 2 does Tile B\n• Midway through: Groups SWAP\n• Second half of time:\n   - Group 1 does Tile B\n   - Group 2 does Tile A\n\nNote: Enter tile types (Sports, Special) not specific activities.',
     'elective': 'ELECTIVE\n\nReserves specific fields/activities for THIS division only. Other divisions cannot use them during this time.',
     'league': 'LEAGUE GAME\n\nFull buyout for a regular league matchup. All bunks in the division play head-to-head games.',
     'specialty_league': 'SPECIALTY LEAGUE\n\nSimilar to regular leagues but for special sports.',
@@ -842,7 +885,7 @@ function showTileInfo(tile) {
     'lunch': 'LUNCH\n\nFixed lunch period. No scheduling occurs during this time.',
     'snacks': 'SNACKS\n\nFixed snack break.',
     'dismissal': 'DISMISSAL\n\nEnd of day marker.',
-    'custom': 'CUSTOM PINNED\n\nCreate any fixed event (e.g., Assembly, Special Program). You can reserve specific locations.'
+    'custom': 'CUSTOM PINNED\n\nCreate any fixed event (e.g., Assembly, Davening, Special Program).\n\nYou can reserve specific locations from your Locations settings.'
   };
   showAlert(descriptions[tile.type] || tile.description);
 }
@@ -1022,7 +1065,7 @@ function renderEventTile(ev, top, height) {
   }
   
   if (ev.type === 'smart' && ev.smartData) {
-    innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">↩ ${ev.smartData.fallbackActivity}</div>`;
+    innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">Fallback: ${ev.smartData.fallbackActivity}</div>`;
   }
 
   const selectedClass = selectedTileId === ev.id ? ' selected' : '';
@@ -1086,19 +1129,17 @@ function addDropListeners(selector) {
       if (tileData.type === 'smart') {
         const result = await showModal({
           title: 'Smart Tile Setup',
-          description: 'Configure two activities that will be balanced across bunks.',
+          description: 'Calculates Main 1 capacity → assigns bunks there, rest get Main 2. Next period they swap. If Main 1 is full, Fallback is used. Enter TILE TYPES not specific activities.',
           fields: [
             { name: 'startTime', label: 'Start Time', type: 'text', default: startStr },
             { name: 'endTime', label: 'End Time', type: 'text', default: endStr },
-            { name: 'main1', label: 'Activity 1', type: 'text', placeholder: 'e.g., Swim' },
-            { name: 'main2', label: 'Activity 2', type: 'text', placeholder: 'e.g., Art' },
-            { name: 'fallbackFor', label: 'Which needs fallback?', type: 'select', options: ['Activity 1', 'Activity 2'] },
-            { name: 'fallbackActivity', label: 'Fallback Activity', type: 'text', default: 'Sports' }
+            { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', placeholder: 'e.g., Special, Swim' },
+            { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', placeholder: 'e.g., Sports, Activity' },
+            { name: 'fallbackActivity', label: 'Fallback (if Main 1 full)', type: 'text', default: 'Activity', placeholder: 'e.g., Activity, Sports' }
           ]
         });
         if (!result || !result.main1 || !result.main2) return;
         
-        const fbFor = result.fallbackFor === 'Activity 1' ? result.main1 : result.main2;
         newEvent = {
           id: Date.now().toString(),
           type: 'smart',
@@ -1106,19 +1147,19 @@ function addDropListeners(selector) {
           division: divName,
           startTime: result.startTime,
           endTime: result.endTime,
-          smartData: { main1: result.main1, main2: result.main2, fallbackFor: fbFor, fallbackActivity: result.fallbackActivity }
+          smartData: { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: result.fallbackActivity || 'Activity' }
         };
       }
       // SPLIT TILE
       else if (tileData.type === 'split') {
         const result = await showModal({
           title: 'Split Activity Setup',
-          description: 'Two activities share the block. Groups swap halfway through.',
+          description: 'Splits division between two tile types. Midway through the time block, groups SWAP. Enter TILE TYPES (Sports, Special) not specific activities.',
           fields: [
             { name: 'startTime', label: 'Start Time', type: 'text', default: startStr },
             { name: 'endTime', label: 'End Time', type: 'text', default: endStr },
-            { name: 'activity1', label: 'Activity 1 (Group 1 first)', type: 'text', placeholder: 'e.g., Basketball' },
-            { name: 'activity2', label: 'Activity 2 (Group 2 first)', type: 'text', placeholder: 'e.g., Soccer' }
+            { name: 'activity1', label: 'Tile Type A (Group 1 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' },
+            { name: 'activity2', label: 'Tile Type B (Group 2 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' }
           ]
         });
         if (!result || !result.activity1 || !result.activity2) return;
@@ -1168,15 +1209,24 @@ function addDropListeners(selector) {
       else if (tileData.type === 'custom') {
         const locations = getAllLocations();
         
+        // Build fields array
+        const modalFields = [
+          { name: 'eventName', label: 'Event Name', type: 'text', default: '', placeholder: 'e.g., Regroup, Assembly, Davening' },
+          { name: 'startTime', label: 'Start Time', type: 'text', default: startStr },
+          { name: 'endTime', label: 'End Time', type: 'text', default: endStr }
+        ];
+        
+        // Add locations if available
+        if (locations.length > 0) {
+          modalFields.push({ name: 'reservedFields', label: 'Reserve Locations (optional)', type: 'checkbox-group', options: locations });
+        }
+        
         const result = await showModal({
           title: 'Custom Pinned Event',
-          description: 'Create a fixed event. Optionally reserve locations.',
-          fields: [
-            { name: 'eventName', label: 'Event Name', type: 'text', default: '', placeholder: 'e.g., Regroup, Assembly, Special Program' },
-            { name: 'startTime', label: 'Start Time', type: 'text', default: startStr },
-            { name: 'endTime', label: 'End Time', type: 'text', default: endStr },
-            ...(locations.length > 0 ? [{ name: 'reservedFields', label: 'Reserve Locations (optional)', type: 'checkbox-group', options: locations }] : [])
-          ]
+          description: locations.length > 0 
+            ? 'Create a fixed event. Optionally reserve locations from your setup.'
+            : 'Create a fixed event. (No locations found - add them in Setup > Locations)',
+          fields: modalFields
         });
         if (!result || !result.eventName?.trim()) {
           if (result) await showAlert('Please enter an event name.');
