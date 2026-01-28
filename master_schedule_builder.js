@@ -1,18 +1,12 @@
 // =================================================================
-// master_schedule_builder.js (UPDATED - ADVANCED GRID INTERACTION + MOBILE)
-// Beta v2.2
+// master_schedule_builder.js (UPDATED - REDESIGNED UI)
+// Beta v2.3
 // Updates:
-// 1. Added Elective tile type for reserving multiple activities
-// 2. Added "Update [Template Name]" button to save changes to current file.
-// 3. Wired up "Delete Selected Template" button.
-// 4. Tracks 'currentLoadedTemplate' to distinguish between new drafts and existing files.
-// 5. Auto-assigns default locations to pinned tiles if configured.
-// 6. ADDED: Drag-and-drop repositioning of existing tiles.
-// 7. ADDED: Resize handles (top/bottom) with 5-minute snapping.
-// 8. ADDED: Live drop previews and resize tooltips.
-// 9. CHANGED: Deletion now requires DOUBLE-CLICK to prevent accidental clicks.
-// 10. ADDED: Mobile Touch Support (Drag from palette to grid).
-// 11. ADDED: RBAC Checks for Update, Save, and Delete operations.
+// 1. Moved tile palette to LEFT SIDEBAR
+// 2. Redesigned template controls - cleaner, more professional
+// 3. Made UPDATE button always visible and prominent
+// 4. Professional color palette for all tiles
+// 5. Improved overall layout and visual hierarchy
 // =================================================================
 
 (function(){
@@ -20,7 +14,7 @@
 
 let container=null, palette=null, grid=null;
 let dailySkeleton=[];
-let currentLoadedTemplate = null; // Tracks which template is currently being edited
+let currentLoadedTemplate = null;
 
 // --- Constants ---
 const SKELETON_DRAFT_KEY = 'master-schedule-draft';
@@ -34,7 +28,6 @@ function saveDraftToLocalStorage() {
   try {
     if (dailySkeleton && dailySkeleton.length > 0) {
       localStorage.setItem(SKELETON_DRAFT_KEY, JSON.stringify(dailySkeleton));
-      // Persist the loaded name if available so refresh keeps context
       if(currentLoadedTemplate) {
           localStorage.setItem(SKELETON_DRAFT_NAME_KEY, currentLoadedTemplate);
       }
@@ -50,21 +43,28 @@ function clearDraftFromLocalStorage() {
   localStorage.removeItem(SKELETON_DRAFT_NAME_KEY);
 }
 
-// --- Tiles ---
+// --- Tiles (Professional Color Palette) ---
 const TILES=[
-  {type:'activity', name:'Activity', style:'background:#e0f7fa;border:1px solid #007bff;', description:'Flexible slot (Sport or Special).'},
-  {type:'sports', name:'Sports', style:'background:#dcedc8;border:1px solid #689f38;', description:'Sports slot only.'},
-  {type:'special', name:'Special Activity', style:'background:#e8f5e9;border:1px solid #43a047;', description:'Special Activity slot only.'},
-  {type:'smart', name:'Smart Tile', style:'background:#e3f2fd;border:2px dashed #0288d1;color:#01579b;', description:'Balances 2 activities with a fallback.'},
-  {type:'split', name:'Split Activity', style:'background:#fff3e0;border:1px solid #f57c00;', description:'Two activities share the block (Switch halfway).'},
-  {type:'elective', name:'Elective', style:'background:#e1bee7;border:2px solid #8e24aa;color:#4a148c;', description:'Reserve multiple activities for this division only.'},
-  {type:'league', name:'League Game', style:'background:#d1c4e9;border:1px solid #5e35b1;', description:'Regular League slot (Full Buyout).'},
-  {type:'specialty_league', name:'Specialty League', style:'background:#fff8e1;border:1px solid #f9a825;', description:'Specialty League slot (Full Buyout).'},
-  {type:'swim', name:'Swim', style:'background:#bbdefb;border:1px solid #1976d2;', description:'Pinned.'},
-  {type:'lunch', name:'Lunch', style:'background:#fbe9e7;border:1px solid #d84315;', description:'Pinned.'},
-  {type:'snacks', name:'Snacks', style:'background:#fff9c4;border:1px solid #fbc02d;', description:'Pinned.'},
-  {type:'dismissal', name:'Dismissal', style:'background:#f44336;color:white;border:1px solid #b71c1c;', description:'Pinned.'},
-  {type:'custom', name:'Custom Pinned Event', style:'background:#eee;border:1px solid #616161;', description:'Pinned custom (e.g., Regroup).'}
+  // Scheduling Slots - Clean accent colors
+  {type:'activity', name:'Activity', style:'background:#f0f9ff;border-left:4px solid #0284c7;color:#0c4a6e;', description:'Flexible slot (Sport or Special).'},
+  {type:'sports', name:'Sports', style:'background:#f0fdf4;border-left:4px solid #16a34a;color:#14532d;', description:'Sports slot only.'},
+  {type:'special', name:'Special Activity', style:'background:#faf5ff;border-left:4px solid #9333ea;color:#581c87;', description:'Special Activity slot only.'},
+  
+  // Advanced Tiles
+  {type:'smart', name:'Smart Tile', style:'background:#eff6ff;border:2px dashed #3b82f6;color:#1e40af;', description:'Balances 2 activities with a fallback.'},
+  {type:'split', name:'Split Activity', style:'background:#fff7ed;border-left:4px solid #ea580c;color:#7c2d12;', description:'Two activities share the block (Switch halfway).'},
+  {type:'elective', name:'Elective', style:'background:#fdf4ff;border-left:4px solid #c026d3;color:#701a75;', description:'Reserve multiple activities for this division only.'},
+  
+  // Leagues
+  {type:'league', name:'League Game', style:'background:#f5f3ff;border-left:4px solid #7c3aed;color:#4c1d95;', description:'Regular League slot (Full Buyout).'},
+  {type:'specialty_league', name:'Specialty League', style:'background:#fffbeb;border-left:4px solid #d97706;color:#78350f;', description:'Specialty League slot (Full Buyout).'},
+  
+  // Pinned Events
+  {type:'swim', name:'Swim', style:'background:#e0f2fe;border-left:4px solid #0891b2;color:#155e75;', description:'Pinned.'},
+  {type:'lunch', name:'Lunch', style:'background:#fef2f2;border-left:4px solid #dc2626;color:#7f1d1d;', description:'Pinned.'},
+  {type:'snacks', name:'Snacks', style:'background:#fefce8;border-left:4px solid #ca8a04;color:#713f12;', description:'Pinned.'},
+  {type:'dismissal', name:'Dismissal', style:'background:#991b1b;color:#fef2f2;border-left:4px solid #450a0a;', description:'Pinned.'},
+  {type:'custom', name:'Custom Pinned', style:'background:#f8fafc;border-left:4px solid #475569;color:#1e293b;', description:'Pinned custom (e.g., Regroup).'}
 ];
 
 function mapEventNameForOptimizer(name){
@@ -87,11 +87,10 @@ function promptForReservedFields(eventName) {
   const allFields = (app1.fields || []).map(f => f.name);
   const specialActivities = (app1.specialActivities || []).map(s => s.name);
     
-  // Combine fields and special activities as potential "locations"
   const allLocations = [...new Set([...allFields, ...specialActivities])].sort();
     
   if (allLocations.length === 0) {
-    return []; // No fields configured
+    return [];
   }
     
   const fieldInput = prompt(
@@ -106,13 +105,11 @@ function promptForReservedFields(eventName) {
     return [];
   }
     
-  // Parse and validate field names
   const requested = fieldInput.split(',').map(f => f.trim()).filter(Boolean);
   const validated = [];
   const invalid = [];
     
   requested.forEach(name => {
-    // Try to match (case-insensitive)
     const match = allLocations.find(loc => loc.toLowerCase() === name.toLowerCase());
     if (match) {
       validated.push(match);
@@ -135,7 +132,6 @@ const SWIM_POOL_PATTERNS = ['swim', 'pool', 'swimming', 'aqua'];
 
 function isSwimPoolAlias(name) {
   const lower = (name || '').toLowerCase().trim();
-  // Fix #1: Removed backwards check (p.includes(lower)) to prevent false positives
   return SWIM_POOL_PATTERNS.some(p => lower.includes(p));
 }
 
@@ -181,7 +177,6 @@ function promptForElectiveActivities(divName) {
     return null;
   }
     
-  // Parse and validate
   const requested = activitiesInput.split(',').map(s => s.trim()).filter(Boolean);
   const validated = [];
   const invalid = [];
@@ -189,7 +184,6 @@ function promptForElectiveActivities(divName) {
   requested.forEach(name => {
     console.log(`[Elective] Processing: "${name}"`);
       
-    // Check for swim/pool aliases FIRST
     if (isSwimPoolAlias(name)) {
       console.log(`[Elective] "${name}" is a swim/pool alias`);
       if (poolFieldName) {
@@ -198,16 +192,14 @@ function promptForElectiveActivities(divName) {
           console.log(`[Elective] Resolved "${name}" → "${poolFieldName}"`);
         }
       } else {
-        // No pool field in settings, add the literal name
         if (!validated.includes(name)) {
           validated.push(name);
           console.log(`[Elective] No pool field found, adding "${name}" as-is`);
         }
       }
-      return; // Don't check against allLocations for swim/pool
+      return;
     }
       
-    // Standard matching for non-swim activities
     const match = allLocations.find(loc => loc.toLowerCase() === name.toLowerCase());
     if (match) {
       if (!validated.includes(match)) {
@@ -252,37 +244,117 @@ function init(){
     }
   }
 
-  // Inject HTML + CSS
+  // Inject HTML + CSS with new layout
   container.innerHTML=`
-    <div id="scheduler-template-ui" style="padding:15px;background:#f9f9f9;border:1px solid #ddd;border-radius:8px;margin-bottom:20px;"></div>
-    <div id="scheduler-palette" style="padding:10px;background:#f4f4f4;border-radius:8px;margin-bottom:15px;display:flex;flex-wrap:wrap;gap:10px;"></div>
-    <div id="scheduler-grid-wrapper" style="overflow-x:auto; border:1px solid #999; background:#fff;">
-        <div id="scheduler-grid"></div>
-    </div>
     <style>
-      .grid-disabled{position:absolute;width:100%;background-color:#80808040;background-image:linear-gradient(-45deg,#0000001a 25%,transparent 25%,transparent 50%,#0000001a 50%,#0000001a 75%,transparent 75%,transparent);background-size:20px 20px;z-index:1;pointer-events:none}
-      .grid-event{z-index:2;position:relative;box-shadow:0 1px 3px rgba(0,0,0,0.2);}
-      .grid-cell{position:relative; border-right:1px solid #ccc; background:#fff;}
+      /* === MASTER SCHEDULER STYLES === */
+      .ms-container { display:flex; gap:0; min-height:600px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; }
       
-      /* NEW: Resize handles */
+      /* Left Sidebar - Tile Palette */
+      .ms-sidebar { width:200px; min-width:200px; background:#f8fafc; border-right:1px solid #e2e8f0; display:flex; flex-direction:column; }
+      .ms-sidebar-header { padding:16px; border-bottom:1px solid #e2e8f0; background:#fff; }
+      .ms-sidebar-header h3 { margin:0; font-size:14px; font-weight:600; color:#334155; text-transform:uppercase; letter-spacing:0.5px; }
+      .ms-palette { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:8px; }
+      .ms-tile { padding:10px 12px; border-radius:6px; cursor:grab; font-size:13px; font-weight:500; transition:transform 0.15s, box-shadow 0.15s; }
+      .ms-tile:hover { transform:translateX(4px); box-shadow:0 2px 8px rgba(0,0,0,0.1); }
+      .ms-tile:active { cursor:grabbing; }
+      .ms-tile-divider { height:1px; background:#e2e8f0; margin:8px 0; }
+      .ms-tile-label { font-size:11px; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; padding:4px 0; }
+      
+      /* Main Content Area */
+      .ms-main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+      
+      /* Template Controls Header */
+      .ms-header { background:#fff; border-bottom:1px solid #e2e8f0; padding:16px 20px; }
+      .ms-header-row { display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+      .ms-status { display:flex; align-items:center; gap:8px; padding:8px 16px; background:#f1f5f9; border-radius:8px; }
+      .ms-status-dot { width:8px; height:8px; border-radius:50%; }
+      .ms-status-dot.new { background:#94a3b8; }
+      .ms-status-dot.editing { background:#22c55e; }
+      .ms-status-text { font-size:13px; color:#475569; }
+      .ms-status-name { font-weight:600; color:#0f172a; }
+      
+      .ms-control-group { display:flex; align-items:center; gap:8px; }
+      .ms-control-group label { font-size:12px; color:#64748b; font-weight:500; }
+      .ms-select { padding:8px 12px; border:1px solid #e2e8f0; border-radius:6px; font-size:13px; background:#fff; min-width:140px; }
+      .ms-select:focus { outline:none; border-color:#3b82f6; box-shadow:0 0 0 3px rgba(59,130,246,0.1); }
+      .ms-input { padding:8px 12px; border:1px solid #e2e8f0; border-radius:6px; font-size:13px; width:150px; }
+      .ms-input:focus { outline:none; border-color:#3b82f6; box-shadow:0 0 0 3px rgba(59,130,246,0.1); }
+      
+      .ms-btn { padding:8px 16px; border:none; border-radius:6px; font-size:13px; font-weight:500; cursor:pointer; transition:all 0.15s; display:inline-flex; align-items:center; gap:6px; }
+      .ms-btn-primary { background:#3b82f6; color:#fff; }
+      .ms-btn-primary:hover { background:#2563eb; }
+      .ms-btn-success { background:#22c55e; color:#fff; }
+      .ms-btn-success:hover { background:#16a34a; }
+      .ms-btn-warning { background:#f59e0b; color:#fff; }
+      .ms-btn-warning:hover { background:#d97706; }
+      .ms-btn-danger { background:#ef4444; color:#fff; }
+      .ms-btn-danger:hover { background:#dc2626; }
+      .ms-btn-ghost { background:#f1f5f9; color:#475569; }
+      .ms-btn-ghost:hover { background:#e2e8f0; }
+      .ms-btn:disabled { opacity:0.5; cursor:not-allowed; }
+      
+      .ms-divider { width:1px; height:32px; background:#e2e8f0; margin:0 8px; }
+      
+      /* Expandable Section */
+      .ms-expand { margin-top:12px; }
+      .ms-expand-trigger { font-size:13px; color:#3b82f6; cursor:pointer; display:inline-flex; align-items:center; gap:4px; }
+      .ms-expand-trigger:hover { text-decoration:underline; }
+      .ms-expand-content { margin-top:12px; padding:16px; background:#f8fafc; border-radius:8px; display:none; }
+      .ms-expand-content.open { display:block; }
+      .ms-assign-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:12px; }
+      .ms-assign-item label { display:block; font-size:11px; color:#64748b; margin-bottom:4px; font-weight:500; }
+      .ms-assign-item select { width:100%; padding:6px 8px; border:1px solid #e2e8f0; border-radius:4px; font-size:12px; }
+      .ms-delete-section { margin-top:16px; padding-top:16px; border-top:1px solid #e2e8f0; display:flex; align-items:center; gap:12px; }
+      
+      /* Grid Area */
+      .ms-grid-wrapper { flex:1; overflow:auto; background:#fff; }
+      
+      /* Grid Styles */
+      .grid-disabled{position:absolute;width:100%;background-color:#f1f5f9;background-image:linear-gradient(-45deg,#e2e8f0 25%,transparent 25%,transparent 50%,#e2e8f0 50%,#e2e8f0 75%,transparent 75%,transparent);background-size:20px 20px;z-index:1;pointer-events:none}
+      .grid-event{z-index:2;position:relative;box-shadow:0 1px 3px rgba(0,0,0,0.12);}
+      .grid-cell{position:relative; border-right:1px solid #e2e8f0; background:#fff;}
+      
+      /* Resize handles */
       .resize-handle { position:absolute; left:0; right:0; height:10px; cursor:ns-resize; z-index:5; opacity:0; transition:opacity 0.15s; }
       .resize-handle-top { top:-2px; }
       .resize-handle-bottom { bottom:-2px; }
       .grid-event:hover .resize-handle { opacity:1; background:rgba(37,99,235,0.3); }
       .grid-event.resizing { box-shadow:0 0 0 2px #2563eb, 0 4px 12px rgba(37,99,235,0.25) !important; z-index:100 !important; }
       
-      /* NEW: Resize tooltip */
+      /* Resize tooltip */
       #resize-tooltip { position:fixed; padding:10px 14px; background:#111827; color:#fff; border-radius:8px; font-size:0.9em; font-weight:600; pointer-events:none; z-index:10002; display:none; box-shadow:0 8px 24px rgba(15,23,42,0.35); text-align:center; line-height:1.4; }
       #resize-tooltip span { font-size:0.85em; opacity:0.7; }
       
-      /* NEW: Drag ghost */
+      /* Drag ghost */
       #drag-ghost { position:fixed; padding:10px 14px; background:#ffffff; border:2px solid #2563eb; border-radius:8px; box-shadow:0 8px 24px rgba(37,99,235,0.25); pointer-events:none; z-index:10001; display:none; font-size:0.9em; color:#111827; }
       #drag-ghost span { color:#6b7280; }
       
-      /* NEW: Drop preview */
+      /* Drop preview */
       .drop-preview { display:none; position:absolute; left:2%; width:96%; background:rgba(37,99,235,0.15); border:2px dashed #2563eb; border-radius:4px; pointer-events:none; z-index:5; }
       .preview-time-label { text-align:center; padding:8px 4px; color:#1d4ed8; font-weight:700; font-size:0.9em; background:rgba(255,255,255,0.95); border-radius:3px; margin:4px; box-shadow:0 2px 6px rgba(0,0,0,0.1); }
     </style>
+    
+    <div class="ms-container">
+      <!-- Left Sidebar - Tile Palette -->
+      <div class="ms-sidebar">
+        <div class="ms-sidebar-header">
+          <h3>Block Types</h3>
+        </div>
+        <div id="scheduler-palette" class="ms-palette"></div>
+      </div>
+      
+      <!-- Main Content -->
+      <div class="ms-main">
+        <!-- Header Controls -->
+        <div id="scheduler-template-ui" class="ms-header"></div>
+        
+        <!-- Grid -->
+        <div class="ms-grid-wrapper">
+          <div id="scheduler-grid"></div>
+        </div>
+      </div>
+    </div>
   `;
     
   palette=document.getElementById("scheduler-palette");
@@ -293,7 +365,7 @@ function init(){
   renderGrid();
 }
 
-// --- Render Template Controls ---
+// --- Render Template Controls (Redesigned) ---
 function renderTemplateUI(){
   const ui=document.getElementById("scheduler-template-ui");
   if(!ui) return;
@@ -302,49 +374,89 @@ function renderTemplateUI(){
   const assignments=window.getSkeletonAssignments?.()||{};
   let loadOptions=names.map(n=>`<option value="${n}">${n}</option>`).join('');
 
-  // Determine button state for "Update"
-  const updateBtnStyle = currentLoadedTemplate ? '' : 'display:none;';
-  const currentNameLabel = currentLoadedTemplate ? `Editing: <b>${currentLoadedTemplate}</b>` : 'New Schedule';
+  const isEditing = !!currentLoadedTemplate;
+  const statusDotClass = isEditing ? 'editing' : 'new';
+  const statusText = isEditing ? `Editing: <span class="ms-status-name">${currentLoadedTemplate}</span>` : 'New Schedule';
 
   ui.innerHTML=`
-    <div style="margin-bottom:10px;color:#555;">${currentNameLabel}</div>
-    <div class="template-toolbar" style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-end;">
-      <div class="template-group"><label>Load Template</label><br>
-        <select id="template-load-select" style="padding:6px;"><option value="">-- Select --</option>${loadOptions}</select>
+    <!-- Main Controls Row -->
+    <div class="ms-header-row">
+      <!-- Status Badge -->
+      <div class="ms-status">
+        <div class="ms-status-dot ${statusDotClass}"></div>
+        <span class="ms-status-text">${statusText}</span>
       </div>
+      
+      <div class="ms-divider"></div>
+      
+      <!-- Load Template -->
+      <div class="ms-control-group">
+        <label>Load:</label>
+        <select id="template-load-select" class="ms-select">
+          <option value="">Select template...</option>
+          ${loadOptions}
+        </select>
+      </div>
+      
+      <div class="ms-divider"></div>
+      
+      <!-- Update Button (Always visible, disabled if no template) -->
+      <button id="template-update-btn" class="ms-btn ms-btn-success" ${!isEditing ? 'disabled title="Load a template to update"' : ''}>
+        <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+        Update${isEditing ? ` "${currentLoadedTemplate}"` : ''}
+      </button>
+      
+      <!-- Save As New -->
+      <div class="ms-control-group">
+        <input type="text" id="template-save-name" class="ms-input" placeholder="New template name...">
+        <button id="template-save-btn" class="ms-btn ms-btn-primary">Save As New</button>
+      </div>
+      
+      <div class="ms-divider"></div>
+      
+      <!-- Clear -->
+      <button id="template-clear-btn" class="ms-btn ms-btn-warning">
+        <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        New
+      </button>
+    </div>
+    
+    <!-- Expandable Assignments & Delete Section -->
+    <div class="ms-expand">
+      <span class="ms-expand-trigger" onclick="this.nextElementSibling.classList.toggle('open')">
+        <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        Day Assignments & Delete Options
+      </span>
+      <div class="ms-expand-content">
+        <div class="ms-assign-grid">
+          ${["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Default"].map(day=>`
+            <div class="ms-assign-item">
+              <label>${day}</label>
+              <select data-day="${day}">
+                <option value="">None</option>
+                ${loadOptions}
+              </select>
+            </div>
+          `).join('')}
+        </div>
+        <button id="template-assign-save-btn" class="ms-btn ms-btn-success" style="margin-top:16px;">
+          <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+          Save Assignments
+        </button>
         
-      <!-- UPDATE BUTTON (Only shows if editing existing) -->
-      <div class="template-group" style="${updateBtnStyle}">
-         <label>&nbsp;</label><br>
-         <button id="template-update-btn" style="background:#17a2b8;color:#fff;font-weight:bold;">Update "${currentLoadedTemplate}"</button>
-      </div>
-
-      <div class="template-group"><label>Save As New</label><br>
-        <input type="text" id="template-save-name" placeholder="New Name...">
-        <button id="template-save-btn" style="background:#007bff;color:#fff;">Save As</button>
-      </div>
-        
-      <div class="template-group"><label>&nbsp;</label><br>
-        <button id="template-clear-btn" style="background:#ff9800;color:#fff;">New/Clear</button>
+        <div class="ms-delete-section">
+          <label style="font-size:13px;color:#64748b;">Delete Template:</label>
+          <select id="template-delete-select" class="ms-select" style="min-width:160px;">
+            <option value="">Select to delete...</option>
+            ${loadOptions}
+          </select>
+          <button id="template-delete-btn" class="ms-btn ms-btn-danger">
+            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+            Delete
+          </button>
+        </div>
       </div>
     </div>
-
-    <details style="margin-top:10px;">
-      <summary style="cursor:pointer;color:#007bff;">Assignments & Delete</summary>
-      <div style="margin-top:10px;padding:10px;border:1px solid #eee;">
-        <div style="display:flex;flex-wrap:wrap;gap:10px;">
-          ${["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Default"].map(day=>`<br>
-          <div><label>${day}</label><br><select data-day="${day}" style="width:100px;">${loadOptions}</select></div>`).join('')}
-        </div>
-        <button id="template-assign-save-btn" style="margin-top:10px;background:#28a745;color:white;">Save Assignments</button>
-        <hr>
-        <div style="display:flex; align-items:center; gap:10px; margin-top:10px;">
-            <label style="color:#c0392b;">Delete Template:</label>
-            <select id="template-delete-select" style="padding:4px;"><option value="">-- Select to Delete --</option>${loadOptions}</select>
-            <button id="template-delete-btn" style="background:#c0392b;color:white;">Delete Permanently</button>
-        </div>
-      </div>
-    </details>
   `;
 
   // Bindings
@@ -355,7 +467,6 @@ function renderTemplateUI(){
     const name=loadSel.value;
     if(name && saved[name] && confirm(`Load "${name}"?`)){
       loadSkeletonToBuilder(name);
-      // Pre-fill save as name just in case, but rely on update button for edits
       saveName.value=name; 
     }
   };
@@ -364,12 +475,16 @@ function renderTemplateUI(){
   const updateBtn = document.getElementById("template-update-btn");
   if(updateBtn) {
       updateBtn.onclick = () => {
-          // ✅ RBAC Check
+          if (!currentLoadedTemplate) {
+              alert("No template loaded. Load a template first or use 'Save As New'.");
+              return;
+          }
+          
+          // RBAC Check
           if (!window.AccessControl?.checkSetupAccess('update schedule templates')) return;
           
-          if(currentLoadedTemplate && confirm(`Overwrite existing template "${currentLoadedTemplate}" with current grid?`)){
+          if(confirm(`Overwrite "${currentLoadedTemplate}" with current grid?`)){
               window.saveSkeleton?.(currentLoadedTemplate, dailySkeleton);
-              // Fix #2: Explicit sync
               window.forceSyncToCloud?.();
               
               clearDraftFromLocalStorage();
@@ -381,7 +496,6 @@ function renderTemplateUI(){
 
   // 2. SAVE AS NEW
   document.getElementById("template-save-btn").onclick=()=>{
-    // ✅ RBAC Check
     if (!window.AccessControl?.checkSetupAccess('save schedule templates')) return;
     
     const name=saveName.value.trim();
@@ -390,10 +504,9 @@ function renderTemplateUI(){
     if(saved[name] && !confirm(`"${name}" already exists. Overwrite?`)) return;
 
     window.saveSkeleton?.(name, dailySkeleton);
-    // Fix #2: Explicit sync
     window.forceSyncToCloud?.();
     
-    currentLoadedTemplate = name; // Switch context to this new save
+    currentLoadedTemplate = name;
     clearDraftFromLocalStorage();
     alert("Saved.");
     renderTemplateUI();
@@ -403,7 +516,7 @@ function renderTemplateUI(){
   document.getElementById("template-clear-btn").onclick=()=>{
     if(confirm("Clear grid and start new?")) {
         dailySkeleton=[];
-        currentLoadedTemplate = null; // Reset context
+        currentLoadedTemplate = null;
         clearDraftFromLocalStorage();
         renderGrid();
         renderTemplateUI();
@@ -413,9 +526,6 @@ function renderTemplateUI(){
   // 4. ASSIGNMENTS
   ui.querySelectorAll('select[data-day]').forEach(sel=>{
       const day=sel.dataset.day;
-      const opt=document.createElement('option');
-      opt.value=""; opt.textContent="-- None --";
-      sel.prepend(opt);
       sel.value=assignments[day]||"";
   });
 
@@ -423,7 +533,6 @@ function renderTemplateUI(){
       const map={};
       ui.querySelectorAll('select[data-day]').forEach(s=>{ if(s.value) map[s.dataset.day]=s.value; });
       window.saveSkeletonAssignments?.(map);
-      // Fix #2: Explicit sync
       window.forceSyncToCloud?.();
       
       alert("Assignments Saved.");
@@ -431,27 +540,24 @@ function renderTemplateUI(){
 
   // 5. DELETE
   document.getElementById("template-delete-btn").onclick=()=>{
-      // ✅ RBAC Check
       if (!window.AccessControl?.checkSetupAccess('delete schedule templates')) return;
       
       const delSel = document.getElementById("template-delete-select");
       const nameToDelete = delSel.value;
         
       if(!nameToDelete) {
-          alert("Please select a template from the dropdown next to the Delete button.");
+          alert("Please select a template to delete.");
           return;
       }
 
-      if(confirm(`Are you sure you want to PERMANENTLY DELETE "${nameToDelete}"?`)){
+      if(confirm(`Permanently delete "${nameToDelete}"?`)){
           if(window.deleteSkeleton) {
               window.deleteSkeleton(nameToDelete);
-              // Fix #2: Explicit sync
               window.forceSyncToCloud?.();
                 
-              // If we deleted the one we are looking at, reset context
               if(currentLoadedTemplate === nameToDelete){
                   currentLoadedTemplate = null;
-                  dailySkeleton = []; // Optional: Clear grid or keep as unsaved? Let's clear to be safe.
+                  dailySkeleton = [];
                   clearDraftFromLocalStorage();
                   renderGrid();
               }
@@ -459,89 +565,106 @@ function renderTemplateUI(){
               alert("Deleted.");
               renderTemplateUI();
           } else {
-              alert("Error: 'window.deleteSkeleton' function is not defined in your global setup. Please add it to your setup script.");
+              alert("Error: 'window.deleteSkeleton' function not defined.");
           }
       }
   };
 }
 
-// --- Render Palette ---
+// --- Render Palette (Vertical Layout with Categories) ---
 function renderPalette(){
   palette.innerHTML='';
-  TILES.forEach(tile=>{
-    const el=document.createElement('div');
-    el.className='grid-tile-draggable';
-    el.textContent=tile.name;
-    el.style.cssText=tile.style;
-    el.style.padding='8px 12px';
-    el.style.borderRadius='5px';
-    el.style.cursor='grab';
-    el.draggable=true;
-    el.title = tile.description || '';
+  
+  // Category labels
+  const categories = [
+    { label: 'Scheduling Slots', types: ['activity', 'sports', 'special'] },
+    { label: 'Advanced', types: ['smart', 'split', 'elective'] },
+    { label: 'Leagues', types: ['league', 'specialty_league'] },
+    { label: 'Fixed Events', types: ['swim', 'lunch', 'snacks', 'dismissal', 'custom'] }
+  ];
+  
+  categories.forEach((cat, catIndex) => {
+    // Add label
+    const label = document.createElement('div');
+    label.className = 'ms-tile-label';
+    label.textContent = cat.label;
+    palette.appendChild(label);
     
-    // Click handler for tile info
-    el.onclick = (e) => {
-      if (e.detail === 1) { // Single click
-        setTimeout(() => {
-          if (!el.dragging) {
-            showTileInfo(tile);
-          }
-        }, 200);
-      }
-    };
-    
-    el.ondragstart=(e)=>{ 
-      el.dragging = true;
-      e.dataTransfer.setData('application/json',JSON.stringify(tile)); 
-    };
-    el.ondragend = () => { el.dragging = false; };
-    
-    // MOBILE TOUCH SUPPORT
-    let touchStartY = 0;
-    el.addEventListener('touchstart', (e) => {
-      touchStartY = e.touches[0].clientY;
-      el.dataset.tileData = JSON.stringify(tile);
-      el.style.opacity = '0.6';
-    });
-    
-    el.addEventListener('touchend', (e) => {
-      el.style.opacity = '1';
-      const touch = e.changedTouches[0];
-      const touchEndY = touch.clientY;
+    // Add tiles for this category
+    cat.types.forEach(type => {
+      const tile = TILES.find(t => t.type === type);
+      if (!tile) return;
       
-      // 1. Detect if it was just a tap (minimal movement)
-      if (Math.abs(touchEndY - touchStartY) < 10) {
-        showTileInfo(tile);
-        return;
-      }
+      const el = document.createElement('div');
+      el.className = 'ms-tile';
+      el.textContent = tile.name;
+      el.style.cssText = tile.style;
+      el.draggable = true;
+      el.title = tile.description || '';
+      
+      el.onclick = (e) => {
+        if (e.detail === 1) {
+          setTimeout(() => {
+            if (!el.dragging) {
+              showTileInfo(tile);
+            }
+          }, 200);
+        }
+      };
+      
+      el.ondragstart = (e) => { 
+        el.dragging = true;
+        e.dataTransfer.setData('application/json', JSON.stringify(tile)); 
+      };
+      el.ondragend = () => { el.dragging = false; };
+      
+      // Mobile touch support
+      let touchStartY = 0;
+      el.addEventListener('touchstart', (e) => {
+        touchStartY = e.touches[0].clientY;
+        el.dataset.tileData = JSON.stringify(tile);
+        el.style.opacity = '0.6';
+      });
+      
+      el.addEventListener('touchend', (e) => {
+        el.style.opacity = '1';
+        const touch = e.changedTouches[0];
+        const touchEndY = touch.clientY;
+        
+        if (Math.abs(touchEndY - touchStartY) < 10) {
+          showTileInfo(tile);
+          return;
+        }
 
-      // 2. Detect Drop Location (Manual Logic for Mobile)
-      // Since touchend fires on the source element (the palette tile),
-      // we must use elementFromPoint to find what we are "dropping" onto.
-      const elementAtPoint = document.elementFromPoint(touch.clientX, touch.clientY);
-      const cell = elementAtPoint ? elementAtPoint.closest('.grid-cell') : null;
+        const elementAtPoint = document.elementFromPoint(touch.clientX, touch.clientY);
+        const cell = elementAtPoint ? elementAtPoint.closest('.grid-cell') : null;
+        
+        if (cell && cell.ondrop) {
+           const fakeEvent = {
+             preventDefault: () => {},
+             clientX: touch.clientX,
+             clientY: touch.clientY,
+             dataTransfer: {
+               getData: (type) => {
+                 if (type === 'application/json') return JSON.stringify(tile);
+                 return '';
+               },
+               types: ['application/json']
+             }
+           };
+           cell.ondrop(fakeEvent);
+        }
+      });
       
-      if (cell && cell.ondrop) {
-         // Create a fake drop event to reuse the existing logic
-         const fakeEvent = {
-           preventDefault: () => {},
-           clientX: touch.clientX,
-           clientY: touch.clientY,
-           dataTransfer: {
-             getData: (type) => {
-               if (type === 'application/json') return JSON.stringify(tile);
-               return '';
-             },
-             types: ['application/json']
-           }
-         };
-         
-         // Trigger the drop logic on the cell
-         cell.ondrop(fakeEvent);
-      }
+      palette.appendChild(el);
     });
     
-    palette.appendChild(el);
+    // Add divider (except after last category)
+    if (catIndex < categories.length - 1) {
+      const divider = document.createElement('div');
+      divider.className = 'ms-tile-divider';
+      palette.appendChild(divider);
+    }
   });
 }
 
@@ -567,17 +690,21 @@ function showTileInfo(tile) {
   alert(`${tile.name.toUpperCase()}\n\n${desc}`);
 }
 
-// --- RENDER GRID (Fixed) ---
+// --- RENDER GRID ---
 function renderGrid(){
   const divisions=window.divisions||{};
   const availableDivisions=window.availableDivisions||[];
 
   if (availableDivisions.length === 0) {
-      grid.innerHTML = `<div style="padding:20px;text-align:center;color:#666;">No divisions found. Please go to Setup to create divisions.</div>`;
+      grid.innerHTML = `<div style="padding:40px;text-align:center;color:#64748b;font-size:14px;">
+        <svg width="48" height="48" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="margin:0 auto 12px;opacity:0.5;display:block;">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+        </svg>
+        No divisions found. Please go to Setup to create divisions.
+      </div>`;
       return;
   }
 
-  // Calculate Times
   let earliestMin=null, latestMin=null;
   Object.values(divisions).forEach(div=>{
     const s=parseTimeToMinutes(div.startTime);
@@ -588,28 +715,26 @@ function renderGrid(){
   if(earliestMin===null) earliestMin=540;
   if(latestMin===null) latestMin=960;
 
-  // Stretch for pinned events
   const latestPinned=Math.max(-Infinity, ...dailySkeleton.map(e=>parseTimeToMinutes(e.endTime)|| -Infinity));
   if(latestPinned > -Infinity) latestMin = Math.max(latestMin, latestPinned);
   if(latestMin <= earliestMin) latestMin = earliestMin + 60;
 
   const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
 
-  // Build HTML
   let html=`<div style="display:grid; grid-template-columns:60px repeat(${availableDivisions.length}, 1fr); position:relative; min-width:800px;">`;
     
   // Header Row
-  html+=`<div style="grid-row:1; position:sticky; top:0; background:#fff; z-index:10; border-bottom:1px solid #999; padding:8px; font-weight:bold;">Time</div>`;
+  html+=`<div style="grid-row:1; position:sticky; top:0; background:#f8fafc; z-index:10; border-bottom:1px solid #e2e8f0; padding:12px 8px; font-weight:600; font-size:12px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px;">Time</div>`;
   availableDivisions.forEach((divName,i)=>{
-      const color = divisions[divName]?.color || '#444';
-      html+=`<div style="grid-row:1; grid-column:${i+2}; position:sticky; top:0; background:${color}; color:#fff; z-index:10; border-bottom:1px solid #999; padding:8px; text-align:center; font-weight:bold;">${divName}</div>`;
+      const color = divisions[divName]?.color || '#475569';
+      html+=`<div style="grid-row:1; grid-column:${i+2}; position:sticky; top:0; background:${color}; color:#fff; z-index:10; border-bottom:1px solid ${color}; padding:12px 8px; text-align:center; font-weight:600; font-size:13px;">${divName}</div>`;
   });
 
   // Time Column
-  html+=`<div style="grid-row:2; grid-column:1; height:${totalHeight}px; position:relative; background:#f9f9f9; border-right:1px solid #ccc;">`;
+  html+=`<div style="grid-row:2; grid-column:1; height:${totalHeight}px; position:relative; background:#f8fafc; border-right:1px solid #e2e8f0;">`;
   for(let m=earliestMin; m<latestMin; m+=INCREMENT_MINS){
       const top=(m-earliestMin)*PIXELS_PER_MINUTE;
-      html+=`<div style="position:absolute; top:${top}px; left:0; width:100%; border-top:1px dashed #ddd; font-size:10px; padding:2px; color:#666;">${minutesToTime(m)}</div>`;
+      html+=`<div style="position:absolute; top:${top}px; left:0; width:100%; border-top:1px dashed #e2e8f0; font-size:11px; padding:2px 4px; color:#64748b;">${minutesToTime(m)}</div>`;
   }
   html+=`</div>`;
 
@@ -621,7 +746,6 @@ function renderGrid(){
         
       html+=`<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row:2; grid-column:${i+2}; height:${totalHeight}px;">`;
         
-      // Grey out unavailable times
       if(s!==null && s>earliestMin){
           html+=`<div class="grid-disabled" style="top:0; height:${(s-earliestMin)*PIXELS_PER_MINUTE}px;"></div>`;
       }
@@ -629,7 +753,6 @@ function renderGrid(){
           html+=`<div class="grid-disabled" style="top:${(e-earliestMin)*PIXELS_PER_MINUTE}px; height:${(latestMin-e)*PIXELS_PER_MINUTE}px;"></div>`;
       }
 
-      // Render Events
       dailySkeleton.filter(ev=>ev.division===divName).forEach(ev=>{
           const start=parseTimeToMinutes(ev.startTime);
           const end=parseTimeToMinutes(ev.endTime);
@@ -640,7 +763,7 @@ function renderGrid(){
           }
       });
       
-      html+=`<div class="drop-preview"></div>`; // NEW: Drop preview container
+      html+=`<div class="drop-preview"></div>`;
       html+=`</div>`;
   });
 
@@ -648,64 +771,48 @@ function renderGrid(){
   grid.innerHTML=html;
   grid.dataset.earliestMin = earliestMin;
 
-  // Bind Events
   addDropListeners('.grid-cell');
-  addDragToRepositionListeners(grid); // NEW: Drag existing tiles
-  addResizeListeners(grid); // NEW: Resize handles
-  addRemoveListeners('.grid-event'); // UPDATED: Double-click to remove
+  addDragToRepositionListeners(grid);
+  addResizeListeners(grid);
+  addRemoveListeners('.grid-event');
 }
 
-// --- Render Tile (UPDATED to show reserved fields and elective activities) ---
+// --- Render Tile ---
 function renderEventTile(ev, top, height){
     let tile = TILES.find(t=>t.name===ev.event);
     if(!tile && ev.type) tile = TILES.find(t=>t.type===ev.type);
-    const style = tile ? tile.style : 'background:#eee;border:1px solid #666;';
+    const style = tile ? tile.style : 'background:#f8fafc;border-left:4px solid #94a3b8;color:#475569;';
     
-    // Main Content
     let innerHtml = `
         <div class="tile-header">
-            <strong>${ev.event}</strong>
-            <div style="font-size:0.8em">${ev.startTime}-${ev.endTime}</div>
+            <strong style="font-size:12px;">${ev.event}</strong>
+            <div style="font-size:11px;opacity:0.8;">${ev.startTime}-${ev.endTime}</div>
         </div>
     `;
     
-    // 1. LOCATION INDICATOR (New Feature)
     if(ev.location) {
         innerHtml += `
-            <div class="tile-location-badge" style="
-                font-size: 0.75rem; 
-                color: #c62828; 
-                margin-top: 2px; 
-                display: flex; 
-                align-items: center; 
-                gap: 2px;
-                font-weight: 500;
-            ">
-                <span>📍</span>
-                <span>${ev.location}</span>
+            <div style="font-size:10px;color:inherit;opacity:0.9;margin-top:2px;display:flex;align-items:center;gap:2px;">
+                <span>📍</span><span>${ev.location}</span>
             </div>
         `;
     }
-    // 2. Fallback: Reserved Fields (if location is missing but reservedFields exist)
     else if (ev.reservedFields && ev.reservedFields.length > 0 && ev.type !== 'elective') {
-        innerHtml += `<div style="font-size:0.7em;color:#c62828;margin-top:2px;">📍 ${ev.reservedFields.join(', ')}</div>`;
+        innerHtml += `<div style="font-size:10px;opacity:0.9;margin-top:2px;">📍 ${ev.reservedFields.join(', ')}</div>`;
     }
     
-    // Show elective activities
     if (ev.type === 'elective' && ev.electiveActivities && ev.electiveActivities.length > 0) {
         const actList = ev.electiveActivities.slice(0, 4).join(', ');
         const more = ev.electiveActivities.length > 4 ? ` +${ev.electiveActivities.length - 4}` : '';
-        innerHtml += `<div style="font-size:0.7em;color:#6a1b9a;margin-top:2px;">🎯 ${actList}${more}</div>`;
+        innerHtml += `<div style="font-size:10px;opacity:0.9;margin-top:2px;">🎯 ${actList}${more}</div>`;
     }
     
-    // Smart tile fallback info
     if(ev.type==='smart' && ev.smartData){
-        innerHtml += `<div style="font-size:0.75em;margin-top:2px;">F: ${ev.smartData.fallbackActivity} (if ${ev.smartData.fallbackFor.substring(0,4)} busy)</div>`;
+        innerHtml += `<div style="font-size:10px;opacity:0.8;margin-top:2px;">↩ ${ev.smartData.fallbackActivity}</div>`;
     }
 
-    // Return the complete tile HTML with resize handles
     return `<div class="grid-event" data-id="${ev.id}" draggable="true" title="${ev.event} (${ev.startTime}-${ev.endTime}) - Double-click to remove" 
-            style="${style}; position:absolute; top:${top}px; height:${height}px; width:96%; left:2%; padding:2px; font-size:0.85rem; overflow:hidden; border-radius:4px; cursor:pointer; display:flex; flex-direction:column;">
+            style="${style}; position:absolute; top:${top}px; height:${height}px; width:96%; left:2%; padding:6px 8px; font-size:12px; overflow:hidden; border-radius:6px; cursor:pointer; display:flex; flex-direction:column;">
             <div class="resize-handle resize-handle-top"></div>
             ${innerHtml}
             <div class="resize-handle resize-handle-bottom"></div>
@@ -715,13 +822,12 @@ function renderEventTile(ev, top, height){
 // --- Logic: Add/Remove ---
 function addDropListeners(selector){
     grid.querySelectorAll(selector).forEach(cell=>{
-        cell.ondragover=e=>{ e.preventDefault(); cell.style.background='#e6fffa'; };
+        cell.ondragover=e=>{ e.preventDefault(); cell.style.background='#f0fdf4'; };
         cell.ondragleave=e=>{ cell.style.background=''; };
         cell.ondrop=e=>{
             e.preventDefault();
             cell.style.background='';
 
-            // NEW: Handle moving existing tiles
             if (e.dataTransfer.types.includes('text/event-move')) {
                 const eventId = e.dataTransfer.getData('text/event-move');
                 const event = dailySkeleton.find(ev => ev.id === eventId);
@@ -747,22 +853,18 @@ function addDropListeners(selector){
             const divName=cell.dataset.div;
             const earliestMin=parseInt(cell.dataset.startMin);
             
-            // Calc time
             const rect=cell.getBoundingClientRect();
             const offsetY = e.clientY - rect.top;
             
-            // Snap to 15 mins
             let minOffset = Math.round(offsetY / PIXELS_PER_MINUTE / 15) * 15;
             let startMin = earliestMin + minOffset;
-            let endMin = startMin + INCREMENT_MINS; // Default 30 min
+            let endMin = startMin + INCREMENT_MINS;
             
             const startStr = minutesToTime(startMin);
             const endStr = minutesToTime(endMin);
 
-            // PROMPTS
             let newEvent = null;
             
-            // 1. Smart Tile
             if(tileData.type==='smart'){
                 let st=prompt("Start Time:", startStr); if(!st) return;
                 let et=prompt("End Time:", endStr); if(!et) return;
@@ -788,9 +890,6 @@ function addDropListeners(selector){
                     smartData: { main1:m1, main2:m2, fallbackFor, fallbackActivity:fbAct }
                 };
             }
-            // 2. Split Tile
-            // BEHAVIOR: Group 1 gets main 1 first half, main 2 second half
-            //           Group 2 gets main 2 first half, main 1 second half
             else if(tileData.type==='split'){
                 let st=prompt("Start Time:", startStr); 
                 if(!st) return;
@@ -811,21 +910,16 @@ function addDropListeners(selector){
                     division: divName,
                     startTime: st,
                     endTime: et,
-                    // Consistent structure - always use {event: name} format
                     subEvents: [
                         { event: a1 },
                         { event: a2 }
                     ]
                 };
                 
-                // Log for debugging
                 console.log(`[SPLIT TILE] Created split tile for ${divName}:`);
                 console.log(`  Main 1: "${a1}", Main 2: "${a2}"`);
                 console.log(`  Time: ${st} - ${et}`);
-                console.log(`  First half:  Group 1 → ${a1}, Group 2 → ${a2}`);
-                console.log(`  Second half: Group 1 → ${a2}, Group 2 → ${a1}`);
             }
-            // 3. ELECTIVE TILE - Reserve multiple activities for this division
             else if (tileData.type === 'elective') {
                 let st = prompt("Start Time:", startStr); if (!st) return;
                 let et = prompt("End Time:", endStr); if (!et) return;
@@ -843,34 +937,30 @@ function addDropListeners(selector){
                     startTime: st,
                     endTime: et,
                     electiveActivities: activities,
-                    reservedFields: activities // Also mark as reserved for field conflict detection
+                    reservedFields: activities
                 };
             }
-            // 4. PINNED TILES WITH FIELD RESERVATION
             else if (['lunch','snacks','custom','dismissal','swim'].includes(tileData.type)) {
                 let name = tileData.name;
                 let reservedFields = [];
                 let location = null;
                 
-                // NEW: Auto-assign location from defaults if available
                 location = window.getPinnedTileDefaultLocation?.(tileData.type) || null;
                 if (location) {
-                    reservedFields = [location]; // Sync to reservedFields so it appears in UI
+                    reservedFields = [location];
                 }
                 
                 if (tileData.type === 'custom') {
                     name = prompt("Event Name (e.g., 'Special with R. Rosenfeld'):", "Regroup");
                     if (!name) return;
                     
-                    // Ask for reserved fields (Manual override)
                     const manualFields = promptForReservedFields(name);
                     if (manualFields.length > 0) {
                         reservedFields = manualFields;
-                        location = manualFields.length === 1 ? manualFields[0] : null; // Only set location if single field
+                        location = manualFields.length === 1 ? manualFields[0] : null;
                     }
                 }
                 else if (tileData.type === 'swim') {
-                    // Only auto-discover if no default location was configured
                     if (reservedFields.length === 0) {
                         const globalSettings = window.loadGlobalSettings?.() || {};
                         const fields = globalSettings.app1?.fields || [];
@@ -895,15 +985,13 @@ function addDropListeners(selector){
                     startTime: st,
                     endTime: et,
                     reservedFields: reservedFields,
-                    location: location // Store location as requested
+                    location: location
                 };
             }
-            // 5. Standard & League Types
             else {
                 let name = tileData.name;
                 let finalType = tileData.type;
 
-                // Standardize for Optimizer
                 if (tileData.type === 'activity') { name = "General Activity Slot"; finalType = 'slot'; }
                 else if (tileData.type === 'sports') { name = "Sports Slot"; finalType = 'slot'; }
                 else if (tileData.type === 'special') { name = "Special Activity"; finalType = 'slot'; }
@@ -918,7 +1006,6 @@ function addDropListeners(selector){
                 
                 if(!name) return;
 
-                // Safety Auto-fix for League
                 if (/league/i.test(name) && finalType === 'slot') {
                     finalType = 'league';
                 }
@@ -937,30 +1024,21 @@ function addDropListeners(selector){
             }
 
             if (newEvent) {
-                // 1. Calculate the New Event's Minute Range
                 const newStartVal = parseTimeToMinutes(newEvent.startTime);
                 const newEndVal = parseTimeToMinutes(newEvent.endTime);
 
-                // 2. FILTER: Remove any existing event in this division that overlaps
                 dailySkeleton = dailySkeleton.filter(existing => {
-                    // Keep events in other columns
                     if (existing.division !== divName) return true;
 
                     const exStart = parseTimeToMinutes(existing.startTime);
                     const exEnd = parseTimeToMinutes(existing.endTime);
 
-                    // Skip invalid data
                     if (exStart === null || exEnd === null) return true;
 
-                    // OVERLAP CHECK:
-                    // An overlap occurs if (ExistingStart < NewEnd) AND (ExistingEnd > NewStart)
                     const overlaps = (exStart < newEndVal) && (exEnd > newStartVal);
-
-                    // If it overlaps, return FALSE to remove it (erase the bottom tile)
                     return !overlaps; 
                 });
 
-                // 3. Add the New Event
                 dailySkeleton.push(newEvent);
                 saveDraftToLocalStorage();
                 renderGrid();
@@ -971,9 +1049,9 @@ function addDropListeners(selector){
 
 function addRemoveListeners(selector){
     grid.querySelectorAll(selector).forEach(el=>{
-        el.ondblclick=e=>{ // Changed to double-click
+        el.ondblclick=e=>{
             e.stopPropagation();
-            if (e.target.classList.contains('resize-handle')) return; // Don't delete if clicking handle
+            if (e.target.classList.contains('resize-handle')) return;
             if(confirm("Delete this block?")){
                 const id=el.dataset.id;
                 dailySkeleton = dailySkeleton.filter(x=>x.id!==id);
@@ -1140,7 +1218,7 @@ function addDragToRepositionListeners(gridEl) {
   });
   
   gridEl.querySelectorAll('.grid-cell').forEach(cell => {
-    const preview = cell.querySelector('.drop-preview'); // Use the existing one
+    const preview = cell.querySelector('.drop-preview');
     
     cell.addEventListener('dragover', (e) => {
       const isEventMove = e.dataTransfer.types.includes('text/event-move');
@@ -1149,7 +1227,7 @@ function addDragToRepositionListeners(gridEl) {
       
       e.preventDefault();
       e.dataTransfer.dropEffect = isEventMove ? 'move' : 'copy';
-      cell.style.background = '#e6fffa';
+      cell.style.background = '#f0fdf4';
       
       if (isEventMove && dragData && preview) {
         const rect = cell.getBoundingClientRect();
@@ -1192,10 +1270,10 @@ function loadSkeletonToBuilder(name){
   const all=window.getSavedSkeletons?.()||{};
   if(all[name]) {
       dailySkeleton=JSON.parse(JSON.stringify(all[name]));
-      currentLoadedTemplate = name; // Track that we are editing this template
+      currentLoadedTemplate = name;
   }
   renderGrid();
-  renderTemplateUI(); // Re-render UI to show Update button
+  renderTemplateUI();
   saveDraftToLocalStorage();
 }
 
