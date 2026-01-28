@@ -323,17 +323,17 @@ function init(){
   container.innerHTML = `
     <style>
       /* === MASTER SCHEDULER STYLES === */
-      .ms-container { display:flex; gap:0; min-height:600px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; }
+      .ms-container { display:flex; gap:0; height:calc(100vh - 200px); min-height:500px; max-height:800px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; }
       
-      /* Left Sidebar */
-      .ms-sidebar { width:180px; min-width:180px; background:#f8fafc; border-right:1px solid #e2e8f0; display:flex; flex-direction:column; transition:width 0.2s, min-width 0.2s; }
-      .ms-sidebar-header { padding:14px 12px; border-bottom:1px solid #e2e8f0; background:#fff; cursor:pointer; display:flex; align-items:center; justify-content:space-between; user-select:none; }
-      .ms-sidebar-header:hover { background:#f8fafc; }
+      /* Left Sidebar - Scrollable */
+      .ms-sidebar { width:180px; min-width:180px; background:#f8fafc; border-right:1px solid #e2e8f0; display:flex; flex-direction:column; height:100%; max-height:100%; }
+      .ms-sidebar-header { padding:14px 12px; border-bottom:1px solid #e2e8f0; background:#fff; flex-shrink:0; }
       .ms-sidebar-header h3 { margin:0; font-size:13px; font-weight:600; color:#475569; }
-      .ms-collapse-icon { transition:transform 0.2s; color:#94a3b8; }
-      .ms-sidebar-header.collapsed .ms-collapse-icon { transform:rotate(-90deg); }
-      .ms-palette { flex:1; overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:6px; transition:opacity 0.2s, max-height 0.3s; }
-      .ms-palette.collapsed { opacity:0; max-height:0; overflow:hidden; padding:0 10px; }
+      .ms-palette { flex:1; overflow-y:auto; overflow-x:hidden; padding:10px; display:flex; flex-direction:column; gap:6px; scrollbar-width:thin; scrollbar-color:#cbd5e1 #f1f5f9; }
+      .ms-palette::-webkit-scrollbar { width:6px; }
+      .ms-palette::-webkit-scrollbar-track { background:#f1f5f9; border-radius:3px; }
+      .ms-palette::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:3px; }
+      .ms-palette::-webkit-scrollbar-thumb:hover { background:#94a3b8; }
       .ms-palette { flex:1; overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:6px; }
       .ms-tile { padding:10px 12px; border-radius:6px; cursor:grab; font-size:12px; font-weight:600; transition:transform 0.15s, box-shadow 0.15s; text-shadow:0 1px 2px rgba(0,0,0,0.2); }
       .ms-tile:hover { transform:translateX(3px); box-shadow:0 4px 12px rgba(0,0,0,0.15); }
@@ -380,8 +380,9 @@ function init(){
       
       /* Grid Styles */
       .grid-disabled{position:absolute;width:100%;background-color:#f1f5f9;background-image:linear-gradient(-45deg,#e2e8f0 25%,transparent 25%,transparent 50%,#e2e8f0 50%,#e2e8f0 75%,transparent 75%,transparent);background-size:20px 20px;z-index:1;pointer-events:none}
-      .grid-event{z-index:2;position:relative;box-shadow:0 1px 3px rgba(0,0,0,0.15); transition:box-shadow 0.15s, outline 0.15s;}
-      .grid-event.selected { outline:3px solid #3b82f6; outline-offset:-1px; box-shadow:0 0 0 4px rgba(59,130,246,0.2), 0 2px 8px rgba(0,0,0,0.15); }
+      .grid-event{z-index:2;position:relative;box-shadow:none; transition:box-shadow 0.15s, outline 0.15s; border-bottom:1px solid rgba(0,0,0,0.1);}
+      .grid-event:hover { box-shadow:0 2px 8px rgba(0,0,0,0.15); z-index:3; }
+      .grid-event.selected { outline:3px solid #3b82f6; outline-offset:-1px; box-shadow:0 0 0 4px rgba(59,130,246,0.2); z-index:4; }
       .grid-cell{position:relative; border-right:1px solid #e2e8f0; background:#fff;}
       
       /* Resize handles */
@@ -432,9 +433,8 @@ function init(){
     <div class="ms-container">
       <!-- Left Sidebar -->
       <div class="ms-sidebar">
-        <div class="ms-sidebar-header" onclick="document.getElementById('scheduler-palette').classList.toggle('collapsed'); this.classList.toggle('collapsed');">
+        <div class="ms-sidebar-header">
           <h3>Tile Types</h3>
-          <svg class="ms-collapse-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
         </div>
         <div id="scheduler-palette" class="ms-palette"></div>
       </div>
@@ -848,13 +848,18 @@ function showTileInfo(tile) {
 }
 
 // =================================================================
-// Color Softening Helper - Makes division colors match soft palette
+// Color Softening Helper - Makes division colors match soft pastel palette
 // =================================================================
 function softenColor(hexColor) {
   if (!hexColor) return '#94a3b8';
   
   // Remove # if present
   let hex = hexColor.replace('#', '');
+  
+  // Handle shorthand hex (e.g., #fff)
+  if (hex.length === 3) {
+    hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+  }
   
   // Parse RGB
   let r = parseInt(hex.substring(0, 2), 16);
@@ -864,9 +869,9 @@ function softenColor(hexColor) {
   // If parsing failed, return a default soft color
   if (isNaN(r) || isNaN(g) || isNaN(b)) return '#94a3b8';
   
-  // Soften by blending with white (increase lightness) and reduce saturation
-  // Mix with white at about 30-40% to soften
-  const mixRatio = 0.35;
+  // Soften by blending with white to create pastel effect
+  // Mix with white at about 40% to match tile palette
+  const mixRatio = 0.4;
   r = Math.round(r + (255 - r) * mixRatio);
   g = Math.round(g + (255 - g) * mixRatio);
   b = Math.round(b + (255 - b) * mixRatio);
@@ -914,9 +919,7 @@ function renderGrid() {
   availableDivisions.forEach((divName, i) => {
     const rawColor = divisions[divName]?.color || '#475569';
     const color = softenColor(rawColor);
-    // Use darker text for light backgrounds
-    const textColor = '#fff';
-    html += `<div style="grid-row:1; grid-column:${i+2}; position:sticky; top:0; background:${color}; color:${textColor}; z-index:10; border-bottom:1px solid ${color}; padding:10px 6px; text-align:center; font-weight:600; font-size:12px; text-shadow:0 1px 2px rgba(0,0,0,0.15);">${divName}</div>`;
+    html += `<div style="grid-row:1; grid-column:${i+2}; position:sticky; top:0; background:${color}; color:#1e293b; z-index:10; border-bottom:1px solid ${color}; padding:10px 6px; text-align:center; font-weight:600; font-size:12px;">${divName}</div>`;
   });
 
   // Time Column
@@ -996,6 +999,9 @@ function renderEventTile(ev, top, height) {
   if (!tile && ev.type) tile = TILES.find(t => t.type === ev.type);
   const style = tile ? tile.style : 'background:#6b7280;color:#fff;';
   
+  // Add 1px gap at bottom to prevent overlap with next tile
+  const adjustedHeight = Math.max(height - 1, 10);
+  
   let innerHtml = `
     <div class="tile-header">
       <strong style="font-size:11px;">${ev.event}</strong>
@@ -1021,7 +1027,7 @@ function renderEventTile(ev, top, height) {
 
   const selectedClass = selectedTileId === ev.id ? ' selected' : '';
   return `<div class="grid-event${selectedClass}" data-id="${ev.id}" draggable="true" title="Click to select, Delete key to remove" 
-          style="${style}; position:absolute; top:${top}px; height:${height}px; width:96%; left:2%; padding:5px 7px; font-size:11px; overflow:hidden; border-radius:5px; cursor:pointer; display:flex; flex-direction:column;">
+          style="${style}; position:absolute; top:${top}px; height:${adjustedHeight}px; width:96%; left:2%; padding:5px 7px; font-size:11px; overflow:hidden; border-radius:5px; cursor:pointer; display:flex; flex-direction:column; box-sizing:border-box;">
           <div class="resize-handle resize-handle-top"></div>
           ${innerHtml}
           <div class="resize-handle resize-handle-bottom"></div>
