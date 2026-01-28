@@ -56,19 +56,22 @@ const SNAP_MINS = 5;
 // BLOCK TYPES - EXACT MATCH FROM master_schedule_builder.js
 // =================================================================
 const BLOCKS = {
-  activity:         { name: 'Activity',    color: '#6366F1', bg: '#E0E7FF' },
-  sports:           { name: 'Sports',      color: '#22C55E', bg: '#DCFCE7' },
-  special:          { name: 'Special',     color: '#14B8A6', bg: '#CCFBF1' },
-  smart:            { name: 'Smart',       color: '#8B5CF6', bg: '#EDE9FE', dashed: true },
-  split:            { name: 'Split',       color: '#F59E0B', bg: '#FEF3C7' },
-  elective:         { name: 'Elective',    color: '#EC4899', bg: '#FCE7F3' },
-  league:           { name: 'League',      color: '#8B5CF6', bg: '#F3E8FF' },
-  specialty_league: { name: 'Specialty',   color: '#EAB308', bg: '#FEF9C3' },
-  swim:             { name: 'Swim',        color: '#0EA5E9', bg: '#E0F2FE' },
-  lunch:            { name: 'Lunch',       color: '#EF4444', bg: '#FEE2E2' },
-  snacks:           { name: 'Snacks',      color: '#F97316', bg: '#FFEDD5' },
-  dismissal:        { name: 'Dismissal',   color: '#DC2626', bg: '#FEE2E2' },
-  custom:           { name: 'Custom',      color: '#64748B', bg: '#F1F5F9' }
+  // Soft pastel colors matching master_schedule_builder.js
+  activity:         { name: 'Activity',         color: '#1e3a5f', bg: '#93c5fd' },
+  sports:           { name: 'Sports',           color: '#14532d', bg: '#86efac' },
+  special:          { name: 'Special Activity', color: '#3b1f6b', bg: '#c4b5fd' },
+  smart:            { name: 'Smart Tile',       color: '#0c4a6e', bg: '#7dd3fc', dashed: true },
+  split:            { name: 'Split Activity',   color: '#7c2d12', bg: '#fdba74' },
+  elective:         { name: 'Elective',         color: '#701a75', bg: '#f0abfc' },
+  league:           { name: 'League Game',      color: '#312e81', bg: '#a5b4fc' },
+  specialty_league: { name: 'Specialty League', color: '#581c87', bg: '#d8b4fe' },
+  swim:             { name: 'Swim',             color: '#155e75', bg: '#67e8f9' },
+  lunch:            { name: 'Lunch',            color: '#7f1d1d', bg: '#fca5a5' },
+  snacks:           { name: 'Snacks',           color: '#713f12', bg: '#fde047' },
+  dismissal:        { name: 'Dismissal',        color: '#ffffff', bg: '#f87171' },
+  custom:           { name: 'Custom Pinned',    color: '#334155', bg: '#cbd5e1' },
+  slot:             { name: 'Activity Slot',    color: '#1e3a5f', bg: '#93c5fd' },
+  pinned:           { name: 'Pinned',           color: '#334155', bg: '#cbd5e1' }
 };
 
 // TILES for palette (matching master builder's soft pastel palette)
@@ -1594,6 +1597,128 @@ function getMainStyles() {
       color: var(--da-text);
     }
     
+    /* Resource Card - Expandable */
+    .da-resource-card {
+      background: var(--da-bg);
+      border: 1px solid var(--da-border);
+      border-radius: 10px;
+      margin-bottom: 8px;
+      overflow: hidden;
+      transition: all 0.2s;
+    }
+    
+    .da-resource-card.disabled-all {
+      background: #fef2f2;
+      border-color: #fecaca;
+    }
+    
+    .da-resource-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      cursor: pointer;
+      background: var(--da-surface);
+      transition: background 0.15s;
+    }
+    
+    .da-resource-card-header:hover {
+      background: #f1f5f9;
+    }
+    
+    .da-resource-card-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .da-resource-card-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+    }
+    
+    .da-resource-card-info h4 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--da-text);
+    }
+    
+    .da-resource-card-info span {
+      font-size: 11px;
+      color: var(--da-text3);
+    }
+    
+    .da-resource-card-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .da-resource-card-expand {
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--da-text3);
+      transition: transform 0.2s;
+    }
+    
+    .da-resource-card.expanded .da-resource-card-expand {
+      transform: rotate(180deg);
+    }
+    
+    .da-resource-card-body {
+      display: none;
+      padding: 14px;
+      border-top: 1px solid var(--da-border);
+      background: var(--da-bg);
+    }
+    
+    .da-resource-card.expanded .da-resource-card-body {
+      display: block;
+    }
+    
+    /* Time Restrictions List */
+    .da-time-restrictions {
+      margin-top: 10px;
+    }
+    
+    .da-time-restriction {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: #fef3c7;
+      border: 1px solid #fcd34d;
+      border-radius: 6px;
+      margin-bottom: 6px;
+      font-size: 12px;
+    }
+    
+    .da-time-restriction-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .da-add-restriction {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    
+    .da-add-restriction input {
+      width: 80px;
+    }
+    
     .da-toggle {
       position: relative;
       width: 44px;
@@ -1628,6 +1753,186 @@ function getMainStyles() {
     
     .da-toggle input:checked + .da-toggle-track { background: var(--da-success); }
     .da-toggle input:checked + .da-toggle-track:before { transform: translateX(22px); }
+    
+    /* Trip Cards */
+    .da-trip-card {
+      background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+      border: 1px solid #6ee7b7;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 10px;
+      position: relative;
+    }
+    
+    .da-trip-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 10px;
+    }
+    
+    .da-trip-card-title {
+      font-weight: 600;
+      font-size: 15px;
+      color: #065f46;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .da-trip-card-time {
+      font-size: 12px;
+      color: #047857;
+      background: rgba(5, 150, 105, 0.1);
+      padding: 4px 10px;
+      border-radius: 20px;
+    }
+    
+    .da-trip-card-bunks {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    
+    .da-trip-bunk-tag {
+      background: white;
+      border: 1px solid #a7f3d0;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      color: #065f46;
+    }
+    
+    .da-trip-delete {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(239, 68, 68, 0.1);
+      border: none;
+      color: #dc2626;
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.15s;
+    }
+    
+    .da-trip-delete:hover {
+      background: #fecaca;
+    }
+    
+    /* Add Trip Form */
+    .da-add-trip-form {
+      background: var(--da-surface);
+      border: 2px dashed var(--da-border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-top: 16px;
+    }
+    
+    .da-add-trip-form h4 {
+      margin: 0 0 16px;
+      font-size: 14px;
+      color: var(--da-text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .da-trip-form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    
+    .da-trip-form-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    
+    .da-trip-form-field.full-width {
+      grid-column: 1 / -1;
+    }
+    
+    .da-trip-form-field label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--da-text2);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    
+    /* Bunk Override Cards */
+    .da-override-card {
+      background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+      border: 1px solid #93c5fd;
+      border-radius: 10px;
+      padding: 14px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .da-override-card-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    
+    .da-override-card-bunk {
+      font-weight: 600;
+      font-size: 14px;
+      color: #1e40af;
+    }
+    
+    .da-override-card-detail {
+      font-size: 12px;
+      color: #3b82f6;
+    }
+    
+    /* Bunk Multi-Select */
+    .da-bunk-select-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+      gap: 6px;
+      max-height: 160px;
+      overflow-y: auto;
+      padding: 10px;
+      background: var(--da-bg);
+      border: 1px solid var(--da-border);
+      border-radius: 8px;
+    }
+    
+    .da-bunk-checkbox {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      background: var(--da-surface);
+      border: 1px solid var(--da-border);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: all 0.15s;
+    }
+    
+    .da-bunk-checkbox:hover {
+      background: #f0fdf4;
+      border-color: #86efac;
+    }
+    
+    .da-bunk-checkbox.checked {
+      background: #dcfce7;
+      border-color: #22c55e;
+    }
+    
+    .da-bunk-checkbox input {
+      margin: 0;
+    }
     
     /* List Panel for Overrides */
     .da-list-panel {
@@ -1771,9 +2076,9 @@ function getMainHTML() {
         <!-- Sub-tabs -->
         <div class="da-subtabs">
           <button class="da-subtab active" data-tab="skeleton">Schedule</button>
-          <button class="da-subtab" data-tab="resources">Resources</button>
-          <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
           <button class="da-subtab" data-tab="trips">Trips</button>
+          <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
+          <button class="da-subtab" data-tab="resources">Resources</button>
         </div>
         
         <!-- Skeleton Pane -->
@@ -1783,9 +2088,9 @@ function getMainHTML() {
           <div id="da-skeleton-container" class="da-grid-wrapper"></div>
         </div>
         
-        <!-- Resources Pane -->
-        <div id="da-pane-resources" class="da-pane">
-          <div id="da-resources-container"></div>
+        <!-- Trips Pane -->
+        <div id="da-pane-trips" class="da-pane">
+          <div id="da-trips-container"></div>
         </div>
         
         <!-- Bunk Overrides Pane -->
@@ -1793,9 +2098,9 @@ function getMainHTML() {
           <div id="da-bunk-overrides-container"></div>
         </div>
         
-        <!-- Trips Pane -->
-        <div id="da-pane-trips" class="da-pane">
-          <div id="da-trips-container"></div>
+        <!-- Resources Pane -->
+        <div id="da-pane-resources" class="da-pane">
+          <div id="da-resources-container"></div>
         </div>
       </div>
     </div>
@@ -2806,22 +3111,27 @@ function renderResourceOverridesUI() {
   
   const isRainy = isRainyDayActive();
   
+  // Initialize time restrictions if not present
+  if (!currentOverrides.timeRestrictions) {
+    currentOverrides.timeRestrictions = {};
+  }
+  
   container.innerHTML = `
     <div class="da-section">
-      <h3 class="da-section-title">Fields</h3>
-      <p class="da-section-desc">Toggle fields on/off for today only.</p>
+      <h3 class="da-section-title">📍 Locations (Fields)</h3>
+      <p class="da-section-desc">Manage field availability. Click to expand and set time-based restrictions.</p>
       <div id="da-fields-list"></div>
     </div>
     
     <div class="da-section">
-      <h3 class="da-section-title">Special Activities</h3>
-      <p class="da-section-desc">Toggle special activities on/off for today only.</p>
+      <h3 class="da-section-title">🎯 Facilities (Special Activities)</h3>
+      <p class="da-section-desc">Manage special activity availability and time restrictions.</p>
       <div id="da-specials-list"></div>
     </div>
     
     ${leagues.length > 0 ? `
     <div class="da-section">
-      <h3 class="da-section-title">Leagues</h3>
+      <h3 class="da-section-title">🏆 Leagues</h3>
       <p class="da-section-desc">Select which leagues are active today.</p>
       <div id="da-leagues-list"></div>
     </div>
@@ -2829,31 +3139,71 @@ function renderResourceOverridesUI() {
     
     ${specialtyLeagues.length > 0 ? `
     <div class="da-section">
-      <h3 class="da-section-title">Specialty Leagues</h3>
+      <h3 class="da-section-title">⭐ Specialty Leagues</h3>
       <p class="da-section-desc">Toggle specialty leagues on/off for today.</p>
       <div id="da-specialty-leagues-list"></div>
     </div>
     ` : ''}
   `;
   
-  // Render fields
+  // Render fields with expandable cards
   const fieldsContainer = document.getElementById('da-fields-list');
   fields.forEach(field => {
     const isDisabled = currentOverrides.disabledFields.includes(field.name);
     const isRainyDisabled = isRainy && !field.rainyDayAvailable;
+    const restrictions = currentOverrides.timeRestrictions[field.name] || [];
+    const hasRestrictions = restrictions.length > 0;
     
-    const row = document.createElement('div');
-    row.className = `da-resource-row ${isDisabled || isRainyDisabled ? 'disabled' : ''}`;
-    row.innerHTML = `
-      <span class="da-resource-name">${escapeHtml(field.name)} ${isRainyDisabled ? '<span style="color:#f59e0b;font-size:11px;">(Rainy)</span>' : ''}</span>
-      <label class="da-toggle" title="${isRainyDisabled ? 'Disabled by Rainy Day Mode' : ''}">
-        <input type="checkbox" ${!isDisabled && !isRainyDisabled ? 'checked' : ''} ${isRainyDisabled ? 'disabled' : ''}>
-        <span class="da-toggle-track"></span>
-      </label>
+    const card = document.createElement('div');
+    card.className = `da-resource-card ${isDisabled || isRainyDisabled ? 'disabled-all' : ''} ${hasRestrictions ? 'has-restrictions' : ''}`;
+    card.innerHTML = `
+      <div class="da-resource-card-header">
+        <div class="da-resource-card-left">
+          <div class="da-resource-card-icon" style="background:#dcfce7;color:#16a34a;">🏟️</div>
+          <div class="da-resource-card-info">
+            <h4>${escapeHtml(field.name)}</h4>
+            <span>${isRainyDisabled ? '🌧️ Disabled (Rainy Day)' : isDisabled ? '❌ Disabled all day' : hasRestrictions ? `⏰ ${restrictions.length} time restriction(s)` : '✅ Available all day'}</span>
+          </div>
+        </div>
+        <div class="da-resource-card-right">
+          <label class="da-toggle" title="${isRainyDisabled ? 'Disabled by Rainy Day Mode' : 'Toggle all-day availability'}" onclick="event.stopPropagation();">
+            <input type="checkbox" ${!isDisabled && !isRainyDisabled ? 'checked' : ''} ${isRainyDisabled ? 'disabled' : ''} data-field="${escapeHtml(field.name)}">
+            <span class="da-toggle-track"></span>
+          </label>
+          <div class="da-resource-card-expand">▼</div>
+        </div>
+      </div>
+      <div class="da-resource-card-body">
+        <p style="font-size:12px;color:var(--da-text2);margin:0 0 10px;">Add specific times when this field is <strong>unavailable</strong>:</p>
+        <div class="da-time-restrictions" data-field="${escapeHtml(field.name)}">
+          ${restrictions.map((r, i) => `
+            <div class="da-time-restriction">
+              <div class="da-time-restriction-info">
+                <span>🚫</span>
+                <span>Unavailable: <strong>${r.start} - ${r.end}</strong></span>
+              </div>
+              <button class="da-btn da-btn-danger da-btn-sm" onclick="window._removeTimeRestriction('${escapeHtml(field.name)}', ${i})">✕</button>
+            </div>
+          `).join('')}
+        </div>
+        <div class="da-add-restriction">
+          <input type="text" class="da-input" placeholder="Start (9:00)" data-start="${escapeHtml(field.name)}" style="width:80px;">
+          <span>to</span>
+          <input type="text" class="da-input" placeholder="End (10:30)" data-end="${escapeHtml(field.name)}" style="width:80px;">
+          <button class="da-btn da-btn-primary da-btn-sm" onclick="window._addTimeRestriction('${escapeHtml(field.name)}')">Add</button>
+        </div>
+      </div>
     `;
     
-    const input = row.querySelector('input');
-    input.onchange = function() {
+    // Toggle expand
+    card.querySelector('.da-resource-card-header').onclick = (e) => {
+      if (e.target.closest('.da-toggle')) return;
+      card.classList.toggle('expanded');
+    };
+    
+    // Toggle all-day
+    const toggle = card.querySelector('input[type="checkbox"]');
+    toggle.onchange = function() {
       if (this.checked) {
         currentOverrides.disabledFields = currentOverrides.disabledFields.filter(f => f !== field.name);
       } else {
@@ -2862,29 +3212,69 @@ function renderResourceOverridesUI() {
         }
       }
       saveCurrentOverrides();
-      row.classList.toggle('disabled', !this.checked);
+      renderResourceOverridesUI();
     };
     
-    fieldsContainer.appendChild(row);
+    fieldsContainer.appendChild(card);
   });
   
-  // Render specials
+  // Render specials with expandable cards
   const specialsContainer = document.getElementById('da-specials-list');
   specials.forEach(special => {
     const isDisabled = currentOverrides.disabledSpecials.includes(special.name);
+    const restrictions = currentOverrides.timeRestrictions[special.name] || [];
+    const hasRestrictions = restrictions.length > 0;
     
-    const row = document.createElement('div');
-    row.className = `da-resource-row ${isDisabled ? 'disabled' : ''}`;
-    row.innerHTML = `
-      <span class="da-resource-name">${escapeHtml(special.name)}</span>
-      <label class="da-toggle">
-        <input type="checkbox" ${!isDisabled ? 'checked' : ''}>
-        <span class="da-toggle-track"></span>
-      </label>
+    const card = document.createElement('div');
+    card.className = `da-resource-card ${isDisabled ? 'disabled-all' : ''} ${hasRestrictions ? 'has-restrictions' : ''}`;
+    card.innerHTML = `
+      <div class="da-resource-card-header">
+        <div class="da-resource-card-left">
+          <div class="da-resource-card-icon" style="background:#f3e8ff;color:#9333ea;">🎨</div>
+          <div class="da-resource-card-info">
+            <h4>${escapeHtml(special.name)}</h4>
+            <span>${isDisabled ? '❌ Disabled all day' : hasRestrictions ? `⏰ ${restrictions.length} time restriction(s)` : '✅ Available all day'}</span>
+          </div>
+        </div>
+        <div class="da-resource-card-right">
+          <label class="da-toggle" onclick="event.stopPropagation();">
+            <input type="checkbox" ${!isDisabled ? 'checked' : ''} data-special="${escapeHtml(special.name)}">
+            <span class="da-toggle-track"></span>
+          </label>
+          <div class="da-resource-card-expand">▼</div>
+        </div>
+      </div>
+      <div class="da-resource-card-body">
+        <p style="font-size:12px;color:var(--da-text2);margin:0 0 10px;">Add specific times when this facility is <strong>unavailable</strong>:</p>
+        <div class="da-time-restrictions" data-special="${escapeHtml(special.name)}">
+          ${restrictions.map((r, i) => `
+            <div class="da-time-restriction">
+              <div class="da-time-restriction-info">
+                <span>🚫</span>
+                <span>Unavailable: <strong>${r.start} - ${r.end}</strong></span>
+              </div>
+              <button class="da-btn da-btn-danger da-btn-sm" onclick="window._removeTimeRestriction('${escapeHtml(special.name)}', ${i})">✕</button>
+            </div>
+          `).join('')}
+        </div>
+        <div class="da-add-restriction">
+          <input type="text" class="da-input" placeholder="Start (9:00)" data-start="${escapeHtml(special.name)}" style="width:80px;">
+          <span>to</span>
+          <input type="text" class="da-input" placeholder="End (10:30)" data-end="${escapeHtml(special.name)}" style="width:80px;">
+          <button class="da-btn da-btn-primary da-btn-sm" onclick="window._addTimeRestriction('${escapeHtml(special.name)}')">Add</button>
+        </div>
+      </div>
     `;
     
-    const input = row.querySelector('input');
-    input.onchange = function() {
+    // Toggle expand
+    card.querySelector('.da-resource-card-header').onclick = (e) => {
+      if (e.target.closest('.da-toggle')) return;
+      card.classList.toggle('expanded');
+    };
+    
+    // Toggle all-day
+    const toggle = card.querySelector('input[type="checkbox"]');
+    toggle.onchange = function() {
       if (this.checked) {
         currentOverrides.disabledSpecials = currentOverrides.disabledSpecials.filter(s => s !== special.name);
       } else {
@@ -2893,13 +3283,13 @@ function renderResourceOverridesUI() {
         }
       }
       saveCurrentOverrides();
-      row.classList.toggle('disabled', !this.checked);
+      renderResourceOverridesUI();
     };
     
-    specialsContainer.appendChild(row);
+    specialsContainer.appendChild(card);
   });
   
-  // Render leagues if present
+  // Render leagues if present (simple toggles)
   if (leagues.length > 0) {
     const leaguesContainer = document.getElementById('da-leagues-list');
     leagues.forEach(league => {
@@ -2908,7 +3298,7 @@ function renderResourceOverridesUI() {
       const row = document.createElement('div');
       row.className = `da-resource-row ${!isEnabled ? 'disabled' : ''}`;
       row.innerHTML = `
-        <span class="da-resource-name">${escapeHtml(league.name)}</span>
+        <span class="da-resource-name">🏆 ${escapeHtml(league.name)}</span>
         <label class="da-toggle">
           <input type="checkbox" ${isEnabled ? 'checked' : ''}>
           <span class="da-toggle-track"></span>
@@ -2941,7 +3331,7 @@ function renderResourceOverridesUI() {
       const row = document.createElement('div');
       row.className = `da-resource-row ${isDisabled ? 'disabled' : ''}`;
       row.innerHTML = `
-        <span class="da-resource-name">${escapeHtml(sl.name)}</span>
+        <span class="da-resource-name">⭐ ${escapeHtml(sl.name)}</span>
         <label class="da-toggle">
           <input type="checkbox" ${!isDisabled ? 'checked' : ''}>
           <span class="da-toggle-track"></span>
@@ -2966,6 +3356,44 @@ function renderResourceOverridesUI() {
   }
 }
 
+// Helper functions for time restrictions
+window._addTimeRestriction = function(resourceName) {
+  const startInput = document.querySelector(`input[data-start="${resourceName}"]`);
+  const endInput = document.querySelector(`input[data-end="${resourceName}"]`);
+  if (!startInput || !endInput) return;
+  
+  const start = startInput.value.trim();
+  const end = endInput.value.trim();
+  
+  if (!start || !end) {
+    showAlert('Please enter both start and end times.');
+    return;
+  }
+  
+  if (!currentOverrides.timeRestrictions) {
+    currentOverrides.timeRestrictions = {};
+  }
+  if (!currentOverrides.timeRestrictions[resourceName]) {
+    currentOverrides.timeRestrictions[resourceName] = [];
+  }
+  
+  currentOverrides.timeRestrictions[resourceName].push({ start, end });
+  saveCurrentOverrides();
+  renderResourceOverridesUI();
+  notify('Time restriction added');
+};
+
+window._removeTimeRestriction = function(resourceName, index) {
+  if (!currentOverrides.timeRestrictions?.[resourceName]) return;
+  currentOverrides.timeRestrictions[resourceName].splice(index, 1);
+  if (currentOverrides.timeRestrictions[resourceName].length === 0) {
+    delete currentOverrides.timeRestrictions[resourceName];
+  }
+  saveCurrentOverrides();
+  renderResourceOverridesUI();
+  notify('Time restriction removed');
+};
+
 // =================================================================
 // BUNK OVERRIDES
 // =================================================================
@@ -2980,87 +3408,112 @@ function renderBunkOverridesUI() {
   });
   
   const locations = getAllLocations();
-  const times = window.unifiedTimes || [];
-  
-  const timeOptions = times.map((t, i) => {
-    const label = t.label || `Slot ${i + 1}`;
-    return `<option value="${i}">${label}</option>`;
-  }).join('');
-  
-  const bunkOptions = allBunks.map(b => 
-    `<option value="${b.bunk}">${b.bunk} (${b.division})</option>`
-  ).join('');
+  const overrides = currentOverrides.bunkActivityOverrides || [];
   
   const locationOptions = locations.map(l => 
-    `<option value="${l}">${l}</option>`
+    `<option value="${escapeHtml(l)}">${escapeHtml(l)}</option>`
   ).join('');
-  
-  const overrides = currentOverrides.bunkActivityOverrides || [];
   
   container.innerHTML = `
     <div class="da-section">
-      <h3 class="da-section-title">Bunk-Specific Overrides</h3>
-      <p class="da-section-desc">Assign specific activities to bunks at specific times.</p>
+      <h3 class="da-section-title">🎯 Bunk-Specific Activity Overrides</h3>
+      <p class="da-section-desc">Force specific bunks to do a certain activity during a time range. These will override the automatic scheduler.</p>
       
-      <div class="da-form-row">
-        <div class="da-form-field">
-          <label>Bunk</label>
-          <select id="da-bunk-select" class="da-select">${bunkOptions}</select>
-        </div>
-        <div class="da-form-field">
-          <label>Time Slot</label>
-          <select id="da-slot-select" class="da-select">${timeOptions}</select>
-        </div>
-        <div class="da-form-field">
-          <label>Activity</label>
-          <select id="da-activity-select" class="da-select">${locationOptions}</select>
-        </div>
-        <button id="da-add-override-btn" class="da-btn da-btn-primary">Add Override</button>
+      <!-- Existing Overrides -->
+      <div id="da-override-list" style="margin-bottom:16px;">
+        ${overrides.length === 0 ? '<p style="color:var(--da-text3);font-size:13px;text-align:center;padding:20px;">No overrides set. Add one below.</p>' : ''}
       </div>
       
-      <div id="da-override-list" class="da-override-list"></div>
+      <!-- Add Override Form -->
+      <div class="da-add-trip-form">
+        <h4>➕ Add New Override</h4>
+        <div class="da-trip-form-grid">
+          <div class="da-trip-form-field">
+            <label>Bunk</label>
+            <select id="da-bunk-select" class="da-select">
+              <option value="">Select bunk...</option>
+              ${allBunks.map(b => `<option value="${escapeHtml(b.bunk)}">${escapeHtml(b.bunk)} (${escapeHtml(b.division)})</option>`).join('')}
+            </select>
+          </div>
+          <div class="da-trip-form-field">
+            <label>Activity / Location</label>
+            <select id="da-activity-select" class="da-select">
+              <option value="">Select activity...</option>
+              ${locationOptions}
+            </select>
+          </div>
+          <div class="da-trip-form-field">
+            <label>Start Time</label>
+            <input type="text" id="da-override-start" class="da-input" placeholder="e.g., 9:00 AM">
+          </div>
+          <div class="da-trip-form-field">
+            <label>End Time</label>
+            <input type="text" id="da-override-end" class="da-input" placeholder="e.g., 10:30 AM">
+          </div>
+        </div>
+        <div style="margin-top:16px;text-align:right;">
+          <button id="da-add-override-btn" class="da-btn da-btn-primary">Add Override</button>
+        </div>
+      </div>
     </div>
   `;
   
   // Render existing overrides
   const listEl = document.getElementById('da-override-list');
-  overrides.forEach((o, idx) => {
-    const slot = times[o.slotIndex];
-    const slotLabel = slot?.label || `Slot ${o.slotIndex + 1}`;
-    
-    const item = document.createElement('div');
-    item.className = 'da-override-item';
-    item.innerHTML = `
-      <div class="da-override-item-info">
-        <strong>${escapeHtml(o.bunk)}</strong>
-        <span> → ${escapeHtml(o.activity)} at ${slotLabel}</span>
-      </div>
-      <button class="da-btn da-btn-danger da-btn-sm" data-idx="${idx}">Remove</button>
-    `;
-    
-    item.querySelector('button').onclick = () => {
-      currentOverrides.bunkActivityOverrides.splice(idx, 1);
-      saveCurrentOverrides();
-      renderBunkOverridesUI();
-    };
-    
-    listEl.appendChild(item);
-  });
+  if (overrides.length > 0) {
+    listEl.innerHTML = '';
+    overrides.forEach((o, idx) => {
+      const item = document.createElement('div');
+      item.className = 'da-override-card';
+      item.innerHTML = `
+        <div class="da-override-card-info">
+          <div class="da-override-card-bunk">${escapeHtml(o.bunk)}</div>
+          <div class="da-override-card-detail">
+            → ${escapeHtml(o.activity)} from <strong>${o.startTime || 'N/A'}</strong> to <strong>${o.endTime || 'N/A'}</strong>
+          </div>
+        </div>
+        <button class="da-btn da-btn-danger da-btn-sm" data-idx="${idx}">Remove</button>
+      `;
+      
+      item.querySelector('button').onclick = () => {
+        currentOverrides.bunkActivityOverrides.splice(idx, 1);
+        saveCurrentOverrides();
+        renderBunkOverridesUI();
+        notify('Override removed');
+      };
+      
+      listEl.appendChild(item);
+    });
+  }
   
   // Add button handler
   document.getElementById('da-add-override-btn').onclick = () => {
     if (!window.AccessControl?.checkEditAccess?.('add bunk override')) return;
     
     const bunk = document.getElementById('da-bunk-select').value;
-    const slot = parseInt(document.getElementById('da-slot-select').value);
     const activity = document.getElementById('da-activity-select').value;
+    const startTime = document.getElementById('da-override-start').value.trim();
+    const endTime = document.getElementById('da-override-end').value.trim();
     
-    if (!bunk || isNaN(slot) || !activity) {
-      showAlert('Please select a bunk, time slot, and activity.');
+    if (!bunk) {
+      showAlert('Please select a bunk.');
+      return;
+    }
+    if (!activity) {
+      showAlert('Please select an activity.');
+      return;
+    }
+    if (!startTime || !endTime) {
+      showAlert('Please enter start and end times.');
       return;
     }
     
-    currentOverrides.bunkActivityOverrides.push({ bunk, slotIndex: slot, activity });
+    currentOverrides.bunkActivityOverrides.push({ 
+      bunk, 
+      activity, 
+      startTime, 
+      endTime 
+    });
     saveCurrentOverrides();
     renderBunkOverridesUI();
     notify('Override added');
@@ -3075,102 +3528,201 @@ function renderTripsForm() {
   if (!container) return;
   
   const D = window.divisions || {};
-  const allBunks = [];
+  const divisionGroups = {};
   Object.entries(D).forEach(([divName, divData]) => {
-    (divData.bunks || []).forEach(b => allBunks.push({ bunk: b, division: divName }));
+    divisionGroups[divName] = divData.bunks || [];
   });
   
-  const times = window.unifiedTimes || [];
   const dailyData = window.loadCurrentDailyData?.() || {};
   const trips = dailyData.trips || [];
   
   container.innerHTML = `
     <div class="da-section">
-      <h3 class="da-section-title">Trips & Outings</h3>
-      <p class="da-section-desc">Mark bunks as on a trip for specific time slots. They won't be scheduled during these times.</p>
+      <h3 class="da-section-title">🚌 Trips & Outings</h3>
+      <p class="da-section-desc">When bunks go on a trip, they won't be scheduled for activities during that time. The scheduler will automatically skip them.</p>
       
-      <div class="da-form-row">
-        <div class="da-form-field">
-          <label>Bunk(s)</label>
-          <select id="da-trip-bunk" class="da-select" multiple style="height:80px;">
-            ${allBunks.map(b => `<option value="${b.bunk}">${b.bunk}</option>`).join('')}
-          </select>
-        </div>
-        <div class="da-form-field">
-          <label>From Slot</label>
-          <select id="da-trip-from" class="da-select">
-            ${times.map((t, i) => `<option value="${i}">${t.label || `Slot ${i+1}`}</option>`).join('')}
-          </select>
-        </div>
-        <div class="da-form-field">
-          <label>To Slot</label>
-          <select id="da-trip-to" class="da-select">
-            ${times.map((t, i) => `<option value="${i}">${t.label || `Slot ${i+1}`}</option>`).join('')}
-          </select>
-        </div>
-        <div class="da-form-field">
-          <label>Trip Name</label>
-          <input type="text" id="da-trip-name" class="da-input" placeholder="e.g., Zoo Trip">
-        </div>
-        <button id="da-add-trip-btn" class="da-btn da-btn-primary">Add Trip</button>
+      <!-- Existing Trips -->
+      <div id="da-trip-list" style="margin-bottom:20px;">
+        ${trips.length === 0 ? '<p style="color:var(--da-text3);font-size:13px;text-align:center;padding:30px;background:var(--da-surface);border-radius:10px;border:1px dashed var(--da-border);">No trips scheduled for today. Add one below!</p>' : ''}
       </div>
       
-      <div id="da-trip-list" class="da-override-list"></div>
+      <!-- Add Trip Form -->
+      <div class="da-add-trip-form">
+        <h4>➕ Schedule a Trip</h4>
+        
+        <div class="da-trip-form-grid">
+          <div class="da-trip-form-field full-width">
+            <label>Trip Name</label>
+            <input type="text" id="da-trip-name" class="da-input" placeholder="e.g., Zoo Trip, Museum Visit, Water Park">
+          </div>
+          
+          <div class="da-trip-form-field">
+            <label>Departure Time</label>
+            <input type="text" id="da-trip-start" class="da-input" placeholder="e.g., 9:00 AM">
+          </div>
+          
+          <div class="da-trip-form-field">
+            <label>Return Time</label>
+            <input type="text" id="da-trip-end" class="da-input" placeholder="e.g., 3:00 PM">
+          </div>
+        </div>
+        
+        <div style="margin-top:16px;">
+          <label style="font-size:11px;font-weight:600;color:var(--da-text2);text-transform:uppercase;letter-spacing:0.3px;display:block;margin-bottom:8px;">Select Bunks Going on Trip</label>
+          
+          <!-- Division Quick-Select Buttons -->
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+            ${Object.keys(divisionGroups).map(divName => `
+              <button class="da-btn da-btn-ghost da-btn-sm da-div-select-btn" data-div="${escapeHtml(divName)}">
+                ${escapeHtml(divName)}
+              </button>
+            `).join('')}
+            <button class="da-btn da-btn-ghost da-btn-sm" id="da-select-all-bunks">Select All</button>
+            <button class="da-btn da-btn-ghost da-btn-sm" id="da-clear-all-bunks">Clear All</button>
+          </div>
+          
+          <!-- Bunk Checkboxes -->
+          <div class="da-bunk-select-grid" id="da-trip-bunks">
+            ${Object.entries(divisionGroups).map(([divName, bunks]) => 
+              bunks.map(b => `
+                <label class="da-bunk-checkbox" data-div="${escapeHtml(divName)}">
+                  <input type="checkbox" value="${escapeHtml(b)}">
+                  <span>${escapeHtml(b)}</span>
+                </label>
+              `).join('')
+            ).join('')}
+          </div>
+        </div>
+        
+        <div style="margin-top:20px;display:flex;justify-content:space-between;align-items:center;">
+          <span id="da-bunks-selected" style="font-size:12px;color:var(--da-text3);">0 bunks selected</span>
+          <button id="da-add-trip-btn" class="da-btn da-btn-success">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+            Add Trip
+          </button>
+        </div>
+      </div>
     </div>
   `;
   
   // Render existing trips
   const listEl = document.getElementById('da-trip-list');
-  trips.forEach((trip, idx) => {
-    const fromSlot = times[trip.fromSlot];
-    const toSlot = times[trip.toSlot];
-    
-    const item = document.createElement('div');
-    item.className = 'da-override-item';
-    item.innerHTML = `
-      <div class="da-override-item-info">
-        <strong>${escapeHtml(trip.name || 'Trip')}</strong>
-        <span> - ${trip.bunks.join(', ')} (${fromSlot?.label || trip.fromSlot} to ${toSlot?.label || trip.toSlot})</span>
-      </div>
-      <button class="da-btn da-btn-danger da-btn-sm" data-idx="${idx}">Remove</button>
-    `;
-    
-    item.querySelector('button').onclick = () => {
-      trips.splice(idx, 1);
-      window.saveCurrentDailyData?.("trips", trips);
-      window.forceSyncToCloud?.();
-      renderTripsForm();
+  if (trips.length > 0) {
+    listEl.innerHTML = '';
+    trips.forEach((trip, idx) => {
+      const card = document.createElement('div');
+      card.className = 'da-trip-card';
+      card.innerHTML = `
+        <button class="da-trip-delete" data-idx="${idx}" title="Remove trip">✕</button>
+        <div class="da-trip-card-header">
+          <div class="da-trip-card-title">
+            <span>🚌</span>
+            ${escapeHtml(trip.name || 'Unnamed Trip')}
+          </div>
+          <div class="da-trip-card-time">
+            ${trip.startTime || 'N/A'} → ${trip.endTime || 'N/A'}
+          </div>
+        </div>
+        <div class="da-trip-card-bunks">
+          ${(trip.bunks || []).map(b => `<span class="da-trip-bunk-tag">${escapeHtml(b)}</span>`).join('')}
+        </div>
+      `;
+      
+      card.querySelector('.da-trip-delete').onclick = async () => {
+        const ok = await showConfirm(`Remove trip "${trip.name || 'Unnamed Trip'}"?`);
+        if (ok) {
+          trips.splice(idx, 1);
+          window.saveCurrentDailyData?.("trips", trips);
+          window.forceSyncToCloud?.();
+          renderTripsForm();
+          notify('Trip removed');
+        }
+      };
+      
+      listEl.appendChild(card);
+    });
+  }
+  
+  // Update selected count
+  const updateSelectedCount = () => {
+    const checked = container.querySelectorAll('#da-trip-bunks input:checked').length;
+    document.getElementById('da-bunks-selected').textContent = `${checked} bunk${checked !== 1 ? 's' : ''} selected`;
+  };
+  
+  // Bunk checkbox styling
+  container.querySelectorAll('.da-bunk-checkbox input').forEach(cb => {
+    cb.onchange = function() {
+      this.closest('.da-bunk-checkbox').classList.toggle('checked', this.checked);
+      updateSelectedCount();
     };
-    
-    listEl.appendChild(item);
   });
   
+  // Division quick-select buttons
+  container.querySelectorAll('.da-div-select-btn').forEach(btn => {
+    btn.onclick = () => {
+      const divName = btn.dataset.div;
+      const checkboxes = container.querySelectorAll(`.da-bunk-checkbox[data-div="${divName}"] input`);
+      const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+      checkboxes.forEach(cb => {
+        cb.checked = !allChecked;
+        cb.closest('.da-bunk-checkbox').classList.toggle('checked', cb.checked);
+      });
+      updateSelectedCount();
+    };
+  });
+  
+  // Select all / Clear all
+  document.getElementById('da-select-all-bunks').onclick = () => {
+    container.querySelectorAll('#da-trip-bunks input').forEach(cb => {
+      cb.checked = true;
+      cb.closest('.da-bunk-checkbox').classList.add('checked');
+    });
+    updateSelectedCount();
+  };
+  
+  document.getElementById('da-clear-all-bunks').onclick = () => {
+    container.querySelectorAll('#da-trip-bunks input').forEach(cb => {
+      cb.checked = false;
+      cb.closest('.da-bunk-checkbox').classList.remove('checked');
+    });
+    updateSelectedCount();
+  };
+  
   // Add trip handler
-  document.getElementById('da-add-trip-btn').onclick = () => {
+  document.getElementById('da-add-trip-btn').onclick = async () => {
     if (!window.AccessControl?.checkEditAccess?.('add trip')) return;
     
-    const bunkSelect = document.getElementById('da-trip-bunk');
-    const selectedBunks = Array.from(bunkSelect.selectedOptions).map(o => o.value);
-    const fromSlot = parseInt(document.getElementById('da-trip-from').value);
-    const toSlot = parseInt(document.getElementById('da-trip-to').value);
-    const name = document.getElementById('da-trip-name').value;
+    const name = document.getElementById('da-trip-name').value.trim();
+    const startTime = document.getElementById('da-trip-start').value.trim();
+    const endTime = document.getElementById('da-trip-end').value.trim();
+    const selectedBunks = Array.from(container.querySelectorAll('#da-trip-bunks input:checked')).map(cb => cb.value);
     
+    if (!name) {
+      showAlert('Please enter a trip name.');
+      return;
+    }
+    if (!startTime || !endTime) {
+      showAlert('Please enter departure and return times.');
+      return;
+    }
     if (selectedBunks.length === 0) {
-      showAlert('Please select at least one bunk.');
+      showAlert('Please select at least one bunk for this trip.');
       return;
     }
     
     trips.push({
-      bunks: selectedBunks,
-      fromSlot,
-      toSlot,
-      name: name || 'Trip'
+      name,
+      startTime,
+      endTime,
+      bunks: selectedBunks
     });
     
     window.saveCurrentDailyData?.("trips", trips);
     window.forceSyncToCloud?.();
     renderTripsForm();
-    notify('Trip added');
+    notify(`Trip "${name}" added with ${selectedBunks.length} bunks`);
   };
 }
 
