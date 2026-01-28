@@ -59,7 +59,7 @@ const TILES=[
   {type:'special', name:'Special Activity', style:'background:#c4b5fd;color:#3b1f6b;', description:'Special Activity slot only.'},
   
   // Advanced Tiles
-  {type:'smart', name:'Smart Tile', style:'background:#7dd3fc;color:#0c4a6e;border:2px dashed #0284c7;', description:'Calculates Main 1 capacity, assigns rest to Main 2, then swaps.'},
+  {type:'smart', name:'Smart Tile', style:'background:#7dd3fc;color:#0c4a6e;border:2px dashed #0284c7;', description:'Fills Main 1 by capacity, rest get Main 2, then swap next period.'},
   {type:'split', name:'Split Activity', style:'background:#fdba74;color:#7c2d12;', description:'Splits division between two tile types, swap midway.'},
   {type:'elective', name:'Elective', style:'background:#f0abfc;color:#701a75;', description:'Reserve multiple activities for this division only.'},
   
@@ -876,7 +876,7 @@ function showTileInfo(tile) {
     'activity': 'ACTIVITY SLOT\n\nA flexible time block where the scheduler assigns either a sport or special activity based on availability and fairness rules.',
     'sports': 'SPORTS SLOT\n\nDedicated time for sports activities only. The scheduler will assign an available field and sport.',
     'special': 'SPECIAL ACTIVITY\n\nTime reserved for special activities like Art, Music, Drama, etc.',
-    'smart': 'SMART TILE\n\nSmartly calculates capacity for Main 1 and distributes bunks:\n\n1. Calculates how many bunks can fit in Main 1\n2. Assigns those bunks to Main 1, everyone else gets Main 2\n3. Next activity period: They SWAP\n   • Main 1 bunks → now get Main 2\n   • Main 2 bunks → now get Main 1\n4. If Main 1 capacity is insufficient, Fallback is used\n\nNote: Enter tile types (Sports, Special, Activity) not specific activities.',
+    'smart': 'SMART TILE\n\nCalculates how many bunks can do Main 1 based on capacity:\n\n• Bunks that fit → Main 1\n• Everyone else → Main 2\n• If Main 1 is full → Fallback is used\n\nNext period, groups SWAP:\n• Main 1 bunks → get Main 2\n• Main 2 bunks → get Main 1\n\nExample: Main 1 = Swim (capacity 4), Main 2 = Sports\nPeriod 1: Bunks 1-4 swim, Bunks 5-8 sports\nPeriod 2: Bunks 5-8 swim, Bunks 1-4 sports\n\nNote: Enter tile types (Sports, Special) not specific activities.',
     'split': 'SPLIT ACTIVITY\n\nSplits the division into two groups for the time block:\n\n• First half of time:\n   - Group 1 does Tile A\n   - Group 2 does Tile B\n• Midway through: Groups SWAP\n• Second half of time:\n   - Group 1 does Tile B\n   - Group 2 does Tile A\n\nNote: Enter tile types (Sports, Special) not specific activities.',
     'elective': 'ELECTIVE\n\nReserves specific fields/activities for THIS division only. Other divisions cannot use them during this time.',
     'league': 'LEAGUE GAME\n\nFull buyout for a regular league matchup. All bunks in the division play head-to-head games.',
@@ -1129,13 +1129,13 @@ function addDropListeners(selector) {
       if (tileData.type === 'smart') {
         const result = await showModal({
           title: 'Smart Tile Setup',
-          description: 'Calculates Main 1 capacity → assigns bunks there, rest get Main 2. Next period they swap. If Main 1 is full, Fallback is used. Enter TILE TYPES not specific activities.',
+          description: 'Fills Main 1 based on capacity, rest get Main 2. Next period they swap. If Main 1 is full, Fallback is used.',
           fields: [
             { name: 'startTime', label: 'Start Time', type: 'text', default: startStr },
             { name: 'endTime', label: 'End Time', type: 'text', default: endStr },
             { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', placeholder: 'e.g., Special, Swim' },
             { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', placeholder: 'e.g., Sports, Activity' },
-            { name: 'fallbackActivity', label: 'Fallback (if Main 1 full)', type: 'text', default: 'Activity', placeholder: 'e.g., Activity, Sports' }
+            { name: 'fallbackActivity', label: 'Fallback (when Main 1 is full)', type: 'text', default: 'Activity', placeholder: 'e.g., Activity, Sports' }
           ]
         });
         if (!result || !result.main1 || !result.main2) return;
