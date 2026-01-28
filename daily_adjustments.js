@@ -921,127 +921,149 @@ function getMainStyles() {
       box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
     }
     
-    /* Grid Area */
+    /* Grid Area - CSS Grid Layout (matches master builder) */
     .da-grid-wrapper {
       flex: 1;
       overflow: auto;
       background: var(--da-bg);
     }
     
-    .da-grid {
-      display: flex;
-      position: relative;
-      min-width: max-content;
+    .da-grid-container {
+      min-width: 700px;
     }
     
-    .da-time-rail {
-      position: sticky;
-      left: 0;
-      z-index: 30;
-      background: var(--da-bg);
-      border-right: 1px solid var(--da-border);
-      width: 72px;
-      padding-top: 10px;
-    }
-    
-    .da-time-label {
-      position: absolute;
-      right: 8px;
-      font-size: 11px;
-      color: var(--da-text3);
-      font-weight: 500;
-      transform: translateY(-50%);
-    }
-    
-    .da-cols {
-      display: flex;
-      flex: 1;
-    }
-    
-    .da-col {
-      flex: 1;
-      min-width: 120px;
-      border-right: 1px solid var(--da-border);
-      position: relative;
-    }
-    
-    .da-col:last-child { border-right: none; }
-    
-    .da-col-header {
+    /* Grid Headers */
+    .da-grid-header-time {
+      grid-row: 1;
       position: sticky;
       top: 0;
-      z-index: 20;
       background: var(--da-surface);
-      padding: 10px 8px;
-      text-align: center;
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--da-text);
+      z-index: 10;
       border-bottom: 1px solid var(--da-border);
+      padding: 12px 8px;
+      font-weight: 600;
+      font-size: 11px;
+      color: var(--da-text3);
+      text-align: center;
     }
     
-    .da-col-body {
+    .da-grid-header-div {
+      grid-row: 1;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      border-bottom: 1px solid var(--da-border);
+      border-left: 1px solid var(--da-border);
+      padding: 12px 8px;
+      text-align: center;
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--da-text);
+    }
+    
+    /* Time Column */
+    .da-grid-time-col {
+      grid-row: 2;
       position: relative;
+      background: var(--da-surface);
+      border-right: 1px solid var(--da-border);
+    }
+    
+    .da-grid-time-label {
+      position: absolute;
+      left: 0;
+      width: 100%;
+      padding: 2px 6px;
+      font-size: 10px;
+      color: var(--da-text3);
+      border-top: 1px dashed var(--da-border);
+      box-sizing: border-box;
+    }
+    
+    /* Division Cells */
+    .da-grid-cell {
+      grid-row: 2;
+      position: relative;
+      border-left: 1px solid var(--da-border);
       background: var(--da-bg);
     }
     
-    .da-hour-line {
+    /* Grid Lines */
+    .da-grid-line {
       position: absolute;
       left: 0;
       right: 0;
       height: 1px;
+      background: #f1f5f9;
+      pointer-events: none;
+    }
+    
+    .da-grid-line.hour {
       background: var(--da-border);
     }
     
-    .da-off-hours {
+    /* Disabled/Off-hours zones */
+    .da-grid-disabled {
       position: absolute;
       left: 0;
       right: 0;
-      background: repeating-linear-gradient(-45deg, #f1f5f9, #f1f5f9 10px, #e2e8f0 10px, #e2e8f0 11px);
+      background-color: #f8fafc;
+      background-image: linear-gradient(-45deg, #e2e8f0 25%, transparent 25%, transparent 50%, #e2e8f0 50%, #e2e8f0 75%, transparent 75%, transparent);
+      background-size: 16px 16px;
       z-index: 1;
       pointer-events: none;
     }
     
-    /* Grid Events */
-    .da-event {
+    /* Grid Events/Tiles */
+    .da-grid-event {
       position: absolute;
-      left: 4px;
-      right: 4px;
+      left: 3px;
+      right: 3px;
       border-radius: 6px;
       padding: 6px 8px;
       font-size: 11px;
-      font-weight: 600;
       cursor: pointer;
-      z-index: 10;
-      transition: box-shadow 0.15s, outline 0.15s;
+      z-index: 5;
       overflow: hidden;
       display: flex;
       flex-direction: column;
-      justify-content: center;
+      box-sizing: border-box;
+      transition: box-shadow 0.15s, outline 0.15s;
     }
     
-    .da-event:hover {
+    .da-grid-event:hover {
       box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-      z-index: 11;
+      z-index: 6;
     }
     
-    .da-event.selected {
+    .da-grid-event.selected {
       outline: 3px solid var(--da-accent);
       outline-offset: -1px;
       box-shadow: 0 0 0 4px rgba(59,130,246,0.2);
-      z-index: 12;
+      z-index: 7;
     }
     
-    .da-event-name {
+    .da-tile-name {
+      font-weight: 600;
+      font-size: 11px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
     
-    .da-event-time {
+    .da-tile-time {
+      font-size: 10px;
+      opacity: 0.85;
+      margin-top: 1px;
+    }
+    
+    .da-tile-detail {
       font-size: 9px;
       opacity: 0.8;
       margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     
     /* Resize Handles */
@@ -1059,22 +1081,27 @@ function getMainStyles() {
     .da-resize-top { top: -2px; }
     .da-resize-bottom { bottom: -2px; }
     
-    .da-event:hover .da-resize-handle {
+    .da-grid-event:hover .da-resize-handle {
       opacity: 1;
       background: rgba(59,130,246,0.4);
+    }
+    
+    .da-grid-event.resizing {
+      box-shadow: 0 0 0 2px var(--da-accent) !important;
+      z-index: 100 !important;
     }
     
     /* Drop Preview */
     .da-drop-preview {
       display: none;
       position: absolute;
-      left: 4px;
-      right: 4px;
+      left: 3px;
+      right: 3px;
       background: rgba(59,130,246,0.15);
       border: 2px dashed var(--da-accent);
       border-radius: 6px;
       pointer-events: none;
-      z-index: 5;
+      z-index: 4;
     }
     
     .da-preview-label {
@@ -1977,142 +2004,300 @@ function renderGrid() {
     return;
   }
   
-  const bounds = getGridBounds();
-  const gridHeight = (bounds.hi - bounds.lo) * PIXELS_PER_MINUTE;
+  // Calculate time bounds
+  let earliestMin = null, latestMin = null;
+  divs.forEach(([_, divData]) => {
+    const s = parseTimeToMinutes(divData.startTime);
+    const e = parseTimeToMinutes(divData.endTime);
+    if (s !== null && (earliestMin === null || s < earliestMin)) earliestMin = s;
+    if (e !== null && (latestMin === null || e > latestMin)) latestMin = e;
+  });
+  if (earliestMin === null) earliestMin = 540;
+  if (latestMin === null) latestMin = 960;
   
-  // Build time rail
-  let timeRailHTML = '';
-  for (let m = bounds.lo; m <= bounds.hi; m += 30) {
-    const top = (m - bounds.lo) * PIXELS_PER_MINUTE;
-    timeRailHTML += `<div class="da-time-label" style="top:${top}px;">${minutesToTime(m)}</div>`;
-  }
+  // Extend for pinned events that go beyond
+  dailyOverrideSkeleton.forEach(ev => {
+    const e = parseTimeToMinutes(ev.endTime);
+    if (e !== null && e > latestMin) latestMin = e;
+    const s = parseTimeToMinutes(ev.startTime);
+    if (s !== null && s < earliestMin) earliestMin = s;
+  });
   
-  // Build columns
-  let colsHTML = '';
+  if (latestMin <= earliestMin) latestMin = earliestMin + 60;
+  
+  const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
+  const numCols = divs.length;
+  
+  // Build the grid using CSS Grid (matching master builder)
+  let html = `<div class="da-grid-container" data-earliest="${earliestMin}" style="display:grid; grid-template-columns:60px repeat(${numCols}, 1fr); position:relative; min-width:${Math.max(700, 60 + numCols * 120)}px;">`;
+  
+  // === ROW 1: Headers ===
+  html += `<div class="da-grid-header-time">Time</div>`;
   divs.forEach(([divName, divData]) => {
-    const divStart = parseTimeToMinutes(divData.startTime) || bounds.lo;
-    const divEnd = parseTimeToMinutes(divData.endTime) || bounds.hi;
+    const color = divData.color || '#475569';
+    html += `<div class="da-grid-header-div" style="background:${softenColor(color)};">${escapeHtml(divName)}</div>`;
+  });
+  
+  // === ROW 2: Time column ===
+  html += `<div class="da-grid-time-col" style="height:${totalHeight}px;">`;
+  for (let m = earliestMin; m < latestMin; m += INCREMENT_MINS) {
+    const top = (m - earliestMin) * PIXELS_PER_MINUTE;
+    html += `<div class="da-grid-time-label" style="top:${top}px;">${minutesToTime(m)}</div>`;
+  }
+  html += `</div>`;
+  
+  // === ROW 2: Division columns ===
+  divs.forEach(([divName, divData]) => {
+    const divStart = parseTimeToMinutes(divData.startTime) || earliestMin;
+    const divEnd = parseTimeToMinutes(divData.endTime) || latestMin;
     
-    // Off-hours before
-    let offBefore = '', offAfter = '';
-    if (divStart > bounds.lo) {
-      const height = (divStart - bounds.lo) * PIXELS_PER_MINUTE;
-      offBefore = `<div class="da-off-hours" style="top:0;height:${height}px;"></div>`;
-    }
-    if (divEnd < bounds.hi) {
-      const top = (divEnd - bounds.lo) * PIXELS_PER_MINUTE;
-      const height = (bounds.hi - divEnd) * PIXELS_PER_MINUTE;
-      offAfter = `<div class="da-off-hours" style="top:${top}px;height:${height}px;"></div>`;
+    html += `<div class="da-grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="height:${totalHeight}px;">`;
+    
+    // Off-hours (before division start)
+    if (divStart > earliestMin) {
+      const h = (divStart - earliestMin) * PIXELS_PER_MINUTE;
+      html += `<div class="da-grid-disabled" style="top:0;height:${h}px;"></div>`;
     }
     
-    // Hour lines
-    let hourLines = '';
-    for (let m = bounds.lo; m <= bounds.hi; m += 60) {
-      const top = (m - bounds.lo) * PIXELS_PER_MINUTE;
-      hourLines += `<div class="da-hour-line" style="top:${top}px;"></div>`;
+    // Off-hours (after division end)
+    if (divEnd < latestMin) {
+      const t = (divEnd - earliestMin) * PIXELS_PER_MINUTE;
+      const h = (latestMin - divEnd) * PIXELS_PER_MINUTE;
+      html += `<div class="da-grid-disabled" style="top:${t}px;height:${h}px;"></div>`;
+    }
+    
+    // Time lines every 30 min
+    for (let m = earliestMin; m < latestMin; m += 30) {
+      const top = (m - earliestMin) * PIXELS_PER_MINUTE;
+      const isHour = m % 60 === 0;
+      html += `<div class="da-grid-line ${isHour ? 'hour' : ''}" style="top:${top}px;"></div>`;
     }
     
     // Events for this division
     const divEvents = dailyOverrideSkeleton.filter(ev => {
-      if (!ev.divisions) return true;
+      if (!ev.divisions || ev.divisions.length === 0) return true;
       return ev.divisions.includes(divName);
     });
     
-    let eventsHTML = '';
     divEvents.forEach(ev => {
       const startMin = parseTimeToMinutes(ev.startTime);
       const endMin = parseTimeToMinutes(ev.endTime);
-      if (startMin == null || endMin == null) return;
+      if (startMin == null || endMin == null || endMin <= startMin) return;
       
-      const top = (startMin - bounds.lo) * PIXELS_PER_MINUTE;
-      const height = (endMin - startMin) * PIXELS_PER_MINUTE;
+      const top = (startMin - earliestMin) * PIXELS_PER_MINUTE;
+      const height = Math.max((endMin - startMin) * PIXELS_PER_MINUTE - 2, 20);
       
       const block = BLOCKS[ev.type] || BLOCKS.activity;
-      const isDashed = block.dashed ? 'border:2px dashed ' + block.color + ';' : '';
+      const borderStyle = block.dashed ? `border:2px dashed ${block.color};` : `border-left:3px solid ${block.color};`;
+      const selectedClass = selectedTileId === ev.id ? ' selected' : '';
       
-      eventsHTML += `
-        <div class="da-event ${selectedTileId === ev.id ? 'selected' : ''}" 
-             data-id="${ev.id}" data-div="${divName}"
-             style="top:${top}px;height:${height}px;background:${block.bg};color:${block.color};${isDashed}">
-          <div class="da-event-name">${escapeHtml(ev.name || block.name)}</div>
-          <div class="da-event-time">${minutesToTime(startMin)} - ${minutesToTime(endMin)}</div>
+      // Build inner content
+      let innerContent = `<strong class="da-tile-name">${escapeHtml(ev.name || block.name)}</strong>`;
+      innerContent += `<span class="da-tile-time">${minutesToTime(startMin)} - ${minutesToTime(endMin)}</span>`;
+      
+      // Show smart tile info
+      if (ev.type === 'smart' && ev.smartConfig) {
+        innerContent += `<span class="da-tile-detail">${ev.smartConfig.activity1} / ${ev.smartConfig.activity2}</span>`;
+      }
+      
+      // Show elective info
+      if (ev.type === 'elective' && ev.reservedActivities?.length > 0) {
+        const actList = ev.reservedActivities.slice(0, 2).join(', ');
+        const more = ev.reservedActivities.length > 2 ? ` +${ev.reservedActivities.length - 2}` : '';
+        innerContent += `<span class="da-tile-detail">🎯 ${actList}${more}</span>`;
+      }
+      
+      html += `
+        <div class="da-grid-event${selectedClass}" data-id="${ev.id}" draggable="true"
+             style="top:${top}px;height:${height}px;background:${block.bg};color:${block.color};${borderStyle}">
+          ${innerContent}
           <div class="da-resize-handle da-resize-top"></div>
           <div class="da-resize-handle da-resize-bottom"></div>
         </div>
       `;
     });
     
-    colsHTML += `
-      <div class="da-col" data-div="${divName}">
-        <div class="da-col-header">${escapeHtml(divName)}</div>
-        <div class="da-col-body" style="height:${gridHeight}px;">
-          ${offBefore}
-          ${hourLines}
-          ${eventsHTML}
-          ${offAfter}
-          <div class="da-drop-preview"><div class="da-preview-label"></div></div>
-        </div>
-      </div>
-    `;
+    // Drop preview
+    html += `<div class="da-drop-preview"><div class="da-preview-label"></div></div>`;
+    html += `</div>`;
   });
   
-  gridContainer.innerHTML = `
-    <div class="da-grid">
-      <div class="da-time-rail" style="height:${gridHeight + 40}px;">
-        ${timeRailHTML}
-      </div>
-      <div class="da-cols">
-        ${colsHTML}
-      </div>
-    </div>
-  `;
+  html += `</div>`;
+  gridContainer.innerHTML = html;
   
   // Bind event handlers
-  bindGridEvents(bounds);
+  bindGridEvents({ lo: earliestMin, hi: latestMin });
+}
+
+// Soften a color for header backgrounds
+function softenColor(hex) {
+  try {
+    let c = hex.replace('#', '');
+    if (c.length === 3) c = c[0]+c[0]+c[1]+c[1]+c[2]+c[2];
+    const r = parseInt(c.substr(0,2), 16);
+    const g = parseInt(c.substr(2,2), 16);
+    const b = parseInt(c.substr(4,2), 16);
+    const newR = Math.round(r + (255 - r) * 0.7);
+    const newG = Math.round(g + (255 - g) * 0.7);
+    const newB = Math.round(b + (255 - b) * 0.7);
+    return `rgb(${newR},${newG},${newB})`;
+  } catch(e) {
+    return '#f1f5f9';
+  }
 }
 
 function bindGridEvents(bounds) {
   const grid = document.getElementById('da-skeleton-container');
   if (!grid) return;
   
-  // Click to select
-  grid.querySelectorAll('.da-event').forEach(el => {
+  const earliestMin = bounds.lo;
+  
+  // Click to select events
+  grid.querySelectorAll('.da-grid-event').forEach(el => {
     el.onclick = (e) => {
+      if (e.target.classList.contains('da-resize-handle')) return;
       e.stopPropagation();
       selectTile(el.dataset.id);
     };
     
     el.ondblclick = (e) => {
       e.stopPropagation();
+      if (e.target.classList.contains('da-resize-handle')) return;
       editTile(el.dataset.id);
     };
+    
+    // Drag to reposition
+    el.addEventListener('dragstart', (e) => {
+      if (e.target.classList.contains('da-resize-handle')) { e.preventDefault(); return; }
+      
+      const eventId = el.dataset.id;
+      const event = dailyOverrideSkeleton.find(ev => ev.id === eventId);
+      if (!event) return;
+      
+      const duration = parseTimeToMinutes(event.endTime) - parseTimeToMinutes(event.startTime);
+      e.dataTransfer.setData('text/event-move', JSON.stringify({ id: eventId, duration }));
+      e.dataTransfer.effectAllowed = 'move';
+      
+      el.style.opacity = '0.4';
+      
+      // Show ghost
+      const ghost = document.getElementById('da-drag-ghost');
+      if (ghost) {
+        ghost.innerHTML = `<strong>${escapeHtml(event.name || 'Event')}</strong><br><span style="color:#64748b;">${event.startTime} - ${event.endTime}</span>`;
+        ghost.style.display = 'block';
+      }
+    });
+    
+    el.addEventListener('drag', (e) => {
+      if (e.clientX === 0 && e.clientY === 0) return;
+      const ghost = document.getElementById('da-drag-ghost');
+      if (ghost) {
+        ghost.style.left = (e.clientX + 12) + 'px';
+        ghost.style.top = (e.clientY + 12) + 'px';
+      }
+    });
+    
+    el.addEventListener('dragend', () => {
+      el.style.opacity = '1';
+      const ghost = document.getElementById('da-drag-ghost');
+      if (ghost) ghost.style.display = 'none';
+      grid.querySelectorAll('.da-drop-preview').forEach(p => { p.style.display = 'none'; });
+      grid.querySelectorAll('.da-grid-cell').forEach(c => c.style.background = '');
+    });
   });
   
-  // Click grid to deselect
-  grid.querySelectorAll('.da-col-body').forEach(body => {
-    body.onclick = (e) => {
-      if (e.target === body) deselectAllTiles();
+  // Click grid background to deselect
+  grid.querySelectorAll('.da-grid-cell').forEach(cell => {
+    cell.onclick = (e) => {
+      if (e.target === cell) deselectAllTiles();
     };
     
-    // Drop handling
-    body.ondragover = (e) => {
-      e.preventDefault();
-      showDropPreview(body, e.clientY, bounds);
-    };
-    
-    body.ondragleave = () => {
-      hideDropPreview(body);
-    };
-    
-    body.ondrop = (e) => {
-      e.preventDefault();
-      hideDropPreview(body);
+    // Drag over for drop preview
+    cell.addEventListener('dragover', (e) => {
+      const isEventMove = e.dataTransfer.types.includes('text/event-move');
+      const isNewTile = e.dataTransfer.types.includes('application/json');
+      if (!isEventMove && !isNewTile) return;
       
-      try {
-        const data = JSON.parse(e.dataTransfer.getData('application/json'));
-        handleDrop(body, data, e.clientY, bounds);
-      } catch (err) {}
-    };
+      e.preventDefault();
+      e.dataTransfer.dropEffect = isEventMove ? 'move' : 'copy';
+      cell.style.background = '#ecfdf5';
+      
+      // Show drop preview
+      const preview = cell.querySelector('.da-drop-preview');
+      if (preview) {
+        const rect = cell.getBoundingClientRect();
+        const y = e.clientY - rect.top;
+        const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
+        
+        let duration = INCREMENT_MINS;
+        if (isEventMove) {
+          try {
+            const data = JSON.parse(e.dataTransfer.getData('text/event-move') || '{}');
+            duration = data.duration || INCREMENT_MINS;
+          } catch(err) {}
+        }
+        
+        const previewStart = earliestMin + snapMin;
+        const previewEnd = previewStart + duration;
+        
+        preview.style.display = 'block';
+        preview.style.top = (snapMin * PIXELS_PER_MINUTE) + 'px';
+        preview.style.height = (duration * PIXELS_PER_MINUTE) + 'px';
+        preview.querySelector('.da-preview-label').textContent = `${minutesToTime(previewStart)} - ${minutesToTime(previewEnd)}`;
+      }
+    });
+    
+    cell.addEventListener('dragleave', (e) => {
+      if (!cell.contains(e.relatedTarget)) {
+        cell.style.background = '';
+        const preview = cell.querySelector('.da-drop-preview');
+        if (preview) preview.style.display = 'none';
+      }
+    });
+    
+    // Handle drop
+    cell.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      cell.style.background = '';
+      const preview = cell.querySelector('.da-drop-preview');
+      if (preview) preview.style.display = 'none';
+      
+      const divName = cell.dataset.div;
+      const rect = cell.getBoundingClientRect();
+      const y = e.clientY - rect.top;
+      const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
+      
+      // Handle moving existing event
+      if (e.dataTransfer.types.includes('text/event-move')) {
+        try {
+          const data = JSON.parse(e.dataTransfer.getData('text/event-move'));
+          const event = dailyOverrideSkeleton.find(ev => ev.id === data.id);
+          if (event) {
+            const newStart = earliestMin + snapMin;
+            const newEnd = newStart + data.duration;
+            
+            event.startTime = minutesToTime(newStart);
+            event.endTime = minutesToTime(newEnd);
+            event.divisions = [divName];
+            
+            saveDailySkeleton();
+            renderGrid();
+            notify('Block moved');
+          }
+        } catch(err) {}
+        return;
+      }
+      
+      // Handle new tile drop
+      if (e.dataTransfer.types.includes('application/json')) {
+        try {
+          const tileData = JSON.parse(e.dataTransfer.getData('application/json'));
+          const startMinutes = earliestMin + snapMin;
+          const endMinutes = startMinutes + INCREMENT_MINS;
+          await handleDrop(cell, tileData, e.clientY, bounds);
+        } catch(err) {}
+      }
+    });
   });
   
   // Resize handles
@@ -2128,13 +2313,13 @@ function bindGridEvents(bounds) {
 function selectTile(id) {
   deselectAllTiles();
   selectedTileId = id;
-  const el = document.querySelector(`.da-event[data-id="${id}"]`);
+  const el = document.querySelector(`.da-grid-event[data-id="${id}"]`);
   if (el) el.classList.add('selected');
 }
 
 function deselectAllTiles() {
   selectedTileId = null;
-  document.querySelectorAll('.da-event.selected').forEach(el => el.classList.remove('selected'));
+  document.querySelectorAll('.da-grid-event.selected').forEach(el => el.classList.remove('selected'));
 }
 
 async function deleteTile(id) {
@@ -2185,39 +2370,17 @@ async function editTile(id) {
   }
 }
 
-function showDropPreview(body, clientY, bounds) {
-  const preview = body.querySelector('.da-drop-preview');
-  if (!preview) return;
-  
-  const rect = body.getBoundingClientRect();
-  const relY = clientY - rect.top;
-  const minutes = Math.round((relY / PIXELS_PER_MINUTE + bounds.lo) / SNAP_MINS) * SNAP_MINS;
-  const endMinutes = minutes + INCREMENT_MINS;
-  
-  const top = (minutes - bounds.lo) * PIXELS_PER_MINUTE;
-  const height = INCREMENT_MINS * PIXELS_PER_MINUTE;
-  
-  preview.style.display = 'block';
-  preview.style.top = top + 'px';
-  preview.style.height = height + 'px';
-  preview.querySelector('.da-preview-label').textContent = `${minutesToTime(minutes)} - ${minutesToTime(endMinutes)}`;
-}
-
-function hideDropPreview(body) {
-  const preview = body.querySelector('.da-drop-preview');
-  if (preview) preview.style.display = 'none';
-}
-
-async function handleDrop(body, tileData, clientY, bounds) {
+async function handleDrop(cell, tileData, clientY, bounds) {
   if (!window.AccessControl?.checkEditAccess?.('add block')) return;
-  if (!bounds) bounds = getGridBounds();
   
-  const rect = body.getBoundingClientRect();
+  const earliestMin = bounds.lo;
+  const rect = cell.getBoundingClientRect();
   const relY = clientY - rect.top;
-  const startMinutes = Math.round((relY / PIXELS_PER_MINUTE + bounds.lo) / SNAP_MINS) * SNAP_MINS;
+  const snapMin = Math.round(relY / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
+  const startMinutes = earliestMin + snapMin;
   const endMinutes = startMinutes + INCREMENT_MINS;
   
-  const divName = body.closest('.da-col')?.dataset.div;
+  const divName = cell.dataset.div;
   
   // Handle special tile types
   if (tileData.type === 'smart') {
@@ -2373,45 +2536,85 @@ async function handleCustomTileDrop(startMin, endMin, divName) {
 }
 
 function startResize(handle, e, bounds) {
-  const eventEl = handle.closest('.da-event');
+  const eventEl = handle.closest('.da-grid-event');
   if (!eventEl) return;
   
   const id = eventEl.dataset.id;
   const tile = dailyOverrideSkeleton.find(t => t.id === id);
   if (!tile) return;
   
+  if (!window.AccessControl?.checkEditAccess?.('resize block')) return;
+  
   const isTop = handle.classList.contains('da-resize-top');
   const startY = e.clientY;
   const originalStart = parseTimeToMinutes(tile.startTime);
   const originalEnd = parseTimeToMinutes(tile.endTime);
+  const earliestMin = bounds.lo;
   
   eventEl.classList.add('resizing');
+  
+  // Create or get tooltip
+  let tooltip = document.getElementById('da-resize-tooltip');
+  if (!tooltip) {
+    tooltip = document.createElement('div');
+    tooltip.id = 'da-resize-tooltip';
+    tooltip.style.cssText = 'position:fixed;padding:8px 12px;background:#1e293b;color:#fff;border-radius:6px;font-size:12px;font-weight:600;pointer-events:none;z-index:10002;display:none;box-shadow:0 4px 12px rgba(0,0,0,0.25);';
+    document.body.appendChild(tooltip);
+  }
   
   const onMouseMove = (e) => {
     const deltaY = e.clientY - startY;
     const deltaMinutes = Math.round(deltaY / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
     
+    let newStart = originalStart;
+    let newEnd = originalEnd;
+    
     if (isTop) {
-      const newStart = Math.max(bounds.lo, originalStart + deltaMinutes);
-      if (newStart < originalEnd - 10) {
-        tile.startTime = minutesToTime(newStart);
-      }
+      newStart = Math.max(bounds.lo, originalStart + deltaMinutes);
+      if (newStart >= originalEnd - 10) newStart = originalEnd - 10;
     } else {
-      const newEnd = Math.min(bounds.hi, originalEnd + deltaMinutes);
-      if (newEnd > originalStart + 10) {
-        tile.endTime = minutesToTime(newEnd);
-      }
+      newEnd = Math.min(bounds.hi, originalEnd + deltaMinutes);
+      if (newEnd <= originalStart + 10) newEnd = originalStart + 10;
     }
     
-    renderGrid();
-    selectTile(id);
+    // Update visual position
+    const top = (newStart - earliestMin) * PIXELS_PER_MINUTE;
+    const height = Math.max((newEnd - newStart) * PIXELS_PER_MINUTE - 2, 20);
+    eventEl.style.top = top + 'px';
+    eventEl.style.height = height + 'px';
+    
+    // Update tooltip
+    const duration = newEnd - newStart;
+    const durationStr = duration < 60 ? `${duration}m` : `${Math.floor(duration/60)}h${duration%60 > 0 ? duration%60+'m' : ''}`;
+    tooltip.textContent = `${minutesToTime(newStart)} - ${minutesToTime(newEnd)} (${durationStr})`;
+    tooltip.style.display = 'block';
+    tooltip.style.left = (e.clientX + 12) + 'px';
+    tooltip.style.top = (e.clientY - 30) + 'px';
+    
+    // Store temp values for mouseup
+    eventEl.dataset.tempStart = newStart;
+    eventEl.dataset.tempEnd = newEnd;
   };
   
   const onMouseUp = () => {
     eventEl.classList.remove('resizing');
     document.removeEventListener('mousemove', onMouseMove);
     document.removeEventListener('mouseup', onMouseUp);
+    tooltip.style.display = 'none';
+    
+    // Apply the final values
+    const newStart = parseInt(eventEl.dataset.tempStart) || originalStart;
+    const newEnd = parseInt(eventEl.dataset.tempEnd) || originalEnd;
+    
+    tile.startTime = minutesToTime(newStart);
+    tile.endTime = minutesToTime(newEnd);
+    
+    delete eventEl.dataset.tempStart;
+    delete eventEl.dataset.tempEnd;
+    
     saveDailySkeleton();
+    renderGrid();
+    selectTile(id);
   };
   
   document.addEventListener('mousemove', onMouseMove);
