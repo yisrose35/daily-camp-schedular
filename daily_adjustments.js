@@ -170,12 +170,40 @@ function getRainyDayStats() {
   const g = window.loadGlobalSettings?.() || {};
   const fields = g.app1?.fields || [];
   const specials = g.app1?.specialActivities || [];
+  
+  // Indoor fields = marked as rainyDayAvailable
+  const indoorFields = fields.filter(f => f.rainyDayAvailable === true);
+  // Outdoor fields = NOT marked as rainyDayAvailable
+  const outdoorFields = fields.filter(f => f.rainyDayAvailable !== true);
+  
+  // Rainy day special activities = marked as rainyDayOnly
+  const rainyOnlySpecials = specials.filter(s => s.rainyDayOnly === true);
+  // Indoor special activities = NOT marked as outdoor (available indoors)
+  const indoorSpecials = specials.filter(s => s.isOutdoor !== true);
+  
+  // Count unique indoor activities from indoor fields
+  const indoorSportsSet = new Set();
+  indoorFields.forEach(f => {
+    (f.activities || []).forEach(act => indoorSportsSet.add(act));
+  });
+  
+  // Count outdoor activities from outdoor fields
+  const outdoorSportsSet = new Set();
+  outdoorFields.forEach(f => {
+    (f.activities || []).forEach(act => outdoorSportsSet.add(act));
+  });
      
   return {
-    indoorFields: fields.filter(f => f.rainyDayAvailable === true).length,
-    outdoorFields: fields.filter(f => f.rainyDayAvailable !== true).length,
-    rainySpecials: specials.filter(s => s.rainyDayOnly === true).length,
-    outdoorFieldNames: fields.filter(f => f.rainyDayAvailable !== true).map(f => f.name)
+    indoorFields: indoorFields.length,
+    outdoorFields: outdoorFields.length,
+    indoorFieldNames: indoorFields.map(f => f.name),
+    outdoorFieldNames: outdoorFields.map(f => f.name),
+    rainySpecials: rainyOnlySpecials.length,
+    indoorSpecials: indoorSpecials.length,
+    indoorSportsCount: indoorSportsSet.size,
+    outdoorSportsCount: outdoorSportsSet.size,
+    totalIndoorActivities: indoorSportsSet.size + indoorSpecials.length,
+    totalOutdoorActivities: outdoorSportsSet.size + specials.filter(s => s.isOutdoor === true).length
   };
 }
 
@@ -197,11 +225,11 @@ function renderRainyDayPanel() {
      
   // Generate rain drops for animation
   let rainDrops = '';
-  for (let i = 0; i < 18; i++) {
+  for (let i = 0; i < 25; i++) {
     const left = Math.random() * 100;
     const delay = Math.random() * 2;
-    const duration = 0.7 + Math.random() * 0.4;
-    const height = 12 + Math.random() * 18;
+    const duration = 0.5 + Math.random() * 0.5;
+    const height = 15 + Math.random() * 20;
     rainDrops += `<div class="da-rain-drop" style="left:${left}%;animation-delay:${delay}s;animation-duration:${duration}s;height:${height}px;"></div>`;
   }
      
@@ -223,7 +251,7 @@ function renderRainyDayPanel() {
       <div class="da-rainy-dropdown-header" id="da-rainy-dropdown-toggle">
         <div class="da-rainy-dropdown-title">
           <span class="da-rainy-dropdown-icon">${isActive ? '🌧️' : '☀️'}</span>
-          <span>Rainy Day Mode</span>
+          <span>${isActive ? 'Rainy Day Mode' : 'Regular Day'}</span>
           ${isActive ? `<span class="da-rainy-active-badge">${isMidDay ? 'MID-DAY' : 'ACTIVE'}</span>` : ''}
         </div>
         <span class="da-rainy-dropdown-arrow">${isExpanded ? '▼' : '▶'}</span>
@@ -237,27 +265,23 @@ function renderRainyDayPanel() {
             <div class="da-rainy-title-section">
               <div class="da-rainy-icon">${isActive ? '🌧️' : '☀️'}</div>
               <div>
-                <h3 class="da-rainy-title">Rainy Day Mode</h3>
+                <h3 class="da-rainy-title">${isActive ? 'Rainy Day Mode' : 'Regular Day'}</h3>
                 <p class="da-rainy-subtitle">
                   ${isActive 
-                    ? (isMidDay ? 'Mid-day mode — morning schedule preserved' : 'Indoor schedule active — outdoor fields disabled')
-                    : 'Normal schedule — all fields available'}
+                    ? (isMidDay ? 'Mid-day mode — morning schedule preserved' : 'Indoor activities only — outdoor fields disabled')
+                    : 'Normal schedule — all fields and activities available'}
                 </p>
               </div>
             </div>
             
             <div class="da-rainy-toggle-container">
-              <button id="da-rainy-settings-btn" class="da-rainy-settings-btn">⚙️ Settings</button>
-                
-              <span class="da-rainy-status-badge ${isActive ? 'active' : 'inactive'}">
-                <span class="da-status-dot ${isActive ? 'active' : 'inactive'}"></span>
-                ${isActive ? (isMidDay ? 'MID-DAY' : 'ACTIVE') : 'INACTIVE'}
-              </span>
-                
               <label class="da-rainy-toggle" onclick="event.stopPropagation();">
                 <input type="checkbox" id="da-rainy-toggle-input" ${isActive ? 'checked' : ''}>
-                <span class="da-rainy-toggle-track"></span>
-                <span class="da-rainy-toggle-thumb">${isActive ? '💧' : '☀️'}</span>
+                <span class="da-rainy-toggle-track">
+                  <span class="da-rainy-toggle-label-off">OFF</span>
+                  <span class="da-rainy-toggle-label-on">ON</span>
+                </span>
+                <span class="da-rainy-toggle-thumb"></span>
               </label>
             </div>
           </div>
@@ -265,14 +289,54 @@ function renderRainyDayPanel() {
           ${midDayInfo}
             
           <div class="da-rainy-stats">
-            <div class="da-rainy-stat"><span>🏠</span><strong>${stats.indoorFields}</strong><span>Indoor</span></div>
-            <div class="da-rainy-stat"><span>🌳</span><strong>${stats.outdoorFields}</strong><span>Outdoor ${isActive ? '(Disabled)' : ''}</span></div>
-            <div class="da-rainy-stat"><span>🎨</span><strong>${stats.rainySpecials}</strong><span>Rainy Activities</span></div>
-            ${!isActive ? `
-            <div class="da-rainy-stat" style="margin-left:auto;">
-              <button id="da-rainy-midday-btn" class="da-btn da-btn-warning">⏰ Start Mid-Day Mode</button>
-            </div>
-            ` : ''}
+            ${isActive ? `
+              <!-- RAINY DAY STATS -->
+              <div class="da-rainy-stat available">
+                <span>🏠</span>
+                <strong>${stats.indoorFields}</strong>
+                <span>Indoor Fields</span>
+              </div>
+              <div class="da-rainy-stat available">
+                <span>🎨</span>
+                <strong>${stats.indoorSpecials}</strong>
+                <span>Indoor Specials</span>
+              </div>
+              <div class="da-rainy-stat highlight">
+                <span>🌧️</span>
+                <strong>${stats.rainySpecials}</strong>
+                <span>Rainy-Only Activities</span>
+              </div>
+              <div class="da-rainy-stat disabled">
+                <span>🚫</span>
+                <strong>${stats.outdoorFields}</strong>
+                <span>Outdoor (Disabled)</span>
+              </div>
+            ` : `
+              <!-- REGULAR DAY STATS -->
+              <div class="da-rainy-stat">
+                <span>🏠</span>
+                <strong>${stats.indoorFields}</strong>
+                <span>Indoor Fields</span>
+              </div>
+              <div class="da-rainy-stat">
+                <span>🌳</span>
+                <strong>${stats.outdoorFields}</strong>
+                <span>Outdoor Fields</span>
+              </div>
+              <div class="da-rainy-stat">
+                <span>🎨</span>
+                <strong>${stats.indoorSpecials + stats.rainySpecials}</strong>
+                <span>Special Activities</span>
+              </div>
+              <div class="da-rainy-stat" style="margin-left:auto;">
+                <button id="da-rainy-midday-btn" class="da-btn da-btn-warning da-btn-sm">⏰ Mid-Day Mode</button>
+              </div>
+            `}
+          </div>
+          
+          <!-- Settings Toggle -->
+          <div class="da-rainy-settings-toggle">
+            <button id="da-rainy-settings-btn" class="da-rainy-settings-btn">⚙️ Settings</button>
           </div>
             
           <!-- Settings Panel -->
@@ -2043,21 +2107,35 @@ function renderBunkOverridesUI() {
   const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
   
   // Get facilities from locations system (Pool, Lunchroom, Gym, etc.)
-  const allFacilities = (typeof window.getAllLocations === 'function' ? window.getAllLocations() : []).map(loc => loc.name);
+  const allFacilities = (typeof window.getAllLocations === 'function' ? window.getAllLocations() : []);
   
-  // Combine all into one list with categories
+  // Get pinned tile defaults (Swim → Pool, Lunch → Lunchroom, etc.)
+  // These are the ACTIVITIES that use facilities
+  const pinnedDefaults = (typeof window.getPinnedTileDefaults === 'function' ? window.getPinnedTileDefaults() : {});
+  const pinnedActivities = Object.keys(pinnedDefaults); // ["Swim", "Lunch", "Snacks", etc.]
+  
+  // Combine all into sets
   const sportsSet = new Set(allSports);
   const specialsSet = new Set(allSpecials);
-  const facilitiesSet = new Set(allFacilities);
   
   // Build grouped options
-  let activityOptions = '<option value="">-- Select Activity or Facility --</option>';
+  let activityOptions = '<option value="">-- Select Activity --</option>';
   
-  // Facilities group (Pool, Lunchroom, etc.)
+  // Pinned Activities group (Swim, Lunch, Snacks, etc.) - Activities that use facilities
+  if (pinnedActivities.length > 0) {
+    activityOptions += '<optgroup label="📌 Pinned Activities (Facilities)">';
+    pinnedActivities.sort().forEach(act => {
+      const facility = pinnedDefaults[act];
+      activityOptions += `<option value="${act}" data-type="pinned" data-location="${facility}">${act} → ${facility}</option>`;
+    });
+    activityOptions += '</optgroup>';
+  }
+  
+  // Facilities group (Pool, Lunchroom, etc.) - For custom activities at a facility
   if (allFacilities.length > 0) {
-    activityOptions += '<optgroup label="📍 Facilities">';
-    [...facilitiesSet].sort().forEach(fac => {
-      activityOptions += `<option value="${fac}" data-type="facility">${fac}</option>`;
+    activityOptions += '<optgroup label="🏢 Facilities (Custom Use)">';
+    allFacilities.forEach(fac => {
+      activityOptions += `<option value="${fac.name}" data-type="facility" data-location="${fac.name}">${fac.displayName}</option>`;
     });
     activityOptions += '</optgroup>';
   }
@@ -2083,11 +2161,11 @@ function renderBunkOverridesUI() {
   container.innerHTML = `
     <div class="da-section">
       <h3 class="da-section-title">Bunk-Specific Overrides</h3>
-      <p class="da-section-desc">Assign a specific activity or facility to bunks at a specific time. This pins the activity for those bunks.</p>
+      <p class="da-section-desc">Assign a specific activity to bunks at a specific time. This pins the activity for those bunks.</p>
       
       <div class="da-form-grid">
         <div class="da-form-field" style="grid-column: span 2;">
-          <label>Select Activity or Facility:</label>
+          <label>Select Activity:</label>
           <select id="da-bunk-override-activity" class="da-select">${activityOptions}</select>
         </div>
         <div class="da-form-field">
@@ -2142,22 +2220,17 @@ function renderBunkOverridesUI() {
     const activity = activityEl.value;
     const selectedOption = activityEl.options[activityEl.selectedIndex];
     const activityType = selectedOption?.dataset?.type || 'special';
+    const location = selectedOption?.dataset?.location || null;
     
     // Determine type based on what was selected
     let type = 'special';
-    if (activityType === 'facility') {
-      type = 'pinned'; // Facilities are pinned (like Pool for swim)
+    if (activityType === 'pinned' || activityType === 'facility') {
+      type = 'pinned';
     } else if (activityType === 'sport') {
       type = 'sport';
     }
     
-    // For facilities, the location is the activity itself
-    let location = null;
-    if (activityType === 'facility') {
-      location = activity;
-    }
-    
-    if (!activity) { alert('Please select an activity or facility.'); return; }
+    if (!activity) { alert('Please select an activity.'); return; }
     if (!startEl.value || !endEl.value) { alert('Please enter a start and end time.'); return; }
     if (selectedBunks.length === 0) { alert('Please select at least one bunk.'); return; }
     
@@ -2204,11 +2277,11 @@ function renderBunkOverridesUI() {
     overrides.forEach(item => {
       const el = document.createElement('div');
       el.className = 'da-override-item';
-      const locationInfo = item.location ? `<span style="color:#059669;">@ ${item.location}</span>` : '';
-      const typeIcon = item.type === 'pinned' ? '📍' : (item.type === 'sport' ? '⚽' : '🎨');
+      const locationInfo = item.location ? ` <span style="color:#059669;">@ ${item.location}</span>` : '';
+      const typeIcon = item.type === 'pinned' ? '📌' : (item.type === 'sport' ? '⚽' : '🎨');
       el.innerHTML = `
         <div>
-          <strong>${item.bunk}</strong> → <span style="color:#3b82f6;">${typeIcon} ${item.activity}</span> ${locationInfo}
+          <strong>${item.bunk}</strong> → <span style="color:#3b82f6;">${typeIcon} ${item.activity}</span>${locationInfo}
           <div style="font-size:12px;color:#64748b;">${item.startTime} - ${item.endTime}</div>
         </div>
         <button class="da-btn da-btn-danger da-btn-sm" data-id="${item.id}">Remove</button>
@@ -2706,8 +2779,8 @@ function getStyles() {
     .da-switch input:disabled + .da-switch-slider { opacity:0.5; cursor:not-allowed; }
     
     /* Rainy Day Dropdown */
-    .da-rainy-dropdown { margin-bottom:16px; border:1px solid var(--da-border); border-radius:10px; overflow:hidden; background:var(--da-surface); }
-    .da-rainy-dropdown.active { border-color:#0ea5e9; }
+    .da-rainy-dropdown { margin-bottom:16px; border:1px solid var(--da-border); border-radius:10px; overflow:hidden; background:var(--da-surface); transition:all 0.3s; }
+    .da-rainy-dropdown.active { border-color:#0ea5e9; box-shadow:0 0 20px rgba(14,165,233,0.15); }
     .da-rainy-dropdown-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; cursor:pointer; user-select:none; transition:background 0.15s; }
     .da-rainy-dropdown-header:hover { background:rgba(0,0,0,0.02); }
     .da-rainy-dropdown.active .da-rainy-dropdown-header { background:linear-gradient(135deg,#1e3a5f,#0c4a6e); }
@@ -2716,57 +2789,78 @@ function getStyles() {
     .da-rainy-dropdown-icon { font-size:18px; }
     .da-rainy-dropdown-arrow { color:var(--da-text3); font-size:10px; transition:transform 0.2s; }
     .da-rainy-dropdown.active .da-rainy-dropdown-arrow { color:#7dd3fc; }
-    .da-rainy-active-badge { background:rgba(14,165,233,0.2); color:#0ea5e9; padding:2px 8px; border-radius:999px; font-size:10px; font-weight:600; }
+    .da-rainy-active-badge { background:rgba(14,165,233,0.2); color:#0ea5e9; padding:2px 8px; border-radius:999px; font-size:10px; font-weight:600; animation:pulse 2s infinite; }
     .da-rainy-dropdown.active .da-rainy-active-badge { background:rgba(255,255,255,0.15); color:#7dd3fc; }
+    @keyframes pulse { 0%, 100% { opacity:1; } 50% { opacity:0.6; } }
     .da-rainy-dropdown-content { border-top:1px solid var(--da-border); }
     .da-rainy-dropdown.active .da-rainy-dropdown-content { border-top-color:rgba(255,255,255,0.1); }
     
     /* Rainy Day Panel */
-    .da-rainy-card { border-radius:0; overflow:hidden; transition:all 0.4s; position:relative; }
-    .da-rainy-card.inactive { background:linear-gradient(135deg,#f8fafc,#f1f5f9); }
-    .da-rainy-card.active { background:linear-gradient(135deg,#1e3a5f,#0c4a6e,#164e63); }
-    .da-rainy-header { padding:14px 18px; display:flex; justify-content:space-between; align-items:center; position:relative; z-index:1; }
-    .da-rainy-title-section { display:flex; align-items:center; gap:10px; }
-    .da-rainy-icon { width:40px; height:40px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:20px; }
-    .da-rainy-card.inactive .da-rainy-icon { background:#e2e8f0; }
-    .da-rainy-card.active .da-rainy-icon { background:rgba(14,165,233,0.2); }
-    .da-rainy-title { font-size:14px; font-weight:600; margin:0; }
-    .da-rainy-card.inactive .da-rainy-title { color:#334155; }
+    .da-rainy-card { border-radius:0; overflow:hidden; transition:all 0.4s; position:relative; min-height:120px; }
+    .da-rainy-card.inactive { background:linear-gradient(135deg,#fefce8 0%,#fef9c3 50%,#fef08a 100%); }
+    .da-rainy-card.active { background:linear-gradient(135deg,#0c4a6e 0%,#164e63 50%,#1e3a5f 100%); }
+    .da-rainy-header { padding:16px 18px; display:flex; justify-content:space-between; align-items:center; position:relative; z-index:1; }
+    .da-rainy-title-section { display:flex; align-items:center; gap:12px; }
+    .da-rainy-icon { width:48px; height:48px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:24px; transition:all 0.3s; }
+    .da-rainy-card.inactive .da-rainy-icon { background:rgba(251,191,36,0.2); }
+    .da-rainy-card.active .da-rainy-icon { background:rgba(14,165,233,0.3); animation:iconPulse 2s infinite; }
+    @keyframes iconPulse { 0%, 100% { transform:scale(1); } 50% { transform:scale(1.05); } }
+    .da-rainy-title { font-size:16px; font-weight:700; margin:0; }
+    .da-rainy-card.inactive .da-rainy-title { color:#92400e; }
     .da-rainy-card.active .da-rainy-title { color:#f0f9ff; }
-    .da-rainy-subtitle { font-size:11px; margin:2px 0 0; }
-    .da-rainy-card.inactive .da-rainy-subtitle { color:#64748b; }
+    .da-rainy-subtitle { font-size:12px; margin:3px 0 0; }
+    .da-rainy-card.inactive .da-rainy-subtitle { color:#a16207; }
     .da-rainy-card.active .da-rainy-subtitle { color:#7dd3fc; }
-    .da-rainy-toggle-container { display:flex; align-items:center; gap:8px; }
-    .da-rainy-settings-btn { padding:6px 10px; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); border-radius:6px; color:#64748b; cursor:pointer; font-size:12px; }
-    .da-rainy-card.active .da-rainy-settings-btn { color:#e0f2fe; }
-    .da-rainy-status-badge { display:inline-flex; align-items:center; gap:5px; padding:4px 10px; border-radius:999px; font-size:10px; font-weight:600; }
-    .da-rainy-status-badge.active { background:rgba(14,165,233,0.2); color:#7dd3fc; border:1px solid rgba(14,165,233,0.3); }
-    .da-rainy-status-badge.inactive { background:#f1f5f9; color:#64748b; border:1px solid #e2e8f0; }
-    .da-status-dot { width:6px; height:6px; border-radius:50%; }
-    .da-status-dot.active { background:#22d3ee; box-shadow:0 0 6px #22d3ee; }
-    .da-status-dot.inactive { background:#94a3b8; }
-    .da-rainy-toggle { position:relative; width:48px; height:24px; cursor:pointer; }
-    .da-rainy-toggle input { opacity:0; width:0; height:0; }
-    .da-rainy-toggle-track { position:absolute; top:0; left:0; right:0; bottom:0; background:#cbd5e1; border-radius:24px; transition:0.4s; }
+    .da-rainy-toggle-container { display:flex; align-items:center; gap:10px; }
+    
+    /* Big Toggle Switch */
+    .da-rainy-toggle { position:relative; width:70px; height:34px; cursor:pointer; display:block; }
+    .da-rainy-toggle input { opacity:0; width:0; height:0; position:absolute; }
+    .da-rainy-toggle-track { position:absolute; top:0; left:0; right:0; bottom:0; background:linear-gradient(135deg,#fbbf24,#f59e0b); border-radius:34px; transition:all 0.4s; overflow:hidden; box-shadow:inset 0 2px 4px rgba(0,0,0,0.1); }
     .da-rainy-toggle input:checked + .da-rainy-toggle-track { background:linear-gradient(135deg,#0ea5e9,#06b6d4); }
-    .da-rainy-toggle-thumb { position:absolute; top:2px; left:2px; width:20px; height:20px; background:white; border-radius:50%; transition:0.4s; display:flex; align-items:center; justify-content:center; font-size:10px; z-index:1; }
-    .da-rainy-toggle input:checked ~ .da-rainy-toggle-thumb { left:26px; }
-    .da-rainy-stats { padding:0 18px 14px; display:flex; gap:16px; flex-wrap:wrap; position:relative; z-index:1; }
-    .da-rainy-stat { display:flex; align-items:center; gap:5px; font-size:12px; }
-    .da-rainy-card.inactive .da-rainy-stat { color:#64748b; }
-    .da-rainy-card.inactive .da-rainy-stat strong { color:#334155; }
-    .da-rainy-card.active .da-rainy-stat { color:#bae6fd; }
-    .da-rainy-card.active .da-rainy-stat strong { color:#f0f9ff; }
+    .da-rainy-toggle-label-off, .da-rainy-toggle-label-on { position:absolute; top:50%; transform:translateY(-50%); font-size:9px; font-weight:700; text-transform:uppercase; transition:opacity 0.3s; }
+    .da-rainy-toggle-label-off { right:8px; color:rgba(255,255,255,0.9); }
+    .da-rainy-toggle-label-on { left:8px; color:rgba(255,255,255,0.9); opacity:0; }
+    .da-rainy-toggle input:checked + .da-rainy-toggle-track .da-rainy-toggle-label-off { opacity:0; }
+    .da-rainy-toggle input:checked + .da-rainy-toggle-track .da-rainy-toggle-label-on { opacity:1; }
+    .da-rainy-toggle-thumb { position:absolute; top:3px; left:3px; width:28px; height:28px; background:white; border-radius:50%; transition:all 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55); display:flex; align-items:center; justify-content:center; font-size:14px; z-index:2; box-shadow:0 2px 5px rgba(0,0,0,0.2); }
+    .da-rainy-toggle input:checked ~ .da-rainy-toggle-thumb { left:39px; }
+    .da-rainy-toggle-thumb::before { content:'☀️'; }
+    .da-rainy-toggle input:checked ~ .da-rainy-toggle-thumb::before { content:'🌧️'; }
+    
+    /* Stats Section */
+    .da-rainy-stats { padding:12px 18px 16px; display:flex; gap:12px; flex-wrap:wrap; position:relative; z-index:1; }
+    .da-rainy-stat { display:flex; align-items:center; gap:6px; font-size:12px; padding:6px 12px; border-radius:8px; background:rgba(255,255,255,0.1); }
+    .da-rainy-card.inactive .da-rainy-stat { color:#78350f; background:rgba(255,255,255,0.5); }
+    .da-rainy-card.inactive .da-rainy-stat strong { color:#451a03; font-size:16px; }
+    .da-rainy-card.active .da-rainy-stat { color:#bae6fd; background:rgba(255,255,255,0.1); }
+    .da-rainy-card.active .da-rainy-stat strong { color:#f0f9ff; font-size:16px; }
+    .da-rainy-stat.available { background:rgba(34,197,94,0.2); border:1px solid rgba(34,197,94,0.3); }
+    .da-rainy-card.active .da-rainy-stat.available { color:#86efac; }
+    .da-rainy-stat.highlight { background:rgba(14,165,233,0.3); border:1px solid rgba(14,165,233,0.4); }
+    .da-rainy-card.active .da-rainy-stat.highlight { color:#7dd3fc; }
+    .da-rainy-stat.disabled { background:rgba(239,68,68,0.2); border:1px solid rgba(239,68,68,0.3); }
+    .da-rainy-card.active .da-rainy-stat.disabled { color:#fca5a5; }
+    .da-rainy-stat.disabled strong { color:#fca5a5 !important; }
+    
+    /* Settings Section */
+    .da-rainy-settings-toggle { padding:0 18px 12px; position:relative; z-index:1; }
+    .da-rainy-settings-btn { padding:6px 12px; background:rgba(0,0,0,0.1); border:1px solid rgba(0,0,0,0.1); border-radius:6px; color:#64748b; cursor:pointer; font-size:12px; transition:all 0.2s; }
+    .da-rainy-card.inactive .da-rainy-settings-btn { background:rgba(255,255,255,0.5); color:#78350f; }
+    .da-rainy-card.inactive .da-rainy-settings-btn:hover { background:rgba(255,255,255,0.8); }
+    .da-rainy-card.active .da-rainy-settings-btn { color:#e0f2fe; background:rgba(255,255,255,0.1); border-color:rgba(255,255,255,0.2); }
+    .da-rainy-card.active .da-rainy-settings-btn:hover { background:rgba(255,255,255,0.2); }
+    
     .da-rainy-midday-info { display:flex; gap:8px; padding:0 18px 12px; position:relative; z-index:1; }
     .da-rainy-midday-badge { padding:4px 10px; background:rgba(245,158,11,0.2); border:1px solid rgba(245,158,11,0.3); border-radius:999px; font-size:11px; font-weight:600; color:#fbbf24; }
     .da-rainy-preserved-badge { padding:4px 10px; background:rgba(34,197,94,0.2); border:1px solid rgba(34,197,94,0.3); border-radius:999px; font-size:11px; font-weight:600; color:#4ade80; }
     .da-rainy-settings-panel { padding:14px 18px; border-top:1px solid rgba(255,255,255,0.1); position:relative; z-index:1; }
-    .da-rainy-card.inactive .da-rainy-settings-panel { border-top-color:#e2e8f0; background:#fafafa; }
-    .da-rainy-card.active .da-rainy-settings-panel { background:rgba(0,0,0,0.15); }
+    .da-rainy-card.inactive .da-rainy-settings-panel { border-top-color:#e2e8f0; background:rgba(255,255,255,0.5); }
+    .da-rainy-card.active .da-rainy-settings-panel { background:rgba(0,0,0,0.2); }
     .da-rainy-settings-row { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; gap:10px; }
     .da-rainy-settings-row:last-child { margin-bottom:0; }
     .da-rainy-settings-label { font-size:13px; font-weight:500; }
-    .da-rainy-card.inactive .da-rainy-settings-label { color:#475569; }
+    .da-rainy-card.inactive .da-rainy-settings-label { color:#78350f; }
     .da-rainy-card.active .da-rainy-settings-label { color:#e0f2fe; }
     .da-rainy-settings-sublabel { font-size:11px; opacity:0.7; }
     .da-mini-toggle { position:relative; width:36px; height:18px; cursor:pointer; display:inline-block; }
@@ -2777,12 +2871,12 @@ function getStyles() {
     .da-mini-toggle input:checked ~ .da-mini-thumb { left:20px; }
     .da-rain-container { position:absolute; top:0; left:0; right:0; bottom:0; overflow:hidden; pointer-events:none; opacity:0; transition:opacity 0.5s; }
     .da-rainy-card.active .da-rain-container { opacity:1; }
-    .da-rain-drop { position:absolute; top:-20px; width:2px; background:linear-gradient(to bottom,transparent,rgba(186,230,253,0.4),rgba(186,230,253,0.2)); animation:daRainFall linear infinite; border-radius:0 0 2px 2px; }
+    .da-rain-drop { position:absolute; top:-30px; width:2px; background:linear-gradient(to bottom,transparent 0%,rgba(186,230,253,0.6) 50%,rgba(125,211,252,0.8) 100%); animation:daRainFall linear infinite; border-radius:0 0 2px 2px; }
     @keyframes daRainFall { 
-      0% { transform:translateY(-20px); opacity:0; } 
-      10% { opacity:1; } 
-      90% { opacity:1; } 
-      100% { transform:translateY(250px); opacity:0; } 
+      0% { transform:translateY(-30px); opacity:0; } 
+      5% { opacity:1; } 
+      95% { opacity:0.8; } 
+      100% { transform:translateY(200px); opacity:0; } 
     }
     
     /* Notifications */
