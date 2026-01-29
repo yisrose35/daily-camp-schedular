@@ -871,7 +871,14 @@
         // =========================================================================
         // ★★★ STEP 0.5: RAINY DAY MODE CHECK ★★★
         // =========================================================================
+// Ensure window.isRainyDay is set from daily data
+const dailyData = window.loadCurrentDailyData?.() || {};
+if (window.isRainyDay === undefined) {
+    window.isRainyDay = dailyData.rainyDayMode === true || dailyData.isRainyDay === true;
+}
+console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️' : 'INACTIVE ☀️'}`);
 
+const rainyDayFilter = getRainyDayFieldFilter();
         const rainyDayFilter = getRainyDayFieldFilter();
         const rainyDaySpecials = getRainyDaySpecialActivities();
 
