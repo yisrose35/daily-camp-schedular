@@ -40,18 +40,39 @@
     }
 
     function isFieldUnavailable(fieldName, block) {
-        const disabledFields = window.currentDisabledFields || [];
-        if (disabledFields.includes(fieldName)) {
+    const disabledFields = window.currentDisabledFields || [];
+    if (disabledFields.includes(fieldName)) {
+        return true;
+    }
+
+    // ★★★ RAINY DAY CHECK: Outdoor fields unavailable on rainy days ★★★
+    const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
+    if (isRainyMode) {
+        const fieldProps = window.activityProperties?.[fieldName];
+        // If this field is NOT marked as indoor/rainyDayAvailable, it's unavailable
+        if (fieldProps && fieldProps.rainyDayAvailable !== true) {
+            // Double-check it's a field type (not a special activity)
+            if (fieldProps.type === 'field' || fieldProps.activities) {
+                return true;
+            }
+        }
+        
+        // Also check the raw field data
+        const g = window.loadGlobalSettings?.() || {};
+        const fields = g.app1?.fields || [];
+        const fieldData = fields.find(f => f.name === fieldName);
+        if (fieldData && fieldData.rainyDayAvailable !== true) {
             return true;
         }
-
-        if (!window.GlobalFieldLocks) return false;
-        const slots = block.slots || [];
-        if (slots.length === 0) return false;
-
-        const divisionContext = block.divName || block.division;
-        return window.GlobalFieldLocks.isFieldLocked(fieldName, slots, divisionContext) !== null;
     }
+
+    if (!window.GlobalFieldLocks) return false;
+    const slots = block.slots || [];
+    if (slots.length === 0) return false;
+
+    const divisionContext = block.divName || block.division;
+    return window.GlobalFieldLocks.isFieldLocked(fieldName, slots, divisionContext) !== null;
+}
 
     // =========================================================================
     // ★★★ CENTRALIZED CAPACITY FUNCTION ★★★
