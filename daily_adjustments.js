@@ -2391,28 +2391,41 @@ function renderBunkOverridesUI() {
     });
   });
   
-  // Get activities
-  const allSports = (masterSettings.app1?.fields || []).flatMap(f => f.activities || []);
-  const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+  // Get fields (from app1.fields) - these are the FIELD NAMES
+  const allFields = (masterSettings.app1?.fields || []).map(f => ({
+    name: f.name,
+    activities: f.activities || [],
+    isIndoor: f.rainyDayAvailable === true
+  }));
   
-  // Get facilities from locations system (Pool, Lunchroom, Gym, etc.)
-  const allFacilities = (typeof window.getAllLocations === 'function' ? window.getAllLocations() : []);
+  // Get all sports (activities from fields)
+  const allSportsSet = new Set();
+  allFields.forEach(f => {
+    (f.activities || []).forEach(act => allSportsSet.add(act));
+  });
+  const allSports = [...allSportsSet].sort();
+  
+  // Get special activities
+  const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name).sort();
+  
+  // Get all locations (fields + facilities from locations.js)
+  const allLocations = (typeof window.getAllLocations === 'function' ? window.getAllLocations() : []);
+  
+  // Separate fields from facilities
+  const fieldNames = new Set(allFields.map(f => f.name));
+  const facilities = allLocations.filter(loc => !fieldNames.has(loc.name) || loc.type === 'facility');
+  const fields = allLocations.filter(loc => fieldNames.has(loc.name) && loc.type !== 'facility');
   
   // Get pinned tile defaults (Swim → Pool, Lunch → Lunchroom, etc.)
-  // These are the ACTIVITIES that use facilities
   const pinnedDefaults = (typeof window.getPinnedTileDefaults === 'function' ? window.getPinnedTileDefaults() : {});
-  const pinnedActivities = Object.keys(pinnedDefaults); // ["Swim", "Lunch", "Snacks", etc.]
-  
-  // Combine all into sets
-  const sportsSet = new Set(allSports);
-  const specialsSet = new Set(allSpecials);
+  const pinnedActivities = Object.keys(pinnedDefaults);
   
   // Build grouped options
   let activityOptions = '<option value="">-- Select Activity --</option>';
   
-  // Pinned Activities group (Swim, Lunch, Snacks, etc.) - Activities that use facilities
+  // Pinned Activities group (Swim, Lunch, Snacks, etc.) - if available
   if (pinnedActivities.length > 0) {
-    activityOptions += '<optgroup label="📌 Pinned Activities (Facilities)">';
+    activityOptions += '<optgroup label="📌 Pinned Activities">';
     pinnedActivities.sort().forEach(act => {
       const facility = pinnedDefaults[act];
       activityOptions += `<option value="${act}" data-type="pinned" data-location="${facility}">${act} → ${facility}</option>`;
@@ -2420,28 +2433,40 @@ function renderBunkOverridesUI() {
     activityOptions += '</optgroup>';
   }
   
-  // Facilities group (Pool, Lunchroom, etc.) - For custom activities at a facility
-  if (allFacilities.length > 0) {
-    activityOptions += '<optgroup label="🏢 Facilities (Custom Use)">';
-    allFacilities.forEach(fac => {
-      activityOptions += `<option value="${fac.name}" data-type="facility" data-location="${fac.name}">${fac.displayName}</option>`;
+  // Fields group (Hockey Arena, Baseball Field, etc.)
+  if (allFields.length > 0) {
+    activityOptions += '<optgroup label="🏟️ Fields">';
+    allFields.sort((a, b) => a.name.localeCompare(b.name)).forEach(field => {
+      const indoorBadge = field.isIndoor ? ' 🏠' : '';
+      activityOptions += `<option value="${field.name}" data-type="field" data-location="${field.name}">${field.name}${indoorBadge}</option>`;
     });
     activityOptions += '</optgroup>';
   }
   
-  // Special Activities group
+  // Facilities group (Pool, Lunchroom, Gym, etc.) - locations that aren't sports fields
+  if (facilities.length > 0) {
+    activityOptions += '<optgroup label="🏢 Facilities">';
+    facilities.sort((a, b) => (a.name || '').localeCompare(b.name || '')).forEach(fac => {
+      if (fac.name) {
+        activityOptions += `<option value="${fac.name}" data-type="facility" data-location="${fac.name}">${fac.name}</option>`;
+      }
+    });
+    activityOptions += '</optgroup>';
+  }
+  
+  // Special Activities group (Canteen, Gameroom, etc.)
   if (allSpecials.length > 0) {
     activityOptions += '<optgroup label="🎨 Special Activities">';
-    [...specialsSet].sort().forEach(act => {
+    allSpecials.forEach(act => {
       activityOptions += `<option value="${act}" data-type="special">${act}</option>`;
     });
     activityOptions += '</optgroup>';
   }
   
-  // Sports group
+  // Sports group (Basketball, Soccer, etc.)
   if (allSports.length > 0) {
     activityOptions += '<optgroup label="⚽ Sports">';
-    [...sportsSet].sort().forEach(sport => {
+    allSports.forEach(sport => {
       activityOptions += `<option value="${sport}" data-type="sport">${sport}</option>`;
     });
     activityOptions += '</optgroup>';
