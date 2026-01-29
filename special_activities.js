@@ -1,5 +1,5 @@
 // ============================================================================
-// special_activities.js — PRODUCTION-READY v2.0
+// special_activities.js — PRODUCTION-READY v2.1
 // ============================================================================
 // 1. Layout: Apple-inspired Two-Pane with Collapsible Detail Sections.
 // 2. Logic: Retains Sharing, Frequency, and Time Rules.
@@ -17,11 +17,16 @@
 // - ★ NULL SAFETY: Added checks for DOM elements and parameters
 // - ★ ORPHAN CLEANUP: Validates divisions and locations on load
 // - ★ ERROR HANDLING: Added try/catch around risky operations
+//
+// v2.1 RAINY DAY FIXES:
+// - ★ RAINY DAY FILTERING: getGlobalSpecialActivities now filters by rainy mode
+// - ★ ROBUST MODE CHECK: isRainyDayModeActive checks multiple flags
+// - ★ SCHEDULER HELPERS: Added getRainyDayOnlySpecials, getIndoorAvailableSpecials
 // ============================================================================
 (function() {
 'use strict';
 
-console.log("[SPECIAL_ACTIVITIES] Module v2.0 loading...");
+console.log("[SPECIAL_ACTIVITIES] Module v2.1 loading...");
 
 // =========================================================================
 // STATE - Internal variables
@@ -280,7 +285,8 @@ function validateSpecialActivity(activity, activityName) {
         frequencyWeeks: parseInt(activity.frequencyWeeks, 10) || 0,
         rainyDayExclusive: activity.rainyDayExclusive === true,
         rainyDayOnly: activity.rainyDayOnly === true, // Legacy support
-        rainyDayAvailable: activity.rainyDayAvailable !== false
+        rainyDayAvailable: activity.rainyDayAvailable !== false,
+        availableOnRainyDay: activity.availableOnRainyDay !== false // Additional flag support
     };
 }
 
@@ -294,7 +300,8 @@ function createDefaultActivity(name) {
         maxUsage: null,
         frequencyWeeks: 0,
         rainyDayExclusive: false,
-        rainyDayAvailable: true
+        rainyDayAvailable: true,
+        availableOnRainyDay: true
     };
 }
 
@@ -465,7 +472,9 @@ function initSpecialActivitiesTab() {
  */
 function loadData() {
     try {
-        const allActivities = window.getGlobalSpecialActivities?.() || [];
+        // ★ Use raw getter to avoid circular filtering
+        const settings = window.loadGlobalSettings?.() || {};
+        const allActivities = settings.specialActivities || settings.app1?.specialActivities || [];
         
         // Separate regular and rainy day exclusive activities
         specialActivities = [];
@@ -1543,29 +1552,93 @@ window.getSpecialActivityByName = function(name) {
     return item ? { ...item } : null; // Return copy
 };
 
+// =========================================================================
+// ★★★ v2.1 RAINY DAY MODE EXPORTS ★★★
+// =========================================================================
+
 // Check if rainy day mode is active (for scheduler integration)
+// ★★★ ENHANCED: Checks multiple flags for robustness ★★★
 window.isRainyDayModeActive = function() {
     try {
         const dailyData = window.loadCurrentDailyData?.() || {};
-        return dailyData.rainyDayMode === true;
+        // Check multiple possible flags for rainy day mode
+        return dailyData.rainyDayMode === true || 
+               dailyData.isRainyDay === true ||
+               window.isRainyDay === true;
     } catch (e) {
-        return false;
+        return window.isRainyDay === true; // Fallback to global flag
     }
 };
 
 // Get available special activities based on weather
+// ★★★ ENHANCED: More thorough filtering ★★★
 window.getAvailableSpecialActivities = function() {
     const isRainy = window.isRainyDayModeActive?.() || false;
 
     if (isRainy) {
         // Rainy day: return regular specials that are rainy-available + rainy day exclusives
-        const regularAvailable = specialActivities.filter(s => s.available && s.rainyDayAvailable !== false);
+        const regularAvailable = specialActivities.filter(s => 
+            s.available && 
+            s.rainyDayAvailable !== false && 
+            s.availableOnRainyDay !== false
+        );
         const rainyAvailable = rainyDayActivities.filter(s => s.available);
         return [...regularAvailable, ...rainyAvailable];
     } else {
         // Normal day: return only regular specials (not rainy day exclusives)
         return specialActivities.filter(s => s.available);
     }
+};
+
+// ★★★ PRIMARY SCHEDULER FUNCTION - RAINY DAY FILTERED ★★★
+// This is the main function the scheduler should use for getting specials
+window.getGlobalSpecialActivities = function(respectRainyDay = true) {
+    // Get all activities from both lists
+    const allActivities = [...specialActivities, ...rainyDayActivities];
+    
+    if (!respectRainyDay) {
+        return allActivities;
+    }
+    
+    const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
+    
+    if (isRainyMode) {
+        // Rainy day mode: 
+        // - Include regular specials that are available on rainy days
+        // - Include rainy-day-only/exclusive specials
+        console.log('[SpecialActivities] 🌧️ Rainy mode - filtering for indoor/rainy activities');
+        return allActivities.filter(s => {
+            // Include rainy-day-only activities
+            if (s.rainyDayOnly === true || s.rainyDayExclusive === true) {
+                return true;
+            }
+            // Include regular activities that are available on rainy days
+            if (s.rainyDayAvailable !== false && s.availableOnRainyDay !== false) {
+                return true;
+            }
+            return false;
+        });
+    } else {
+        // Normal day: exclude rainy-day-only activities
+        console.log('[SpecialActivities] ☀️ Normal mode - excluding rainy-day-only activities');
+        return allActivities.filter(s => 
+            s.rainyDayOnly !== true && s.rainyDayExclusive !== true
+        );
+    }
+};
+
+// ★★★ GET RAINY-DAY-ONLY SPECIALS (for scheduler to add during rainy mode) ★★★
+window.getRainyDayOnlySpecials = function() {
+    return rainyDayActivities.filter(s => s.available !== false);
+};
+
+// ★★★ GET INDOOR-AVAILABLE SPECIALS (available regardless of weather) ★★★
+window.getIndoorAvailableSpecials = function() {
+    return specialActivities.filter(s => 
+        s.available !== false && 
+        s.rainyDayAvailable !== false && 
+        s.availableOnRainyDay !== false
+    );
 };
 
 // ★ FIX: Export cleanup function for external use
@@ -1617,14 +1690,23 @@ window.diagnoseSpecialActivities = function() {
     console.log('═'.repeat(60));
     
     const settings = window.loadGlobalSettings?.() || {};
-    const storedActivities = window.getGlobalSpecialActivities?.() || [];
+    const storedActivities = settings.specialActivities || settings.app1?.specialActivities || [];
     const divisions = Object.keys(settings.divisions || {});
+    
+    // ★★★ v2.1: Add rainy day mode status ★★★
+    const isRainyMode = window.isRainyDayModeActive?.() || false;
     
     console.log(`\n📊 SUMMARY:`);
     console.log(`   Total activities: ${storedActivities.length}`);
     console.log(`   Regular specials: ${specialActivities.length}`);
     console.log(`   Rainy day specials: ${rainyDayActivities.length}`);
     console.log(`   Valid divisions: ${divisions.join(', ') || 'none'}`);
+    console.log(`   🌧️ Rainy Day Mode: ${isRainyMode ? 'ACTIVE' : 'INACTIVE'}`);
+    
+    if (isRainyMode) {
+        const availableNow = window.getGlobalSpecialActivities?.() || [];
+        console.log(`   📋 Currently available specials: ${availableNow.length}`);
+    }
     
     const issues = [];
     
@@ -1693,6 +1775,6 @@ window.diagnoseSpecialActivities = function() {
     return { activities: storedActivities.length, issues: issues.length };
 };
 
-console.log("[SPECIAL_ACTIVITIES] Module v2.0 loaded");
+console.log("[SPECIAL_ACTIVITIES] Module v2.1 loaded");
 
 })();
