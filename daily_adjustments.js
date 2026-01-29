@@ -112,16 +112,30 @@ function saveSmartTileHistory(history) {
 // RAINY DAY MODE - UI Components (Enhanced with Mid-Day & Auto-Skeleton)
 // =================================================================
 function isRainyDayActive() {
+  // Check window.isRainyDay first (this is what the save system uses)
+  if (window.isRainyDay === true) return true;
+  
+  // Fallback to dailyData for backward compatibility
   const dailyData = window.loadCurrentDailyData?.() || {};
-  return dailyData.rainyDayMode === true;
+  return dailyData.rainyDayMode === true || dailyData.isRainyDay === true;
 }
 
 function isMidDayModeActive() {
+  // Check window.rainyDayStartTime first
+  if (window.rainyDayStartTime !== null && window.rainyDayStartTime !== undefined) return true;
+  
+  // Fallback to dailyData
   const dailyData = window.loadCurrentDailyData?.() || {};
   return dailyData.rainyDayStartTime !== null && dailyData.rainyDayStartTime !== undefined;
 }
 
 function getMidDayStartTime() {
+  // Check window.rainyDayStartTime first
+  if (window.rainyDayStartTime !== null && window.rainyDayStartTime !== undefined) {
+    return window.rainyDayStartTime;
+  }
+  
+  // Fallback to dailyData
   const dailyData = window.loadCurrentDailyData?.() || {};
   return dailyData.rainyDayStartTime || null;
 }
@@ -469,8 +483,17 @@ function activateFullDayRainyMode() {
   overrides.disabledFields = newDisabled;
   currentOverrides.disabledFields = newDisabled;
   window.saveCurrentDailyData?.("overrides", overrides);
+  
+  // Set window.isRainyDay (this is what saveCurrentDailyData syncs)
+  window.isRainyDay = true;
+  window.rainyDayStartTime = null;
+  
+  // Also save for backward compatibility
   window.saveCurrentDailyData?.("rainyDayMode", true);
   window.saveCurrentDailyData?.("rainyDayStartTime", null);
+  
+  // Trigger a save to sync isRainyDay to cloud
+  window.saveCurrentDailyData?.("isRainyDay", true);
   
   let skeletonSwitched = false;
   if (isAutoSkeletonSwitchEnabled()) {
@@ -501,8 +524,14 @@ function activateMidDayRainyMode() {
   overrides.disabledFields = newDisabled;
   currentOverrides.disabledFields = newDisabled;
   window.saveCurrentDailyData?.("overrides", overrides);
+  
+  // Set window.isRainyDay (this is what the save system uses)
+  window.isRainyDay = true;
+  window.rainyDayStartTime = currentTimeMin;
+  
   window.saveCurrentDailyData?.("rainyDayMode", true);
   window.saveCurrentDailyData?.("rainyDayStartTime", currentTimeMin);
+  window.saveCurrentDailyData?.("isRainyDay", true);
   
   let skeletonSwitched = false;
   if (isAutoSkeletonSwitchEnabled()) {
@@ -511,6 +540,7 @@ function activateMidDayRainyMode() {
   
   const preservedCount = getPreservedSlotCount();
   showRainyDayNotification(true, stats.outdoorFieldNames.length, true, skeletonSwitched, preservedCount);
+  console.log("[RainyDay] Activated mid-day mode, window.isRainyDay =", window.isRainyDay);
 }
 
 function backupPreservedSchedule(startTimeMin) {
@@ -583,17 +613,23 @@ function deactivateRainyDayMode() {
   overrides.disabledFields = preRainyDisabled;
   currentOverrides.disabledFields = preRainyDisabled;
   
+  // Set window.isRainyDay = false (this is what the save system uses)
+  window.isRainyDay = false;
+  window.rainyDayStartTime = null;
+  
   window.saveCurrentDailyData?.("overrides", overrides);
   window.saveCurrentDailyData?.("preRainyDayDisabledFields", null);
   window.saveCurrentDailyData?.("rainyDayMode", false);
   window.saveCurrentDailyData?.("rainyDayStartTime", null);
   window.saveCurrentDailyData?.("preservedScheduleBackup", null);
+  window.saveCurrentDailyData?.("isRainyDay", false);
   
   if (isAutoSkeletonSwitchEnabled()) {
     restorePreRainySkeleton();
   }
   
   showRainyDayNotification(false);
+  console.log("[RainyDay] Deactivated rainy mode, window.isRainyDay =", window.isRainyDay);
 }
 
 function restorePreRainySkeleton() {
