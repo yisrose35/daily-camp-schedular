@@ -2408,16 +2408,23 @@ function renderBunkOverridesUI() {
   // Get special activities
   const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name).sort();
   
-  // Get all locations (fields + facilities from locations.js)
-  const allLocations = (typeof window.getAllLocations === 'function' ? window.getAllLocations() : []);
-  
-  // Separate fields from facilities
-  const fieldNames = new Set(allFields.map(f => f.name));
-  const facilities = allLocations.filter(loc => !fieldNames.has(loc.name) || loc.type === 'facility');
-  const fields = allLocations.filter(loc => fieldNames.has(loc.name) && loc.type !== 'facility');
+  // Get facilities from locationZones (Pool, Lunchroom, etc.)
+  const locationZones = masterSettings.global?.locationZones || {};
+  const facilities = [];
+  Object.entries(locationZones).forEach(([zoneName, zone]) => {
+    if (zone && zone.locations) {
+      Object.keys(zone.locations).forEach(locName => {
+        facilities.push({
+          name: locName,
+          zone: zoneName,
+          displayName: `${locName} (${zoneName})`
+        });
+      });
+    }
+  });
   
   // Get pinned tile defaults (Swim → Pool, Lunch → Lunchroom, etc.)
-  const pinnedDefaults = (typeof window.getPinnedTileDefaults === 'function' ? window.getPinnedTileDefaults() : {});
+  const pinnedDefaults = masterSettings.global?.pinnedTileDefaults || {};
   const pinnedActivities = Object.keys(pinnedDefaults);
   
   // Build grouped options
@@ -2433,23 +2440,21 @@ function renderBunkOverridesUI() {
     activityOptions += '</optgroup>';
   }
   
+  // Facilities group (Pool, Lunchroom, etc.) - from locationZones
+  if (facilities.length > 0) {
+    activityOptions += '<optgroup label="🏢 Facilities">';
+    facilities.sort((a, b) => a.name.localeCompare(b.name)).forEach(fac => {
+      activityOptions += `<option value="${fac.name}" data-type="facility" data-location="${fac.name}">${fac.displayName}</option>`;
+    });
+    activityOptions += '</optgroup>';
+  }
+  
   // Fields group (Hockey Arena, Baseball Field, etc.)
   if (allFields.length > 0) {
     activityOptions += '<optgroup label="🏟️ Fields">';
     allFields.sort((a, b) => a.name.localeCompare(b.name)).forEach(field => {
       const indoorBadge = field.isIndoor ? ' 🏠' : '';
       activityOptions += `<option value="${field.name}" data-type="field" data-location="${field.name}">${field.name}${indoorBadge}</option>`;
-    });
-    activityOptions += '</optgroup>';
-  }
-  
-  // Facilities group (Pool, Lunchroom, Gym, etc.) - locations that aren't sports fields
-  if (facilities.length > 0) {
-    activityOptions += '<optgroup label="🏢 Facilities">';
-    facilities.sort((a, b) => (a.name || '').localeCompare(b.name || '')).forEach(fac => {
-      if (fac.name) {
-        activityOptions += `<option value="${fac.name}" data-type="facility" data-location="${fac.name}">${fac.name}</option>`;
-      }
     });
     activityOptions += '</optgroup>';
   }
