@@ -931,13 +931,13 @@ function getMainStyles() {
       background: var(--da-bg);
     }
     
-    .da-grid-flex {
+    .da-grid-wrapper-inner {
       display: flex;
       min-width: max-content;
     }
     
     /* Time Column */
-    .da-time-column {
+    .grid-time-col {
       width: 60px;
       min-width: 60px;
       flex-shrink: 0;
@@ -945,7 +945,7 @@ function getMainStyles() {
       border-right: 1px solid var(--da-border);
     }
     
-    .da-time-header {
+    .grid-time-header {
       height: 44px;
       display: flex;
       align-items: center;
@@ -960,11 +960,11 @@ function getMainStyles() {
       z-index: 20;
     }
     
-    .da-time-body {
+    .grid-time-body {
       position: relative;
     }
     
-    .da-time-tick {
+    .grid-time-label {
       position: absolute;
       left: 0;
       right: 0;
@@ -976,17 +976,17 @@ function getMainStyles() {
     }
     
     /* Division Columns */
-    .da-div-column {
+    .grid-col {
       flex: 1;
       min-width: 120px;
       border-right: 1px solid var(--da-border);
     }
     
-    .da-div-column:last-child {
+    .grid-col:last-child {
       border-right: none;
     }
     
-    .da-div-header {
+    .grid-col-header {
       height: 44px;
       display: flex;
       align-items: center;
@@ -1000,13 +1000,13 @@ function getMainStyles() {
       z-index: 20;
     }
     
-    .da-div-body {
+    .grid-cell {
       position: relative;
       background: var(--da-bg);
     }
     
     /* Off-hours zones */
-    .da-off-zone {
+    .grid-disabled {
       position: absolute;
       left: 0;
       right: 0;
@@ -1018,6 +1018,52 @@ function getMainStyles() {
     }
     
     /* Grid Lines */
+    .grid-line {
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: #f1f5f9;
+      pointer-events: none;
+    }
+    
+    .grid-line.hour {
+      background: #e2e8f0;
+    }
+    
+    /* Events */
+    .grid-event {
+      z-index: 2;
+      position: relative;
+      box-shadow: none;
+      transition: box-shadow 0.15s, outline 0.15s;
+      border-bottom: 1px solid rgba(0,0,0,0.1);
+    }
+    
+    .grid-event:hover {
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      z-index: 3;
+    }
+    
+    .grid-event.selected {
+      outline: 3px solid #3b82f6;
+      outline-offset: -1px;
+      box-shadow: 0 0 0 4px rgba(59,130,246,0.2);
+      z-index: 4;
+    }
+    
+    /* Resize handles */
+    .resize-handle {
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 8px;
+      cursor: ns-resize;
+      z-index: 5;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    
     .da-hour-line, .da-half-line {
       position: absolute;
       left: 0;
@@ -1439,9 +1485,15 @@ function getMainStyles() {
       width: 52px;
       height: 26px;
       cursor: pointer;
+      display: inline-block;
     }
     
-    .da-rainy-toggle input { opacity: 0; width: 0; height: 0; }
+    .da-rainy-toggle input { 
+      opacity: 0; 
+      width: 0; 
+      height: 0; 
+      position: absolute;
+    }
     
     .da-rainy-toggle-track {
       position: absolute;
@@ -1473,9 +1525,10 @@ function getMainStyles() {
       align-items: center;
       justify-content: center;
       font-size: 11px;
+      z-index: 1;
     }
     
-    .da-rainy-toggle input:checked ~ .da-rainy-toggle-thumb {
+    .da-rainy-toggle input:checked + .da-rainy-toggle-track + .da-rainy-toggle-thumb {
       left: 28px;
       background: #f0f9ff;
     }
@@ -1695,11 +1748,19 @@ function getMainStyles() {
       align-items: center;
       justify-content: space-between;
       padding: 8px 12px;
-      background: #fef3c7;
-      border: 1px solid #fcd34d;
       border-radius: 6px;
       margin-bottom: 6px;
       font-size: 12px;
+    }
+    
+    .da-time-restriction.unavailable {
+      background: #fef3c7;
+      border: 1px solid #fcd34d;
+    }
+    
+    .da-time-restriction.available {
+      background: #dcfce7;
+      border: 1px solid #86efac;
     }
     
     .da-time-restriction-info {
@@ -1713,6 +1774,7 @@ function getMainStyles() {
       align-items: center;
       gap: 8px;
       margin-top: 10px;
+      flex-wrap: wrap;
     }
     
     .da-add-restriction input {
@@ -2350,16 +2412,16 @@ function renderGrid() {
   
   const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
   
-  // Build grid using FLEXBOX (more reliable than CSS grid)
-  let html = `<div class="da-grid-flex" data-earliest="${earliestMin}">`;
+  // Build grid matching master builder structure
+  let html = `<div class="da-grid-wrapper-inner" data-earliest-min="${earliestMin}">`;
   
   // === TIME COLUMN ===
-  html += `<div class="da-time-column">`;
-  html += `<div class="da-time-header">Time</div>`;
-  html += `<div class="da-time-body" style="height:${totalHeight}px;">`;
+  html += `<div class="grid-time-col">`;
+  html += `<div class="grid-time-header">Time</div>`;
+  html += `<div class="grid-time-body" style="height:${totalHeight}px;">`;
   for (let m = earliestMin; m < latestMin; m += INCREMENT_MINS) {
     const top = (m - earliestMin) * PIXELS_PER_MINUTE;
-    html += `<div class="da-time-tick" style="top:${top}px;">${minutesToTime(m)}</div>`;
+    html += `<div class="grid-time-label" style="top:${top}px;">${minutesToTime(m)}</div>`;
   }
   html += `</div></div>`;
   
@@ -2369,88 +2431,113 @@ function renderGrid() {
     const divEnd = parseTimeToMinutes(divData.endTime) || latestMin;
     const color = divData.color || '#475569';
     
-    html += `<div class="da-div-column" data-div="${escapeHtml(divName)}" data-start-min="${earliestMin}">`;
-    
-    // Header
-    html += `<div class="da-div-header" style="background:${softenColor(color)};">${escapeHtml(divName)}</div>`;
-    
-    // Body with events
-    html += `<div class="da-div-body" style="height:${totalHeight}px;">`;
+    html += `<div class="grid-col">`;
+    html += `<div class="grid-col-header" style="background:${softenColor(color)};">${escapeHtml(divName)}</div>`;
+    html += `<div class="grid-cell" data-div="${escapeHtml(divName)}" data-start-min="${earliestMin}" style="height:${totalHeight}px;">`;
     
     // Off-hours zones
     if (divStart > earliestMin) {
       const h = (divStart - earliestMin) * PIXELS_PER_MINUTE;
-      html += `<div class="da-off-zone" style="top:0;height:${h}px;"></div>`;
+      html += `<div class="grid-disabled" style="top:0;height:${h}px;"></div>`;
     }
     if (divEnd < latestMin) {
       const t = (divEnd - earliestMin) * PIXELS_PER_MINUTE;
       const h = (latestMin - divEnd) * PIXELS_PER_MINUTE;
-      html += `<div class="da-off-zone" style="top:${t}px;height:${h}px;"></div>`;
+      html += `<div class="grid-disabled" style="top:${t}px;height:${h}px;"></div>`;
     }
     
-    // Hour lines
+    // Hour/half-hour lines
     for (let m = earliestMin; m < latestMin; m += 30) {
       const top = (m - earliestMin) * PIXELS_PER_MINUTE;
-      const cls = m % 60 === 0 ? 'da-hour-line' : 'da-half-line';
-      html += `<div class="${cls}" style="top:${top}px;"></div>`;
+      const isHour = m % 60 === 0;
+      html += `<div class="grid-line ${isHour ? 'hour' : ''}" style="top:${top}px;"></div>`;
     }
     
-    // Events for THIS DIVISION ONLY
+    // Events for this division
     const divEvents = dailyOverrideSkeleton.filter(ev => {
       if (ev.division) return ev.division === divName;
       if (ev.divisions && ev.divisions.length > 0) return ev.divisions.includes(divName);
-      return true; // No division = show in all
+      return true;
     });
     
     divEvents.forEach(ev => {
-      const startMin = parseTimeToMinutes(ev.startTime);
-      const endMin = parseTimeToMinutes(ev.endTime);
-      if (startMin == null || endMin == null || endMin <= startMin) return;
-      
-      const top = (startMin - earliestMin) * PIXELS_PER_MINUTE;
-      const height = Math.max((endMin - startMin) * PIXELS_PER_MINUTE - 2, 20);
-      
-      const block = BLOCKS[ev.type] || BLOCKS.activity;
-      const borderStyle = block.dashed ? `border:2px dashed ${block.color};` : `border-left:3px solid ${block.color};`;
-      const selectedClass = selectedTileId === ev.id ? ' selected' : '';
-      
-      let label = ev.name || ev.event || block.name;
-      let detail = '';
-      
-      if (ev.type === 'smart' && (ev.smartConfig || ev.smartData)) {
-        const cfg = ev.smartConfig || ev.smartData;
-        detail = `${cfg.activity1 || ''} / ${cfg.activity2 || ''}`;
-      }
-      if (ev.type === 'elective') {
-        const acts = ev.reservedActivities || ev.electiveActivities || [];
-        if (acts.length > 0) detail = '🎯 ' + acts.slice(0, 2).join(', ') + (acts.length > 2 ? ' +' + (acts.length - 2) : '');
-      }
-      if (ev.location) {
-        detail = detail ? detail + ' · 📍' + ev.location : '📍 ' + ev.location;
-      }
-      
-      html += `
-        <div class="da-event${selectedClass}" data-id="${ev.id}" data-div="${escapeHtml(divName)}" draggable="true"
-             style="top:${top}px;height:${height}px;background:${block.bg};color:${block.color};${borderStyle}">
-          <div class="da-event-label">${escapeHtml(label)}</div>
-          <div class="da-event-time">${minutesToTime(startMin)} - ${minutesToTime(endMin)}</div>
-          ${detail ? `<div class="da-event-detail">${escapeHtml(detail)}</div>` : ''}
-          <div class="da-resize-handle da-resize-top"></div>
-          <div class="da-resize-handle da-resize-bottom"></div>
-        </div>
-      `;
+      html += renderEventTile(ev, earliestMin);
     });
     
     // Drop preview
-    html += `<div class="da-drop-preview"><div class="da-preview-label"></div></div>`;
-    html += `</div></div>`; // Close body and column
+    html += `<div class="drop-preview"><div class="preview-time-label"></div></div>`;
+    html += `</div></div>`;
   });
   
-  html += `</div>`; // Close grid
+  html += `</div>`;
   gridContainer.innerHTML = html;
+  
+  // Store earliest min for event handlers
+  gridContainer.dataset.earliestMin = earliestMin;
   
   // Bind event handlers
   bindGridEvents({ lo: earliestMin, hi: latestMin });
+}
+
+// Render event tile - MATCHING MASTER BUILDER EXACTLY
+function renderEventTile(ev, earliestMin) {
+  const startMin = parseTimeToMinutes(ev.startTime);
+  const endMin = parseTimeToMinutes(ev.endTime);
+  if (startMin == null || endMin == null || endMin <= startMin) return '';
+  
+  const top = (startMin - earliestMin) * PIXELS_PER_MINUTE;
+  const height = (endMin - startMin) * PIXELS_PER_MINUTE;
+  const adjustedHeight = Math.max(height - 1, 10);
+  
+  // Find matching tile style
+  let tile = TILES.find(t => t.name === ev.event);
+  if (!tile && ev.type) tile = TILES.find(t => t.type === ev.type);
+  if (!tile) {
+    if (ev.event === 'General Activity Slot') tile = TILES.find(t => t.type === 'activity');
+    else if (ev.event === 'Sports Slot') tile = TILES.find(t => t.type === 'sports');
+    else if (ev.event === 'Special Activity') tile = TILES.find(t => t.type === 'special');
+    else tile = TILES.find(t => t.type === 'custom');
+  }
+  const style = tile ? tile.style : 'background:#cbd5e1;color:#334155;';
+  const selectedClass = selectedTileId === ev.id ? ' selected' : '';
+  
+  // Build inner HTML - MATCHING MASTER BUILDER
+  let innerHtml = `
+    <div class="tile-header">
+      <strong style="font-size:11px;">${escapeHtml(ev.event || ev.name || 'Event')}</strong>
+      <div style="font-size:10px;opacity:0.9;">${ev.startTime}-${ev.endTime}</div>
+    </div>
+  `;
+  
+  // Location (only if tile is tall enough)
+  if (adjustedHeight > 45) {
+    if (ev.location) {
+      innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${ev.location}</div>`;
+    } else if (ev.reservedFields?.length > 0 && ev.type !== 'elective') {
+      innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${ev.reservedFields.join(', ')}</div>`;
+    }
+  }
+  
+  // Elective activities
+  if (ev.type === 'elective' && (ev.electiveActivities?.length > 0 || ev.reservedActivities?.length > 0) && adjustedHeight > 50) {
+    const acts = ev.electiveActivities || ev.reservedActivities;
+    const actList = acts.slice(0, 3).join(', ');
+    const more = acts.length > 3 ? ` +${acts.length - 3}` : '';
+    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${actList}${more}</div>`;
+  }
+  
+  // Smart tile fallback
+  if (ev.type === 'smart' && (ev.smartData || ev.smartConfig) && adjustedHeight > 60) {
+    const cfg = ev.smartData || ev.smartConfig;
+    innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">Fallback: ${cfg.fallbackActivity || cfg.fallback || 'N/A'}</div>`;
+  }
+  
+  return `<div class="grid-event${selectedClass}" data-id="${ev.id}" draggable="true" title="Click to select, Delete key to remove"
+          style="${style}; position:absolute; top:${top}px; height:${adjustedHeight}px; width:96%; left:2%; padding:5px 7px; font-size:11px; overflow:hidden; border-radius:5px; cursor:pointer; display:flex; flex-direction:column; box-sizing:border-box;">
+          <div class="resize-handle resize-handle-top"></div>
+          ${innerHtml}
+          <div class="resize-handle resize-handle-bottom"></div>
+          </div>`;
 }
 
 // Soften a color for header backgrounds
@@ -3011,8 +3098,8 @@ function renderRainyDayPanel() {
             ${isActive ? (isMidDay ? 'MID-DAY' : 'ACTIVE') : 'INACTIVE'}
           </span>
           
-          <label class="da-rainy-toggle">
-            <input type="checkbox" id="da-rainy-toggle" ${isActive ? 'checked' : ''}>
+          <label class="da-rainy-toggle" for="da-rainy-toggle-input">
+            <input type="checkbox" id="da-rainy-toggle-input" ${isActive ? 'checked' : ''}>
             <span class="da-rainy-toggle-track"></span>
             <span class="da-rainy-toggle-thumb">${isActive ? '💧' : '☀️'}</span>
           </label>
@@ -3047,7 +3134,7 @@ function renderRainyDayPanel() {
   `;
   
   // Bind events
-  const toggle = document.getElementById('da-rainy-toggle');
+  const toggle = document.getElementById('da-rainy-toggle-input');
   if (toggle) {
     toggle.onchange = function() {
       if (this.checked) {
@@ -3106,6 +3193,7 @@ function renderResourceOverridesUI() {
   const app1 = g.app1 || {};
   const fields = app1.fields || [];
   const specials = app1.specialActivities || [];
+  const facilities = app1.facilities || [];
   const leagues = g.leagues || [];
   const specialtyLeagues = g.specialtyLeagues || [];
   
@@ -3118,20 +3206,28 @@ function renderResourceOverridesUI() {
   
   container.innerHTML = `
     <div class="da-section">
-      <h3 class="da-section-title">📍 Locations (Fields)</h3>
+      <h3 class="da-section-title">Locations (Fields)</h3>
       <p class="da-section-desc">Manage field availability. Click to expand and set time-based restrictions.</p>
       <div id="da-fields-list"></div>
     </div>
     
     <div class="da-section">
-      <h3 class="da-section-title">🎯 Facilities (Special Activities)</h3>
+      <h3 class="da-section-title">Facilities (Special Activities)</h3>
       <p class="da-section-desc">Manage special activity availability and time restrictions.</p>
       <div id="da-specials-list"></div>
     </div>
     
+    ${facilities.length > 0 ? `
+    <div class="da-section">
+      <h3 class="da-section-title">Other Facilities</h3>
+      <p class="da-section-desc">Manage other facility availability.</p>
+      <div id="da-facilities-list"></div>
+    </div>
+    ` : ''}
+    
     ${leagues.length > 0 ? `
     <div class="da-section">
-      <h3 class="da-section-title">🏆 Leagues</h3>
+      <h3 class="da-section-title">Leagues</h3>
       <p class="da-section-desc">Select which leagues are active today.</p>
       <div id="da-leagues-list"></div>
     </div>
@@ -3139,7 +3235,7 @@ function renderResourceOverridesUI() {
     
     ${specialtyLeagues.length > 0 ? `
     <div class="da-section">
-      <h3 class="da-section-title">⭐ Specialty Leagues</h3>
+      <h3 class="da-section-title">Specialty Leagues</h3>
       <p class="da-section-desc">Toggle specialty leagues on/off for today.</p>
       <div id="da-specialty-leagues-list"></div>
     </div>
@@ -3159,10 +3255,10 @@ function renderResourceOverridesUI() {
     card.innerHTML = `
       <div class="da-resource-card-header">
         <div class="da-resource-card-left">
-          <div class="da-resource-card-icon" style="background:#dcfce7;color:#16a34a;">🏟️</div>
+          <div class="da-resource-card-icon" style="background:#dcfce7;color:#16a34a;">F</div>
           <div class="da-resource-card-info">
             <h4>${escapeHtml(field.name)}</h4>
-            <span>${isRainyDisabled ? '🌧️ Disabled (Rainy Day)' : isDisabled ? '❌ Disabled all day' : hasRestrictions ? `⏰ ${restrictions.length} time restriction(s)` : '✅ Available all day'}</span>
+            <span>${isRainyDisabled ? 'Disabled (Rainy Day)' : isDisabled ? 'Disabled all day' : hasRestrictions ? `${restrictions.length} time restriction(s)` : 'Available all day'}</span>
           </div>
         </div>
         <div class="da-resource-card-right">
@@ -3174,19 +3270,22 @@ function renderResourceOverridesUI() {
         </div>
       </div>
       <div class="da-resource-card-body">
-        <p style="font-size:12px;color:var(--da-text2);margin:0 0 10px;">Add specific times when this field is <strong>unavailable</strong>:</p>
-        <div class="da-time-restrictions" data-field="${escapeHtml(field.name)}">
+        <p style="font-size:12px;color:var(--da-text2);margin:0 0 10px;">Add time-based availability changes:</p>
+        <div class="da-time-restrictions" data-resource="${escapeHtml(field.name)}">
           ${restrictions.map((r, i) => `
-            <div class="da-time-restriction">
+            <div class="da-time-restriction ${r.type === 'available' ? 'available' : 'unavailable'}">
               <div class="da-time-restriction-info">
-                <span>🚫</span>
-                <span>Unavailable: <strong>${r.start} - ${r.end}</strong></span>
+                <span>${r.type === 'available' ? 'Available' : 'Unavailable'}: <strong>${r.start} - ${r.end}</strong></span>
               </div>
               <button class="da-btn da-btn-danger da-btn-sm" onclick="window._removeTimeRestriction('${escapeHtml(field.name)}', ${i})">✕</button>
             </div>
           `).join('')}
         </div>
         <div class="da-add-restriction">
+          <select class="da-select da-restriction-type" data-resource="${escapeHtml(field.name)}" style="width:100px;">
+            <option value="unavailable">Unavailable</option>
+            <option value="available">Available</option>
+          </select>
           <input type="text" class="da-input" placeholder="Start (9:00)" data-start="${escapeHtml(field.name)}" style="width:80px;">
           <span>to</span>
           <input type="text" class="da-input" placeholder="End (10:30)" data-end="${escapeHtml(field.name)}" style="width:80px;">
@@ -3230,10 +3329,10 @@ function renderResourceOverridesUI() {
     card.innerHTML = `
       <div class="da-resource-card-header">
         <div class="da-resource-card-left">
-          <div class="da-resource-card-icon" style="background:#f3e8ff;color:#9333ea;">🎨</div>
+          <div class="da-resource-card-icon" style="background:#f3e8ff;color:#9333ea;">S</div>
           <div class="da-resource-card-info">
             <h4>${escapeHtml(special.name)}</h4>
-            <span>${isDisabled ? '❌ Disabled all day' : hasRestrictions ? `⏰ ${restrictions.length} time restriction(s)` : '✅ Available all day'}</span>
+            <span>${isDisabled ? 'Disabled all day' : hasRestrictions ? `${restrictions.length} time restriction(s)` : 'Available all day'}</span>
           </div>
         </div>
         <div class="da-resource-card-right">
@@ -3245,19 +3344,22 @@ function renderResourceOverridesUI() {
         </div>
       </div>
       <div class="da-resource-card-body">
-        <p style="font-size:12px;color:var(--da-text2);margin:0 0 10px;">Add specific times when this facility is <strong>unavailable</strong>:</p>
-        <div class="da-time-restrictions" data-special="${escapeHtml(special.name)}">
+        <p style="font-size:12px;color:var(--da-text2);margin:0 0 10px;">Add time-based availability changes:</p>
+        <div class="da-time-restrictions" data-resource="${escapeHtml(special.name)}">
           ${restrictions.map((r, i) => `
-            <div class="da-time-restriction">
+            <div class="da-time-restriction ${r.type === 'available' ? 'available' : 'unavailable'}">
               <div class="da-time-restriction-info">
-                <span>🚫</span>
-                <span>Unavailable: <strong>${r.start} - ${r.end}</strong></span>
+                <span>${r.type === 'available' ? 'Available' : 'Unavailable'}: <strong>${r.start} - ${r.end}</strong></span>
               </div>
               <button class="da-btn da-btn-danger da-btn-sm" onclick="window._removeTimeRestriction('${escapeHtml(special.name)}', ${i})">✕</button>
             </div>
           `).join('')}
         </div>
         <div class="da-add-restriction">
+          <select class="da-select da-restriction-type" data-resource="${escapeHtml(special.name)}" style="width:100px;">
+            <option value="unavailable">Unavailable</option>
+            <option value="available">Available</option>
+          </select>
           <input type="text" class="da-input" placeholder="Start (9:00)" data-start="${escapeHtml(special.name)}" style="width:80px;">
           <span>to</span>
           <input type="text" class="da-input" placeholder="End (10:30)" data-end="${escapeHtml(special.name)}" style="width:80px;">
@@ -3289,6 +3391,42 @@ function renderResourceOverridesUI() {
     specialsContainer.appendChild(card);
   });
   
+  // Render facilities if present
+  if (facilities.length > 0) {
+    const facilitiesContainer = document.getElementById('da-facilities-list');
+    if (!currentOverrides.disabledFacilities) currentOverrides.disabledFacilities = [];
+    
+    facilities.forEach(facility => {
+      const facilityName = facility.name || facility;
+      const isDisabled = currentOverrides.disabledFacilities.includes(facilityName);
+      
+      const row = document.createElement('div');
+      row.className = `da-resource-row ${isDisabled ? 'disabled' : ''}`;
+      row.innerHTML = `
+        <span class="da-resource-name">${escapeHtml(facilityName)}</span>
+        <label class="da-toggle">
+          <input type="checkbox" ${!isDisabled ? 'checked' : ''}>
+          <span class="da-toggle-track"></span>
+        </label>
+      `;
+      
+      const input = row.querySelector('input');
+      input.onchange = function() {
+        if (this.checked) {
+          currentOverrides.disabledFacilities = currentOverrides.disabledFacilities.filter(f => f !== facilityName);
+        } else {
+          if (!currentOverrides.disabledFacilities.includes(facilityName)) {
+            currentOverrides.disabledFacilities.push(facilityName);
+          }
+        }
+        saveCurrentOverrides();
+        row.classList.toggle('disabled', !this.checked);
+      };
+      
+      facilitiesContainer.appendChild(row);
+    });
+  }
+  
   // Render leagues if present (simple toggles)
   if (leagues.length > 0) {
     const leaguesContainer = document.getElementById('da-leagues-list');
@@ -3298,7 +3436,7 @@ function renderResourceOverridesUI() {
       const row = document.createElement('div');
       row.className = `da-resource-row ${!isEnabled ? 'disabled' : ''}`;
       row.innerHTML = `
-        <span class="da-resource-name">🏆 ${escapeHtml(league.name)}</span>
+        <span class="da-resource-name">${escapeHtml(league.name)}</span>
         <label class="da-toggle">
           <input type="checkbox" ${isEnabled ? 'checked' : ''}>
           <span class="da-toggle-track"></span>
@@ -3331,7 +3469,7 @@ function renderResourceOverridesUI() {
       const row = document.createElement('div');
       row.className = `da-resource-row ${isDisabled ? 'disabled' : ''}`;
       row.innerHTML = `
-        <span class="da-resource-name">⭐ ${escapeHtml(sl.name)}</span>
+        <span class="da-resource-name">${escapeHtml(sl.name)}</span>
         <label class="da-toggle">
           <input type="checkbox" ${!isDisabled ? 'checked' : ''}>
           <span class="da-toggle-track"></span>
@@ -3358,10 +3496,12 @@ function renderResourceOverridesUI() {
 
 // Helper functions for time restrictions
 window._addTimeRestriction = function(resourceName) {
+  const typeSelect = document.querySelector(`select.da-restriction-type[data-resource="${resourceName}"]`);
   const startInput = document.querySelector(`input[data-start="${resourceName}"]`);
   const endInput = document.querySelector(`input[data-end="${resourceName}"]`);
   if (!startInput || !endInput) return;
   
+  const type = typeSelect?.value || 'unavailable';
   const start = startInput.value.trim();
   const end = endInput.value.trim();
   
@@ -3377,7 +3517,7 @@ window._addTimeRestriction = function(resourceName) {
     currentOverrides.timeRestrictions[resourceName] = [];
   }
   
-  currentOverrides.timeRestrictions[resourceName].push({ start, end });
+  currentOverrides.timeRestrictions[resourceName].push({ type, start, end });
   saveCurrentOverrides();
   renderResourceOverridesUI();
   notify('Time restriction added');
@@ -3408,16 +3548,21 @@ function renderBunkOverridesUI() {
   });
   
   const locations = getAllLocations();
+  const activities = getAllActivities();
   const overrides = currentOverrides.bunkActivityOverrides || [];
   
   const locationOptions = locations.map(l => 
     `<option value="${escapeHtml(l)}">${escapeHtml(l)}</option>`
   ).join('');
   
+  const activityOptions = activities.map(a => 
+    `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`
+  ).join('');
+  
   container.innerHTML = `
     <div class="da-section">
-      <h3 class="da-section-title">🎯 Bunk-Specific Activity Overrides</h3>
-      <p class="da-section-desc">Force specific bunks to do a certain activity during a time range. These will override the automatic scheduler.</p>
+      <h3 class="da-section-title">Bunk-Specific Activity Overrides</h3>
+      <p class="da-section-desc">Force specific bunks to do a certain activity at a certain location during a time range. These will override the automatic scheduler.</p>
       
       <!-- Existing Overrides -->
       <div id="da-override-list" style="margin-bottom:16px;">
@@ -3426,7 +3571,7 @@ function renderBunkOverridesUI() {
       
       <!-- Add Override Form -->
       <div class="da-add-trip-form">
-        <h4>➕ Add New Override</h4>
+        <h4>Add New Override</h4>
         <div class="da-trip-form-grid">
           <div class="da-trip-form-field">
             <label>Bunk</label>
@@ -3436,10 +3581,17 @@ function renderBunkOverridesUI() {
             </select>
           </div>
           <div class="da-trip-form-field">
-            <label>Activity / Location</label>
+            <label>Location</label>
+            <select id="da-location-select" class="da-select">
+              <option value="">Select location...</option>
+              ${locationOptions}
+            </select>
+          </div>
+          <div class="da-trip-form-field">
+            <label>Activity</label>
             <select id="da-activity-select" class="da-select">
               <option value="">Select activity...</option>
-              ${locationOptions}
+              ${activityOptions}
             </select>
           </div>
           <div class="da-trip-form-field">
@@ -3469,7 +3621,9 @@ function renderBunkOverridesUI() {
         <div class="da-override-card-info">
           <div class="da-override-card-bunk">${escapeHtml(o.bunk)}</div>
           <div class="da-override-card-detail">
-            → ${escapeHtml(o.activity)} from <strong>${o.startTime || 'N/A'}</strong> to <strong>${o.endTime || 'N/A'}</strong>
+            ${o.location ? `Location: <strong>${escapeHtml(o.location)}</strong> · ` : ''}
+            Activity: <strong>${escapeHtml(o.activity)}</strong>
+            <br>Time: <strong>${o.startTime || 'N/A'}</strong> to <strong>${o.endTime || 'N/A'}</strong>
           </div>
         </div>
         <button class="da-btn da-btn-danger da-btn-sm" data-idx="${idx}">Remove</button>
@@ -3491,6 +3645,7 @@ function renderBunkOverridesUI() {
     if (!window.AccessControl?.checkEditAccess?.('add bunk override')) return;
     
     const bunk = document.getElementById('da-bunk-select').value;
+    const location = document.getElementById('da-location-select').value;
     const activity = document.getElementById('da-activity-select').value;
     const startTime = document.getElementById('da-override-start').value.trim();
     const endTime = document.getElementById('da-override-end').value.trim();
@@ -3510,6 +3665,7 @@ function renderBunkOverridesUI() {
     
     currentOverrides.bunkActivityOverrides.push({ 
       bunk, 
+      location,
       activity, 
       startTime, 
       endTime 
@@ -3518,6 +3674,16 @@ function renderBunkOverridesUI() {
     renderBunkOverridesUI();
     notify('Override added');
   };
+}
+
+// Get all activities (for bunk overrides)
+function getAllActivities() {
+  const globalSettings = window.loadGlobalSettings?.() || {};
+  const app1 = globalSettings.app1 || {};
+  const activities = (app1.activities || []).map(a => a.name || a);
+  const sports = (app1.sports || []).map(s => s.name || s);
+  const specials = (app1.specialActivities || []).map(s => s.name);
+  return [...new Set([...activities, ...sports, ...specials])].sort();
 }
 
 // =================================================================
@@ -3538,8 +3704,8 @@ function renderTripsForm() {
   
   container.innerHTML = `
     <div class="da-section">
-      <h3 class="da-section-title">🚌 Trips & Outings</h3>
-      <p class="da-section-desc">When bunks go on a trip, they won't be scheduled for activities during that time. The scheduler will automatically skip them.</p>
+      <h3 class="da-section-title">Trips & Outings</h3>
+      <p class="da-section-desc">When bunks go on a trip, they won't be scheduled for activities during that time. Adding a trip will remove any overlapping schedule blocks for those bunks.</p>
       
       <!-- Existing Trips -->
       <div id="da-trip-list" style="margin-bottom:20px;">
@@ -3548,7 +3714,7 @@ function renderTripsForm() {
       
       <!-- Add Trip Form -->
       <div class="da-add-trip-form">
-        <h4>➕ Schedule a Trip</h4>
+        <h4>Schedule a Trip</h4>
         
         <div class="da-trip-form-grid">
           <div class="da-trip-form-field full-width">
@@ -3596,12 +3762,7 @@ function renderTripsForm() {
         
         <div style="margin-top:20px;display:flex;justify-content:space-between;align-items:center;">
           <span id="da-bunks-selected" style="font-size:12px;color:var(--da-text3);">0 bunks selected</span>
-          <button id="da-add-trip-btn" class="da-btn da-btn-success">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 5v14M5 12h14"/>
-            </svg>
-            Add Trip
-          </button>
+          <button id="da-add-trip-btn" class="da-btn da-btn-success">Add Trip</button>
         </div>
       </div>
     </div>
@@ -3618,11 +3779,10 @@ function renderTripsForm() {
         <button class="da-trip-delete" data-idx="${idx}" title="Remove trip">✕</button>
         <div class="da-trip-card-header">
           <div class="da-trip-card-title">
-            <span>🚌</span>
             ${escapeHtml(trip.name || 'Unnamed Trip')}
           </div>
           <div class="da-trip-card-time">
-            ${trip.startTime || 'N/A'} → ${trip.endTime || 'N/A'}
+            ${trip.startTime || 'N/A'} - ${trip.endTime || 'N/A'}
           </div>
         </div>
         <div class="da-trip-card-bunks">
@@ -3712,6 +3872,57 @@ function renderTripsForm() {
       return;
     }
     
+    // Check for overlapping tiles and warn
+    const tripStartMin = parseTimeToMinutes(startTime);
+    const tripEndMin = parseTimeToMinutes(endTime);
+    
+    if (tripStartMin === null || tripEndMin === null) {
+      showAlert('Invalid time format. Please use format like "9:00 AM" or "2:30 PM".');
+      return;
+    }
+    
+    // Find tiles that will be affected
+    const affectedTiles = [];
+    dailyOverrideSkeleton.forEach(ev => {
+      const evStart = parseTimeToMinutes(ev.startTime);
+      const evEnd = parseTimeToMinutes(ev.endTime);
+      if (evStart === null || evEnd === null) return;
+      
+      // Check time overlap
+      const timeOverlaps = (evStart < tripEndMin) && (evEnd > tripStartMin);
+      if (!timeOverlaps) return;
+      
+      // Check if any selected bunk is in this event's division
+      const evDivision = ev.division || ev.divisions?.[0];
+      if (!evDivision) return;
+      
+      const divData = D[evDivision];
+      if (!divData) return;
+      
+      const divBunks = divData.bunks || [];
+      const affectedBunks = selectedBunks.filter(b => divBunks.includes(b));
+      if (affectedBunks.length > 0) {
+        affectedTiles.push({
+          event: ev.event || ev.name || 'Block',
+          time: `${ev.startTime} - ${ev.endTime}`,
+          division: evDivision,
+          bunks: affectedBunks
+        });
+      }
+    });
+    
+    // Show warning if tiles will be affected
+    if (affectedTiles.length > 0) {
+      const warningMsg = `Adding this trip will affect the following schedule blocks:\n\n` +
+        affectedTiles.slice(0, 5).map(t => `• ${t.event} (${t.time}) - ${t.division}`).join('\n') +
+        (affectedTiles.length > 5 ? `\n...and ${affectedTiles.length - 5} more` : '') +
+        `\n\nThe scheduler will skip these bunks during the trip time. Continue?`;
+      
+      const proceed = await showConfirm(warningMsg);
+      if (!proceed) return;
+    }
+    
+    // Add the trip
     trips.push({
       name,
       startTime,
@@ -3719,9 +3930,13 @@ function renderTripsForm() {
       bunks: selectedBunks
     });
     
+    // Save trips
     window.saveCurrentDailyData?.("trips", trips);
     window.forceSyncToCloud?.();
+    
+    // Re-render
     renderTripsForm();
+    renderGrid();
     notify(`Trip "${name}" added with ${selectedBunks.length} bunks`);
   };
 }
