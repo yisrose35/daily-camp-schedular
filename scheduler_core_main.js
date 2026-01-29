@@ -878,7 +878,7 @@ if (window.isRainyDay === undefined) {
 }
 console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️' : 'INACTIVE ☀️'}`);
 
-const rainyDayFilter = getRainyDayFieldFilter();
+
         const rainyDayFilter = getRainyDayFieldFilter();
         const rainyDaySpecials = getRainyDaySpecialActivities();
 
