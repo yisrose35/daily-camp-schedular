@@ -457,7 +457,11 @@ function bindRainyDayEvents() {
     autoSkeletonToggle.onchange = function(e) {
       e.stopPropagation();
       setAutoSkeletonSwitch(this.checked);
-      renderRainyDayPanel();
+      // Just update the skeleton dropdown state instead of re-rendering entire panel
+      const skeletonDropdown = document.getElementById('da-rainy-skeleton-select');
+      if (skeletonDropdown) {
+        skeletonDropdown.disabled = !this.checked;
+      }
     };
   }
      
