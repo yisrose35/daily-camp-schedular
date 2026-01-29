@@ -2041,40 +2041,54 @@ function renderBunkOverridesUI() {
   // Get activities
   const allSports = (masterSettings.app1?.fields || []).flatMap(f => f.activities || []);
   const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
-  const allActivities = [...new Set([...allSports, ...allSpecials])].sort();
   
-  // Get locations (fields + special activity locations)
-  const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
-  const specialLocations = (masterSettings.app1?.specialActivities || []).map(s => s.location || s.name).filter(Boolean);
-  const allLocations = [...new Set([...allFields, ...specialLocations])].sort();
+  // Get facilities from locations system (Pool, Lunchroom, Gym, etc.)
+  const allFacilities = (typeof window.getAllLocations === 'function' ? window.getAllLocations() : []).map(loc => loc.name);
   
-  let activityOptions = '<option value="">-- Select an Activity --</option>';
-  allActivities.forEach(act => { activityOptions += `<option value="${act}">${act}</option>`; });
+  // Combine all into one list with categories
+  const sportsSet = new Set(allSports);
+  const specialsSet = new Set(allSpecials);
+  const facilitiesSet = new Set(allFacilities);
   
-  let locationOptions = '<option value="">-- No Location --</option>';
-  allLocations.forEach(loc => { locationOptions += `<option value="${loc}">${loc}</option>`; });
+  // Build grouped options
+  let activityOptions = '<option value="">-- Select Activity or Facility --</option>';
+  
+  // Facilities group (Pool, Lunchroom, etc.)
+  if (allFacilities.length > 0) {
+    activityOptions += '<optgroup label="📍 Facilities">';
+    [...facilitiesSet].sort().forEach(fac => {
+      activityOptions += `<option value="${fac}" data-type="facility">${fac}</option>`;
+    });
+    activityOptions += '</optgroup>';
+  }
+  
+  // Special Activities group
+  if (allSpecials.length > 0) {
+    activityOptions += '<optgroup label="🎨 Special Activities">';
+    [...specialsSet].sort().forEach(act => {
+      activityOptions += `<option value="${act}" data-type="special">${act}</option>`;
+    });
+    activityOptions += '</optgroup>';
+  }
+  
+  // Sports group
+  if (allSports.length > 0) {
+    activityOptions += '<optgroup label="⚽ Sports">';
+    [...sportsSet].sort().forEach(sport => {
+      activityOptions += `<option value="${sport}" data-type="sport">${sport}</option>`;
+    });
+    activityOptions += '</optgroup>';
+  }
   
   container.innerHTML = `
     <div class="da-section">
       <h3 class="da-section-title">Bunk-Specific Overrides</h3>
-      <p class="da-section-desc">Assign a specific activity to bunks at a specific time. This pins the activity for those bunks.</p>
+      <p class="da-section-desc">Assign a specific activity or facility to bunks at a specific time. This pins the activity for those bunks.</p>
       
       <div class="da-form-grid">
-        <div class="da-form-field">
-          <label>Select Activity:</label>
+        <div class="da-form-field" style="grid-column: span 2;">
+          <label>Select Activity or Facility:</label>
           <select id="da-bunk-override-activity" class="da-select">${activityOptions}</select>
-        </div>
-        <div class="da-form-field">
-          <label>OR Custom Name:</label>
-          <input id="da-bunk-override-custom" type="text" placeholder="e.g., Trip, Assembly" class="da-input">
-        </div>
-        <div class="da-form-field">
-          <label>Location/Facility (optional):</label>
-          <select id="da-bunk-override-location" class="da-select">${locationOptions}</select>
-        </div>
-        <div class="da-form-field">
-          <label>OR Custom Location:</label>
-          <input id="da-bunk-override-custom-location" type="text" placeholder="e.g., Off Campus" class="da-input">
         </div>
         <div class="da-form-field">
           <label>Start Time:</label>
@@ -2121,25 +2135,29 @@ function renderBunkOverridesUI() {
   // Add button handler
   document.getElementById('da-add-override-btn').onclick = () => {
     const activityEl = document.getElementById('da-bunk-override-activity');
-    const customEl = document.getElementById('da-bunk-override-custom');
-    const locationEl = document.getElementById('da-bunk-override-location');
-    const customLocationEl = document.getElementById('da-bunk-override-custom-location');
     const startEl = document.getElementById('da-bunk-override-start');
     const endEl = document.getElementById('da-bunk-override-end');
     const selectedBunks = Array.from(document.querySelectorAll('#da-bunk-chips .da-chip.selected')).map(el => el.dataset.value);
     
-    let activity = customEl.value.trim();
-    let type = 'trip';
+    const activity = activityEl.value;
+    const selectedOption = activityEl.options[activityEl.selectedIndex];
+    const activityType = selectedOption?.dataset?.type || 'special';
     
-    if (!activity) {
-      activity = activityEl.value;
-      type = 'special';
+    // Determine type based on what was selected
+    let type = 'special';
+    if (activityType === 'facility') {
+      type = 'pinned'; // Facilities are pinned (like Pool for swim)
+    } else if (activityType === 'sport') {
+      type = 'sport';
     }
     
-    // Get location
-    let location = customLocationEl.value.trim() || locationEl.value || null;
+    // For facilities, the location is the activity itself
+    let location = null;
+    if (activityType === 'facility') {
+      location = activity;
+    }
     
-    if (!activity) { alert('Please select an activity or enter a custom name.'); return; }
+    if (!activity) { alert('Please select an activity or facility.'); return; }
     if (!startEl.value || !endEl.value) { alert('Please enter a start and end time.'); return; }
     if (selectedBunks.length === 0) { alert('Please select at least one bunk.'); return; }
     
@@ -2170,9 +2188,6 @@ function renderBunkOverridesUI() {
     currentOverrides.bunkActivityOverrides = overrides;
     
     activityEl.value = "";
-    customEl.value = "";
-    locationEl.value = "";
-    customLocationEl.value = "";
     startEl.value = "";
     endEl.value = "";
     document.querySelectorAll('#da-bunk-chips .da-chip.selected').forEach(chip => chip.click());
@@ -2190,9 +2205,10 @@ function renderBunkOverridesUI() {
       const el = document.createElement('div');
       el.className = 'da-override-item';
       const locationInfo = item.location ? `<span style="color:#059669;">@ ${item.location}</span>` : '';
+      const typeIcon = item.type === 'pinned' ? '📍' : (item.type === 'sport' ? '⚽' : '🎨');
       el.innerHTML = `
         <div>
-          <strong>${item.bunk}</strong> → <span style="color:#3b82f6;">${item.activity}</span> ${locationInfo}
+          <strong>${item.bunk}</strong> → <span style="color:#3b82f6;">${typeIcon} ${item.activity}</span> ${locationInfo}
           <div style="font-size:12px;color:#64748b;">${item.startTime} - ${item.endTime}</div>
         </div>
         <button class="da-btn da-btn-danger da-btn-sm" data-id="${item.id}">Remove</button>
