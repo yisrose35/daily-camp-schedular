@@ -1052,6 +1052,22 @@ function getMainStyles() {
       z-index: 4;
     }
     
+    /* Trip tile styling */
+    .grid-event.trip-tile {
+      z-index: 3;
+      pointer-events: none;
+      animation: tripPulse 3s ease-in-out infinite;
+    }
+    
+    @keyframes tripPulse {
+      0%, 100% { opacity: 0.85; }
+      50% { opacity: 0.95; }
+    }
+    
+    .grid-event.trip-tile:hover {
+      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+    }
+    
     /* Resize handles */
     .resize-handle {
       position: absolute;
@@ -1528,7 +1544,7 @@ function getMainStyles() {
       z-index: 1;
     }
     
-    .da-rainy-toggle input:checked + .da-rainy-toggle-track + .da-rainy-toggle-thumb {
+    .da-rainy-toggle input:checked ~ .da-rainy-toggle-thumb {
       left: 28px;
       background: #f0f9ff;
     }
@@ -2408,6 +2424,16 @@ function renderGrid() {
     if (s !== null && s < earliestMin) earliestMin = s;
   });
   
+  // Extend for trips that go beyond normal hours
+  const dailyDataForBounds = window.loadCurrentDailyData?.() || {};
+  const tripsForBounds = dailyDataForBounds.trips || [];
+  tripsForBounds.forEach(trip => {
+    const e = parseTimeToMinutes(trip.endTime);
+    if (e !== null && e > latestMin) latestMin = e;
+    const s = parseTimeToMinutes(trip.startTime);
+    if (s !== null && s < earliestMin) earliestMin = s;
+  });
+  
   if (latestMin <= earliestMin) latestMin = earliestMin + 60;
   
   const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
@@ -2462,6 +2488,17 @@ function renderGrid() {
     
     divEvents.forEach(ev => {
       html += renderEventTile(ev, earliestMin);
+    });
+    
+    // === TRIPS for this division ===
+    const divBunks = divData.bunks || [];
+    
+    tripsForBounds.forEach(trip => {
+      // Check if any bunk from this division is on this trip
+      const tripBunksInDiv = (trip.bunks || []).filter(b => divBunks.includes(b));
+      if (tripBunksInDiv.length > 0) {
+        html += renderTripTile(trip, tripBunksInDiv, earliestMin);
+      }
     });
     
     // Drop preview
@@ -2537,6 +2574,42 @@ function renderEventTile(ev, earliestMin) {
           <div class="resize-handle resize-handle-top"></div>
           ${innerHtml}
           <div class="resize-handle resize-handle-bottom"></div>
+          </div>`;
+}
+
+// Render trip tile - special styling for trips
+function renderTripTile(trip, bunksInDiv, earliestMin) {
+  const startMin = parseTimeToMinutes(trip.startTime);
+  const endMin = parseTimeToMinutes(trip.endTime);
+  if (startMin == null || endMin == null || endMin <= startMin) return '';
+  
+  const top = (startMin - earliestMin) * PIXELS_PER_MINUTE;
+  const height = (endMin - startMin) * PIXELS_PER_MINUTE;
+  const adjustedHeight = Math.max(height - 1, 10);
+  
+  // Trip-specific styling - distinctive purple/blue gradient
+  const tripStyle = 'background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%); color: white; border: 2px solid #6366f1; box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);';
+  
+  // Build bunk list for display
+  const bunkList = bunksInDiv.slice(0, 4).join(', ');
+  const moreCount = bunksInDiv.length > 4 ? ` +${bunksInDiv.length - 4}` : '';
+  
+  let innerHtml = `
+    <div class="tile-header">
+      <strong style="font-size:11px;">🚌 ${escapeHtml(trip.name || 'Trip')}</strong>
+      <div style="font-size:10px;opacity:0.9;">${trip.startTime}-${trip.endTime}</div>
+    </div>
+  `;
+  
+  // Show bunks if tile is tall enough
+  if (adjustedHeight > 45) {
+    innerHtml += `<div style="font-size:9px;opacity:0.9;margin-top:2px;">${bunkList}${moreCount}</div>`;
+  }
+  
+  return `<div class="grid-event trip-tile" data-trip-id="${escapeHtml(trip.name || '')}" 
+          title="Trip: ${escapeHtml(trip.name || 'Unnamed')} - ${bunksInDiv.length} bunk(s)"
+          style="${tripStyle}; position:absolute; top:${top}px; height:${adjustedHeight}px; width:96%; left:2%; padding:5px 7px; font-size:11px; overflow:hidden; border-radius:5px; cursor:default; display:flex; flex-direction:column; box-sizing:border-box; pointer-events:none; opacity:0.9;">
+          ${innerHtml}
           </div>`;
 }
 
@@ -3547,13 +3620,8 @@ function renderBunkOverridesUI() {
     (divData.bunks || []).forEach(b => allBunks.push({ bunk: b, division: divName }));
   });
   
-  const locations = getAllLocations();
   const activities = getAllActivities();
   const overrides = currentOverrides.bunkActivityOverrides || [];
-  
-  const locationOptions = locations.map(l => 
-    `<option value="${escapeHtml(l)}">${escapeHtml(l)}</option>`
-  ).join('');
   
   const activityOptions = activities.map(a => 
     `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`
@@ -3562,7 +3630,7 @@ function renderBunkOverridesUI() {
   container.innerHTML = `
     <div class="da-section">
       <h3 class="da-section-title">Bunk-Specific Activity Overrides</h3>
-      <p class="da-section-desc">Force specific bunks to do a certain activity at a certain location during a time range. These will override the automatic scheduler.</p>
+      <p class="da-section-desc">Force specific bunks to a certain activity (including locations like Pool) during a time range. These override the automatic scheduler.</p>
       
       <!-- Existing Overrides -->
       <div id="da-override-list" style="margin-bottom:16px;">
@@ -3581,14 +3649,7 @@ function renderBunkOverridesUI() {
             </select>
           </div>
           <div class="da-trip-form-field">
-            <label>Location</label>
-            <select id="da-location-select" class="da-select">
-              <option value="">Select location...</option>
-              ${locationOptions}
-            </select>
-          </div>
-          <div class="da-trip-form-field">
-            <label>Activity</label>
+            <label>Activity / Location</label>
             <select id="da-activity-select" class="da-select">
               <option value="">Select activity...</option>
               ${activityOptions}
@@ -3621,7 +3682,6 @@ function renderBunkOverridesUI() {
         <div class="da-override-card-info">
           <div class="da-override-card-bunk">${escapeHtml(o.bunk)}</div>
           <div class="da-override-card-detail">
-            ${o.location ? `Location: <strong>${escapeHtml(o.location)}</strong> · ` : ''}
             Activity: <strong>${escapeHtml(o.activity)}</strong>
             <br>Time: <strong>${o.startTime || 'N/A'}</strong> to <strong>${o.endTime || 'N/A'}</strong>
           </div>
@@ -3645,7 +3705,6 @@ function renderBunkOverridesUI() {
     if (!window.AccessControl?.checkEditAccess?.('add bunk override')) return;
     
     const bunk = document.getElementById('da-bunk-select').value;
-    const location = document.getElementById('da-location-select').value;
     const activity = document.getElementById('da-activity-select').value;
     const startTime = document.getElementById('da-override-start').value.trim();
     const endTime = document.getElementById('da-override-end').value.trim();
@@ -3663,9 +3722,22 @@ function renderBunkOverridesUI() {
       return;
     }
     
+    // Validate time format
+    const startMin = parseTimeToMinutes(startTime);
+    const endMin = parseTimeToMinutes(endTime);
+    
+    if (startMin === null || endMin === null) {
+      showAlert('Invalid time format. Please use format like "9:00 AM" or "2:30 PM".');
+      return;
+    }
+    
+    if (endMin <= startMin) {
+      showAlert('End time must be after start time.');
+      return;
+    }
+    
     currentOverrides.bunkActivityOverrides.push({ 
       bunk, 
-      location,
       activity, 
       startTime, 
       endTime 
@@ -3676,14 +3748,22 @@ function renderBunkOverridesUI() {
   };
 }
 
-// Get all activities (for bunk overrides)
+// Get all activities (for bunk overrides) - includes facilities like Pool
 function getAllActivities() {
   const globalSettings = window.loadGlobalSettings?.() || {};
   const app1 = globalSettings.app1 || {};
-  const activities = (app1.activities || []).map(a => a.name || a);
-  const sports = (app1.sports || []).map(s => s.name || s);
+  
+  // Get sports from fields
+  const sports = (app1.fields || []).flatMap(f => f.activities || []);
+  
+  // Get special activities
   const specials = (app1.specialActivities || []).map(s => s.name);
-  return [...new Set([...activities, ...sports, ...specials])].sort();
+  
+  // Get facilities (locations like Pool, Gym, etc.)
+  const facilities = (app1.facilities || []).map(f => f.name || f);
+  
+  // Combine all, deduplicate, and sort
+  return [...new Set([...sports, ...specials, ...facilities])].sort();
 }
 
 // =================================================================
@@ -3878,6 +3958,11 @@ function renderTripsForm() {
     
     if (tripStartMin === null || tripEndMin === null) {
       showAlert('Invalid time format. Please use format like "9:00 AM" or "2:30 PM".');
+      return;
+    }
+    
+    if (tripEndMin <= tripStartMin) {
+      showAlert('Return time must be after departure time.');
       return;
     }
     
