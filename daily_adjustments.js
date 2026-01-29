@@ -191,6 +191,9 @@ function renderRainyDayPanel() {
   const autoSwitch = isAutoSkeletonSwitchEnabled();
   const rainySkeletonName = getRainyDaySkeletonName();
   const availableSkeletons = getAvailableSkeletons();
+  
+  // Check if panel should be expanded (auto-expand if active)
+  const isExpanded = isActive || panel.dataset.expanded === 'true';
      
   // Generate rain drops for animation
   let rainDrops = '';
@@ -216,74 +219,87 @@ function renderRainyDayPanel() {
   ` : '';
      
   panel.innerHTML = `
-    <div class="da-rainy-card ${isActive ? 'active' : 'inactive'}">
-      <div class="da-rain-container">${rainDrops}</div>
-        
-      <div class="da-rainy-header">
-        <div class="da-rainy-title-section">
-          <div class="da-rainy-icon">${isActive ? '🌧️' : '☀️'}</div>
-          <div>
-            <h3 class="da-rainy-title">Rainy Day Mode</h3>
-            <p class="da-rainy-subtitle">
-              ${isActive 
-                ? (isMidDay ? 'Mid-day mode — morning schedule preserved' : 'Indoor schedule active — outdoor fields disabled')
-                : 'Normal schedule — all fields available'}
-            </p>
-          </div>
+    <div class="da-rainy-dropdown ${isExpanded ? 'expanded' : ''} ${isActive ? 'active' : ''}">
+      <div class="da-rainy-dropdown-header" id="da-rainy-dropdown-toggle">
+        <div class="da-rainy-dropdown-title">
+          <span class="da-rainy-dropdown-icon">${isActive ? '🌧️' : '☀️'}</span>
+          <span>Rainy Day Mode</span>
+          ${isActive ? `<span class="da-rainy-active-badge">${isMidDay ? 'MID-DAY' : 'ACTIVE'}</span>` : ''}
         </div>
-        
-        <div class="da-rainy-toggle-container">
-          <button id="da-rainy-settings-btn" class="da-rainy-settings-btn">⚙️ Settings</button>
-            
-          <span class="da-rainy-status-badge ${isActive ? 'active' : 'inactive'}">
-            <span class="da-status-dot ${isActive ? 'active' : 'inactive'}"></span>
-            ${isActive ? (isMidDay ? 'MID-DAY' : 'ACTIVE') : 'INACTIVE'}
-          </span>
-            
-          <label class="da-rainy-toggle">
-            <input type="checkbox" id="da-rainy-toggle-input" ${isActive ? 'checked' : ''}>
-            <span class="da-rainy-toggle-track"></span>
-            <span class="da-rainy-toggle-thumb">${isActive ? '💧' : '☀️'}</span>
-          </label>
-        </div>
+        <span class="da-rainy-dropdown-arrow">${isExpanded ? '▼' : '▶'}</span>
       </div>
-        
-      ${midDayInfo}
-        
-      <div class="da-rainy-stats">
-        <div class="da-rainy-stat"><span>🏠</span><strong>${stats.indoorFields}</strong><span>Indoor</span></div>
-        <div class="da-rainy-stat"><span>🌳</span><strong>${stats.outdoorFields}</strong><span>Outdoor ${isActive ? '(Disabled)' : ''}</span></div>
-        <div class="da-rainy-stat"><span>🎨</span><strong>${stats.rainySpecials}</strong><span>Rainy Activities</span></div>
-        ${!isActive ? `
-        <div class="da-rainy-stat" style="margin-left:auto;">
-          <button id="da-rainy-midday-btn" class="da-btn da-btn-warning">⏰ Start Mid-Day Mode</button>
-        </div>
-        ` : ''}
-      </div>
-        
-      <!-- Settings Panel -->
-      <div id="da-rainy-settings-panel" class="da-rainy-settings-panel" style="display:none;">
-        <div class="da-rainy-settings-row">
-          <div>
-            <span class="da-rainy-settings-label">Auto-Switch Skeleton</span>
-            <div class="da-rainy-settings-sublabel">Automatically load rainy day template when activating</div>
+      
+      <div class="da-rainy-dropdown-content" style="display:${isExpanded ? 'block' : 'none'};">
+        <div class="da-rainy-card ${isActive ? 'active' : 'inactive'}">
+          <div class="da-rain-container">${rainDrops}</div>
+            
+          <div class="da-rainy-header">
+            <div class="da-rainy-title-section">
+              <div class="da-rainy-icon">${isActive ? '🌧️' : '☀️'}</div>
+              <div>
+                <h3 class="da-rainy-title">Rainy Day Mode</h3>
+                <p class="da-rainy-subtitle">
+                  ${isActive 
+                    ? (isMidDay ? 'Mid-day mode — morning schedule preserved' : 'Indoor schedule active — outdoor fields disabled')
+                    : 'Normal schedule — all fields available'}
+                </p>
+              </div>
+            </div>
+            
+            <div class="da-rainy-toggle-container">
+              <button id="da-rainy-settings-btn" class="da-rainy-settings-btn">⚙️ Settings</button>
+                
+              <span class="da-rainy-status-badge ${isActive ? 'active' : 'inactive'}">
+                <span class="da-status-dot ${isActive ? 'active' : 'inactive'}"></span>
+                ${isActive ? (isMidDay ? 'MID-DAY' : 'ACTIVE') : 'INACTIVE'}
+              </span>
+                
+              <label class="da-rainy-toggle" onclick="event.stopPropagation();">
+                <input type="checkbox" id="da-rainy-toggle-input" ${isActive ? 'checked' : ''}>
+                <span class="da-rainy-toggle-track"></span>
+                <span class="da-rainy-toggle-thumb">${isActive ? '💧' : '☀️'}</span>
+              </label>
+            </div>
           </div>
-          <label class="da-mini-toggle">
-            <input type="checkbox" id="da-rainy-auto-skeleton-toggle" ${autoSwitch ? 'checked' : ''}>
-            <span class="da-mini-track"></span>
-            <span class="da-mini-thumb"></span>
-          </label>
-        </div>
-        
-        <div class="da-rainy-settings-row">
-          <div>
-            <span class="da-rainy-settings-label">Rainy Day Skeleton</span>
-            <div class="da-rainy-settings-sublabel">Template to use when rainy mode activates</div>
+            
+          ${midDayInfo}
+            
+          <div class="da-rainy-stats">
+            <div class="da-rainy-stat"><span>🏠</span><strong>${stats.indoorFields}</strong><span>Indoor</span></div>
+            <div class="da-rainy-stat"><span>🌳</span><strong>${stats.outdoorFields}</strong><span>Outdoor ${isActive ? '(Disabled)' : ''}</span></div>
+            <div class="da-rainy-stat"><span>🎨</span><strong>${stats.rainySpecials}</strong><span>Rainy Activities</span></div>
+            ${!isActive ? `
+            <div class="da-rainy-stat" style="margin-left:auto;">
+              <button id="da-rainy-midday-btn" class="da-btn da-btn-warning">⏰ Start Mid-Day Mode</button>
+            </div>
+            ` : ''}
           </div>
-          <select id="da-rainy-skeleton-select" class="da-select" ${!autoSwitch ? 'disabled' : ''}>
-            <option value="">-- Select Template --</option>
-            ${skeletonOptions}
-          </select>
+            
+          <!-- Settings Panel -->
+          <div id="da-rainy-settings-panel" class="da-rainy-settings-panel" style="display:none;">
+            <div class="da-rainy-settings-row">
+              <div>
+                <span class="da-rainy-settings-label">Auto-Switch Skeleton</span>
+                <div class="da-rainy-settings-sublabel">Automatically load rainy day template when activating</div>
+              </div>
+              <label class="da-mini-toggle">
+                <input type="checkbox" id="da-rainy-auto-skeleton-toggle" ${autoSwitch ? 'checked' : ''}>
+                <span class="da-mini-track"></span>
+                <span class="da-mini-thumb"></span>
+              </label>
+            </div>
+            
+            <div class="da-rainy-settings-row">
+              <div>
+                <span class="da-rainy-settings-label">Rainy Day Skeleton</span>
+                <div class="da-rainy-settings-sublabel">Template to use when rainy mode activates</div>
+              </div>
+              <select id="da-rainy-skeleton-select" class="da-select" ${!autoSwitch ? 'disabled' : ''}>
+                <option value="">-- Select Template --</option>
+                ${skeletonOptions}
+              </select>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -293,6 +309,28 @@ function renderRainyDayPanel() {
 }
 
 function bindRainyDayEvents() {
+  // Dropdown toggle
+  const dropdownToggle = document.getElementById('da-rainy-dropdown-toggle');
+  const panel = document.getElementById('da-rainy-panel');
+  
+  if (dropdownToggle) {
+    dropdownToggle.onclick = function(e) {
+      // Don't toggle if clicking on the actual toggle switch
+      if (e.target.closest('.da-rainy-toggle') || e.target.closest('.da-rainy-settings-btn')) return;
+      
+      const dropdown = dropdownToggle.closest('.da-rainy-dropdown');
+      const content = dropdown.querySelector('.da-rainy-dropdown-content');
+      const arrow = dropdown.querySelector('.da-rainy-dropdown-arrow');
+      const isExpanded = content.style.display !== 'none';
+      
+      content.style.display = isExpanded ? 'none' : 'block';
+      arrow.textContent = isExpanded ? '▶' : '▼';
+      dropdown.classList.toggle('expanded', !isExpanded);
+      
+      if (panel) panel.dataset.expanded = (!isExpanded).toString();
+    };
+  }
+  
   const toggle = document.getElementById('da-rainy-toggle-input');
   const autoSkeletonToggle = document.getElementById('da-rainy-auto-skeleton-toggle');
   const skeletonSelect = document.getElementById('da-rainy-skeleton-select');
@@ -301,7 +339,8 @@ function bindRainyDayEvents() {
   const settingsPanel = document.getElementById('da-rainy-settings-panel');
      
   if (settingsBtn && settingsPanel) {
-    settingsBtn.onclick = function() {
+    settingsBtn.onclick = function(e) {
+      e.stopPropagation();
       const isOpen = settingsPanel.style.display !== 'none';
       settingsPanel.style.display = isOpen ? 'none' : 'block';
       settingsBtn.textContent = isOpen ? '⚙️ Settings' : '⚙️ Close';
@@ -309,7 +348,8 @@ function bindRainyDayEvents() {
   }
      
   if (toggle) {
-    toggle.onchange = function() {
+    toggle.onchange = function(e) {
+      e.stopPropagation();
       if (this.checked) {
         activateFullDayRainyMode();
       } else {
@@ -322,20 +362,23 @@ function bindRainyDayEvents() {
   }
      
   if (autoSkeletonToggle) {
-    autoSkeletonToggle.onchange = function() {
+    autoSkeletonToggle.onchange = function(e) {
+      e.stopPropagation();
       setAutoSkeletonSwitch(this.checked);
       renderRainyDayPanel();
     };
   }
      
   if (skeletonSelect) {
-    skeletonSelect.onchange = function() {
+    skeletonSelect.onchange = function(e) {
+      e.stopPropagation();
       setRainyDaySkeletonName(this.value || null);
     };
   }
      
   if (midDayBtn) {
-    midDayBtn.onclick = function() {
+    midDayBtn.onclick = function(e) {
+      e.stopPropagation();
       if (confirm('Start Mid-Day Mode?\n\nThis will:\n• Preserve current morning schedule\n• Switch to rainy day mode from now onwards\n• Disable outdoor fields')) {
         activateMidDayRainyMode();
         renderRainyDayPanel();
@@ -887,7 +930,7 @@ function renderEventTile(ev, top, height) {
   }
   
   let style = tile ? tile.style : 'background:#d1d5db;color:#374151;';
-  const adjustedHeight = Math.max(height - 2, 10);
+  const adjustedHeight = Math.max(height - 2, 18); // Minimum 18px height
   
   // Night activity styling
   const isNight = !!ev.isNightActivity;
@@ -898,36 +941,58 @@ function renderEventTile(ev, top, height) {
   const selectedClass = selectedTileId === ev.id ? ' selected' : '';
   const nightClass = isNight ? ' da-night-activity' : '';
   
-  let fontSize = adjustedHeight < 30 ? '10px' : (adjustedHeight < 50 ? '11px' : '12px');
+  // Better font sizing for small tiles
+  let fontSize, lineHeight, padding;
+  if (adjustedHeight < 24) {
+    fontSize = '9px'; lineHeight = '1.1'; padding = '1px 4px';
+  } else if (adjustedHeight < 35) {
+    fontSize = '10px'; lineHeight = '1.2'; padding = '2px 5px';
+  } else if (adjustedHeight < 50) {
+    fontSize = '11px'; lineHeight = '1.2'; padding = '3px 5px';
+  } else {
+    fontSize = '12px'; lineHeight = '1.3'; padding = '4px 6px';
+  }
   
   const eventName = ev.event || 'Event';
   const timeStr = `${ev.startTime}-${ev.endTime}`;
   
-  let content = `<strong>${eventName}</strong>`;
-  if (isNight) content += ' 🌙';
-  content += `<div style="font-size:10px;opacity:0.85;">${timeStr}</div>`;
-  
-  // Location display
-  if (adjustedHeight > 50) {
-    const locationDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
-    if (locationDisplay && ev.type !== 'elective') {
-      content += `<div style="font-size:9px;opacity:0.8;">📍 ${locationDisplay}</div>`;
-    }
+  // Compact content for very small tiles
+  let content;
+  if (adjustedHeight < 24) {
+    // Ultra compact - just name abbreviated
+    const shortName = eventName.length > 12 ? eventName.substring(0, 10) + '..' : eventName;
+    content = `<span style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${shortName}${isNight ? ' 🌙' : ''}</span>`;
+  } else if (adjustedHeight < 35) {
+    // Compact - name + time on one line
+    content = `<span style="font-weight:600;">${eventName}</span>${isNight ? ' 🌙' : ''} <span style="font-size:9px;opacity:0.8;">${timeStr}</span>`;
+  } else {
+    // Normal layout
+    content = `<strong>${eventName}</strong>`;
+    if (isNight) content += ' 🌙';
+    content += `<div style="font-size:10px;opacity:0.85;">${timeStr}</div>`;
     
-    if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
-      const actList = ev.electiveActivities.slice(0, 3).join(', ');
-      const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
-      content += `<div style="font-size:9px;opacity:0.8;">🎯 ${actList}${more}</div>`;
-    }
-    
-    if (ev.type === 'smart' && ev.smartData) {
-      content += `<div style="font-size:9px;opacity:0.8;">F: ${ev.smartData.fallbackActivity}</div>`;
+    // Location display for larger tiles
+    if (adjustedHeight > 50) {
+      const locationDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
+      if (locationDisplay && ev.type !== 'elective') {
+        content += `<div style="font-size:9px;opacity:0.8;">📍 ${locationDisplay}</div>`;
+      }
+      
+      if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
+        const actList = ev.electiveActivities.slice(0, 3).join(', ');
+        const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
+        content += `<div style="font-size:9px;opacity:0.8;">🎯 ${actList}${more}</div>`;
+      }
+      
+      if (ev.type === 'smart' && ev.smartData) {
+        content += `<div style="font-size:9px;opacity:0.8;">F: ${ev.smartData.fallbackActivity}</div>`;
+      }
     }
   }
   
   return `<div class="da-event${selectedClass}${nightClass}" data-id="${ev.id}" draggable="true" 
           title="${eventName} (${timeStr})${isNight ? ' - Night Activity' : ''} - Double-click to remove"
-          style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};">
+          style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};line-height:${lineHeight};padding:${padding};">
           <div class="da-resize-handle da-resize-top"></div>
           ${content}
           <div class="da-resize-handle da-resize-bottom"></div>
@@ -1973,17 +2038,26 @@ function renderBunkOverridesUI() {
     });
   });
   
+  // Get activities
   const allSports = (masterSettings.app1?.fields || []).flatMap(f => f.activities || []);
   const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
   const allActivities = [...new Set([...allSports, ...allSpecials])].sort();
   
+  // Get locations (fields + special activity locations)
+  const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
+  const specialLocations = (masterSettings.app1?.specialActivities || []).map(s => s.location || s.name).filter(Boolean);
+  const allLocations = [...new Set([...allFields, ...specialLocations])].sort();
+  
   let activityOptions = '<option value="">-- Select an Activity --</option>';
   allActivities.forEach(act => { activityOptions += `<option value="${act}">${act}</option>`; });
+  
+  let locationOptions = '<option value="">-- No Location --</option>';
+  allLocations.forEach(loc => { locationOptions += `<option value="${loc}">${loc}</option>`; });
   
   container.innerHTML = `
     <div class="da-section">
       <h3 class="da-section-title">Bunk-Specific Overrides</h3>
-      <p class="da-section-desc">Assign a specific activity to bunks at a specific time.</p>
+      <p class="da-section-desc">Assign a specific activity to bunks at a specific time. This pins the activity for those bunks.</p>
       
       <div class="da-form-grid">
         <div class="da-form-field">
@@ -1992,7 +2066,15 @@ function renderBunkOverridesUI() {
         </div>
         <div class="da-form-field">
           <label>OR Custom Name:</label>
-          <input id="da-bunk-override-custom" type="text" placeholder="e.g., Trip" class="da-input">
+          <input id="da-bunk-override-custom" type="text" placeholder="e.g., Trip, Assembly" class="da-input">
+        </div>
+        <div class="da-form-field">
+          <label>Location/Facility (optional):</label>
+          <select id="da-bunk-override-location" class="da-select">${locationOptions}</select>
+        </div>
+        <div class="da-form-field">
+          <label>OR Custom Location:</label>
+          <input id="da-bunk-override-custom-location" type="text" placeholder="e.g., Off Campus" class="da-input">
         </div>
         <div class="da-form-field">
           <label>Start Time:</label>
@@ -2040,6 +2122,8 @@ function renderBunkOverridesUI() {
   document.getElementById('da-add-override-btn').onclick = () => {
     const activityEl = document.getElementById('da-bunk-override-activity');
     const customEl = document.getElementById('da-bunk-override-custom');
+    const locationEl = document.getElementById('da-bunk-override-location');
+    const customLocationEl = document.getElementById('da-bunk-override-custom-location');
     const startEl = document.getElementById('da-bunk-override-start');
     const endEl = document.getElementById('da-bunk-override-end');
     const selectedBunks = Array.from(document.querySelectorAll('#da-bunk-chips .da-chip.selected')).map(el => el.dataset.value);
@@ -2051,6 +2135,9 @@ function renderBunkOverridesUI() {
       activity = activityEl.value;
       type = 'special';
     }
+    
+    // Get location
+    let location = customLocationEl.value.trim() || locationEl.value || null;
     
     if (!activity) { alert('Please select an activity or enter a custom name.'); return; }
     if (!startEl.value || !endEl.value) { alert('Please enter a start and end time.'); return; }
@@ -2068,7 +2155,15 @@ function renderBunkOverridesUI() {
     const overrides = dailyData.bunkActivityOverrides || [];
     
     selectedBunks.forEach(bunk => {
-      overrides.push({ id: uid(), bunk, activity, startTime: startEl.value, endTime: endEl.value, type });
+      overrides.push({ 
+        id: uid(), 
+        bunk, 
+        activity, 
+        location,
+        startTime: startEl.value, 
+        endTime: endEl.value, 
+        type 
+      });
     });
     
     window.saveCurrentDailyData("bunkActivityOverrides", overrides);
@@ -2076,6 +2171,8 @@ function renderBunkOverridesUI() {
     
     activityEl.value = "";
     customEl.value = "";
+    locationEl.value = "";
+    customLocationEl.value = "";
     startEl.value = "";
     endEl.value = "";
     document.querySelectorAll('#da-bunk-chips .da-chip.selected').forEach(chip => chip.click());
@@ -2092,9 +2189,10 @@ function renderBunkOverridesUI() {
     overrides.forEach(item => {
       const el = document.createElement('div');
       el.className = 'da-override-item';
+      const locationInfo = item.location ? `<span style="color:#059669;">@ ${item.location}</span>` : '';
       el.innerHTML = `
         <div>
-          <strong>${item.bunk}</strong> → <span style="color:#3b82f6;">${item.activity}</span>
+          <strong>${item.bunk}</strong> → <span style="color:#3b82f6;">${item.activity}</span> ${locationInfo}
           <div style="font-size:12px;color:#64748b;">${item.startTime} - ${item.endTime}</div>
         </div>
         <button class="da-btn da-btn-danger da-btn-sm" data-id="${item.id}">Remove</button>
@@ -2157,9 +2255,9 @@ function renderResourceOverridesUI() {
         <div id="da-override-specialty-leagues-list"></div>
       </div>
       <div class="da-resource-detail">
-        <h4>Details</h4>
+        <h4>Details & Time Rules</h4>
         <div id="da-override-detail-pane">
-          <p style="color:#94a3b8;">Select an item to edit details.</p>
+          <p style="color:#94a3b8;">Select an item to edit details and set time-based availability.</p>
         </div>
       </div>
     </div>
@@ -2173,6 +2271,7 @@ function renderResourceOverridesUI() {
     fullOverrides.disabledSpecials = currentOverrides.disabledSpecials;
     window.saveCurrentDailyData("overrides", fullOverrides);
     window.saveCurrentDailyData("dailyDisabledSportsByField", currentOverrides.dailyDisabledSportsByField);
+    window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
   };
   
   const fields = masterSettings.app1?.fields || [];
@@ -2182,6 +2281,7 @@ function renderResourceOverridesUI() {
     const isDisabled = currentOverrides.disabledFields.includes(item.name);
     const isOutdoor = item.rainyDayAvailable !== true;
     const isRainyDisabled = isRainy && isOutdoor;
+    const hasTimeRules = (currentOverrides.dailyFieldAvailability[item.name] || []).length > 0;
     
     const onToggle = (isEnabled) => {
       if (isEnabled) currentOverrides.disabledFields = currentOverrides.disabledFields.filter(n => n !== item.name);
@@ -2190,7 +2290,7 @@ function renderResourceOverridesUI() {
       renderResourceOverridesUI();
     };
     
-    fieldsListEl.appendChild(createResourceToggleItem('field', item.name, !isDisabled, onToggle, isOutdoor, isRainyDisabled));
+    fieldsListEl.appendChild(createResourceToggleItem('field', item.name, !isDisabled, onToggle, isOutdoor, isRainyDisabled, false, hasTimeRules));
   });
   
   const specials = masterSettings.app1?.specialActivities || [];
@@ -2198,12 +2298,14 @@ function renderResourceOverridesUI() {
   specials.forEach(item => {
     const isDisabled = currentOverrides.disabledSpecials.includes(item.name);
     const isRainyOnly = item.rainyDayOnly === true;
+    const hasTimeRules = (currentOverrides.dailyFieldAvailability[item.name] || []).length > 0;
+    
     const onToggle = (isEnabled) => {
       if (isEnabled) currentOverrides.disabledSpecials = currentOverrides.disabledSpecials.filter(n => n !== item.name);
       else if (!currentOverrides.disabledSpecials.includes(item.name)) currentOverrides.disabledSpecials.push(item.name);
       saveOverrides();
     };
-    specialsListEl.appendChild(createResourceToggleItem('special', item.name, !isDisabled, onToggle, false, false, isRainyOnly));
+    specialsListEl.appendChild(createResourceToggleItem('special', item.name, !isDisabled, onToggle, false, false, isRainyOnly, hasTimeRules));
   });
   
   const leagues = Object.keys(masterSettings.leaguesByName || {});
@@ -2233,7 +2335,7 @@ function renderResourceOverridesUI() {
   renderOverrideDetailPane();
 }
 
-function createResourceToggleItem(type, name, isEnabled, onToggle, isOutdoor = false, isRainyDisabled = false, isRainyOnly = false) {
+function createResourceToggleItem(type, name, isEnabled, onToggle, isOutdoor = false, isRainyDisabled = false, isRainyOnly = false, hasTimeRules = false) {
   const el = document.createElement('div');
   el.className = 'da-resource-item' + (selectedOverrideId === type + '-' + name ? ' selected' : '');
   if (isRainyDisabled) el.style.opacity = '0.6';
@@ -2242,6 +2344,7 @@ function createResourceToggleItem(type, name, isEnabled, onToggle, isOutdoor = f
   if (isOutdoor) badges += '<span class="da-badge da-badge-outdoor">🌳 Outdoor</span>';
   else if (type === 'field') badges += '<span class="da-badge da-badge-indoor">🏠 Indoor</span>';
   if (isRainyOnly) badges += '<span class="da-badge da-badge-rainy">🌧️ Rainy</span>';
+  if (hasTimeRules) badges += '<span class="da-badge da-badge-time">⏰ Time Rules</span>';
   
   el.innerHTML = `
     <span class="da-resource-name">${name}${badges}</span>
@@ -2269,48 +2372,152 @@ function renderOverrideDetailPane() {
   if (!paneEl) return;
   
   if (!selectedOverrideId) {
-    paneEl.innerHTML = '<p style="color:#94a3b8;">Select an item to edit details.</p>';
+    paneEl.innerHTML = '<p style="color:#94a3b8;">Select an item to edit details and set time-based availability.</p>';
     return;
   }
   
   const [type, ...nameParts] = selectedOverrideId.split('-');
   const name = nameParts.join('-');
   
-  if (type === 'field') {
-    const item = (masterSettings.app1?.fields || []).find(f => f.name === name);
-    if (!item) { paneEl.innerHTML = '<p style="color:#ef4444;">Field not found.</p>'; return; }
+  if (type === 'field' || type === 'special') {
+    const item = type === 'field' 
+      ? (masterSettings.app1?.fields || []).find(f => f.name === name)
+      : (masterSettings.app1?.specialActivities || []).find(s => s.name === name);
+    
+    if (!item) { paneEl.innerHTML = '<p style="color:#ef4444;">Item not found.</p>'; return; }
+    
+    // Get global rules from setup and daily rules
+    const globalRules = item.timeRules || [];
+    if (!currentOverrides.dailyFieldAvailability[name]) {
+      currentOverrides.dailyFieldAvailability[name] = [];
+    }
+    const dailyRules = currentOverrides.dailyFieldAvailability[name];
     
     paneEl.innerHTML = `
-      <h4>${name}</h4>
-      <div style="margin-top:12px;">
-        <strong>Sports on this field:</strong>
-        <div id="da-sports-checkboxes" style="margin-top:8px;"></div>
+      <h4 style="margin:0 0 12px;display:flex;align-items:center;gap:8px;">
+        ${name}
+        ${type === 'field' ? (item.rainyDayAvailable ? '<span class="da-badge da-badge-indoor">🏠 Indoor</span>' : '<span class="da-badge da-badge-outdoor">🌳 Outdoor</span>') : ''}
+      </h4>
+      
+      <div class="da-detail-section">
+        <h5>📋 Global Rules (from Setup)</h5>
+        <div id="da-global-rules-list"></div>
       </div>
+      
+      <div class="da-detail-section">
+        <h5>📅 Today's Time Rules</h5>
+        <p class="da-section-desc">Add custom availability windows for today only. These override global rules.</p>
+        <div id="da-daily-rules-list"></div>
+        
+        <div class="da-time-rule-form">
+          <select id="da-rule-type" class="da-select da-select-sm">
+            <option value="Available">✅ Available</option>
+            <option value="Unavailable">❌ Unavailable</option>
+          </select>
+          <span style="color:#64748b;">from</span>
+          <input id="da-rule-start" placeholder="9:00am" class="da-input da-input-sm" style="width:80px;">
+          <span style="color:#64748b;">to</span>
+          <input id="da-rule-end" placeholder="10:00am" class="da-input da-input-sm" style="width:80px;">
+          <button id="da-add-rule-btn" class="da-btn da-btn-primary da-btn-sm">Add</button>
+        </div>
+      </div>
+      
+      ${type === 'field' ? `
+      <div class="da-detail-section">
+        <h5>🏃 Sports Availability</h5>
+        <p class="da-section-desc">Disable specific sports on this field for today.</p>
+        <div id="da-sports-checkboxes"></div>
+      </div>
+      ` : ''}
     `;
     
-    const sports = item.activities || [];
-    const checkboxesEl = document.getElementById('da-sports-checkboxes');
-    if (sports.length === 0) {
-      checkboxesEl.innerHTML = '<p style="color:#94a3b8;font-size:13px;">No sports assigned.</p>';
+    // Render global rules
+    const globalRulesEl = document.getElementById('da-global-rules-list');
+    if (globalRules.length === 0) {
+      globalRulesEl.innerHTML = '<p style="color:#94a3b8;font-size:12px;margin:4px 0;">Available all day (no restrictions)</p>';
     } else {
-      const disabledToday = currentOverrides.dailyDisabledSportsByField[name] || [];
-      sports.forEach(sport => {
-        const isEnabled = !disabledToday.includes(sport);
-        const label = document.createElement('label');
-        label.style.cssText = 'display:flex;align-items:center;gap:8px;margin:4px 0;cursor:pointer;';
-        label.innerHTML = `<input type="checkbox" ${isEnabled ? 'checked' : ''}> ${sport}`;
-        label.querySelector('input').onchange = (e) => {
-          let list = currentOverrides.dailyDisabledSportsByField[name] || [];
-          if (e.target.checked) list = list.filter(s => s !== sport);
-          else if (!list.includes(sport)) list.push(sport);
-          currentOverrides.dailyDisabledSportsByField[name] = list;
-          window.saveCurrentDailyData("dailyDisabledSportsByField", currentOverrides.dailyDisabledSportsByField);
+      globalRulesEl.innerHTML = globalRules.map(rule => `
+        <div class="da-rule-item da-rule-${rule.type.toLowerCase()}">
+          <span class="da-rule-type">${rule.type === 'Available' ? '✅' : '❌'} ${rule.type}</span>
+          <span class="da-rule-time">${rule.start} - ${rule.end}</span>
+        </div>
+      `).join('');
+    }
+    
+    // Render daily rules
+    const dailyRulesEl = document.getElementById('da-daily-rules-list');
+    if (dailyRules.length === 0) {
+      dailyRulesEl.innerHTML = '<p style="color:#94a3b8;font-size:12px;margin:4px 0;">No daily overrides - using global rules</p>';
+    } else {
+      dailyRulesEl.innerHTML = dailyRules.map((rule, idx) => `
+        <div class="da-rule-item da-rule-${rule.type.toLowerCase()} da-rule-daily">
+          <span class="da-rule-type">${rule.type === 'Available' ? '✅' : '❌'} ${rule.type}</span>
+          <span class="da-rule-time">${rule.start} - ${rule.end}</span>
+          <button class="da-rule-remove" data-idx="${idx}">✕</button>
+        </div>
+      `).join('');
+      
+      // Add remove handlers
+      dailyRulesEl.querySelectorAll('.da-rule-remove').forEach(btn => {
+        btn.onclick = () => {
+          const idx = parseInt(btn.dataset.idx);
+          dailyRules.splice(idx, 1);
+          currentOverrides.dailyFieldAvailability[name] = dailyRules;
+          window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
+          renderOverrideDetailPane();
         };
-        checkboxesEl.appendChild(label);
       });
     }
+    
+    // Add rule handler
+    document.getElementById('da-add-rule-btn').onclick = () => {
+      const ruleType = document.getElementById('da-rule-type').value;
+      const start = document.getElementById('da-rule-start').value.trim();
+      const end = document.getElementById('da-rule-end').value.trim();
+      
+      if (!start || !end) { alert('Please enter start and end times.'); return; }
+      const startMin = parseTimeToMinutes(start);
+      const endMin = parseTimeToMinutes(end);
+      if (startMin === null || endMin === null) { alert('Invalid time format. Use format like 9:00am or 2:30pm'); return; }
+      if (startMin >= endMin) { alert('End time must be after start time.'); return; }
+      
+      dailyRules.push({ type: ruleType, start, end });
+      currentOverrides.dailyFieldAvailability[name] = dailyRules;
+      window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
+      renderOverrideDetailPane();
+      renderResourceOverridesUI();
+    };
+    
+    // Render sports checkboxes for fields
+    if (type === 'field') {
+      const sports = item.activities || [];
+      const checkboxesEl = document.getElementById('da-sports-checkboxes');
+      if (sports.length === 0) {
+        checkboxesEl.innerHTML = '<p style="color:#94a3b8;font-size:12px;">No sports assigned to this field.</p>';
+      } else {
+        const disabledToday = currentOverrides.dailyDisabledSportsByField[name] || [];
+        checkboxesEl.innerHTML = '';
+        sports.forEach(sport => {
+          const isEnabled = !disabledToday.includes(sport);
+          const label = document.createElement('label');
+          label.className = 'da-sport-checkbox';
+          label.innerHTML = `<input type="checkbox" ${isEnabled ? 'checked' : ''}> ${sport}`;
+          label.querySelector('input').onchange = (e) => {
+            let list = currentOverrides.dailyDisabledSportsByField[name] || [];
+            if (e.target.checked) list = list.filter(s => s !== sport);
+            else if (!list.includes(sport)) list.push(sport);
+            currentOverrides.dailyDisabledSportsByField[name] = list;
+            window.saveCurrentDailyData("dailyDisabledSportsByField", currentOverrides.dailyDisabledSportsByField);
+          };
+          checkboxesEl.appendChild(label);
+        });
+      }
+    }
   } else {
-    paneEl.innerHTML = `<p style="color:#94a3b8;">Use the toggle to enable/disable this item for today.</p>`;
+    paneEl.innerHTML = `
+      <h4 style="margin:0 0 12px;">${name}</h4>
+      <p style="color:#94a3b8;">Use the toggle in the list to enable/disable this ${type === 'league' ? 'league' : 'specialty league'} for today.</p>
+    `;
   }
 }
 
@@ -2378,14 +2585,32 @@ function getStyles() {
     .da-grid-night-zone { background:rgba(30,41,59,0.1) !important; }
     
     /* Events */
-    .da-event { position:absolute; width:96%; left:2%; padding:4px 6px; border-radius:4px; cursor:pointer; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; overflow:hidden; z-index:2; transition:box-shadow 0.15s; }
+    .da-event { position:absolute; width:96%; left:2%; padding:4px 6px; border-radius:4px; cursor:pointer; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; overflow:hidden; z-index:2; transition:box-shadow 0.15s; min-height:18px; }
     .da-event:hover { box-shadow:0 2px 8px rgba(0,0,0,0.2); z-index:5; }
     .da-event.selected { box-shadow:0 0 0 2px var(--da-accent), 0 4px 12px rgba(59,130,246,0.3); z-index:10; }
     .da-event.da-resizing { box-shadow:0 0 0 2px var(--da-accent), 0 4px 12px rgba(59,130,246,0.25) !important; z-index:100 !important; }
     .da-night-activity { animation:nightGlow 2s ease-in-out infinite alternate; }
     @keyframes nightGlow { from { box-shadow:0 0 8px rgba(233,69,96,0.4); } to { box-shadow:0 0 16px rgba(233,69,96,0.7); } }
-    .da-conflict-warn { border:2px solid #ef4444 !important; box-shadow:0 0 0 2px rgba(239,68,68,0.2) !important; }
-    .da-conflict-notice { border:2px solid #f59e0b !important; box-shadow:0 0 0 2px rgba(245,158,11,0.2) !important; }
+    
+    /* CONFLICT WARNINGS - More Visible */
+    .da-conflict-warn { 
+      border:3px solid #dc2626 !important; 
+      box-shadow:0 0 0 3px rgba(220,38,38,0.3), 0 0 12px rgba(220,38,38,0.4), inset 0 0 8px rgba(220,38,38,0.1) !important; 
+      animation: conflictPulse 1s ease-in-out infinite;
+    }
+    .da-conflict-notice { 
+      border:3px solid #f59e0b !important; 
+      box-shadow:0 0 0 3px rgba(245,158,11,0.3), 0 0 12px rgba(245,158,11,0.4), inset 0 0 8px rgba(245,158,11,0.1) !important; 
+      animation: conflictPulseWarn 1.5s ease-in-out infinite;
+    }
+    @keyframes conflictPulse {
+      0%, 100% { box-shadow:0 0 0 3px rgba(220,38,38,0.3), 0 0 12px rgba(220,38,38,0.4); }
+      50% { box-shadow:0 0 0 5px rgba(220,38,38,0.5), 0 0 20px rgba(220,38,38,0.6); }
+    }
+    @keyframes conflictPulseWarn {
+      0%, 100% { box-shadow:0 0 0 3px rgba(245,158,11,0.3), 0 0 12px rgba(245,158,11,0.4); }
+      50% { box-shadow:0 0 0 5px rgba(245,158,11,0.5), 0 0 20px rgba(245,158,11,0.6); }
+    }
     
     /* Resize Handles */
     .da-resize-handle { position:absolute; left:0; right:0; height:8px; cursor:ns-resize; z-index:5; opacity:0; transition:opacity 0.15s; }
@@ -2464,10 +2689,26 @@ function getStyles() {
     .da-switch input:checked + .da-switch-slider:before { transform:translateX(18px); }
     .da-switch input:disabled + .da-switch-slider { opacity:0.5; cursor:not-allowed; }
     
+    /* Rainy Day Dropdown */
+    .da-rainy-dropdown { margin-bottom:16px; border:1px solid var(--da-border); border-radius:10px; overflow:hidden; background:var(--da-surface); }
+    .da-rainy-dropdown.active { border-color:#0ea5e9; }
+    .da-rainy-dropdown-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; cursor:pointer; user-select:none; transition:background 0.15s; }
+    .da-rainy-dropdown-header:hover { background:rgba(0,0,0,0.02); }
+    .da-rainy-dropdown.active .da-rainy-dropdown-header { background:linear-gradient(135deg,#1e3a5f,#0c4a6e); }
+    .da-rainy-dropdown-title { display:flex; align-items:center; gap:10px; font-weight:600; font-size:14px; color:var(--da-text); }
+    .da-rainy-dropdown.active .da-rainy-dropdown-title { color:#f0f9ff; }
+    .da-rainy-dropdown-icon { font-size:18px; }
+    .da-rainy-dropdown-arrow { color:var(--da-text3); font-size:10px; transition:transform 0.2s; }
+    .da-rainy-dropdown.active .da-rainy-dropdown-arrow { color:#7dd3fc; }
+    .da-rainy-active-badge { background:rgba(14,165,233,0.2); color:#0ea5e9; padding:2px 8px; border-radius:999px; font-size:10px; font-weight:600; }
+    .da-rainy-dropdown.active .da-rainy-active-badge { background:rgba(255,255,255,0.15); color:#7dd3fc; }
+    .da-rainy-dropdown-content { border-top:1px solid var(--da-border); }
+    .da-rainy-dropdown.active .da-rainy-dropdown-content { border-top-color:rgba(255,255,255,0.1); }
+    
     /* Rainy Day Panel */
-    .da-rainy-card { border-radius:12px; overflow:hidden; margin-bottom:16px; transition:all 0.4s; position:relative; }
-    .da-rainy-card.inactive { background:linear-gradient(135deg,#f8fafc,#f1f5f9); border:1px solid #e2e8f0; }
-    .da-rainy-card.active { background:linear-gradient(135deg,#1e3a5f,#0c4a6e,#164e63); border:1px solid #0ea5e9; box-shadow:0 0 30px rgba(14,165,233,0.15); }
+    .da-rainy-card { border-radius:0; overflow:hidden; transition:all 0.4s; position:relative; }
+    .da-rainy-card.inactive { background:linear-gradient(135deg,#f8fafc,#f1f5f9); }
+    .da-rainy-card.active { background:linear-gradient(135deg,#1e3a5f,#0c4a6e,#164e63); }
     .da-rainy-header { padding:14px 18px; display:flex; justify-content:space-between; align-items:center; position:relative; z-index:1; }
     .da-rainy-title-section { display:flex; align-items:center; gap:10px; }
     .da-rainy-icon { width:40px; height:40px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:20px; }
@@ -2518,10 +2759,15 @@ function getStyles() {
     .da-mini-toggle input:checked + .da-mini-track { background:#10b981; }
     .da-mini-thumb { position:absolute; top:2px; left:2px; width:14px; height:14px; background:white; border-radius:50%; transition:0.3s; }
     .da-mini-toggle input:checked ~ .da-mini-thumb { left:20px; }
-    .da-rain-container { position:absolute; top:0; left:0; right:0; bottom:0; overflow:hidden; pointer-events:none; opacity:0; transition:opacity 0.5s; border-radius:12px; }
+    .da-rain-container { position:absolute; top:0; left:0; right:0; bottom:0; overflow:hidden; pointer-events:none; opacity:0; transition:opacity 0.5s; }
     .da-rainy-card.active .da-rain-container { opacity:1; }
-    .da-rain-drop { position:absolute; width:2px; background:linear-gradient(to bottom,transparent,rgba(186,230,253,0.3)); animation:daRainFall linear infinite; }
-    @keyframes daRainFall { 0% { transform:translateY(-100%); opacity:0; } 10% { opacity:1; } 90% { opacity:1; } 100% { transform:translateY(200px); opacity:0; } }
+    .da-rain-drop { position:absolute; top:-20px; width:2px; background:linear-gradient(to bottom,transparent,rgba(186,230,253,0.4),rgba(186,230,253,0.2)); animation:daRainFall linear infinite; border-radius:0 0 2px 2px; }
+    @keyframes daRainFall { 
+      0% { transform:translateY(-20px); opacity:0; } 
+      10% { opacity:1; } 
+      90% { opacity:1; } 
+      100% { transform:translateY(250px); opacity:0; } 
+    }
     
     /* Notifications */
     .da-notif { position:fixed; top:80px; right:20px; padding:14px 18px; border-radius:12px; z-index:10000; display:flex; align-items:center; gap:10px; font-weight:500; font-size:13px; transform:translateX(120%); opacity:0; transition:all 0.35s cubic-bezier(0.4,0,0.2,1); box-shadow:0 8px 24px rgba(0,0,0,0.2); }
@@ -2546,6 +2792,26 @@ function getStyles() {
     
     /* Empty State */
     .da-empty-state { padding:40px; text-align:center; color:var(--da-text3); }
+    
+    /* Time Rules Styling */
+    .da-detail-section { margin-bottom:20px; }
+    .da-detail-section h5 { margin:0 0 8px; font-size:13px; font-weight:600; color:var(--da-text); }
+    .da-rule-item { display:flex; align-items:center; gap:10px; padding:8px 12px; background:var(--da-bg); border:1px solid var(--da-border); border-radius:6px; margin-bottom:4px; font-size:12px; }
+    .da-rule-available { border-left:3px solid #10b981; }
+    .da-rule-unavailable { border-left:3px solid #ef4444; }
+    .da-rule-daily { background:#fffbeb; border-color:#fcd34d; }
+    .da-rule-type { font-weight:600; min-width:100px; }
+    .da-rule-time { color:var(--da-text2); }
+    .da-rule-remove { background:none; border:none; color:#ef4444; cursor:pointer; font-size:14px; margin-left:auto; padding:2px 6px; border-radius:4px; }
+    .da-rule-remove:hover { background:rgba(239,68,68,0.1); }
+    .da-time-rule-form { display:flex; align-items:center; gap:8px; margin-top:12px; padding:12px; background:var(--da-surface); border-radius:8px; flex-wrap:wrap; }
+    .da-input-sm { padding:6px 10px; font-size:12px; }
+    .da-select-sm { padding:6px 10px; font-size:12px; }
+    .da-sport-checkbox { display:flex; align-items:center; gap:8px; margin:6px 0; cursor:pointer; font-size:13px; }
+    .da-sport-checkbox input { width:16px; height:16px; cursor:pointer; }
+    
+    /* Badge for time rules */
+    .da-badge-time { background:#dbeafe; color:#1d4ed8; }
   </style>`;
 }
 
