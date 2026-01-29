@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_logic_fillers.js (v6.2 - FIXED CAPACITY LOGIC)
+// scheduler_logic_fillers.js (v6.3 - RAINY DAY SUPPORT)
 // ============================================================================
 // ★★★ THIS FILE NOW DELEGATES ALL ROTATION LOGIC TO rotation_engine.js ★★★
 //
@@ -16,6 +16,11 @@
 // - Case-insensitive type filtering throughout
 // - Dual property lookup (checks both field AND activity names)
 // - Sports and specials compete fairly based on rotation scores
+//
+// KEY FIXES IN v6.3:
+// - ★★★ RAINY DAY: isFieldUnavailable checks rainyDayAvailable property ★★★
+// - Optimized field lookup with caching for performance
+// - Better detection of field vs special activity types
 //
 // ============================================================================
 
@@ -39,40 +44,86 @@
         return match ? parseInt(match[1], 10) : Infinity;
     }
 
-    function isFieldUnavailable(fieldName, block) {
-    const disabledFields = window.currentDisabledFields || [];
-    if (disabledFields.includes(fieldName)) {
-        return true;
-    }
+    // =========================================================================
+    // ★★★ RAINY DAY FIELD CACHE (Performance optimization) ★★★
+    // =========================================================================
+    let _rainyDayFieldCache = null;
+    let _rainyDayCacheTime = 0;
+    const CACHE_TTL = 5000; // 5 second cache
 
-    // ★★★ RAINY DAY CHECK: Outdoor fields unavailable on rainy days ★★★
-    const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
-    if (isRainyMode) {
-        const fieldProps = window.activityProperties?.[fieldName];
-        // If this field is NOT marked as indoor/rainyDayAvailable, it's unavailable
-        if (fieldProps && fieldProps.rainyDayAvailable !== true) {
-            // Double-check it's a field type (not a special activity)
-            if (fieldProps.type === 'field' || fieldProps.activities) {
-                return true;
+    function getFieldRainyDayStatus(fieldName) {
+        const now = Date.now();
+        
+        // Refresh cache if stale
+        if (!_rainyDayFieldCache || (now - _rainyDayCacheTime) > CACHE_TTL) {
+            _rainyDayFieldCache = {};
+            try {
+                const g = window.loadGlobalSettings?.() || {};
+                const fields = g.app1?.fields || [];
+                fields.forEach(f => {
+                    if (f && f.name) {
+                        _rainyDayFieldCache[f.name] = {
+                            isField: true,
+                            rainyDayAvailable: f.rainyDayAvailable === true
+                        };
+                    }
+                });
+                _rainyDayCacheTime = now;
+            } catch (e) {
+                console.warn('[FILLERS] Error building rainy day cache:', e);
             }
         }
         
-        // Also check the raw field data
-        const g = window.loadGlobalSettings?.() || {};
-        const fields = g.app1?.fields || [];
-        const fieldData = fields.find(f => f.name === fieldName);
-        if (fieldData && fieldData.rainyDayAvailable !== true) {
-            return true;
-        }
+        return _rainyDayFieldCache[fieldName] || null;
     }
 
-    if (!window.GlobalFieldLocks) return false;
-    const slots = block.slots || [];
-    if (slots.length === 0) return false;
+    // Clear cache when rainy mode changes
+    window.clearRainyDayFieldCache = function() {
+        _rainyDayFieldCache = null;
+        _rainyDayCacheTime = 0;
+    };
 
-    const divisionContext = block.divName || block.division;
-    return window.GlobalFieldLocks.isFieldLocked(fieldName, slots, divisionContext) !== null;
-}
+    // =========================================================================
+    // ★★★ FIELD UNAVAILABILITY CHECK (with Rainy Day Support) ★★★
+    // =========================================================================
+
+    function isFieldUnavailable(fieldName, block) {
+        // 1. Check explicitly disabled fields first (fastest check)
+        const disabledFields = window.currentDisabledFields || [];
+        if (disabledFields.includes(fieldName)) {
+            return true;
+        }
+
+        // 2. ★★★ RAINY DAY CHECK: Outdoor fields unavailable on rainy days ★★★
+        const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
+        if (isRainyMode) {
+            // First check activityProperties (already loaded, fast lookup)
+            const fieldProps = window.activityProperties?.[fieldName];
+            if (fieldProps) {
+                // Only check fields, not special activities
+                const isFieldType = fieldProps.type === 'field' || 
+                                   (Array.isArray(fieldProps.activities) && fieldProps.activities.length > 0);
+                
+                if (isFieldType && fieldProps.rainyDayAvailable !== true) {
+                    return true;
+                }
+            }
+            
+            // Fallback: Check raw field data using cache
+            const fieldStatus = getFieldRainyDayStatus(fieldName);
+            if (fieldStatus && fieldStatus.isField && !fieldStatus.rainyDayAvailable) {
+                return true;
+            }
+        }
+
+        // 3. Check global field locks
+        if (!window.GlobalFieldLocks) return false;
+        const slots = block.slots || [];
+        if (slots.length === 0) return false;
+
+        const divisionContext = block.divName || block.division;
+        return window.GlobalFieldLocks.isFieldLocked(fieldName, slots, divisionContext) !== null;
+    }
 
     // =========================================================================
     // ★★★ CENTRALIZED CAPACITY FUNCTION ★★★
@@ -150,7 +201,7 @@
                 activityName,
                 divisionName: block.divName || block.division,
                 beforeSlotIndex: block.slots?.[0] || 0,
-                allActivities: null,  // Will use RotationEngine.getAllActivityNames()
+                allActivities: null,
                 activityProperties
             });
         }
@@ -162,10 +213,10 @@
         const actLower = (activityName || '').toLowerCase().trim();
         
         if (todayActivities.has(actLower)) {
-            return Infinity;  // Same day = blocked
+            return Infinity;
         }
         
-        return 0;  // Basic fallback
+        return 0;
     }
 
     // =========================================================================
@@ -227,7 +278,6 @@
         if (state.count === 0) return true;
 
         // ★★★ FIX v6.2: Use centralized capacity function ★★★
-        // Check both field AND activity name for properties
         const maxCapacity = getFieldCapacity(fieldName, activityProperties) || 
                            getFieldCapacity(activityName, activityProperties) || 1;
 
@@ -285,7 +335,7 @@
         const bunkName = block.bunk;
         const divName = block.divName;
 
-        // Use RotationEngine's getRankedActivities if available (includes tie-breaking)
+        // Use RotationEngine's getRankedActivities if available
         if (window.RotationEngine?.getRankedActivities && picks.length > 0) {
             const rankedActivities = window.RotationEngine.getRankedActivities({
                 bunkName,
@@ -298,7 +348,6 @@
                 activityProperties
             });
 
-            // Map back to picks with scores
             return rankedActivities
                 .filter(r => r.allowed)
                 .map(r => {
@@ -326,7 +375,6 @@
                 return { ...pick, _rotationScore: Infinity, _blocked: true };
             }
 
-            // ★★★ FIX: Check both field AND activity name for properties ★★★
             const fieldProps = activityProperties[fieldName] || activityProperties[actName] || {};
             const preferenceScore = calculatePreferenceScore(fieldProps, divName);
             const sharingBonus = calculateSharingBonus(fieldName, block, activityProperties);
@@ -363,7 +411,6 @@
         const currentSlotIndex = block.slots[0];
         const doneToday = getActivitiesDoneToday(block.bunk, currentSlotIndex);
 
-        // ★★★ FIX: Case-insensitive type filtering ★★★
         const specials = allActivities
             .filter(a => {
                 const t = (a.type || '').toLowerCase();
@@ -426,7 +473,6 @@
         const currentSlotIndex = block.slots[0];
         const doneToday = getActivitiesDoneToday(block.bunk, currentSlotIndex);
 
-        // ★★★ FIX: Case-insensitive type filtering ★★★
         const sports = allActivities
             .filter(a => {
                 const t = (a.type || '').toLowerCase();
@@ -458,7 +504,6 @@
                 return false;
             }
 
-            // ★★★ FIX: Check both field AND activity name for properties ★★★
             if (!activityProperties[fieldName] && !activityProperties[pick._activity]) return false;
 
             if (!window.SchedulerCoreUtils?.canBlockFit?.(
@@ -488,7 +533,6 @@
         const currentSlotIndex = block.slots[0];
         const doneToday = getActivitiesDoneToday(block.bunk, currentSlotIndex);
 
-        // ★★★ FIX: Case-insensitive type filtering ★★★
         const sports = allActivities.filter(a => {
             const t = (a.type || '').toLowerCase();
             return t === 'field' || t === 'sport';
@@ -521,7 +565,6 @@
                 return false;
             }
 
-            // ★★★ FIX: Check both field AND activity name for properties ★★★
             if (!activityProperties[fieldName] && !activityProperties[actName]) return false;
 
             if (!canShareWithActivity(fieldName, block, actName, activityProperties)) {
@@ -547,10 +590,6 @@
 
     // =========================================================================
     // GENERAL ACTIVITY SELECTOR (MASTER SELECTOR) - UNIFIED SCORING v2.0
-    // =========================================================================
-    // ★★★ FIXED: Now uses unified scoring for BOTH sports and specials ★★★
-    // Instead of prioritizing one type over another, all available options
-    // compete fairly based on their rotation scores.
     // =========================================================================
 
     window.findBestGeneralActivity = function (
@@ -580,14 +619,11 @@
             const actName = special.name;
             const fieldName = fieldLabel(actName);
 
-            // Skip if unavailable
             if (isFieldUnavailable(fieldName, block)) return;
             if (doneToday.has((actName || '').toLowerCase().trim())) return;
 
-            // Check sharing and capacity
             if (!canShareWithActivity(fieldName, block, actName, activityProperties)) return;
 
-            // Check canBlockFit - look up properties by activity name
             const props = activityProperties[fieldName] || activityProperties[actName] || {};
             if (props.available === false) return;
 
@@ -622,11 +658,9 @@
                 const fieldName = fieldLabel(f);
                 const actName = sportName;
 
-                // Skip if unavailable
                 if (isFieldUnavailable(fieldName, block)) return;
                 if (doneToday.has((actName || '').toLowerCase().trim())) return;
 
-                // Check if field has activity properties (check both field AND sport)
                 const fieldProps = activityProperties[fieldName];
                 const sportProps = activityProperties[sportName];
                 if (!fieldProps && !sportProps) return;
@@ -697,7 +731,6 @@
         }
     });
 
-    // Expose calculateRotationScore (delegates to RotationEngine)
     window.calculateRotationScore = function(options) {
         if (window.RotationEngine?.calculateRotationScore) {
             return window.RotationEngine.calculateRotationScore(options);
@@ -705,9 +738,9 @@
         return 0;
     };
 
-    // Expose getFieldCapacity for external use
     window.getFieldCapacityFromFillers = getFieldCapacity;
+    window.isFieldUnavailable = isFieldUnavailable;
 
-    console.log('[FILLERS] v6.2 loaded - FIXED CAPACITY LOGIC (type=all → 999)');
+    console.log('[FILLERS] v6.3 loaded - RAINY DAY SUPPORT + CAPACITY LOGIC');
 
 })();
