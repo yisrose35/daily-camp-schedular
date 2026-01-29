@@ -52,6 +52,7 @@ let selectedOverrideId = null;
 // Event listener tracking for cleanup
 let _keyHandler = null;
 let _visHandler = null;
+let _rainyToggleDebounce = false;
 
 // Constants
 const SMART_TILE_HISTORY_KEY = "smartTileHistory_v1";
@@ -113,9 +114,11 @@ function saveSmartTileHistory(history) {
 // =================================================================
 function isRainyDayActive() {
   // Check window.isRainyDay first (this is what the save system uses)
+  // Must be strictly true, not just truthy
   if (window.isRainyDay === true) return true;
+  if (window.isRainyDay === false) return false;
   
-  // Fallback to dailyData for backward compatibility
+  // Fallback to dailyData for backward compatibility (only if window.isRainyDay is undefined)
   const dailyData = window.loadCurrentDailyData?.() || {};
   return dailyData.rainyDayMode === true || dailyData.isRainyDay === true;
 }
@@ -428,6 +431,17 @@ function bindRainyDayEvents() {
   if (toggle) {
     toggle.onchange = function(e) {
       e.stopPropagation();
+      
+      // Debounce to prevent double-triggering
+      if (_rainyToggleDebounce) {
+        console.log("[RainyDay] Toggle debounced - ignoring duplicate");
+        return;
+      }
+      _rainyToggleDebounce = true;
+      setTimeout(() => { _rainyToggleDebounce = false; }, 500);
+      
+      console.log("[RainyDay] Toggle changed, checked =", this.checked);
+      
       if (this.checked) {
         activateFullDayRainyMode();
       } else {
@@ -3103,6 +3117,14 @@ function init() {
   smartTileHistory = loadSmartTileHistory();
   
   loadCurrentOverrides();
+  
+  // Initialize window.isRainyDay from loaded daily data
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  if (window.isRainyDay === undefined) {
+    // Only set if not already defined (e.g., from another module)
+    window.isRainyDay = dailyData.isRainyDay === true || dailyData.rainyDayMode === true;
+  }
+  console.log("[DailyAdj] Initialized window.isRainyDay =", window.isRainyDay);
   
   container.innerHTML = getStyles() + getMainHTML();
   
