@@ -342,23 +342,68 @@
             return m;
         }, {});
 
-        return {
-            activities: filteredActivities,
-            blocks,
-            divisions,
-            bunks,
-            fields,
-            masterActivities,
-            masterSpecials,
-            masterFields: fields,
-            activityProperties,
-            allActivities: masterActivities,
-            h2hActivities,
-            fieldsBySport,      // <<<<<< SMART LEAGUE ENGINE NEEDS THIS
-            masterLeagues: window.masterLeagues || {},
-            masterSpecialtyLeagues: window.masterSpecialtyLeagues || {},
-            disabledFields: dailyOverrides.disabledFields || [],
-            disabledSpecials: dailyOverrides.disabledSpecials || [],
+        // ★★★ RAINY DAY FILTERING ★★★
+const isRainyMode = window.isRainyDayModeActive?.() || 
+                    dailyOverrides.rainyDayMode === true || 
+                    dailyOverrides.isRainyDay === true;
+
+// Get outdoor fields to disable during rainy day
+let effectiveDisabledFields = [...(dailyOverrides.disabledFields || [])];
+if (isRainyMode) {
+    const outdoorFields = fields
+        .filter(f => f.rainyDayAvailable !== true)
+        .map(f => f.name);
+    effectiveDisabledFields = [...new Set([...effectiveDisabledFields, ...outdoorFields])];
+    console.log(`[LoadData] 🌧️ Rainy Day Mode - Disabled ${outdoorFields.length} outdoor fields`);
+}
+
+// Filter special activities based on rainy day mode
+let effectiveMasterSpecials = masterSpecials;
+if (isRainyMode) {
+    // Include rainy day specials, exclude activities not available on rainy days
+    effectiveMasterSpecials = masterSpecials.filter(s => 
+        s.rainyDayAvailable !== false && s.availableOnRainyDay !== false
+    );
+    
+    // Add rainy-day-only specials that might have been excluded
+    const rainyOnlySpecials = (window.getRainyDayActivities?.() || [])
+        .filter(s => s.available !== false);
+    
+    // Merge without duplicates
+    const existingNames = new Set(effectiveMasterSpecials.map(s => s.name));
+    rainyOnlySpecials.forEach(s => {
+        if (!existingNames.has(s.name)) {
+            effectiveMasterSpecials.push({ ...s, type: 'Special' });
+        }
+    });
+    
+    console.log(`[LoadData] 🌧️ Rainy Day Mode - ${effectiveMasterSpecials.length} specials available`);
+} else {
+    // Normal day: exclude rainy-day-only activities
+    effectiveMasterSpecials = masterSpecials.filter(s => 
+        s.rainyDayOnly !== true && s.rainyDayExclusive !== true
+    );
+}
+
+const effectiveSpecialActivityNames = effectiveMasterSpecials.map(s => s.name);
+
+return {
+    activities: filteredActivities,
+    blocks,
+    divisions,
+    bunks,
+    fields,
+    masterActivities,
+    masterSpecials: effectiveMasterSpecials,  // ★ Use filtered specials
+    masterFields: fields,
+    activityProperties,
+    allActivities: masterActivities,
+    h2hActivities,
+    fieldsBySport,
+    masterLeagues: window.masterLeagues || {},
+    masterSpecialtyLeagues: window.masterSpecialtyLeagues || {},
+    disabledFields: effectiveDisabledFields,  // ★ Use effective disabled fields
+    disabledSpecials: dailyOverrides.disabledSpecials || [],
             disabledLeagues: dailyOverrides.disabledLeagues || [],
             disabledSpecialtyLeagues: dailyOverrides.disabledSpecialtyLeagues || [],
             historicalCounts: window.loadHistoricalCounts?.() || {},
