@@ -254,14 +254,25 @@ function renderRainyDayPanel() {
   const skeletonOptions = availableSkeletons.map(name => 
     `<option value="${name}" ${name === rainySkeletonName ? 'selected' : ''}>${name}</option>`
   ).join('');
+  
+  // Get mid-day analysis if available
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  const midDayAnalysis = dailyData.midDayRainAnalysis || null;
      
   // Mid-day info
-  const midDayInfo = isMidDay ? `
-    <div class="da-rainy-midday-info">
-      <span class="da-rainy-midday-badge">⏰ Started at ${minutesToTime(midDayStartTime)}</span>
-      <span class="da-rainy-preserved-badge">📋 ${preservedSlots} slot${preservedSlots !== 1 ? 's' : ''} preserved</span>
-    </div>
-  ` : '';
+  let midDayInfo = '';
+  if (isMidDay) {
+    midDayInfo = `
+      <div class="da-rainy-midday-info">
+        <span class="da-rainy-midday-badge">⏰ Rain started at ${minutesToTime(midDayStartTime)}</span>
+        <span class="da-rainy-preserved-badge">✅ ${preservedSlots} kept</span>
+        ${midDayAnalysis ? `
+          <span class="da-rainy-cutshort-badge">⚠️ ${midDayAnalysis.inProgressCount || 0} cut short</span>
+          <span class="da-rainy-cleared-badge">🗑️ ${midDayAnalysis.futureCount || 0} cleared</span>
+        ` : ''}
+      </div>
+    `;
+  }
      
   panel.innerHTML = `
     <div class="da-rainy-dropdown ${isExpanded ? 'expanded' : ''} ${isActive ? 'active' : ''}">
@@ -475,12 +486,7 @@ function bindRainyDayEvents() {
   if (midDayBtn) {
     midDayBtn.onclick = function(e) {
       e.stopPropagation();
-      if (confirm('Start Mid-Day Mode?\n\nThis will:\n• Preserve current morning schedule\n• Switch to rainy day mode from now onwards\n• Disable outdoor fields')) {
-        activateMidDayRainyMode();
-        renderRainyDayPanel();
-        renderResourceOverridesUI();
-        renderGrid();
-      }
+      showMidDayRainModal();
     };
   }
 }
@@ -521,21 +527,40 @@ function activateFullDayRainyMode() {
   showRainyDayNotification(true, stats.outdoorFieldNames.length, false, skeletonSwitched);
 }
 
-function activateMidDayRainyMode() {
+function activateMidDayRainyMode(customStartTime = null) {
   if (!window.AccessControl?.checkEditAccess?.('activate mid-day rainy mode')) return;
+  
   const dailyData = window.loadCurrentDailyData?.() || {};
   const overrides = dailyData.overrides || {};
   const stats = getRainyDayStats();
   
-  const now = new Date();
-  const currentTimeMin = now.getHours() * 60 + now.getMinutes();
+  // Use custom start time or current time
+  let rainStartMin;
+  if (customStartTime !== null) {
+    rainStartMin = customStartTime;
+  } else {
+    const now = new Date();
+    rainStartMin = now.getHours() * 60 + now.getMinutes();
+  }
   
+  console.log(`[RainyDay] Mid-day mode starting at ${minutesToTime(rainStartMin)}`);
+  
+  // Backup pre-rainy state
   if (!dailyData.preRainyDayDisabledFields) {
     window.saveCurrentDailyData?.("preRainyDayDisabledFields", overrides.disabledFields || []);
   }
   
-  backupPreservedSchedule(currentTimeMin);
+  // Analyze and categorize activities
+  const activityAnalysis = analyzeActivitiesForMidDayRain(rainStartMin);
+  console.log("[RainyDay] Activity analysis:", activityAnalysis);
   
+  // Backup the schedule before making changes
+  backupPreservedSchedule(rainStartMin);
+  
+  // Clear in-progress and future activities from schedule
+  clearActivitiesFromRainStart(rainStartMin, activityAnalysis);
+  
+  // Disable outdoor fields
   const existingDisabled = overrides.disabledFields || [];
   const newDisabled = [...new Set([...existingDisabled, ...stats.outdoorFieldNames])];
   
@@ -543,22 +568,232 @@ function activateMidDayRainyMode() {
   currentOverrides.disabledFields = newDisabled;
   window.saveCurrentDailyData?.("overrides", overrides);
   
-  // Set window.isRainyDay (this is what the save system uses)
+  // Set window.isRainyDay
   window.isRainyDay = true;
-  window.rainyDayStartTime = currentTimeMin;
+  window.rainyDayStartTime = rainStartMin;
   
   window.saveCurrentDailyData?.("rainyDayMode", true);
-  window.saveCurrentDailyData?.("rainyDayStartTime", currentTimeMin);
+  window.saveCurrentDailyData?.("rainyDayStartTime", rainStartMin);
   window.saveCurrentDailyData?.("isRainyDay", true);
+  
+  // Store analysis for UI display
+  window.saveCurrentDailyData?.("midDayRainAnalysis", activityAnalysis);
   
   let skeletonSwitched = false;
   if (isAutoSkeletonSwitchEnabled()) {
     skeletonSwitched = switchToRainySkeleton();
   }
   
-  const preservedCount = getPreservedSlotCount();
-  showRainyDayNotification(true, stats.outdoorFieldNames.length, true, skeletonSwitched, preservedCount);
-  console.log("[RainyDay] Activated mid-day mode, window.isRainyDay =", window.isRainyDay);
+  showRainyDayNotification(true, stats.outdoorFieldNames.length, true, skeletonSwitched, activityAnalysis.completedCount);
+  console.log("[RainyDay] Activated mid-day mode at", minutesToTime(rainStartMin));
+  console.log("[RainyDay] Kept:", activityAnalysis.completedCount, "| Cut short:", activityAnalysis.inProgressCount, "| Cleared:", activityAnalysis.futureCount);
+}
+
+// Analyze activities relative to rain start time
+function analyzeActivitiesForMidDayRain(rainStartMin) {
+  const times = window.unifiedTimes || [];
+  const schedules = window.scheduleAssignments || {};
+  
+  const analysis = {
+    completed: [],      // Slots that finished before rain (KEEP)
+    inProgress: [],     // Slots that were in progress when rain started (CUT SHORT)
+    future: [],         // Slots that hadn't started yet (CLEAR)
+    completedCount: 0,
+    inProgressCount: 0,
+    futureCount: 0,
+    rainStartTime: rainStartMin,
+    rainStartFormatted: minutesToTime(rainStartMin)
+  };
+  
+  for (let i = 0; i < times.length; i++) {
+    const slot = times[i];
+    if (!slot || !slot.start || !slot.end) continue;
+    
+    const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
+    const slotEnd = new Date(slot.end).getHours() * 60 + new Date(slot.end).getMinutes();
+    
+    const slotInfo = {
+      index: i,
+      startTime: minutesToTime(slotStart),
+      endTime: minutesToTime(slotEnd),
+      startMin: slotStart,
+      endMin: slotEnd
+    };
+    
+    if (slotEnd <= rainStartMin) {
+      // Slot ended before rain started → COMPLETED (keep)
+      analysis.completed.push(slotInfo);
+      analysis.completedCount++;
+    } else if (slotStart < rainStartMin && slotEnd > rainStartMin) {
+      // Slot was in progress when rain started → CUT SHORT (discard)
+      slotInfo.cutAt = minutesToTime(rainStartMin);
+      analysis.inProgress.push(slotInfo);
+      analysis.inProgressCount++;
+    } else if (slotStart >= rainStartMin) {
+      // Slot hadn't started yet → FUTURE (clear)
+      analysis.future.push(slotInfo);
+      analysis.futureCount++;
+    }
+  }
+  
+  return analysis;
+}
+
+// Clear schedule assignments from rain start onwards
+function clearActivitiesFromRainStart(rainStartMin, analysis) {
+  const schedules = window.scheduleAssignments || {};
+  
+  // Get slot indices to clear (in-progress + future)
+  const slotsToClear = new Set();
+  analysis.inProgress.forEach(slot => slotsToClear.add(slot.index));
+  analysis.future.forEach(slot => slotsToClear.add(slot.index));
+  
+  if (slotsToClear.size === 0) {
+    console.log("[RainyDay] No slots to clear");
+    return;
+  }
+  
+  // Clear assignments for these slots across all bunks
+  let clearedCount = 0;
+  Object.keys(schedules).forEach(bunk => {
+    slotsToClear.forEach(slotIdx => {
+      if (schedules[bunk] && schedules[bunk][slotIdx]) {
+        schedules[bunk][slotIdx] = null;
+        clearedCount++;
+      }
+    });
+  });
+  
+  // Save the updated schedule
+  window.scheduleAssignments = schedules;
+  window.saveCurrentDailyData?.("scheduleAssignments", schedules);
+  
+  console.log(`[RainyDay] Cleared ${clearedCount} assignments from ${slotsToClear.size} slots`);
+}
+
+// Show mid-day rain start time picker modal
+function showMidDayRainModal() {
+  // Remove any existing modal
+  const existingModal = document.getElementById('da-midday-rain-modal');
+  if (existingModal) existingModal.remove();
+  
+  const now = new Date();
+  const currentHour = now.getHours();
+  const currentMin = Math.floor(now.getMinutes() / 5) * 5; // Round to nearest 5
+  const currentTimeStr = `${String(currentHour).padStart(2, '0')}:${String(currentMin).padStart(2, '0')}`;
+  
+  const modal = document.createElement('div');
+  modal.id = 'da-midday-rain-modal';
+  modal.className = 'da-modal-overlay';
+  modal.innerHTML = `
+    <div class="da-modal" style="max-width:450px;">
+      <div class="da-modal-header">
+        <h3>🌧️ Mid-Day Rain Change</h3>
+        <button class="da-modal-close" onclick="this.closest('.da-modal-overlay').remove()">×</button>
+      </div>
+      <div class="da-modal-body">
+        <p style="margin-bottom:16px;color:#64748b;">
+          This will preserve activities that <strong>completed before</strong> the rain start time, 
+          discard any activities that were <strong>in progress</strong> (cut short by rain), 
+          and clear all <strong>future</strong> activities for you to reschedule with indoor options.
+        </p>
+        
+        <div class="da-form-field" style="margin-bottom:16px;">
+          <label style="font-weight:600;margin-bottom:6px;display:block;">When did rain start?</label>
+          <div style="display:flex;gap:12px;align-items:center;">
+            <input type="time" id="da-midday-rain-time" class="da-input" value="${currentTimeStr}" style="flex:1;font-size:16px;padding:10px;">
+            <button id="da-midday-use-now-btn" class="da-btn da-btn-secondary" style="white-space:nowrap;">Use Current Time</button>
+          </div>
+        </div>
+        
+        <div id="da-midday-preview" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:16px;">
+          <div style="font-weight:600;margin-bottom:8px;">Preview:</div>
+          <div id="da-midday-preview-content">Calculating...</div>
+        </div>
+        
+        <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:12px;margin-bottom:16px;">
+          <div style="font-weight:600;color:#92400e;margin-bottom:4px;">⚠️ Warning</div>
+          <div style="font-size:13px;color:#a16207;">
+            Activities that were <strong>in progress</strong> when rain started will be marked as incomplete and won't count toward rotation.
+          </div>
+        </div>
+      </div>
+      <div class="da-modal-footer">
+        <button class="da-btn da-btn-secondary" onclick="this.closest('.da-modal-overlay').remove()">Cancel</button>
+        <button id="da-midday-confirm-btn" class="da-btn da-btn-primary">🌧️ Activate Mid-Day Rain</button>
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(modal);
+  
+  // Preview function
+  const updatePreview = () => {
+    const timeInput = document.getElementById('da-midday-rain-time');
+    const previewContent = document.getElementById('da-midday-preview-content');
+    
+    if (!timeInput || !previewContent) return;
+    
+    const [hours, mins] = timeInput.value.split(':').map(Number);
+    const rainStartMin = hours * 60 + mins;
+    
+    const analysis = analyzeActivitiesForMidDayRain(rainStartMin);
+    
+    previewContent.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center;">
+        <div style="background:#d1fae5;padding:8px;border-radius:6px;">
+          <div style="font-size:20px;font-weight:700;color:#065f46;">${analysis.completedCount}</div>
+          <div style="font-size:11px;color:#047857;">✅ Keep</div>
+        </div>
+        <div style="background:#fef3c7;padding:8px;border-radius:6px;">
+          <div style="font-size:20px;font-weight:700;color:#92400e;">${analysis.inProgressCount}</div>
+          <div style="font-size:11px;color:#a16207;">⚠️ Cut Short</div>
+        </div>
+        <div style="background:#fee2e2;padding:8px;border-radius:6px;">
+          <div style="font-size:20px;font-weight:700;color:#991b1b;">${analysis.futureCount}</div>
+          <div style="font-size:11px;color:#dc2626;">🗑️ Clear</div>
+        </div>
+      </div>
+      ${analysis.inProgressCount > 0 ? `
+        <div style="margin-top:10px;font-size:12px;color:#64748b;">
+          <strong>Cut short slots:</strong> ${analysis.inProgress.map(s => s.startTime + '-' + s.endTime).join(', ')}
+        </div>
+      ` : ''}
+    `;
+  };
+  
+  // Event handlers
+  document.getElementById('da-midday-rain-time').addEventListener('change', updatePreview);
+  document.getElementById('da-midday-rain-time').addEventListener('input', updatePreview);
+  
+  document.getElementById('da-midday-use-now-btn').onclick = () => {
+    const now = new Date();
+    const h = String(now.getHours()).padStart(2, '0');
+    const m = String(Math.floor(now.getMinutes() / 5) * 5).padStart(2, '0');
+    document.getElementById('da-midday-rain-time').value = `${h}:${m}`;
+    updatePreview();
+  };
+  
+  document.getElementById('da-midday-confirm-btn').onclick = () => {
+    const timeInput = document.getElementById('da-midday-rain-time');
+    const [hours, mins] = timeInput.value.split(':').map(Number);
+    const rainStartMin = hours * 60 + mins;
+    
+    modal.remove();
+    
+    activateMidDayRainyMode(rainStartMin);
+    renderRainyDayPanel();
+    renderResourceOverridesUI();
+    renderGrid();
+  };
+  
+  // Close on overlay click
+  modal.onclick = (e) => {
+    if (e.target === modal) modal.remove();
+  };
+  
+  // Initial preview
+  updatePreview();
 }
 
 function backupPreservedSchedule(startTimeMin) {
@@ -2781,6 +3016,16 @@ function getStyles() {
     .da-btn-warning:hover { background:#d97706; }
     .da-btn-danger { background:var(--da-danger); color:#fff; }
     .da-btn-danger:hover { background:#dc2626; }
+    
+    /* Modal Styles */
+    .da-modal-overlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:99999; backdrop-filter:blur(2px); }
+    .da-modal { background:#fff; border-radius:12px; box-shadow:0 20px 50px rgba(0,0,0,0.3); max-width:500px; width:90%; max-height:90vh; overflow:hidden; display:flex; flex-direction:column; }
+    .da-modal-header { padding:16px 20px; border-bottom:1px solid #e2e8f0; display:flex; align-items:center; justify-content:space-between; }
+    .da-modal-header h3 { margin:0; font-size:16px; font-weight:600; color:#1e293b; }
+    .da-modal-close { background:none; border:none; font-size:24px; color:#94a3b8; cursor:pointer; padding:0; line-height:1; }
+    .da-modal-close:hover { color:#64748b; }
+    .da-modal-body { padding:20px; overflow-y:auto; flex:1; }
+    .da-modal-footer { padding:16px 20px; border-top:1px solid #e2e8f0; display:flex; justify-content:flex-end; gap:10px; background:#f8fafc; }
     .da-btn-ghost { background:transparent; color:var(--da-text2); border:1px solid var(--da-border); }
     .da-btn-ghost:hover { background:var(--da-surface); }
     .da-btn-sm { padding:4px 8px; font-size:11px; }
@@ -2905,9 +3150,11 @@ function getStyles() {
     .da-rainy-card.active .da-rainy-settings-btn { color:#e0f2fe; background:rgba(255,255,255,0.1); border-color:rgba(255,255,255,0.2); }
     .da-rainy-card.active .da-rainy-settings-btn:hover { background:rgba(255,255,255,0.2); }
     
-    .da-rainy-midday-info { display:flex; gap:8px; padding:0 18px 12px; position:relative; z-index:1; }
+    .da-rainy-midday-info { display:flex; gap:8px; padding:0 18px 12px; position:relative; z-index:1; flex-wrap:wrap; }
     .da-rainy-midday-badge { padding:4px 10px; background:rgba(245,158,11,0.2); border:1px solid rgba(245,158,11,0.3); border-radius:999px; font-size:11px; font-weight:600; color:#fbbf24; }
     .da-rainy-preserved-badge { padding:4px 10px; background:rgba(34,197,94,0.2); border:1px solid rgba(34,197,94,0.3); border-radius:999px; font-size:11px; font-weight:600; color:#4ade80; }
+    .da-rainy-cutshort-badge { padding:4px 10px; background:rgba(251,191,36,0.2); border:1px solid rgba(251,191,36,0.3); border-radius:999px; font-size:11px; font-weight:600; color:#fbbf24; }
+    .da-rainy-cleared-badge { padding:4px 10px; background:rgba(239,68,68,0.2); border:1px solid rgba(239,68,68,0.3); border-radius:999px; font-size:11px; font-weight:600; color:#f87171; }
     .da-rainy-settings-panel { padding:14px 18px; border-top:1px solid rgba(255,255,255,0.1); position:relative; z-index:1; }
     .da-rainy-card.inactive .da-rainy-settings-panel { border-top-color:#e2e8f0; background:rgba(255,255,255,0.5); }
     .da-rainy-card.active .da-rainy-settings-panel { background:rgba(0,0,0,0.2); }
