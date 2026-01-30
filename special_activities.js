@@ -1,5 +1,5 @@
 // ============================================================================
-// special_activities.js — PRODUCTION-READY v2.1
+// special_activities.js — PRODUCTION-READY v2.2
 // ============================================================================
 // 1. Layout: Apple-inspired Two-Pane with Collapsible Detail Sections.
 // 2. Logic: Retains Sharing, Frequency, and Time Rules.
@@ -7,6 +7,8 @@
 // 4. Update: Added Location Dropdown for Special Activities.
 // 5. Update: Added RBAC Checks for Add/Delete operations.
 // 6. Update: Transition/Zone rules removed - now managed in Locations tab.
+// ★ v2.1: Enhanced rainy day filtering with multiple flag support
+// ★ v2.2: Added comprehensive debug logging for rainy day activity tracking
 //
 // v2.0 PRODUCTION FIXES:
 // - ★ CLOUD SYNC: Proper cloud sync via saveGlobalSettings
@@ -476,6 +478,16 @@ function loadData() {
         const settings = window.loadGlobalSettings?.() || {};
         const allActivities = settings.specialActivities || settings.app1?.specialActivities || [];
         
+        // ★★★ DEBUG: Log what we loaded from storage ★★★
+        const rawRainyOnly = allActivities.filter(s => 
+            s.rainyDayOnly === true || s.rainyDayExclusive === true
+        );
+        console.log(`[SPECIAL_ACTIVITIES] loadData: Found ${allActivities.length} total activities in storage`);
+        console.log(`[SPECIAL_ACTIVITIES] loadData: ${rawRainyOnly.length} have rainyDayOnly/rainyDayExclusive=true`);
+        if (rawRainyOnly.length > 0) {
+            console.log(`[SPECIAL_ACTIVITIES] loadData: Rainy-only names: ${rawRainyOnly.map(s => s.name).join(', ')}`);
+        }
+        
         // Separate regular and rainy day exclusive activities
         specialActivities = [];
         rainyDayActivities = [];
@@ -499,7 +511,8 @@ function loadData() {
         
         console.log("[SPECIAL_ACTIVITIES] Data loaded:", {
             specials: specialActivities.length,
-            rainyDay: rainyDayActivities.length
+            rainyDay: rainyDayActivities.length,
+            rainyDayNames: rainyDayActivities.map(s => s.name)
         });
     } catch (e) {
         console.error("[SPECIAL_ACTIVITIES] Error loading data:", e);
@@ -1539,7 +1552,10 @@ window.getRainyDayActivities = function() {
 };
 
 window.getAllSpecialActivities = function() {
-    return [...specialActivities, ...rainyDayActivities];
+    const combined = [...specialActivities, ...rainyDayActivities];
+    const rainyOnlyInCombined = combined.filter(s => s.rainyDayOnly || s.rainyDayExclusive);
+    console.log(`[SPECIAL_ACTIVITIES] getAllSpecialActivities: Returning ${combined.length} total (${rainyOnlyInCombined.length} rainy-only)`);
+    return combined;
 };
 
 window.getSpecialActivityByName = function(name) {
