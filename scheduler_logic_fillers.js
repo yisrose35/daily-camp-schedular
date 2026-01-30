@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_logic_fillers.js (v6.3 - RAINY DAY SUPPORT)
+// scheduler_logic_fillers.js (v6.4 - UNIFIED RAINY DAY SUPPORT)
 // ============================================================================
 // ★★★ THIS FILE NOW DELEGATES ALL ROTATION LOGIC TO rotation_engine.js ★★★
 //
@@ -22,6 +22,11 @@
 // - Optimized field lookup with caching for performance
 // - Better detection of field vs special activity types
 //
+// KEY FIXES IN v6.4:
+// - ★★★ UNIFIED checkRainyDayMode() function checks ALL rainy day flags ★★★
+// - Rainy-day-only specials now properly included in rotation ★★★
+// - Enhanced logging to debug rainy day activity selection
+//
 // ============================================================================
 
 (function () {
@@ -42,6 +47,27 @@
         if (!bunkName) return Infinity;
         const match = String(bunkName).match(/(\d+)/);
         return match ? parseInt(match[1], 10) : Infinity;
+    }
+
+    // =========================================================================
+    // ★★★ UNIFIED RAINY DAY MODE CHECK ★★★
+    // =========================================================================
+
+    function checkRainyDayMode() {
+        // Check all possible flags for rainy day mode
+        if (window.isRainyDayModeActive?.()) return true;
+        if (window.isRainyDay === true) return true;
+        
+        // Check daily data directly
+        try {
+            const dailyData = window.loadCurrentDailyData?.() || {};
+            if (dailyData.rainyDayMode === true) return true;
+            if (dailyData.isRainyDay === true) return true;
+        } catch (e) {
+            console.warn('[FILLERS] Error checking daily data for rainy mode:', e);
+        }
+        
+        return false;
     }
 
     // =========================================================================
@@ -95,7 +121,7 @@
         }
 
         // 2. ★★★ RAINY DAY CHECK: Outdoor fields unavailable on rainy days ★★★
-        const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
+        const isRainyMode = checkRainyDayMode();
         if (isRainyMode) {
             // First check activityProperties (already loaded, fast lookup)
             const fieldProps = window.activityProperties?.[fieldName];
@@ -411,17 +437,60 @@
         const currentSlotIndex = block.slots[0];
         const doneToday = getActivitiesDoneToday(block.bunk, currentSlotIndex);
 
+        // ★★★ v6.4: USE UNIFIED RAINY DAY CHECK ★★★
+        const isRainyMode = checkRainyDayMode();
+        
+        // ★★★ DEBUG: Log what specials we're working with ★★★
+        const allSpecials = allActivities.filter(a => (a.type || '').toLowerCase() === 'special');
+        const rainyOnlyInAll = allSpecials.filter(a => a.rainyDayOnly === true || a.rainyDayExclusive === true);
+        
+        if (isRainyMode) {
+            console.log(`[findBestSpecial] 🌧️ RAINY MODE ACTIVE for ${block.bunk}`);
+            console.log(`[findBestSpecial]    Total specials in allActivities: ${allSpecials.length}`);
+            console.log(`[findBestSpecial]    Rainy-day-only in allActivities: ${rainyOnlyInAll.length}`);
+            if (rainyOnlyInAll.length > 0) {
+                console.log(`[findBestSpecial]    Names: ${rainyOnlyInAll.map(a => a.name).join(', ')}`);
+            }
+        }
+
         const specials = allActivities
             .filter(a => {
                 const t = (a.type || '').toLowerCase();
-                return t === 'special';
+                if (t !== 'special') return false;
+                
+                // Skip disabled activities
+                if (a.available === false) return false;
+                
+                // ★★★ RAINY DAY LOGIC ★★★
+                if (isRainyMode) {
+                    // In rainy mode: EXCLUDE specials NOT available on rainy days
+                    if (a.rainyDayAvailable === false || a.availableOnRainyDay === false) {
+                        console.log(`[findBestSpecial]    ❌ Excluded (not rainy-available): ${a.name}`);
+                        return false;
+                    }
+                    // Include everything else (regular specials + rainy-only specials)
+                    return true;
+                } else {
+                    // In normal mode: EXCLUDE rainy-day-only specials
+                    if (a.rainyDayOnly === true || a.rainyDayExclusive === true) {
+                        return false;
+                    }
+                    return true;
+                }
             })
             .map(a => ({
                 field: a.name,
                 sport: null,
                 _activity: a.name,
-                _type: 'special'
+                _type: 'special',
+                _rainyDayOnly: a.rainyDayOnly || a.rainyDayExclusive || false
             }));
+
+        // ★★★ Log available specials for debugging ★★★
+        if (isRainyMode) {
+            const rainyOnlyCount = specials.filter(s => s._rainyDayOnly).length;
+            console.log(`[findBestSpecial]    ✅ After filter: ${specials.length} specials (${rainyOnlyCount} rainy-only)`);
+        }
 
         const available = specials.filter(pick => {
             const actName = pick._activity;
@@ -606,13 +675,34 @@
         const doneToday = getActivitiesDoneToday(block.bunk, currentSlotIndex);
         const fieldsBySport = window.SchedulerCoreUtils?.loadAndFilterData?.()?.fieldsBySport || {};
 
+        // ★★★ v6.4: USE UNIFIED RAINY DAY CHECK ★★★
+        const isRainyMode = checkRainyDayMode();
+
         // ★★★ UNIFIED POOL: Collect ALL available options (specials + sports) ★★★
         const allPicks = [];
 
-        // 1) Collect SPECIAL activities
+        // 1) Collect SPECIAL activities with rainy day filtering
         const specials = allActivities.filter(a => {
             const t = (a.type || '').toLowerCase();
-            return t === 'special';
+            if (t !== 'special') return false;
+            
+            // Skip disabled activities
+            if (a.available === false) return false;
+            
+            // ★★★ RAINY DAY LOGIC ★★★
+            if (isRainyMode) {
+                // EXCLUDE specials NOT available on rainy days
+                if (a.rainyDayAvailable === false || a.availableOnRainyDay === false) {
+                    return false;
+                }
+                // Include everything else (regular + rainy-only)
+            } else {
+                // EXCLUDE rainy-day-only specials on normal days
+                if (a.rainyDayOnly === true || a.rainyDayExclusive === true) {
+                    return false;
+                }
+            }
+            return true;
         });
 
         specials.forEach(special => {
@@ -741,6 +831,6 @@
     window.getFieldCapacityFromFillers = getFieldCapacity;
     window.isFieldUnavailable = isFieldUnavailable;
 
-    console.log('[FILLERS] v6.3 loaded - RAINY DAY SUPPORT + CAPACITY LOGIC');
+    console.log('[FILLERS] v6.4 loaded - UNIFIED RAINY DAY SUPPORT + CAPACITY LOGIC');
 
 })();
