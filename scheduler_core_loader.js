@@ -1,8 +1,9 @@
 // ============================================================================
-// scheduler_core_loader.js (GCM PATCHED FOR SMART LEAGUE ENGINE v2.2)
+// scheduler_core_loader.js (GCM PATCHED FOR SMART LEAGUE ENGINE v2.3)
 // FULL REWRITE — SPEC-COMPLIANT LOADER FOR ORCHESTRATOR V3
 // ★★★ v2.1: ENHANCED buildActivityProperties with ALL field properties ★★★
 // ★★★ v2.2: RAINY DAY FILTERING - Indoor fields/specials only on rainy days ★★★
+// ★★★ v2.3: ENHANCED DEBUG LOGGING for rainy day special tracking ★★★
 // ============================================================================
 
 (function () {
@@ -19,12 +20,17 @@
     function getSpecialActivities() {
         // Try getAllSpecialActivities first (includes both regular and rainy-day-only)
         if (typeof window.getAllSpecialActivities === 'function') {
-            return window.getAllSpecialActivities();
+            const all = window.getAllSpecialActivities();
+            const rainyOnly = (all || []).filter(s => s.rainyDayOnly || s.rainyDayExclusive);
+            console.log(`[LoadData] getSpecialActivities via getAllSpecialActivities: ${all?.length || 0} total, ${rainyOnly.length} rainy-only`);
+            return all;
         }
         // Fallback: combine both arrays manually
         const regular = window.specialActivities || [];
         const rainy = window.rainyDayActivities || [];
-        return [...regular, ...rainy];
+        const combined = [...regular, ...rainy];
+        console.log(`[LoadData] getSpecialActivities fallback: ${regular.length} regular + ${rainy.length} rainy = ${combined.length} total`);
+        return combined;
     }
 
     function getDailyOverrides() {
@@ -352,6 +358,16 @@
             (a.type || '').toLowerCase() === 'special'
         );
 
+        // ★★★ DEBUG: Log what specials we found ★★★
+        const rainyOnlyInMaster = masterSpecials.filter(s => 
+            s.rainyDayOnly === true || s.rainyDayExclusive === true
+        );
+        console.log(`[LoadData] Found ${masterSpecials.length} specials in masterActivities`);
+        console.log(`[LoadData]    Rainy-day-only: ${rainyOnlyInMaster.length}`);
+        if (rainyOnlyInMaster.length > 0) {
+            console.log(`[LoadData]    Names: ${rainyOnlyInMaster.map(s => s.name).join(', ')}`);
+        }
+
         const divisions = divisionsArray.reduce((m, d) => {
             if (d?.name) m[d.name] = d;
             return m;
@@ -425,6 +441,32 @@
         window.currentDisabledFields = effectiveDisabledFields;
 
         // =====================================================================
+        // ★★★ v2.2: UPDATE allActivities TO REFLECT RAINY DAY FILTERING ★★★
+        // This ensures filler functions see the correct set of specials
+        // =====================================================================
+        const effectiveSpecialNames = new Set(effectiveMasterSpecials.map(s => s.name));
+        const originalSpecialNames = new Set(masterSpecials.map(s => s.name));
+        
+        // Remove specials that were filtered out, add ones that were added
+        let effectiveAllActivities = masterActivities.filter(a => {
+            const isSpecial = (a.type || '').toLowerCase() === 'special';
+            if (!isSpecial) return true; // Keep non-specials
+            return effectiveSpecialNames.has(a.name); // Only keep filtered specials
+        });
+        
+        // Add any rainy-day-only specials that might not have been in masterActivities
+        effectiveMasterSpecials.forEach(s => {
+            if (!effectiveAllActivities.some(a => a.name === s.name)) {
+                effectiveAllActivities.push({
+                    ...s,
+                    type: 'Special',
+                    duration: s.duration || 30
+                });
+                console.log(`[LoadData] ✅ Added rainy-day-only special to allActivities: ${s.name}`);
+            }
+        });
+
+        // =====================================================================
         // RETURN DATA
         // =====================================================================
         return {
@@ -433,11 +475,11 @@
             divisions,
             bunks,
             fields,
-            masterActivities,
+            masterActivities: effectiveAllActivities, // ★ Use filtered version
             masterSpecials: effectiveMasterSpecials,
             masterFields: fields,
             activityProperties,
-            allActivities: masterActivities,
+            allActivities: effectiveAllActivities, // ★ Use filtered version
             h2hActivities,
             fieldsBySport,
             masterLeagues: window.masterLeagues || {},
@@ -463,6 +505,6 @@
     window.generateSchedulableBlocks = generateSchedulableBlocks;
     window.buildActivityProperties = buildActivityProperties;
 
-    console.log('[LOADER] v2.2 loaded - Rainy day field/special filtering enabled');
+    console.log('[LOADER] v2.3 loaded - Rainy day filtering + enhanced debug logging');
 
 })();
