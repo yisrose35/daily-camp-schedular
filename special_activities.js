@@ -1,5 +1,5 @@
 // ============================================================================
-// special_activities.js — PRODUCTION-READY v2.3
+// special_activities.js — PRODUCTION-READY v2.4
 // ============================================================================
 // 1. Layout: Apple-inspired Two-Pane with Collapsible Detail Sections.
 // 2. Logic: Retains Sharing, Frequency, and Time Rules.
@@ -10,6 +10,7 @@
 // ★ v2.1: Enhanced rainy day filtering with multiple flag support
 // ★ v2.2: Added comprehensive debug logging for rainy day activity tracking
 // ★ v2.3: Added Indoor/Outdoor availability section (matches fields.js pattern)
+// ★ v2.4: CRITICAL FIX - Always set type:'Special' for scheduler filtering
 //
 // v2.0 PRODUCTION FIXES:
 // - ★ CLOUD SYNC: Proper cloud sync via saveGlobalSettings
@@ -30,11 +31,15 @@
 // - ★ WEATHER SECTION: Added Weather & Availability collapsible section
 // - ★ INDOOR FLAG: isIndoor property determines rainy day availability
 // - ★ MATCHES FIELDS: Same UI pattern as fields.js for consistency
+//
+// v2.4 SCHEDULER FIX:
+// - ★ TYPE PROPERTY: Always ensures type:'Special' is set on all activities
+// - ★ Fixes issue where activities without type were filtered out by scheduler
 // ============================================================================
 (function() {
 'use strict';
 
-console.log("[SPECIAL_ACTIVITIES] Module v2.3 loading...");
+console.log("[SPECIAL_ACTIVITIES] Module v2.4 loading...");
 
 // =========================================================================
 // STATE - Internal variables
@@ -297,6 +302,7 @@ function validateSpecialActivity(activity, activityName) {
     
     return {
         name: activity.name || activityName || 'Unknown',
+        type: 'Special', // ★ v2.4 FIX: Always ensure type is set for scheduler filtering
         available: activity.available !== false,
         sharableWith: sharableWith,
         limitUsage: limitUsage,
@@ -317,6 +323,7 @@ function validateSpecialActivity(activity, activityName) {
 function createDefaultActivity(name) {
     return {
         name: name,
+        type: 'Special', // ★ v2.4 FIX: Always ensure type is set for scheduler filtering
         available: true,
         sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         limitUsage: { enabled: false, divisions: {}, priorityList: [] },
@@ -522,7 +529,7 @@ function loadData() {
         rainyDayActivities = [];
         
         allActivities.forEach(s => {
-            // ★ FIX: Validate each activity on load
+            // ★ FIX: Validate each activity on load (this now adds type:'Special')
             const validated = validateSpecialActivity(s, s?.name);
             
             // Also support legacy property name from daily_adjustments.js
@@ -1675,7 +1682,31 @@ window.getRainyDayActivities = function() {
     return [...rainyDayActivities]; // Return copy
 };
 
+// ★ v2.4: Self-initializing getter - loads from storage if arrays are empty
 window.getAllSpecialActivities = function() {
+    // ★ v2.4 FIX: Auto-load from storage if arrays are empty
+    if ((!specialActivities || specialActivities.length === 0) && 
+        (!rainyDayActivities || rainyDayActivities.length === 0)) {
+        console.log('[SPECIAL_ACTIVITIES] ⚠️ Arrays empty - auto-loading from storage...');
+        const settings = window.loadGlobalSettings?.() || {};
+        const allActivities = settings.specialActivities || settings.app1?.specialActivities || [];
+        
+        if (allActivities.length > 0) {
+            specialActivities = [];
+            rainyDayActivities = [];
+            
+            allActivities.forEach(s => {
+                const validated = validateSpecialActivity(s, s?.name);
+                if (validated.rainyDayExclusive || validated.rainyDayOnly) {
+                    rainyDayActivities.push(validated);
+                } else {
+                    specialActivities.push(validated);
+                }
+            });
+            console.log(`[SPECIAL_ACTIVITIES] ✅ Auto-loaded ${specialActivities.length} regular + ${rainyDayActivities.length} rainy-only`);
+        }
+    }
+    
     const combined = [...specialActivities, ...rainyDayActivities];
     const rainyOnlyInCombined = combined.filter(s => s.rainyDayOnly || s.rainyDayExclusive);
     console.log(`[SPECIAL_ACTIVITIES] getAllSpecialActivities: Returning ${combined.length} total (${rainyOnlyInCombined.length} rainy-only)`);
@@ -1862,6 +1893,11 @@ window.diagnoseSpecialActivities = function() {
     storedActivities.forEach((a, idx) => {
         const actIssues = [];
         
+        // ★ v2.4: Check type property
+        if (!a.type || a.type !== 'Special') {
+            actIssues.push('Missing or incorrect type property (should be "Special")');
+        }
+        
         // Check sharableWith structure
         if (!a.sharableWith) {
             actIssues.push('Missing sharableWith');
@@ -1929,6 +1965,6 @@ window.diagnoseSpecialActivities = function() {
     return { activities: storedActivities.length, issues: issues.length };
 };
 
-console.log("[SPECIAL_ACTIVITIES] Module v2.3 loaded");
+console.log("[SPECIAL_ACTIVITIES] Module v2.4 loaded");
 
 })();
