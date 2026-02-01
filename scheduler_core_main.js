@@ -118,9 +118,11 @@
     // -------------------------------------------------------------------------
 
     function isRainyDayModeActive() {
-        const dailyData = window.loadCurrentDailyData?.() || {};
-        return dailyData.rainyDayMode === true;
-    }
+    const dailyData = window.loadCurrentDailyData?.() || {};
+    return dailyData.rainyDayMode === true || 
+           dailyData.isRainyDay === true ||
+           window.isRainyDay === true;
+}
 
     function getRainyDayFieldFilter() {
         if (!isRainyDayModeActive()) return null;
