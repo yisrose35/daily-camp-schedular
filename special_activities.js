@@ -1,5 +1,5 @@
 // ============================================================================
-// special_activities.js — PRODUCTION-READY v2.2
+// special_activities.js — PRODUCTION-READY v2.3
 // ============================================================================
 // 1. Layout: Apple-inspired Two-Pane with Collapsible Detail Sections.
 // 2. Logic: Retains Sharing, Frequency, and Time Rules.
@@ -9,6 +9,7 @@
 // 6. Update: Transition/Zone rules removed - now managed in Locations tab.
 // ★ v2.1: Enhanced rainy day filtering with multiple flag support
 // ★ v2.2: Added comprehensive debug logging for rainy day activity tracking
+// ★ v2.3: Added Indoor/Outdoor availability section (matches fields.js pattern)
 //
 // v2.0 PRODUCTION FIXES:
 // - ★ CLOUD SYNC: Proper cloud sync via saveGlobalSettings
@@ -24,11 +25,16 @@
 // - ★ RAINY DAY FILTERING: getGlobalSpecialActivities now filters by rainy mode
 // - ★ ROBUST MODE CHECK: isRainyDayModeActive checks multiple flags
 // - ★ SCHEDULER HELPERS: Added getRainyDayOnlySpecials, getIndoorAvailableSpecials
+//
+// v2.3 INDOOR/OUTDOOR:
+// - ★ WEATHER SECTION: Added Weather & Availability collapsible section
+// - ★ INDOOR FLAG: isIndoor property determines rainy day availability
+// - ★ MATCHES FIELDS: Same UI pattern as fields.js for consistency
 // ============================================================================
 (function() {
 'use strict';
 
-console.log("[SPECIAL_ACTIVITIES] Module v2.1 loading...");
+console.log("[SPECIAL_ACTIVITIES] Module v2.3 loading...");
 
 // =========================================================================
 // STATE - Internal variables
@@ -275,6 +281,20 @@ function validateSpecialActivity(activity, activityName) {
         })).filter(rule => rule.start && rule.end);
     }
     
+    // ★ v2.3: Determine isIndoor value - migrate from legacy properties if needed
+    let isIndoor = activity.isIndoor;
+    if (isIndoor === undefined) {
+        // Migrate from legacy properties
+        if (activity.rainyDayAvailable === true || activity.availableOnRainyDay === true) {
+            isIndoor = true;
+        } else if (activity.rainyDayAvailable === false || activity.availableOnRainyDay === false) {
+            isIndoor = false;
+        } else {
+            // Default: special activities are typically indoor
+            isIndoor = true;
+        }
+    }
+    
     return {
         name: activity.name || activityName || 'Unknown',
         available: activity.available !== false,
@@ -287,8 +307,10 @@ function validateSpecialActivity(activity, activityName) {
         frequencyWeeks: parseInt(activity.frequencyWeeks, 10) || 0,
         rainyDayExclusive: activity.rainyDayExclusive === true,
         rainyDayOnly: activity.rainyDayOnly === true, // Legacy support
-        rainyDayAvailable: activity.rainyDayAvailable !== false,
-        availableOnRainyDay: activity.availableOnRainyDay !== false // Additional flag support
+        // ★ v2.3: Indoor/Outdoor availability (matches fields.js pattern)
+        isIndoor: isIndoor,
+        rainyDayAvailable: isIndoor, // Keep in sync for backward compatibility
+        availableOnRainyDay: isIndoor // Keep in sync for backward compatibility
     };
 }
 
@@ -302,6 +324,8 @@ function createDefaultActivity(name) {
         maxUsage: null,
         frequencyWeeks: 0,
         rainyDayExclusive: false,
+        // ★ v2.3: Default special activities to indoor (typically arts, canteen, etc.)
+        isIndoor: true,
         rainyDayAvailable: true,
         availableOnRainyDay: true
     };
@@ -369,6 +393,11 @@ function initSpecialActivitiesTab() {
         /* Rainy Day List Styles */
         .rainy-list { background: linear-gradient(to bottom, #f0f9ff, #fff) !important; border-color: #7dd3fc !important; }
         .rainy-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 0.7rem; color: #0284c7; background: #e0f2fe; padding: 2px 8px; border-radius: 999px; margin-left: 8px; }
+        
+        /* ★ v2.3: Indoor/Outdoor badge styles */
+        .weather-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 0.65rem; padding: 2px 6px; border-radius: 999px; margin-left: 6px; }
+        .weather-badge.indoor { color: #065f46; background: #d1fae5; }
+        .weather-badge.outdoor { color: #92400e; background: #fef3c7; }
     `;
     container.appendChild(style);
 
@@ -661,6 +690,12 @@ function createMasterListItem(item, isRainyDay = false) {
         badge.className = "rainy-badge";
         badge.textContent = "🌧️ Rainy Only";
         nameEl.appendChild(badge);
+    } else {
+        // ★ v2.3: Add indoor/outdoor badge for regular specials
+        const weatherBadge = document.createElement("span");
+        weatherBadge.className = `weather-badge ${item.isIndoor ? 'indoor' : 'outdoor'}`;
+        weatherBadge.textContent = item.isIndoor ? '🏠' : '🌳';
+        nameEl.appendChild(weatherBadge);
     }
 
     infoDiv.appendChild(nameEl);
@@ -823,11 +858,21 @@ function renderDetailPane() {
     detailPaneEl.appendChild(header);
 
     // -- 2. COLLAPSIBLE SECTIONS --
+    // ★ v2.3: Added Weather & Availability section (only for regular specials, not rainy-day-only)
     const sections = [
         { title: "Sharing Rules", summary: summarySharing(item), render: () => renderSharing(item) },
         { title: "Division Access", summary: summaryAccess(item), render: () => renderAccess(item) },
         { title: "Time Availability", summary: summaryTime(item), render: () => renderTimeRules(item) }
     ];
+    
+    // Add Weather section only for regular specials (not rainy-day-exclusive ones)
+    if (!isRainyDayItem) {
+        sections.push({ 
+            title: "Weather & Availability", 
+            summary: summaryWeather(item), 
+            render: () => renderWeatherSettings(item) 
+        });
+    }
 
     sections.forEach(sec => {
         const section = document.createElement("div");
@@ -877,6 +922,11 @@ function summaryAccess(item) {
 function summaryTime(item) { 
     const count = (item.timeRules || []).length;
     return count ? `${count} rule(s) active` : "Available all day"; 
+}
+
+// ★ v2.3: Weather summary (matches fields.js pattern)
+function summaryWeather(item) {
+    return item.isIndoor ? "🏠 Indoor - Available on rainy days" : "🌳 Outdoor - Disabled on rainy days";
 }
 
 // =========================================================================
@@ -1268,6 +1318,79 @@ function renderTimeRules(item) {
     return container;
 }
 
+// ★ v2.3: 4. WEATHER & AVAILABILITY (matches fields.js pattern)
+function renderWeatherSettings(item) {
+    const container = document.createElement("div");
+    
+    const isIndoor = item.isIndoor === true;
+    
+    const updateSummary = () => {
+        const summaryEl = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (summaryEl) summaryEl.textContent = summaryWeather(item);
+    };
+    
+    container.innerHTML = `
+        <div style="margin-bottom: 16px;">
+            <p style="font-size: 0.85rem; color: #6b7280; margin: 0 0 12px 0;">
+                Mark this special activity as indoor to keep it available during Rainy Day Mode.
+                Outdoor activities will be automatically disabled when rainy weather is activated.
+            </p>
+            
+            <div style="display: flex; align-items: center; gap: 12px; padding: 14px; 
+                        background: ${isIndoor ? '#ecfdf5' : '#fef3c7'}; 
+                        border: 1px solid ${isIndoor ? '#a7f3d0' : '#fcd34d'};
+                        border-radius: 10px; transition: all 0.2s ease;">
+                <span style="font-size: 28px;">${isIndoor ? '🏠' : '🌳'}</span>
+                <div style="flex: 1;">
+                    <div style="font-weight: 600; color: ${isIndoor ? '#065f46' : '#92400e'};">
+                        ${isIndoor ? 'Indoor Activity' : 'Outdoor Activity'}
+                    </div>
+                    <div style="font-size: 0.85rem; color: ${isIndoor ? '#047857' : '#b45309'};">
+                        ${isIndoor ? 'Available on rainy days' : 'Disabled during rainy days'}
+                    </div>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" id="weather-toggle" ${isIndoor ? 'checked' : ''}>
+                    <span class="slider"></span>
+                </label>
+            </div>
+        </div>
+        
+        <div style="background: #f9fafb; border-radius: 8px; padding: 12px; font-size: 0.85rem; color: #4b5563;">
+            <strong>💡 Tip:</strong> Indoor activities like arts & crafts, canteen, game rooms, and 
+            indoor sports should be marked as indoor. Outdoor activities like nature walks, 
+            outdoor adventure courses, and field activities should remain as outdoor.
+        </div>
+    `;
+    
+    // Bind toggle
+    const toggle = container.querySelector('#weather-toggle');
+    if (toggle) {
+        toggle.onchange = function() {
+            item.isIndoor = this.checked;
+            // Keep legacy properties in sync
+            item.rainyDayAvailable = this.checked;
+            item.availableOnRainyDay = this.checked;
+            saveData();
+
+            // Update the parent container to reflect the change
+            const parentContainer = container.parentElement;
+            if (parentContainer) {
+                parentContainer.innerHTML = '';
+                parentContainer.appendChild(renderWeatherSettings(item));
+            }
+
+            // Update summary
+            updateSummary();
+            
+            // Update master list to show new badge
+            renderMasterList();
+        };
+    }
+    
+    return container;
+}
+
 // =========================================================================
 // ADD SPECIAL
 // =========================================================================
@@ -1319,6 +1442,7 @@ function addRainyDayActivity() {
     const newActivity = createDefaultActivity(n);
     newActivity.rainyDayExclusive = true;
     newActivity.rainyDayOnly = true; // Legacy support
+    newActivity.isIndoor = true; // Rainy day activities are always indoor
     rainyDayActivities.push(newActivity);
 
     addRainyDayInput.value = "";
@@ -1587,16 +1711,14 @@ window.isRainyDayModeActive = function() {
 };
 
 // Get available special activities based on weather
-// ★★★ ENHANCED: More thorough filtering ★★★
+// ★★★ ENHANCED v2.3: Uses isIndoor property for filtering ★★★
 window.getAvailableSpecialActivities = function() {
     const isRainy = window.isRainyDayModeActive?.() || false;
 
     if (isRainy) {
-        // Rainy day: return regular specials that are rainy-available + rainy day exclusives
+        // Rainy day: return indoor specials + rainy day exclusives
         const regularAvailable = specialActivities.filter(s => 
-            s.available && 
-            s.rainyDayAvailable !== false && 
-            s.availableOnRainyDay !== false
+            s.available && s.isIndoor === true
         );
         const rainyAvailable = rainyDayActivities.filter(s => s.available);
         return [...regularAvailable, ...rainyAvailable];
@@ -1608,6 +1730,7 @@ window.getAvailableSpecialActivities = function() {
 
 // ★★★ PRIMARY SCHEDULER FUNCTION - RAINY DAY FILTERED ★★★
 // This is the main function the scheduler should use for getting specials
+// ★★★ ENHANCED v2.3: Uses isIndoor property for filtering ★★★
 window.getGlobalSpecialActivities = function(respectRainyDay = true) {
     // Get all activities from both lists
     const allActivities = [...specialActivities, ...rainyDayActivities];
@@ -1620,7 +1743,7 @@ window.getGlobalSpecialActivities = function(respectRainyDay = true) {
     
     if (isRainyMode) {
         // Rainy day mode: 
-        // - Include regular specials that are available on rainy days
+        // - Include indoor regular specials
         // - Include rainy-day-only/exclusive specials
         console.log('[SpecialActivities] 🌧️ Rainy mode - filtering for indoor/rainy activities');
         return allActivities.filter(s => {
@@ -1628,8 +1751,8 @@ window.getGlobalSpecialActivities = function(respectRainyDay = true) {
             if (s.rainyDayOnly === true || s.rainyDayExclusive === true) {
                 return true;
             }
-            // Include regular activities that are available on rainy days
-            if (s.rainyDayAvailable !== false && s.availableOnRainyDay !== false) {
+            // Include indoor activities
+            if (s.isIndoor === true) {
                 return true;
             }
             return false;
@@ -1649,12 +1772,16 @@ window.getRainyDayOnlySpecials = function() {
 };
 
 // ★★★ GET INDOOR-AVAILABLE SPECIALS (available regardless of weather) ★★★
+// ★★★ ENHANCED v2.3: Uses isIndoor property ★★★
 window.getIndoorAvailableSpecials = function() {
     return specialActivities.filter(s => 
-        s.available !== false && 
-        s.rainyDayAvailable !== false && 
-        s.availableOnRainyDay !== false
+        s.available !== false && s.isIndoor === true
     );
+};
+
+// ★★★ v2.3: GET OUTDOOR SPECIALS (disabled during rainy mode) ★★★
+window.getOutdoorSpecials = function() {
+    return specialActivities.filter(s => s.isIndoor !== true);
 };
 
 // ★ FIX: Export cleanup function for external use
@@ -1712,9 +1839,15 @@ window.diagnoseSpecialActivities = function() {
     // ★★★ v2.1: Add rainy day mode status ★★★
     const isRainyMode = window.isRainyDayModeActive?.() || false;
     
+    // ★★★ v2.3: Add indoor/outdoor counts ★★★
+    const indoorCount = specialActivities.filter(s => s.isIndoor === true).length;
+    const outdoorCount = specialActivities.filter(s => s.isIndoor !== true).length;
+    
     console.log(`\n📊 SUMMARY:`);
     console.log(`   Total activities: ${storedActivities.length}`);
     console.log(`   Regular specials: ${specialActivities.length}`);
+    console.log(`      - Indoor: ${indoorCount}`);
+    console.log(`      - Outdoor: ${outdoorCount}`);
     console.log(`   Rainy day specials: ${rainyDayActivities.length}`);
     console.log(`   Valid divisions: ${divisions.join(', ') || 'none'}`);
     console.log(`   🌧️ Rainy Day Mode: ${isRainyMode ? 'ACTIVE' : 'INACTIVE'}`);
@@ -1769,6 +1902,11 @@ window.diagnoseSpecialActivities = function() {
             });
         }
         
+        // ★★★ v2.3: Check isIndoor property ★★★
+        if (a.isIndoor === undefined && !a.rainyDayExclusive && !a.rainyDayOnly) {
+            actIssues.push('isIndoor property missing (will default to true)');
+        }
+        
         if (actIssues.length > 0) {
             issues.push({ activity: a.name || `[index ${idx}]`, issues: actIssues });
         }
@@ -1791,6 +1929,6 @@ window.diagnoseSpecialActivities = function() {
     return { activities: storedActivities.length, issues: issues.length };
 };
 
-console.log("[SPECIAL_ACTIVITIES] Module v2.1 loaded");
+console.log("[SPECIAL_ACTIVITIES] Module v2.3 loaded");
 
 })();
