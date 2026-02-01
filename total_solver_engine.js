@@ -1,5 +1,5 @@
 // ============================================================================
-// total_solver_engine.js (ENHANCED v9.2 - CROSS-DIVISION TIME CONFLICT FIX)
+// total_solver_engine.js (ENHANCED v9.3 - TIME-BASED SORTING + CAPACITY FIX)
 // Backtracking Constraint Solver + League Engine
 // ----------------------------------------------------------------------------
 // ★★★ NOW DELEGATES ALL ROTATION LOGIC TO rotation_engine.js ★★★
@@ -17,9 +17,11 @@
 // - League game handling
 // - Penalty cost calculation (delegates rotation to RotationEngine)
 //
-// KEY FIXES IN v9.2:
-// - ★★★ CROSS-DIVISION TIME-BASED CONFLICT DETECTION ★★★
-// - Checks field usage by TIME OVERLAP, not slot index
+// KEY FIXES IN v9.3:
+// - ★★★ TIME-BASED BLOCK SORTING ★★★
+//   Blocks for same bunk now sorted by startTime to prevent same-day repetition
+// - ★★★ CROSS-DIVISION TIME-BASED CAPACITY FILTERING ★★★
+//   getValidActivityPicks now filters by actual time overlap, not slot index
 // - Prevents conflicts when Div 1 slot 6 overlaps Div 2 slot 7 in time
 // - Clears rotation cache at solver start
 // - Property checks for both field AND activity names
@@ -381,8 +383,11 @@
         const blockDivSlots = window.divisionTimes?.[blockDivName] || [];
         const blockSlots = block.slots || [];
         
-        let blockStartMin = null, blockEndMin = null;
-        if (blockSlots.length > 0 && blockDivSlots[blockSlots[0]]) {
+        let blockStartMin = block.startTime;
+        let blockEndMin = block.endTime;
+        
+        // Fallback: calculate from divisionTimes if not provided
+        if ((blockStartMin === undefined || blockEndMin === undefined) && blockSlots.length > 0 && blockDivSlots[blockSlots[0]]) {
             blockStartMin = blockDivSlots[blockSlots[0]].startMin;
             const lastSlot = blockDivSlots[blockSlots[blockSlots.length - 1]];
             blockEndMin = lastSlot ? lastSlot.endMin : (blockStartMin + 30);
@@ -406,9 +411,11 @@
         // ★★★ FIX: Check both field AND activity name for properties ★★★
         const props = activityProperties[fieldName] || activityProperties[act] || {};
         let maxCapacity = 1;
-        if (props.sharableWith?.capacity) {
+        if (props.sharableWith?.type === 'all') {
+            maxCapacity = 999;
+        } else if (props.sharableWith?.capacity) {
             maxCapacity = parseInt(props.sharableWith.capacity) || 1;
-        } else if (props.sharable || props.sharableWith?.type === "all") {
+        } else if (props.sharable) {
             maxCapacity = 2;
         }
 
@@ -495,16 +502,32 @@
     // MAIN SOLVER
     // ============================================================================
 
+    /**
+     * ★★★ v9.3 FIX: Sort blocks by TIME for same bunk ★★★
+     * This ensures earlier-in-day blocks are processed first,
+     * preventing same-day activity repetition bugs where slot 4 was
+     * processed before slot 0 for the same bunk.
+     */
     Solver.sortBlocksByDifficulty = function (blocks, config) {
         const meta = config.bunkMetaData || {};
         return blocks.sort((a, b) => {
+            // Leagues always first
             if (a._isLeague && !b._isLeague) return -1;
             if (!a._isLeague && b._isLeague) return 1;
 
+            // Then by bunk number
             const numA = getBunkNumber(a.bunk) || Infinity;
             const numB = getBunkNumber(b.bunk) || Infinity;
             if (numA !== numB) return numA - numB;
 
+            // ★★★ v9.3 FIX: Sort by START TIME for same bunk ★★★
+            // This ensures earlier-in-day blocks are processed first
+            // preventing same-day activity repetition bugs
+            const timeA = a.startTime ?? (a.slots?.[0] * 30 + 660) ?? 0;
+            const timeB = b.startTime ?? (b.slots?.[0] * 30 + 660) ?? 0;
+            if (timeA !== timeB) return timeA - timeB;
+
+            // Then by bunk size (larger bunks first for better field utilization)
             const sa = meta[a.bunk]?.size || 0;
             const sb = meta[b.bunk]?.size || 0;
             if (sa !== sb) return sb - sa;
@@ -630,6 +653,7 @@
 
     /**
      * ★★★ GET VALID PICKS - WITH DELEGATED ROTATION SCORING ★★★
+     * ★★★ v9.3 FIX: Added cross-division TIME-BASED capacity filtering ★★★
      */
     Solver.getValidActivityPicks = function (block) {
         const picks = [];
@@ -692,13 +716,49 @@
             console.log(`⚠️ NO VALID PICKS for ${block.bunk} at ${block.startTime}`);
         }
 
-        // Free as fallback with very high penalty
-        picks.push({
-            pick: { field: "Free", sport: null, _activity: "Free" },
-            cost: 100000
+        // =========================================================================
+        // ★★★ v9.3 FIX: Filter picks by cross-division TIME-BASED capacity ★★★
+        // This is an additional safety check that filters based on actual time
+        // overlap across divisions, not just slot indices
+        // =========================================================================
+        const startMin = block.startTime;
+        const endMin = block.endTime;
+        
+        const timeFilteredPicks = picks.filter(p => {
+            const fieldName = p.pick?.field;
+            if (!fieldName || fieldName === 'Free') return true;
+            
+            const actName = p.pick?._activity || fieldName;
+            const props = activityProperties[fieldName] || activityProperties[actName] || {};
+            const sharableWith = props.sharableWith || {};
+            
+            // Determine max capacity
+            let maxCapacity = parseInt(sharableWith.capacity) || 1;
+            if (sharableWith.type === 'all') maxCapacity = 999;
+            if (sharableWith.type === 'not_sharable') maxCapacity = 1;
+            
+            // Count current usage across ALL divisions by TIME (not slot index)
+            if (startMin !== undefined && endMin !== undefined) {
+                const usageInfo = countFieldUsageByTime(fieldName, startMin, endMin, bunk, {});
+                
+                if (usageInfo.fieldCount >= maxCapacity) {
+                    crossDivLog(`[TIME-FILTER] ${fieldName} rejected for ${bunk}: ${usageInfo.fieldCount}/${maxCapacity} at ${startMin}-${endMin}`);
+                    return false;
+                }
+            }
+            
+            return true;
         });
 
-        return picks;
+        // Free as fallback with very high penalty (only if no other options)
+        if (!timeFilteredPicks.some(p => p.pick?.field !== 'Free')) {
+            timeFilteredPicks.push({
+                pick: { field: "Free", sport: null, _activity: "Free" },
+                cost: 100000
+            });
+        }
+
+        return timeFilteredPicks;
     };
 
     Solver.applyTentativePick = function (block, scored) {
@@ -759,7 +819,7 @@
         
         console.log(`[SOLVER] Processing ${activityBlocks.length} activity blocks`);
         console.log(`[SOLVER] ★ Using ${window.RotationEngine ? 'SUPERCHARGED RotationEngine v2.2' : 'FALLBACK scoring'}`);
-        console.log(`[SOLVER] ★ Cross-division time-based conflict detection ENABLED (v9.2)`);
+        console.log(`[SOLVER] ★ v9.3: Time-based sorting + cross-division capacity filtering ENABLED`);
         
         let bestSchedule = [];
         let maxDepthReached = 0;
@@ -897,9 +957,11 @@
         // Get capacity
         const props = activityProperties[fieldName] || {};
         let maxCapacity = 1;
-        if (props.sharableWith?.capacity) {
+        if (props.sharableWith?.type === 'all') {
+            maxCapacity = 999;
+        } else if (props.sharableWith?.capacity) {
             maxCapacity = parseInt(props.sharableWith.capacity) || 1;
-        } else if (props.sharable || props.sharableWith?.type === "all") {
+        } else if (props.sharable) {
             maxCapacity = 2;
         }
         
@@ -1044,6 +1106,6 @@
     window.debugRotationConfig = Solver.debugRotationConfig;
     window.debugCrossDivisionConflict = Solver.debugCrossDivisionConflict;
 
-    console.log('[SOLVER] v9.2 loaded - ★ CROSS-DIVISION TIME CONFLICT DETECTION ★');
+    console.log('[SOLVER] v9.3 loaded - ★ TIME-BASED SORTING + CROSS-DIV CAPACITY ★');
 
 })();
