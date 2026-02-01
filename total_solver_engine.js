@@ -1,5 +1,5 @@
 // ============================================================================
-// total_solver_engine.js (ENHANCED v9.3 - TIME-BASED SORTING + CAPACITY FIX)
+// total_solver_engine.js (ENHANCED v9.5 - GUARANTEED CAPACITY ENFORCEMENT)
 // Backtracking Constraint Solver + League Engine
 // ----------------------------------------------------------------------------
 // ★★★ NOW DELEGATES ALL ROTATION LOGIC TO rotation_engine.js ★★★
@@ -17,15 +17,12 @@
 // - League game handling
 // - Penalty cost calculation (delegates rotation to RotationEngine)
 //
-// KEY FIXES IN v9.3:
-// - ★★★ TIME-BASED BLOCK SORTING ★★★
-//   Blocks for same bunk now sorted by startTime to prevent same-day repetition
-// - ★★★ CROSS-DIVISION TIME-BASED CAPACITY FILTERING ★★★
-//   getValidActivityPicks now filters by actual time overlap, not slot index
-// - Prevents conflicts when Div 1 slot 6 overlaps Div 2 slot 7 in time
-// - Clears rotation cache at solver start
-// - Property checks for both field AND activity names
-// - Better integration with RotationEngine
+// KEY FIXES IN v9.5:
+// - ★★★ GUARANTEED CAPACITY CHECK - Never skipped! ★★★
+// - Calculates time from divisionTimes if block.startTime undefined
+// - Two-layer check: TIME-BASED (cross-div) + SLOT-BASED (fallback)
+// - Prevents overbooking of special activities like Skits
+// - Time-based block sorting for same-day repetition prevention
 // ============================================================================
 
 (function () {
@@ -36,7 +33,7 @@
 
     const DEBUG_MODE = false;
     const DEBUG_ROTATION = false;
-    const DEBUG_CROSS_DIV = false; // Set to true to debug cross-division conflicts
+    const DEBUG_CROSS_DIV = true; // ★★★ ENABLED for debugging capacity issues ★★★
 
     let globalConfig = null;
     let activityProperties = {};
@@ -652,13 +649,33 @@
     }
 
     /**
-     * ★★★ GET VALID PICKS - WITH DELEGATED ROTATION SCORING ★★★
-     * ★★★ v9.3 FIX: Added cross-division TIME-BASED capacity filtering ★★★
+     * ★★★ GET VALID PICKS - v9.5 GUARANTEED CAPACITY ENFORCEMENT ★★★
+     * CRITICAL FIX: Capacity is checked FIRST, with fallback calculations
      */
     Solver.getValidActivityPicks = function (block) {
         const picks = [];
         const slots = block.slots || [];
         const bunk = block.bunk;
+        
+        // =========================================================================
+        // ★★★ v9.5: ALWAYS calculate time range - NEVER skip capacity checks ★★★
+        // =========================================================================
+        let startMin = block.startTime;
+        let endMin = block.endTime;
+        
+        // If times aren't on block, calculate from divisionTimes
+        if (startMin === undefined || endMin === undefined) {
+            const blockDivName = block.divName || block.division;
+            const divSlots = window.divisionTimes?.[blockDivName] || [];
+            
+            if (slots.length > 0 && divSlots[slots[0]]) {
+                startMin = divSlots[slots[0]].startMin;
+                const lastSlotInfo = divSlots[slots[slots.length - 1]];
+                endMin = lastSlotInfo ? lastSlotInfo.endMin : (startMin + 40);
+            }
+        }
+        
+        debugLog(`[v9.5] Block for ${bunk}: slots=${slots.join(',')}, time=${startMin}-${endMin}`);
 
         const disabledFields = window.currentDisabledFields || globalConfig.disabledFields || [];
 
@@ -673,6 +690,97 @@
             if (window.GlobalFieldLocks?.isFieldLocked(cand.field, slots)) {
                 continue;
             }
+
+            // =========================================================================
+            // ★★★ v9.5 CRITICAL: GUARANTEED CAPACITY CHECK ★★★
+            // Two-layer check: TIME-BASED (cross-division) + SLOT-BASED (fallback)
+            // =========================================================================
+            const fieldName = cand.field;
+            const actName = cand.activityName || fieldName;
+            
+            // Get capacity - check both field and activity name
+            const props = activityProperties[fieldName] || activityProperties[actName] || {};
+            const sharableWith = props.sharableWith || {};
+            
+            let maxCapacity = 1; // Default: not sharable
+            if (sharableWith.type === 'all') {
+                maxCapacity = 999;
+            } else if (sharableWith.type === 'not_sharable') {
+                maxCapacity = 1;
+            } else if (sharableWith.type === 'custom') {
+                maxCapacity = parseInt(sharableWith.capacity) || 2;
+            } else if (sharableWith.capacity) {
+                maxCapacity = parseInt(sharableWith.capacity);
+            } else if (props.sharable) {
+                maxCapacity = 2;
+            }
+            
+            // ★★★ v9.5: DEBUG - Log capacity calculation for special activities ★★★
+            if (cand.type === 'special') {
+                crossDivLog(`[CAP-CHECK] ${bunk} checking ${fieldName}: sharableWith.type=${sharableWith.type}, maxCapacity=${maxCapacity}, time=${startMin}-${endMin}`);
+            }
+            
+            // ★★★ LAYER 1: TIME-BASED CHECK (cross-division) ★★★
+            if (startMin !== undefined && endMin !== undefined) {
+                const usageInfo = countFieldUsageByTime(fieldName, startMin, endMin, bunk, {});
+                
+                // ★★★ v9.5: DEBUG - Always log for special activities ★★★
+                if (cand.type === 'special') {
+                    crossDivLog(`[TIME-CHECK] ${bunk} ${fieldName}: found ${usageInfo.fieldCount}/${maxCapacity} users at ${startMin}-${endMin}`);
+                }
+                
+                if (usageInfo.fieldCount >= maxCapacity) {
+                    crossDivLog(`[CAPACITY-TIME] ${fieldName} REJECTED for ${bunk}: ${usageInfo.fieldCount}/${maxCapacity} at ${startMin}-${endMin}`);
+                    continue;
+                }
+            } else {
+                // ★★★ v9.5: WARN if times are missing ★★★
+                console.warn(`[SOLVER-v9.5] Block for ${bunk} missing times! startMin=${startMin}, endMin=${endMin}`);
+            }
+            
+            // ★★★ LAYER 2: SLOT-BASED CHECK (direct scan of scheduleAssignments) ★★★
+            // This catches cases where fieldUsageBySlot might not be updated
+            let slotCapacityExceeded = false;
+            const fieldNameLower = fieldName.toLowerCase().trim();
+            
+            for (const slotIdx of slots) {
+                // First check fieldUsageBySlot
+                const slotUsage = window.fieldUsageBySlot?.[slotIdx]?.[fieldName];
+                if (slotUsage && slotUsage.count >= maxCapacity) {
+                    crossDivLog(`[CAPACITY-SLOT] ${fieldName} REJECTED for ${bunk} at slot ${slotIdx}: ${slotUsage.count}/${maxCapacity} (from fieldUsageBySlot)`);
+                    slotCapacityExceeded = true;
+                    break;
+                }
+                
+                // ★★★ v9.5: DIRECT SCAN of scheduleAssignments as fallback ★★★
+                let directCount = 0;
+                const schedules = window.scheduleAssignments || {};
+                for (const [otherBunk, otherSlots] of Object.entries(schedules)) {
+                    if (String(otherBunk) === String(bunk)) continue;
+                    const entry = otherSlots?.[slotIdx];
+                    if (!entry || entry.continuation) continue;
+                    
+                    // Check both field and _activity names
+                    const entryFieldName = (entry.field || '').toLowerCase().trim();
+                    const entryActivityName = (entry._activity || '').toLowerCase().trim();
+                    
+                    if (entryFieldName === fieldNameLower || entryActivityName === fieldNameLower) {
+                        directCount++;
+                    }
+                }
+                
+                if (directCount >= maxCapacity) {
+                    crossDivLog(`[CAPACITY-DIRECT] ${fieldName} REJECTED for ${bunk} at slot ${slotIdx}: ${directCount}/${maxCapacity} (from direct scan)`);
+                    slotCapacityExceeded = true;
+                    break;
+                }
+            }
+            if (slotCapacityExceeded) {
+                continue;
+            }
+            // =========================================================================
+            // END CAPACITY CHECK
+            // =========================================================================
 
             // ★★★ FIX: Verify activity properties exist (check both field and activity name) ★★★
             const hasFieldProps = !!activityProperties[cand.field];
@@ -713,52 +821,18 @@
         }
 
         if (picks.length === 0 && DEBUG_MODE) {
-            console.log(`⚠️ NO VALID PICKS for ${block.bunk} at ${block.startTime}`);
+            console.log(`⚠️ NO VALID PICKS for ${block.bunk} at ${startMin}-${endMin}`);
         }
 
-        // =========================================================================
-        // ★★★ v9.3 FIX: Filter picks by cross-division TIME-BASED capacity ★★★
-        // This is an additional safety check that filters based on actual time
-        // overlap across divisions, not just slot indices
-        // =========================================================================
-        const startMin = block.startTime;
-        const endMin = block.endTime;
-        
-        const timeFilteredPicks = picks.filter(p => {
-            const fieldName = p.pick?.field;
-            if (!fieldName || fieldName === 'Free') return true;
-            
-            const actName = p.pick?._activity || fieldName;
-            const props = activityProperties[fieldName] || activityProperties[actName] || {};
-            const sharableWith = props.sharableWith || {};
-            
-            // Determine max capacity
-            let maxCapacity = parseInt(sharableWith.capacity) || 1;
-            if (sharableWith.type === 'all') maxCapacity = 999;
-            if (sharableWith.type === 'not_sharable') maxCapacity = 1;
-            
-            // Count current usage across ALL divisions by TIME (not slot index)
-            if (startMin !== undefined && endMin !== undefined) {
-                const usageInfo = countFieldUsageByTime(fieldName, startMin, endMin, bunk, {});
-                
-                if (usageInfo.fieldCount >= maxCapacity) {
-                    crossDivLog(`[TIME-FILTER] ${fieldName} rejected for ${bunk}: ${usageInfo.fieldCount}/${maxCapacity} at ${startMin}-${endMin}`);
-                    return false;
-                }
-            }
-            
-            return true;
-        });
-
-        // Free as fallback with very high penalty (only if no other options)
-        if (!timeFilteredPicks.some(p => p.pick?.field !== 'Free')) {
-            timeFilteredPicks.push({
+        // Free as fallback with very high penalty (only if no real options)
+        if (picks.length === 0 || !picks.some(p => p.pick?.field !== 'Free')) {
+            picks.push({
                 pick: { field: "Free", sport: null, _activity: "Free" },
                 cost: 100000
             });
         }
 
-        return timeFilteredPicks;
+        return picks;
     };
 
     Solver.applyTentativePick = function (block, scored) {
@@ -819,7 +893,7 @@
         
         console.log(`[SOLVER] Processing ${activityBlocks.length} activity blocks`);
         console.log(`[SOLVER] ★ Using ${window.RotationEngine ? 'SUPERCHARGED RotationEngine v2.2' : 'FALLBACK scoring'}`);
-        console.log(`[SOLVER] ★ v9.3: Time-based sorting + cross-division capacity filtering ENABLED`);
+        console.log(`[SOLVER] ★ v9.5: GUARANTEED capacity enforcement (time + slot checks)`);
         
         let bestSchedule = [];
         let maxDepthReached = 0;
@@ -1106,6 +1180,6 @@
     window.debugRotationConfig = Solver.debugRotationConfig;
     window.debugCrossDivisionConflict = Solver.debugCrossDivisionConflict;
 
-    console.log('[SOLVER] v9.3 loaded - ★ TIME-BASED SORTING + CROSS-DIV CAPACITY ★');
+    console.log('[SOLVER] v9.5 loaded - ★ GUARANTEED CAPACITY ENFORCEMENT ★');
 
 })();
