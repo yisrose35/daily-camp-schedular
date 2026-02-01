@@ -1,18 +1,18 @@
 // =================================================================
-// validator.js v2.2 — COMPREHENSIVE SCHEDULE VALIDATOR
+// validator.js v2.3 — COMPREHENSIVE SCHEDULE VALIDATOR
 // =================================================================
 // 
 // CHECKS FOR:
-// ✅ Same-slot capacity violations (basic)
-// ✅ Cross-division TIME-based conflicts
+// ✅ Cross-division conflicts (different divs can't share at same time)
+// ✅ Per-division capacity violations (too many same-div bunks)
 // ✅ Same-day activity repetitions
 // ✅ Missing required activities (lunch/dismissal)
 // ✅ Division-specific time awareness
 //
-// v2.2 FIXES:
-// - ★★★ League slots no longer flagged as empty ★★★
-// - ★★★ Default capacity is 2 when sharing enabled ★★★
-// - ★★★ Improved cross-division time conflict detection ★★★
+// v2.3 FIXES:
+// - ★★★ Separate cross-division vs capacity violations ★★★
+// - ★★★ Correctly reads sharableWith.capacity from config ★★★
+// - ★★★ Shows "different divisions" error vs "capacity exceeded" ★★★
 //
 // =================================================================
 
@@ -37,7 +37,7 @@
      * Main validation function
      */
     function validateSchedule() {
-        console.log('🛡️ Running comprehensive schedule validation v2.2...');
+        console.log('🛡️ Running comprehensive schedule validation v2.3...');
         
         const assignments = window.scheduleAssignments || {};
         const divisions = window.divisions || {};
@@ -220,10 +220,10 @@
             (slots || []).forEach((entry, slotIdx) => {
                 if (!entry || entry.continuation) return;
                 
-                // ★★★ v2.2: Skip league entries in conflict check ★★★
+                // Skip league entries in conflict check
                 if (entry._isLeague || entry._allMatchups) return;
                 
-                const fieldName = normalizeFieldName(entry.field);
+                const fieldName = normalizeFieldName(entry.field) || normalizeFieldName(entry._activity);
                 if (!fieldName || IGNORED_FIELDS.includes(fieldName)) return;
                 
                 const slotInfo = divSlots[slotIdx];
@@ -244,14 +244,33 @@
             });
         });
         
-        // Now check for time-based capacity violations
+        // Now check for conflicts
         Object.entries(fieldUsageByTime).forEach(([fieldName, usages]) => {
             if (usages.length < 2) return;
             
-            const capacity = getFieldCapacity(fieldName, activityProperties);
+            // Get properties for this field/activity
+            const props = activityProperties[fieldName] || {};
+            const sharableWith = props.sharableWith || {};
             
-            // For each usage, find all OTHER usages that overlap in time
-            const conflictGroups = [];
+            // ★★★ v2.2 FIX: Get ACTUAL capacity from config ★★★
+            let maxCapacity = 1;
+            if (sharableWith.type === 'all') {
+                maxCapacity = 999;
+            } else if (sharableWith.type === 'not_sharable') {
+                maxCapacity = 1;
+            } else if (sharableWith.type === 'custom') {
+                maxCapacity = parseInt(sharableWith.capacity) || 2;
+            } else if (sharableWith.capacity) {
+                maxCapacity = parseInt(sharableWith.capacity);
+            } else if (props.sharable) {
+                maxCapacity = 2;
+            }
+            
+            // ★★★ v2.2: Separate CROSS-DIVISION conflicts from CAPACITY violations ★★★
+            // If sharableWith.type !== 'all', different divisions cannot share at overlapping times
+            const canShareAcrossDivisions = sharableWith.type === 'all';
+            
+            // Group usages by time overlap
             const processed = new Set();
             
             usages.forEach((usage, i) => {
@@ -263,7 +282,7 @@
                 usages.forEach((other, j) => {
                     if (i === j || processed.has(j)) return;
                     
-                    // Check TIME overlap (not slot index!)
+                    // Check TIME overlap
                     const hasOverlap = usage.startMin < other.endMin && usage.endMin > other.startMin;
                     
                     if (hasOverlap) {
@@ -272,26 +291,46 @@
                     }
                 });
                 
-                if (overlapping.length > capacity) {
-                    conflictGroups.push(overlapping);
+                if (overlapping.length < 2) return;
+                
+                // Get unique divisions in this overlap group
+                const divisionsInGroup = [...new Set(overlapping.map(g => g.divName))];
+                
+                // ★★★ Check for CROSS-DIVISION conflict ★★★
+                if (!canShareAcrossDivisions && divisionsInGroup.length > 1) {
+                    const timeStart = Math.min(...overlapping.map(g => g.startMin));
+                    const timeEnd = Math.max(...overlapping.map(g => g.endMin));
+                    const timeLabel = `${formatTime(timeStart)} - ${formatTime(timeEnd)}`;
+                    
+                    const bunkList = overlapping.map(g => `${g.bunk} (Div ${g.divName})`).join(', ');
+                    
+                    errors.push(
+                        `<strong>Cross-Division Conflict:</strong> <u>${fieldName}</u> used by ` +
+                        `<strong>${overlapping.length}</strong> bunks from <strong>different divisions</strong> during ${timeLabel}<br>` +
+                        `<small style="color:#666;">Divisions: ${divisionsInGroup.join(', ')} | Bunks: ${bunkList}</small><br>` +
+                        `<small style="color:#888;">This activity cannot be shared across divisions at the same time.</small>`
+                    );
+                } else {
+                    // Same division(s) - check capacity per division
+                    divisionsInGroup.forEach(divName => {
+                        const divUsages = overlapping.filter(g => g.divName === divName);
+                        
+                        if (divUsages.length > maxCapacity) {
+                            const timeStart = Math.min(...divUsages.map(g => g.startMin));
+                            const timeEnd = Math.max(...divUsages.map(g => g.endMin));
+                            const timeLabel = `${formatTime(timeStart)} - ${formatTime(timeEnd)}`;
+                            
+                            const bunkList = divUsages.map(g => g.bunk).join(', ');
+                            
+                            errors.push(
+                                `<strong>Capacity Exceeded:</strong> <u>${fieldName}</u> used by ` +
+                                `<strong>${divUsages.length}</strong> bunks in Division ${divName} at ${timeLabel} ` +
+                                `(Max Capacity: ${maxCapacity})<br>` +
+                                `<small style="color:#666;">Bunks: ${bunkList}</small>`
+                            );
+                        }
+                    });
                 }
-            });
-            
-            // Report conflicts
-            conflictGroups.forEach(group => {
-                const timeStart = Math.min(...group.map(g => g.startMin));
-                const timeEnd = Math.max(...group.map(g => g.endMin));
-                const timeLabel = `${formatTime(timeStart)} - ${formatTime(timeEnd)}`;
-                
-                const bunkList = group.map(g => `${g.bunk} (Div ${g.divName})`).join(', ');
-                const divList = [...new Set(group.map(g => g.divName))].join(', ');
-                
-                errors.push(
-                    `<strong>Cross-Division Conflict:</strong> <u>${fieldName}</u> used by ` +
-                    `<strong>${group.length}</strong> bunks during overlapping time ${timeLabel} ` +
-                    `(Capacity: ${capacity})<br>` +
-                    `<small style="color:#666;">Divisions: ${divList} | Bunks: ${bunkList}</small>`
-                );
             });
         });
         
@@ -299,71 +338,15 @@
     }
 
     // =========================================================================
-    // CHECK 2: SAME-SLOT CAPACITY (within same division)
+    // CHECK 2: SAME-SLOT CAPACITY (within same division) - REMOVED
     // =========================================================================
+    // NOTE: This check is now merged into checkCrossDivisionTimeConflicts
+    // which handles both cross-division conflicts AND per-division capacity
 
     function checkSameSlotCapacity(assignments, divisions, divisionTimes, activityProperties) {
-        const errors = [];
-        
-        // Build usage map: { "divName-slotIdx-fieldName": { bunks: [...] } }
-        const slotUsage = {};
-        
-        Object.entries(assignments).forEach(([bunk, slots]) => {
-            // Find division for bunk
-            let divName = null;
-            for (const [d, data] of Object.entries(divisions)) {
-                if ((data.bunks || []).map(String).includes(String(bunk))) {
-                    divName = d;
-                    break;
-                }
-            }
-            
-            if (!divName) return;
-            
-            const divSlots = divisionTimes[divName] || [];
-            
-            (slots || []).forEach((entry, slotIdx) => {
-                if (!entry || entry.continuation) return;
-                
-                // ★★★ v2.2: Skip league entries ★★★
-                if (entry._isLeague || entry._allMatchups) return;
-                
-                const fieldName = normalizeFieldName(entry.field);
-                if (!fieldName || IGNORED_FIELDS.includes(fieldName)) return;
-                
-                const key = `${divName}-${slotIdx}-${fieldName}`;
-                if (!slotUsage[key]) {
-                    slotUsage[key] = {
-                        bunks: [],
-                        divName,
-                        slotIdx,
-                        fieldName,
-                        slotInfo: divSlots[slotIdx]
-                    };
-                }
-                slotUsage[key].bunks.push(bunk);
-            });
-        });
-        
-        // Check capacities
-        Object.values(slotUsage).forEach(usage => {
-            const capacity = getFieldCapacity(usage.fieldName, activityProperties);
-            
-            if (usage.bunks.length > capacity) {
-                const timeLabel = usage.slotInfo 
-                    ? `${formatTime(usage.slotInfo.startMin)} - ${formatTime(usage.slotInfo.endMin)}`
-                    : `Slot ${usage.slotIdx}`;
-                
-                errors.push(
-                    `<strong>Double Booking:</strong> <u>${usage.fieldName}</u> used by ` +
-                    `<strong>${usage.bunks.length}</strong> bunks in Division ${usage.divName} ` +
-                    `at ${timeLabel} (Capacity: ${capacity})<br>` +
-                    `<small style="color:#666;">Bunks: ${usage.bunks.join(', ')}</small>`
-                );
-            }
-        });
-        
-        return errors;
+        // This function is now a no-op since checkCrossDivisionTimeConflicts
+        // handles both cross-division and same-division capacity violations
+        return [];
     }
 
     // =========================================================================
@@ -553,7 +536,7 @@
                 <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:10px; margin-bottom:15px;">
                     <h2 style="margin:0; color:#333; display:flex; align-items:center; gap:8px;">
                         🛡️ Schedule Validator
-                        <span style="font-size:0.6em; background:#e0e0e0; padding:2px 8px; border-radius:4px;">v2.2</span>
+                        <span style="font-size:0.6em; background:#e0e0e0; padding:2px 8px; border-radius:4px;">v2.3</span>
                     </h2>
                     <button id="val-close-x" style="background:none; border:none; font-size:1.5em; cursor:pointer; color:#888; padding:0 8px;">&times;</button>
                 </div>
@@ -666,6 +649,6 @@
         getFieldCapacity: getFieldCapacity
     };
 
-    console.log('🛡️ Validator v2.2 loaded - ★★★ LEAGUE-AWARE + CAPACITY FIX ★★★');
+    console.log('🛡️ Validator v2.3 loaded - ★★★ CROSS-DIV vs CAPACITY SEPARATION ★★★');
 
 })();
