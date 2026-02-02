@@ -1,11 +1,11 @@
 // =============================================================================
-// campistry_me.js — Campistry Me v4.0
-// Fast inline inputs for grades/bunks/campers, CSV template download
+// campistry_me.js — Campistry Me v5.0
+// Professional UI, Cloud Sync, Fast inline inputs
 // =============================================================================
 
 (function() {
     'use strict';
-    console.log('[Me] Campistry Me v4.0 loading...');
+    console.log('[Me] Campistry Me v5.0 loading...');
 
     let structure = {};
     let camperRoster = {};
@@ -45,15 +45,49 @@
     }
 
     async function loadAllData() {
+        // Wait for CampistryDB if available
         if (window.CampistryDB?.ready) await window.CampistryDB.ready;
-        const global = loadGlobalSettings();
+        
+        // Try to load from cloud first, then localStorage
+        let global = await loadFromCloud() || loadGlobalSettings();
+        
         camperRoster = global?.app1?.camperRoster || {};
         structure = global?.campStructure || migrateOldStructure(global?.app1?.divisions || {});
+        
+        // Collect league teams
         const teams = new Set();
         Object.values(global?.leaguesByName || {}).forEach(l => (l.teams || []).forEach(t => teams.add(t)));
         Object.values(global?.specialtyLeagues || {}).forEach(l => (l.teams || []).forEach(t => teams.add(t)));
         leagueTeams = Array.from(teams).sort();
+        
+        // Expand all divisions by default
         Object.keys(structure).forEach(d => expandedDivisions.add(d));
+        
+        console.log('[Me] Loaded', Object.keys(structure).length, 'divisions,', Object.keys(camperRoster).length, 'campers');
+    }
+
+    async function loadFromCloud() {
+        if (!window.supabase) return null;
+        try {
+            const { data: { session } } = await window.supabase.auth.getSession();
+            if (!session?.user?.id) return null;
+            
+            const { data, error } = await window.supabase
+                .from('user_settings')
+                .select('settings')
+                .eq('user_id', session.user.id)
+                .single();
+            
+            if (error || !data?.settings) return null;
+            
+            // Update localStorage with cloud data
+            localStorage.setItem('campistryGlobalSettings', JSON.stringify(data.settings));
+            console.log('[Me] Loaded from cloud');
+            return data.settings;
+        } catch (e) {
+            console.log('[Me] Cloud load failed, using localStorage');
+            return null;
+        }
     }
 
     function migrateOldStructure(oldDivisions) {
@@ -83,14 +117,49 @@
             if (!global.app1) global.app1 = {};
             global.app1.camperRoster = camperRoster;
             global.app1.divisions = convertToOldFormat(structure);
+            
+            // Save to localStorage first (immediate)
+            localStorage.setItem('campistryGlobalSettings', JSON.stringify(global));
+            
+            // Then sync to cloud
             if (window.saveGlobalSettings) {
                 window.saveGlobalSettings('campStructure', structure);
                 window.saveGlobalSettings('app1', global.app1);
+                setTimeout(() => setSyncStatus('synced'), 500);
             } else {
-                localStorage.setItem('campistryGlobalSettings', JSON.stringify(global));
+                // Direct supabase sync fallback
+                syncToCloud(global).then(() => {
+                    setSyncStatus('synced');
+                }).catch(() => {
+                    setSyncStatus('error');
+                });
             }
-            setTimeout(() => setSyncStatus('synced'), 500);
-        } catch (e) { setSyncStatus('error'); }
+        } catch (e) { 
+            console.error('[Me] Save error:', e);
+            setSyncStatus('error'); 
+        }
+    }
+
+    async function syncToCloud(global) {
+        if (!window.supabase) return;
+        try {
+            const { data: { session } } = await window.supabase.auth.getSession();
+            if (!session?.user?.id) return;
+            
+            const { error } = await window.supabase
+                .from('user_settings')
+                .upsert({
+                    user_id: session.user.id,
+                    settings: global,
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'user_id' });
+            
+            if (error) throw error;
+            console.log('[Me] Cloud sync successful');
+        } catch (e) {
+            console.error('[Me] Cloud sync failed:', e);
+            throw e;
+        }
     }
 
     function convertToOldFormat(struct) {
