@@ -1,11 +1,11 @@
 // =============================================================================
-// campistry_me.js — Campistry Me v5.1
+// campistry_me.js — Campistry Me v5.2
 // Professional UI, Cloud Sync, Fast inline inputs
 // =============================================================================
 
 (function() {
     'use strict';
-    console.log('[Me] Campistry Me v5.1 loading...');
+    console.log('[Me] Campistry Me v5.2 loading...');
 
     let structure = {};
     let camperRoster = {};
@@ -272,6 +272,10 @@
     function openDivisionModal(editName = null) {
         currentEditDivision = editName;
         document.getElementById('divisionModalTitle').textContent = editName ? 'Edit Division' : 'Add Division';
+        
+        // Ensure color presets are set up
+        setupColorPresets();
+        
         if (editName && structure[editName]) {
             document.getElementById('divisionName').value = editName;
             document.getElementById('divisionColor').value = structure[editName].color || COLOR_PRESETS[0];
@@ -283,7 +287,7 @@
             updateColorPresetSelection(nextColor);
         }
         openModal('divisionModal');
-        document.getElementById('divisionName').focus();
+        setTimeout(() => document.getElementById('divisionName').focus(), 50);
     }
 
     function saveDivision() {
@@ -556,7 +560,10 @@
 
     function setupColorPresets() {
         const container = document.getElementById('colorPresets');
-        if (!container) return;
+        if (!container) {
+            console.warn('[Me] colorPresets container not found');
+            return;
+        }
         container.innerHTML = '';
         COLOR_PRESETS.forEach(c => {
             const btn = document.createElement('button');
@@ -564,16 +571,21 @@
             btn.className = 'color-preset';
             btn.style.background = c;
             btn.dataset.color = c;
-            btn.onclick = (e) => {
+            btn.addEventListener('click', function(e) {
                 e.preventDefault();
                 e.stopPropagation();
                 selectColorPreset(c);
-            };
+            }, false);
             container.appendChild(btn);
         });
+        console.log('[Me] Color presets initialized:', COLOR_PRESETS.length);
     }
 
-    function selectColorPreset(color) { document.getElementById('divisionColor').value = color; updateColorPresetSelection(color); }
+    function selectColorPreset(color) { 
+        console.log('[Me] Color preset selected:', color);
+        document.getElementById('divisionColor').value = color; 
+        updateColorPresetSelection(color); 
+    }
     function updateColorPresetSelection(color) { document.querySelectorAll('.color-preset').forEach(el => el.classList.toggle('selected', el.dataset.color === color)); }
 
     function setupEventListeners() {
@@ -613,8 +625,21 @@
             fileInput.onchange = e => handleCsvFile(e.target.files[0]);
         }
 
+        // Modal close handlers - only close when clicking dark backdrop
         document.querySelectorAll('.modal-overlay').forEach(overlay => {
-            overlay.onclick = e => { if (e.target === overlay) closeModal(overlay.id); };
+            overlay.addEventListener('mousedown', e => {
+                // Only close if clicking directly on the overlay (dark backdrop)
+                if (e.target === overlay) {
+                    e.preventDefault();
+                    closeModal(overlay.id);
+                }
+            });
+        });
+        
+        // Prevent all clicks inside modal from doing anything unexpected
+        document.querySelectorAll('.modal').forEach(modal => {
+            modal.addEventListener('mousedown', e => e.stopPropagation());
+            modal.addEventListener('click', e => e.stopPropagation());
         });
     }
 
