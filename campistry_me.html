@@ -2,788 +2,438 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
-    <title>Campistry Me - Camper Management</title>
+    <title>Campistry Me | Camper Management</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="design-system.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
     
     <style>
+        :root {
+            --slate-50: #f8fafc;
+            --slate-100: #f1f5f9;
+            --slate-200: #e2e8f0;
+            --slate-300: #cbd5e1;
+            --slate-400: #94a3b8;
+            --slate-500: #64748b;
+            --slate-600: #475569;
+            --slate-700: #334155;
+            --slate-800: #1e293b;
+            --slate-900: #0f172a;
+            --primary: #4F46E5;
+            --me-accent: #d97706;
+            --me-accent-light: #fef3c7;
+            --success: #059669;
+            --success-bg: #d1fae5;
+            --error: #dc2626;
+            --error-bg: #fee2e2;
+        }
+        
         * { box-sizing: border-box; margin: 0; padding: 0; }
         
         body {
             font-family: 'Outfit', sans-serif;
-            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 50%, #fcd34d 100%);
+            background-color: var(--slate-50);
+            color: var(--slate-800);
+            line-height: 1.5;
             min-height: 100vh;
-            color: #1f2937;
         }
-        
-        /* Header */
-        .me-header {
+
+        .nav {
             background: white;
-            border-bottom: 1px solid #e5e7eb;
-            padding: 16px 24px;
+            border-bottom: 1px solid var(--slate-200);
+            padding: 1rem 0;
+        }
+        
+        .nav-inner {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 1.5rem;
             display: flex;
-            align-items: center;
             justify-content: space-between;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            align-items: center;
         }
         
-        .me-header-left {
+        .nav-left { display: flex; align-items: center; gap: 1.5rem; }
+        
+        .nav-back {
             display: flex;
             align-items: center;
-            gap: 16px;
-        }
-        
-        .me-header-left a {
-            color: #d97706;
+            gap: 0.5rem;
+            color: var(--slate-600);
             text-decoration: none;
             font-weight: 500;
+            font-size: 0.9rem;
         }
         
-        .me-header-left a:hover {
-            text-decoration: underline;
-        }
+        .nav-back:hover { color: var(--me-accent); }
         
-        .me-logo {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
+        .nav-logo { display: flex; align-items: center; gap: 0.625rem; }
         
-        .me-logo-icon {
-            width: 40px;
-            height: 40px;
+        .nav-logo-icon {
+            width: 36px;
+            height: 36px;
             background: linear-gradient(135deg, #f59e0b, #d97706);
-            border-radius: 10px;
+            border-radius: 8px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.2rem;
-        }
-        
-        .me-logo-text {
-            font-size: 1.25rem;
-            font-weight: 700;
-            color: #1f2937;
-        }
-        
-        .me-logo-text span {
-            color: #d97706;
-        }
-        
-        /* Main Container */
-        .me-main {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 24px;
-        }
-        
-        /* Stats Bar */
-        .me-stats-bar {
-            display: flex;
-            gap: 16px;
-            margin-bottom: 24px;
-            flex-wrap: wrap;
-        }
-        
-        .me-stat {
-            background: white;
-            padding: 16px 24px;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        
-        .me-stat-icon {
-            font-size: 1.5rem;
-        }
-        
-        .me-stat-value {
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: #d97706;
-        }
-        
-        .me-stat-label {
-            font-size: 0.85rem;
-            color: #6b7280;
-        }
-        
-        /* Action Bar */
-        .me-action-bar {
-            display: flex;
-            gap: 12px;
-            margin-bottom: 24px;
-            flex-wrap: wrap;
-            align-items: center;
-        }
-        
-        .me-btn {
-            padding: 10px 20px;
-            border-radius: 8px;
-            border: none;
-            font-family: inherit;
-            font-size: 0.95rem;
-            font-weight: 500;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            transition: all 0.2s;
-        }
-        
-        .me-btn-primary {
-            background: linear-gradient(135deg, #f59e0b, #d97706);
             color: white;
         }
         
-        .me-btn-primary:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
-        }
+        .nav-logo-text { font-weight: 700; font-size: 1.15rem; color: var(--slate-900); }
+        .nav-logo-text span { color: var(--me-accent); }
         
-        .me-btn-secondary {
-            background: white;
-            color: #374151;
-            border: 1px solid #d1d5db;
-        }
-        
-        .me-btn-secondary:hover {
-            background: #f9fafb;
-        }
-        
-        .me-btn-danger {
-            background: #fee2e2;
-            color: #dc2626;
-        }
-        
-        .me-btn-danger:hover {
-            background: #fecaca;
-        }
-        
-        .me-search {
-            flex: 1;
-            min-width: 200px;
-            max-width: 400px;
-            padding: 10px 16px;
-            border: 1px solid #d1d5db;
-            border-radius: 8px;
-            font-family: inherit;
-            font-size: 0.95rem;
-            background: white;
-        }
-        
-        .me-search:focus {
-            outline: none;
-            border-color: #f59e0b;
-            box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.1);
-        }
-        
-        /* Cards */
-        .me-card {
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 4px 16px rgba(0,0,0,0.08);
-            overflow: hidden;
-            margin-bottom: 24px;
-        }
-        
-        .me-card-header {
-            padding: 20px 24px;
-            border-bottom: 1px solid #e5e7eb;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-        
-        .me-card-header h2 {
-            font-size: 1.25rem;
-            font-weight: 600;
-            color: #1f2937;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .me-card-body {
-            padding: 24px;
-        }
-        
-        /* Table */
-        .me-table-wrapper {
-            overflow-x: auto;
-        }
-        
-        .me-table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        
-        .me-table th,
-        .me-table td {
-            padding: 12px 16px;
-            text-align: left;
-            border-bottom: 1px solid #e5e7eb;
-        }
-        
-        .me-table th {
-            background: #f9fafb;
-            font-weight: 600;
-            color: #374151;
-            font-size: 0.85rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            cursor: pointer;
-            user-select: none;
-        }
-        
-        .me-table th:hover {
-            background: #f3f4f6;
-        }
-        
-        .me-table th.sorted-asc::after {
-            content: ' ▲';
-            font-size: 0.7rem;
-        }
-        
-        .me-table th.sorted-desc::after {
-            content: ' ▼';
-            font-size: 0.7rem;
-        }
-        
-        .me-table tbody tr:hover {
-            background: #fffbeb;
-        }
-        
-        .me-table input,
-        .me-table select {
-            padding: 6px 10px;
-            border: 1px solid #d1d5db;
-            border-radius: 6px;
+        .sync-status { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--slate-500); }
+        .sync-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); }
+        .sync-dot.syncing { background: var(--me-accent); animation: pulse 1s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+        .main { max-width: 1200px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+
+        .page-header { margin-bottom: 1.5rem; }
+        .page-title { font-family: 'Playfair Display', serif; font-size: 2rem; font-weight: 600; color: var(--slate-900); margin-bottom: 0.25rem; }
+        .page-subtitle { color: var(--slate-500); font-size: 0.95rem; }
+
+        .tabs { display: flex; gap: 0.25rem; margin-bottom: 1.5rem; border-bottom: 2px solid var(--slate-200); }
+        .tab-btn {
+            padding: 0.75rem 1.25rem;
+            background: none;
+            border: none;
             font-family: inherit;
             font-size: 0.9rem;
-            width: 100%;
-            max-width: 180px;
-        }
-        
-        .me-table input:focus,
-        .me-table select:focus {
-            outline: none;
-            border-color: #f59e0b;
-        }
-        
-        .me-delete-btn {
-            background: none;
-            border: none;
-            color: #9ca3af;
-            cursor: pointer;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 1.1rem;
-        }
-        
-        .me-delete-btn:hover {
-            background: #fee2e2;
-            color: #dc2626;
-        }
-        
-        /* Empty State */
-        .me-empty {
-            text-align: center;
-            padding: 60px 20px;
-            color: #6b7280;
-        }
-        
-        .me-empty-icon {
-            font-size: 4rem;
-            margin-bottom: 16px;
-            opacity: 0.5;
-        }
-        
-        .me-empty h3 {
-            font-size: 1.25rem;
-            color: #374151;
-            margin-bottom: 8px;
-        }
-        
-        /* Modal */
-        .me-modal-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(0,0,0,0.5);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 1000;
-            opacity: 0;
-            visibility: hidden;
-            transition: all 0.2s;
-        }
-        
-        .me-modal-overlay.active {
-            opacity: 1;
-            visibility: visible;
-        }
-        
-        .me-modal {
-            background: white;
-            border-radius: 16px;
-            width: 90%;
-            max-width: 500px;
-            max-height: 90vh;
-            overflow-y: auto;
-            transform: scale(0.95);
-            transition: transform 0.2s;
-        }
-        
-        .me-modal-overlay.active .me-modal {
-            transform: scale(1);
-        }
-        
-        .me-modal-header {
-            padding: 20px 24px;
-            border-bottom: 1px solid #e5e7eb;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-        
-        .me-modal-header h3 {
-            font-size: 1.25rem;
-            font-weight: 600;
-        }
-        
-        .me-modal-close {
-            background: none;
-            border: none;
-            font-size: 1.5rem;
-            color: #9ca3af;
-            cursor: pointer;
-            padding: 4px;
-            line-height: 1;
-        }
-        
-        .me-modal-close:hover {
-            color: #374151;
-        }
-        
-        .me-modal-body {
-            padding: 24px;
-        }
-        
-        .me-form-group {
-            margin-bottom: 20px;
-        }
-        
-        .me-form-group label {
-            display: block;
             font-weight: 500;
-            margin-bottom: 6px;
-            color: #374151;
+            color: var(--slate-500);
+            cursor: pointer;
+            position: relative;
         }
+        .tab-btn:hover { color: var(--slate-700); }
+        .tab-btn.active { color: var(--me-accent); }
+        .tab-btn.active::after { content: ''; position: absolute; bottom: -2px; left: 0; right: 0; height: 2px; background: var(--me-accent); }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+        .stat-card { background: white; border: 1px solid var(--slate-200); border-radius: 12px; padding: 1.25rem; display: flex; align-items: center; gap: 1rem; }
+        .stat-icon { width: 44px; height: 44px; background: var(--slate-100); border-radius: 10px; display: flex; align-items: center; justify-content: center; color: var(--slate-500); flex-shrink: 0; }
+        .stat-value { font-size: 1.5rem; font-weight: 700; color: var(--primary); line-height: 1.2; }
+        .stat-label { font-size: 0.8rem; color: var(--slate-500); text-transform: uppercase; letter-spacing: 0.03em; }
+
+        .action-bar { display: flex; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap; align-items: center; }
         
-        .me-form-group input,
-        .me-form-group select {
-            width: 100%;
-            padding: 10px 14px;
-            border: 1px solid #d1d5db;
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.625rem 1rem;
             border-radius: 8px;
+            border: none;
             font-family: inherit;
-            font-size: 1rem;
-        }
-        
-        .me-form-group input:focus,
-        .me-form-group select:focus {
-            outline: none;
-            border-color: #f59e0b;
-            box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.1);
-        }
-        
-        .me-modal-footer {
-            padding: 16px 24px;
-            border-top: 1px solid #e5e7eb;
-            display: flex;
-            gap: 12px;
-            justify-content: flex-end;
-        }
-        
-        /* CSV Import Section */
-        .me-csv-dropzone {
-            border: 2px dashed #d1d5db;
-            border-radius: 12px;
-            padding: 40px 20px;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.2s;
-            background: #f9fafb;
-        }
-        
-        .me-csv-dropzone:hover,
-        .me-csv-dropzone.dragover {
-            border-color: #f59e0b;
-            background: #fffbeb;
-        }
-        
-        .me-csv-dropzone-icon {
-            font-size: 2.5rem;
-            margin-bottom: 12px;
-        }
-        
-        .me-csv-dropzone p {
-            color: #6b7280;
-            margin-bottom: 8px;
-        }
-        
-        .me-csv-dropzone small {
-            color: #9ca3af;
-            font-size: 0.8rem;
-        }
-        
-        #csvFileInput {
-            display: none;
-        }
-        
-        /* Sync Status */
-        .me-sync-status {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 0.85rem;
-            color: #6b7280;
-        }
-        
-        .me-sync-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #10b981;
-        }
-        
-        .me-sync-dot.syncing {
-            background: #f59e0b;
-            animation: pulse 1s infinite;
-        }
-        
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-        
-        /* Toast */
-        .me-toast {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            background: #1f2937;
-            color: white;
-            padding: 14px 20px;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.3s;
-            z-index: 2000;
-        }
-        
-        .me-toast.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
-        
-        .me-toast.success {
-            background: #065f46;
-        }
-        
-        .me-toast.error {
-            background: #991b1b;
-        }
-        
-        /* Loading */
-        #auth-loading-screen {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 50%, #fcd34d 100%);
-        }
-        
-        .auth-loading-spinner {
-            width: 48px;
-            height: 48px;
-            border: 4px solid #fcd34d;
-            border-top-color: #d97706;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-        
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        
-        .auth-loading-text {
-            margin-top: 16px;
-            color: #92400e;
-            font-size: 1rem;
+            font-size: 0.875rem;
             font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
         }
+        .btn svg { width: 16px; height: 16px; }
+        .btn-primary { background: linear-gradient(135deg, #f59e0b, #d97706); color: white; }
+        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3); }
+        .btn-secondary { background: white; color: var(--slate-700); border: 1px solid var(--slate-300); }
+        .btn-secondary:hover { background: var(--slate-50); border-color: var(--slate-400); }
+        .btn-danger { background: var(--error-bg); color: var(--error); }
+        .btn-danger:hover { background: #fecaca; }
         
-        #main-content {
-            display: none;
+        .search-input {
+            flex: 1; min-width: 200px; max-width: 320px;
+            padding: 0.625rem 1rem; border: 1px solid var(--slate-300); border-radius: 8px;
+            font-family: inherit; font-size: 0.875rem; background: white;
         }
+        .search-input:focus { outline: none; border-color: var(--me-accent); box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.1); }
+        .action-spacer { flex: 1; }
+
+        .card { background: white; border: 1px solid var(--slate-200); border-radius: 1rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); overflow: hidden; margin-bottom: 1.5rem; }
+        .card-header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 1.5rem; border-bottom: 1px solid var(--slate-200); }
+        .card-header h2 { font-size: 1rem; font-weight: 600; color: var(--slate-900); margin: 0; }
+        .card-count { font-size: 0.85rem; color: var(--slate-500); }
+        .card-body { padding: 1.5rem; }
+        .card-body.no-padding { padding: 0; }
+
+        .table-wrapper { overflow-x: auto; }
+        .data-table { width: 100%; border-collapse: collapse; }
+        .data-table th, .data-table td { padding: 0.75rem 1.25rem; text-align: left; border-bottom: 1px solid var(--slate-100); }
+        .data-table th { background: var(--slate-50); font-weight: 600; font-size: 0.7rem; color: var(--slate-500); text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer; user-select: none; white-space: nowrap; }
+        .data-table th:hover { background: var(--slate-100); }
+        .data-table th.sorted-asc::after { content: ' ▲'; font-size: 0.6rem; }
+        .data-table th.sorted-desc::after { content: ' ▼'; font-size: 0.6rem; }
+        .data-table th.no-sort { cursor: default; }
+        .data-table th.no-sort:hover { background: var(--slate-50); }
+        .data-table tbody tr:hover { background: var(--slate-50); }
+        .data-table .clickable { color: var(--slate-800); cursor: pointer; font-weight: 500; }
+        .data-table .clickable:hover { color: var(--me-accent); }
+        .data-table select { padding: 0.375rem 0.625rem; border: 1px solid var(--slate-200); border-radius: 6px; font-family: inherit; font-size: 0.85rem; max-width: 150px; background: white; }
+        .data-table select:focus { outline: none; border-color: var(--me-accent); }
         
-        /* Responsive */
+        .icon-btn { background: none; border: none; color: var(--slate-400); cursor: pointer; padding: 0.375rem; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; }
+        .icon-btn:hover { background: var(--slate-100); color: var(--slate-600); }
+        .icon-btn.danger:hover { background: var(--error-bg); color: var(--error); }
+
+        .empty-state { text-align: center; padding: 3rem 2rem; color: var(--slate-500); }
+        .empty-state-icon { width: 56px; height: 56px; margin: 0 auto 1rem; background: var(--slate-100); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--slate-400); }
+        .empty-state h3 { font-size: 1rem; font-weight: 600; color: var(--slate-700); margin-bottom: 0.25rem; }
+        .empty-state p { font-size: 0.875rem; margin-bottom: 1rem; }
+
+        .divisions-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; }
+        .division-card { background: white; border: 1px solid var(--slate-200); border-radius: 12px; overflow: hidden; }
+        .division-header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 1.25rem; background: var(--slate-50); border-bottom: 1px solid var(--slate-200); }
+        .division-name { font-weight: 600; color: var(--slate-900); }
+        .division-actions { display: flex; gap: 0.25rem; }
+        .division-body { padding: 1rem 1.25rem; }
+        .bunk-list { list-style: none; }
+        .bunk-item { display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid var(--slate-100); }
+        .bunk-item:last-child { border-bottom: none; }
+        .bunk-name { color: var(--slate-700); font-size: 0.9rem; }
+        .bunk-count { font-size: 0.8rem; color: var(--slate-500); }
+        .add-bunk-btn { width: 100%; margin-top: 0.75rem; padding: 0.5rem; background: var(--slate-50); border: 1px dashed var(--slate-300); border-radius: 6px; color: var(--slate-500); font-size: 0.85rem; cursor: pointer; font-family: inherit; }
+        .add-bunk-btn:hover { background: var(--slate-100); border-color: var(--slate-400); color: var(--slate-700); }
+
+        .grades-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; }
+        .grade-chip { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 1rem; background: var(--slate-50); border: 1px solid var(--slate-200); border-radius: 8px; }
+        .grade-chip-name { font-weight: 500; color: var(--slate-800); }
+
+        .modal-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; opacity: 0; visibility: hidden; transition: all 0.2s; padding: 1rem; }
+        .modal-overlay.active { opacity: 1; visibility: visible; }
+        .modal { background: white; border-radius: 16px; width: 100%; max-width: 480px; max-height: calc(100vh - 2rem); overflow-y: auto; transform: scale(0.95) translateY(10px); transition: transform 0.2s; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); }
+        .modal-overlay.active .modal { transform: scale(1) translateY(0); }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--slate-200); }
+        .modal-header h3 { font-size: 1.1rem; font-weight: 600; margin: 0; }
+        .modal-close { background: none; border: none; color: var(--slate-400); cursor: pointer; padding: 0.375rem; border-radius: 6px; display: flex; }
+        .modal-close:hover { background: var(--slate-100); color: var(--slate-600); }
+        .modal-body { padding: 1.5rem; }
+        .modal-footer { display: flex; justify-content: flex-end; gap: 0.75rem; padding: 1rem 1.5rem; border-top: 1px solid var(--slate-200); background: var(--slate-50); }
+
+        .form-group { margin-bottom: 1.25rem; }
+        .form-group:last-child { margin-bottom: 0; }
+        .form-group label { display: block; font-size: 0.875rem; font-weight: 500; color: var(--slate-700); margin-bottom: 0.5rem; }
+        .form-group input, .form-group select { width: 100%; padding: 0.625rem 0.875rem; border: 1px solid var(--slate-300); border-radius: 8px; font-family: inherit; font-size: 0.9rem; }
+        .form-group input:focus, .form-group select:focus { outline: none; border-color: var(--me-accent); box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.1); }
+        .form-hint { font-size: 0.8rem; color: var(--slate-500); margin-top: 0.375rem; }
+
+        .csv-dropzone { border: 2px dashed var(--slate-300); border-radius: 12px; padding: 2rem 1.5rem; text-align: center; cursor: pointer; background: var(--slate-50); }
+        .csv-dropzone:hover, .csv-dropzone.dragover { border-color: var(--me-accent); background: var(--me-accent-light); }
+        .csv-dropzone-icon { margin-bottom: 0.75rem; color: var(--slate-400); }
+        .csv-dropzone p { color: var(--slate-600); margin-bottom: 0.25rem; }
+        .csv-dropzone small { color: var(--slate-500); font-size: 0.8rem; }
+        #csvFileInput { display: none; }
+        .csv-preview { margin-top: 1.25rem; border: 1px solid var(--slate-200); border-radius: 8px; overflow: hidden; }
+        .csv-preview-header { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 1rem; background: var(--slate-50); border-bottom: 1px solid var(--slate-200); }
+        .csv-preview-header h4 { font-size: 0.875rem; font-weight: 600; margin: 0; }
+        .csv-preview-table { max-height: 200px; overflow-y: auto; }
+
+        .toast { position: fixed; bottom: 1.5rem; right: 1.5rem; background: var(--slate-800); color: white; padding: 0.875rem 1.25rem; border-radius: 10px; display: flex; align-items: center; gap: 0.625rem; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.2); transform: translateY(100px); opacity: 0; transition: all 0.3s; z-index: 2000; font-size: 0.9rem; }
+        .toast.show { transform: translateY(0); opacity: 1; }
+        .toast.success { background: #065f46; }
+        .toast.error { background: #991b1b; }
+
+        #auth-loading-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; background: var(--slate-50); }
+        .loading-spinner { width: 40px; height: 40px; border: 3px solid var(--slate-200); border-top-color: var(--me-accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loading-text { margin-top: 1rem; color: var(--slate-600); font-size: 0.9rem; }
+        #main-content { display: none; }
+
         @media (max-width: 768px) {
-            .me-header {
-                flex-direction: column;
-                gap: 12px;
-                align-items: flex-start;
-            }
-            
-            .me-action-bar {
-                flex-direction: column;
-                align-items: stretch;
-            }
-            
-            .me-search {
-                max-width: none;
-            }
-            
-            .me-stats-bar {
-                flex-direction: column;
-            }
-            
-            .me-stat {
-                width: 100%;
-            }
+            .action-bar { flex-direction: column; align-items: stretch; }
+            .search-input { max-width: none; }
+            .action-spacer { display: none; }
+            .stats-row { grid-template-columns: 1fr 1fr; }
+            .divisions-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
 <body>
 
-<!-- Loading Screen -->
 <div id="auth-loading-screen">
-    <div class="auth-loading-spinner"></div>
-    <div class="auth-loading-text">Loading Campistry Me...</div>
+    <div class="loading-spinner"></div>
+    <div class="loading-text">Loading Campistry Me...</div>
 </div>
 
-<!-- Main Content -->
 <div id="main-content">
-    <!-- Header -->
-    <header class="me-header">
-        <div class="me-header-left">
-            <a href="dashboard.html">← Dashboard</a>
-            <div class="me-logo">
-                <div class="me-logo-icon">👤</div>
-                <div class="me-logo-text">Campistry <span>Me</span></div>
+    <nav class="nav">
+        <div class="nav-inner">
+            <div class="nav-left">
+                <a href="dashboard.html" class="nav-back">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                    Dashboard
+                </a>
+                <div class="nav-logo">
+                    <div class="nav-logo-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    </div>
+                    <div class="nav-logo-text">Campistry <span>Me</span></div>
+                </div>
+            </div>
+            <div class="sync-status">
+                <div class="sync-dot" id="syncDot"></div>
+                <span id="syncText">Synced</span>
             </div>
         </div>
-        <div class="me-sync-status">
-            <div class="me-sync-dot" id="syncDot"></div>
-            <span id="syncText">Synced</span>
-        </div>
-    </header>
+    </nav>
 
-    <!-- Main -->
-    <main class="me-main">
-        <!-- Stats Bar -->
-        <div class="me-stats-bar">
-            <div class="me-stat">
-                <span class="me-stat-icon">👥</span>
-                <div>
-                    <div class="me-stat-value" id="statTotalCampers">0</div>
-                    <div class="me-stat-label">Total Campers</div>
-                </div>
-            </div>
-            <div class="me-stat">
-                <span class="me-stat-icon">🏠</span>
-                <div>
-                    <div class="me-stat-value" id="statTotalBunks">0</div>
-                    <div class="me-stat-label">Bunks</div>
-                </div>
-            </div>
-            <div class="me-stat">
-                <span class="me-stat-icon">🏅</span>
-                <div>
-                    <div class="me-stat-value" id="statWithTeams">0</div>
-                    <div class="me-stat-label">Assigned to Teams</div>
-                </div>
-            </div>
-        </div>
+    <main class="main">
+        <header class="page-header">
+            <h1 class="page-title">Camper Management</h1>
+            <p class="page-subtitle">Manage your camp's structure and roster</p>
+        </header>
 
-        <!-- Action Bar -->
-        <div class="me-action-bar">
-            <button class="me-btn me-btn-primary" id="addCamperBtn">
-                <span>➕</span> Add Camper
-            </button>
-            <button class="me-btn me-btn-secondary" id="importCsvBtn">
-                <span>📥</span> Import CSV
-            </button>
-            <button class="me-btn me-btn-secondary" id="exportCsvBtn">
-                <span>📤</span> Export CSV
-            </button>
-            <input type="text" class="me-search" id="searchInput" placeholder="Search campers...">
-            <button class="me-btn me-btn-danger" id="clearAllBtn" style="margin-left: auto;">
-                <span>🗑️</span> Clear All
-            </button>
+        <div class="stats-row">
+            <div class="stat-card">
+                <div class="stat-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+                <div><div class="stat-value" id="statCampers">0</div><div class="stat-label">Campers</div></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></div>
+                <div><div class="stat-value" id="statBunks">0</div><div class="stat-label">Bunks</div></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div>
+                <div><div class="stat-value" id="statDivisions">0</div><div class="stat-label">Divisions</div></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg></div>
+                <div><div class="stat-value" id="statGrades">0</div><div class="stat-label">Grades</div></div>
+            </div>
         </div>
 
-        <!-- Camper List Card -->
-        <div class="me-card">
-            <div class="me-card-header">
-                <h2>👥 Camper Database</h2>
-                <span id="camperCount" style="color: #6b7280; font-size: 0.9rem;"></span>
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="campers">Campers</button>
+            <button class="tab-btn" data-tab="structure">Divisions & Bunks</button>
+            <button class="tab-btn" data-tab="grades">Grades</button>
+        </div>
+
+        <!-- CAMPERS TAB -->
+        <div id="tab-campers" class="tab-content active">
+            <div class="action-bar">
+                <button class="btn btn-primary" id="addCamperBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add Camper</button>
+                <button class="btn btn-secondary" id="importCsvBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Import CSV</button>
+                <button class="btn btn-secondary" id="exportCsvBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Export</button>
+                <input type="text" class="search-input" id="searchInput" placeholder="Search campers...">
+                <div class="action-spacer"></div>
+                <button class="btn btn-danger" id="clearAllBtn">Clear All</button>
             </div>
-            <div class="me-card-body" style="padding: 0;">
-                <div class="me-table-wrapper">
-                    <table class="me-table" id="camperTable">
-                        <thead>
-                            <tr>
-                                <th data-sort="name">Name</th>
-                                <th data-sort="grade">Grade</th>
-                                <th data-sort="division">Division</th>
-                                <th data-sort="bunk">Bunk</th>
-                                <th data-sort="team">League Team</th>
-                                <th style="width: 50px;"></th>
-                            </tr>
-                        </thead>
-                        <tbody id="camperTableBody">
-                            <!-- Populated by JS -->
-                        </tbody>
-                    </table>
+            <div class="card">
+                <div class="card-header"><h2>Camper Database</h2><span class="card-count" id="camperCount"></span></div>
+                <div class="card-body no-padding">
+                    <div class="table-wrapper">
+                        <table class="data-table" id="camperTable">
+                            <thead><tr><th data-sort="name">Name</th><th data-sort="grade">Grade</th><th data-sort="division">Division</th><th data-sort="bunk">Bunk</th><th data-sort="team">League Team</th><th class="no-sort" style="width:60px;"></th></tr></thead>
+                            <tbody id="camperTableBody"></tbody>
+                        </table>
+                    </div>
+                    <div class="empty-state" id="campersEmptyState" style="display:none;">
+                        <div class="empty-state-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div>
+                        <h3>No campers yet</h3><p>Add campers manually or import from CSV</p>
+                    </div>
                 </div>
-                
-                <!-- Empty State -->
-                <div class="me-empty" id="emptyState" style="display: none;">
-                    <div class="me-empty-icon">👥</div>
-                    <h3>No campers yet</h3>
-                    <p>Add campers manually or import from a CSV file.</p>
+            </div>
+        </div>
+
+        <!-- STRUCTURE TAB -->
+        <div id="tab-structure" class="tab-content">
+            <div class="action-bar">
+                <button class="btn btn-primary" id="addDivisionBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add Division</button>
+            </div>
+            <div class="divisions-grid" id="divisionsGrid"></div>
+            <div class="empty-state" id="divisionsEmptyState" style="display:none;">
+                <div class="empty-state-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div>
+                <h3>No divisions yet</h3><p>Create divisions to organize your bunks</p>
+            </div>
+        </div>
+
+        <!-- GRADES TAB -->
+        <div id="tab-grades" class="tab-content">
+            <div class="action-bar">
+                <button class="btn btn-primary" id="addGradeBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add Grade</button>
+                <button class="btn btn-secondary" id="addDefaultGradesBtn">Add Default Grades</button>
+            </div>
+            <div class="card">
+                <div class="card-header"><h2>Grade Levels</h2></div>
+                <div class="card-body">
+                    <div class="grades-grid" id="gradesGrid"></div>
+                    <div class="empty-state" id="gradesEmptyState" style="display:none;">
+                        <div class="empty-state-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg></div>
+                        <h3>No grades defined</h3><p>Add grade levels for your camp</p>
+                    </div>
                 </div>
             </div>
         </div>
     </main>
 </div>
 
-<!-- Add/Edit Camper Modal -->
-<div class="me-modal-overlay" id="camperModal">
-    <div class="me-modal">
-        <div class="me-modal-header">
-            <h3 id="modalTitle">Add Camper</h3>
-            <button class="me-modal-close" id="modalClose">&times;</button>
+<!-- MODALS -->
+<div class="modal-overlay" id="camperModal">
+    <div class="modal">
+        <div class="modal-header"><h3 id="camperModalTitle">Add Camper</h3><button class="modal-close" onclick="CampistryMe.closeModal('camperModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+        <div class="modal-body">
+            <div class="form-group"><label for="camperName">Full Name *</label><input type="text" id="camperName" placeholder="Enter name"></div>
+            <div class="form-group"><label for="camperGrade">Grade</label><select id="camperGrade"><option value="">Select grade...</option></select></div>
+            <div class="form-group"><label for="camperDivision">Division</label><select id="camperDivision"><option value="">Select division...</option></select></div>
+            <div class="form-group"><label for="camperBunk">Bunk</label><select id="camperBunk"><option value="">Select bunk...</option></select></div>
+            <div class="form-group"><label for="camperTeam">League Team</label><select id="camperTeam"><option value="">Select team...</option></select></div>
         </div>
-        <div class="me-modal-body">
-            <div class="me-form-group">
-                <label for="camperName">Full Name *</label>
-                <input type="text" id="camperName" placeholder="Enter camper's full name" required>
-            </div>
-            <div class="me-form-group">
-                <label for="camperGrade">Grade</label>
-                <select id="camperGrade">
-                    <option value="">Select grade...</option>
-                    <option value="K">Kindergarten</option>
-                    <option value="1">1st Grade</option>
-                    <option value="2">2nd Grade</option>
-                    <option value="3">3rd Grade</option>
-                    <option value="4">4th Grade</option>
-                    <option value="5">5th Grade</option>
-                    <option value="6">6th Grade</option>
-                    <option value="7">7th Grade</option>
-                    <option value="8">8th Grade</option>
-                    <option value="9">9th Grade</option>
-                    <option value="10">10th Grade</option>
-                    <option value="11">11th Grade</option>
-                    <option value="12">12th Grade</option>
-                    <option value="Staff">Staff</option>
-                </select>
-            </div>
-            <div class="me-form-group">
-                <label for="camperDivision">Division</label>
-                <select id="camperDivision">
-                    <option value="">Select division...</option>
-                    <!-- Populated dynamically -->
-                </select>
-            </div>
-            <div class="me-form-group">
-                <label for="camperBunk">Bunk</label>
-                <select id="camperBunk">
-                    <option value="">Select bunk...</option>
-                    <!-- Populated dynamically based on division -->
-                </select>
-            </div>
-            <div class="me-form-group">
-                <label for="camperTeam">League Team</label>
-                <select id="camperTeam">
-                    <option value="">Select team...</option>
-                    <!-- Populated dynamically from leagues -->
-                </select>
-            </div>
-        </div>
-        <div class="me-modal-footer">
-            <button class="me-btn me-btn-secondary" id="modalCancel">Cancel</button>
-            <button class="me-btn me-btn-primary" id="modalSave">Save Camper</button>
-        </div>
+        <div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryMe.closeModal('camperModal')">Cancel</button><button class="btn btn-primary" id="saveCamperBtn">Save</button></div>
     </div>
 </div>
 
-<!-- CSV Import Modal -->
-<div class="me-modal-overlay" id="csvModal">
-    <div class="me-modal">
-        <div class="me-modal-header">
-            <h3>Import Campers from CSV</h3>
-            <button class="me-modal-close" id="csvModalClose">&times;</button>
-        </div>
-        <div class="me-modal-body">
-            <div class="me-csv-dropzone" id="csvDropzone">
-                <div class="me-csv-dropzone-icon">📄</div>
-                <p><strong>Drag & drop a CSV file here</strong></p>
-                <p>or click to browse</p>
-                <small>Format: Name, Grade, Division, Bunk, Team (optional)</small>
+<div class="modal-overlay" id="csvModal">
+    <div class="modal">
+        <div class="modal-header"><h3>Import from CSV</h3><button class="modal-close" onclick="CampistryMe.closeModal('csvModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+        <div class="modal-body">
+            <div class="csv-dropzone" id="csvDropzone">
+                <div class="csv-dropzone-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></div>
+                <p><strong>Drop CSV here</strong> or click to browse</p>
+                <small>Format: Name, Grade, Division, Bunk, Team</small>
             </div>
             <input type="file" id="csvFileInput" accept=".csv,.txt">
-            
-            <div id="csvPreview" style="margin-top: 20px; display: none;">
-                <h4 style="margin-bottom: 10px;">Preview (<span id="csvPreviewCount">0</span> campers)</h4>
-                <div style="max-height: 200px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 8px;">
-                    <table class="me-table" id="csvPreviewTable">
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>Grade</th>
-                                <th>Division</th>
-                                <th>Bunk</th>
-                                <th>Team</th>
-                            </tr>
-                        </thead>
-                        <tbody id="csvPreviewBody"></tbody>
-                    </table>
-                </div>
+            <div id="csvPreview" class="csv-preview" style="display:none;">
+                <div class="csv-preview-header"><h4>Preview (<span id="csvPreviewCount">0</span> rows)</h4></div>
+                <div class="csv-preview-table"><table class="data-table"><thead><tr><th class="no-sort">Name</th><th class="no-sort">Grade</th><th class="no-sort">Division</th><th class="no-sort">Bunk</th><th class="no-sort">Team</th></tr></thead><tbody id="csvPreviewBody"></tbody></table></div>
             </div>
         </div>
-        <div class="me-modal-footer">
-            <button class="me-btn me-btn-secondary" id="csvCancel">Cancel</button>
-            <button class="me-btn me-btn-primary" id="csvImport" disabled>Import Campers</button>
-        </div>
+        <div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryMe.closeModal('csvModal')">Cancel</button><button class="btn btn-primary" id="csvImportBtn" disabled>Import</button></div>
     </div>
 </div>
 
-<!-- Toast -->
-<div class="me-toast" id="toast">
-    <span id="toastIcon">✓</span>
-    <span id="toastMessage">Success!</span>
+<div class="modal-overlay" id="divisionModal">
+    <div class="modal">
+        <div class="modal-header"><h3 id="divisionModalTitle">Add Division</h3><button class="modal-close" onclick="CampistryMe.closeModal('divisionModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+        <div class="modal-body"><div class="form-group"><label for="divisionName">Division Name *</label><input type="text" id="divisionName" placeholder="e.g., Junior Boys"></div></div>
+        <div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryMe.closeModal('divisionModal')">Cancel</button><button class="btn btn-primary" id="saveDivisionBtn">Save</button></div>
+    </div>
 </div>
 
-<!-- Scripts -->
+<div class="modal-overlay" id="bunkModal">
+    <div class="modal">
+        <div class="modal-header"><h3 id="bunkModalTitle">Add Bunk</h3><button class="modal-close" onclick="CampistryMe.closeModal('bunkModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+        <div class="modal-body">
+            <div class="form-group"><label>Division</label><input type="text" id="bunkDivisionDisplay" disabled></div>
+            <div class="form-group"><label for="bunkName">Bunk Name *</label><input type="text" id="bunkName" placeholder="e.g., Bunk 1"></div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryMe.closeModal('bunkModal')">Cancel</button><button class="btn btn-primary" id="saveBunkBtn">Save</button></div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="gradeModal">
+    <div class="modal">
+        <div class="modal-header"><h3>Add Grade</h3><button class="modal-close" onclick="CampistryMe.closeModal('gradeModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+        <div class="modal-body"><div class="form-group"><label for="gradeName">Grade Name *</label><input type="text" id="gradeName" placeholder="e.g., 5th Grade"><p class="form-hint">Appears in camper assignment dropdowns</p></div></div>
+        <div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryMe.closeModal('gradeModal')">Cancel</button><button class="btn btn-primary" id="saveGradeBtn">Save</button></div>
+    </div>
+</div>
+
+<div class="toast" id="toast"><svg id="toastIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg><span id="toastMessage">Success!</span></div>
+
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="supabase_client.js"></script>
 <script src="campistry_me.js"></script>
-
 </body>
 </html>
