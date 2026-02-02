@@ -113,12 +113,7 @@
     }
 
     /**
-     * ★★★ FIXED v2.2: Get field capacity from properties ★★★
-     * - type='not_sharable' → 1
-     * - type='all' → 999 (unlimited)
-     * - type='custom' → configured capacity (default 2)
-     * - ★★★ NEW: No sharableWith but sharable=true → 2 ★★★
-     * - ★★★ NEW: sharableWith exists without explicit capacity → 2 ★★★
+     * ★★★ FIXED v2.3: Get field capacity with CASE-INSENSITIVE lookup ★★★
      */
     function getFieldCapacity(fieldName, activityProperties) {
         // Use centralized utility if available
@@ -126,7 +121,8 @@
             return window.SchedulerCoreUtils.getFieldCapacity(fieldName, activityProperties);
         }
         
-        const props = activityProperties[fieldName] || {};
+        // ★★★ v2.3 FIX: Case-insensitive lookup ★★★
+        const props = findPropsForField(fieldName, activityProperties);
         
         // Check sharableWith config
         if (props.sharableWith) {
@@ -142,7 +138,7 @@
             if (props.sharableWith.type === 'custom') {
                 return parseInt(props.sharableWith.capacity) || 2;
             }
-            // ★★★ FIX v2.2: Any sharableWith without explicit not_sharable = default 2 ★★★
+            // Any sharableWith without explicit not_sharable = default 2
             if (props.sharableWith.capacity) {
                 return parseInt(props.sharableWith.capacity);
             }
@@ -161,6 +157,28 @@
         }
         
         return 1; // Default: not sharable
+    }
+
+    /**
+     * ★★★ v2.3: Case-insensitive property lookup ★★★
+     */
+    function findPropsForField(fieldName, activityProperties) {
+        if (!fieldName || !activityProperties) return {};
+        
+        // Try exact match first
+        if (activityProperties[fieldName]) {
+            return activityProperties[fieldName];
+        }
+        
+        // Try case-insensitive match
+        const fieldNameLower = fieldName.toLowerCase().trim();
+        for (const [key, props] of Object.entries(activityProperties)) {
+            if (key.toLowerCase().trim() === fieldNameLower) {
+                return props;
+            }
+        }
+        
+        return {};
     }
 
     /**
@@ -248,8 +266,8 @@
         Object.entries(fieldUsageByTime).forEach(([fieldName, usages]) => {
             if (usages.length < 2) return;
             
-            // Get properties for this field/activity
-            const props = activityProperties[fieldName] || {};
+            // Get properties for this field/activity (case-insensitive)
+            const props = findPropsForField(fieldName, activityProperties);
             const sharableWith = props.sharableWith || {};
             
             // ★★★ v2.2 FIX: Get ACTUAL capacity from config ★★★
