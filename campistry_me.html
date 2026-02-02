@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Campistry Me - Camper Management</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="design-system.css" />
+    
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 50%, #fcd34d 100%);
+            min-height: 100vh;
+            color: #1f2937;
+        }
+        
+        /* Header */
+        .me-header {
+            background: white;
+            border-bottom: 1px solid #e5e7eb;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        
+        .me-header-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        
+        .me-header-left a {
+            color: #d97706;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        
+        .me-header-left a:hover {
+            text-decoration: underline;
+        }
+        
+        .me-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .me-logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+        }
+        
+        .me-logo-text {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #1f2937;
+        }
+        
+        .me-logo-text span {
+            color: #d97706;
+        }
+        
+        /* Main Container */
+        .me-main {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+        
+        /* Stats Bar */
+        .me-stats-bar {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+        }
+        
+        .me-stat {
+            background: white;
+            padding: 16px 24px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .me-stat-icon {
+            font-size: 1.5rem;
+        }
+        
+        .me-stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #d97706;
+        }
+        
+        .me-stat-label {
+            font-size: 0.85rem;
+            color: #6b7280;
+        }
+        
+        /* Action Bar */
+        .me-action-bar {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        .me-btn {
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: none;
+            font-family: inherit;
+            font-size: 0.95rem;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s;
+        }
+        
+        .me-btn-primary {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: white;
+        }
+        
+        .me-btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
+        }
+        
+        .me-btn-secondary {
+            background: white;
+            color: #374151;
+            border: 1px solid #d1d5db;
+        }
+        
+        .me-btn-secondary:hover {
+            background: #f9fafb;
+        }
+        
+        .me-btn-danger {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+        
+        .me-btn-danger:hover {
+            background: #fecaca;
+        }
+        
+        .me-search {
+            flex: 1;
+            min-width: 200px;
+            max-width: 400px;
+            padding: 10px 16px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 0.95rem;
+            background: white;
+        }
+        
+        .me-search:focus {
+            outline: none;
+            border-color: #f59e0b;
+            box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.1);
+        }
+        
+        /* Cards */
+        .me-card {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+            overflow: hidden;
+            margin-bottom: 24px;
+        }
+        
+        .me-card-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .me-card-header h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #1f2937;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .me-card-body {
+            padding: 24px;
+        }
+        
+        /* Table */
+        .me-table-wrapper {
+            overflow-x: auto;
+        }
+        
+        .me-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .me-table th,
+        .me-table td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        
+        .me-table th {
+            background: #f9fafb;
+            font-weight: 600;
+            color: #374151;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            cursor: pointer;
+            user-select: none;
+        }
+        
+        .me-table th:hover {
+            background: #f3f4f6;
+        }
+        
+        .me-table th.sorted-asc::after {
+            content: ' ▲';
+            font-size: 0.7rem;
+        }
+        
+        .me-table th.sorted-desc::after {
+            content: ' ▼';
+            font-size: 0.7rem;
+        }
+        
+        .me-table tbody tr:hover {
+            background: #fffbeb;
+        }
+        
+        .me-table input,
+        .me-table select {
+            padding: 6px 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 0.9rem;
+            width: 100%;
+            max-width: 180px;
+        }
+        
+        .me-table input:focus,
+        .me-table select:focus {
+            outline: none;
+            border-color: #f59e0b;
+        }
+        
+        .me-delete-btn {
+            background: none;
+            border: none;
+            color: #9ca3af;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 1.1rem;
+        }
+        
+        .me-delete-btn:hover {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+        
+        /* Empty State */
+        .me-empty {
+            text-align: center;
+            padding: 60px 20px;
+            color: #6b7280;
+        }
+        
+        .me-empty-icon {
+            font-size: 4rem;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+        
+        .me-empty h3 {
+            font-size: 1.25rem;
+            color: #374151;
+            margin-bottom: 8px;
+        }
+        
+        /* Modal */
+        .me-modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.2s;
+        }
+        
+        .me-modal-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+        
+        .me-modal {
+            background: white;
+            border-radius: 16px;
+            width: 90%;
+            max-width: 500px;
+            max-height: 90vh;
+            overflow-y: auto;
+            transform: scale(0.95);
+            transition: transform 0.2s;
+        }
+        
+        .me-modal-overlay.active .me-modal {
+            transform: scale(1);
+        }
+        
+        .me-modal-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .me-modal-header h3 {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+        
+        .me-modal-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            color: #9ca3af;
+            cursor: pointer;
+            padding: 4px;
+            line-height: 1;
+        }
+        
+        .me-modal-close:hover {
+            color: #374151;
+        }
+        
+        .me-modal-body {
+            padding: 24px;
+        }
+        
+        .me-form-group {
+            margin-bottom: 20px;
+        }
+        
+        .me-form-group label {
+            display: block;
+            font-weight: 500;
+            margin-bottom: 6px;
+            color: #374151;
+        }
+        
+        .me-form-group input,
+        .me-form-group select {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 1rem;
+        }
+        
+        .me-form-group input:focus,
+        .me-form-group select:focus {
+            outline: none;
+            border-color: #f59e0b;
+            box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.1);
+        }
+        
+        .me-modal-footer {
+            padding: 16px 24px;
+            border-top: 1px solid #e5e7eb;
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+        }
+        
+        /* CSV Import Section */
+        .me-csv-dropzone {
+            border: 2px dashed #d1d5db;
+            border-radius: 12px;
+            padding: 40px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: #f9fafb;
+        }
+        
+        .me-csv-dropzone:hover,
+        .me-csv-dropzone.dragover {
+            border-color: #f59e0b;
+            background: #fffbeb;
+        }
+        
+        .me-csv-dropzone-icon {
+            font-size: 2.5rem;
+            margin-bottom: 12px;
+        }
+        
+        .me-csv-dropzone p {
+            color: #6b7280;
+            margin-bottom: 8px;
+        }
+        
+        .me-csv-dropzone small {
+            color: #9ca3af;
+            font-size: 0.8rem;
+        }
+        
+        #csvFileInput {
+            display: none;
+        }
+        
+        /* Sync Status */
+        .me-sync-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+            color: #6b7280;
+        }
+        
+        .me-sync-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #10b981;
+        }
+        
+        .me-sync-dot.syncing {
+            background: #f59e0b;
+            animation: pulse 1s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        /* Toast */
+        .me-toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: #1f2937;
+            color: white;
+            padding: 14px 20px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s;
+            z-index: 2000;
+        }
+        
+        .me-toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        .me-toast.success {
+            background: #065f46;
+        }
+        
+        .me-toast.error {
+            background: #991b1b;
+        }
+        
+        /* Loading */
+        #auth-loading-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 50%, #fcd34d 100%);
+        }
+        
+        .auth-loading-spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid #fcd34d;
+            border-top-color: #d97706;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .auth-loading-text {
+            margin-top: 16px;
+            color: #92400e;
+            font-size: 1rem;
+            font-weight: 500;
+        }
+        
+        #main-content {
+            display: none;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .me-header {
+                flex-direction: column;
+                gap: 12px;
+                align-items: flex-start;
+            }
+            
+            .me-action-bar {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .me-search {
+                max-width: none;
+            }
+            
+            .me-stats-bar {
+                flex-direction: column;
+            }
+            
+            .me-stat {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Loading Screen -->
+<div id="auth-loading-screen">
+    <div class="auth-loading-spinner"></div>
+    <div class="auth-loading-text">Loading Campistry Me...</div>
+</div>
+
+<!-- Main Content -->
+<div id="main-content">
+    <!-- Header -->
+    <header class="me-header">
+        <div class="me-header-left">
+            <a href="dashboard.html">← Dashboard</a>
+            <div class="me-logo">
+                <div class="me-logo-icon">👤</div>
+                <div class="me-logo-text">Campistry <span>Me</span></div>
+            </div>
+        </div>
+        <div class="me-sync-status">
+            <div class="me-sync-dot" id="syncDot"></div>
+            <span id="syncText">Synced</span>
+        </div>
+    </header>
+
+    <!-- Main -->
+    <main class="me-main">
+        <!-- Stats Bar -->
+        <div class="me-stats-bar">
+            <div class="me-stat">
+                <span class="me-stat-icon">👥</span>
+                <div>
+                    <div class="me-stat-value" id="statTotalCampers">0</div>
+                    <div class="me-stat-label">Total Campers</div>
+                </div>
+            </div>
+            <div class="me-stat">
+                <span class="me-stat-icon">🏠</span>
+                <div>
+                    <div class="me-stat-value" id="statTotalBunks">0</div>
+                    <div class="me-stat-label">Bunks</div>
+                </div>
+            </div>
+            <div class="me-stat">
+                <span class="me-stat-icon">🏅</span>
+                <div>
+                    <div class="me-stat-value" id="statWithTeams">0</div>
+                    <div class="me-stat-label">Assigned to Teams</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Action Bar -->
+        <div class="me-action-bar">
+            <button class="me-btn me-btn-primary" id="addCamperBtn">
+                <span>➕</span> Add Camper
+            </button>
+            <button class="me-btn me-btn-secondary" id="importCsvBtn">
+                <span>📥</span> Import CSV
+            </button>
+            <button class="me-btn me-btn-secondary" id="exportCsvBtn">
+                <span>📤</span> Export CSV
+            </button>
+            <input type="text" class="me-search" id="searchInput" placeholder="Search campers...">
+            <button class="me-btn me-btn-danger" id="clearAllBtn" style="margin-left: auto;">
+                <span>🗑️</span> Clear All
+            </button>
+        </div>
+
+        <!-- Camper List Card -->
+        <div class="me-card">
+            <div class="me-card-header">
+                <h2>👥 Camper Database</h2>
+                <span id="camperCount" style="color: #6b7280; font-size: 0.9rem;"></span>
+            </div>
+            <div class="me-card-body" style="padding: 0;">
+                <div class="me-table-wrapper">
+                    <table class="me-table" id="camperTable">
+                        <thead>
+                            <tr>
+                                <th data-sort="name">Name</th>
+                                <th data-sort="grade">Grade</th>
+                                <th data-sort="division">Division</th>
+                                <th data-sort="bunk">Bunk</th>
+                                <th data-sort="team">League Team</th>
+                                <th style="width: 50px;"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="camperTableBody">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Empty State -->
+                <div class="me-empty" id="emptyState" style="display: none;">
+                    <div class="me-empty-icon">👥</div>
+                    <h3>No campers yet</h3>
+                    <p>Add campers manually or import from a CSV file.</p>
+                </div>
+            </div>
+        </div>
+    </main>
+</div>
+
+<!-- Add/Edit Camper Modal -->
+<div class="me-modal-overlay" id="camperModal">
+    <div class="me-modal">
+        <div class="me-modal-header">
+            <h3 id="modalTitle">Add Camper</h3>
+            <button class="me-modal-close" id="modalClose">&times;</button>
+        </div>
+        <div class="me-modal-body">
+            <div class="me-form-group">
+                <label for="camperName">Full Name *</label>
+                <input type="text" id="camperName" placeholder="Enter camper's full name" required>
+            </div>
+            <div class="me-form-group">
+                <label for="camperGrade">Grade</label>
+                <select id="camperGrade">
+                    <option value="">Select grade...</option>
+                    <option value="K">Kindergarten</option>
+                    <option value="1">1st Grade</option>
+                    <option value="2">2nd Grade</option>
+                    <option value="3">3rd Grade</option>
+                    <option value="4">4th Grade</option>
+                    <option value="5">5th Grade</option>
+                    <option value="6">6th Grade</option>
+                    <option value="7">7th Grade</option>
+                    <option value="8">8th Grade</option>
+                    <option value="9">9th Grade</option>
+                    <option value="10">10th Grade</option>
+                    <option value="11">11th Grade</option>
+                    <option value="12">12th Grade</option>
+                    <option value="Staff">Staff</option>
+                </select>
+            </div>
+            <div class="me-form-group">
+                <label for="camperDivision">Division</label>
+                <select id="camperDivision">
+                    <option value="">Select division...</option>
+                    <!-- Populated dynamically -->
+                </select>
+            </div>
+            <div class="me-form-group">
+                <label for="camperBunk">Bunk</label>
+                <select id="camperBunk">
+                    <option value="">Select bunk...</option>
+                    <!-- Populated dynamically based on division -->
+                </select>
+            </div>
+            <div class="me-form-group">
+                <label for="camperTeam">League Team</label>
+                <select id="camperTeam">
+                    <option value="">Select team...</option>
+                    <!-- Populated dynamically from leagues -->
+                </select>
+            </div>
+        </div>
+        <div class="me-modal-footer">
+            <button class="me-btn me-btn-secondary" id="modalCancel">Cancel</button>
+            <button class="me-btn me-btn-primary" id="modalSave">Save Camper</button>
+        </div>
+    </div>
+</div>
+
+<!-- CSV Import Modal -->
+<div class="me-modal-overlay" id="csvModal">
+    <div class="me-modal">
+        <div class="me-modal-header">
+            <h3>Import Campers from CSV</h3>
+            <button class="me-modal-close" id="csvModalClose">&times;</button>
+        </div>
+        <div class="me-modal-body">
+            <div class="me-csv-dropzone" id="csvDropzone">
+                <div class="me-csv-dropzone-icon">📄</div>
+                <p><strong>Drag & drop a CSV file here</strong></p>
+                <p>or click to browse</p>
+                <small>Format: Name, Grade, Division, Bunk, Team (optional)</small>
+            </div>
+            <input type="file" id="csvFileInput" accept=".csv,.txt">
+            
+            <div id="csvPreview" style="margin-top: 20px; display: none;">
+                <h4 style="margin-bottom: 10px;">Preview (<span id="csvPreviewCount">0</span> campers)</h4>
+                <div style="max-height: 200px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 8px;">
+                    <table class="me-table" id="csvPreviewTable">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Grade</th>
+                                <th>Division</th>
+                                <th>Bunk</th>
+                                <th>Team</th>
+                            </tr>
+                        </thead>
+                        <tbody id="csvPreviewBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="me-modal-footer">
+            <button class="me-btn me-btn-secondary" id="csvCancel">Cancel</button>
+            <button class="me-btn me-btn-primary" id="csvImport" disabled>Import Campers</button>
+        </div>
+    </div>
+</div>
+
+<!-- Toast -->
+<div class="me-toast" id="toast">
+    <span id="toastIcon">✓</span>
+    <span id="toastMessage">Success!</span>
+</div>
+
+<!-- Scripts -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase_client.js"></script>
+<script src="campistry_me.js"></script>
+
+</body>
+</html>
