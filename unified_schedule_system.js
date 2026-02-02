@@ -117,44 +117,86 @@
     }
     
     function canEditBunk(bunk) {
-        return Utils()?.canEditBunk?.(bunk) ?? true;
+        // ★★★ FIX: Check initialization state and use fallback chain ★★★
+        const role = window.AccessControl?.getCurrentRole?.();
+        const isInitialized = window.AccessControl?.isInitialized;
+        
+        // If AccessControl exists but isn't initialized, or role is null/undefined, 
+        // fall back to CampistryDB or allow by default
+        if (window.AccessControl && (!isInitialized || !role)) {
+            const fallbackRole = window.CampistryDB?.getRole?.() || 
+                                 localStorage.getItem('campistry_role');
+            if (fallbackRole === 'owner' || fallbackRole === 'admin') return true;
+            // If still no role info, default to ALLOW (don't block the owner)
+            if (!fallbackRole) return true;
+        }
+        
+        // Owner/admin always can edit
+        if (role === 'owner' || role === 'admin') return true;
+        
+        // Delegate to Utils if available
+        if (Utils()?.canEditBunk) {
+            return Utils().canEditBunk(bunk);
+        }
+        
+        // Final fallback: check editable bunks
+        const editableBunks = getEditableBunks();
+        return editableBunks.has(String(bunk));
     }
     
-   function getEditableBunks() {
-    const editableBunks = new Set();
-    const divisions = window.divisions || {};
-    
-    // ★★★ FIX v4.1.1: Check initialization state to prevent race condition ★★★
-    // If AccessControl exists but isn't initialized yet, role will be null/undefined
-    // In that case, we should ALLOW edits (default permissive) rather than block
-    const isInitialized = window.AccessControl?.isInitialized;
-    const role = window.AccessControl?.getCurrentRole?.();
-    
-    // Allow all if: no RBAC, not initialized yet, or user is owner/admin
-    if (!window.AccessControl || !isInitialized || role === 'owner' || role === 'admin') {
-        // Add all bunks from all divisions
-        for (const divInfo of Object.values(divisions)) {
+    function getEditableBunks() {
+        const editableBunks = new Set();
+        const divisions = window.divisions || {};
+        
+        // ★★★ FIX: Check initialization state before trusting AccessControl ★★★
+        const isInitialized = window.AccessControl?.isInitialized;
+        const role = window.AccessControl?.getCurrentRole?.();
+        
+        // Fallback role detection
+        const effectiveRole = role || 
+                              window.CampistryDB?.getRole?.() || 
+                              localStorage.getItem('campistry_role');
+        
+        // If owner/admin (from any source), return all bunks
+        if (effectiveRole === 'owner' || effectiveRole === 'admin') {
+            Object.values(divisions).forEach(divInfo => {
+                if (divInfo?.bunks) {
+                    divInfo.bunks.forEach(b => editableBunks.add(String(b)));
+                }
+            });
+            // Also include any bunks in scheduleAssignments
+            Object.keys(window.scheduleAssignments || {}).forEach(b => editableBunks.add(String(b)));
+            return editableBunks;
+        }
+        
+        // If AccessControl not initialized, default to allowing all (safe for owner)
+        if (!window.AccessControl || !isInitialized) {
+            Object.values(divisions).forEach(divInfo => {
+                if (divInfo?.bunks) {
+                    divInfo.bunks.forEach(b => editableBunks.add(String(b)));
+                }
+            });
+            Object.keys(window.scheduleAssignments || {}).forEach(b => editableBunks.add(String(b)));
+            return editableBunks;
+        }
+        
+        // AccessControl is initialized - use its editable divisions
+        const editableDivisions = window.AccessControl.getEditableDivisions?.() || [];
+        
+        for (const divName of editableDivisions) {
+            const divInfo = divisions[divName];
             if (divInfo?.bunks) {
                 divInfo.bunks.forEach(b => editableBunks.add(String(b)));
             }
         }
-        // Also add any bunks already in scheduleAssignments
-        Object.keys(window.scheduleAssignments || {}).forEach(b => editableBunks.add(String(b)));
+        
+        // If still empty and role unknown, default to allow (don't block owner)
+        if (editableBunks.size === 0 && !role) {
+            Object.keys(window.scheduleAssignments || {}).forEach(b => editableBunks.add(String(b)));
+        }
+        
         return editableBunks;
     }
-    
-    // For schedulers/viewers: use assigned divisions only
-    const editableDivisions = window.AccessControl.getEditableDivisions?.() || [];
-    
-    for (const divName of editableDivisions) {
-        const divInfo = divisions[divName];
-        if (divInfo?.bunks) {
-            divInfo.bunks.forEach(b => editableBunks.add(String(b)));
-        }
-    }
-    
-    return editableBunks;
-}
 
    
 
