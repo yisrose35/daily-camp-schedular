@@ -115,6 +115,8 @@
         .stat-value { display: block; font-size: 1.5rem; font-weight: 800; color: var(--primary); }
         .stat-label { font-size: 0.875rem; color: var(--slate-600); }
         .stats-note { font-size: 0.75rem; color: var(--slate-600); text-align: center; font-style: italic; }
+        .stats-note a { color: #d97706; text-decoration: none; }
+        .stats-note a:hover { text-decoration: underline; }
 
         /* Products Section */
         .products-section { margin-top: 3rem; }
@@ -168,6 +170,14 @@
         .status-coming-soon { background: #f3f4f6; color: #4b5563; }
         .product-arrow { margin-left: auto; color: var(--slate-200); }
         .product-tile:hover:not(.disabled) .product-arrow { color: var(--primary); }
+        
+        /* Campistry Me hover color */
+        .product-tile.product-me:hover {
+            border-color: #d97706;
+        }
+        .product-tile.product-me:hover .product-arrow {
+            color: #d97706;
+        }
 
         /* Quick Links */
         .quick-links {
@@ -543,7 +553,7 @@
                         <span class="stat-label">Campers</span>
                     </div>
                 </div>
-                <p class="stats-note">Camper count will be available with Campistry Me</p>
+                <p class="stats-note">Manage campers in <a href="campistry_me.html">Campistry Me</a></p>
             </section>
         </div>
 
@@ -659,14 +669,19 @@
                 </div>
 
                 <!-- ME -->
-                <div class="product-tile product-me disabled">
-                    <div class="product-icon">📱</div>
+                <a href="campistry_me.html" class="product-tile product-me">
+                    <div class="product-icon">👤</div>
                     <div class="product-info">
                         <h3>Campistry Me</h3>
-                        <p>Camper portal & parent communication</p>
+                        <p>Camper management & profiles</p>
                     </div>
-                    <span class="product-status status-coming-soon">Coming Soon</span>
-                </div>
+                    <span class="product-status status-active">Active</span>
+                    <div class="product-arrow">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M5 12h14M12 5l7 7-7 7"/>
+                        </svg>
+                    </div>
+                </a>
             </div>
         </section>
 
