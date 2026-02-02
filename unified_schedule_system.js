@@ -120,10 +120,31 @@
         return Utils()?.canEditBunk?.(bunk) ?? true;
     }
     
-    function getEditableBunks() {
+   function getEditableBunks() {
     const editableBunks = new Set();
-    const editableDivisions = window.AccessControl?.getEditableDivisions?.() || [];
     const divisions = window.divisions || {};
+    
+    // ★★★ FIX v4.1.1: Check initialization state to prevent race condition ★★★
+    // If AccessControl exists but isn't initialized yet, role will be null/undefined
+    // In that case, we should ALLOW edits (default permissive) rather than block
+    const isInitialized = window.AccessControl?.isInitialized;
+    const role = window.AccessControl?.getCurrentRole?.();
+    
+    // Allow all if: no RBAC, not initialized yet, or user is owner/admin
+    if (!window.AccessControl || !isInitialized || role === 'owner' || role === 'admin') {
+        // Add all bunks from all divisions
+        for (const divInfo of Object.values(divisions)) {
+            if (divInfo?.bunks) {
+                divInfo.bunks.forEach(b => editableBunks.add(String(b)));
+            }
+        }
+        // Also add any bunks already in scheduleAssignments
+        Object.keys(window.scheduleAssignments || {}).forEach(b => editableBunks.add(String(b)));
+        return editableBunks;
+    }
+    
+    // For schedulers/viewers: use assigned divisions only
+    const editableDivisions = window.AccessControl.getEditableDivisions?.() || [];
     
     for (const divName of editableDivisions) {
         const divInfo = divisions[divName];
@@ -132,15 +153,7 @@
         }
     }
     
-    // If no RBAC or owner/admin, all bunks are editable
-    if (editableBunks.size === 0) {
-        const role = window.AccessControl?.getCurrentRole?.();
-        if (!window.AccessControl || role === 'owner' || role === 'admin') {
-            Object.keys(window.scheduleAssignments || {}).forEach(b => editableBunks.add(b));
-        }
-    }
-    
-    return editableBunks;  // Always returns a Set
+    return editableBunks;
 }
 
    
