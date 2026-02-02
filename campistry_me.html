@@ -708,7 +708,14 @@
         .color-picker-row input[type="color"]:hover {
             border-color: var(--border-medium);
         }
-        .color-presets { display: flex; gap: 10px; flex-wrap: wrap; padding: 4px 0; }
+        .color-presets { 
+            display: flex; 
+            gap: 10px; 
+            flex-wrap: wrap; 
+            padding: 4px 0;
+            position: relative;
+            z-index: 10;
+        }
         .color-preset {
             width: 36px; height: 36px;
             min-width: 36px;
@@ -721,6 +728,9 @@
             padding: 0;
             outline: none;
             -webkit-tap-highlight-color: transparent;
+            pointer-events: auto;
+            position: relative;
+            z-index: 11;
         }
         .color-preset:hover { transform: scale(1.12); }
         .color-preset:focus { outline: none; }
