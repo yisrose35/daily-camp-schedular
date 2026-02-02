@@ -1,11 +1,11 @@
 // =============================================================================
-// campistry_me.js — Campistry Me v5.2
+// campistry_me.js — Campistry Me v5.3
 // Professional UI, Cloud Sync, Fast inline inputs
 // =============================================================================
 
 (function() {
     'use strict';
-    console.log('[Me] Campistry Me v5.2 loading...');
+    console.log('[Me] Campistry Me v5.3 loading...');
 
     let structure = {};
     let camperRoster = {};
@@ -564,20 +564,10 @@
             console.warn('[Me] colorPresets container not found');
             return;
         }
-        container.innerHTML = '';
-        COLOR_PRESETS.forEach(c => {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'color-preset';
-            btn.style.background = c;
-            btn.dataset.color = c;
-            btn.addEventListener('click', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                selectColorPreset(c);
-            }, false);
-            container.appendChild(btn);
-        });
+        // Use innerHTML with inline onclick - more reliable across browsers
+        container.innerHTML = COLOR_PRESETS.map(c => 
+            `<button type="button" class="color-preset" style="background:${c}" data-color="${c}" onclick="event.stopPropagation(); CampistryMe.selectColorPreset('${c}')"></button>`
+        ).join('');
         console.log('[Me] Color presets initialized:', COLOR_PRESETS.length);
     }
 
