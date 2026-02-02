@@ -3793,6 +3793,7 @@ if (bypassStatus.highlight) {
     window.editCell = editCell;
     window.enhancedEditCell = enhancedEditCell;
     window.proceedWithScope = proceedWithScope;
+    window.closeIntegratedEditModal = closeIntegratedEditModal;
 
     // Save/Load functions
     window.saveSchedule = saveSchedule;
