@@ -4,138 +4,55 @@
     <meta charset="UTF-8" />
     <title>Campistry Me | Camper Management</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
     
     <style>
         :root {
-            --slate-50: #f8fafc;
-            --slate-100: #f1f5f9;
-            --slate-200: #e2e8f0;
-            --slate-300: #cbd5e1;
-            --slate-400: #94a3b8;
-            --slate-500: #64748b;
-            --slate-600: #475569;
-            --slate-700: #334155;
-            --slate-800: #1e293b;
-            --slate-900: #0f172a;
-            --primary: #4F46E5;
-            --me-accent: #d97706;
-            --me-accent-light: #fef3c7;
-            --success: #059669;
-            --success-bg: #d1fae5;
-            --error: #dc2626;
-            --error-bg: #fee2e2;
+            --slate-50: #f8fafc; --slate-100: #f1f5f9; --slate-200: #e2e8f0; --slate-300: #cbd5e1;
+            --slate-400: #94a3b8; --slate-500: #64748b; --slate-600: #475569; --slate-700: #334155;
+            --slate-800: #1e293b; --slate-900: #0f172a;
+            --primary: #4F46E5; --me-accent: #d97706; --me-accent-light: #fef3c7;
+            --success: #059669; --success-bg: #d1fae5; --error: #dc2626; --error-bg: #fee2e2;
         }
-        
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        
-        body {
-            font-family: 'Outfit', sans-serif;
-            background-color: var(--slate-50);
-            color: var(--slate-800);
-            line-height: 1.5;
-            min-height: 100vh;
-        }
+        body { font-family: 'Outfit', sans-serif; background: var(--slate-50); color: var(--slate-800); line-height: 1.5; min-height: 100vh; }
 
-        .nav {
-            background: white;
-            border-bottom: 1px solid var(--slate-200);
-            padding: 1rem 0;
-        }
-        
-        .nav-inner {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 1.5rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
+        .nav { background: white; border-bottom: 1px solid var(--slate-200); padding: 1rem 0; }
+        .nav-inner { max-width: 1200px; margin: 0 auto; padding: 0 1.5rem; display: flex; justify-content: space-between; align-items: center; }
         .nav-left { display: flex; align-items: center; gap: 1.5rem; }
-        
-        .nav-back {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            color: var(--slate-600);
-            text-decoration: none;
-            font-weight: 500;
-            font-size: 0.9rem;
-        }
-        
+        .nav-back { display: flex; align-items: center; gap: 0.5rem; color: var(--slate-600); text-decoration: none; font-weight: 500; font-size: 0.9rem; }
         .nav-back:hover { color: var(--me-accent); }
-        
         .nav-logo { display: flex; align-items: center; gap: 0.625rem; }
-        
-        .nav-logo-icon {
-            width: 36px;
-            height: 36px;
-            background: linear-gradient(135deg, #f59e0b, #d97706);
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-        }
-        
+        .nav-logo-icon { width: 36px; height: 36px; background: linear-gradient(135deg, #f59e0b, #d97706); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; }
         .nav-logo-text { font-weight: 700; font-size: 1.15rem; color: var(--slate-900); }
         .nav-logo-text span { color: var(--me-accent); }
-        
         .sync-status { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--slate-500); }
         .sync-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); }
         .sync-dot.syncing { background: var(--me-accent); animation: pulse 1s infinite; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
         .main { max-width: 1200px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
-
         .page-header { margin-bottom: 1.5rem; }
         .page-title { font-family: 'Playfair Display', serif; font-size: 2rem; font-weight: 600; color: var(--slate-900); margin-bottom: 0.25rem; }
         .page-subtitle { color: var(--slate-500); font-size: 0.95rem; }
 
         .tabs { display: flex; gap: 0.25rem; margin-bottom: 1.5rem; border-bottom: 2px solid var(--slate-200); }
-        .tab-btn {
-            padding: 0.75rem 1.25rem;
-            background: none;
-            border: none;
-            font-family: inherit;
-            font-size: 0.9rem;
-            font-weight: 500;
-            color: var(--slate-500);
-            cursor: pointer;
-            position: relative;
-        }
+        .tab-btn { padding: 0.75rem 1.25rem; background: none; border: none; font-family: inherit; font-size: 0.9rem; font-weight: 500; color: var(--slate-500); cursor: pointer; position: relative; }
         .tab-btn:hover { color: var(--slate-700); }
         .tab-btn.active { color: var(--me-accent); }
         .tab-btn.active::after { content: ''; position: absolute; bottom: -2px; left: 0; right: 0; height: 2px; background: var(--me-accent); }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
 
-        .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
-        .stat-card { background: white; border: 1px solid var(--slate-200); border-radius: 12px; padding: 1.25rem; display: flex; align-items: center; gap: 1rem; }
-        .stat-icon { width: 44px; height: 44px; background: var(--slate-100); border-radius: 10px; display: flex; align-items: center; justify-content: center; color: var(--slate-500); flex-shrink: 0; }
-        .stat-value { font-size: 1.5rem; font-weight: 700; color: var(--primary); line-height: 1.2; }
-        .stat-label { font-size: 0.8rem; color: var(--slate-500); text-transform: uppercase; letter-spacing: 0.03em; }
+        .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+        .stat-card { background: white; border: 1px solid var(--slate-200); border-radius: 12px; padding: 1rem 1.25rem; display: flex; align-items: center; gap: 0.875rem; }
+        .stat-icon { width: 38px; height: 38px; background: var(--slate-100); border-radius: 10px; display: flex; align-items: center; justify-content: center; color: var(--slate-500); flex-shrink: 0; }
+        .stat-value { font-size: 1.35rem; font-weight: 700; color: var(--primary); line-height: 1.2; }
+        .stat-label { font-size: 0.7rem; color: var(--slate-500); text-transform: uppercase; letter-spacing: 0.03em; }
 
-        .action-bar { display: flex; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap; align-items: center; }
-        
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.625rem 1rem;
-            border-radius: 8px;
-            border: none;
-            font-family: inherit;
-            font-size: 0.875rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.15s;
-            white-space: nowrap;
-        }
+        .btn { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.625rem 1rem; border-radius: 8px; border: none; font-family: inherit; font-size: 0.875rem; font-weight: 500; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
         .btn svg { width: 16px; height: 16px; }
         .btn-primary { background: linear-gradient(135deg, #f59e0b, #d97706); color: white; }
         .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3); }
@@ -143,12 +60,10 @@
         .btn-secondary:hover { background: var(--slate-50); border-color: var(--slate-400); }
         .btn-danger { background: var(--error-bg); color: var(--error); }
         .btn-danger:hover { background: #fecaca; }
-        
-        .search-input {
-            flex: 1; min-width: 200px; max-width: 320px;
-            padding: 0.625rem 1rem; border: 1px solid var(--slate-300); border-radius: 8px;
-            font-family: inherit; font-size: 0.875rem; background: white;
-        }
+        .btn-sm { padding: 0.375rem 0.75rem; font-size: 0.8rem; }
+
+        .action-bar { display: flex; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap; align-items: center; }
+        .search-input { flex: 1; min-width: 200px; max-width: 320px; padding: 0.625rem 1rem; border: 1px solid var(--slate-300); border-radius: 8px; font-family: inherit; font-size: 0.875rem; background: white; }
         .search-input:focus { outline: none; border-color: var(--me-accent); box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.1); }
         .action-spacer { flex: 1; }
 
@@ -171,9 +86,9 @@
         .data-table tbody tr:hover { background: var(--slate-50); }
         .data-table .clickable { color: var(--slate-800); cursor: pointer; font-weight: 500; }
         .data-table .clickable:hover { color: var(--me-accent); }
-        .data-table select { padding: 0.375rem 0.625rem; border: 1px solid var(--slate-200); border-radius: 6px; font-family: inherit; font-size: 0.85rem; max-width: 150px; background: white; }
+        .data-table select { padding: 0.375rem 0.625rem; border: 1px solid var(--slate-200); border-radius: 6px; font-family: inherit; font-size: 0.85rem; max-width: 140px; background: white; }
         .data-table select:focus { outline: none; border-color: var(--me-accent); }
-        
+
         .icon-btn { background: none; border: none; color: var(--slate-400); cursor: pointer; padding: 0.375rem; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; }
         .icon-btn:hover { background: var(--slate-100); color: var(--slate-600); }
         .icon-btn.danger:hover { background: var(--error-bg); color: var(--error); }
@@ -183,27 +98,53 @@
         .empty-state h3 { font-size: 1rem; font-weight: 600; color: var(--slate-700); margin-bottom: 0.25rem; }
         .empty-state p { font-size: 0.875rem; margin-bottom: 1rem; }
 
-        .divisions-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; }
-        .division-card { background: white; border: 1px solid var(--slate-200); border-radius: 12px; overflow: hidden; }
-        .division-header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 1.25rem; background: var(--slate-50); border-bottom: 1px solid var(--slate-200); }
-        .division-name { font-weight: 600; color: var(--slate-900); }
-        .division-actions { display: flex; gap: 0.25rem; }
-        .division-body { padding: 1rem 1.25rem; }
-        .bunk-list { list-style: none; }
-        .bunk-item { display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid var(--slate-100); }
-        .bunk-item:last-child { border-bottom: none; }
-        .bunk-name { color: var(--slate-700); font-size: 0.9rem; }
-        .bunk-count { font-size: 0.8rem; color: var(--slate-500); }
-        .add-bunk-btn { width: 100%; margin-top: 0.75rem; padding: 0.5rem; background: var(--slate-50); border: 1px dashed var(--slate-300); border-radius: 6px; color: var(--slate-500); font-size: 0.85rem; cursor: pointer; font-family: inherit; }
-        .add-bunk-btn:hover { background: var(--slate-100); border-color: var(--slate-400); color: var(--slate-700); }
+        /* ===================== HIERARCHY STRUCTURE ===================== */
+        .hierarchy-container { display: flex; flex-direction: column; gap: 1rem; }
 
-        .grades-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; }
-        .grade-chip { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 1rem; background: var(--slate-50); border: 1px solid var(--slate-200); border-radius: 8px; }
-        .grade-chip-name { font-weight: 500; color: var(--slate-800); }
+        .division-block { background: white; border: 1px solid var(--slate-200); border-radius: 12px; overflow: hidden; }
+        .division-header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 1.25rem; border-bottom: 1px solid var(--slate-200); cursor: pointer; transition: background 0.15s; }
+        .division-header:hover { background: var(--slate-50); }
+        .division-header.collapsed { border-bottom: none; }
+        .division-left { display: flex; align-items: center; gap: 0.75rem; }
+        .division-color { width: 16px; height: 16px; border-radius: 4px; border: 2px solid rgba(0,0,0,0.1); flex-shrink: 0; }
+        .division-info h3 { font-size: 1rem; font-weight: 600; color: var(--slate-900); margin: 0; }
+        .division-meta { font-size: 0.8rem; color: var(--slate-500); }
+        .division-actions { display: flex; align-items: center; gap: 0.25rem; }
+        .expand-icon { color: var(--slate-400); transition: transform 0.2s; }
+        .expand-icon.collapsed { transform: rotate(-90deg); }
 
+        .division-body { padding: 0 1.25rem 1rem; }
+        .division-body.collapsed { display: none; }
+
+        .grades-section { margin-top: 0.75rem; }
+        .grades-list { display: flex; flex-direction: column; gap: 0.5rem; }
+
+        .grade-block { background: var(--slate-50); border: 1px solid var(--slate-200); border-radius: 8px; overflow: hidden; }
+        .grade-header { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 1rem; cursor: pointer; }
+        .grade-header:hover { background: var(--slate-100); }
+        .grade-header.collapsed { border-bottom: none; }
+        .grade-left { display: flex; align-items: center; gap: 0.625rem; }
+        .grade-info { font-weight: 500; color: var(--slate-800); font-size: 0.9rem; }
+        .grade-count { font-size: 0.75rem; color: var(--slate-500); margin-left: 0.5rem; }
+        .grade-actions { display: flex; align-items: center; gap: 0.25rem; }
+
+        .grade-body { padding: 0.5rem 1rem 0.75rem; border-top: 1px solid var(--slate-200); }
+        .grade-body.collapsed { display: none; }
+
+        .bunks-list { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem; }
+        .bunk-chip { display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.375rem 0.625rem 0.375rem 0.75rem; background: white; border: 1px solid var(--slate-200); border-radius: 6px; font-size: 0.8rem; color: var(--slate-700); }
+        .bunk-chip-count { font-size: 0.7rem; color: var(--slate-400); }
+        .bunk-chip .icon-btn { padding: 0.125rem; margin: -0.125rem; }
+
+        .add-btn-inline { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.375rem 0.625rem; background: none; border: 1px dashed var(--slate-300); border-radius: 6px; color: var(--slate-500); font-size: 0.8rem; cursor: pointer; font-family: inherit; transition: all 0.15s; }
+        .add-btn-inline:hover { background: var(--slate-100); border-color: var(--slate-400); color: var(--slate-700); }
+
+        .add-grade-row { margin-top: 0.5rem; padding-top: 0.75rem; border-top: 1px dashed var(--slate-200); }
+
+        /* ===================== MODAL ===================== */
         .modal-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; opacity: 0; visibility: hidden; transition: all 0.2s; padding: 1rem; }
         .modal-overlay.active { opacity: 1; visibility: visible; }
-        .modal { background: white; border-radius: 16px; width: 100%; max-width: 480px; max-height: calc(100vh - 2rem); overflow-y: auto; transform: scale(0.95) translateY(10px); transition: transform 0.2s; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); }
+        .modal { background: white; border-radius: 16px; width: 100%; max-width: 440px; max-height: calc(100vh - 2rem); overflow-y: auto; transform: scale(0.95) translateY(10px); transition: transform 0.2s; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); }
         .modal-overlay.active .modal { transform: scale(1) translateY(0); }
         .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--slate-200); }
         .modal-header h3 { font-size: 1.1rem; font-weight: 600; margin: 0; }
@@ -217,9 +158,18 @@
         .form-group label { display: block; font-size: 0.875rem; font-weight: 500; color: var(--slate-700); margin-bottom: 0.5rem; }
         .form-group input, .form-group select { width: 100%; padding: 0.625rem 0.875rem; border: 1px solid var(--slate-300); border-radius: 8px; font-family: inherit; font-size: 0.9rem; }
         .form-group input:focus, .form-group select:focus { outline: none; border-color: var(--me-accent); box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.1); }
-        .form-hint { font-size: 0.8rem; color: var(--slate-500); margin-top: 0.375rem; }
+        .form-row { display: flex; gap: 1rem; }
+        .form-row .form-group { flex: 1; }
 
-        .csv-dropzone { border: 2px dashed var(--slate-300); border-radius: 12px; padding: 2rem 1.5rem; text-align: center; cursor: pointer; background: var(--slate-50); }
+        .color-picker-row { display: flex; align-items: center; gap: 1rem; }
+        .color-picker-row input[type="color"] { width: 50px; height: 38px; padding: 2px; border: 1px solid var(--slate-300); border-radius: 8px; cursor: pointer; }
+        .color-presets { display: flex; gap: 0.375rem; flex-wrap: wrap; }
+        .color-preset { width: 28px; height: 28px; border-radius: 6px; border: 2px solid transparent; cursor: pointer; transition: transform 0.1s; }
+        .color-preset:hover { transform: scale(1.1); }
+        .color-preset.selected { border-color: var(--slate-800); }
+
+        /* CSV */
+        .csv-dropzone { border: 2px dashed var(--slate-300); border-radius: 12px; padding: 2rem 1.5rem; text-align: center; cursor: pointer; background: var(--slate-50); transition: all 0.2s; }
         .csv-dropzone:hover, .csv-dropzone.dragover { border-color: var(--me-accent); background: var(--me-accent-light); }
         .csv-dropzone-icon { margin-bottom: 0.75rem; color: var(--slate-400); }
         .csv-dropzone p { color: var(--slate-600); margin-bottom: 0.25rem; }
@@ -246,7 +196,7 @@
             .search-input { max-width: none; }
             .action-spacer { display: none; }
             .stats-row { grid-template-columns: 1fr 1fr; }
-            .divisions-grid { grid-template-columns: 1fr; }
+            .form-row { flex-direction: column; gap: 0; }
         }
     </style>
 </head>
@@ -282,86 +232,93 @@
     <main class="main">
         <header class="page-header">
             <h1 class="page-title">Camper Management</h1>
-            <p class="page-subtitle">Manage your camp's structure and roster</p>
+            <p class="page-subtitle">Organize your camp structure and roster</p>
         </header>
 
         <div class="stats-row">
             <div class="stat-card">
-                <div class="stat-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
-                <div><div class="stat-value" id="statCampers">0</div><div class="stat-label">Campers</div></div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></div>
-                <div><div class="stat-value" id="statBunks">0</div><div class="stat-label">Bunks</div></div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div>
+                <div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div>
                 <div><div class="stat-value" id="statDivisions">0</div><div class="stat-label">Divisions</div></div>
             </div>
             <div class="stat-card">
-                <div class="stat-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg></div>
+                <div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg></div>
                 <div><div class="stat-value" id="statGrades">0</div><div class="stat-label">Grades</div></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></div>
+                <div><div class="stat-value" id="statBunks">0</div><div class="stat-label">Bunks</div></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+                <div><div class="stat-value" id="statCampers">0</div><div class="stat-label">Campers</div></div>
             </div>
         </div>
 
         <div class="tabs">
-            <button class="tab-btn active" data-tab="campers">Campers</button>
-            <button class="tab-btn" data-tab="structure">Divisions & Bunks</button>
-            <button class="tab-btn" data-tab="grades">Grades</button>
+            <button class="tab-btn active" data-tab="structure">Camp Structure</button>
+            <button class="tab-btn" data-tab="campers">Campers</button>
         </div>
 
-        <!-- CAMPERS TAB -->
-        <div id="tab-campers" class="tab-content active">
+        <!-- ===================== STRUCTURE TAB ===================== -->
+        <div id="tab-structure" class="tab-content active">
             <div class="action-bar">
-                <button class="btn btn-primary" id="addCamperBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add Camper</button>
-                <button class="btn btn-secondary" id="importCsvBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Import CSV</button>
-                <button class="btn btn-secondary" id="exportCsvBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Export</button>
+                <button class="btn btn-primary" id="addDivisionBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    Add Division
+                </button>
+            </div>
+
+            <div class="hierarchy-container" id="hierarchyContainer"></div>
+
+            <div class="empty-state" id="structureEmptyState" style="display:none;">
+                <div class="empty-state-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div>
+                <h3>No divisions yet</h3>
+                <p>Create divisions to organize grades and bunks</p>
+            </div>
+        </div>
+
+        <!-- ===================== CAMPERS TAB ===================== -->
+        <div id="tab-campers" class="tab-content">
+            <div class="action-bar">
+                <button class="btn btn-primary" id="addCamperBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    Add Camper
+                </button>
+                <button class="btn btn-secondary" id="importCsvBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Import CSV
+                </button>
+                <button class="btn btn-secondary" id="exportCsvBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    Export
+                </button>
                 <input type="text" class="search-input" id="searchInput" placeholder="Search campers...">
                 <div class="action-spacer"></div>
                 <button class="btn btn-danger" id="clearAllBtn">Clear All</button>
             </div>
+
             <div class="card">
-                <div class="card-header"><h2>Camper Database</h2><span class="card-count" id="camperCount"></span></div>
+                <div class="card-header"><h2>Camper Roster</h2><span class="card-count" id="camperCount"></span></div>
                 <div class="card-body no-padding">
                     <div class="table-wrapper">
                         <table class="data-table" id="camperTable">
-                            <thead><tr><th data-sort="name">Name</th><th data-sort="grade">Grade</th><th data-sort="division">Division</th><th data-sort="bunk">Bunk</th><th data-sort="team">League Team</th><th class="no-sort" style="width:60px;"></th></tr></thead>
+                            <thead>
+                                <tr>
+                                    <th data-sort="name">Name</th>
+                                    <th data-sort="division">Division</th>
+                                    <th data-sort="grade">Grade</th>
+                                    <th data-sort="bunk">Bunk</th>
+                                    <th data-sort="team">League Team</th>
+                                    <th class="no-sort" style="width:60px;"></th>
+                                </tr>
+                            </thead>
                             <tbody id="camperTableBody"></tbody>
                         </table>
                     </div>
                     <div class="empty-state" id="campersEmptyState" style="display:none;">
                         <div class="empty-state-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div>
-                        <h3>No campers yet</h3><p>Add campers manually or import from CSV</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- STRUCTURE TAB -->
-        <div id="tab-structure" class="tab-content">
-            <div class="action-bar">
-                <button class="btn btn-primary" id="addDivisionBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add Division</button>
-            </div>
-            <div class="divisions-grid" id="divisionsGrid"></div>
-            <div class="empty-state" id="divisionsEmptyState" style="display:none;">
-                <div class="empty-state-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div>
-                <h3>No divisions yet</h3><p>Create divisions to organize your bunks</p>
-            </div>
-        </div>
-
-        <!-- GRADES TAB -->
-        <div id="tab-grades" class="tab-content">
-            <div class="action-bar">
-                <button class="btn btn-primary" id="addGradeBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add Grade</button>
-                <button class="btn btn-secondary" id="addDefaultGradesBtn">Add Default Grades</button>
-            </div>
-            <div class="card">
-                <div class="card-header"><h2>Grade Levels</h2></div>
-                <div class="card-body">
-                    <div class="grades-grid" id="gradesGrid"></div>
-                    <div class="empty-state" id="gradesEmptyState" style="display:none;">
-                        <div class="empty-state-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg></div>
-                        <h3>No grades defined</h3><p>Add grade levels for your camp</p>
+                        <h3>No campers yet</h3>
+                        <p>Add campers manually or import from CSV</p>
                     </div>
                 </div>
             </div>
@@ -369,64 +326,148 @@
     </main>
 </div>
 
-<!-- MODALS -->
-<div class="modal-overlay" id="camperModal">
+<!-- ===================== MODALS ===================== -->
+
+<!-- Division Modal -->
+<div class="modal-overlay" id="divisionModal">
     <div class="modal">
-        <div class="modal-header"><h3 id="camperModalTitle">Add Camper</h3><button class="modal-close" onclick="CampistryMe.closeModal('camperModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
-        <div class="modal-body">
-            <div class="form-group"><label for="camperName">Full Name *</label><input type="text" id="camperName" placeholder="Enter name"></div>
-            <div class="form-group"><label for="camperGrade">Grade</label><select id="camperGrade"><option value="">Select grade...</option></select></div>
-            <div class="form-group"><label for="camperDivision">Division</label><select id="camperDivision"><option value="">Select division...</option></select></div>
-            <div class="form-group"><label for="camperBunk">Bunk</label><select id="camperBunk"><option value="">Select bunk...</option></select></div>
-            <div class="form-group"><label for="camperTeam">League Team</label><select id="camperTeam"><option value="">Select team...</option></select></div>
+        <div class="modal-header">
+            <h3 id="divisionModalTitle">Add Division</h3>
+            <button class="modal-close" onclick="CampistryMe.closeModal('divisionModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
-        <div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryMe.closeModal('camperModal')">Cancel</button><button class="btn btn-primary" id="saveCamperBtn">Save</button></div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="divisionName">Division Name</label>
+                <input type="text" id="divisionName" placeholder="e.g., Junior Boys, Senior Girls">
+            </div>
+            <div class="form-group">
+                <label>Division Color</label>
+                <div class="color-picker-row">
+                    <input type="color" id="divisionColor" value="#4F46E5">
+                    <div class="color-presets" id="colorPresets"></div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="CampistryMe.closeModal('divisionModal')">Cancel</button>
+            <button class="btn btn-primary" id="saveDivisionBtn">Save Division</button>
+        </div>
     </div>
 </div>
 
+<!-- Grade Modal -->
+<div class="modal-overlay" id="gradeModal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 id="gradeModalTitle">Add Grade</h3>
+            <button class="modal-close" onclick="CampistryMe.closeModal('gradeModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label>Division</label>
+                <input type="text" id="gradeForDivision" disabled>
+            </div>
+            <div class="form-group">
+                <label for="gradeName">Grade Name</label>
+                <input type="text" id="gradeName" placeholder="e.g., 5th Grade, Freshman">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="CampistryMe.closeModal('gradeModal')">Cancel</button>
+            <button class="btn btn-primary" id="saveGradeBtn">Save Grade</button>
+        </div>
+    </div>
+</div>
+
+<!-- Bunk Modal -->
+<div class="modal-overlay" id="bunkModal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 id="bunkModalTitle">Add Bunk</h3>
+            <button class="modal-close" onclick="CampistryMe.closeModal('bunkModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+        <div class="modal-body">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Division</label>
+                    <input type="text" id="bunkForDivision" disabled>
+                </div>
+                <div class="form-group">
+                    <label>Grade</label>
+                    <input type="text" id="bunkForGrade" disabled>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="bunkName">Bunk Name</label>
+                <input type="text" id="bunkName" placeholder="e.g., Bunk 1, Cabin A">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="CampistryMe.closeModal('bunkModal')">Cancel</button>
+            <button class="btn btn-primary" id="saveBunkBtn">Save Bunk</button>
+        </div>
+    </div>
+</div>
+
+<!-- Camper Modal -->
+<div class="modal-overlay" id="camperModal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 id="camperModalTitle">Add Camper</h3>
+            <button class="modal-close" onclick="CampistryMe.closeModal('camperModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="camperName">Full Name</label>
+                <input type="text" id="camperName" placeholder="Enter camper's name">
+            </div>
+            <div class="form-group">
+                <label for="camperDivision">Division</label>
+                <select id="camperDivision"><option value="">Select division...</option></select>
+            </div>
+            <div class="form-group">
+                <label for="camperGrade">Grade</label>
+                <select id="camperGrade"><option value="">Select grade...</option></select>
+            </div>
+            <div class="form-group">
+                <label for="camperBunk">Bunk</label>
+                <select id="camperBunk"><option value="">Select bunk...</option></select>
+            </div>
+            <div class="form-group">
+                <label for="camperTeam">League Team</label>
+                <select id="camperTeam"><option value="">Select team...</option></select>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="CampistryMe.closeModal('camperModal')">Cancel</button>
+            <button class="btn btn-primary" id="saveCamperBtn">Save Camper</button>
+        </div>
+    </div>
+</div>
+
+<!-- CSV Modal -->
 <div class="modal-overlay" id="csvModal">
     <div class="modal">
-        <div class="modal-header"><h3>Import from CSV</h3><button class="modal-close" onclick="CampistryMe.closeModal('csvModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+        <div class="modal-header">
+            <h3>Import from CSV</h3>
+            <button class="modal-close" onclick="CampistryMe.closeModal('csvModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
         <div class="modal-body">
             <div class="csv-dropzone" id="csvDropzone">
                 <div class="csv-dropzone-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></div>
                 <p><strong>Drop CSV here</strong> or click to browse</p>
-                <small>Format: Name, Grade, Division, Bunk, Team</small>
+                <small>Format: Name, Division, Grade, Bunk, Team</small>
             </div>
             <input type="file" id="csvFileInput" accept=".csv,.txt">
             <div id="csvPreview" class="csv-preview" style="display:none;">
                 <div class="csv-preview-header"><h4>Preview (<span id="csvPreviewCount">0</span> rows)</h4></div>
-                <div class="csv-preview-table"><table class="data-table"><thead><tr><th class="no-sort">Name</th><th class="no-sort">Grade</th><th class="no-sort">Division</th><th class="no-sort">Bunk</th><th class="no-sort">Team</th></tr></thead><tbody id="csvPreviewBody"></tbody></table></div>
+                <div class="csv-preview-table"><table class="data-table"><thead><tr><th class="no-sort">Name</th><th class="no-sort">Division</th><th class="no-sort">Grade</th><th class="no-sort">Bunk</th><th class="no-sort">Team</th></tr></thead><tbody id="csvPreviewBody"></tbody></table></div>
             </div>
         </div>
-        <div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryMe.closeModal('csvModal')">Cancel</button><button class="btn btn-primary" id="csvImportBtn" disabled>Import</button></div>
-    </div>
-</div>
-
-<div class="modal-overlay" id="divisionModal">
-    <div class="modal">
-        <div class="modal-header"><h3 id="divisionModalTitle">Add Division</h3><button class="modal-close" onclick="CampistryMe.closeModal('divisionModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
-        <div class="modal-body"><div class="form-group"><label for="divisionName">Division Name *</label><input type="text" id="divisionName" placeholder="e.g., Junior Boys"></div></div>
-        <div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryMe.closeModal('divisionModal')">Cancel</button><button class="btn btn-primary" id="saveDivisionBtn">Save</button></div>
-    </div>
-</div>
-
-<div class="modal-overlay" id="bunkModal">
-    <div class="modal">
-        <div class="modal-header"><h3 id="bunkModalTitle">Add Bunk</h3><button class="modal-close" onclick="CampistryMe.closeModal('bunkModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
-        <div class="modal-body">
-            <div class="form-group"><label>Division</label><input type="text" id="bunkDivisionDisplay" disabled></div>
-            <div class="form-group"><label for="bunkName">Bunk Name *</label><input type="text" id="bunkName" placeholder="e.g., Bunk 1"></div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="CampistryMe.closeModal('csvModal')">Cancel</button>
+            <button class="btn btn-primary" id="csvImportBtn" disabled>Import</button>
         </div>
-        <div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryMe.closeModal('bunkModal')">Cancel</button><button class="btn btn-primary" id="saveBunkBtn">Save</button></div>
-    </div>
-</div>
-
-<div class="modal-overlay" id="gradeModal">
-    <div class="modal">
-        <div class="modal-header"><h3>Add Grade</h3><button class="modal-close" onclick="CampistryMe.closeModal('gradeModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
-        <div class="modal-body"><div class="form-group"><label for="gradeName">Grade Name *</label><input type="text" id="gradeName" placeholder="e.g., 5th Grade"><p class="form-hint">Appears in camper assignment dropdowns</p></div></div>
-        <div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryMe.closeModal('gradeModal')">Cancel</button><button class="btn btn-primary" id="saveGradeBtn">Save</button></div>
     </div>
 </div>
 
