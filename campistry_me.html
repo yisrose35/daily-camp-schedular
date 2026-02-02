@@ -714,8 +714,11 @@
             cursor: pointer;
             transition: all 0.15s;
             box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
+            padding: 0;
+            outline: none;
         }
         .color-preset:hover { transform: scale(1.12); }
+        .color-preset:focus { outline: none; }
         .color-preset.selected { 
             border-color: var(--text-primary); 
             box-shadow: 0 0 0 2px var(--bg-secondary), 0 0 0 4px var(--border-medium);
@@ -953,7 +956,7 @@
             <div class="form-group">
                 <label>Division Color</label>
                 <div class="color-picker-row">
-                    <input type="color" id="divisionColor" value="#4F46E5">
+                    <input type="color" id="divisionColor" value="#00C896">
                     <div class="color-presets" id="colorPresets"></div>
                 </div>
             </div>
