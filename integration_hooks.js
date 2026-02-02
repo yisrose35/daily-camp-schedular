@@ -1,6 +1,10 @@
 // =============================================================================
-// integration_hooks.js v6.4 — CAMPISTRY SCHEDULER INTEGRATION
+// integration_hooks.js v6.5 — CAMPISTRY SCHEDULER INTEGRATION
 // =============================================================================
+//
+// v6.5 FIXES:
+// - ★ RAINY DAY PERSISTENCE - Properly saves/loads isRainyDay and rainyDayStartTime
+// - ★ BACKWARD COMPATIBILITY - Includes rainyDayMode for legacy support
 //
 // v6.4 FIXES:
 // - ★ FIXED: Duplicate save notifications - added deduplication with 3s threshold
@@ -31,7 +35,7 @@
 (function() {
     'use strict';
 
-    console.log('🔗 Campistry Integration Hooks v6.4 loading...');
+    console.log('🔗 Campistry Integration Hooks v6.5 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -486,12 +490,15 @@
     async function verifiedScheduleSave(dateKey, data, attempt = 1) {
         if (!dateKey) dateKey = window.currentScheduleDate;
         if (!data) {
+            // ★★★ FIX v6.5: Include rainyDayStartTime and rainyDayMode ★★★
             data = {
                 scheduleAssignments: window.scheduleAssignments || {},
                 leagueAssignments: window.leagueAssignments || {},
                 unifiedTimes: window.unifiedTimes || [],
                 divisionTimes: window.divisionTimes || {},
-                isRainyDay: window.isRainyDay || false
+                isRainyDay: window.isRainyDay || false,
+                rainyDayStartTime: window.rainyDayStartTime ?? null,
+                rainyDayMode: window.isRainyDay || false  // backward compatibility
             };
         }
 
@@ -640,6 +647,22 @@
                 
                 if (result.data.divisionTimes) {
                     window.divisionTimes = result.data.divisionTimes;
+                }
+
+                // ★★★ FIX v6.5: Hydrate rainy day state ★★★
+                if (result.data.isRainyDay === true || result.data.rainyDayMode === true) {
+                    window.isRainyDay = true;
+                    log('[CLOUD LOAD] Hydrated isRainyDay: true');
+                } else if (result.data.isRainyDay === false) {
+                    window.isRainyDay = false;
+                    log('[CLOUD LOAD] Hydrated isRainyDay: false');
+                }
+                
+                if (result.data.rainyDayStartTime !== null && result.data.rainyDayStartTime !== undefined) {
+                    window.rainyDayStartTime = result.data.rainyDayStartTime;
+                    log('[CLOUD LOAD] Hydrated rainyDayStartTime:', result.data.rainyDayStartTime);
+                } else {
+                    window.rainyDayStartTime = null;
                 }
 
                 // Update localStorage
@@ -937,6 +960,19 @@
                         window.divisionTimes = result.data.divisionTimes;
                     }
 
+                    // ★★★ FIX v6.5: Hydrate rainy day state ★★★
+                    if (result.data.isRainyDay === true || result.data.rainyDayMode === true) {
+                        window.isRainyDay = true;
+                    } else if (result.data.isRainyDay === false) {
+                        window.isRainyDay = false;
+                    }
+                    
+                    if (result.data.rainyDayStartTime !== null && result.data.rainyDayStartTime !== undefined) {
+                        window.rainyDayStartTime = result.data.rainyDayStartTime;
+                    } else {
+                        window.rainyDayStartTime = null;
+                    }
+
                     if (window.updateTable) {
                         window.updateTable();
                     }
@@ -944,6 +980,8 @@
                     console.log('🔗 Loaded schedule for', newDateKey, {
                         bunks: Object.keys(window.scheduleAssignments).length,
                         slots: window.unifiedTimes?.length || 0,
+                        isRainyDay: window.isRainyDay,
+                        rainyDayStartTime: window.rainyDayStartTime,
                         source: result.source
                     });
                 }
@@ -967,12 +1005,15 @@
                 const dateKey = window.currentScheduleDate;
                 if (!dateKey) return;
 
+                // ★★★ FIX v6.5: Include rainyDayStartTime and rainyDayMode ★★★
                 const data = {
                     scheduleAssignments: window.scheduleAssignments || {},
                     leagueAssignments: window.leagueAssignments || {},
                     unifiedTimes: window.unifiedTimes || [],
                     divisionTimes: window.divisionTimes || {},
-                    isRainyDay: window.isRainyDay || false
+                    isRainyDay: window.isRainyDay || false,
+                    rainyDayStartTime: window.rainyDayStartTime ?? null,
+                    rainyDayMode: window.isRainyDay || false  // backward compatibility
                 };
 
                 if (window.ScheduleSync?.queueSave) {
@@ -1076,6 +1117,17 @@
                         // ★★★ FIX: Also update unifiedTimes from remote ★★★
                         if (result.data.unifiedTimes?.length > (window.unifiedTimes?.length || 0)) {
                             window.unifiedTimes = result.data.unifiedTimes;
+                        }
+
+                        // ★★★ FIX v6.5: Also update rainy day state from remote ★★★
+                        if (result.data.isRainyDay === true || result.data.rainyDayMode === true) {
+                            window.isRainyDay = true;
+                        } else if (result.data.isRainyDay === false) {
+                            window.isRainyDay = false;
+                        }
+                        
+                        if (result.data.rainyDayStartTime !== null && result.data.rainyDayStartTime !== undefined) {
+                            window.rainyDayStartTime = result.data.rainyDayStartTime;
                         }
 
                         if (window.updateTable) {
@@ -1219,6 +1271,9 @@
                         leagueAssignments: window.leagueAssignments,
                         unifiedTimes: window.unifiedTimes,
                         divisionTimes: window.divisionTimes,
+                        isRainyDay: window.isRainyDay || false,
+                        rainyDayStartTime: window.rainyDayStartTime ?? null,
+                        rainyDayMode: window.isRainyDay || false,  // backward compatibility
                         savedAt: new Date().toISOString()
                     };
                     localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
@@ -1231,7 +1286,10 @@
                     scheduleAssignments: window.scheduleAssignments,
                     leagueAssignments: window.leagueAssignments,
                     unifiedTimes: window.unifiedTimes,
-                    divisionTimes: window.divisionTimes
+                    divisionTimes: window.divisionTimes,
+                    isRainyDay: window.isRainyDay || false,
+                    rainyDayStartTime: window.rainyDayStartTime ?? null,
+                    rainyDayMode: window.isRainyDay || false
                 }).catch(() => {});
             }
         });
@@ -1294,12 +1352,15 @@
             const dateKey = window.currentScheduleDate;
             if (!dateKey) return;
 
+            // ★★★ FIX v6.5: Include rainyDayStartTime and rainyDayMode ★★★
             const data = {
                 scheduleAssignments: window.scheduleAssignments || {},
                 leagueAssignments: window.leagueAssignments || {},
                 unifiedTimes: window.unifiedTimes || [],
                 divisionTimes: window.divisionTimes || {},
-                isRainyDay: window.isRainyDay || false
+                isRainyDay: window.isRainyDay || false,
+                rainyDayStartTime: window.rainyDayStartTime ?? null,
+                rainyDayMode: window.isRainyDay || false
             };
 
             if (window.ScheduleSync?.queueSave) {
@@ -1338,7 +1399,7 @@
         const client = window.CampistryDB?.getClient?.();
 
         console.log('═══════════════════════════════════════════════════════');
-        console.log('SCHEDULE SYNC DIAGNOSTIC v6.4');
+        console.log('SCHEDULE SYNC DIAGNOSTIC v6.5');
         console.log('═══════════════════════════════════════════════════════');
         console.log('Date:', dateKey);
         console.log('Online:', navigator.onLine);
@@ -1349,6 +1410,8 @@
         console.log('  scheduleAssignments:', Object.keys(window.scheduleAssignments || {}).length, 'bunks');
         console.log('  unifiedTimes:', (window.unifiedTimes || []).length, 'slots');
         console.log('  divisionTimes:', Object.keys(window.divisionTimes || {}).length, 'divisions');
+        console.log('  isRainyDay:', window.isRainyDay);
+        console.log('  rainyDayStartTime:', window.rainyDayStartTime);
         console.log('');
         console.log('CloudPermissions:');
         console.log('  Role:', window.CloudPermissions?.getRole?.());
@@ -1361,7 +1424,7 @@
             try {
                 const { data, error } = await client
                     .from('daily_schedules')
-                    .select('scheduler_id, scheduler_name, divisions, updated_at, schedule_data, unified_times')
+                    .select('scheduler_id, scheduler_name, divisions, updated_at, schedule_data, unified_times, is_rainy_day')
                     .eq('camp_id', campId)
                     .eq('date_key', dateKey);
 
@@ -1371,11 +1434,14 @@
                     data.forEach((r, i) => {
                         const bunks = Object.keys(r.schedule_data?.scheduleAssignments || {}).length;
                         const slots = r.schedule_data?.unifiedTimes?.length || r.unified_times?.length || 0;
+                        const isRainy = r.is_rainy_day || r.schedule_data?.isRainyDay || r.schedule_data?.rainyDayMode;
+                        const rainyStart = r.schedule_data?.rainyDayStartTime;
                         totalCloudBunks += bunks;
                         const isMe = r.scheduler_id === userId ? ' ★YOU★' : '';
                         console.log(`  [${i + 1}] ${r.scheduler_name || 'Unknown'}${isMe}`);
                         console.log(`      Divisions: ${JSON.stringify(r.divisions)}`);
                         console.log(`      Bunks: ${bunks}, Slots: ${slots}`);
+                        console.log(`      Rainy: ${isRainy}, StartTime: ${rainyStart}`);
                         console.log(`      Updated: ${r.updated_at}`);
                     });
                     console.log('');
@@ -1406,8 +1472,8 @@
         setTimeout(waitForSystems, 300);
     }
 
-    console.log('🔗 Campistry Integration Hooks v6.4 loaded');
+    console.log('🔗 Campistry Integration Hooks v6.5 loaded');
     console.log('   Commands: diagnoseScheduleSync(), verifiedScheduleSave(), forceLoadScheduleFromCloud()');
-    console.log('   v6.4: Save deduplication - prevents duplicate notifications');
+    console.log('   v6.5: Rainy day persistence fix - isRainyDay and rainyDayStartTime now properly saved/loaded');
 
 })();
