@@ -1,7 +1,12 @@
 // =============================================================================
-// POST-GENERATION EDIT SYSTEM v3.1 - CLIENT UI ONLY
+// POST-GENERATION EDIT SYSTEM v3.2 - CLIENT UI ONLY
 // =============================================================================
 // 
+// v3.2 CHANGES:
+// - CRITICAL FIX: Owner/Admin permission check now handles uninitialized AccessControl
+// - Added fallback chain: AccessControl -> CampistryDB -> localStorage -> allow
+// - Prevents owners from being blocked when RBAC hasn't finished loading
+//
 // FEATURES:
 // - Modal UI for editing cells post-generation
 // - Activity name and location/field selection
@@ -20,7 +25,7 @@
 (function() {
     'use strict';
 
-    console.log('📝 Post-Generation Edit System v3.1 (UI Client) loading...');
+    console.log('📝 Post-Generation Edit System v3.2 (UI Client) loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -112,14 +117,47 @@
     }
 
     // =========================================================================
-    // EDITABLE BUNKS (RBAC)
+    // EDITABLE BUNKS (RBAC) - ★★★ FIXED v3.2 ★★★
     // =========================================================================
 
     function getEditableBunks() {
         const editableBunks = new Set();
-        
-        const editableDivisions = window.AccessControl?.getEditableDivisions?.() || [];
         const divisions = window.divisions || {};
+        
+        // ★★★ FIX v3.2: Check initialization state to prevent race condition ★★★
+        // If AccessControl exists but isn't initialized yet, role will be null/undefined
+        // In that case, we should ALLOW edits (default permissive) rather than block owner
+        const isInitialized = window.AccessControl?.isInitialized;
+        const role = window.AccessControl?.getCurrentRole?.();
+        
+        // Fallback role detection (CampistryDB or localStorage)
+        const fallbackRole = window.CampistryDB?.getRole?.() || 
+                            localStorage.getItem('campistry_role');
+        const effectiveRole = role || fallbackRole;
+        
+        debugLog('getEditableBunks check:', { 
+            hasAccessControl: !!window.AccessControl, 
+            isInitialized, 
+            role,
+            fallbackRole,
+            effectiveRole
+        });
+        
+        // Allow all if: no RBAC, not initialized yet, or user is owner/admin
+        if (!window.AccessControl || !isInitialized || effectiveRole === 'owner' || effectiveRole === 'admin') {
+            // Add all bunks from all divisions
+            for (const divInfo of Object.values(divisions)) {
+                if (divInfo?.bunks) {
+                    divInfo.bunks.forEach(b => editableBunks.add(String(b)));
+                }
+            }
+            // Also add any bunks already in scheduleAssignments
+            Object.keys(window.scheduleAssignments || {}).forEach(b => editableBunks.add(String(b)));
+            return editableBunks;
+        }
+        
+        // For schedulers/viewers: use assigned divisions only
+        const editableDivisions = window.AccessControl.getEditableDivisions?.() || [];
         
         for (const divName of editableDivisions) {
             const divInfo = divisions[divName];
@@ -128,26 +166,39 @@
             }
         }
         
-        // If no RBAC or owner, all bunks are editable
-        if (editableBunks.size === 0) {
-            const role = window.AccessControl?.getCurrentRole?.();
-            if (!window.AccessControl || role === 'owner' || role === 'admin') {
-                Object.keys(window.scheduleAssignments || {}).forEach(b => editableBunks.add(b));
-            }
-        }
-        
         return editableBunks;
     }
 
     /**
      * Check if user can edit a specific bunk
+     * ★★★ FIX v3.2: Handle uninitialized AccessControl race condition ★★★
      */
     function canEditBunk(bunkName) {
+        // Check initialization state
+        const isInitialized = window.AccessControl?.isInitialized;
         const role = window.AccessControl?.getCurrentRole?.();
+        
+        // If AccessControl exists but isn't initialized, check fallbacks
+        if (window.AccessControl && (!isInitialized || !role)) {
+            const fallbackRole = window.CampistryDB?.getRole?.() || 
+                                localStorage.getItem('campistry_role');
+            if (fallbackRole === 'owner' || fallbackRole === 'admin') {
+                debugLog(`canEditBunk(${bunkName}): Using fallback role = ${fallbackRole}, ALLOWED`);
+                return true;
+            }
+            // If still no role info, default to ALLOW (don't block the owner during init)
+            if (!fallbackRole) {
+                debugLog(`canEditBunk(${bunkName}): No role info during init, defaulting to ALLOW`);
+                return true;
+            }
+        }
+        
+        // Owner/admin always can edit
         if (role === 'owner' || role === 'admin') return true;
         
+        // Check editable bunks for schedulers
         const editableBunks = getEditableBunks();
-        return editableBunks.has(bunkName);
+        return editableBunks.has(String(bunkName));
     }
 
     // =========================================================================
@@ -157,7 +208,8 @@
     function checkLocationConflict(locationName, slots, excludeBunk) {
         const assignments = window.scheduleAssignments || {};
         // UPDATED: Use SchedulerCoreUtils
-        const activityProperties = window.SchedulerCoreUtils.getActivityProperties();
+        const activityProperties = window.SchedulerCoreUtils?.getActivityProperties?.() || 
+                                   window.activityProperties || {};
         const locationInfo = activityProperties[locationName] || {};
         
         let maxCapacity = 1;
@@ -195,7 +247,7 @@
                         bunk: bunkName,
                         activity: entryActivity || entryField,
                         field: entryField,
-                        canEdit: editableBunks.has(bunkName)
+                        canEdit: editableBunks.has(String(bunkName))
                     });
                 }
             }
@@ -205,7 +257,8 @@
         let globalLock = null;
         if (window.GlobalFieldLocks) {
             // UPDATED: Use SchedulerCoreUtils
-            const divName = window.SchedulerCoreUtils.getDivisionForBunk(excludeBunk);
+            const divName = window.SchedulerCoreUtils?.getDivisionForBunk?.(excludeBunk) ||
+                           window.getDivisionForBunk?.(excludeBunk);
             const lockInfo = window.GlobalFieldLocks.isFieldLocked(locationName, slots, divName);
             if (lockInfo) {
                 globalLock = lockInfo;
@@ -259,7 +312,7 @@
 
     function applyDirectEdit(bunk, slots, activity, location, isClear) {
         // ★ FIX: Use division-specific slot count ★
-        const divName = window.SchedulerCoreUtils?.getDivisionForBunk(bunk) || 
+        const divName = window.SchedulerCoreUtils?.getDivisionForBunk?.(bunk) || 
                         window.getDivisionForBunk?.(bunk);
         const divTimes = window.divisionTimes?.[divName] || [];
         
@@ -289,7 +342,8 @@
         // Register location usage
         if (location && !isClear && window.registerLocationUsage) {
             // UPDATED: Use SchedulerCoreUtils
-            const divName = window.SchedulerCoreUtils.getDivisionForBunk(bunk);
+            const divName = window.SchedulerCoreUtils?.getDivisionForBunk?.(bunk) ||
+                           window.getDivisionForBunk?.(bunk);
             slots.forEach(idx => {
                 window.registerLocationUsage(idx, location, activity, divName);
             });
@@ -464,7 +518,7 @@
         
         const isClear = activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
         // UPDATED: Use SchedulerCoreUtils
-        const slots = window.SchedulerCoreUtils.findSlotsForRange(startMin, endMin, unifiedTimes);
+        const slots = window.SchedulerCoreUtils?.findSlotsForRange?.(startMin, endMin, unifiedTimes) || [];
         
         if (slots.length === 0) {
             console.error('[PostEdit] ❌ No slots found for time range:', startMin, '-', endMin);
@@ -653,15 +707,15 @@
 
     function showEditModal(bunk, startMin, endMin, currentValue, onSave) {
         const modal = createModal();
-        const locations = getAllLocations(); // This is defined in Part 1
+        const locations = getAllLocations();
         const unifiedTimes = window.unifiedTimes || [];
         
         let currentActivity = currentValue || '';
         let currentField = '';
         let resolutionChoice = 'notify';
         
-        // UPDATED: Use SchedulerCoreUtils
-        const slots = window.SchedulerCoreUtils.findSlotsForRange(startMin, endMin, unifiedTimes);
+        // UPDATED: Use SchedulerCoreUtils with fallback
+        const slots = window.SchedulerCoreUtils?.findSlotsForRange?.(startMin, endMin, unifiedTimes) || [];
         if (slots.length > 0) {
             const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
             if (entry) {
@@ -669,6 +723,17 @@
                 currentActivity = entry._activity || currentField || currentValue;
             }
         }
+        
+        // Helper for time label with fallback
+        const minutesToTimeLabel = window.SchedulerCoreUtils?.minutesToTimeLabel || 
+            function(mins) {
+                if (mins === null || mins === undefined) return '';
+                const h = Math.floor(mins / 60);
+                const m = mins % 60;
+                const h12 = h > 12 ? h - 12 : (h === 0 ? 12 : h);
+                const ampm = h >= 12 ? 'PM' : 'AM';
+                return `${h12}:${m.toString().padStart(2, '0')} ${ampm}`;
+            };
         
         modal.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
@@ -679,7 +744,7 @@
             <div style="background: #f3f4f6; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px;">
                 <div style="font-weight: 600; color: #374151;">${bunk}</div>
                 <div style="font-size: 0.875rem; color: #6b7280;" id="post-edit-time-display">
-                    ${window.SchedulerCoreUtils.minutesToTimeLabel(startMin)} - ${window.SchedulerCoreUtils.minutesToTimeLabel(endMin)}
+                    ${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}
                 </div>
             </div>
             
@@ -828,7 +893,7 @@
         
         function updateTimeDisplay() {
             const times = getEffectiveTimes();
-            timeDisplay.textContent = `${window.SchedulerCoreUtils.minutesToTimeLabel(times.startMin)} - ${window.SchedulerCoreUtils.minutesToTimeLabel(times.endMin)}`;
+            timeDisplay.textContent = `${minutesToTimeLabel(times.startMin)} - ${minutesToTimeLabel(times.endMin)}`;
         }
         
         function checkAndShowConflicts() {
@@ -840,8 +905,8 @@
                 return null;
             }
             
-            // UPDATED: Use SchedulerCoreUtils
-            const targetSlots = window.SchedulerCoreUtils.findSlotsForRange(times.startMin, times.endMin, unifiedTimes);
+            // UPDATED: Use SchedulerCoreUtils with fallback
+            const targetSlots = window.SchedulerCoreUtils?.findSlotsForRange?.(times.startMin, times.endMin, unifiedTimes) || [];
             const conflictCheck = checkLocationConflict(location, targetSlots, bunk);
             
             if (conflictCheck.hasConflict) {
@@ -937,8 +1002,8 @@
                 return;
             }
             
-            // UPDATED: Use SchedulerCoreUtils
-            const targetSlots = window.SchedulerCoreUtils.findSlotsForRange(times.startMin, times.endMin, unifiedTimes);
+            // UPDATED: Use SchedulerCoreUtils with fallback
+            const targetSlots = window.SchedulerCoreUtils?.findSlotsForRange?.(times.startMin, times.endMin, unifiedTimes) || [];
             const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
             
             if (conflictCheck?.hasConflict) {
@@ -978,7 +1043,7 @@
     function enhancedEditCell(bunk, startMin, endMin, current) {
         debugLog(`enhancedEditCell called: ${bunk}, ${startMin}-${endMin}, "${current}"`);
         
-        // RBAC check
+        // RBAC check - now with proper initialization handling
         if (!canEditBunk(bunk)) {
             alert('You do not have permission to edit this schedule.\n\n(You can only edit your assigned divisions.)');
             return;
@@ -1059,33 +1124,30 @@
     // INITIALIZATION
     // =========================================================================
 
-   function initPostEditSystem() {
-    // Verify dependencies
-    const missing = [];
-    if (typeof window.smartRegenerateConflicts !== 'function') missing.push('smartRegenerateConflicts');
-    if (typeof window.resolveConflictsAndApply !== 'function') missing.push('resolveConflictsAndApply');
-    if (typeof window.applyPickToBunk !== 'function') missing.push('applyPickToBunk');
-    
-    if (missing.length > 0) {
-        console.error('❌ [PostEdit] Missing dependencies:', missing.join(', '));
-    }
-    
-    // Add styles
-    if (!document.getElementById('post-edit-styles')) {
-        const style = document.createElement('style');
-        style.id = 'post-edit-styles';
-        style.textContent = `
-            @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-        `;
-        document.head.appendChild(style);
-    }
-    
-    console.log('📝 Post-Edit System v4.0 initialized (consolidated)');
-}
-
-
+    function initPostEditSystem() {
+        // Verify dependencies
+        const missing = [];
+        if (typeof window.smartRegenerateConflicts !== 'function') missing.push('smartRegenerateConflicts');
+        if (typeof window.resolveConflictsAndApply !== 'function') missing.push('resolveConflictsAndApply');
+        if (typeof window.applyPickToBunk !== 'function') missing.push('applyPickToBunk');
         
+        if (missing.length > 0) {
+            console.warn('⚠️ [PostEdit] Missing dependencies (will use fallbacks):', missing.join(', '));
+        }
         
+        // Add styles
+        if (!document.getElementById('post-edit-styles')) {
+            const style = document.createElement('style');
+            style.id = 'post-edit-styles';
+            style.textContent = `
+                @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        console.log('📝 Post-Edit System v3.2 initialized');
+        console.log('   ★★★ FIX: Owner permission check handles uninitialized AccessControl ★★★');
+    }
 
     // =========================================================================
     // EXPORTS
@@ -1096,10 +1158,10 @@
     window.checkLocationConflict = checkLocationConflict;
     window.getAllLocations = getAllLocations;
     window.getEditableBunks = getEditableBunks;
+    window.canEditBunk = canEditBunk;
     window.sendSchedulerNotification = sendSchedulerNotification;
     window.bypassSaveAllBunks = bypassSaveAllBunks;
    
-    
     // =========================================================================
     // ★★★ CRITICAL PATCH: Make loadScheduleForDate respect _postEditInProgress ★★★
     // =========================================================================
