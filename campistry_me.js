@@ -1,11 +1,11 @@
 // =============================================================================
-// campistry_me.js — Campistry Me v5.0
+// campistry_me.js — Campistry Me v5.1
 // Professional UI, Cloud Sync, Fast inline inputs
 // =============================================================================
 
 (function() {
     'use strict';
-    console.log('[Me] Campistry Me v5.0 loading...');
+    console.log('[Me] Campistry Me v5.1 loading...');
 
     let structure = {};
     let camperRoster = {};
@@ -18,7 +18,7 @@
     let sortDirection = 'asc';
     let pendingCsvData = [];
 
-    const COLOR_PRESETS = ['#4F46E5','#7C3AED','#EC4899','#EF4444','#F97316','#EAB308','#22C55E','#14B8A6','#06B6D4','#3B82F6'];
+    const COLOR_PRESETS = ['#00C896','#6366F1','#F59E0B','#EF4444','#8B5CF6','#3B82F6','#10B981','#EC4899','#F97316','#14B8A6','#84CC16','#A855F7','#06B6D4','#F43F5E','#22C55E','#FBBF24'];
 
     async function init() {
         const authed = await checkAuth();
@@ -218,7 +218,7 @@
                 return '<div class="grade-block"><div class="grade-header" onclick="CampistryMe.toggleGrade(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\')"><div class="grade-left"><svg class="expand-icon ' + (isGradeExpanded ? '' : 'collapsed') + '" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg><span class="grade-info">' + esc(gradeName) + '</span><span class="grade-count">' + bunks.length + ' bunk' + (bunks.length !== 1 ? 's' : '') + '</span></div><div class="grade-actions" onclick="event.stopPropagation()"><button class="icon-btn danger" onclick="CampistryMe.deleteGrade(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></div></div><div class="grade-body ' + (isGradeExpanded ? '' : 'collapsed') + '"><div class="bunks-list">' + bunks.map(b => '<span class="bunk-chip">' + esc(b) + '<button class="icon-btn danger" onclick="CampistryMe.deleteBunk(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\',\'' + esc(b) + '\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></span>').join('') + '<div class="quick-add"><input type="text" placeholder="+ Bunk" id="addBunk_' + esc(divName) + '_' + esc(gradeName) + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addBunkInline(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\');event.preventDefault();}"><button class="quick-add-btn" onclick="CampistryMe.addBunkInline(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div></div></div></div>';
             }).join('');
 
-            return '<div class="division-block"><div class="division-header ' + (isExpanded ? '' : 'collapsed') + '" onclick="CampistryMe.toggleDivision(\'' + esc(divName) + '\')"><div class="division-left"><div class="division-color" style="background:' + (div.color || '#4F46E5') + '"></div><div class="division-info"><h3>' + esc(divName) + '</h3><div class="division-meta">' + gradeNames.length + ' grade' + (gradeNames.length !== 1 ? 's' : '') + ' · ' + camperCount + ' camper' + (camperCount !== 1 ? 's' : '') + '</div></div></div><div class="division-actions" onclick="event.stopPropagation()"><button class="icon-btn" onclick="CampistryMe.editDivision(\'' + esc(divName) + '\')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button><button class="icon-btn danger" onclick="CampistryMe.deleteDivision(\'' + esc(divName) + '\')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button><svg class="expand-icon ' + (isExpanded ? '' : 'collapsed') + '" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></div></div><div class="division-body ' + (isExpanded ? '' : 'collapsed') + '"><div class="grades-section"><div class="grades-list">' + gradesHtml + '</div><div class="add-grade-inline"><div class="quick-add"><input type="text" placeholder="+ Add grade" style="width:150px" id="addGrade_' + esc(divName) + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addGradeInline(\'' + esc(divName) + '\');event.preventDefault();}"><button class="quick-add-btn" onclick="CampistryMe.addGradeInline(\'' + esc(divName) + '\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div></div></div></div></div>';
+            return '<div class="division-block"><div class="division-header ' + (isExpanded ? '' : 'collapsed') + '" onclick="CampistryMe.toggleDivision(\'' + esc(divName) + '\')"><div class="division-left"><div class="division-color" style="background:' + (div.color || COLOR_PRESETS[0]) + '"></div><div class="division-info"><h3>' + esc(divName) + '</h3><div class="division-meta">' + gradeNames.length + ' grade' + (gradeNames.length !== 1 ? 's' : '') + ' · ' + camperCount + ' camper' + (camperCount !== 1 ? 's' : '') + '</div></div></div><div class="division-actions" onclick="event.stopPropagation()"><button class="icon-btn" onclick="CampistryMe.editDivision(\'' + esc(divName) + '\')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button><button class="icon-btn danger" onclick="CampistryMe.deleteDivision(\'' + esc(divName) + '\')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button><svg class="expand-icon ' + (isExpanded ? '' : 'collapsed') + '" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></div></div><div class="division-body ' + (isExpanded ? '' : 'collapsed') + '"><div class="grades-section"><div class="grades-list">' + gradesHtml + '</div><div class="add-grade-inline"><div class="quick-add"><input type="text" placeholder="+ Add grade" style="width:150px" id="addGrade_' + esc(divName) + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addGradeInline(\'' + esc(divName) + '\');event.preventDefault();}"><button class="quick-add-btn" onclick="CampistryMe.addGradeInline(\'' + esc(divName) + '\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div></div></div></div></div>';
         }).join('');
     }
 
@@ -274,8 +274,8 @@
         document.getElementById('divisionModalTitle').textContent = editName ? 'Edit Division' : 'Add Division';
         if (editName && structure[editName]) {
             document.getElementById('divisionName').value = editName;
-            document.getElementById('divisionColor').value = structure[editName].color || '#4F46E5';
-            updateColorPresetSelection(structure[editName].color);
+            document.getElementById('divisionColor').value = structure[editName].color || COLOR_PRESETS[0];
+            updateColorPresetSelection(structure[editName].color || COLOR_PRESETS[0]);
         } else {
             document.getElementById('divisionName').value = '';
             const nextColor = COLOR_PRESETS[Object.keys(structure).length % COLOR_PRESETS.length];
@@ -557,7 +557,20 @@
     function setupColorPresets() {
         const container = document.getElementById('colorPresets');
         if (!container) return;
-        container.innerHTML = COLOR_PRESETS.map(c => '<div class="color-preset" style="background:' + c + '" data-color="' + c + '" onclick="CampistryMe.selectColorPreset(\'' + c + '\')"></div>').join('');
+        container.innerHTML = '';
+        COLOR_PRESETS.forEach(c => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'color-preset';
+            btn.style.background = c;
+            btn.dataset.color = c;
+            btn.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                selectColorPreset(c);
+            };
+            container.appendChild(btn);
+        });
     }
 
     function selectColorPreset(color) { document.getElementById('divisionColor').value = color; updateColorPresetSelection(color); }
