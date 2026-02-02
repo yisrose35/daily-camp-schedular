@@ -93,9 +93,10 @@
     function migrateOldStructure(oldDivisions) {
         const newStructure = {};
         Object.entries(oldDivisions).forEach(([divName, divData]) => {
+            const bunks = (divData.bunks || []).map(b => typeof b === 'string' ? b : b.name);
             newStructure[divName] = {
                 color: divData.color || COLOR_PRESETS[Object.keys(newStructure).length % COLOR_PRESETS.length],
-                grades: { 'Default': { bunks: (divData.bunks || []).map(b => typeof b === 'string' ? b : b.name) } }
+                grades: bunks.length > 0 ? { 'Default': { bunks } } : {}
             };
         });
         return newStructure;
@@ -403,18 +404,18 @@
         currentEditCamper = name;
         const c = camperRoster[name];
         document.getElementById('camperModalTitle').textContent = 'Edit Camper';
-        document.getElementById('camperName').value = name;
-        const divSelect = document.getElementById('camperDivision');
+        document.getElementById('editCamperName').value = name;
+        const divSelect = document.getElementById('editCamperDivision');
         divSelect.innerHTML = '<option value="">—</option>' + Object.keys(structure).sort().map(d => '<option value="' + esc(d) + '"' + (d === c.division ? ' selected' : '') + '>' + esc(d) + '</option>').join('');
         updateEditGrades(c.division, c.grade);
         updateEditBunks(c.division, c.grade, c.bunk);
-        const teamSelect = document.getElementById('camperTeam');
+        const teamSelect = document.getElementById('editCamperTeam');
         teamSelect.innerHTML = '<option value="">—</option>' + leagueTeams.map(t => '<option value="' + esc(t) + '"' + (t === c.team ? ' selected' : '') + '>' + esc(t) + '</option>').join('');
         openModal('camperModal');
     }
 
     function updateEditGrades(divName, selectedGrade) {
-        const gradeSelect = document.getElementById('camperGrade');
+        const gradeSelect = document.getElementById('editCamperGrade');
         if (!gradeSelect) return;
         gradeSelect.innerHTML = '<option value="">—</option>';
         if (divName && structure[divName]) {
@@ -423,7 +424,7 @@
     }
 
     function updateEditBunks(divName, gradeName, selectedBunk) {
-        const bunkSelect = document.getElementById('camperBunk');
+        const bunkSelect = document.getElementById('editCamperBunk');
         if (!bunkSelect) return;
         bunkSelect.innerHTML = '<option value="">—</option>';
         if (divName && gradeName && structure[divName]?.grades?.[gradeName]) {
@@ -434,10 +435,10 @@
     function saveCamper() {
         if (!currentEditCamper || !camperRoster[currentEditCamper]) return;
         camperRoster[currentEditCamper] = {
-            division: document.getElementById('camperDivision')?.value || '',
-            grade: document.getElementById('camperGrade')?.value || '',
-            bunk: document.getElementById('camperBunk')?.value || '',
-            team: document.getElementById('camperTeam')?.value || ''
+            division: document.getElementById('editCamperDivision')?.value || '',
+            grade: document.getElementById('editCamperGrade')?.value || '',
+            bunk: document.getElementById('editCamperBunk')?.value || '',
+            team: document.getElementById('editCamperTeam')?.value || ''
         };
         saveData(); closeModal('camperModal'); renderCamperTable(); toast('Camper updated');
     }
@@ -576,9 +577,9 @@
         on('csvImportBtn', 'onclick', importCsv);
         on('searchInput', 'oninput', renderCamperTable);
         on('clearAllBtn', 'onclick', clearAllCampers);
-        on('saveCamperBtn', 'onclick', saveCamper);
-        on('camperDivision', 'onchange', e => { updateEditGrades(e.target.value, ''); updateEditBunks(e.target.value, '', ''); });
-        on('camperGrade', 'onchange', e => { updateEditBunks(document.getElementById('camperDivision')?.value, e.target.value, ''); });
+        on('saveEditCamperBtn', 'onclick', saveCamper);
+        on('editCamperDivision', 'onchange', e => { updateEditGrades(e.target.value, ''); updateEditBunks(e.target.value, '', ''); });
+        on('editCamperGrade', 'onchange', e => { updateEditBunks(document.getElementById('editCamperDivision')?.value, e.target.value, ''); });
 
         document.querySelectorAll('#camperTable th[data-sort]').forEach(th => {
             th.onclick = () => {
