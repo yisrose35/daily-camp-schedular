@@ -2790,9 +2790,8 @@ if (bypassStatus.highlight) {
         const divSlots = window.divisionTimes?.[divName] || [];
 
         modal.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div style="margin-bottom: 16px;">
                 <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">✏️ Edit Schedule</h2>
-                <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #6b7280;">&times;</button>
             </div>
             <div style="background: #f3f4f6; border-radius: 8px; padding: 12px; margin-bottom: 20px;">
                 <div style="font-size: 0.9rem; color: #6b7280;">Selected Cell</div>
