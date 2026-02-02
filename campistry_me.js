@@ -1,69 +1,45 @@
 // =============================================================================
-// campistry_me.js — Campistry Me Camper Management v1.0
+// campistry_me.js — Campistry Me Camper Management v2.0
 // =============================================================================
-//
-// Provides camper database management for Campistry platform.
-// Stores data in same format as Campistry Flow for seamless integration.
-//
-// Data Structure (compatible with app1.js camperRoster):
-// {
-//   "Camper Name": {
-//     division: "Division A",
-//     bunk: "Bunk 1",
-//     team: "Red Team",
-//     grade: "5"  // NEW field for Campistry Me
-//   }
-// }
-//
+// Professional camper, division, bunk, and grade management
+// Integrates with Campistry Flow data structures
 // =============================================================================
 
 (function() {
     'use strict';
 
-    console.log('👤 Campistry Me v1.0 loading...');
+    console.log('[Me] Campistry Me v2.0 loading...');
 
     // =========================================================================
     // STATE
     // =========================================================================
-
-    let camperRoster = {};       // Main camper data
-    let divisions = {};          // Division/bunk structure from Flow
-    let leagueTeams = [];        // Available league teams
-    let currentEditCamper = null; // For edit mode
+    let camperRoster = {};
+    let divisions = {};
+    let grades = [];
+    let leagueTeams = [];
+    let currentEditCamper = null;
+    let currentEditDivision = null;
+    let currentBunkDivision = null;
     let sortColumn = 'name';
     let sortDirection = 'asc';
-    let pendingCsvData = [];     // CSV import staging
+    let pendingCsvData = [];
 
     // =========================================================================
     // INITIALIZATION
     // =========================================================================
-
     async function init() {
-        console.log('👤 Initializing Campistry Me...');
-
-        // Check auth
         const authed = await checkAuth();
         if (!authed) return;
 
-        // Load data
         await loadAllData();
-
-        // Setup UI
         setupEventListeners();
-        renderCamperTable();
-        updateStats();
-        populateDropdowns();
+        setupTabs();
+        renderAll();
 
-        // Show main content
         document.getElementById('auth-loading-screen').style.display = 'none';
         document.getElementById('main-content').style.display = 'block';
-
-        console.log('👤 Campistry Me ready!');
+        console.log('[Me] Ready');
     }
-
-    // =========================================================================
-    // AUTHENTICATION
-    // =========================================================================
 
     async function checkAuth() {
         try {
@@ -72,26 +48,17 @@
                 await new Promise(r => setTimeout(r, 100));
                 attempts++;
             }
-
             if (!window.supabase) {
-                console.error('👤 Supabase not available');
                 window.location.href = 'landing.html';
                 return false;
             }
-
-            const { data: { session }, error } = await window.supabase.auth.getSession();
-
-            if (error || !session) {
-                console.log('👤 No session, redirecting to login');
+            const { data: { session } } = await window.supabase.auth.getSession();
+            if (!session) {
                 window.location.href = 'landing.html';
                 return false;
             }
-
-            console.log('👤 Authenticated as:', session.user.email);
             return true;
-
         } catch (e) {
-            console.error('👤 Auth check failed:', e);
             window.location.href = 'landing.html';
             return false;
         }
@@ -100,98 +67,60 @@
     // =========================================================================
     // DATA LOADING
     // =========================================================================
-
     async function loadAllData() {
-        // Wait for CampistryDB if available
-        if (window.CampistryDB?.ready) {
-            await window.CampistryDB.ready;
-        }
-
-        // Load global settings (contains camper roster, divisions, leagues)
+        if (window.CampistryDB?.ready) await window.CampistryDB.ready;
+        
         const global = loadGlobalSettings();
-
-        // Load camper roster
         camperRoster = global?.app1?.camperRoster || {};
-        console.log('👤 Loaded', Object.keys(camperRoster).length, 'campers');
-
-        // Load divisions/bunks structure
         divisions = global?.app1?.divisions || {};
-        console.log('👤 Loaded', Object.keys(divisions).length, 'divisions');
-
+        grades = global?.grades || [];
+        
         // Load league teams
-        loadLeagueTeams(global);
+        const teams = new Set();
+        const leagues = global?.leaguesByName || {};
+        Object.values(leagues).forEach(l => {
+            if (l.teams) l.teams.forEach(t => teams.add(t));
+        });
+        const specialtyLeagues = global?.specialtyLeagues || {};
+        Object.values(specialtyLeagues).forEach(l => {
+            if (l.teams) l.teams.forEach(t => teams.add(t));
+        });
+        leagueTeams = Array.from(teams).sort();
+        
+        console.log('[Me] Loaded:', Object.keys(camperRoster).length, 'campers,', Object.keys(divisions).length, 'divisions,', grades.length, 'grades');
     }
 
     function loadGlobalSettings() {
         try {
-            // Try cloud-synced data first
-            if (window.loadGlobalSettings) {
-                return window.loadGlobalSettings();
-            }
-            
-            // Fallback to localStorage
+            if (window.loadGlobalSettings) return window.loadGlobalSettings();
             const raw = localStorage.getItem('campistryGlobalSettings');
             return raw ? JSON.parse(raw) : {};
         } catch (e) {
-            console.error('👤 Failed to load global settings:', e);
             return {};
         }
-    }
-
-    function loadLeagueTeams(global) {
-        const teams = new Set();
-
-        // Regular leagues
-        const leagues = global?.leaguesByName || {};
-        Object.values(leagues).forEach(league => {
-            if (league.teams) {
-                league.teams.forEach(t => teams.add(t));
-            }
-        });
-
-        // Specialty leagues
-        const specialtyLeagues = global?.specialtyLeagues || {};
-        Object.values(specialtyLeagues).forEach(league => {
-            if (league.teams) {
-                league.teams.forEach(t => teams.add(t));
-            }
-        });
-
-        leagueTeams = Array.from(teams).sort();
-        console.log('👤 Loaded', leagueTeams.length, 'league teams');
     }
 
     // =========================================================================
     // DATA SAVING
     // =========================================================================
-
     function saveData() {
         try {
             setSyncStatus('syncing');
-
-            // Get current global settings
             const global = loadGlobalSettings();
-            
-            // Ensure app1 exists
             if (!global.app1) global.app1 = {};
-            
-            // Update camper roster
             global.app1.camperRoster = camperRoster;
+            global.app1.divisions = divisions;
+            global.grades = grades;
 
-            // Save using saveGlobalSettings if available (handles cloud sync)
             if (window.saveGlobalSettings) {
                 window.saveGlobalSettings('app1', global.app1);
+                window.saveGlobalSettings('grades', grades);
             } else {
-                // Fallback to localStorage
                 localStorage.setItem('campistryGlobalSettings', JSON.stringify(global));
             }
-
-            console.log('👤 Saved', Object.keys(camperRoster).length, 'campers');
-            
             setTimeout(() => setSyncStatus('synced'), 500);
-            
         } catch (e) {
-            console.error('👤 Save failed:', e);
+            console.error('[Me] Save failed:', e);
             setSyncStatus('error');
         }
     }
@@ -199,43 +128,54 @@
     function setSyncStatus(status) {
         const dot = document.getElementById('syncDot');
         const text = document.getElementById('syncText');
-        
         if (status === 'syncing') {
             dot.classList.add('syncing');
             text.textContent = 'Syncing...';
         } else if (status === 'synced') {
             dot.classList.remove('syncing');
-            dot.style.background = '#10b981';
+            dot.style.background = '#059669';
             text.textContent = 'Synced';
         } else {
             dot.classList.remove('syncing');
             dot.style.background = '#ef4444';
-            text.textContent = 'Sync error';
+            text.textContent = 'Error';
         }
     }
 
     // =========================================================================
-    // UI RENDERING
+    // RENDER ALL
     // =========================================================================
+    function renderAll() {
+        updateStats();
+        renderCamperTable();
+        renderDivisions();
+        renderGrades();
+        populateDropdowns();
+    }
 
+    function updateStats() {
+        document.getElementById('statCampers').textContent = Object.keys(camperRoster).length;
+        let bunkCount = 0;
+        Object.values(divisions).forEach(d => { bunkCount += (d.bunks || []).length; });
+        document.getElementById('statBunks').textContent = bunkCount;
+        document.getElementById('statDivisions').textContent = Object.keys(divisions).length;
+        document.getElementById('statGrades').textContent = grades.length;
+    }
+
+    // =========================================================================
+    // CAMPER TABLE
+    // =========================================================================
     function renderCamperTable() {
         const tbody = document.getElementById('camperTableBody');
-        const emptyState = document.getElementById('emptyState');
-        const searchInput = document.getElementById('searchInput');
-        const filter = searchInput.value.toLowerCase().trim();
+        const empty = document.getElementById('campersEmptyState');
+        const filter = document.getElementById('searchInput').value.toLowerCase().trim();
 
-        // Get campers as array
-        let campers = Object.entries(camperRoster).map(([name, data]) => ({
-            name,
-            grade: data.grade || '',
-            division: data.division || '',
-            bunk: data.bunk || '',
-            team: data.team || ''
+        let campers = Object.entries(camperRoster).map(([name, d]) => ({
+            name, grade: d.grade || '', division: d.division || '', bunk: d.bunk || '', team: d.team || ''
         }));
 
-        // Filter
         if (filter) {
-            campers = campers.filter(c => 
+            campers = campers.filter(c =>
                 c.name.toLowerCase().includes(filter) ||
                 c.grade.toLowerCase().includes(filter) ||
                 c.division.toLowerCase().includes(filter) ||
@@ -244,324 +184,398 @@
             );
         }
 
-        // Sort
         campers.sort((a, b) => {
-            let valA = a[sortColumn] || '';
-            let valB = b[sortColumn] || '';
-            
-            // Numeric sort for grade
+            let va = a[sortColumn] || '', vb = b[sortColumn] || '';
             if (sortColumn === 'grade') {
-                valA = gradeToNumber(valA);
-                valB = gradeToNumber(valB);
-                return sortDirection === 'asc' ? valA - valB : valB - valA;
+                va = gradeToNum(va); vb = gradeToNum(vb);
+                return sortDirection === 'asc' ? va - vb : vb - va;
             }
-            
-            // String sort for others
-            const cmp = valA.localeCompare(valB, undefined, { numeric: true });
+            const cmp = va.localeCompare(vb, undefined, { numeric: true });
             return sortDirection === 'asc' ? cmp : -cmp;
         });
 
-        // Update sort indicators
-        document.querySelectorAll('.me-table th[data-sort]').forEach(th => {
+        document.querySelectorAll('#camperTable th[data-sort]').forEach(th => {
             th.classList.remove('sorted-asc', 'sorted-desc');
-            if (th.dataset.sort === sortColumn) {
-                th.classList.add(sortDirection === 'asc' ? 'sorted-asc' : 'sorted-desc');
-            }
+            if (th.dataset.sort === sortColumn) th.classList.add(sortDirection === 'asc' ? 'sorted-asc' : 'sorted-desc');
         });
 
-        // Show/hide empty state
-        const totalCampers = Object.keys(camperRoster).length;
-        if (totalCampers === 0) {
+        const total = Object.keys(camperRoster).length;
+        if (total === 0) {
             tbody.innerHTML = '';
-            emptyState.style.display = 'block';
+            empty.style.display = 'block';
             document.getElementById('camperCount').textContent = '';
             return;
         }
-        
-        emptyState.style.display = 'none';
+        empty.style.display = 'none';
+        document.getElementById('camperCount').textContent = filter ? `${campers.length} of ${total}` : `${total} campers`;
 
-        // Update count
-        if (filter) {
-            document.getElementById('camperCount').textContent = 
-                `Showing ${campers.length} of ${totalCampers}`;
-        } else {
-            document.getElementById('camperCount').textContent = `${totalCampers} campers`;
-        }
+        let teamOpts = '<option value="">—</option>';
+        leagueTeams.forEach(t => { teamOpts += `<option value="${esc(t)}">${esc(t)}</option>`; });
 
-        // Build team options
-        let teamOptions = '<option value="">—</option>';
-        leagueTeams.forEach(t => {
-            teamOptions += `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`;
-        });
-
-        // Build rows
-        const fragment = document.createDocumentFragment();
-        
-        campers.forEach(camper => {
-            const row = document.createElement('tr');
-            
-            // Team options with current selection
-            let currentTeamOptions = teamOptions;
-            if (camper.team) {
-                currentTeamOptions = currentTeamOptions.replace(
-                    `value="${escapeHtml(camper.team)}"`,
-                    `value="${escapeHtml(camper.team)}" selected`
-                );
-            }
-
-            row.innerHTML = `
-                <td>
-                    <strong style="cursor: pointer; color: #d97706;" 
-                            onclick="window.CampistryMe.editCamper('${escapeHtml(camper.name)}')"
-                            title="Click to edit">
-                        ${escapeHtml(camper.name)}
-                    </strong>
-                </td>
-                <td>${escapeHtml(camper.grade) || '—'}</td>
-                <td>${escapeHtml(camper.division) || '—'}</td>
-                <td>${escapeHtml(camper.bunk) || '—'}</td>
-                <td>
-                    <select class="team-selector" data-name="${escapeHtml(camper.name)}">
-                        ${currentTeamOptions}
-                    </select>
-                </td>
-                <td>
-                    <button class="me-delete-btn" 
-                            onclick="window.CampistryMe.deleteCamper('${escapeHtml(camper.name)}')"
-                            title="Delete camper">
-                        🗑️
-                    </button>
-                </td>
+        const frag = document.createDocumentFragment();
+        campers.forEach(c => {
+            const tr = document.createElement('tr');
+            let opts = teamOpts;
+            if (c.team) opts = opts.replace(`value="${esc(c.team)}"`, `value="${esc(c.team)}" selected`);
+            tr.innerHTML = `
+                <td><span class="clickable" onclick="CampistryMe.editCamper('${esc(c.name)}')">${esc(c.name)}</span></td>
+                <td>${esc(c.grade) || '—'}</td>
+                <td>${esc(c.division) || '—'}</td>
+                <td>${esc(c.bunk) || '—'}</td>
+                <td><select class="team-sel" data-name="${esc(c.name)}">${opts}</select></td>
+                <td><button class="icon-btn danger" onclick="CampistryMe.deleteCamper('${esc(c.name)}')" title="Delete"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></td>
             `;
-            
-            fragment.appendChild(row);
+            frag.appendChild(tr);
         });
-
         tbody.innerHTML = '';
-        tbody.appendChild(fragment);
+        tbody.appendChild(frag);
 
-        // Attach team change listeners
-        tbody.querySelectorAll('.team-selector').forEach(select => {
-            select.addEventListener('change', (e) => {
+        tbody.querySelectorAll('.team-sel').forEach(sel => {
+            sel.onchange = e => {
                 const name = e.target.dataset.name;
-                const newTeam = e.target.value;
                 if (camperRoster[name]) {
-                    camperRoster[name].team = newTeam;
+                    camperRoster[name].team = e.target.value;
                     saveData();
-                    updateStats();
-                    showToast('Team updated', 'success');
+                    toast('Team updated');
                 }
-            });
+            };
         });
     }
 
-    function updateStats() {
-        const total = Object.keys(camperRoster).length;
-        const bunks = new Set(Object.values(camperRoster).map(c => c.bunk).filter(Boolean));
-        const withTeams = Object.values(camperRoster).filter(c => c.team).length;
+    // =========================================================================
+    // DIVISIONS
+    // =========================================================================
+    function renderDivisions() {
+        const grid = document.getElementById('divisionsGrid');
+        const empty = document.getElementById('divisionsEmptyState');
+        const divNames = Object.keys(divisions).sort();
 
-        document.getElementById('statTotalCampers').textContent = total;
-        document.getElementById('statTotalBunks').textContent = bunks.size;
-        document.getElementById('statWithTeams').textContent = withTeams;
+        if (divNames.length === 0) {
+            grid.innerHTML = '';
+            empty.style.display = 'block';
+            return;
+        }
+        empty.style.display = 'none';
+
+        grid.innerHTML = divNames.map(name => {
+            const div = divisions[name];
+            const bunks = div.bunks || [];
+            const bunkHtml = bunks.length ? bunks.map(b => {
+                const bName = typeof b === 'string' ? b : b.name;
+                const count = Object.values(camperRoster).filter(c => c.bunk === bName).length;
+                return `<li class="bunk-item"><span class="bunk-name">${esc(bName)}</span><span class="bunk-count">${count} campers</span><button class="icon-btn danger" onclick="CampistryMe.deleteBunk('${esc(name)}','${esc(bName)}')" title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></li>`;
+            }).join('') : '<li class="bunk-item" style="color:var(--slate-400);font-size:0.85rem;">No bunks yet</li>';
+
+            return `
+                <div class="division-card">
+                    <div class="division-header">
+                        <span class="division-name">${esc(name)}</span>
+                        <div class="division-actions">
+                            <button class="icon-btn" onclick="CampistryMe.editDivision('${esc(name)}')" title="Edit"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+                            <button class="icon-btn danger" onclick="CampistryMe.deleteDivision('${esc(name)}')" title="Delete"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                        </div>
+                    </div>
+                    <div class="division-body">
+                        <ul class="bunk-list">${bunkHtml}</ul>
+                        <button class="add-bunk-btn" onclick="CampistryMe.openBunkModal('${esc(name)}')">+ Add Bunk</button>
+                    </div>
+                </div>
+            `;
+        }).join('');
     }
 
+    // =========================================================================
+    // GRADES
+    // =========================================================================
+    function renderGrades() {
+        const grid = document.getElementById('gradesGrid');
+        const empty = document.getElementById('gradesEmptyState');
+
+        if (grades.length === 0) {
+            grid.innerHTML = '';
+            empty.style.display = 'block';
+            return;
+        }
+        empty.style.display = 'none';
+
+        grid.innerHTML = grades.map(g => `
+            <div class="grade-chip">
+                <span class="grade-chip-name">${esc(g)}</span>
+                <button class="icon-btn danger" onclick="CampistryMe.deleteGrade('${esc(g)}')" title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            </div>
+        `).join('');
+    }
+
+    function addDefaultGrades() {
+        const defaults = ['K', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th', '10th', '11th', '12th', 'Staff'];
+        let added = 0;
+        defaults.forEach(g => {
+            if (!grades.includes(g)) { grades.push(g); added++; }
+        });
+        if (added) {
+            saveData();
+            renderGrades();
+            populateDropdowns();
+            updateStats();
+            toast(`Added ${added} grades`);
+        } else {
+            toast('Default grades already exist', 'error');
+        }
+    }
+
+    // =========================================================================
+    // DROPDOWNS
+    // =========================================================================
     function populateDropdowns() {
-        // Populate division dropdown
-        const divisionSelect = document.getElementById('camperDivision');
-        divisionSelect.innerHTML = '<option value="">Select division...</option>';
-        
-        Object.keys(divisions).sort().forEach(divName => {
-            const opt = document.createElement('option');
-            opt.value = divName;
-            opt.textContent = divName;
-            divisionSelect.appendChild(opt);
+        // Grades
+        const gradeSelect = document.getElementById('camperGrade');
+        gradeSelect.innerHTML = '<option value="">Select grade...</option>';
+        grades.forEach(g => {
+            gradeSelect.innerHTML += `<option value="${esc(g)}">${esc(g)}</option>`;
         });
 
-        // Populate team dropdown
+        // Divisions
+        const divSelect = document.getElementById('camperDivision');
+        divSelect.innerHTML = '<option value="">Select division...</option>';
+        Object.keys(divisions).sort().forEach(d => {
+            divSelect.innerHTML += `<option value="${esc(d)}">${esc(d)}</option>`;
+        });
+
+        // Teams
         const teamSelect = document.getElementById('camperTeam');
         teamSelect.innerHTML = '<option value="">Select team...</option>';
-        
-        leagueTeams.forEach(team => {
-            const opt = document.createElement('option');
-            opt.value = team;
-            opt.textContent = team;
-            teamSelect.appendChild(opt);
+        leagueTeams.forEach(t => {
+            teamSelect.innerHTML += `<option value="${esc(t)}">${esc(t)}</option>`;
         });
     }
 
-    function populateBunksForDivision(divisionName) {
+    function populateBunksFor(divName) {
         const bunkSelect = document.getElementById('camperBunk');
         bunkSelect.innerHTML = '<option value="">Select bunk...</option>';
-
-        if (!divisionName || !divisions[divisionName]) return;
-
-        const bunks = divisions[divisionName].bunks || [];
-        bunks.forEach(bunk => {
-            const bunkName = typeof bunk === 'string' ? bunk : bunk.name;
-            const opt = document.createElement('option');
-            opt.value = bunkName;
-            opt.textContent = bunkName;
-            bunkSelect.appendChild(opt);
+        if (!divName || !divisions[divName]) return;
+        (divisions[divName].bunks || []).forEach(b => {
+            const name = typeof b === 'string' ? b : b.name;
+            bunkSelect.innerHTML += `<option value="${esc(name)}">${esc(name)}</option>`;
         });
     }
 
     // =========================================================================
-    // CAMPER CRUD OPERATIONS
+    // CAMPER CRUD
     // =========================================================================
+    function openCamperModal(editName = null) {
+        currentEditCamper = editName;
+        document.getElementById('camperModalTitle').textContent = editName ? 'Edit Camper' : 'Add Camper';
+        document.getElementById('camperName').disabled = !!editName;
 
-    function openAddModal() {
-        currentEditCamper = null;
-        document.getElementById('modalTitle').textContent = 'Add Camper';
-        document.getElementById('camperName').value = '';
-        document.getElementById('camperGrade').value = '';
-        document.getElementById('camperDivision').value = '';
-        document.getElementById('camperBunk').innerHTML = '<option value="">Select bunk...</option>';
-        document.getElementById('camperTeam').value = '';
-        document.getElementById('camperName').disabled = false;
-        
-        document.getElementById('camperModal').classList.add('active');
-        document.getElementById('camperName').focus();
-    }
-
-    function editCamper(name) {
-        if (!camperRoster[name]) return;
-
-        currentEditCamper = name;
-        const data = camperRoster[name];
-
-        document.getElementById('modalTitle').textContent = 'Edit Camper';
-        document.getElementById('camperName').value = name;
-        document.getElementById('camperName').disabled = true; // Don't allow name change
-        document.getElementById('camperGrade').value = data.grade || '';
-        document.getElementById('camperDivision').value = data.division || '';
-        
-        // Populate bunks and select current
-        populateBunksForDivision(data.division);
-        document.getElementById('camperBunk').value = data.bunk || '';
-        
-        document.getElementById('camperTeam').value = data.team || '';
-
-        document.getElementById('camperModal').classList.add('active');
+        if (editName && camperRoster[editName]) {
+            const c = camperRoster[editName];
+            document.getElementById('camperName').value = editName;
+            document.getElementById('camperGrade').value = c.grade || '';
+            document.getElementById('camperDivision').value = c.division || '';
+            populateBunksFor(c.division);
+            document.getElementById('camperBunk').value = c.bunk || '';
+            document.getElementById('camperTeam').value = c.team || '';
+        } else {
+            document.getElementById('camperName').value = '';
+            document.getElementById('camperGrade').value = '';
+            document.getElementById('camperDivision').value = '';
+            document.getElementById('camperBunk').innerHTML = '<option value="">Select bunk...</option>';
+            document.getElementById('camperTeam').value = '';
+        }
+        openModal('camperModal');
+        if (!editName) document.getElementById('camperName').focus();
     }
 
     function saveCamper() {
         const name = document.getElementById('camperName').value.trim();
-        const grade = document.getElementById('camperGrade').value;
-        const division = document.getElementById('camperDivision').value;
-        const bunk = document.getElementById('camperBunk').value;
-        const team = document.getElementById('camperTeam').value;
-
-        if (!name) {
-            showToast('Please enter a name', 'error');
-            return;
-        }
-
-        // Check for duplicate names (only when adding new)
-        if (!currentEditCamper && camperRoster[name]) {
-            showToast('A camper with this name already exists', 'error');
-            return;
-        }
+        if (!name) { toast('Please enter a name', 'error'); return; }
+        if (!currentEditCamper && camperRoster[name]) { toast('Camper already exists', 'error'); return; }
 
         camperRoster[name] = {
-            division,
-            bunk,
-            team,
-            grade
+            division: document.getElementById('camperDivision').value,
+            bunk: document.getElementById('camperBunk').value,
+            team: document.getElementById('camperTeam').value,
+            grade: document.getElementById('camperGrade').value
         };
-
         saveData();
-        closeModal();
+        closeModal('camperModal');
         renderCamperTable();
         updateStats();
-        showToast(currentEditCamper ? 'Camper updated' : 'Camper added', 'success');
+        toast(currentEditCamper ? 'Camper updated' : 'Camper added');
     }
 
     function deleteCamper(name) {
-        if (!confirm(`Delete "${name}" from the camper database?`)) return;
-
+        if (!confirm(`Delete "${name}"?`)) return;
         delete camperRoster[name];
         saveData();
         renderCamperTable();
         updateStats();
-        showToast('Camper deleted', 'success');
+        toast('Camper deleted');
     }
 
     function clearAllCampers() {
         const count = Object.keys(camperRoster).length;
-        if (!confirm(`Are you sure you want to delete ALL ${count} campers? This cannot be undone.`)) return;
-
+        if (!count) { toast('No campers to clear', 'error'); return; }
+        if (!confirm(`Delete all ${count} campers?`)) return;
         camperRoster = {};
         saveData();
         renderCamperTable();
         updateStats();
-        showToast('All campers cleared', 'success');
+        toast('All campers cleared');
     }
 
-    function closeModal() {
-        document.getElementById('camperModal').classList.remove('active');
-        currentEditCamper = null;
+    // =========================================================================
+    // DIVISION CRUD
+    // =========================================================================
+    function openDivisionModal(editName = null) {
+        currentEditDivision = editName;
+        document.getElementById('divisionModalTitle').textContent = editName ? 'Edit Division' : 'Add Division';
+        document.getElementById('divisionName').value = editName || '';
+        openModal('divisionModal');
+        document.getElementById('divisionName').focus();
+    }
+
+    function saveDivision() {
+        const name = document.getElementById('divisionName').value.trim();
+        if (!name) { toast('Please enter a name', 'error'); return; }
+
+        if (currentEditDivision && currentEditDivision !== name) {
+            // Rename
+            divisions[name] = divisions[currentEditDivision];
+            delete divisions[currentEditDivision];
+            // Update campers
+            Object.values(camperRoster).forEach(c => {
+                if (c.division === currentEditDivision) c.division = name;
+            });
+        } else if (!currentEditDivision) {
+            if (divisions[name]) { toast('Division already exists', 'error'); return; }
+            divisions[name] = { bunks: [] };
+        }
+
+        saveData();
+        closeModal('divisionModal');
+        renderAll();
+        toast(currentEditDivision ? 'Division updated' : 'Division added');
+    }
+
+    function deleteDivision(name) {
+        const bunks = (divisions[name]?.bunks || []).length;
+        if (!confirm(`Delete "${name}"${bunks ? ` and its ${bunks} bunks` : ''}?`)) return;
+        delete divisions[name];
+        // Clear division/bunk from campers
+        Object.values(camperRoster).forEach(c => {
+            if (c.division === name) { c.division = ''; c.bunk = ''; }
+        });
+        saveData();
+        renderAll();
+        toast('Division deleted');
+    }
+
+    // =========================================================================
+    // BUNK CRUD
+    // =========================================================================
+    function openBunkModal(divName) {
+        currentBunkDivision = divName;
+        document.getElementById('bunkDivisionDisplay').value = divName;
+        document.getElementById('bunkName').value = '';
+        openModal('bunkModal');
+        document.getElementById('bunkName').focus();
+    }
+
+    function saveBunk() {
+        const name = document.getElementById('bunkName').value.trim();
+        if (!name) { toast('Please enter a name', 'error'); return; }
+        if (!currentBunkDivision || !divisions[currentBunkDivision]) { toast('Invalid division', 'error'); return; }
+
+        if (!divisions[currentBunkDivision].bunks) divisions[currentBunkDivision].bunks = [];
+        const exists = divisions[currentBunkDivision].bunks.some(b => (typeof b === 'string' ? b : b.name) === name);
+        if (exists) { toast('Bunk already exists', 'error'); return; }
+
+        divisions[currentBunkDivision].bunks.push(name);
+        saveData();
+        closeModal('bunkModal');
+        renderAll();
+        toast('Bunk added');
+    }
+
+    function deleteBunk(divName, bunkName) {
+        if (!confirm(`Delete bunk "${bunkName}"?`)) return;
+        if (!divisions[divName]) return;
+        divisions[divName].bunks = (divisions[divName].bunks || []).filter(b => (typeof b === 'string' ? b : b.name) !== bunkName);
+        // Clear from campers
+        Object.values(camperRoster).forEach(c => {
+            if (c.bunk === bunkName) c.bunk = '';
+        });
+        saveData();
+        renderAll();
+        toast('Bunk deleted');
+    }
+
+    // =========================================================================
+    // GRADE CRUD
+    // =========================================================================
+    function openGradeModal() {
+        document.getElementById('gradeName').value = '';
+        openModal('gradeModal');
+        document.getElementById('gradeName').focus();
+    }
+
+    function saveGrade() {
+        const name = document.getElementById('gradeName').value.trim();
+        if (!name) { toast('Please enter a name', 'error'); return; }
+        if (grades.includes(name)) { toast('Grade already exists', 'error'); return; }
+        grades.push(name);
+        saveData();
+        closeModal('gradeModal');
+        renderGrades();
+        populateDropdowns();
+        updateStats();
+        toast('Grade added');
+    }
+
+    function deleteGrade(name) {
+        if (!confirm(`Delete grade "${name}"?`)) return;
+        grades = grades.filter(g => g !== name);
+        saveData();
+        renderGrades();
+        populateDropdowns();
+        updateStats();
+        toast('Grade deleted');
     }
 
     // =========================================================================
     // CSV IMPORT/EXPORT
     // =========================================================================
-
     function openCsvModal() {
         pendingCsvData = [];
         document.getElementById('csvPreview').style.display = 'none';
-        document.getElementById('csvImport').disabled = true;
-        document.getElementById('csvModal').classList.add('active');
-    }
-
-    function closeCsvModal() {
-        document.getElementById('csvModal').classList.remove('active');
-        pendingCsvData = [];
+        document.getElementById('csvImportBtn').disabled = true;
+        openModal('csvModal');
     }
 
     function handleCsvFile(file) {
         if (!file) return;
-
         const reader = new FileReader();
-        reader.onload = (e) => {
-            try {
-                const text = e.target.result;
-                parseCsvData(text);
-            } catch (err) {
-                showToast('Failed to read CSV file', 'error');
-                console.error('CSV read error:', err);
-            }
+        reader.onload = e => {
+            try { parseCsv(e.target.result); }
+            catch (err) { toast('Failed to read CSV', 'error'); }
         };
         reader.readAsText(file);
     }
 
-    function parseCsvData(text) {
-        const lines = text.split(/\r?\n/).filter(line => line.trim());
-        
-        if (lines.length === 0) {
-            showToast('CSV file is empty', 'error');
-            return;
-        }
+    function parseCsv(text) {
+        const lines = text.split(/\r?\n/).filter(l => l.trim());
+        if (!lines.length) { toast('CSV is empty', 'error'); return; }
 
-        // Detect if first row is header
-        const firstLine = lines[0].toLowerCase();
-        const hasHeader = firstLine.includes('name') || 
-                         firstLine.includes('grade') || 
-                         firstLine.includes('division') ||
-                         firstLine.includes('bunk');
-
-        const startIndex = hasHeader ? 1 : 0;
+        const first = lines[0].toLowerCase();
+        const hasHeader = first.includes('name') || first.includes('grade') || first.includes('division');
+        const start = hasHeader ? 1 : 0;
         pendingCsvData = [];
 
-        for (let i = startIndex; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line) continue;
-
-            // Parse CSV line (handle quoted values)
-            const cols = parseCSVLine(line);
-
+        for (let i = start; i < lines.length; i++) {
+            const cols = parseCsvLine(lines[i]);
             const name = (cols[0] || '').trim();
             if (!name) continue;
-
             pendingCsvData.push({
                 name,
                 grade: (cols[1] || '').trim(),
@@ -571,286 +585,182 @@
             });
         }
 
-        // Show preview
-        if (pendingCsvData.length > 0) {
+        if (pendingCsvData.length) {
             renderCsvPreview();
             document.getElementById('csvPreview').style.display = 'block';
-            document.getElementById('csvImport').disabled = false;
+            document.getElementById('csvImportBtn').disabled = false;
             document.getElementById('csvPreviewCount').textContent = pendingCsvData.length;
         } else {
-            showToast('No valid camper data found in CSV', 'error');
+            toast('No valid data found', 'error');
         }
     }
 
-    function parseCSVLine(line) {
+    function parseCsvLine(line) {
         const result = [];
-        let current = '';
-        let inQuotes = false;
-
-        for (let i = 0; i < line.length; i++) {
-            const char = line[i];
-            
-            if (char === '"') {
-                inQuotes = !inQuotes;
-            } else if (char === ',' && !inQuotes) {
-                result.push(current);
-                current = '';
-            } else {
-                current += char;
-            }
+        let current = '', inQuotes = false;
+        for (const char of line) {
+            if (char === '"') inQuotes = !inQuotes;
+            else if (char === ',' && !inQuotes) { result.push(current); current = ''; }
+            else current += char;
         }
         result.push(current);
-        
         return result;
     }
 
     function renderCsvPreview() {
         const tbody = document.getElementById('csvPreviewBody');
-        tbody.innerHTML = '';
-
-        // Show first 10 rows
-        const preview = pendingCsvData.slice(0, 10);
-        
-        preview.forEach(row => {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-                <td>${escapeHtml(row.name)}</td>
-                <td>${escapeHtml(row.grade) || '—'}</td>
-                <td>${escapeHtml(row.division) || '—'}</td>
-                <td>${escapeHtml(row.bunk) || '—'}</td>
-                <td>${escapeHtml(row.team) || '—'}</td>
-            `;
-            tbody.appendChild(tr);
-        });
-
+        tbody.innerHTML = pendingCsvData.slice(0, 10).map(r => `
+            <tr><td>${esc(r.name)}</td><td>${esc(r.grade) || '—'}</td><td>${esc(r.division) || '—'}</td><td>${esc(r.bunk) || '—'}</td><td>${esc(r.team) || '—'}</td></tr>
+        `).join('');
         if (pendingCsvData.length > 10) {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `<td colspan="5" style="text-align: center; color: #6b7280;">
-                ...and ${pendingCsvData.length - 10} more
-            </td>`;
-            tbody.appendChild(tr);
+            tbody.innerHTML += `<tr><td colspan="5" style="text-align:center;color:var(--slate-400);">...and ${pendingCsvData.length - 10} more</td></tr>`;
         }
     }
 
-    function importCsvData() {
-        if (pendingCsvData.length === 0) return;
-
-        let added = 0;
-        let updated = 0;
-
-        pendingCsvData.forEach(row => {
-            if (camperRoster[row.name]) {
-                updated++;
-            } else {
-                added++;
-            }
-
-            camperRoster[row.name] = {
-                division: row.division,
-                bunk: row.bunk,
-                team: row.team,
-                grade: row.grade
-            };
+    function importCsv() {
+        if (!pendingCsvData.length) return;
+        let added = 0, updated = 0;
+        pendingCsvData.forEach(r => {
+            if (camperRoster[r.name]) updated++; else added++;
+            camperRoster[r.name] = { division: r.division, bunk: r.bunk, team: r.team, grade: r.grade };
         });
-
         saveData();
-        closeCsvModal();
-        renderCamperTable();
-        updateStats();
-        populateDropdowns();
-
-        showToast(`Imported ${added} new, ${updated} updated`, 'success');
+        closeModal('csvModal');
+        renderAll();
+        toast(`Imported ${added} new, ${updated} updated`);
     }
 
     function exportCsv() {
-        const campers = Object.entries(camperRoster);
-        
-        if (campers.length === 0) {
-            showToast('No campers to export', 'error');
-            return;
-        }
-
-        // Build CSV
+        const entries = Object.entries(camperRoster);
+        if (!entries.length) { toast('No campers to export', 'error'); return; }
         let csv = 'Name,Grade,Division,Bunk,Team\n';
-        
-        campers.forEach(([name, data]) => {
-            const row = [
-                `"${name}"`,
-                `"${data.grade || ''}"`,
-                `"${data.division || ''}"`,
-                `"${data.bunk || ''}"`,
-                `"${data.team || ''}"`
-            ];
-            csv += row.join(',') + '\n';
+        entries.forEach(([name, d]) => {
+            csv += `"${name}","${d.grade || ''}","${d.division || ''}","${d.bunk || ''}","${d.team || ''}"\n`;
         });
-
-        // Download
         const blob = new Blob([csv], { type: 'text/csv' });
-        const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url;
-        a.download = `campistry_campers_${new Date().toISOString().split('T')[0]}.csv`;
+        a.href = URL.createObjectURL(blob);
+        a.download = `campers_${new Date().toISOString().split('T')[0]}.csv`;
         a.click();
-        URL.revokeObjectURL(url);
+        toast(`Exported ${entries.length} campers`);
+    }
 
-        showToast(`Exported ${campers.length} campers`, 'success');
+    // =========================================================================
+    // TABS
+    // =========================================================================
+    function setupTabs() {
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.onclick = () => {
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                btn.classList.add('active');
+                document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+            };
+        });
+    }
+
+    // =========================================================================
+    // MODAL HELPERS
+    // =========================================================================
+    function openModal(id) {
+        document.getElementById(id).classList.add('active');
+    }
+
+    function closeModal(id) {
+        document.getElementById(id).classList.remove('active');
     }
 
     // =========================================================================
     // EVENT LISTENERS
     // =========================================================================
-
     function setupEventListeners() {
-        // Add camper button
-        document.getElementById('addCamperBtn').addEventListener('click', openAddModal);
+        document.getElementById('addCamperBtn').onclick = () => openCamperModal();
+        document.getElementById('saveCamperBtn').onclick = saveCamper;
+        document.getElementById('camperDivision').onchange = e => populateBunksFor(e.target.value);
+        document.getElementById('searchInput').oninput = renderCamperTable;
+        document.getElementById('clearAllBtn').onclick = clearAllCampers;
 
-        // Modal controls
-        document.getElementById('modalClose').addEventListener('click', closeModal);
-        document.getElementById('modalCancel').addEventListener('click', closeModal);
-        document.getElementById('modalSave').addEventListener('click', saveCamper);
-
-        // Division change - update bunks
-        document.getElementById('camperDivision').addEventListener('change', (e) => {
-            populateBunksForDivision(e.target.value);
-        });
-
-        // Search
-        document.getElementById('searchInput').addEventListener('input', () => {
-            renderCamperTable();
-        });
-
-        // Sort
-        document.querySelectorAll('.me-table th[data-sort]').forEach(th => {
-            th.addEventListener('click', () => {
+        document.querySelectorAll('#camperTable th[data-sort]').forEach(th => {
+            th.onclick = () => {
                 const col = th.dataset.sort;
-                if (sortColumn === col) {
-                    sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
-                } else {
-                    sortColumn = col;
-                    sortDirection = 'asc';
-                }
+                if (sortColumn === col) sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+                else { sortColumn = col; sortDirection = 'asc'; }
                 renderCamperTable();
-            });
+            };
         });
 
-        // Clear all
-        document.getElementById('clearAllBtn').addEventListener('click', clearAllCampers);
+        document.getElementById('importCsvBtn').onclick = openCsvModal;
+        document.getElementById('exportCsvBtn').onclick = exportCsv;
+        document.getElementById('csvImportBtn').onclick = importCsv;
 
-        // CSV import
-        document.getElementById('importCsvBtn').addEventListener('click', openCsvModal);
-        document.getElementById('csvModalClose').addEventListener('click', closeCsvModal);
-        document.getElementById('csvCancel').addEventListener('click', closeCsvModal);
-        document.getElementById('csvImport').addEventListener('click', importCsvData);
-
-        // CSV dropzone
         const dropzone = document.getElementById('csvDropzone');
         const fileInput = document.getElementById('csvFileInput');
+        dropzone.onclick = () => fileInput.click();
+        dropzone.ondragover = e => { e.preventDefault(); dropzone.classList.add('dragover'); };
+        dropzone.ondragleave = () => dropzone.classList.remove('dragover');
+        dropzone.ondrop = e => { e.preventDefault(); dropzone.classList.remove('dragover'); handleCsvFile(e.dataTransfer.files[0]); };
+        fileInput.onchange = e => handleCsvFile(e.target.files[0]);
 
-        dropzone.addEventListener('click', () => fileInput.click());
-        
-        dropzone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            dropzone.classList.add('dragover');
-        });
-        
-        dropzone.addEventListener('dragleave', () => {
-            dropzone.classList.remove('dragover');
-        });
-        
-        dropzone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            dropzone.classList.remove('dragover');
-            const file = e.dataTransfer.files[0];
-            if (file) handleCsvFile(file);
-        });
+        document.getElementById('addDivisionBtn').onclick = () => openDivisionModal();
+        document.getElementById('saveDivisionBtn').onclick = saveDivision;
 
-        fileInput.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (file) handleCsvFile(file);
-        });
+        document.getElementById('saveBunkBtn').onclick = saveBunk;
 
-        // CSV export
-        document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
+        document.getElementById('addGradeBtn').onclick = openGradeModal;
+        document.getElementById('addDefaultGradesBtn').onclick = addDefaultGrades;
+        document.getElementById('saveGradeBtn').onclick = saveGrade;
 
         // Close modals on overlay click
-        document.getElementById('camperModal').addEventListener('click', (e) => {
-            if (e.target.id === 'camperModal') closeModal();
-        });
-        
-        document.getElementById('csvModal').addEventListener('click', (e) => {
-            if (e.target.id === 'csvModal') closeCsvModal();
+        document.querySelectorAll('.modal-overlay').forEach(overlay => {
+            overlay.onclick = e => { if (e.target === overlay) closeModal(overlay.id); };
         });
 
-        // Enter key in modal
-        document.getElementById('camperName').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') saveCamper();
-        });
+        // Enter key support
+        document.getElementById('camperName').onkeypress = e => { if (e.key === 'Enter') saveCamper(); };
+        document.getElementById('divisionName').onkeypress = e => { if (e.key === 'Enter') saveDivision(); };
+        document.getElementById('bunkName').onkeypress = e => { if (e.key === 'Enter') saveBunk(); };
+        document.getElementById('gradeName').onkeypress = e => { if (e.key === 'Enter') saveGrade(); };
     }
 
     // =========================================================================
     // UTILITIES
     // =========================================================================
-
-    function escapeHtml(str) {
-        if (!str) return '';
-        return String(str)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
+    function esc(s) {
+        if (!s) return '';
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
     }
 
-    function gradeToNumber(grade) {
-        if (!grade) return 99;
-        if (grade === 'K') return 0;
-        if (grade === 'Staff') return 100;
-        const num = parseInt(grade);
-        return isNaN(num) ? 99 : num;
+    function gradeToNum(g) {
+        if (!g) return 99;
+        if (g === 'K') return 0;
+        if (g === 'Staff') return 100;
+        const n = parseInt(g);
+        return isNaN(n) ? 99 : n;
     }
 
-    function showToast(message, type = 'success') {
-        const toast = document.getElementById('toast');
-        const icon = document.getElementById('toastIcon');
-        const text = document.getElementById('toastMessage');
-
-        icon.textContent = type === 'success' ? '✓' : '✕';
-        text.textContent = message;
-        
-        toast.className = 'me-toast ' + type;
-        toast.classList.add('show');
-
-        setTimeout(() => {
-            toast.classList.remove('show');
-        }, 3000);
+    function toast(msg, type = 'success') {
+        const t = document.getElementById('toast');
+        document.getElementById('toastMessage').textContent = msg;
+        t.className = 'toast ' + type + ' show';
+        setTimeout(() => t.classList.remove('show'), 3000);
     }
 
     // =========================================================================
     // PUBLIC API
     // =========================================================================
-
     window.CampistryMe = {
-        editCamper,
+        editCamper: openCamperModal,
         deleteCamper,
-        getCamperRoster: () => camperRoster,
-        getDivisions: () => divisions,
-        getLeagueTeams: () => leagueTeams,
-        refresh: async () => {
-            await loadAllData();
-            renderCamperTable();
-            updateStats();
-            populateDropdowns();
-        }
+        editDivision: openDivisionModal,
+        deleteDivision,
+        openBunkModal,
+        deleteBunk,
+        deleteGrade,
+        closeModal
     };
 
-    // =========================================================================
-    // BOOT
-    // =========================================================================
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
-    } else {
-        setTimeout(init, 100);
-    }
+    // Boot
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+    else setTimeout(init, 100);
 
 })();
