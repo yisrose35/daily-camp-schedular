@@ -1,5 +1,5 @@
 // ============================================================================
-// total_solver_engine.js (ENHANCED v9.7 - CROSS-DIVISION CONFLICT DETECTION)
+// total_solver_engine.js (ENHANCED v9.8 - CROSS-DIVISION CONFLICT FIX)
 // Backtracking Constraint Solver + League Engine
 // ----------------------------------------------------------------------------
 // ★★★ NOW DELEGATES ALL ROTATION LOGIC TO rotation_engine.js ★★★
@@ -17,13 +17,12 @@
 // - League game handling
 // - Penalty cost calculation (delegates rotation to RotationEngine)
 //
-// KEY FIXES IN v9.7:
-// - ★★★ CROSS-DIVISION CONFLICT DETECTION ★★★
-//   - If sharableWith.type !== 'all', only ONE division can use resource at a time
-//   - Cross-division sharing blocked even if capacity is high (e.g., 99)
-//   - Same-division bunks can share up to capacity limit
-// - Tracks which divisions are using each resource
-// - Separate same-division capacity check vs cross-division exclusivity
+// KEY FIXES IN v9.8:
+// - ★★★ FIXED CROSS-DIVISION CONFLICT DETECTION ★★★
+//   - Division name ALWAYS resolved (from block OR bunk lookup)
+//   - Time range ALWAYS calculated - never skipped
+//   - Cross-division checks use TIME OVERLAP, not slot indices
+//   - Slot-based check now also does time-overlap for other divisions
 // ============================================================================
 
 (function () {
@@ -274,11 +273,11 @@
     }
 
     // ============================================================================
-    // ★★★ v9.2: CROSS-DIVISION TIME-BASED FIELD USAGE COUNTER ★★★
+    // ★★★ v9.8: CROSS-DIVISION TIME-BASED FIELD USAGE COUNTER ★★★
     // ============================================================================
 
     /**
-     * ★★★ v9.7: Count field usage - TRACKS ALL DIVISIONS for cross-div detection ★★★
+     * ★★★ v9.8: Count field usage - TRACKS ALL DIVISIONS for cross-div detection ★★★
      * 
      * Returns:
      * - fieldCount: Total bunks using this field during time window
@@ -299,7 +298,9 @@
         const existingActivities = new Set();
         const divisions = []; // Track which divisions are using this field
         
-        if (blockStartMin === null || blockEndMin === null) {
+        if (blockStartMin === null || blockEndMin === null || 
+            blockStartMin === undefined || blockEndMin === undefined) {
+            crossDivLog(`[countFieldUsageByTime] SKIPPED - no time range provided`);
             return { fieldCount, combinedSize, existingActivities, divisions };
         }
         
@@ -318,7 +319,7 @@
                 
                 for (let otherSlotIdx = 0; otherSlotIdx < otherDivSlots.length; otherSlotIdx++) {
                     const otherSlot = otherDivSlots[otherSlotIdx];
-                    if (!otherSlot) continue;
+                    if (!otherSlot || otherSlot.startMin === undefined) continue;
                     
                     // ★★★ KEY: Check TIME overlap, not slot index ★★★
                     const hasTimeOverlap = otherSlot.startMin < blockEndMin && 
@@ -329,8 +330,14 @@
                     const entry = otherAssignments[otherSlotIdx];
                     if (!entry || entry.continuation) continue;
                     
-                    const entryField = window.SchedulerCoreUtils?.fieldLabel?.(entry.field) || entry._activity;
-                    if (entryField && entryField.toLowerCase().trim() === fieldNameLower) {
+                    // ★★★ v9.8: Check BOTH field and _activity for matching ★★★
+                    const entryField = (entry.field || '').toLowerCase().trim();
+                    const entryActivity = (entry._activity || '').toLowerCase().trim();
+                    const entryFieldLabel = window.SchedulerCoreUtils?.fieldLabel?.(entry.field)?.toLowerCase().trim() || '';
+                    
+                    if (entryField === fieldNameLower || 
+                        entryActivity === fieldNameLower || 
+                        entryFieldLabel === fieldNameLower) {
                         fieldCount++;
                         divisionHasUsage = true;
                         combinedSize += (bunkMeta?.[otherBunk]?.size || 0);
@@ -353,12 +360,13 @@
     }
 
     /**
-     * ★★★ v9.7: Count usage ONLY within the same division ★★★
+     * ★★★ v9.8: Count usage ONLY within the same division ★★★
      */
     function countSameDivisionUsage(fieldName, blockStartMin, blockEndMin, excludeBunk, divisionName) {
         let count = 0;
         
-        if (!divisionName || blockStartMin === null || blockEndMin === null) return 0;
+        if (!divisionName || blockStartMin === null || blockEndMin === null ||
+            blockStartMin === undefined || blockEndMin === undefined) return 0;
         
         const divData = window.divisions?.[divisionName];
         if (!divData) return 0;
@@ -374,7 +382,7 @@
             
             for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
                 const slot = divSlots[slotIdx];
-                if (!slot) continue;
+                if (!slot || slot.startMin === undefined) continue;
                 
                 // Check TIME overlap
                 const hasTimeOverlap = slot.startMin < blockEndMin && slot.endMin > blockStartMin;
@@ -383,8 +391,14 @@
                 const entry = otherAssignments[slotIdx];
                 if (!entry || entry.continuation) continue;
                 
-                const entryField = window.SchedulerCoreUtils?.fieldLabel?.(entry.field) || entry._activity;
-                if (entryField && entryField.toLowerCase().trim() === fieldNameLower) {
+                // ★★★ v9.8: Check BOTH field and _activity for matching ★★★
+                const entryField = (entry.field || '').toLowerCase().trim();
+                const entryActivity = (entry._activity || '').toLowerCase().trim();
+                const entryFieldLabel = window.SchedulerCoreUtils?.fieldLabel?.(entry.field)?.toLowerCase().trim() || '';
+                
+                if (entryField === fieldNameLower || 
+                    entryActivity === fieldNameLower || 
+                    entryFieldLabel === fieldNameLower) {
                     count++;
                 }
             }
@@ -394,26 +408,128 @@
     }
 
     /**
-     * ★★★ v9.7: Get division name for a bunk ★★★
+     * ★★★ v9.8: Get division name for a bunk - with caching ★★★
      */
+    const _bunkDivisionCache = {};
+    
     function getBunkDivision(bunkName) {
+        const bunkStr = String(bunkName);
+        
+        // Check cache first
+        if (_bunkDivisionCache[bunkStr]) {
+            return _bunkDivisionCache[bunkStr];
+        }
+        
         // Try SchedulerCoreUtils first
         if (window.SchedulerCoreUtils?.getDivisionForBunk) {
-            return window.SchedulerCoreUtils.getDivisionForBunk(bunkName);
+            const div = window.SchedulerCoreUtils.getDivisionForBunk(bunkName);
+            if (div) {
+                _bunkDivisionCache[bunkStr] = div;
+                return div;
+            }
         }
         
         // Manual lookup
         const divisions = window.divisions || {};
-        const bunkStr = String(bunkName);
         
         for (const [divName, divData] of Object.entries(divisions)) {
             const bunks = (divData.bunks || []).map(String);
             if (bunks.includes(bunkStr)) {
+                _bunkDivisionCache[bunkStr] = divName;
                 return divName;
             }
         }
         
         return null;
+    }
+    
+    /**
+     * ★★★ v9.8: Clear division cache (call when divisions change) ★★★
+     */
+    function clearBunkDivisionCache() {
+        for (const key in _bunkDivisionCache) {
+            delete _bunkDivisionCache[key];
+        }
+    }
+
+    // ============================================================================
+    // ★★★ v9.8: EXPLICIT CROSS-DIVISION CONFLICT CHECKER ★★★
+    // ============================================================================
+    
+    /**
+     * Check if placing this activity would cause a cross-division conflict
+     * This is the FINAL GATE - if this returns true, the pick is BLOCKED
+     * 
+     * @param {string} fieldName - Field/activity name
+     * @param {number} startMin - Block start time in minutes
+     * @param {number} endMin - Block end time in minutes  
+     * @param {string} blockDivName - Division of the bunk being scheduled
+     * @param {string} excludeBunk - Bunk to exclude from check
+     * @param {Object} props - Activity properties
+     * @returns {Object|null} Conflict info or null if no conflict
+     */
+    function checkCrossDivisionConflict(fieldName, startMin, endMin, blockDivName, excludeBunk, props) {
+        const sharableWith = props?.sharableWith || {};
+        
+        // If type is 'all', cross-division sharing is allowed
+        if (sharableWith.type === 'all') {
+            return null;
+        }
+        
+        if (!blockDivName || startMin === undefined || endMin === undefined) {
+            return null; // Can't check without required info
+        }
+        
+        const fieldLower = (fieldName || '').toLowerCase().trim();
+        const divisions = window.divisions || {};
+        const schedules = window.scheduleAssignments || {};
+        
+        // Check all OTHER divisions for time-overlapping usage
+        for (const [otherDivName, otherDivData] of Object.entries(divisions)) {
+            // Skip our own division
+            if (otherDivName === blockDivName) continue;
+            
+            const otherDivSlots = window.divisionTimes?.[otherDivName] || [];
+            
+            for (const otherBunk of (otherDivData.bunks || [])) {
+                if (String(otherBunk) === String(excludeBunk)) continue;
+                
+                const otherAssignments = schedules[otherBunk] || [];
+                
+                for (let slotIdx = 0; slotIdx < otherDivSlots.length; slotIdx++) {
+                    const otherSlot = otherDivSlots[slotIdx];
+                    if (!otherSlot || otherSlot.startMin === undefined) continue;
+                    
+                    // Check for TIME overlap
+                    const hasTimeOverlap = otherSlot.startMin < endMin && otherSlot.endMin > startMin;
+                    if (!hasTimeOverlap) continue;
+                    
+                    const entry = otherAssignments[slotIdx];
+                    if (!entry || entry.continuation) continue;
+                    
+                    // Check if using same field
+                    const entryField = (entry.field || '').toLowerCase().trim();
+                    const entryActivity = (entry._activity || '').toLowerCase().trim();
+                    const entryFieldLabel = window.SchedulerCoreUtils?.fieldLabel?.(entry.field)?.toLowerCase().trim() || '';
+                    
+                    if (entryField === fieldLower || 
+                        entryActivity === fieldLower || 
+                        entryFieldLabel === fieldLower) {
+                        // Found cross-division conflict!
+                        return {
+                            conflictingDiv: otherDivName,
+                            conflictingBunk: otherBunk,
+                            conflictingSlot: slotIdx,
+                            theirTime: `${otherSlot.startMin}-${otherSlot.endMin}`,
+                            ourTime: `${startMin}-${endMin}`,
+                            overlapTime: `${Math.max(startMin, otherSlot.startMin)}-${Math.min(endMin, otherSlot.endMin)}`
+                        };
+                    }
+                }
+            }
+        }
+        
+        return null; // No conflict
     }
 
     // ============================================================================
@@ -450,12 +566,11 @@
         penalty -= sharingScore;
 
         // =========================================================================
-        // ★★★ v9.7 FIX: CROSS-DIVISION CONFLICT DETECTION ★★★
-        // If sharableWith.type !== 'all', only ONE division can use this resource at a time
+        // ★★★ v9.8 FIX: CROSS-DIVISION CONFLICT DETECTION ★★★
         // =========================================================================
         
         // Get the actual time range for this block
-        const blockDivName = block.divName || block.division;
+        let blockDivName = block.divName || block.division || getBunkDivision(bunk);
         const blockDivSlots = window.divisionTimes?.[blockDivName] || [];
         const blockSlots = block.slots || [];
         
@@ -471,6 +586,20 @@
         
         crossDivLog(`Checking ${bunk} for ${fieldName} at ${blockStartMin}-${blockEndMin} (Div ${blockDivName})`);
         
+        // Get properties
+        const props = activityProperties[fieldName] || activityProperties[act] || {};
+        const sharableWith = props.sharableWith || {};
+        
+        // ★★★ v9.8: Explicit cross-division check ★★★
+        const crossDivConflict = checkCrossDivisionConflict(
+            fieldName, blockStartMin, blockEndMin, blockDivName, bunk, props
+        );
+        
+        if (crossDivConflict) {
+            crossDivLog(`  ❌ CROSS-DIV REJECTED - ${fieldName} used by Div ${crossDivConflict.conflictingDiv} (${crossDivConflict.conflictingBunk}) at overlapping time ${crossDivConflict.overlapTime}`);
+            return 999999;
+        }
+        
         // Count field usage across ALL divisions
         const usageInfo = countFieldUsageByTime(fieldName, blockStartMin, blockEndMin, bunk, bunkMeta);
         const { fieldCount, combinedSize, existingActivities, divisions: usingDivisions } = usageInfo;
@@ -479,10 +608,6 @@
         
         crossDivLog(`  Field usage: ${fieldCount} bunks in divisions: ${(usingDivisions || []).join(', ')}`);
 
-        // ★★★ FIX: Check both field AND activity name for properties ★★★
-        const props = activityProperties[fieldName] || activityProperties[act] || {};
-        const sharableWith = props.sharableWith || {};
-        
         let maxCapacity = 1;
         if (sharableWith.type === 'all') {
             maxCapacity = 999;
@@ -496,17 +621,7 @@
 
         crossDivLog(`  Capacity: ${fieldCount}/${maxCapacity}, sharableWith.type=${sharableWith.type}`);
 
-        // ★★★ v9.7 CRITICAL: CHECK FOR CROSS-DIVISION CONFLICTS ★★★
-        if (sharableWith.type !== 'all' && usingDivisions && usingDivisions.length > 0) {
-            const otherDivisionsUsing = usingDivisions.filter(d => d !== blockDivName);
-            
-            if (otherDivisionsUsing.length > 0) {
-                crossDivLog(`  ❌ CROSS-DIV REJECTED - ${fieldName} used by other divisions: ${otherDivisionsUsing.join(', ')}`);
-                return 999999;
-            }
-        }
-
-        // ★★★ v9.7: Count same-division usage for capacity check ★★★
+        // ★★★ v9.8: Count same-division usage for capacity check ★★★
         const sameDivCount = countSameDivisionUsage(fieldName, blockStartMin, blockEndMin, bunk, blockDivName);
         
         if (sameDivCount >= maxCapacity) {
@@ -591,26 +706,43 @@
     // ============================================================================
 
     /**
-     * ★★★ v9.3 FIX: Sort blocks by TIME for same bunk ★★★
-     * This ensures earlier-in-day blocks are processed first,
-     * preventing same-day activity repetition bugs where slot 4 was
-     * processed before slot 0 for the same bunk.
+     * ★★★ v9.8 FIX: Sort blocks by DIVISION then by TIME ★★★
+     * This ensures we process all of Division 1's blocks first,
+     * then Division 2's blocks can see Division 1's assignments
      */
     Solver.sortBlocksByDifficulty = function (blocks, config) {
         const meta = config.bunkMetaData || {};
+        
+        // First, ensure all blocks have division info
+        blocks.forEach(b => {
+            if (!b.divName && !b.division) {
+                b.divName = getBunkDivision(b.bunk);
+            }
+        });
+        
         return blocks.sort((a, b) => {
             // Leagues always first
             if (a._isLeague && !b._isLeague) return -1;
             if (!a._isLeague && b._isLeague) return 1;
 
-            // Then by bunk number
+            // ★★★ v9.8: Sort by DIVISION first ★★★
+            // This ensures all of Div 1 is scheduled before Div 2
+            // So when Div 2 is scheduled, it can see Div 1's assignments
+            const divA = a.divName || a.division || '';
+            const divB = b.divName || b.division || '';
+            if (divA !== divB) {
+                // Sort divisions numerically if possible
+                const divNumA = parseInt(divA) || 999;
+                const divNumB = parseInt(divB) || 999;
+                return divNumA - divNumB;
+            }
+
+            // Then by bunk number within division
             const numA = getBunkNumber(a.bunk) || Infinity;
             const numB = getBunkNumber(b.bunk) || Infinity;
             if (numA !== numB) return numA - numB;
 
-            // ★★★ v9.3 FIX: Sort by START TIME for same bunk ★★★
-            // This ensures earlier-in-day blocks are processed first
-            // preventing same-day activity repetition bugs
+            // Then by START TIME for same bunk
             const timeA = a.startTime ?? (a.slots?.[0] * 30 + 660) ?? 0;
             const timeB = b.startTime ?? (b.slots?.[0] * 30 + 660) ?? 0;
             if (timeA !== timeB) return timeA - timeB;
@@ -740,8 +872,11 @@
     }
 
     /**
-     * ★★★ GET VALID PICKS - v9.5 GUARANTEED CAPACITY ENFORCEMENT ★★★
-     * CRITICAL FIX: Capacity is checked FIRST, with fallback calculations
+     * ★★★ GET VALID PICKS - v9.8 GUARANTEED CROSS-DIVISION ENFORCEMENT ★★★
+     * CRITICAL FIX: 
+     * - Division name ALWAYS resolved (from block or bunk lookup)
+     * - Time range ALWAYS calculated for cross-division checks
+     * - Cross-division conflicts blocked at time-overlap level
      */
     Solver.getValidActivityPicks = function (block) {
         const picks = [];
@@ -749,24 +884,51 @@
         const bunk = block.bunk;
         
         // =========================================================================
-        // ★★★ v9.5: ALWAYS calculate time range - NEVER skip capacity checks ★★★
+        // ★★★ v9.8 FIX: ALWAYS resolve division name - critical for cross-div checks
+        // =========================================================================
+        let blockDivName = block.divName || block.division;
+        
+        // If division not on block, look it up from bunk
+        if (!blockDivName) {
+            blockDivName = getBunkDivision(bunk);
+            if (blockDivName) {
+                block.divName = blockDivName; // Cache it on the block
+                crossDivLog(`[DIV-LOOKUP] Resolved division for ${bunk}: ${blockDivName}`);
+            }
+        }
+        
+        if (!blockDivName) {
+            console.warn(`[SOLVER-v9.8] Cannot determine division for ${bunk} - cross-div checks may fail!`);
+        }
+        
+        // =========================================================================
+        // ★★★ v9.8: ALWAYS calculate time range - NEVER skip cross-div checks ★★★
         // =========================================================================
         let startMin = block.startTime;
         let endMin = block.endTime;
         
         // If times aren't on block, calculate from divisionTimes
         if (startMin === undefined || endMin === undefined) {
-            const blockDivName = block.divName || block.division;
             const divSlots = window.divisionTimes?.[blockDivName] || [];
             
             if (slots.length > 0 && divSlots[slots[0]]) {
                 startMin = divSlots[slots[0]].startMin;
                 const lastSlotInfo = divSlots[slots[slots.length - 1]];
                 endMin = lastSlotInfo ? lastSlotInfo.endMin : (startMin + 40);
+                
+                // Cache times on block for later use
+                block.startTime = startMin;
+                block.endTime = endMin;
             }
         }
         
-        debugLog(`[v9.5] Block for ${bunk}: slots=${slots.join(',')}, time=${startMin}-${endMin}`);
+        // ★★★ v9.8: CRITICAL - Warn if we still can't determine times ★★★
+        const hasValidTimes = startMin !== undefined && endMin !== undefined;
+        if (!hasValidTimes) {
+            console.warn(`[SOLVER-v9.8] Cannot determine time range for ${bunk} (Div ${blockDivName}) - cross-div checks limited!`);
+        }
+        
+        debugLog(`[v9.8] Block for ${bunk} (Div ${blockDivName}): slots=${slots.join(',')}, time=${startMin}-${endMin}`);
 
         const disabledFields = window.currentDisabledFields || globalConfig.disabledFields || [];
 
@@ -783,8 +945,7 @@
             }
 
             // =========================================================================
-            // ★★★ v9.5 CRITICAL: GUARANTEED CAPACITY CHECK ★★★
-            // Two-layer check: TIME-BASED (cross-division) + SLOT-BASED (fallback)
+            // ★★★ v9.8 CRITICAL: GUARANTEED CROSS-DIVISION + CAPACITY CHECK ★★★
             // =========================================================================
             const fieldName = cand.field;
             const actName = cand.activityName || fieldName;
@@ -806,135 +967,144 @@
                 maxCapacity = 2;
             }
             
-            // ★★★ v9.5: DEBUG - Log capacity calculation for special activities ★★★
             const isSpecialActivity = cand.type === 'special';
             if (isSpecialActivity) {
                 crossDivLog(`[CAP-CHECK] ${bunk} checking ${fieldName}: sharableWith.type=${sharableWith.type}, maxCapacity=${maxCapacity}, time=${startMin}-${endMin}, isSpecial=true`);
             }
             
-            // Get division for this bunk
-            const blockDivName = block.divName || block.division;
+            // =========================================================================
+            // ★★★ v9.8: EXPLICIT CROSS-DIVISION CONFLICT CHECK (ALWAYS RUNS) ★★★
+            // =========================================================================
+            if (hasValidTimes && sharableWith.type !== 'all') {
+                const crossDivConflict = checkCrossDivisionConflict(
+                    fieldName, startMin, endMin, blockDivName, bunk, props
+                );
+                
+                if (crossDivConflict) {
+                    crossDivLog(`[CROSS-DIV-BLOCK] ${fieldName} REJECTED for ${bunk} (Div ${blockDivName}): conflict with Div ${crossDivConflict.conflictingDiv} at ${crossDivConflict.overlapTime}`);
+                    continue;
+                }
+            }
             
-            // ★★★ LAYER 1: TIME-BASED CHECK with CROSS-DIVISION DETECTION ★★★
-            if (startMin !== undefined && endMin !== undefined) {
+            // =========================================================================
+            // ★★★ v9.8: TIME-BASED CAPACITY CHECK ★★★
+            // =========================================================================
+            if (hasValidTimes) {
                 const usageInfo = countFieldUsageByTime(fieldName, startMin, endMin, bunk, {});
                 
-                // ★★★ v9.7 CRITICAL: CHECK FOR CROSS-DIVISION CONFLICTS ★★★
-                // If sharableWith.type !== 'all', only ONE division can use this resource at a time
+                // Double-check cross-division (belt and suspenders)
                 if (sharableWith.type !== 'all' && usageInfo.divisions && usageInfo.divisions.length > 0) {
-                    // Check if ANY other division is already using this
                     const otherDivisionsUsing = usageInfo.divisions.filter(d => d !== blockDivName);
                     
                     if (otherDivisionsUsing.length > 0) {
-                        crossDivLog(`[CROSS-DIV-BLOCK] ${fieldName} REJECTED for ${bunk} (Div ${blockDivName}): already used by divisions: ${otherDivisionsUsing.join(', ')}`);
+                        crossDivLog(`[CROSS-DIV-USAGE] ${fieldName} REJECTED for ${bunk} (Div ${blockDivName}): used by divisions: ${otherDivisionsUsing.join(', ')}`);
                         continue;
-                    }
-                    
-                    // If type='custom', also check if our division is in allowed list
-                    if (sharableWith.type === 'custom' && Array.isArray(sharableWith.divisions) && sharableWith.divisions.length > 0) {
-                        const allowedDivisions = sharableWith.divisions;
-                        // Check if existing users are from a division NOT in our allowed list AND our division is not allowed
-                        if (!allowedDivisions.includes(blockDivName)) {
-                            const conflictingDivs = usageInfo.divisions.filter(d => allowedDivisions.includes(d));
-                            if (conflictingDivs.length > 0) {
-                                crossDivLog(`[CUSTOM-DIV-BLOCK] ${fieldName} REJECTED for ${bunk} (Div ${blockDivName}): not in allowed divisions, conflicts with ${conflictingDivs.join(', ')}`);
-                                continue;
-                            }
-                        }
                     }
                 }
                 
-                // ★★★ v9.7: Count SAME-DIVISION usage for capacity check ★★★
-                // Cross-div is already blocked above, so now count same-div for capacity
+                // Count same-division usage for capacity
                 const sameDivCount = usageInfo.divisions.includes(blockDivName) ? 
                     countSameDivisionUsage(fieldName, startMin, endMin, bunk, blockDivName) : 0;
                 
-                // ★★★ v9.5: DEBUG - Always log for special activities ★★★
                 if (isSpecialActivity) {
                     crossDivLog(`[TIME-CHECK] ${bunk} (Div ${blockDivName}) ${fieldName}: total=${usageInfo.fieldCount}, sameDivCount=${sameDivCount}/${maxCapacity}, divs: ${usageInfo.divisions.join(',')}`);
                 }
                 
-                // Check capacity (same-division bunks only, since cross-div is blocked)
                 if (sameDivCount >= maxCapacity) {
                     crossDivLog(`[CAPACITY-TIME] ${fieldName} REJECTED for ${bunk}: ${sameDivCount}/${maxCapacity} same-div users at ${startMin}-${endMin}`);
                     continue;
                 }
-            } else {
-                // ★★★ v9.5: WARN if times are missing ★★★
-                console.warn(`[SOLVER-v9.7] Block for ${bunk} missing times! startMin=${startMin}, endMin=${endMin}`);
             }
             
-            // ★★★ LAYER 2: SLOT-BASED CHECK (direct scan of scheduleAssignments) ★★★
-            // Enforces both capacity AND cross-division restrictions
-            let slotCapacityExceeded = false;
-            let crossDivConflict = false;
+            // =========================================================================
+            // ★★★ v9.8: FALLBACK SLOT-BASED CHECK (for when times unavailable) ★★★
+            // This also uses time-overlap logic for cross-division detection
+            // =========================================================================
+            let slotConflict = false;
             const fieldNameLower = fieldName.toLowerCase().trim();
             
             for (const slotIdx of slots) {
-                let sameDivCount = 0;
-                let otherDivFound = false;
+                // Get this slot's time range
+                const myDivSlots = window.divisionTimes?.[blockDivName] || [];
+                const mySlot = myDivSlots[slotIdx];
+                const myStartMin = mySlot?.startMin ?? startMin;
+                const myEndMin = mySlot?.endMin ?? endMin;
                 
-                const schedules = window.scheduleAssignments || {};
-                for (const [otherBunk, otherSlots] of Object.entries(schedules)) {
-                    if (String(otherBunk) === String(bunk)) continue;
+                let sameDivCount = 0;
+                
+                // Check ALL divisions for conflicts
+                const allDivisions = window.divisions || {};
+                
+                for (const [otherDivName, otherDivData] of Object.entries(allDivisions)) {
+                    const otherDivSlots = window.divisionTimes?.[otherDivName] || [];
                     
-                    const entry = otherSlots?.[slotIdx];
-                    if (!entry || entry.continuation) continue;
-                    
-                    // Check both field and _activity names
-                    const entryFieldName = (entry.field || '').toLowerCase().trim();
-                    const entryActivityName = (entry._activity || '').toLowerCase().trim();
-                    
-                    if (entryFieldName === fieldNameLower || entryActivityName === fieldNameLower) {
-                        // Found a user - check which division
-                        const otherBunkDiv = getBunkDivision(otherBunk);
+                    for (const otherBunk of (otherDivData.bunks || [])) {
+                        if (String(otherBunk) === String(bunk)) continue;
                         
-                        if (otherBunkDiv === blockDivName) {
-                            sameDivCount++;
-                        } else if (otherBunkDiv) {
-                            // Different division using same resource!
-                            if (sharableWith.type !== 'all') {
-                                crossDivLog(`[SLOT-CROSS-DIV] ${fieldName} at slot ${slotIdx}: ${otherBunk} (Div ${otherBunkDiv}) conflicts with ${bunk} (Div ${blockDivName})`);
-                                otherDivFound = true;
+                        const otherAssignments = window.scheduleAssignments?.[otherBunk] || [];
+                        
+                        // Check ALL slots in other division for time overlap
+                        for (let otherSlotIdx = 0; otherSlotIdx < otherDivSlots.length; otherSlotIdx++) {
+                            const otherSlot = otherDivSlots[otherSlotIdx];
+                            if (!otherSlot || otherSlot.startMin === undefined) continue;
+                            
+                            // Check TIME overlap (not slot index!)
+                            const hasTimeOverlap = myStartMin !== undefined && myEndMin !== undefined &&
+                                                  otherSlot.startMin < myEndMin && otherSlot.endMin > myStartMin;
+                            
+                            if (!hasTimeOverlap) continue;
+                            
+                            const entry = otherAssignments[otherSlotIdx];
+                            if (!entry || entry.continuation) continue;
+                            
+                            const entryField = (entry.field || '').toLowerCase().trim();
+                            const entryActivity = (entry._activity || '').toLowerCase().trim();
+                            
+                            if (entryField === fieldNameLower || entryActivity === fieldNameLower) {
+                                if (otherDivName === blockDivName) {
+                                    sameDivCount++;
+                                } else if (sharableWith.type !== 'all') {
+                                    // Cross-division conflict!
+                                    crossDivLog(`[SLOT-CROSS-DIV] ${fieldName} at time ${myStartMin}-${myEndMin}: ${otherBunk} (Div ${otherDivName}) conflicts with ${bunk} (Div ${blockDivName})`);
+                                    slotConflict = true;
+                                    break;
+                                }
                             }
                         }
+                        
+                        if (slotConflict) break;
                     }
+                    
+                    if (slotConflict) break;
                 }
                 
-                // ★★★ v9.7: Reject if cross-division conflict ★★★
-                if (otherDivFound) {
-                    crossDivLog(`[CROSS-DIV-SLOT] ${fieldName} REJECTED for ${bunk}: other division using at slot ${slotIdx}`);
-                    crossDivConflict = true;
-                    break;
-                }
+                if (slotConflict) break;
                 
-                // ★★★ v9.7: Check same-division capacity ★★★
                 if (sameDivCount >= maxCapacity) {
-                    crossDivLog(`[CAPACITY-DIRECT] ${fieldName} REJECTED for ${bunk} at slot ${slotIdx}: ${sameDivCount}/${maxCapacity} same-div users`);
-                    slotCapacityExceeded = true;
+                    crossDivLog(`[CAPACITY-SLOT] ${fieldName} REJECTED for ${bunk} at slot ${slotIdx}: ${sameDivCount}/${maxCapacity} same-div users`);
+                    slotConflict = true;
                     break;
                 }
             }
             
-            if (crossDivConflict || slotCapacityExceeded) {
+            if (slotConflict) {
                 continue;
             }
             // =========================================================================
-            // END CAPACITY CHECK
+            // END CAPACITY/CROSS-DIV CHECK
             // =========================================================================
 
-            // ★★★ FIX: Verify activity properties exist (check both field and activity name) ★★★
+            // Verify activity properties exist
             const hasFieldProps = !!activityProperties[cand.field];
             const hasActivityProps = !!activityProperties[cand.activityName];
             if (!hasFieldProps && !hasActivityProps && cand.type !== 'special') {
-                // Skip sports without proper field configuration
                 continue;
             }
 
-            // ★★★ PRE-CHECK ROTATION - Skip activities done today ★★★
+            // PRE-CHECK ROTATION - Skip activities done today
             const rotationPenalty = calculateRotationPenalty(bunk, cand.activityName, block);
             if (rotationPenalty === Infinity) {
-                continue; // Skip - blocked by rotation
+                continue;
             }
 
             const fits = window.SchedulerCoreUtils.canBlockFit(
@@ -965,7 +1135,7 @@
             console.log(`⚠️ NO VALID PICKS for ${block.bunk} at ${startMin}-${endMin}`);
         }
 
-        // Free as fallback with very high penalty (only if no real options)
+        // Free as fallback with very high penalty
         if (picks.length === 0 || !picks.some(p => p.pick?.field !== 'Free')) {
             picks.push({
                 pick: { field: "Free", sport: null, _activity: "Free" },
@@ -1013,6 +1183,10 @@
         activityProperties = config.activityProperties || {};
         let iterations = 0;
         const SAFETY_LIMIT = 100000;
+        
+        // ★★★ v9.8: Clear division cache at start of solve ★★★
+        clearBunkDivisionCache();
+        
         allCandidateOptions = buildAllCandidateOptions(config, []);
 
         if (allCandidateOptions.length === 0) {
@@ -1026,7 +1200,7 @@
         const sorted = Solver.sortBlocksByDifficulty(allBlocks, config);
         const activityBlocks = sorted.filter(b => !b._isLeague);
         
-        // ★★★ FIX: Clear rotation cache for fresh scoring ★★★
+        // Clear rotation cache for fresh scoring
         if (window.RotationEngine?.clearHistoryCache) {
             window.RotationEngine.clearHistoryCache();
             console.log('[SOLVER] Rotation history cache cleared for fresh scoring');
@@ -1034,7 +1208,7 @@
         
         console.log(`[SOLVER] Processing ${activityBlocks.length} activity blocks`);
         console.log(`[SOLVER] ★ Using ${window.RotationEngine ? 'SUPERCHARGED RotationEngine v2.2' : 'FALLBACK scoring'}`);
-        console.log(`[SOLVER] ★ v9.7: Cross-division conflict detection + per-division capacity`);
+        console.log(`[SOLVER] ★ v9.8: FIXED cross-division conflict detection with time-overlap`);
         
         let bestSchedule = [];
         let maxDepthReached = 0;
@@ -1126,7 +1300,7 @@
     };
 
     /**
-     * ★★★ v9.2: DEBUG Cross-division time conflict check ★★★
+     * ★★★ v9.8: DEBUG Cross-division time conflict check ★★★
      */
     Solver.debugCrossDivisionConflict = function(fieldName, divName, slotIdx) {
         const divSlots = window.divisionTimes?.[divName] || [];
@@ -1139,68 +1313,75 @@
         console.log(`\n🔍 Cross-Division Check: "${fieldName}" at Div ${divName} Slot ${slotIdx}`);
         console.log(`   Time: ${slot.startMin}-${slot.endMin} (${window.SchedulerCoreUtils?.minutesToTime?.(slot.startMin) || slot.startMin} - ${window.SchedulerCoreUtils?.minutesToTime?.(slot.endMin) || slot.endMin})`);
         
-        const divisions = window.divisions || {};
-        const conflicts = [];
+        const props = activityProperties[fieldName] || {};
+        const conflict = checkCrossDivisionConflict(fieldName, slot.startMin, slot.endMin, divName, null, props);
         
-        for (const [otherDivName, otherDivData] of Object.entries(divisions)) {
-            const otherDivSlots = window.divisionTimes?.[otherDivName] || [];
+        if (conflict) {
+            console.log(`   ❌ CONFLICT FOUND:`);
+            console.log(`      Division: ${conflict.conflictingDiv}`);
+            console.log(`      Bunk: ${conflict.conflictingBunk}`);
+            console.log(`      Their time: ${conflict.theirTime}`);
+            console.log(`      Overlap: ${conflict.overlapTime}`);
+        } else {
+            console.log(`   ✅ No cross-division conflict`);
+        }
+        
+        // Also show all current users
+        const usageInfo = countFieldUsageByTime(fieldName, slot.startMin, slot.endMin, null, {});
+        console.log(`\n   Current usage: ${usageInfo.fieldCount} bunks in divisions: ${usageInfo.divisions.join(', ') || 'none'}`);
+        
+        return conflict;
+    };
+
+    /**
+     * ★★★ v9.8: Test cross-division detection between two specific divisions ★★★
+     */
+    Solver.testCrossDivisionDetection = function(div1 = '1', div2 = '2') {
+        console.log('\n' + '='.repeat(60));
+        console.log(`🧪 TESTING CROSS-DIVISION DETECTION: Div ${div1} vs Div ${div2}`);
+        console.log('='.repeat(60));
+        
+        const div1Slots = window.divisionTimes?.[div1] || [];
+        const div2Slots = window.divisionTimes?.[div2] || [];
+        
+        console.log(`\nDiv ${div1} slots: ${div1Slots.length}`);
+        console.log(`Div ${div2} slots: ${div2Slots.length}`);
+        
+        // Find overlapping time ranges
+        console.log('\n--- Time Overlap Analysis ---');
+        let overlapFound = false;
+        
+        for (let i = 0; i < div1Slots.length; i++) {
+            const slot1 = div1Slots[i];
+            if (!slot1 || slot1.startMin === undefined) continue;
             
-            for (const otherBunk of (otherDivData.bunks || [])) {
-                const otherAssignments = window.scheduleAssignments?.[otherBunk] || [];
+            for (let j = 0; j < div2Slots.length; j++) {
+                const slot2 = div2Slots[j];
+                if (!slot2 || slot2.startMin === undefined) continue;
                 
-                for (let otherSlotIdx = 0; otherSlotIdx < otherDivSlots.length; otherSlotIdx++) {
-                    const otherSlot = otherDivSlots[otherSlotIdx];
-                    if (!otherSlot) continue;
+                const hasOverlap = slot1.startMin < slot2.endMin && slot1.endMin > slot2.startMin;
+                
+                if (hasOverlap) {
+                    overlapFound = true;
+                    const overlapStart = Math.max(slot1.startMin, slot2.startMin);
+                    const overlapEnd = Math.min(slot1.endMin, slot2.endMin);
+                    const overlapMins = overlapEnd - overlapStart;
                     
-                    // Check time overlap
-                    if (otherSlot.startMin < slot.endMin && otherSlot.endMin > slot.startMin) {
-                        const entry = otherAssignments[otherSlotIdx];
-                        if (entry?.field === fieldName || entry?._activity === fieldName) {
-                            conflicts.push({
-                                div: otherDivName,
-                                bunk: otherBunk,
-                                slot: otherSlotIdx,
-                                time: `${otherSlot.startMin}-${otherSlot.endMin}`,
-                                overlap: `${Math.max(slot.startMin, otherSlot.startMin)}-${Math.min(slot.endMin, otherSlot.endMin)}`
-                            });
-                        }
-                    }
+                    console.log(`⚠️ OVERLAP: Div ${div1} slot ${i} (${slot1.startMin}-${slot1.endMin}) ↔ Div ${div2} slot ${j} (${slot2.startMin}-${slot2.endMin})`);
+                    console.log(`   Overlap window: ${overlapStart}-${overlapEnd} (${overlapMins} minutes)`);
                 }
             }
         }
         
-        // Get capacity
-        const props = activityProperties[fieldName] || {};
-        let maxCapacity = 1;
-        if (props.sharableWith?.type === 'all') {
-            maxCapacity = 999;
-        } else if (props.sharableWith?.capacity) {
-            maxCapacity = parseInt(props.sharableWith.capacity) || 1;
-        } else if (props.sharable) {
-            maxCapacity = 2;
+        if (!overlapFound) {
+            console.log('✅ No time overlaps found between these divisions');
         }
         
-        if (conflicts.length === 0) {
-            console.log('   ✅ No conflicts found');
-        } else {
-            console.log(`   Found ${conflicts.length} bunks using this field during overlapping time:`);
-            conflicts.forEach(c => {
-                console.log(`      Div ${c.div} Bunk ${c.bunk} @ slot ${c.slot} (${c.time}), overlap: ${c.overlap}`);
-            });
-            console.log(`\n   Capacity: ${maxCapacity}`);
-            console.log(`   Current usage: ${conflicts.length}`);
-            if (conflicts.length >= maxCapacity) {
-                console.log(`   ❌ WOULD BE REJECTED (at or over capacity)`);
-            } else {
-                console.log(`   ✅ Has room (${maxCapacity - conflicts.length} remaining)`);
-            }
-        }
-        
-        return conflicts;
+        console.log('='.repeat(60));
     };
 
     /**
-     * ★★★ DEBUG: Rotation Analysis - Delegates to RotationEngine ★★★
+     * DEBUG: Rotation Analysis - Delegates to RotationEngine
      */
     Solver.debugBunkRotation = function(bunkName, slotIndex = 0) {
         if (window.RotationEngine?.debugBunkRotation) {
@@ -1229,11 +1410,10 @@
     };
 
     /**
-     * ★★★ DEBUG: Activity recommendations - Delegates to RotationEngine ★★★
+     * DEBUG: Activity recommendations - Delegates to RotationEngine
      */
     Solver.debugActivityRecommendations = function(bunkName, slotIndex = 0) {
         if (window.RotationEngine?.debugBunkRotation) {
-            // RotationEngine's debug includes recommendations
             window.RotationEngine.debugBunkRotation(bunkName, slotIndex);
         } else {
             console.log('\n' + '='.repeat(60));
@@ -1315,12 +1495,13 @@
     window.totalSolverEngine = Solver;
     window.TotalSolver = Solver; // Alias for compatibility
 
-    // Expose debug utilities (delegate to RotationEngine when available)
+    // Expose debug utilities
     window.debugBunkRotation = Solver.debugBunkRotation;
     window.debugActivityRecommendations = Solver.debugActivityRecommendations;
     window.debugRotationConfig = Solver.debugRotationConfig;
     window.debugCrossDivisionConflict = Solver.debugCrossDivisionConflict;
+    window.testCrossDivisionDetection = Solver.testCrossDivisionDetection;
 
-    console.log('[SOLVER] v9.7 loaded - ★ CROSS-DIVISION CONFLICT DETECTION ★');
+    console.log('[SOLVER] v9.8 loaded - ★ FIXED CROSS-DIVISION CONFLICT DETECTION ★');
 
 })();
