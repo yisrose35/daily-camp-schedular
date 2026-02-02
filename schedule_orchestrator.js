@@ -1,8 +1,12 @@
 // =============================================================================
-// schedule_orchestrator.js v1.4 — CAMPISTRY SCHEDULE ORCHESTRATOR
+// schedule_orchestrator.js v1.5 — CAMPISTRY SCHEDULE ORCHESTRATOR
 // =============================================================================
 //
 // ★★★ THE SINGLE SOURCE OF TRUTH FOR ALL SCHEDULE OPERATIONS ★★★
+//
+// v1.5 FIXES:
+// - ★ RAINY DAY PERSISTENCE - Properly saves/loads isRainyDay and rainyDayStartTime
+// - ★ BACKWARD COMPATIBILITY - Checks both isRainyDay and rainyDayMode flags
 //
 // v1.4 FIXES:
 // - ★ REALTIME SUBSCRIPTION - Auto-subscribes when loading a date
@@ -40,14 +44,14 @@
 (function() {
     'use strict';
 
-    console.log('🎯 Campistry Schedule Orchestrator v1.3 loading...');
+    console.log('🎯 Campistry Schedule Orchestrator v1.5 loading...');
 
     // =========================================================================
     // CONFIGURATION
     // =========================================================================
 
     const CONFIG = {
-        VERSION: '1.4.0',
+        VERSION: '1.5.0',
         DEBUG: true,
         LOCAL_STORAGE_KEY: 'campDailyData_v1',
         
@@ -297,9 +301,21 @@
             log('Hydrated divisionTimes:', Object.keys(window.divisionTimes).length, 'divisions');
         }
 
-        // Hydrate rainy day flag
-        if (typeof data.isRainyDay === 'boolean') {
-            window.isRainyDay = data.isRainyDay;
+        // ★★★ FIX v1.5: Hydrate rainy day state (check both flags for backward compatibility) ★★★
+        if (data.isRainyDay === true || data.rainyDayMode === true) {
+            window.isRainyDay = true;
+            log('Hydrated isRainyDay: true');
+        } else if (data.isRainyDay === false) {
+            window.isRainyDay = false;
+            log('Hydrated isRainyDay: false');
+        }
+        
+        // ★★★ FIX v1.5: Hydrate rainyDayStartTime for mid-day mode ★★★
+        if (data.rainyDayStartTime !== null && data.rainyDayStartTime !== undefined) {
+            window.rainyDayStartTime = data.rainyDayStartTime;
+            log('Hydrated rainyDayStartTime:', data.rainyDayStartTime);
+        } else {
+            window.rainyDayStartTime = null;
         }
     }
 
@@ -309,7 +325,9 @@
             leagueAssignments: window.leagueAssignments || {},
             unifiedTimes: window.unifiedTimes || [],
             divisionTimes: window.divisionTimes || {},
-            isRainyDay: window.isRainyDay || false
+            isRainyDay: window.isRainyDay || false,
+            rainyDayStartTime: window.rainyDayStartTime ?? null,  // ★ FIX v1.5: Include for mid-day mode
+            rainyDayMode: window.isRainyDay || false              // ★ FIX v1.5: Backward compatibility
         };
     }
 
@@ -452,6 +470,7 @@
 
                         log('✅ Cloud load success:', result.bunkCount, 'bunks from', records.length, 'records');
                         log('   unifiedTimes:', merged.unifiedTimes?.length || 0, 'slots');
+                        log('   isRainyDay:', merged.isRainyDay, 'rainyDayStartTime:', merged.rainyDayStartTime);
 
                         // Update localStorage cache
                         setLocalData(dateKey, merged);
@@ -561,6 +580,7 @@
 
     /**
      * ★★★ IMPROVED: Merge multiple scheduler records with proper unifiedTimes handling ★★★
+     * ★★★ v1.5 FIX: Also properly merge rainy day state from schedule_data ★★★
      */
     function mergeCloudRecords(records) {
         const merged = {
@@ -568,7 +588,8 @@
             leagueAssignments: {},
             unifiedTimes: [],
             divisionTimes: {},
-            isRainyDay: false
+            isRainyDay: false,
+            rainyDayStartTime: null  // ★ FIX v1.5: Include for mid-day mode persistence
         };
 
         for (const record of records) {
@@ -607,16 +628,23 @@
                 });
             }
 
-            // Rainy day flag
-            if (record.is_rainy_day) {
+            // ★★★ FIX v1.5: Rainy day flag - check BOTH database column AND inside schedule_data ★★★
+            if (record.is_rainy_day || data.isRainyDay === true || data.rainyDayMode === true) {
                 merged.isRainyDay = true;
+            }
+            
+            // ★★★ FIX v1.5: Also capture rainyDayStartTime for mid-day mode ★★★
+            if (data.rainyDayStartTime !== null && data.rainyDayStartTime !== undefined) {
+                merged.rainyDayStartTime = data.rainyDayStartTime;
             }
         }
 
         log('Merged records:', {
             bunks: Object.keys(merged.scheduleAssignments).length,
             unifiedTimes: merged.unifiedTimes.length,
-            divisionTimes: Object.keys(merged.divisionTimes).length
+            divisionTimes: Object.keys(merged.divisionTimes).length,
+            isRainyDay: merged.isRainyDay,
+            rainyDayStartTime: merged.rainyDayStartTime
         });
 
         return merged;
@@ -1259,7 +1287,7 @@
         const dateKey = getCurrentDateKey();
         
         console.log('═══════════════════════════════════════════════════════');
-        console.log('🎯 ORCHESTRATOR DIAGNOSIS v1.3');
+        console.log('🎯 ORCHESTRATOR DIAGNOSIS v1.5');
         console.log('═══════════════════════════════════════════════════════');
         console.log('Version:', CONFIG.VERSION);
         console.log('Initialized:', _isInitialized);
@@ -1276,6 +1304,8 @@
         console.log('leagueAssignments:', Object.keys(window.leagueAssignments || {}).length, 'entries');
         console.log('unifiedTimes:', (window.unifiedTimes || []).length, 'slots');
         console.log('divisionTimes:', Object.keys(window.divisionTimes || {}).length, 'divisions');
+        console.log('isRainyDay:', window.isRainyDay);
+        console.log('rainyDayStartTime:', window.rainyDayStartTime);
         console.log('');
         
         console.log('=== LocalStorage ===');
@@ -1284,6 +1314,8 @@
             const localBunks = Object.keys(localData.scheduleAssignments || {}).length;
             console.log('scheduleAssignments:', localBunks, 'bunks');
             console.log('unifiedTimes:', (localData.unifiedTimes || []).length, 'slots');
+            console.log('isRainyDay:', localData.isRainyDay);
+            console.log('rainyDayStartTime:', localData.rainyDayStartTime);
             console.log('Updated at:', localData._updatedAt || 'Unknown');
         } else {
             console.log('No data for', dateKey);
@@ -1303,7 +1335,7 @@
             try {
                 const { data, error } = await client
                     .from('daily_schedules')
-                    .select('scheduler_id, scheduler_name, divisions, updated_at, schedule_data, unified_times')
+                    .select('scheduler_id, scheduler_name, divisions, updated_at, schedule_data, unified_times, is_rainy_day')
                     .eq('camp_id', campId)
                     .eq('date_key', dateKey);
 
@@ -1317,11 +1349,14 @@
                     data.forEach((r, i) => {
                         const bunks = Object.keys(r.schedule_data?.scheduleAssignments || {}).length;
                         const slots = r.schedule_data?.unifiedTimes?.length || r.unified_times?.length || 0;
+                        const isRainy = r.is_rainy_day || r.schedule_data?.isRainyDay || r.schedule_data?.rainyDayMode;
+                        const rainyStart = r.schedule_data?.rainyDayStartTime;
                         totalCloudBunks += bunks;
                         const isMe = r.scheduler_id === userId ? ' (YOU)' : '';
                         console.log(`  [${i + 1}] ${r.scheduler_name || 'Unknown'}${isMe}`);
                         console.log(`      Divisions: ${JSON.stringify(r.divisions)}`);
                         console.log(`      Bunks: ${bunks}, Slots: ${slots}`);
+                        console.log(`      Rainy: ${isRainy}, StartTime: ${rainyStart}`);
                         console.log(`      Updated: ${r.updated_at}`);
                     });
                     console.log('Total cloud bunks (merged):', totalCloudBunks);
@@ -1409,6 +1444,6 @@
         setTimeout(initialize, 200);
     }
 
-    console.log('🎯 Campistry Schedule Orchestrator v1.3 loaded');
+    console.log('🎯 Campistry Schedule Orchestrator v1.5 loaded');
 
 })();
