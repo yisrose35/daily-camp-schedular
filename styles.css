@@ -1084,25 +1084,16 @@ label.override-checkbox span {
   color: var(--slate-500, #64748B);
 }
 
-/* App Logo Icons (Flow green, Me orange) */
-.app-logo-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+/* App Logo Images (full logos with icon + text) */
+.app-logo-full {
+  height: 40px;
+  width: auto;
+  display: block;
   flex-shrink: 0;
 }
 
-.app-logo-flow {
-  background: linear-gradient(135deg, var(--camp-green, #0D7C5C), var(--camp-green-light, #10B981));
-  box-shadow: 0 4px 12px rgba(13, 124, 92, 0.35);
-}
-
-.app-logo-me {
-  background: linear-gradient(135deg, #E67E22, #F39C12);
-  box-shadow: 0 4px 12px rgba(230, 126, 34, 0.35);
+.app-logo-me-img {
+  height: 32px;
 }
 
 .brand-accent-flow {
@@ -1135,11 +1126,7 @@ label.override-checkbox span {
   transform: translateY(-1px);
 }
 
-.header-app-switch .app-logo-icon {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-}
+/* padding adjusted for image-only content */
 
 .header-app-switch-label {
   font-size: 0.82rem;
