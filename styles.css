@@ -1099,11 +1099,12 @@ label.override-checkbox span {
   display: block;
   flex-shrink: 0;
   object-fit: contain;
+  vertical-align: middle;
 }
 
 .app-logo-flow-img {
-  height: 30px;
-  max-height: 30px;
+  height: 45px;
+  max-height: 45px;
   width: auto;
 }
 
