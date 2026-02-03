@@ -516,7 +516,7 @@ function initLocationsTab(){
                   <div id="pinned-defaults-list" style="margin-bottom:12px;"></div>
                   <div style="display:flex; gap:8px; align-items:center;">
                     <input id="new-pinned-tile-input" class="form-input" placeholder="Tile name" style="flex:1;">
-                    <select id="new-pinned-tile-location" class="form-input" style="flex:1;"></select>
+                  <select id="new-pinned-tile-location" class="form-input" style="flex:1; color:#111827; background:#fff; -webkit-appearance:menulist;"></select>
                     <button id="add-pinned-default-btn" style="background:#10B981; color:white; border:none; border-radius:8px; padding:8px 12px; cursor:pointer; font-size:0.85rem;">Add</button>
                   </div>
                 </div>
