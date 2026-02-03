@@ -1,14 +1,13 @@
 // =================================================================
-// app1.js — MERGED: Beta Camper Roster + Published SyncSpine
+// app1.js — v5.0: Inline Division/Grade/Bunk Management
 //
 // THEME: Modern Pro Camp (Emerald/White)
-// VERSION: 4.0 - Divisions/Bunks sourced from Campistry Me
+// VERSION: 5.0 - Hierarchical Division→Grade→Bunk creation in Setup
 // 
-// v4.0 CHANGES:
-// - Divisions & bunks are READ-ONLY (managed in Campistry Me)
-// - loadData() reads from campStructure (Campistry Me) as source of truth
-// - CSV import removed (use Campistry Me instead)
-// - Division/bunk add/edit/delete removed
+// v5.0 CHANGES:
+// - Divisions, grades & bunks can now be created/deleted directly in Setup
+// - Hierarchical detail pane: Division → Grades → Bunks (like Campistry Me)
+// - campStructure written as source of truth for cross-page compat
 // - Times still editable per division
 // - All window exports preserved for scheduler compatibility
 // =================================================================
@@ -16,7 +15,7 @@
     "use strict";
     
     // ==================== CONSTANTS ====================
-    const VERSION = "4.0";
+    const VERSION = "5.0";
     const DEBOUNCE_MS = 150;
     const DEFAULT_BUNK_SIZE = 0;
     
@@ -42,10 +41,10 @@
     });
 
     // ==================== STATE ====================
-    // Using a state object to avoid stale reference issues
     const state = {
         bunks: [],
-        divisions: {},
+        divisions: {},          // Flat: { divName: { startTime, endTime, bunks:[], color } }
+        campStructure: {},      // Hierarchical: { divName: { color, grades: { gradeName: { bunks:[] } } } }
         specialActivities: [],
         availableDivisions: [],
         selectedDivision: null,
@@ -53,26 +52,20 @@
         sportMetaData: {},
         allSports: [...DEFAULT_SPORTS],
         savedSkeletons: {},
-        skeletonAssignments: {}
+        skeletonAssignments: {},
+        // UI state for expand/collapse
+        expandedDivisions: new Set(),
+        expandedGrades: new Set()
     };
 
     // ==================== UTILITIES ====================
     
-    /**
-     * Deep clone an object safely
-     */
     function deepClone(obj) {
         if (obj === null || obj === undefined) return obj;
-        try {
-            return structuredClone(obj);
-        } catch {
-            return JSON.parse(JSON.stringify(obj));
-        }
+        try { return structuredClone(obj); }
+        catch { return JSON.parse(JSON.stringify(obj)); }
     }
     
-    /**
-     * Debounce function calls
-     */
     function debounce(fn, delay = DEBOUNCE_MS) {
         let timeoutId;
         return function (...args) {
@@ -81,9 +74,6 @@
         };
     }
     
-    /**
-     * Safe property access
-     */
     function safeGet(obj, path, defaultVal = null) {
         if (!obj || !path) return defaultVal;
         const keys = path.split('.');
@@ -95,56 +85,35 @@
         return result ?? defaultVal;
     }
     
-    /**
-     * Parse time string to minutes
-     */
     function parseTimeToMinutes(str) {
         if (!str || typeof str !== "string") return null;
-        
         let s = str.trim().toLowerCase();
         let meridiem = null;
-        
         if (s.endsWith("am") || s.endsWith("pm")) {
             meridiem = s.endsWith("am") ? "am" : "pm";
             s = s.replace(/am|pm/gi, "").trim();
         }
-        
         const match = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
         if (!match) return null;
-        
         let hours = parseInt(match[1], 10);
         const minutes = parseInt(match[2], 10);
-        
         if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
-        
         if (meridiem) {
             if (hours === 12) hours = meridiem === "am" ? 0 : 12;
             else if (meridiem === "pm" && hours < 12) hours += 12;
         }
-        
         return hours * 60 + minutes;
     }
     
-    /**
-     * Compare bunks for sorting (natural sort)
-     */
     function compareBunks(a, b) {
-        const strA = String(a ?? "");
-        const strB = String(b ?? "");
-        return strA.localeCompare(strB, undefined, { numeric: true, sensitivity: "base" });
+        return String(a ?? "").localeCompare(String(b ?? ""), undefined, { numeric: true, sensitivity: "base" });
     }
     
-    /**
-     * Sort bunks array in place
-     */
     function sortBunksInPlace(arr) {
         if (!Array.isArray(arr)) return;
         arr.sort(compareBunks);
     }
     
-    /**
-     * Escape HTML to prevent XSS
-     */
     function escapeHtml(str) {
         if (!str) return "";
         const div = document.createElement("div");
@@ -154,9 +123,6 @@
 
     // ==================== SYNC SPINE ====================
     
-    /**
-     * Sync state to global authority - call after ANY state mutation
-     */
     function syncSpine() {
         window.setGlobalDivisions?.(deepClone(state.divisions));
         window.setGlobalBunks?.(deepClone(state.bunks));
@@ -182,14 +148,9 @@
     
     function getNextUniqueDivisionColor(divisionsObj = state.divisions) {
         const usedColors = new Set(
-            Object.values(divisionsObj || {})
-                .map(d => d?.color)
-                .filter(Boolean)
+            Object.values(divisionsObj || {}).map(d => d?.color).filter(Boolean)
         );
-        
         const startIndex = getColorIndex();
-        
-        // Try to find unused color
         for (let i = 0; i < DEFAULT_COLORS.length; i++) {
             const index = (startIndex + i) % DEFAULT_COLORS.length;
             const color = DEFAULT_COLORS[index];
@@ -198,9 +159,213 @@
                 return color;
             }
         }
-        
-        // All colors used - cycle through
         return getNextDivisionColor();
+    }
+
+    function getNextUniqueStructureColor() {
+        const usedColors = new Set(
+            Object.values(state.campStructure || {}).map(d => d?.color).filter(Boolean)
+        );
+        const startIndex = getColorIndex();
+        for (let i = 0; i < DEFAULT_COLORS.length; i++) {
+            const index = (startIndex + i) % DEFAULT_COLORS.length;
+            const color = DEFAULT_COLORS[index];
+            if (!usedColors.has(color)) {
+                setColorIndex(index + 1);
+                return color;
+            }
+        }
+        return getNextDivisionColor();
+    }
+
+    // ==================== CAMP STRUCTURE ↔ FLAT DIVISIONS ====================
+
+    /**
+     * Rebuild flat state.divisions + state.bunks from state.campStructure
+     * Preserves existing times from state.divisions
+     */
+    function rebuildFlatDivisions() {
+        const existingTimes = {};
+        Object.entries(state.divisions).forEach(([name, div]) => {
+            if (div?.startTime || div?.endTime) {
+                existingTimes[name] = { startTime: div.startTime || "", endTime: div.endTime || "" };
+            }
+        });
+
+        const newDivisions = {};
+        const allBunks = [];
+
+        Object.entries(state.campStructure).forEach(([divName, divData]) => {
+            if (typeof divData !== 'object' || divData === null) return;
+            const bunks = [];
+            Object.values(divData.grades || {}).forEach(grade => {
+                (grade.bunks || []).forEach(b => {
+                    bunks.push(b);
+                    if (!allBunks.includes(b)) allBunks.push(b);
+                });
+            });
+            sortBunksInPlace(bunks);
+
+            const times = existingTimes[divName] || {};
+            newDivisions[divName] = {
+                startTime: times.startTime || "",
+                endTime: times.endTime || "",
+                bunks: bunks,
+                color: divData.color || getNextUniqueDivisionColor(newDivisions)
+            };
+        });
+
+        state.divisions = newDivisions;
+        state.bunks = allBunks;
+        state.availableDivisions = Object.keys(state.divisions);
+        syncSpine();
+    }
+
+    /**
+     * Migrate old flat divisions to hierarchical campStructure
+     */
+    function migrateToStructure(oldDivisions) {
+        const struct = {};
+        Object.entries(oldDivisions).forEach(([divName, divData]) => {
+            const bunks = (divData.bunks || []).map(b => typeof b === 'string' ? b : b.name);
+            struct[divName] = {
+                color: divData.color || DEFAULT_COLORS[Object.keys(struct).length % DEFAULT_COLORS.length],
+                grades: bunks.length > 0 ? { 'Default': { bunks } } : {}
+            };
+        });
+        return struct;
+    }
+
+    // ==================== DIVISION / GRADE / BUNK OPERATIONS ====================
+
+    function addDivision() {
+        const input = document.getElementById("divisionInput");
+        const name = input?.value?.trim();
+        if (!name) return;
+
+        if (state.campStructure[name]) {
+            alert("Division '" + name + "' already exists.");
+            return;
+        }
+
+        state.campStructure[name] = {
+            color: getNextUniqueStructureColor(),
+            grades: {}
+        };
+        state.expandedDivisions.add(name);
+
+        input.value = "";
+        rebuildFlatDivisions();
+        state.selectedDivision = name;
+        saveData();
+        setupDivisionButtons();
+        renderDivisionDetailPane();
+    }
+
+    function deleteDivision(divName) {
+        if (!confirm('Delete "' + divName + '" and all its grades & bunks?')) return;
+        delete state.campStructure[divName];
+        state.expandedDivisions.delete(divName);
+        // Clean any expanded grades for this division
+        [...state.expandedGrades].forEach(key => {
+            if (key.startsWith(divName + '||')) state.expandedGrades.delete(key);
+        });
+
+        rebuildFlatDivisions();
+        if (state.selectedDivision === divName) {
+            state.selectedDivision = state.availableDivisions[0] || null;
+        }
+        saveData();
+        setupDivisionButtons();
+        renderDivisionDetailPane();
+    }
+
+    function addGradeToDiv(divName) {
+        const input = document.getElementById("add-grade-input-" + CSS.escape(divName));
+        const gradeName = input?.value?.trim();
+        if (!gradeName) return;
+
+        const div = state.campStructure[divName];
+        if (!div) return;
+        if (!div.grades) div.grades = {};
+
+        if (div.grades[gradeName]) {
+            alert("Grade '" + gradeName + "' already exists in " + divName + ".");
+            return;
+        }
+
+        div.grades[gradeName] = { bunks: [] };
+        state.expandedGrades.add(divName + '||' + gradeName);
+        input.value = "";
+
+        rebuildFlatDivisions();
+        saveData();
+        renderDivisionDetailPane();
+
+        // Focus the bunk input for this new grade
+        setTimeout(() => {
+            document.getElementById("add-bunk-input-" + CSS.escape(divName) + "-" + CSS.escape(gradeName))?.focus();
+        }, 60);
+    }
+
+    function deleteGrade(divName, gradeName) {
+        if (!confirm('Delete grade "' + gradeName + '" and all its bunks?')) return;
+        const div = state.campStructure[divName];
+        if (!div?.grades) return;
+        delete div.grades[gradeName];
+        state.expandedGrades.delete(divName + '||' + gradeName);
+
+        rebuildFlatDivisions();
+        saveData();
+        renderDivisionDetailPane();
+    }
+
+    function addBunkToGrade(divName, gradeName) {
+        const inputId = "add-bunk-input-" + CSS.escape(divName) + "-" + CSS.escape(gradeName);
+        const input = document.getElementById(inputId);
+        const bunkName = input?.value?.trim();
+        if (!bunkName) return;
+
+        const gradeData = state.campStructure[divName]?.grades?.[gradeName];
+        if (!gradeData) return;
+        if (!gradeData.bunks) gradeData.bunks = [];
+
+        if (gradeData.bunks.includes(bunkName)) {
+            alert("Bunk '" + bunkName + "' already exists.");
+            return;
+        }
+
+        gradeData.bunks.push(bunkName);
+        input.value = "";
+
+        rebuildFlatDivisions();
+        saveData();
+        renderDivisionDetailPane();
+
+        setTimeout(() => document.getElementById(inputId)?.focus(), 60);
+    }
+
+    function deleteBunk(divName, gradeName, bunkName) {
+        const gradeData = state.campStructure[divName]?.grades?.[gradeName];
+        if (!gradeData) return;
+        gradeData.bunks = (gradeData.bunks || []).filter(b => b !== bunkName);
+
+        rebuildFlatDivisions();
+        saveData();
+        renderDivisionDetailPane();
+    }
+
+    function toggleDetailDivision(divName) {
+        if (state.expandedDivisions.has(divName)) state.expandedDivisions.delete(divName);
+        else state.expandedDivisions.add(divName);
+        renderDivisionDetailPane();
+    }
+
+    function toggleDetailGrade(divName, gradeName) {
+        const key = divName + '||' + gradeName;
+        if (state.expandedGrades.has(key)) state.expandedGrades.delete(key);
+        else state.expandedGrades.add(key);
+        renderDivisionDetailPane();
     }
 
     // ==================== STYLES ====================
@@ -301,213 +466,289 @@
                 color: #111827;
             }
             
-            .division-header-left .division-name {
-                cursor: text;
+            .division-status-dot {
+                width: 10px;
+                height: 10px;
+                border-radius: 50%;
+                flex-shrink: 0;
             }
             
-            .division-status-dot {
-                width: 11px;
-                height: 11px;
-                border-radius: 999px;
-                background: #00C896;
-                box-shadow: 0 0 0 4px rgba(0, 200, 150, 0.25);
+            .division-name {
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
             }
             
             .division-header-summary {
                 font-size: 0.8rem;
                 color: #6B7280;
-                text-align: right;
-                white-space: nowrap;
+                font-weight: 400;
             }
             
             .division-edit-grid {
                 display: flex;
-                flex-wrap: wrap;
-                gap: 20px;
-                margin-top: 6px;
+                flex-direction: column;
+                gap: 14px;
             }
             
             .division-mini-card {
-                flex: 1 1 280px;
-                border-radius: 16px;
                 background: #FFFFFF;
                 border: 1px solid #E5E7EB;
-                padding: 12px 14px 14px;
-                box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+                border-radius: 12px;
+                padding: 12px 14px;
+                box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
             }
             
             .division-mini-header {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                margin-bottom: 8px;
-                padding-bottom: 6px;
-                font-size: 0.78rem;
-                text-transform: uppercase;
-                letter-spacing: 0.06em;
-                color: #6B7280;
                 font-weight: 600;
-                border-bottom: 1px solid rgba(148, 163, 184, 0.4);
-            }
-            
-            .division-mini-pill {
-                padding: 4px 12px;
-                border-radius: 999px;
-                background: #ECFDF5;
-                color: #047857;
-                font-size: 0.7rem;
-                border: none;
-                cursor: default;
-                font-weight: 500;
-                box-shadow: 0 4px 10px rgba(16, 185, 129, 0.35);
+                font-size: 0.82rem;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                color: #374151;
+                margin-bottom: 6px;
             }
             
             .division-mini-help {
-                margin: 0 0 10px;
                 font-size: 0.78rem;
-                color: #6B7280;
-                max-width: 340px;
+                color: #9CA3AF;
+                margin: 0 0 6px;
+            }
+            
+            .division-bunk-pill {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                padding: 5px 12px;
+                border-radius: 999px;
+                background: #F1F5F9;
+                color: #1E293B;
+                font-size: 0.8rem;
+                font-weight: 500;
+                border: 1px solid transparent;
+                transition: all 0.15s ease;
+            }
+            
+            .division-bunk-pill:hover {
+                background: rgba(13, 124, 92, 0.12);
+                border-color: #0D7C5C;
+            }
+            
+            .bunk-size-badge {
+                background: #E2E8F0;
+                color: #64748B;
+                padding: 1px 6px;
+                border-radius: 999px;
+                font-size: 0.7rem;
+                font-weight: 500;
             }
             
             .division-color-row {
                 display: flex;
                 align-items: center;
-                gap: 10px;
-                margin: 6px 0 16px;
+                gap: 8px;
                 font-size: 0.8rem;
-                color: #4B5563;
+                color: #6B7280;
+                margin-bottom: 12px;
             }
-            
-            .division-color-row input[type="color"] {
-                -webkit-appearance: none;
-                appearance: none;
-                width: 68px;
-                height: 26px;
-                padding: 0;
-                border-radius: 999px;
+
+            /* ===== Hierarchy Detail Styles (v5.0) ===== */
+
+            .hierarchy-section {
+                margin-top: 14px;
+            }
+
+            .grade-block-detail {
+                background: #FFFFFF;
                 border: 1px solid #E5E7EB;
-                background: #FFFFFF;
+                border-radius: 10px;
+                margin-bottom: 8px;
                 overflow: hidden;
-                box-shadow: 0 4px 10px rgba(15, 23, 42, 0.12);
-                cursor: pointer;
+                transition: box-shadow 0.15s ease;
             }
-            
-            .division-color-row input[type="color"]::-webkit-color-swatch {
-                border: none;
-                border-radius: 999px;
-                padding: 0;
+
+            .grade-block-detail:hover {
+                box-shadow: 0 4px 12px rgba(15,23,42,0.06);
             }
-            
-            .division-bunk-pill {
-                padding: 4px 10px;
-                border-radius: 999px;
-                border: 1px solid #D1D5DB;
-                background: #FFFFFF;
-                color: #374151;
-                font-size: 0.8rem;
-                cursor: pointer;
-                display: inline-flex;
+
+            .grade-header-detail {
+                display: flex;
+                justify-content: space-between;
                 align-items: center;
-                justify-content: center;
-                gap: 6px;
-                min-width: 28px;
-                box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);
-                transition: all 0.12s ease;
+                padding: 8px 12px;
+                cursor: pointer;
+                transition: background 0.12s ease;
                 user-select: none;
             }
-            
-            .division-bunk-pill:hover {
-                background-color: #F3F4F6;
-                box-shadow: 0 3px 8px rgba(15, 23, 42, 0.14);
-                transform: translateY(-0.5px);
+
+            .grade-header-detail:hover {
+                background: #F9FAFB;
             }
-            
-            .bunk-size-badge {
-                background: #ECFDF5;
-                color: #047857;
-                border-radius: 6px;
-                padding: 1px 5px;
-                font-size: 0.7rem;
-                font-weight: 600;
-                border: 1px solid #A7F3D0;
-            }
-            
-            .bunk-edit-form {
-                display: inline-flex;
-                align-items: center;
-                gap: 6px;
-                padding: 3px 6px;
-                border-radius: 999px;
-                border: 1px solid #00C896;
-                background: #FFFFFF;
-                box-shadow: 0 2px 8px rgba(0, 200, 150, 0.15);
-            }
-            
-            .bunk-edit-input {
-                border: 1px solid #E5E7EB;
-                outline: none;
-                padding: 3px 6px;
-                width: 80px;
-                font-size: 0.85rem;
-                border-radius: 4px;
-            }
-            
-            .bunk-edit-input:focus {
-                border-color: #00C896;
-                box-shadow: 0 0 0 2px rgba(0, 200, 150, 0.2);
-            }
-            
-            .bunk-edit-size {
-                width: 65px;
-                border: 1px solid #E5E7EB;
-                border-radius: 4px;
-                text-align: center;
-                font-size: 0.85rem;
-                padding: 3px 2px;
-            }
-            
-            .bunk-edit-size:focus {
-                border-color: #00C896;
-                box-shadow: 0 0 0 2px rgba(0, 200, 150, 0.2);
-            }
-            
-            .bunk-edit-save {
-                background: #00C896;
-                color: white;
-                border: none;
-                border-radius: 50%;
-                width: 24px;
-                height: 24px;
+
+            .grade-header-left {
                 display: flex;
                 align-items: center;
-                justify-content: center;
-                font-size: 0.8rem;
-                cursor: pointer;
+                gap: 8px;
+            }
+
+            .grade-expand-icon {
+                transition: transform 0.2s ease;
+                color: #9CA3AF;
                 flex-shrink: 0;
-                transition: background 0.15s ease;
             }
-            
-            .bunk-edit-save:hover {
-                background: #00A67C;
+
+            .grade-expand-icon.collapsed {
+                transform: rotate(-90deg);
             }
-            
-            .bulk-card {
+
+            .grade-name-label {
+                font-weight: 600;
+                font-size: 0.85rem;
+                color: #111827;
+            }
+
+            .grade-bunk-count {
+                font-size: 0.72rem;
+                color: #9CA3AF;
+                background: #F3F4F6;
+                padding: 2px 8px;
+                border-radius: 999px;
+            }
+
+            .grade-delete-btn {
+                background: none;
+                border: none;
+                cursor: pointer;
+                color: #D1D5DB;
+                padding: 4px;
+                border-radius: 6px;
+                transition: all 0.15s;
+                display: flex;
+                align-items: center;
+            }
+
+            .grade-delete-btn:hover {
+                color: #EF4444;
+                background: #FEF2F2;
+            }
+
+            .grade-body-detail {
+                padding: 8px 12px 12px;
+                border-top: 1px solid #F3F4F6;
+                background: #FAFBFC;
+            }
+
+            .grade-body-detail.collapsed {
+                display: none;
+            }
+
+            .bunks-wrap {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+                align-items: center;
+            }
+
+            .bunk-chip-detail {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                padding: 4px 10px;
+                background: #F1F5F9;
+                border: 1px solid #E2E8F0;
+                border-radius: 999px;
+                font-size: 0.78rem;
+                font-weight: 500;
+                color: #1E293B;
+                transition: all 0.12s;
+            }
+
+            .bunk-chip-detail:hover {
+                background: #E2E8F0;
+            }
+
+            .bunk-chip-x {
+                background: none;
+                border: none;
+                cursor: pointer;
+                color: #D1D5DB;
+                font-size: 0.75rem;
+                padding: 0 0 0 2px;
+                line-height: 1;
+                transition: color 0.12s;
+                display: flex;
+                align-items: center;
+            }
+
+            .bunk-chip-x:hover {
+                color: #EF4444;
+            }
+
+            .quick-add-row {
+                display: flex;
+                gap: 6px;
+                align-items: center;
+                margin-top: 6px;
+            }
+
+            .quick-add-row input {
+                flex: 1;
+                min-width: 80px;
+                padding: 5px 10px;
                 border: 1px solid #E5E7EB;
-                border-radius: 16px;
-                padding: 18px 24px;
-                background: #FFFFFF;
-                box-shadow: 0 4px 14px rgba(0, 0, 0, 0.04);
-                margin-bottom: 24px;
-                width: 100%;
-                box-sizing: border-box;
+                border-radius: 8px;
+                font-size: 0.8rem;
+                outline: none;
+                transition: border-color 0.15s;
             }
-            
-            .muted {
-                color: #6B7280;
-                font-size: 0.86rem;
+
+            .quick-add-row input:focus {
+                border-color: #00C896;
+                box-shadow: 0 0 0 2px rgba(0,200,150,0.15);
             }
-            
-            /* Delete confirmation styling */
+
+            .quick-add-btn {
+                background: #F3F4F6;
+                border: 1px solid #E5E7EB;
+                border-radius: 8px;
+                padding: 5px 10px;
+                cursor: pointer;
+                color: #374151;
+                font-size: 0.8rem;
+                font-weight: 500;
+                transition: all 0.12s;
+                display: flex;
+                align-items: center;
+                gap: 4px;
+            }
+
+            .quick-add-btn:hover {
+                background: #E5E7EB;
+                border-color: #D1D5DB;
+            }
+
+            .add-grade-section {
+                margin-top: 10px;
+                padding-top: 10px;
+                border-top: 1px dashed #E5E7EB;
+            }
+
+            .delete-division-btn {
+                background: none;
+                border: 1px solid #FECACA;
+                color: #EF4444;
+                padding: 6px 14px;
+                border-radius: 8px;
+                font-size: 0.78rem;
+                cursor: pointer;
+                transition: all 0.12s;
+                font-weight: 500;
+            }
+
+            .delete-division-btn:hover {
+                background: #FEF2F2;
+                border-color: #EF4444;
+            }
+
             .bunk-delete-confirm {
                 background: #FEF2F2;
                 border-color: #FECACA;
@@ -523,50 +764,8 @@
         document.head.appendChild(style);
     }
 
-    // ==================== BUNK OPERATIONS ====================
-    // Bunks are now managed in Campistry Me - these are kept as no-ops for compatibility
-
-    // ==================== CSV / BULK IMPORT ====================
-    // CSV import removed - use Campistry Me for data import
-    
-    /**
-     * Render a "Campistry Me" link banner at top of setup (replaces CSV import UI)
-     */
-    function renderCampistryMeLink() {
-        if (document.getElementById("me-link-banner")) return;
-        
-        const grid = document.querySelector(".setup-grid");
-        const target = grid || document.getElementById("division-detail-pane")?.parentNode;
-        if (!target) return;
-        
-        const card = document.createElement("section");
-        card.className = "setup-card setup-card-wide bulk-card";
-        card.id = "me-link-banner";
-        
-        card.innerHTML = `
-            <div style="display:flex; align-items:center; justify-content:space-between; gap:20px; flex-wrap:wrap;">
-                <div style="flex:1; min-width:200px;">
-                    <h3 style="margin:0; font-size:1.1rem; color:#111827; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                        Camp Setup & Configuration
-                        <span style="font-size:0.7rem; background:#8A5DFF; color:white; padding:2px 8px; border-radius:999px;">Step 1</span>
-                    </h3>
-                    <p class="muted" style="margin:4px 0 0;">
-                        Divisions, grades, bunks &amp; campers are managed in <a href="campistry_me.html" style="color:#7C3AED; font-weight:600;">Campistry Me</a>. Configure <strong>times</strong> and <strong>scheduling settings</strong> here.
-                    </p>
-                </div>
-                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                    <a href="campistry_me.html" style="background:#7C3AED; color:white; border:none; padding:8px 18px; border-radius:999px; font-size:0.85rem; cursor:pointer; font-weight:600; text-decoration:none; transition:all 0.15s ease;">
-                        Open Campistry Me
-                    </a>
-                </div>
-            </div>
-        `;
-        
-        target.prepend(card);
-    }
-
-    // ==================== DIVISION OPERATIONS ====================
-    // Divisions are now managed in Campistry Me - editing removed
+    // ==================== BUNK OPERATIONS (LEGACY COMPAT) ====================
+    // No-ops kept for any external callers
 
     // ==================== UI RENDERING ====================
     
@@ -579,21 +778,19 @@
         if (!state.availableDivisions?.length) {
             container.innerHTML = `
                 <p class="muted">
-                    No divisions yet. <a href="campistry_me.html" style="color:#7C3AED; font-weight:600;">Open Campistry Me</a> to create divisions, grades, and bunks.
+                    No divisions yet. Use the input above to create one.
                 </p>
             `;
             renderDivisionDetailPane();
             return;
         }
         
-        // Use DocumentFragment for better performance
         const fragment = document.createDocumentFragment();
         
         state.availableDivisions.forEach((name) => {
             const divObj = state.divisions[name];
             if (!divObj) return;
             
-            // Calculate total campers
             let totalKids = 0;
             (divObj.bunks || []).forEach(b => {
                 totalKids += state.bunkMetaData[b]?.size || 0;
@@ -607,6 +804,12 @@
             
             card.addEventListener("click", () => {
                 state.selectedDivision = name;
+                // Auto-expand when selecting
+                state.expandedDivisions.add(name);
+                const struct = state.campStructure[name];
+                if (struct?.grades) {
+                    Object.keys(struct.grades).forEach(g => state.expandedGrades.add(name + '||' + g));
+                }
                 saveData();
                 setupDivisionButtons();
                 renderDivisionDetailPane();
@@ -614,6 +817,7 @@
             
             const color = divObj.color || DEFAULT_COLORS[0];
             const bunkCount = (divObj.bunks || []).length;
+            const gradeCount = Object.keys(state.campStructure[name]?.grades || {}).length;
             
             card.innerHTML = `
                 <div class="division-card-top">
@@ -623,7 +827,7 @@
                     <div class="division-color-chip-list" style="background-color:${escapeHtml(color)}"></div>
                 </div>
                 <div class="division-card-subline">
-                    ${bunkCount} bunks • <strong>${totalKids}</strong> campers
+                    ${gradeCount} grade${gradeCount !== 1 ? 's' : ''} · ${bunkCount} bunk${bunkCount !== 1 ? 's' : ''} · <strong>${totalKids}</strong> camper${totalKids !== 1 ? 's' : ''}
                 </div>
             `;
             
@@ -643,33 +847,33 @@
         if (!state.selectedDivision || !state.divisions[state.selectedDivision]) {
             pane.innerHTML = `
                 <p class="muted">
-                    Click a division on the left to set its <strong>times</strong> 
-                    and view its <strong>bunks</strong>.
+                    Click a division on the left to set its <strong>times</strong>,
+                    manage <strong>grades</strong>, and add <strong>bunks</strong>.
                 </p>
             `;
             return;
         }
         
-        const divObj = state.divisions[state.selectedDivision];
+        const divName = state.selectedDivision;
+        const divObj = state.divisions[divName];
+        const structDiv = state.campStructure[divName] || { grades: {} };
         const color = divObj.color || DEFAULT_COLORS[0];
         
-        // Calculate totals
         let totalKids = 0;
-        (divObj.bunks || []).forEach(b => {
-            totalKids += state.bunkMetaData[b]?.size || 0;
-        });
+        (divObj.bunks || []).forEach(b => { totalKids += state.bunkMetaData[b]?.size || 0; });
         
         const bunkCount = (divObj.bunks || []).length;
+        const gradeCount = Object.keys(structDiv.grades || {}).length;
         const timesSummary = divObj.startTime && divObj.endTime
-            ? `${divObj.startTime} – ${divObj.endTime}`
-            : "Times not set";
+            ? `${divObj.startTime} – ${divObj.endTime}` : "Times not set";
         
-        // Build the pane - read-only for divisions/bunks, editable for times
+        // ====== HEADER ======
         pane.innerHTML = `
             <div class="detail-header" style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #E5E7EB; padding-bottom:8px; margin-bottom:10px; column-gap:12px;">
-                <h3 style="margin:0; font-size:1rem; font-weight:600; color:#111827;">
-                    Division Details
+                <h3 style="margin:0; font-size:1.1rem; font-weight:600; color:#111827;">
+                    ${escapeHtml(divName)}
                 </h3>
+                <button class="delete-division-btn" id="delete-div-btn">Delete Division</button>
             </div>
             
             <div class="division-color-row">
@@ -681,39 +885,49 @@
                 <div class="division-edit-header">
                     <div class="division-header-left">
                         <span class="division-status-dot" style="background-color:${escapeHtml(color)}; box-shadow:0 0 0 4px ${escapeHtml(color)}33;"></span>
-                        <span class="division-name">${escapeHtml(state.selectedDivision)}</span>
+                        <span class="division-name">${escapeHtml(divName)}</span>
                     </div>
                     <div class="division-header-summary">
-                        ${bunkCount} bunks • <strong>${totalKids}</strong> campers • ${escapeHtml(timesSummary)}
+                        ${gradeCount} grade${gradeCount !== 1 ? 's' : ''} · ${bunkCount} bunk${bunkCount !== 1 ? 's' : ''} · <strong>${totalKids}</strong> campers · ${escapeHtml(timesSummary)}
                     </div>
                 </div>
                 
                 <div class="division-edit-grid">
+                    <!-- TIMES CARD -->
                     <div class="division-mini-card">
                         <div class="division-mini-header"><span>Division Times</span></div>
                         <p class="division-mini-help">Set the daily time window this division is in camp.</p>
                         <div style="display:flex; align-items:center; gap:8px; margin-top:4px; flex-wrap:wrap;">
-                            <input id="time-start-input" value="${escapeHtml(divObj.startTime || "")}" placeholder="9:00am" style="width:80px; padding:4px 8px; border-radius:999px; border:1px solid #D1D5DB; font-size:0.85rem;">
-                            <span class="muted">to</span>
-                            <input id="time-end-input" value="${escapeHtml(divObj.endTime || "")}" placeholder="4:00pm" style="width:80px; padding:4px 8px; border-radius:999px; border:1px solid #D1D5DB; font-size:0.85rem;">
-                            <button id="save-times-btn" style="background:#00C896; color:white; border:none; padding:4px 12px; border-radius:999px; font-weight:600; cursor:pointer; transition:background 0.15s ease;">
-                                Save
-                            </button>
+                            <input id="time-start-input" value="${escapeHtml(divObj.startTime || "")}" placeholder="9:00am" style="width:80px; padding:4px 8px; border-radius:8px; border:1px solid #D1D5DB; font-size:0.85rem;">
+                            <span style="color:#9CA3AF;">to</span>
+                            <input id="time-end-input" value="${escapeHtml(divObj.endTime || "")}" placeholder="4:00pm" style="width:80px; padding:4px 8px; border-radius:8px; border:1px solid #D1D5DB; font-size:0.85rem;">
+                            <button id="save-times-btn" style="background:#111827; color:white; border:none; padding:5px 14px; border-radius:8px; font-size:0.8rem; cursor:pointer; font-weight:500;">Save Times</button>
                         </div>
                     </div>
                     
+                    <!-- GRADES & BUNKS HIERARCHY -->
                     <div class="division-mini-card">
-                        <div class="division-mini-header"><span>Bunks in this Division</span></div>
-                        <p class="division-mini-help">
-                            Bunks are managed in <a href="campistry_me.html" style="color:#7C3AED; font-weight:600;">Campistry Me</a>.
-                        </p>
-                        <div id="bunk-list" style="margin-top:6px; display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;"></div>
+                        <div class="division-mini-header"><span>Grades & Bunks</span></div>
+                        <p class="division-mini-help">Organize bunks within grades. Add grades first, then add bunks to each grade.</p>
+                        <div id="grades-hierarchy-container"></div>
+                        <div class="add-grade-section">
+                            <div class="quick-add-row">
+                                <input id="add-grade-input-${escapeHtml(divName)}" placeholder="+ Add grade (e.g. 3rd Grade)" style="flex:1;">
+                                <button class="quick-add-btn" id="add-grade-btn">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                    Add Grade
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
         `;
         
-        // Time inputs (still editable)
+        // ====== WIRE UP: Delete Division ======
+        pane.querySelector("#delete-div-btn")?.addEventListener("click", () => deleteDivision(divName));
+
+        // ====== WIRE UP: Times ======
         const startInput = pane.querySelector("#time-start-input");
         const endInput = pane.querySelector("#time-end-input");
         const saveTimesBtn = pane.querySelector("#save-times-btn");
@@ -731,26 +945,117 @@
         startInput?.addEventListener("keydown", (e) => e.key === "Enter" && saveTimes());
         endInput?.addEventListener("keydown", (e) => e.key === "Enter" && saveTimes());
         
-        // Bunk list (read-only pills)
-        const bunkList = pane.querySelector("#bunk-list");
-        if (bunkList) {
-            if (!divObj.bunks?.length) {
-                bunkList.innerHTML = '<p class="muted">No bunks assigned yet.</p>';
-            } else {
-                const sorted = [...divObj.bunks].sort(compareBunks);
-                sorted.forEach(bunkName => {
-                    const meta = state.bunkMetaData[bunkName] || { size: 0 };
-                    const pill = document.createElement("span");
-                    pill.className = "division-bunk-pill";
-                    pill.style.cursor = "default";
-                    pill.innerHTML = `
-                        ${escapeHtml(bunkName)} 
-                        <span class="bunk-size-badge">${meta.size || 0}</span>
-                    `;
-                    bunkList.appendChild(pill);
-                });
-            }
+        // ====== WIRE UP: Add Grade ======
+        const addGradeBtn = pane.querySelector("#add-grade-btn");
+        const addGradeInput = pane.querySelector("#add-grade-input-" + CSS.escape(divName));
+        addGradeBtn?.addEventListener("click", () => addGradeToDiv(divName));
+        addGradeInput?.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") { e.preventDefault(); addGradeToDiv(divName); }
+        });
+        
+        // ====== RENDER GRADES HIERARCHY ======
+        renderGradesHierarchy(divName, structDiv);
+    }
+
+    /**
+     * Render the grades & bunks tree inside the detail pane
+     */
+    function renderGradesHierarchy(divName, structDiv) {
+        const container = document.getElementById("grades-hierarchy-container");
+        if (!container) return;
+
+        const grades = structDiv.grades || {};
+        const gradeNames = Object.keys(grades).sort();
+
+        if (gradeNames.length === 0) {
+            container.innerHTML = '<p style="color:#9CA3AF; font-size:0.82rem; margin:8px 0 0;">No grades yet. Add one below.</p>';
+            return;
         }
+
+        container.innerHTML = "";
+
+        gradeNames.forEach(gradeName => {
+            const gradeKey = divName + '||' + gradeName;
+            const isExpanded = state.expandedGrades.has(gradeKey);
+            const bunks = grades[gradeName].bunks || [];
+
+            // --- Grade Block ---
+            const block = document.createElement("div");
+            block.className = "grade-block-detail";
+
+            // --- Grade Header ---
+            const header = document.createElement("div");
+            header.className = "grade-header-detail";
+            header.innerHTML = `
+                <div class="grade-header-left">
+                    <svg class="grade-expand-icon ${isExpanded ? '' : 'collapsed'}" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    <span class="grade-name-label">${escapeHtml(gradeName)}</span>
+                    <span class="grade-bunk-count">${bunks.length} bunk${bunks.length !== 1 ? 's' : ''}</span>
+                </div>
+            `;
+
+            // Delete grade button (in header, right side)
+            const delBtn = document.createElement("button");
+            delBtn.className = "grade-delete-btn";
+            delBtn.title = "Delete grade";
+            delBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
+            delBtn.addEventListener("click", (e) => { e.stopPropagation(); deleteGrade(divName, gradeName); });
+            header.appendChild(delBtn);
+
+            header.addEventListener("click", (e) => {
+                if (e.target.closest('.grade-delete-btn')) return;
+                toggleDetailGrade(divName, gradeName);
+            });
+
+            block.appendChild(header);
+
+            // --- Grade Body (bunks) ---
+            const body = document.createElement("div");
+            body.className = "grade-body-detail" + (isExpanded ? "" : " collapsed");
+
+            const bunksWrap = document.createElement("div");
+            bunksWrap.className = "bunks-wrap";
+
+            bunks.sort(compareBunks).forEach(bunkName => {
+                const meta = state.bunkMetaData[bunkName] || { size: 0 };
+                const chip = document.createElement("span");
+                chip.className = "bunk-chip-detail";
+                chip.innerHTML = `
+                    ${escapeHtml(bunkName)}
+                    <span class="bunk-size-badge">${meta.size || 0}</span>
+                    <button class="bunk-chip-x" title="Remove bunk">
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                `;
+                chip.querySelector(".bunk-chip-x").addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    deleteBunk(divName, gradeName, bunkName);
+                });
+                bunksWrap.appendChild(chip);
+            });
+
+            body.appendChild(bunksWrap);
+
+            // --- Add Bunk Row ---
+            const addRow = document.createElement("div");
+            addRow.className = "quick-add-row";
+            const addBunkInputId = "add-bunk-input-" + CSS.escape(divName) + "-" + CSS.escape(gradeName);
+            addRow.innerHTML = `
+                <input id="${addBunkInputId}" placeholder="+ Add bunk" style="flex:1;">
+                <button class="quick-add-btn" data-div="${escapeHtml(divName)}" data-grade="${escapeHtml(gradeName)}">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    Add
+                </button>
+            `;
+            addRow.querySelector("button").addEventListener("click", () => addBunkToGrade(divName, gradeName));
+            addRow.querySelector("input").addEventListener("keydown", (e) => {
+                if (e.key === "Enter") { e.preventDefault(); addBunkToGrade(divName, gradeName); }
+            });
+
+            body.appendChild(addRow);
+            block.appendChild(body);
+            container.appendChild(block);
+        });
     }
 
     // ==================== PERSISTENCE ====================
@@ -773,8 +1078,10 @@
         };
         
         window.saveGlobalSettings?.("app1", data);
+
+        // ★ Also save campStructure for cross-page compatibility (Campistry Me)
+        window.saveGlobalSettings?.("campStructure", state.campStructure);
         
-        // Update window.app1 reference
         updateWindowApp1();
     }
     
@@ -798,78 +1105,51 @@
             }
             
             // ============================================================
-            // SOURCE OF TRUTH: campStructure from Campistry Me
-            // Flatten grades → bunks for app1's flat division format
-            // Merge with app1's own times (startTime/endTime)
+            // SOURCE OF TRUTH: campStructure
+            // If campStructure exists, use it. Otherwise migrate from flat.
             // ============================================================
             if (Object.keys(campStructure).length > 0) {
-                console.log("[app1] Loading divisions from Campistry Me campStructure");
-                const meBasedDivisions = {};
-                const allBunks = [];
-                
-                Object.entries(campStructure).forEach(([divName, divData]) => {
-                    if (typeof divData !== 'object' || divData === null) return;
-                    
-                    const bunks = [];
-                    Object.values(divData.grades || {}).forEach(grade => {
-                        (grade.bunks || []).forEach(b => {
-                            bunks.push(b);
-                            if (!allBunks.includes(b)) allBunks.push(b);
-                        });
-                    });
-                    sortBunksInPlace(bunks);
-                    
-                    const times = existingTimes[divName] || {};
-                    meBasedDivisions[divName] = {
-                        startTime: times.startTime || "",
-                        endTime: times.endTime || "",
-                        bunks: bunks,
-                        color: divData.color || getNextUniqueDivisionColor(meBasedDivisions)
-                    };
-                });
-                
-                state.divisions = meBasedDivisions;
-                state.bunks = allBunks;
-                
+                console.log("[app1] Loading from campStructure");
+                state.campStructure = deepClone(campStructure);
+            } else if (data.divisions && Object.keys(data.divisions).length > 0) {
+                console.log("[app1] Migrating flat divisions to campStructure");
+                state.campStructure = migrateToStructure(data.divisions);
             } else {
-                // Fallback: use global authority > app1 data > empty
-                console.log("[app1] No campStructure found, falling back to app1/global data");
                 const globalDivisions = window.getGlobalDivisions?.() || {};
-                const globalBunks = window.getGlobalBunks?.() || [];
-                
                 if (Object.keys(globalDivisions).length > 0) {
-                    state.divisions = deepClone(globalDivisions);
-                } else if (data.divisions && Object.keys(data.divisions).length > 0) {
-                    state.divisions = deepClone(data.divisions);
+                    state.campStructure = migrateToStructure(globalDivisions);
                 } else {
-                    state.divisions = {};
+                    state.campStructure = {};
                 }
-                
-                if (globalBunks.length > 0) {
-                    state.bunks = deepClone(globalBunks);
-                } else if (data.bunks?.length > 0) {
-                    state.bunks = deepClone(data.bunks);
-                } else {
-                    state.bunks = [];
-                }
-                
-                // Validate and fix division data
-                const validDivisions = {};
-                Object.entries(state.divisions).forEach(([divName, div]) => {
-                    if (typeof div !== 'object' || div === null) return;
-                    
-                    validDivisions[divName] = {
-                        startTime: div.startTime || "",
-                        endTime: div.endTime || "",
-                        bunks: Array.isArray(div.bunks) ? div.bunks : [],
-                        color: div.color || getNextUniqueDivisionColor(validDivisions)
-                    };
-                    
-                    sortBunksInPlace(validDivisions[divName].bunks);
-                });
-                state.divisions = validDivisions;
             }
+
+            // Build flat divisions from campStructure
+            const meBasedDivisions = {};
+            const allBunks = [];
             
+            Object.entries(state.campStructure).forEach(([divName, divData]) => {
+                if (typeof divData !== 'object' || divData === null) return;
+                const bunks = [];
+                Object.values(divData.grades || {}).forEach(grade => {
+                    (grade.bunks || []).forEach(b => {
+                        bunks.push(b);
+                        if (!allBunks.includes(b)) allBunks.push(b);
+                    });
+                });
+                sortBunksInPlace(bunks);
+                
+                const times = existingTimes[divName] || {};
+                meBasedDivisions[divName] = {
+                    startTime: times.startTime || "",
+                    endTime: times.endTime || "",
+                    bunks: bunks,
+                    color: divData.color || getNextUniqueDivisionColor(meBasedDivisions)
+                };
+            });
+            
+            state.divisions = meBasedDivisions;
+            state.bunks = allBunks;
+
             // Update derived state
             state.availableDivisions = Object.keys(state.divisions);
             state.specialActivities = data.specialActivities || [];
@@ -894,8 +1174,10 @@
                     state.bunkMetaData[bunk].size = count;
                 }
             });
+
+            // Auto-expand all divisions on first load
+            Object.keys(state.campStructure).forEach(d => state.expandedDivisions.add(d));
             
-            // Update window.app1
             updateWindowApp1();
             
         } catch (e) {
@@ -903,10 +1185,6 @@
         }
     }
     
-    /**
-     * Update the window.app1 object with current state
-     * Called after any state change to keep references fresh
-     */
     function updateWindowApp1() {
         window.app1 = {
             get divisions() { return state.divisions; },
@@ -921,9 +1199,6 @@
             get sportMetaData() { return state.sportMetaData; }
         };
         
-        // Fix #2 - 🔴 CRITICAL: State/Window Sync
-        // Keep window references as direct references (not copies)
-        // so external code mutations are reflected in state
         window.divisions = state.divisions;
         window.availableDivisions = state.availableDivisions;
         window.bunks = state.bunks;
@@ -934,23 +1209,25 @@
     
     function initApp1() {
         ensureSharedSetupStyles();
-        
-        // Load data first
         loadData();
         
-        // Hide the division input row (now managed in Campistry Me)
+        // ★ v5.0: Re-enable division input (no longer hidden)
         const divisionInput = document.getElementById("divisionInput");
         const addDivisionBtn = document.getElementById("addDivisionBtn");
-        if (divisionInput) {
-            const fieldRow = divisionInput.closest('.setup-field-row');
-            if (fieldRow) fieldRow.style.display = 'none';
+        
+        // Wire up the Add Division button
+        if (addDivisionBtn) {
+            const newBtn = addDivisionBtn.cloneNode(true);
+            addDivisionBtn.parentNode.replaceChild(newBtn, addDivisionBtn);
+            newBtn.addEventListener("click", addDivision);
         }
-        if (addDivisionBtn && !divisionInput) {
-            const fieldRow = addDivisionBtn.closest('.setup-field-row');
-            if (fieldRow) fieldRow.style.display = 'none';
+        if (divisionInput) {
+            divisionInput.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") { e.preventDefault(); addDivision(); }
+            });
         }
         
-        // Hide the enable color toggle
+        // Hide the enable color toggle (auto-managed)
         const enableColor = document.getElementById("enableColor");
         if (enableColor) {
             const label = enableColor.closest('label');
@@ -964,10 +1241,9 @@
             detailPane.style.marginTop = "8px";
         }
         
-        // --- 🟢 Wire up the Erase All Button ---
+        // --- Wire up the Erase All Button ---
         const eraseAllBtn = document.getElementById("eraseAllBtn");
         if (eraseAllBtn) {
-            // Remove old listeners by cloning
             const newBtn = eraseAllBtn.cloneNode(true);
             eraseAllBtn.parentNode.replaceChild(newBtn, eraseAllBtn);
             
@@ -996,7 +1272,6 @@
                                 newBtn.style.opacity = "1";
                             }
                         } else {
-                            // Fallback if bridge isn't loaded
                             localStorage.clear();
                             window.location.reload();
                         }
@@ -1008,17 +1283,15 @@
         // Initial render
         setupDivisionButtons();
         renderDivisionDetailPane();
-        renderCampistryMeLink();
         
-        console.log(`[app1] v${VERSION} initialized - divisions sourced from Campistry Me`);
+        console.log(`[app1] v${VERSION} initialized - inline division/grade/bunk management`);
     }
 
     // ==================== WINDOW EXPORTS ====================
     
-    // Core initialization
     window.initApp1 = initApp1;
     
-    // Getters that always return current state
+    // Getters
     window.getDivisions = () => state.divisions;
     window.getBunkMetaData = () => state.bunkMetaData;
     window.getSportMetaData = () => state.sportMetaData;
@@ -1026,6 +1299,7 @@
     window.getAllGlobalSports = () => [...state.allSports].sort();
     window.getSavedSkeletons = () => state.savedSkeletons || {};
     window.getSkeletonAssignments = () => state.skeletonAssignments || {};
+    window.getCampStructure = () => state.campStructure;
     
     // Setters
     window.addGlobalSport = (sportName) => {
@@ -1037,7 +1311,6 @@
         }
     };
 
-    // Fix #1 - 🟠 HIGH: Missing removeGlobalSport Export
     window.removeGlobalSport = (sportName) => {
         if (!sportName) return;
         const idx = state.allSports.findIndex(sp => 
@@ -1078,10 +1351,23 @@
         saveData();
     };
     
-    // Legacy export - now a no-op since bunks managed in Campistry Me
+    // ★ v5.0: addDivisionBunk now works again (adds to Default grade)
     window.addDivisionBunk = (divName, bunkName) => {
-        console.warn("[app1] addDivisionBunk is deprecated - manage bunks in Campistry Me");
-        return false;
+        if (!divName || !bunkName || !state.campStructure[divName]) return false;
+        const struct = state.campStructure[divName];
+        if (!struct.grades) struct.grades = {};
+        // Add to 'Default' grade if no grades exist
+        const targetGrade = Object.keys(struct.grades).length > 0 
+            ? Object.keys(struct.grades)[0] 
+            : 'Default';
+        if (!struct.grades[targetGrade]) struct.grades[targetGrade] = { bunks: [] };
+        if (struct.grades[targetGrade].bunks.includes(bunkName)) return false;
+        struct.grades[targetGrade].bunks.push(bunkName);
+        rebuildFlatDivisions();
+        saveData();
+        setupDivisionButtons();
+        renderDivisionDetailPane();
+        return true;
     };
     
     // Color utilities
