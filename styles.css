@@ -1086,16 +1086,23 @@ label.override-checkbox span {
   color: var(--slate-500, #64748B);
 }
 
-/* App Logo Images (full logos with icon + text) */
+/* App Logo Images (transparent PNGs, no background) */
+.app-logo-campistry {
+  height: 36px;
+  width: auto;
+  display: block;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
 .app-logo-full {
-  height: 235px;
+  height: 250px;
   max-height: 250px;
   width: auto;
   max-width: none;
   display: block;
   flex-shrink: 0;
   object-fit: contain;
-  mix-blend-mode: multiply;
 }
 
 .app-logo-me-img {
