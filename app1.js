@@ -400,34 +400,7 @@
 
     // ==================== CAMPISTRY ME LINK BANNER ====================
 
-    function renderCampistryMeLink() {
-        if (document.getElementById("me-link-banner")) return;
-        
-        const grid = document.querySelector("#setup .setup-grid");
-        if (!grid) return;
-        
-        const card = document.createElement("section");
-        card.className = "setup-card setup-card-wide";
-        card.id = "me-link-banner";
-        card.style.cssText = "padding: 14px 18px;";
-        
-        card.innerHTML = `
-            <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
-                <div style="flex:1; min-width:180px;">
-                    <p style="margin:0; font-size:0.85rem; color:#6B7280;">
-                        Divisions, grades, bunks &amp; campers are managed in 
-                        <a href="campistry_me.html" style="color:#7C3AED; font-weight:600;">Campistry Me</a>.
-                        Configure <strong>times</strong> here.
-                    </p>
-                </div>
-                <a href="campistry_me.html" style="background:#7C3AED; color:white; border:none; padding:7px 16px; border-radius:999px; font-size:0.82rem; cursor:pointer; font-weight:600; text-decoration:none; transition:all 0.15s ease; white-space:nowrap;">
-                    Open Campistry Me
-                </a>
-            </div>
-        `;
-        
-        grid.prepend(card);
-    }
+    // Campistry Me link is now in the header (index.html)
 
     // ==================== UI RENDERING ====================
     
@@ -866,7 +839,6 @@
         // Initial render
         setupDivisionButtons();
         renderDivisionDetailPane();
-        renderCampistryMeLink();
         
         console.log(`[app1] v${VERSION} initialized — grades are scheduling units`);
     }
