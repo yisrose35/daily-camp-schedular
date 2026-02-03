@@ -1104,26 +1104,18 @@ label.override-checkbox span {
   color: #E67E22;
 }
 
-/* Header App Switch Link (Campistry Me box in Flow header) */
+/* Header App Switch Link (clickable logo link) */
 .header-app-switch {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 14px 6px 6px;
-  margin-left: 12px;
-  border-radius: 12px;
-  border: 1px solid var(--slate-200, #E2E8F0);
-  background: var(--slate-50, #F8FAFC);
+  margin-left: 16px;
   text-decoration: none;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: opacity 0.2s ease;
 }
 
 .header-app-switch:hover {
-  background: #FEF3E2;
-  border-color: #F5C77E;
-  box-shadow: 0 4px 12px rgba(230, 126, 34, 0.15);
-  transform: translateY(-1px);
+  opacity: 0.75;
 }
 
 /* padding adjusted for image-only content */
