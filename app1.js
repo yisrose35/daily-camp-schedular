@@ -474,11 +474,6 @@
                 const divObj = state.divisions[gradeName];
                 if (!divObj) return;
                 
-                let totalKids = 0;
-                (divObj.bunks || []).forEach(b => {
-                    totalKids += state.bunkMetaData[b]?.size || 0;
-                });
-                
                 const card = document.createElement("div");
                 card.className = "division-card";
                 if (state.selectedDivision === gradeName) {
@@ -493,11 +488,7 @@
                 });
                 
                 const color = divObj.color || DEFAULT_COLORS[0];
-                const bunkCount = (divObj.bunks || []).length;
                 const hasTime = divObj.startTime && divObj.endTime;
-                const timeDisplay = hasTime
-                    ? `<span style="color:#0D7C5C; font-weight:500;">${escapeHtml(divObj.startTime)} – ${escapeHtml(divObj.endTime)}</span>`
-                    : `<span style="color:#D97706; font-style:italic;">No times set</span>`;
                 
                 card.innerHTML = `
                     <div class="division-card-top">
@@ -506,7 +497,9 @@
                         </div>
                     </div>
                     <div class="division-card-subline">
-                        ${bunkCount} bunk${bunkCount !== 1 ? 's' : ''} · ${timeDisplay}
+                        ${hasTime
+                            ? `<span style="color:#0D7C5C; font-weight:500;">${escapeHtml(divObj.startTime)} – ${escapeHtml(divObj.endTime)}</span>`
+                            : `<span style="color:#D97706; font-style:italic;">No times set</span>`}
                     </div>
                 `;
                 
