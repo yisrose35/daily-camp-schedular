@@ -1106,14 +1106,16 @@ label.override-checkbox span {
   height: 45px;
   max-height: 45px;
   width: auto;
+  position: relative;
+  top: 2px;
 }
 
 .app-logo-me-img {
-  height: 40px;
-  max-height: 40px;
+  height: 45px;
+  max-height: 45px;
   width: auto;
   position: relative;
-  bottom: 3px;
+  bottom: 2px;
 }
 
 .brand-accent-flow {
