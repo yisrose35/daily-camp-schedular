@@ -1,6 +1,6 @@
 // =================================================================
 // master_schedule_builder.js (UPDATED - REDESIGNED UI)
-// Beta v2.4
+// Beta v2.5
 // Updates:
 // 1. Tile palette on LEFT SIDEBAR with solid colors
 // 2. Toolbar: Status+Update | Load | New+Save | Clear | Delete
@@ -8,6 +8,9 @@
 // 4. In-page modal inputs instead of browser prompts
 // 5. Checkbox selection for locations/facilities
 // 6. Removed draft restore prompt
+// 7. ★ v2.5: Grouped-checkbox modal type for locations (matches DA bunk overrides)
+// 8. ★ v2.5: Custom tile pulls grouped locations from locationZones
+// 9. ★ v2.5: Split tile uses Main 1/Main 2 + mapEventNameForOptimizer (matches DA)
 // =================================================================
 
 (function(){
@@ -156,6 +159,36 @@ function showModal(config) {
         fieldEl.innerHTML = `
           <label>${field.label}</label>
           <div class="ms-checkbox-group">${checkboxes}</div>
+        `;
+        inputs[field.name] = () => {
+          const checked = fieldEl.querySelectorAll(`input[data-group="${field.name}"]:checked`);
+          return Array.from(checked).map(c => c.value);
+        };
+      }
+      // ★ v2.5: Grouped checkbox - renders checkboxes with category headers (like DA bunk overrides)
+      else if (field.type === 'grouped-checkbox') {
+        let groupsHTML = '';
+        (field.groups || []).forEach(group => {
+          if (!group.options || group.options.length === 0) return;
+          groupsHTML += `<div class="ms-checkbox-group-header">${group.label}</div>`;
+          groupsHTML += `<div class="ms-checkbox-group-items">`;
+          group.options.forEach(o => {
+            const val = typeof o === 'object' ? o.value : o;
+            const display = typeof o === 'object' ? o.label : o;
+            groupsHTML += `
+              <label class="ms-checkbox-item">
+                <input type="checkbox" value="${val}" data-group="${field.name}">
+                <span>${display}</span>
+              </label>`;
+          });
+          groupsHTML += `</div>`;
+        });
+        if (!groupsHTML) {
+          groupsHTML = `<div class="ms-checkbox-group-empty">No locations configured. Add them in Setup → Location Zones.</div>`;
+        }
+        fieldEl.innerHTML = `
+          <label>${field.label}</label>
+          <div class="ms-checkbox-grouped">${groupsHTML}</div>
         `;
         inputs[field.name] = () => {
           const checked = fieldEl.querySelectorAll(`input[data-group="${field.name}"]:checked`);
@@ -322,6 +355,52 @@ function getAllLocations() {
 }
 
 // =================================================================
+// ★ v2.5: Build grouped location options (matches DA bunk overrides pattern)
+// =================================================================
+function getGroupedLocationOptions() {
+  const globalSettings = window.loadGlobalSettings?.() || {};
+  const app1 = globalSettings.app1 || {};
+  
+  // Get facilities from locationZones (Pool, Lunchroom, Gym, etc.)
+  const locationZones = globalSettings.locationZones || {};
+  const facilities = [];
+  Object.entries(locationZones).forEach(([zoneName, zone]) => {
+    if (zone && zone.locations) {
+      Object.keys(zone.locations).forEach(locName => {
+        facilities.push({ value: locName, label: `${locName} (${zoneName})` });
+      });
+    }
+  });
+  
+  // Get pinned tile defaults (Swim → Pool, Lunch → Lunchroom, etc.)
+  const pinnedDefaults = globalSettings.pinnedTileDefaults || {};
+  const pinnedOptions = Object.entries(pinnedDefaults).map(([act, loc]) => ({
+    value: loc, label: `${act} → ${loc}`
+  }));
+  
+  // Get fields
+  const allFields = (app1.fields || []).map(f => ({
+    value: f.name,
+    label: f.name + (f.rainyDayAvailable ? ' 🏠' : '')
+  }));
+  
+  // Get special activities
+  const allSpecials = (app1.specialActivities || []).map(s => ({
+    value: s.name, label: s.name
+  }));
+  
+  // Build groups array (only include non-empty groups)
+  const groups = [];
+  if (pinnedOptions.length > 0) groups.push({ label: '📌 Pinned Defaults', options: pinnedOptions });
+  if (facilities.length > 0) groups.push({ label: '🏢 Facilities', options: facilities });
+  if (allFields.length > 0) groups.push({ label: '🏟️ Fields', options: allFields });
+  if (allSpecials.length > 0) groups.push({ label: '🎨 Special Activities', options: allSpecials });
+  
+  const hasAny = groups.some(g => g.options.length > 0);
+  return { groups, hasAny };
+}
+
+// =================================================================
 // Swim/Pool Alias Handling
 // =================================================================
 const SWIM_POOL_PATTERNS = ['swim', 'pool', 'swimming', 'aqua'];
@@ -377,7 +456,6 @@ function init(){
       .ms-palette::-webkit-scrollbar-track { background:#f1f5f9; border-radius:3px; }
       .ms-palette::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:3px; }
       .ms-palette::-webkit-scrollbar-thumb:hover { background:#94a3b8; }
-      .ms-palette { flex:1; overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:6px; }
       .ms-tile { padding:10px 12px; border-radius:6px; cursor:grab; font-size:12px; font-weight:600; transition:transform 0.15s, box-shadow 0.15s; text-shadow:0 1px 2px rgba(0,0,0,0.2); }
       .ms-tile:hover { transform:translateX(3px); box-shadow:0 4px 12px rgba(0,0,0,0.15); }
       .ms-tile:active { cursor:grabbing; }
@@ -461,6 +539,13 @@ function init(){
       .ms-checkbox-item:hover { background:#f1f5f9; }
       .ms-checkbox-item input { margin:0; }
       .ms-checkbox-item span { color:#334155; }
+      
+      /* ★ v2.5: Grouped checkbox styles (matches DA bunk overrides) */
+      .ms-checkbox-grouped { max-height:250px; overflow-y:auto; padding:8px; background:#f8fafc; border-radius:6px; border:1px solid #e2e8f0; }
+      .ms-checkbox-group-header { font-size:11px; font-weight:600; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; padding:8px 4px 4px; margin-top:4px; border-bottom:1px solid #e2e8f0; }
+      .ms-checkbox-group-header:first-child { margin-top:0; padding-top:4px; }
+      .ms-checkbox-group-items { display:grid; grid-template-columns:repeat(2, 1fr); gap:6px; padding:6px 0; }
+      .ms-checkbox-group-empty { font-size:12px; color:#94a3b8; font-style:italic; padding:8px 4px; }
       
       /* Assignments Section */
       .ms-expand { padding:0 16px 12px; }
@@ -877,7 +962,7 @@ function showTileInfo(tile) {
     'sports': 'SPORTS SLOT\n\nDedicated time for sports activities only. The scheduler will assign an available field and sport.',
     'special': 'SPECIAL ACTIVITY\n\nTime reserved for special activities like Art, Music, Drama, etc.',
     'smart': 'SMART TILE\n\nCalculates how many bunks can do Main 1 based on capacity:\n\n• Bunks that fit → Main 1\n• Everyone else → Main 2\n• If Main 1 is full → Fallback is used\n\nNext period, groups SWAP:\n• Main 1 bunks → get Main 2\n• Main 2 bunks → get Main 1\n\nExample: Main 1 = Swim (capacity 4), Main 2 = Sports\nPeriod 1: Bunks 1-4 swim, Bunks 5-8 sports\nPeriod 2: Bunks 5-8 swim, Bunks 1-4 sports\n\nNote: Enter tile types (Sports, Special) not specific activities.',
-    'split': 'SPLIT ACTIVITY\n\nSplits the division into two groups for the time block:\n\n• First half of time:\n   - Group 1 does Tile A\n   - Group 2 does Tile B\n• Midway through: Groups SWAP\n• Second half of time:\n   - Group 1 does Tile B\n   - Group 2 does Tile A\n\nNote: Enter tile types (Sports, Special) not specific activities.',
+    'split': 'SPLIT ACTIVITY\n\nSplits the division into two groups for the time block:\n\n• First half of time:\n   - Group 1 does Main 1\n   - Group 2 does Main 2\n• Midway through: Groups SWAP\n• Second half of time:\n   - Group 1 does Main 2\n   - Group 2 does Main 1\n\nExamples: Swim, Sports, Art, Special, Activity',
     'elective': 'ELECTIVE\n\nReserves specific fields/activities for THIS division only. Other divisions cannot use them during this time.',
     'league': 'LEAGUE GAME\n\nFull buyout for a regular league matchup. All bunks in the division play head-to-head games.',
     'specialty_league': 'SPECIALTY LEAGUE\n\nSimilar to regular leagues but for special sports.',
@@ -1067,6 +1152,11 @@ function renderEventTile(ev, top, height) {
   if (ev.type === 'smart' && ev.smartData) {
     innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">Fallback: ${ev.smartData.fallbackActivity}</div>`;
   }
+  
+  // ★ v2.5: Show split tile sub-events
+  if (ev.type === 'split' && ev.subEvents?.length === 2) {
+    innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">↔ ${ev.subEvents[0].event} / ${ev.subEvents[1].event}</div>`;
+  }
 
   const selectedClass = selectedTileId === ev.id ? ' selected' : '';
   return `<div class="grid-event${selectedClass}" data-id="${ev.id}" draggable="true" title="Click to select, Delete key to remove" 
@@ -1150,29 +1240,39 @@ function addDropListeners(selector) {
           smartData: { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: result.fallbackActivity || 'Activity' }
         };
       }
-      // SPLIT TILE
+      // ★ v2.5: SPLIT TILE - Fixed to match daily adjustments (Main 1/Main 2 + mapEventNameForOptimizer)
       else if (tileData.type === 'split') {
         const result = await showModal({
           title: 'Split Activity Setup',
-          description: 'Splits division between two tile types. Midway through the time block, groups SWAP. Enter TILE TYPES (Sports, Special) not specific activities.',
+          description: 'Splits division into two groups. Midway through the time block, groups SWAP.\n\nExamples: Swim, Sports, Art, Special, Activity',
           fields: [
             { name: 'startTime', label: 'Start Time', type: 'text', default: startStr },
             { name: 'endTime', label: 'End Time', type: 'text', default: endStr },
-            { name: 'activity1', label: 'Tile Type A (Group 1 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' },
-            { name: 'activity2', label: 'Tile Type B (Group 2 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' }
+            { name: 'main1', label: 'Main 1 (Group 1 starts here)', type: 'text', placeholder: 'e.g., Swim, Sports, Art' },
+            { name: 'main2', label: 'Main 2 (Group 2 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' }
           ]
         });
-        if (!result || !result.activity1 || !result.activity2) return;
+        if (!result || !result.main1 || !result.main2) return;
+        
+        // Map through optimizer (same as daily adjustments) to get proper type+event structure
+        const event1 = mapEventNameForOptimizer(result.main1);
+        const event2 = mapEventNameForOptimizer(result.main2);
         
         newEvent = {
           id: Date.now().toString(),
           type: 'split',
-          event: `${result.activity1} / ${result.activity2}`,
+          event: `${result.main1} / ${result.main2}`,
           division: divName,
           startTime: result.startTime,
           endTime: result.endTime,
-          subEvents: [{ event: result.activity1 }, { event: result.activity2 }]
+          // CRITICAL: Ensure .event property is always present in subEvents (matches DA)
+          subEvents: [
+            { ...event1, event: event1.event || result.main1 },
+            { ...event2, event: event2.event || result.main2 }
+          ]
         };
+        
+        console.log(`[SPLIT TILE] Created split tile for ${divName}:`, newEvent.subEvents);
       }
       // ELECTIVE
       else if (tileData.type === 'elective') {
@@ -1205,27 +1305,27 @@ function addDropListeners(selector) {
           reservedFields: result.activities
         };
       }
-      // CUSTOM PINNED
+      // ★ v2.5: CUSTOM PINNED - Now uses grouped locations from locationZones (matches DA bunk overrides)
       else if (tileData.type === 'custom') {
-        const locations = getAllLocations();
+        const { groups: locationGroups, hasAny: hasLocations } = getGroupedLocationOptions();
         
-        // Build fields array
+        // Build modal fields
         const modalFields = [
           { name: 'eventName', label: 'Event Name', type: 'text', default: '', placeholder: 'e.g., Regroup, Assembly, Davening' },
           { name: 'startTime', label: 'Start Time', type: 'text', default: startStr },
           { name: 'endTime', label: 'End Time', type: 'text', default: endStr }
         ];
         
-        // Add locations if available
-        if (locations.length > 0) {
-          modalFields.push({ name: 'reservedFields', label: 'Reserve Locations (optional)', type: 'checkbox-group', options: locations });
+        // Add grouped locations if available
+        if (hasLocations) {
+          modalFields.push({ name: 'reservedFields', label: 'Reserve Locations (optional)', type: 'grouped-checkbox', groups: locationGroups });
         }
         
         const result = await showModal({
           title: 'Custom Pinned Event',
-          description: locations.length > 0 
+          description: hasLocations 
             ? 'Create a fixed event. Optionally reserve locations from your setup.'
-            : 'Create a fixed event. (No locations found - add them in Setup > Locations)',
+            : 'Create a fixed event. (No locations found — add them in Setup → Location Zones)',
           fields: modalFields
         });
         if (!result || !result.eventName?.trim()) {
