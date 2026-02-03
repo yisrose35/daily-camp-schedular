@@ -173,6 +173,175 @@
         return getNextDivisionColor();
     }
 
+    // ==================== SKELETON DIVISION MIGRATION ====================
+    // Handles the transition from parent-division-named events (e.g. "Juniors")
+    // to grade-named events (e.g. "1", "2", "3"). Also handles any future
+    // renaming of grades by checking against a stored divisionNameMap.
+
+    /**
+     * Migrate a single skeleton event array.
+     * - Events whose division matches a current grade: kept as-is
+     * - Events whose division matches a parent division name: expanded to one event per grade
+     * - Events whose division matches an old name in divisionNameMap: remapped
+     * - Everything else: kept as-is (orphaned events ignored by grid)
+     *
+     * Returns { events: [...], changed: boolean }
+     */
+    function migrateSkeletonEvents(events) {
+        if (!Array.isArray(events) || events.length === 0) return { events, changed: false };
+
+        const currentDivs = new Set(state.availableDivisions);
+
+        // Parent division name → array of grade names
+        const parentToGrades = {};
+        Object.entries(state.divisionGroups).forEach(([parentName, group]) => {
+            if (parentName !== "All" && group.grades?.length > 0) {
+                parentToGrades[parentName] = group.grades;
+            }
+        });
+        const parentNames = new Set(Object.keys(parentToGrades));
+
+        // divisionNameMap: old name → new name (single) for grade renames
+        const globalData = window.loadGlobalSettings?.() || {};
+        const nameMap = globalData.divisionNameMap || {};
+
+        // Quick check: does anything need migration?
+        const anyNeedsMigration = events.some(ev =>
+            ev?.division && !currentDivs.has(ev.division) &&
+            (parentNames.has(ev.division) || nameMap[ev.division])
+        );
+        if (!anyNeedsMigration) return { events, changed: false };
+
+        const migrated = [];
+        events.forEach(ev => {
+            if (!ev || !ev.division) { migrated.push(ev); return; }
+
+            // Already matches a current grade — keep
+            if (currentDivs.has(ev.division)) { migrated.push(ev); return; }
+
+            // Matches a parent division — expand to all its grades
+            if (parentToGrades[ev.division]) {
+                parentToGrades[ev.division].forEach(gradeName => {
+                    migrated.push({
+                        ...ev,
+                        division: gradeName,
+                        id: (ev.id || String(Date.now())) + '_' + gradeName
+                    });
+                });
+                return;
+            }
+
+            // Matches a stored rename — remap to new name
+            if (nameMap[ev.division]) {
+                const newName = nameMap[ev.division];
+                if (currentDivs.has(newName)) {
+                    migrated.push({ ...ev, division: newName });
+                    return;
+                }
+            }
+
+            // Unknown — keep as-is
+            migrated.push(ev);
+        });
+
+        return { events: migrated, changed: true };
+    }
+
+    /**
+     * Run migration across ALL stored skeletons:
+     *   1. state.savedSkeletons (templates)
+     *   2. localStorage per-date skeleton keys
+     *   3. Master schedule draft in localStorage
+     *   4. Compound campistryDailyData key
+     */
+    function migrateAllStoredSkeletons() {
+        // Only migrate if we have parent divisions (campStructure loaded)
+        const hasParents = Object.keys(state.divisionGroups).some(k => k !== "All");
+        if (!hasParents) return;
+
+        let anyMigrated = false;
+
+        // 1. Saved templates
+        Object.keys(state.savedSkeletons).forEach(name => {
+            const result = migrateSkeletonEvents(state.savedSkeletons[name]);
+            if (result.changed) {
+                state.savedSkeletons[name] = result.events;
+                anyMigrated = true;
+                console.log(`[app1] Migrated template "${name}" (${state.savedSkeletons[name].length} events)`);
+            }
+        });
+
+        // 2. Per-date localStorage skeleton keys
+        try {
+            const keysToCheck = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && (
+                    key.startsWith('campManualSkeleton_') ||
+                    key.startsWith('campDailyOverrideSkeleton_')
+                )) {
+                    keysToCheck.push(key);
+                }
+            }
+            keysToCheck.forEach(key => {
+                try {
+                    const raw = localStorage.getItem(key);
+                    if (!raw) return;
+                    const events = JSON.parse(raw);
+                    const result = migrateSkeletonEvents(events);
+                    if (result.changed) {
+                        localStorage.setItem(key, JSON.stringify(result.events));
+                        anyMigrated = true;
+                        console.log(`[app1] Migrated localStorage: ${key}`);
+                    }
+                } catch (e) { /* skip invalid */ }
+            });
+        } catch (e) { console.warn('[app1] localStorage migration error:', e); }
+
+        // 3. Master schedule draft
+        try {
+            const draftRaw = localStorage.getItem('master-schedule-draft');
+            if (draftRaw) {
+                const events = JSON.parse(draftRaw);
+                const result = migrateSkeletonEvents(events);
+                if (result.changed) {
+                    localStorage.setItem('master-schedule-draft', JSON.stringify(result.events));
+                    anyMigrated = true;
+                    console.log('[app1] Migrated master-schedule-draft');
+                }
+            }
+        } catch (e) { /* skip */ }
+
+        // 4. Compound campistryDailyData key
+        try {
+            const dailyRaw = localStorage.getItem('campistryDailyData');
+            if (dailyRaw) {
+                const dailyData = JSON.parse(dailyRaw);
+                let changed = false;
+                Object.keys(dailyData).forEach(dateKey => {
+                    const dd = dailyData[dateKey];
+                    if (dd?.manualSkeleton) {
+                        const r = migrateSkeletonEvents(dd.manualSkeleton);
+                        if (r.changed) { dd.manualSkeleton = r.events; changed = true; }
+                    }
+                    if (dd?.skeleton) {
+                        const r = migrateSkeletonEvents(dd.skeleton);
+                        if (r.changed) { dd.skeleton = r.events; changed = true; }
+                    }
+                });
+                if (changed) {
+                    localStorage.setItem('campistryDailyData', JSON.stringify(dailyData));
+                    anyMigrated = true;
+                    console.log('[app1] Migrated campistryDailyData');
+                }
+            }
+        } catch (e) { /* skip */ }
+
+        if (anyMigrated) {
+            console.log('[app1 v5.1] ✅ Skeleton events migrated from parent-division names to grade names');
+        }
+    }
+
     // ==================== STYLES ====================
     
     function ensureSharedSetupStyles() {
@@ -853,6 +1022,9 @@
             
             updateWindowApp1();
             
+            // ★ v5.1: Migrate any skeleton events that use old parent-division names
+            migrateAllStoredSkeletons();
+            
             console.log(`[app1 v5.1] Loaded ${state.availableDivisions.length} grades as scheduling units:`, state.availableDivisions);
             
         } catch (e) {
@@ -982,6 +1154,23 @@
     };
     window.getParentDivision = (gradeName) => {
         return state.divisions[gradeName]?.parentDivision || null;
+    };
+    
+    // ★ v5.1: Skeleton migration — available to all modules at runtime
+    window.migrateSkeletonDivisions = (events) => {
+        const result = migrateSkeletonEvents(events);
+        return result.events;
+    };
+    
+    // ★ v5.1: Store a divisionNameMap entry (for grade renames)
+    //   Call: window.recordDivisionRename("oldName", "newName")
+    window.recordDivisionRename = (oldName, newName) => {
+        if (!oldName || !newName) return;
+        const globalData = window.loadGlobalSettings?.() || {};
+        const nameMap = globalData.divisionNameMap || {};
+        nameMap[oldName] = newName;
+        window.saveGlobalSettings?.("divisionNameMap", nameMap);
+        console.log(`[app1] Recorded rename: "${oldName}" → "${newName}"`);
     };
     
     // Setters
