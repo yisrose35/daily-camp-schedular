@@ -1,6 +1,12 @@
 // =============================================================================
-// division_times_integration.js v1.3 — INTEGRATION LAYER
+// division_times_integration.js v1.3.1 — INTEGRATION LAYER
 // =============================================================================
+//
+// v1.3.1 CHANGES:
+// - ★★★ FIX: Lock divisionTimes during generation to prevent localStorage
+//   restores from overwriting the freshly-built split-aware slot structure.
+//   This was causing "No slots found for range" on split tiles and
+//   mis-indexed pinned events (missing Lunch, Snacks, etc.)
 //
 // v1.3 CHANGES:
 // - REMOVED unifiedTimes build (fully division-aware)
@@ -18,7 +24,7 @@
 (function() {
     'use strict';
 
-    const VERSION = '1.3.0';
+    const VERSION = '1.3.1';
     const DEBUG = true;
 
     function log(...args) {
@@ -151,9 +157,20 @@
 
             log('Division times setup complete. Calling original optimizer...');
             
-            // Call original optimizer
-            if (originalRunSkeletonOptimizer) {
-                return originalRunSkeletonOptimizer.call(this, manualSkeleton, externalOverrides, allowedDivisions, existingScheduleSnapshot, existingUnifiedTimes);
+            // ★★★ v1.3.1 FIX: Lock divisionTimes during generation ★★★
+            // Without this, every loadCurrentDailyData call inside the optimizer
+            // overwrites the freshly-built divisionTimes (which has split-half slots)
+            // with the stale localStorage copy (which doesn't), causing
+            // "No slots found for range" errors on split tiles and mis-indexed pins.
+            window._divisionTimesLocked = true;
+            
+            try {
+                // Call original optimizer
+                if (originalRunSkeletonOptimizer) {
+                    return originalRunSkeletonOptimizer.call(this, manualSkeleton, externalOverrides, allowedDivisions, existingScheduleSnapshot, existingUnifiedTimes);
+                }
+            } finally {
+                window._divisionTimesLocked = false;
             }
         };
 
@@ -221,8 +238,12 @@
                 const result = originalLoadCurrentDailyData ? 
                     originalLoadCurrentDailyData.call(this) : {};
 
-                // If divisionTimes exists in loaded data, restore it
-                if (result?.divisionTimes) {
+                // ★★★ v1.3.1 FIX: Don't overwrite divisionTimes during generation ★★★
+                // During schedule generation, divisionTimes is freshly built with
+                // proper split-half slots. The localStorage version is stale and
+                // lacks split expansion, so restoring it mid-generation breaks
+                // slot lookups for split tiles and causes mis-indexed pinned events.
+                if (result?.divisionTimes && !window._divisionTimesLocked) {
                     window.divisionTimes = window.DivisionTimesSystem?.deserialize(result.divisionTimes) || {};
                     log('Restored divisionTimes from localStorage');
                 }
@@ -471,9 +492,10 @@
     console.log('');
     console.log('   Patches applied to:');
     console.log('   - runSkeletonOptimizer (builds divisionTimes before generation)');
-    console.log('   - localStorage handlers');
+    console.log('   - localStorage handlers (with generation lock)');
     console.log('   - updateTable (syncs before render)');
     console.log('');
+    console.log('   v1.3.1: ★ divisionTimes locked during generation ★');
     console.log('   REMOVED: Utils, fillBlock, ScheduleDB patches (native support enabled)');
     console.log('');
     console.log('   Commands:');
