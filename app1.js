@@ -334,21 +334,112 @@
         return { events: migrated, changed: true };
     }
 
+    // ==================== GENERIC MIGRATION HELPERS ====================
+
     /**
-     * Run migration across ALL stored skeletons:
+     * Rename keys in an object using the migration map.
+     * Returns { result: newObj, changed: boolean }
+     */
+    function remapObjectKeys(obj, map) {
+        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return { result: obj, changed: false };
+        let changed = false;
+        const result = {};
+        Object.entries(obj).forEach(([key, val]) => {
+            if (map[key]) {
+                result[map[key]] = val;
+                changed = true;
+            } else {
+                result[key] = val;
+            }
+        });
+        return { result, changed };
+    }
+
+    /**
+     * Remap string values in an array using the migration map.
+     * Returns { result: newArr, changed: boolean }
+     */
+    function remapArrayValues(arr, map) {
+        if (!Array.isArray(arr)) return { result: arr, changed: false };
+        let changed = false;
+        const result = arr.map(val => {
+            if (typeof val === 'string' && map[val]) {
+                changed = true;
+                return map[val];
+            }
+            return val;
+        });
+        return { result, changed };
+    }
+
+    /**
+     * Build a comprehensive old→new name map from current grade names.
+     * Covers: pure numbers ("1"→"1st Grade"), parent division names,
+     * stored renames, and case variations.
+     */
+    function buildComprehensiveMigrationMap() {
+        const map = {};
+        const grades = state.availableDivisions;
+        if (!grades.length) return map;
+
+        // Number → grade: "1" → "1st Grade", "2" → "2nd Grade"
+        grades.forEach(g => {
+            const m = g.match(/^(\d+)/);
+            if (m) {
+                const n = m[1]; // string "1", "2", etc.
+                map[n] = g;
+                // Also handle ordinal fragments: "1st" → "1st Grade"
+                const ordinals = [n + 'st', n + 'nd', n + 'rd', n + 'th'];
+                ordinals.forEach(o => { if (g.toLowerCase().startsWith(o)) map[o] = g; });
+            }
+            // Case-insensitive: "1st grade" → "1st Grade"
+            if (g.toLowerCase() !== g) map[g.toLowerCase()] = g;
+        });
+
+        // Add parent division → expansion marker (handled in skeleton migration)
+        // Parent names map to MULTIPLE grades, not a single one, so NOT added to this map
+
+        // Merge any stored renames
+        const globalData = window.loadGlobalSettings?.() || {};
+        const nameMap = globalData.divisionNameMap || {};
+        Object.entries(nameMap).forEach(([old, newName]) => {
+            if (grades.includes(newName)) map[old] = newName;
+        });
+
+        return map;
+    }
+
+    // ==================== COMPREHENSIVE DATA MIGRATION ====================
+
+    /**
+     * Run migration across ALL stored data:
      *   1. state.savedSkeletons (templates)
      *   2. localStorage per-date skeleton keys
      *   3. Master schedule draft in localStorage
-     *   4. Compound campistryDailyData key
+     *   4. Compound campistryDailyData
+     *   5. divisionTimes in localStorage (CRITICAL for scheduler)
+     *   6. Special activities (limitUsage, sharableWith)
+     *   7. League division references
+     *   8. Subdivision division mappings
+     *   9. Historical counts
      */
     function migrateAllStoredSkeletons() {
         // Only migrate if we have parent divisions (campStructure loaded)
         const hasParents = Object.keys(state.divisionGroups).some(k => k !== "All");
         if (!hasParents) return;
 
+        // Build comprehensive map once
+        const migMap = buildComprehensiveMigrationMap();
+        if (Object.keys(migMap).length === 0) return;
+
+        // ★ Expose globally so ALL modules can use it at runtime
+        window.divisionNameMigrationMap = migMap;
+
         let anyMigrated = false;
 
-        // 1. Saved templates
+        // ==============================================================
+        // 1. Saved skeleton templates
+        // ==============================================================
         Object.keys(state.savedSkeletons).forEach(name => {
             const result = migrateSkeletonEvents(state.savedSkeletons[name]);
             if (result.changed) {
@@ -358,7 +449,9 @@
             }
         });
 
+        // ==============================================================
         // 2. Per-date localStorage skeleton keys
+        // ==============================================================
         try {
             const keysToCheck = [];
             for (let i = 0; i < localStorage.length; i++) {
@@ -385,7 +478,9 @@
             });
         } catch (e) { console.warn('[app1] localStorage migration error:', e); }
 
+        // ==============================================================
         // 3. Master schedule draft
+        // ==============================================================
         try {
             const draftRaw = localStorage.getItem('master-schedule-draft');
             if (draftRaw) {
@@ -399,7 +494,9 @@
             }
         } catch (e) { /* skip */ }
 
+        // ==============================================================
         // 4. Compound campistryDailyData key
+        // ==============================================================
         try {
             const dailyRaw = localStorage.getItem('campistryDailyData');
             if (dailyRaw) {
@@ -415,17 +512,257 @@
                         const r = migrateSkeletonEvents(dd.skeleton);
                         if (r.changed) { dd.skeleton = r.events; changed = true; }
                     }
+                    // Also migrate divisionTimes inside daily data
+                    if (dd?.divisionTimes) {
+                        const r = remapObjectKeys(dd.divisionTimes, migMap);
+                        if (r.changed) { dd.divisionTimes = r.result; changed = true; }
+                    }
                 });
                 if (changed) {
                     localStorage.setItem('campistryDailyData', JSON.stringify(dailyData));
                     anyMigrated = true;
-                    console.log('[app1] Migrated campistryDailyData');
+                    console.log('[app1] Migrated campistryDailyData (skeletons + divisionTimes)');
                 }
             }
         } catch (e) { /* skip */ }
 
+        // ==============================================================
+        // 5. ★ CRITICAL: divisionTimes in localStorage
+        //    This fixes "[findSlotsForRange] No divisionTimes for: X"
+        //    The DivTimesIntegration module restores from localStorage
+        //    between scheduler steps, overwriting freshly-built data.
+        // ==============================================================
+        try {
+            const dtKeys = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && (
+                    key === 'divisionTimes' ||
+                    key.startsWith('divisionTimes_') ||
+                    key.startsWith('campistryDivisionTimes')
+                )) {
+                    dtKeys.push(key);
+                }
+            }
+            dtKeys.forEach(key => {
+                try {
+                    const raw = localStorage.getItem(key);
+                    if (!raw) return;
+                    const dt = JSON.parse(raw);
+                    const r = remapObjectKeys(dt, migMap);
+                    if (r.changed) {
+                        localStorage.setItem(key, JSON.stringify(r.result));
+                        anyMigrated = true;
+                        console.log(`[app1] Migrated divisionTimes key: ${key}`);
+                    }
+                } catch (e) { /* skip */ }
+            });
+
+            // Also check if divisionTimes is embedded inside schedule state keys
+            const stateKeys = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && (
+                    key.startsWith('scheduleState_') ||
+                    key.startsWith('campSchedule_') ||
+                    key.startsWith('campDailySchedule_')
+                )) {
+                    stateKeys.push(key);
+                }
+            }
+            stateKeys.forEach(key => {
+                try {
+                    const raw = localStorage.getItem(key);
+                    if (!raw) return;
+                    const data = JSON.parse(raw);
+                    let changed = false;
+                    if (data?.divisionTimes) {
+                        const r = remapObjectKeys(data.divisionTimes, migMap);
+                        if (r.changed) { data.divisionTimes = r.result; changed = true; }
+                    }
+                    if (data?.scheduleAssignments) {
+                        // Schedule assignments are keyed by bunk name — no change needed
+                        // But check for any division references inside
+                    }
+                    if (changed) {
+                        localStorage.setItem(key, JSON.stringify(data));
+                        anyMigrated = true;
+                        console.log(`[app1] Migrated divisionTimes in: ${key}`);
+                    }
+                } catch (e) { /* skip */ }
+            });
+
+            // Also update window.divisionTimes if it exists with old keys
+            if (window.divisionTimes && typeof window.divisionTimes === 'object') {
+                const r = remapObjectKeys(window.divisionTimes, migMap);
+                if (r.changed) {
+                    window.divisionTimes = r.result;
+                    anyMigrated = true;
+                    console.log('[app1] Migrated window.divisionTimes in memory');
+                }
+            }
+        } catch (e) { console.warn('[app1] divisionTimes migration error:', e); }
+
+        // ==============================================================
+        // 6. Special Activities — limitUsage keys + sharableWith values
+        //    Prevents "Removed orphaned division" stripping
+        // ==============================================================
+        try {
+            const gs = window.loadGlobalSettings?.() || {};
+            const specials = gs.app1?.specialActivities || gs.specialActivities || [];
+            if (Array.isArray(specials) && specials.length > 0) {
+                let changed = false;
+                specials.forEach(act => {
+                    if (!act) return;
+                    // limitUsage: { "1": 2, "2": 3 } → { "1st Grade": 2, "2nd Grade": 3 }
+                    if (act.limitUsage && typeof act.limitUsage === 'object') {
+                        const r = remapObjectKeys(act.limitUsage, migMap);
+                        if (r.changed) { act.limitUsage = r.result; changed = true; }
+                    }
+                    // sharableWith: ["1", "2"] → ["1st Grade", "2nd Grade"]
+                    if (Array.isArray(act.sharableWith)) {
+                        const r = remapArrayValues(act.sharableWith, migMap);
+                        if (r.changed) { act.sharableWith = r.result; changed = true; }
+                    }
+                    // divisions: ["1", "2"] → ["1st Grade", "2nd Grade"]
+                    if (Array.isArray(act.divisions)) {
+                        const r = remapArrayValues(act.divisions, migMap);
+                        if (r.changed) { act.divisions = r.result; changed = true; }
+                    }
+                    // excludeDivisions
+                    if (Array.isArray(act.excludeDivisions)) {
+                        const r = remapArrayValues(act.excludeDivisions, migMap);
+                        if (r.changed) { act.excludeDivisions = r.result; changed = true; }
+                    }
+                });
+                if (changed) {
+                    // Save back — check both locations
+                    if (gs.app1?.specialActivities) {
+                        const app1Data = { ...gs.app1, specialActivities: specials };
+                        window.saveGlobalSettings?.("app1", app1Data);
+                    }
+                    if (gs.specialActivities) {
+                        window.saveGlobalSettings?.("specialActivities", specials);
+                    }
+                    // Also update in-memory state
+                    state.specialActivities = specials;
+                    anyMigrated = true;
+                    console.log(`[app1] Migrated special activities division refs (${specials.length} activities)`);
+                }
+            }
+        } catch (e) { console.warn('[app1] special activities migration error:', e); }
+
+        // ==============================================================
+        // 7. League division references
+        //    Prevents "Removed stale division" stripping
+        // ==============================================================
+        try {
+            const gs = window.loadGlobalSettings?.() || {};
+            const leagues = gs.leagues || [];
+            if (Array.isArray(leagues) && leagues.length > 0) {
+                let changed = false;
+                leagues.forEach(league => {
+                    if (!league) return;
+                    // divisions: ["1", "2"] → ["1st Grade", "2nd Grade"]
+                    if (Array.isArray(league.divisions)) {
+                        const r = remapArrayValues(league.divisions, migMap);
+                        if (r.changed) { league.divisions = r.result; changed = true; }
+                    }
+                    // teams may reference divisions
+                    if (Array.isArray(league.teams)) {
+                        league.teams.forEach(team => {
+                            if (team?.division && migMap[team.division]) {
+                                team.division = migMap[team.division];
+                                changed = true;
+                            }
+                        });
+                    }
+                });
+                if (changed) {
+                    window.saveGlobalSettings?.("leagues", leagues);
+                    anyMigrated = true;
+                    console.log(`[app1] Migrated league division refs (${leagues.length} leagues)`);
+                }
+            }
+
+            // Also migrate leagueHistory keys
+            const lh = gs.leagueHistory || {};
+            if (Object.keys(lh).length > 0) {
+                const r = remapObjectKeys(lh, migMap);
+                if (r.changed) {
+                    window.saveGlobalSettings?.("leagueHistory", r.result);
+                    anyMigrated = true;
+                    console.log('[app1] Migrated leagueHistory division keys');
+                }
+            }
+        } catch (e) { console.warn('[app1] leagues migration error:', e); }
+
+        // ==============================================================
+        // 8. Subdivision division mappings
+        //    "Juniors: 1, 2, 3" → "Juniors: 1st Grade, 2nd Grade, 3rd Grade"
+        // ==============================================================
+        try {
+            const gs = window.loadGlobalSettings?.() || {};
+            const subdivisions = gs.subdivisions || [];
+            if (Array.isArray(subdivisions) && subdivisions.length > 0) {
+                let changed = false;
+                subdivisions.forEach(sub => {
+                    if (!sub) return;
+                    if (Array.isArray(sub.divisions)) {
+                        const r = remapArrayValues(sub.divisions, migMap);
+                        if (r.changed) { sub.divisions = r.result; changed = true; }
+                    }
+                    // Also handle 'grades' array if present
+                    if (Array.isArray(sub.grades)) {
+                        const r = remapArrayValues(sub.grades, migMap);
+                        if (r.changed) { sub.grades = r.result; changed = true; }
+                    }
+                });
+                if (changed) {
+                    window.saveGlobalSettings?.("subdivisions", subdivisions);
+                    anyMigrated = true;
+                    console.log(`[app1] Migrated subdivision division mappings (${subdivisions.length} subdivisions)`);
+                }
+            }
+        } catch (e) { console.warn('[app1] subdivision migration error:', e); }
+
+        // ==============================================================
+        // 9. Historical counts (keyed by bunk name — usually fine,
+        //    but check for any division-keyed entries)
+        // ==============================================================
+        try {
+            const gs = window.loadGlobalSettings?.() || {};
+            const hc = gs.historicalCounts || {};
+            // Historical counts are keyed by bunk name, not division — 
+            // typically no migration needed. But check rotationHistory.
+            const rh = gs.rotationHistory || {};
+            if (Object.keys(rh).length > 0) {
+                const r = remapObjectKeys(rh, migMap);
+                if (r.changed) {
+                    window.saveGlobalSettings?.("rotationHistory", r.result);
+                    anyMigrated = true;
+                    console.log('[app1] Migrated rotationHistory division keys');
+                }
+            }
+        } catch (e) { /* skip */ }
+
+        // ==============================================================
+        // 10. Persist the migration map for future use + emit event
+        // ==============================================================
         if (anyMigrated) {
-            console.log('[app1 v5.1] ✅ Skeleton events migrated from parent-division names to grade names');
+            // Persist map so it's available even before app1 loads
+            window.saveGlobalSettings?.("divisionNameMap", migMap);
+            saveData();
+
+            console.log('[app1 v5.1] ✅ All data migrated from old division names to grade names');
+            console.log('[app1 v5.1] Migration map:', migMap);
+
+            // Notify other modules that names have changed
+            try {
+                window.dispatchEvent(new CustomEvent('campistry-division-names-migrated', {
+                    detail: { map: migMap }
+                }));
+            } catch (e) { /* skip */ }
         }
     }
 
