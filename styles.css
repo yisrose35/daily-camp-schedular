@@ -1096,19 +1096,21 @@ label.override-checkbox span {
 }
 
 .app-logo-full {
-  height: 40px;
-  max-height: 250px;
-  width: auto;
-  max-width: none;
   display: block;
   flex-shrink: 0;
   object-fit: contain;
 }
 
+.app-logo-flow-img {
+  height: 30px;
+  max-height: 30px;
+  width: auto;
+}
+
 .app-logo-me-img {
-  height: 45px;
-  max-height: 45px;
-  max-width: 200px;
+  height: 40px;
+  max-height: 40px;
+  width: auto;
 }
 
 .brand-accent-flow {
