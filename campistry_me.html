@@ -713,27 +713,18 @@
             gap: 10px; 
             flex-wrap: wrap; 
             padding: 4px 0;
-            position: relative;
-            z-index: 10;
         }
         .color-preset {
-            width: 36px; height: 36px;
-            min-width: 36px;
-            min-height: 36px;
+            width: 36px; 
+            height: 36px;
             border-radius: var(--radius-sm);
             border: 2px solid transparent;
             cursor: pointer;
             transition: all 0.15s;
             box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
-            padding: 0;
-            outline: none;
-            -webkit-tap-highlight-color: transparent;
-            pointer-events: auto;
-            position: relative;
-            z-index: 11;
+            flex-shrink: 0;
         }
         .color-preset:hover { transform: scale(1.12); }
-        .color-preset:focus { outline: none; }
         .color-preset:active { transform: scale(0.95); }
         .color-preset.selected { 
             border-color: var(--text-primary); 
@@ -969,7 +960,7 @@
                 <label for="divisionName">Division Name</label>
                 <input type="text" id="divisionName" placeholder="e.g., Junior Boys, Senior Girls">
             </div>
-            <div class="form-group">
+            <div class="form-group" id="colorPickerGroup">
                 <label>Division Color</label>
                 <div class="color-picker-row">
                     <input type="color" id="divisionColor" value="#00C896">
