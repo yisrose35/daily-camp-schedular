@@ -179,10 +179,79 @@
     // renaming of grades by checking against a stored divisionNameMap.
 
     /**
+     * Build a smart mapping from old division names to current grade names.
+     * Handles cases like "1" → "1st Grade", "3rd grade" → "3rd Grade", etc.
+     *
+     * Strategy (in priority order):
+     *  1. Case-insensitive exact match: "1st grade" → "1st Grade"
+     *  2. Old name is pure number, grade starts with same number: "1" → "1st Grade"
+     *  3. Leading number extraction matches: "1st" → "1st Grade"
+     *  4. Old name is a unique substring of exactly one grade: "3rd" → "3rd Grade"
+     */
+    function buildSmartOldToNewMap(unknownNames) {
+        const map = {};
+        if (!unknownNames || unknownNames.size === 0) return map;
+
+        const grades = state.availableDivisions;
+        if (!grades.length) return map;
+
+        // Pre-build lookups
+        const lowerToGrade = {};
+        const numberToGrade = {};
+        grades.forEach(g => {
+            lowerToGrade[g.toLowerCase()] = g;
+            const m = g.match(/^(\d+)/);
+            if (m) numberToGrade[parseInt(m[1], 10)] = g;
+        });
+
+        unknownNames.forEach(oldName => {
+            if (!oldName) return;
+            const lower = oldName.trim().toLowerCase();
+
+            // 1. Case-insensitive exact match
+            if (lowerToGrade[lower]) {
+                map[oldName] = lowerToGrade[lower];
+                return;
+            }
+
+            // 2. Pure number → grade that starts with that number
+            //    "1" → 1 → "1st Grade", "2" → 2 → "2nd Grade"
+            const asNum = parseInt(oldName, 10);
+            if (!isNaN(asNum) && String(asNum) === oldName.trim() && numberToGrade[asNum]) {
+                map[oldName] = numberToGrade[asNum];
+                return;
+            }
+
+            // 3. Leading number extraction: "1st" → 1 → "1st Grade"
+            const leadMatch = oldName.match(/^(\d+)/);
+            if (leadMatch) {
+                const n = parseInt(leadMatch[1], 10);
+                if (numberToGrade[n]) {
+                    map[oldName] = numberToGrade[n];
+                    return;
+                }
+            }
+
+            // 4. Unique substring: "3rd" is contained in exactly one grade
+            const containing = grades.filter(g => g.toLowerCase().includes(lower));
+            if (containing.length === 1) {
+                map[oldName] = containing[0];
+                return;
+            }
+        });
+
+        if (Object.keys(map).length > 0) {
+            console.log('[app1 v5.1] Smart division→grade mapping:', map);
+        }
+        return map;
+    }
+
+    /**
      * Migrate a single skeleton event array.
      * - Events whose division matches a current grade: kept as-is
      * - Events whose division matches a parent division name: expanded to one event per grade
      * - Events whose division matches an old name in divisionNameMap: remapped
+     * - Events whose division smart-matches a grade (e.g. "1" → "1st Grade"): remapped
      * - Everything else: kept as-is (orphaned events ignored by grid)
      *
      * Returns { events: [...], changed: boolean }
@@ -205,10 +274,22 @@
         const globalData = window.loadGlobalSettings?.() || {};
         const nameMap = globalData.divisionNameMap || {};
 
+        // ★ Collect unknown division names that need smart matching
+        const unknownNames = new Set();
+        events.forEach(ev => {
+            if (ev?.division && !currentDivs.has(ev.division) &&
+                !parentNames.has(ev.division) && !nameMap[ev.division]) {
+                unknownNames.add(ev.division);
+            }
+        });
+
+        // ★ Build smart old→new mapping (e.g. "1" → "1st Grade")
+        const smartMap = buildSmartOldToNewMap(unknownNames);
+
         // Quick check: does anything need migration?
         const anyNeedsMigration = events.some(ev =>
             ev?.division && !currentDivs.has(ev.division) &&
-            (parentNames.has(ev.division) || nameMap[ev.division])
+            (parentNames.has(ev.division) || nameMap[ev.division] || smartMap[ev.division])
         );
         if (!anyNeedsMigration) return { events, changed: false };
 
@@ -238,6 +319,12 @@
                     migrated.push({ ...ev, division: newName });
                     return;
                 }
+            }
+
+            // ★ Smart match: "1" → "1st Grade", "3rd" → "3rd Grade", etc.
+            if (smartMap[ev.division]) {
+                migrated.push({ ...ev, division: smartMap[ev.division] });
+                return;
             }
 
             // Unknown — keep as-is
