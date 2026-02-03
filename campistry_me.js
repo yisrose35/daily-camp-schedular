@@ -814,11 +814,57 @@
     function importCsv() {
         if (!pendingCsvData.length) return;
         let added = 0, updated = 0;
+        let divsCreated = 0, gradesCreated = 0, bunksCreated = 0;
+
+        // ★ Auto-create structure from CSV data
+        const existingDivCount = Object.keys(structure).length;
         pendingCsvData.forEach(r => {
+            const divName = r.division;
+            const gradeName = r.grade;
+            const bunkName = r.bunk;
+
+            // Create division if it has a name and doesn't exist
+            if (divName && !structure[divName]) {
+                const colorIdx = (existingDivCount + divsCreated) % COLOR_PRESETS.length;
+                structure[divName] = { color: COLOR_PRESETS[colorIdx], grades: {} };
+                expandedDivisions.add(divName);
+                divsCreated++;
+            }
+
+            // Create grade under division if both specified
+            if (divName && gradeName && structure[divName]) {
+                if (!structure[divName].grades) structure[divName].grades = {};
+                if (!structure[divName].grades[gradeName]) {
+                    structure[divName].grades[gradeName] = { bunks: [] };
+                    expandedGrades.add(divName + '||' + gradeName);
+                    gradesCreated++;
+                }
+            }
+
+            // Create bunk under grade if all three specified
+            if (divName && gradeName && bunkName && structure[divName]?.grades?.[gradeName]) {
+                const bunks = structure[divName].grades[gradeName].bunks;
+                if (!bunks.includes(bunkName)) {
+                    bunks.push(bunkName);
+                    bunksCreated++;
+                }
+            }
+
+            // Add camper to roster
             if (camperRoster[r.name]) updated++; else added++;
             camperRoster[r.name] = { division: r.division, grade: r.grade, bunk: r.bunk, team: r.team };
         });
-        saveData(); closeModal('csvModal'); renderAll(); toast('Imported ' + added + ' new, ' + updated + ' updated');
+
+        saveData(); closeModal('csvModal'); renderAll();
+
+        // Build summary toast
+        const parts = [];
+        if (added) parts.push(added + ' camper' + (added !== 1 ? 's' : '') + ' added');
+        if (updated) parts.push(updated + ' updated');
+        if (divsCreated) parts.push(divsCreated + ' division' + (divsCreated !== 1 ? 's' : '') + ' created');
+        if (gradesCreated) parts.push(gradesCreated + ' grade' + (gradesCreated !== 1 ? 's' : '') + ' created');
+        if (bunksCreated) parts.push(bunksCreated + ' bunk' + (bunksCreated !== 1 ? 's' : '') + ' created');
+        toast(parts.join(', ') || 'Import complete');
     }
 
     function exportCsv() {
