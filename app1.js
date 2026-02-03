@@ -494,6 +494,10 @@
                 
                 const color = divObj.color || DEFAULT_COLORS[0];
                 const bunkCount = (divObj.bunks || []).length;
+                const hasTime = divObj.startTime && divObj.endTime;
+                const timeDisplay = hasTime
+                    ? `<span style="color:#0D7C5C; font-weight:500;">${escapeHtml(divObj.startTime)} – ${escapeHtml(divObj.endTime)}</span>`
+                    : `<span style="color:#D97706; font-style:italic;">No times set</span>`;
                 
                 card.innerHTML = `
                     <div class="division-card-top">
@@ -502,7 +506,7 @@
                         </div>
                     </div>
                     <div class="division-card-subline">
-                        ${bunkCount} bunk${bunkCount !== 1 ? 's' : ''} · <strong>${totalKids}</strong> camper${totalKids !== 1 ? 's' : ''}
+                        ${bunkCount} bunk${bunkCount !== 1 ? 's' : ''} · ${timeDisplay}
                     </div>
                 `;
                 
@@ -535,50 +539,29 @@
         
         const gradeName = state.selectedDivision;
         const divObj = state.divisions[gradeName];
-        const color = divObj.color || DEFAULT_COLORS[0];
         const parentDiv = divObj.parentDivision || "";
         
-        let totalKids = 0;
-        (divObj.bunks || []).forEach(b => { totalKids += state.bunkMetaData[b]?.size || 0; });
-        
-        const bunkCount = (divObj.bunks || []).length;
-        const timesSummary = divObj.startTime && divObj.endTime
-            ? `${divObj.startTime} – ${divObj.endTime}` : "Times not set";
-        
-        // ====== HEADER ======
+        // ====== CONTENT ======
         pane.innerHTML = `
-            <div class="division-edit-shell">
-                <div class="division-edit-header">
-                    <div class="division-header-left">
-                        <span class="division-status-dot" style="background-color:${escapeHtml(color)}; box-shadow:0 0 0 4px ${escapeHtml(color)}33;"></span>
-                        <span class="division-name">${escapeHtml(gradeName)}</span>
-                        ${parentDiv ? `<span style="font-size:0.75rem; color:#9CA3AF; font-weight:400; margin-left:4px;">(${escapeHtml(parentDiv)})</span>` : ''}
-                    </div>
-                    <div class="division-header-summary">
-                        ${bunkCount} bunk${bunkCount !== 1 ? 's' : ''} · <strong>${totalKids}</strong> camper${totalKids !== 1 ? 's' : ''} · ${escapeHtml(timesSummary)}
+            <div class="division-edit-grid">
+                <!-- TIMES CARD (editable) -->
+                <div class="division-mini-card">
+                    <div class="division-mini-header"><span>Grade Times</span></div>
+                    <p class="division-mini-help">Set the daily time window for this grade.</p>
+                    <div style="display:flex; align-items:center; gap:8px; margin-top:4px; flex-wrap:wrap;">
+                        <input id="time-start-input" value="${escapeHtml(divObj.startTime || "")}" placeholder="9:00am" style="width:80px; padding:4px 8px; border-radius:8px; border:1px solid #D1D5DB; font-size:0.85rem;">
+                        <span style="color:#9CA3AF;">to</span>
+                        <input id="time-end-input" value="${escapeHtml(divObj.endTime || "")}" placeholder="4:00pm" style="width:80px; padding:4px 8px; border-radius:8px; border:1px solid #D1D5DB; font-size:0.85rem;">
+                        <button id="save-times-btn" style="background:#111827; color:white; border:none; padding:5px 14px; border-radius:8px; font-size:0.8rem; cursor:pointer; font-weight:500;">Save Times</button>
+                        ${parentDiv ? `<button id="apply-times-all-btn" style="background:#F3F4F6; color:#374151; border:1px solid #D1D5DB; padding:5px 14px; border-radius:8px; font-size:0.78rem; cursor:pointer; font-weight:500;" title="Apply these times to all grades in ${escapeHtml(parentDiv)}">Apply to All in ${escapeHtml(parentDiv)}</button>` : ''}
                     </div>
                 </div>
                 
-                <div class="division-edit-grid">
-                    <!-- TIMES CARD (editable) -->
-                    <div class="division-mini-card">
-                        <div class="division-mini-header"><span>Grade Times</span></div>
-                        <p class="division-mini-help">Set the daily time window for this grade.</p>
-                        <div style="display:flex; align-items:center; gap:8px; margin-top:4px; flex-wrap:wrap;">
-                            <input id="time-start-input" value="${escapeHtml(divObj.startTime || "")}" placeholder="9:00am" style="width:80px; padding:4px 8px; border-radius:8px; border:1px solid #D1D5DB; font-size:0.85rem;">
-                            <span style="color:#9CA3AF;">to</span>
-                            <input id="time-end-input" value="${escapeHtml(divObj.endTime || "")}" placeholder="4:00pm" style="width:80px; padding:4px 8px; border-radius:8px; border:1px solid #D1D5DB; font-size:0.85rem;">
-                            <button id="save-times-btn" style="background:#111827; color:white; border:none; padding:5px 14px; border-radius:8px; font-size:0.8rem; cursor:pointer; font-weight:500;">Save Times</button>
-                            ${parentDiv ? `<button id="apply-times-all-btn" style="background:#F3F4F6; color:#374151; border:1px solid #D1D5DB; padding:5px 14px; border-radius:8px; font-size:0.78rem; cursor:pointer; font-weight:500;" title="Apply these times to all grades in ${escapeHtml(parentDiv)}">Apply to All in ${escapeHtml(parentDiv)}</button>` : ''}
-                        </div>
-                    </div>
-                    
-                    <!-- BUNKS (read-only) -->
-                    <div class="division-mini-card">
-                        <div class="division-mini-header"><span>Bunks</span></div>
-                        <p class="division-mini-help">Bunks in this grade. <a href="campistry_me.html" style="color:#7C3AED; font-weight:500;">Edit in Campistry Me</a></p>
-                        <div id="bunk-list" style="margin-top:6px; display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;"></div>
-                    </div>
+                <!-- BUNKS (read-only) -->
+                <div class="division-mini-card">
+                    <div class="division-mini-header"><span>Bunks</span></div>
+                    <p class="division-mini-help">Bunks in this grade. <a href="campistry_me.html" style="color:#7C3AED; font-weight:500;">Edit in Campistry Me</a></p>
+                    <div id="bunk-list" style="margin-top:6px; display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;"></div>
                 </div>
             </div>
         `;
@@ -833,49 +816,13 @@
         window.allSports = state.allSports;
     }
 
-    // ==================== DOM CLEANUP (v5.2) ====================
-    
-    /**
-     * ★ v5.2: Clean up legacy HTML elements that are now redundant
-     * since Campistry Me handles structure. This runs once on init.
-     */
-    function cleanupLegacyDOM() {
-        // Hide the divisionInput field row (legacy — managed in Campistry Me)
-        const divisionInput = document.getElementById("divisionInput");
-        const addDivisionBtn = document.getElementById("addDivisionBtn");
-        if (divisionInput) {
-            const fieldRow = divisionInput.closest('.setup-field-row');
-            if (fieldRow) fieldRow.style.display = 'none';
-        }
-        if (addDivisionBtn && !divisionInput) {
-            const fieldRow = addDivisionBtn.closest('.setup-field-row');
-            if (fieldRow) fieldRow.style.display = 'none';
-        }
-        
-        // Hide the enableColor toggle (auto-managed by parent division color)
-        const enableColor = document.getElementById("enableColor");
-        if (enableColor) {
-            const label = enableColor.closest('label');
-            if (label) label.style.display = 'none';
-        }
-        
-        // Hide "All Divisions" subtitle — parent-division group headers replace it
-        const divButtonsContainer = document.getElementById("divisionButtons");
-        const leftPanel = divButtonsContainer?.closest('.setup-card');
-        if (leftPanel) {
-            const subtitle = leftPanel.querySelector('.setup-subtitle');
-            if (subtitle) subtitle.style.display = 'none';
-        }
-    }
+
 
     // ==================== INITIALIZATION ====================
     
     function initApp1() {
         ensureSharedSetupStyles();
         loadData();
-        
-        // ★ v5.2: Clean up all legacy DOM elements
-        cleanupLegacyDOM();
         
         // Style detail pane
         const detailPane = document.getElementById("division-detail-pane");
