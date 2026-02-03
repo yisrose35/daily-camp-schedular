@@ -100,6 +100,39 @@
             color: var(--text-primary);
         }
         .nav-title span { color: var(--amber-600); }
+
+        /* Logo images in nav */
+        .nav-logo-main {
+            display: block;
+            flex-shrink: 0;
+            object-fit: contain;
+            vertical-align: middle;
+        }
+        .nav-logo-me {
+            height: 45px;
+            max-height: 45px;
+            width: auto;
+            position: relative;
+            top: 4px;
+        }
+        .nav-logo-flow {
+            height: 45px;
+            max-height: 45px;
+            width: auto;
+            position: relative;
+            top: 2px;
+        }
+        .nav-app-switch {
+            display: flex;
+            align-items: center;
+            margin-left: 8px;
+            text-decoration: none;
+            cursor: pointer;
+            transition: opacity 0.2s ease;
+        }
+        .nav-app-switch:hover {
+            opacity: 0.75;
+        }
         
         .sync-badge {
             display: flex;
@@ -835,11 +868,11 @@
                     Dashboard
                 </a>
                 <div class="nav-brand">
-                    <div class="nav-icon">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                    </div>
-                    <div class="nav-title">Campistry <span>Me</span></div>
+                    <img src="Me_clean.png" alt="Campistry Me" class="nav-logo-main nav-logo-me">
                 </div>
+                <a href="index.html" class="nav-app-switch" title="Open Campistry Flow — Scheduling">
+                    <img src="Flow_clean.png" alt="Campistry Flow" class="nav-logo-main nav-logo-flow">
+                </a>
             </div>
             <div class="sync-badge">
                 <div class="sync-dot" id="syncDot"></div>
