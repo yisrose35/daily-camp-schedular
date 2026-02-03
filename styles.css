@@ -1087,13 +1087,18 @@ label.override-checkbox span {
 /* App Logo Images (full logos with icon + text) */
 .app-logo-full {
   height: 40px;
+  max-height: 40px;
   width: auto;
+  max-width: 200px;
   display: block;
   flex-shrink: 0;
+  object-fit: contain;
 }
 
 .app-logo-me-img {
   height: 32px;
+  max-height: 32px;
+  max-width: 160px;
 }
 
 .brand-accent-flow {
