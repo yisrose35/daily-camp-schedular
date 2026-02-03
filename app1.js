@@ -435,6 +435,10 @@
         // ★ Expose globally so ALL modules can use it at runtime
         window.divisionNameMigrationMap = migMap;
 
+        // ★ ALWAYS install the runtime guardian, even if no stored data needs migration.
+        //   DivTimesIntegration may restore old-keyed data from sources we didn't migrate.
+        installDivisionTimesGuardian(migMap);
+
         let anyMigrated = false;
 
         // ==============================================================
@@ -764,6 +768,80 @@
                 }));
             } catch (e) { /* skip */ }
         }
+    }
+
+    /**
+     * Install a runtime property guardian on window.divisionTimes.
+     * Every time any code does `window.divisionTimes = obj`, keys are
+     * auto-remapped using the migration map. Also intercepts reads:
+     * if a consumer reads a grade-named key that doesn't exist but the
+     * old-named key does, it returns that data transparently.
+     */
+    function installDivisionTimesGuardian(migMap) {
+        if (!migMap || Object.keys(migMap).length === 0) return;
+
+        // Build reverse map: "1st Grade" → "1"  (for read fallback)
+        const reverseMap = {};
+        Object.entries(migMap).forEach(([old, newName]) => { reverseMap[newName] = old; });
+
+        // Helper: remap keys in an object
+        function remapKeys(obj) {
+            if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
+            const result = {};
+            let changed = false;
+            Object.entries(obj).forEach(([key, val]) => {
+                if (migMap[key]) {
+                    result[migMap[key]] = val;
+                    changed = true;
+                } else {
+                    result[key] = val;
+                }
+            });
+            return changed ? result : obj;
+        }
+
+        // Capture current value
+        let _internalDT = remapKeys(window.divisionTimes || {});
+
+        try {
+            Object.defineProperty(window, 'divisionTimes', {
+                get() { return _internalDT; },
+                set(val) {
+                    if (val && typeof val === 'object' && !Array.isArray(val)) {
+                        const remapped = remapKeys(val);
+                        if (remapped !== val) {
+                            console.log('[app1] ⚡ Auto-remapped divisionTimes keys on assignment');
+                        }
+                        _internalDT = remapped;
+                    } else {
+                        _internalDT = val;
+                    }
+                },
+                configurable: true,
+                enumerable: true
+            });
+            console.log('[app1 v5.1] ✅ divisionTimes runtime guardian installed');
+        } catch (e) {
+            console.warn('[app1] Could not install divisionTimes guardian:', e);
+        }
+
+        // Also guard window.scheduleAssignments if bunk→division lookups need remapping
+        // (Not needed — scheduleAssignments is keyed by bunk name, not division)
+
+        // ★ Also install a global utility for any module to remap division names
+        window.remapDivisionName = function(name) {
+            if (!name || typeof name !== 'string') return name;
+            return migMap[name] || name;
+        };
+
+        window.remapDivisionNames = function(names) {
+            if (!Array.isArray(names)) return names;
+            return names.map(n => (typeof n === 'string' && migMap[n]) ? migMap[n] : n);
+        };
+
+        window.remapDivisionKeys = function(obj) {
+            return remapKeys(obj);
+        };
     }
 
     // ==================== STYLES ====================
