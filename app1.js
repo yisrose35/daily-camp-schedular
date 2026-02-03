@@ -2,26 +2,21 @@
 // app1.js — MERGED: Beta Camper Roster + Published SyncSpine
 //
 // THEME: Modern Pro Camp (Emerald/White)
-// VERSION: 3.4 - Import Uses Immediate Cloud Sync
+// VERSION: 4.0 - Divisions/Bunks sourced from Campistry Me
 // 
-// FIXES APPLIED:
-// - Fixed stale window reference issues (divisions/bunks)
-// - Consistent syncSpine() calls on all mutations
-// - Proper double-click handling (no race conditions)
-// - Debounced color picker
-// - Improved CSV parsing with proper quote handling
-// - Added input validation and error handling
-// - Eliminated memory leaks from event handlers
-// - Centralized constants and configuration
-// - Optimized DOM operations
-// - Added proper null checks throughout
+// v4.0 CHANGES:
+// - Divisions & bunks are READ-ONLY (managed in Campistry Me)
+// - loadData() reads from campStructure (Campistry Me) as source of truth
+// - CSV import removed (use Campistry Me instead)
+// - Division/bunk add/edit/delete removed
+// - Times still editable per division
+// - All window exports preserved for scheduler compatibility
 // =================================================================
 (function () {
     "use strict";
     
     // ==================== CONSTANTS ====================
-    const VERSION = "3.4";
-    const CLICK_DELAY_MS = 300;
+    const VERSION = "4.0";
     const DEBOUNCE_MS = 150;
     const DEFAULT_BUNK_SIZE = 0;
     
@@ -528,387 +523,17 @@
         document.head.appendChild(style);
     }
 
-    // ==================== EDITABLE ELEMENTS ====================
-    
-    /**
-     * Make an element editable on double-click
-     * Returns cleanup function
-     */
-    function makeEditable(el, onSave) {
-        if (!el) return () => {};
-        
-        const handleDblClick = (e) => {
-            e.stopPropagation();
-            
-            const oldValue = el.textContent;
-            const input = document.createElement("input");
-            input.type = "text";
-            input.value = oldValue;
-            input.className = "bunk-edit-input";
-            input.style.width = Math.max(80, el.offsetWidth + 20) + "px";
-            
-            const finalize = (save = true) => {
-                const newValue = input.value.trim();
-                if (save && newValue && newValue !== oldValue) {
-                    onSave(newValue);
-                }
-                el.textContent = newValue || oldValue;
-                if (input.parentNode) {
-                    input.replaceWith(el);
-                }
-            };
-            
-            input.addEventListener("blur", () => finalize(true));
-            input.addEventListener("keydown", (ev) => {
-                if (ev.key === "Enter") {
-                    ev.preventDefault();
-                    finalize(true);
-                } else if (ev.key === "Escape") {
-                    ev.preventDefault();
-                    finalize(false);
-                }
-            });
-            
-            el.replaceWith(input);
-            input.focus();
-            input.select();
-        };
-        
-        el.addEventListener("dblclick", handleDblClick);
-        
-        // Return cleanup function
-        return () => el.removeEventListener("dblclick", handleDblClick);
-    }
-
     // ==================== BUNK OPERATIONS ====================
-    
-    function renameBunkEverywhere(oldName, newName, newSize) {
-        const trimmedName = (newName || "").trim();
-        if (!trimmedName) return false;
-        
-        const sizeVal = Math.max(0, parseInt(newSize, 10) || DEFAULT_BUNK_SIZE);
-        
-        // Size-only change
-        if (trimmedName === oldName) {
-            if (!state.bunkMetaData[trimmedName]) {
-                state.bunkMetaData[trimmedName] = {};
-            }
-            state.bunkMetaData[trimmedName].size = sizeVal;
-            saveData();
-            renderDivisionDetailPane();
-            window.updateTable?.();
-            return true;
-        }
-        
-        // Check for duplicate name
-        const exists = state.bunks.some(
-            b => b.toLowerCase() === trimmedName.toLowerCase() && b !== oldName
-        );
-        
-        if (exists) {
-            alert("Bunk name already exists.");
-            return false;
-        }
-        
-        // Update bunks array
-        const bunkIdx = state.bunks.indexOf(oldName);
-        if (bunkIdx !== -1) {
-            state.bunks[bunkIdx] = trimmedName;
-        }
-        
-        // Update all divisions
-        Object.values(state.divisions).forEach((div) => {
-            if (!div || !Array.isArray(div.bunks)) return;
-            const idx = div.bunks.indexOf(oldName);
-            if (idx !== -1) {
-                div.bunks[idx] = trimmedName;
-                sortBunksInPlace(div.bunks);
-            }
-        });
-        
-        // Update schedule assignments if they exist
-        if (window.scheduleAssignments?.[oldName]) {
-            window.scheduleAssignments[trimmedName] = window.scheduleAssignments[oldName];
-            delete window.scheduleAssignments[oldName];
-            window.saveCurrentDailyData?.("scheduleAssignments", window.scheduleAssignments);
-        }
-        
-        // Update metadata
-        state.bunkMetaData[trimmedName] = { size: sizeVal };
-        delete state.bunkMetaData[oldName];
-        
-        syncSpine();
-        saveData();
-        renderDivisionDetailPane();
-        window.updateTable?.();
-        
-        return true;
-    }
-    
-    function deleteBunkFromDivision(divName, bunkName) {
-        if (!window.AccessControl?.checkSetupAccess('delete bunks')) return false;
-
-        const div = state.divisions[divName];
-        if (!div || !Array.isArray(div.bunks)) return false;
-        
-        const idx = div.bunks.indexOf(bunkName);
-        if (idx === -1) return false;
-        
-        div.bunks.splice(idx, 1);
-        syncSpine();
-        saveData();
-        renderDivisionDetailPane();
-        window.updateTable?.();
-        
-        return true;
-    }
-    
-    function addBunkToDivision(divName, bunkName) {
-        if (!window.AccessControl?.checkSetupAccess('add bunks')) return false;
-
-        if (!divName || !bunkName) return false;
-        
-        const cleanDiv = String(divName).trim();
-        const cleanBunk = String(bunkName).trim();
-        
-        if (!cleanDiv || !cleanBunk) return false;
-        
-        // Add to global bunks if not exists
-        if (!state.bunks.includes(cleanBunk)) {
-            state.bunks.push(cleanBunk);
-        }
-        
-        // Add to division
-        const div = state.divisions[cleanDiv];
-        if (div && !div.bunks.includes(cleanBunk)) {
-            div.bunks.push(cleanBunk);
-            sortBunksInPlace(div.bunks);
-        }
-        
-        // Initialize metadata
-        if (!state.bunkMetaData[cleanBunk]) {
-            state.bunkMetaData[cleanBunk] = { size: DEFAULT_BUNK_SIZE };
-        }
-        
-        syncSpine();
-        saveData();
-        renderDivisionDetailPane();
-        window.updateTable?.();
-        
-        return true;
-    }
+    // Bunks are now managed in Campistry Me - these are kept as no-ops for compatibility
 
     // ==================== CSV / BULK IMPORT ====================
+    // CSV import removed - use Campistry Me for data import
     
     /**
-     * Parse CSV line handling quoted fields properly
+     * Render a "Campistry Me" link banner at top of setup (replaces CSV import UI)
      */
-    function parseCSVLine(line) {
-        const result = [];
-        let current = "";
-        let inQuotes = false;
-        
-        for (let i = 0; i < line.length; i++) {
-            const char = line[i];
-            const nextChar = line[i + 1];
-            
-            if (inQuotes) {
-                if (char === '"' && nextChar === '"') {
-                    // Escaped quote
-                    current += '"';
-                    i++;
-                } else if (char === '"') {
-                    inQuotes = false;
-                } else {
-                    current += char;
-                }
-            } else {
-                if (char === '"') {
-                    inQuotes = true;
-                } else if (char === ',') {
-                    result.push(current.trim());
-                    current = "";
-                } else {
-                    current += char;
-                }
-            }
-        }
-        
-        result.push(current.trim());
-        return result;
-    }
-    
-    function downloadTemplate() {
-        const lines = ["Division,Bunk Name,Camper Name OR Count"];
-        
-        if (state.availableDivisions.length === 0) {
-            lines.push(
-                '"Junior","Bunk 1",12',
-                '"Junior","Bunk 2","Moshe Cohen"',
-                '"Senior","Bunk A","David Levy"'
-            );
-        } else {
-            state.availableDivisions.forEach(divName => {
-                const div = state.divisions[divName];
-                if (!div) return;
-                
-                if (div.bunks?.length > 0) {
-                    div.bunks.forEach(bunk => {
-                        lines.push(`"${divName}","${bunk}","(Enter Name or Count)"`);
-                    });
-                } else {
-                    lines.push(`"${divName}","",`);
-                }
-            });
-        }
-        
-        const csv = lines.join("\n");
-        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-        const url = URL.createObjectURL(blob);
-        
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = "camp_roster_template.csv";
-        link.style.display = "none";
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-    }
-    
-    function handleBulkImport(file) {
-        if (!file) return;
-        
-        const reader = new FileReader();
-        
-        reader.onerror = () => {
-            alert("Error reading file. Please try again.");
-        };
-        
-        reader.onload = (e) => {
-            const text = e.target.result;
-            const lines = text.split(/\r?\n/);
-            
-            let stats = {
-                addedDivs: 0,
-                addedBunks: 0,
-                updatedSizes: 0,
-                addedCampers: 0
-            };
-            
-            // Load existing roster
-            const globalSettings = window.loadGlobalSettings?.() || {};
-            const app1Data = globalSettings.app1 || {};
-            const camperRoster = app1Data.camperRoster || {};
-            const bunkCounts = {};
-            
-            // Skip header row
-            for (let i = 1; i < lines.length; i++) {
-                const line = lines[i].trim();
-                if (!line) continue;
-                
-                const parts = parseCSVLine(line);
-                if (parts.length < 2) continue;
-                
-                const divName = parts[0];
-                const bunkName = parts[1];
-                const thirdCol = parts[2] || "";
-                
-                if (!divName) continue;
-                
-                // Add division if new
-                if (!state.availableDivisions.includes(divName)) {
-                    state.availableDivisions.push(divName);
-                    state.divisions[divName] = {
-                        bunks: [],
-                        color: getNextUniqueDivisionColor(state.divisions),
-                        startTime: "",
-                        endTime: ""
-                    };
-                    stats.addedDivs++;
-                }
-                
-                // Add bunk if specified
-                if (bunkName) {
-                    if (!state.bunks.includes(bunkName)) {
-                        state.bunks.push(bunkName);
-                        stats.addedBunks++;
-                    }
-                    
-                    const div = state.divisions[divName];
-                    if (div && !div.bunks.includes(bunkName)) {
-                        div.bunks.push(bunkName);
-                        sortBunksInPlace(div.bunks);
-                    }
-                    
-                    // Handle third column (size or camper name)
-                    if (thirdCol) {
-                        const asNum = parseInt(thirdCol, 10);
-                        const isNumeric = !isNaN(asNum) && 
-                            String(asNum) === thirdCol.trim();
-                        
-                        if (isNumeric) {
-                            if (!state.bunkMetaData[bunkName]) {
-                                state.bunkMetaData[bunkName] = {};
-                            }
-                            state.bunkMetaData[bunkName].size = asNum;
-                            stats.updatedSizes++;
-                        } else if (thirdCol.length > 1 && 
-                                   !thirdCol.startsWith("(")) {
-                            // Treat as camper name
-                            camperRoster[thirdCol] = {
-                                division: divName,
-                                bunk: bunkName,
-                                team: ""
-                            };
-                            stats.addedCampers++;
-                            
-                            bunkCounts[bunkName] = (bunkCounts[bunkName] || 0) + 1;
-                        }
-                    }
-                }
-            }
-            
-            // Update sizes from camper counts
-            Object.entries(bunkCounts).forEach(([bunk, count]) => {
-                if (!state.bunkMetaData[bunk]) {
-                    state.bunkMetaData[bunk] = {};
-                }
-                state.bunkMetaData[bunk].size = count;
-            });
-            
-            // Save roster to global storage
-            const currentGlobal = window.loadGlobalSettings?.() || {};
-            if (!currentGlobal.app1) currentGlobal.app1 = {};
-            currentGlobal.app1.camperRoster = camperRoster;
-            window.saveGlobalSettings?.("app1", currentGlobal.app1);
-            
-            syncSpine();
-            saveData();
-            setupDivisionButtons();
-            renderDivisionDetailPane();
-            
-            // 🔥 IMMEDIATE CLOUD SYNC
-            if (window.setCloudState) {
-                console.log("☁️ Triggering immediate cloud sync for imported CSV...");
-                const fullState = window.loadGlobalSettings?.();
-                window.setCloudState(fullState);
-            }
-            
-            alert(
-                `Import Complete!\n` +
-                `Added Divisions: ${stats.addedDivs}\n` +
-                `Added Bunks: ${stats.addedBunks}\n` +
-                `Updated Metadata: ${stats.updatedSizes}\n` +
-                `Campers Imported: ${stats.addedCampers}`
-            );
-        };
-        
-        reader.readAsText(file);
-    }
-    
-    function renderBulkImportUI() {
-        if (document.getElementById("bulk-data-card")) return;
+    function renderCampistryMeLink() {
+        if (document.getElementById("me-link-banner")) return;
         
         const grid = document.querySelector(".setup-grid");
         const target = grid || document.getElementById("division-detail-pane")?.parentNode;
@@ -916,7 +541,7 @@
         
         const card = document.createElement("section");
         card.className = "setup-card setup-card-wide bulk-card";
-        card.id = "bulk-data-card";
+        card.id = "me-link-banner";
         
         card.innerHTML = `
             <div style="display:flex; align-items:center; justify-content:space-between; gap:20px; flex-wrap:wrap;">
@@ -926,148 +551,22 @@
                         <span style="font-size:0.7rem; background:#8A5DFF; color:white; padding:2px 8px; border-radius:999px;">Step 1</span>
                     </h3>
                     <p class="muted" style="margin:4px 0 0;">
-                        Import data via CSV (Divisions, Bunks, Camper Names) or add manually below.
+                        Divisions, grades, bunks &amp; campers are managed in <a href="campistry_me.html" style="color:#7C3AED; font-weight:600;">Campistry Me</a>. Configure <strong>times</strong> and <strong>scheduling settings</strong> here.
                     </p>
                 </div>
                 <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                    <button id="btn-download-template" style="background:white; border:1px solid #D1D5DB; padding:8px 16px; border-radius:999px; font-size:0.85rem; cursor:pointer; transition:all 0.15s ease;">
-                        Template
-                    </button>
-                    <button id="btn-trigger-upload" style="background:#0094FF; color:white; border:none; padding:8px 18px; border-radius:999px; font-size:0.85rem; cursor:pointer; font-weight:600; transition:all 0.15s ease;">
-                        Upload CSV
-                    </button>
-                    <input type="file" id="bulk-upload-input" accept=".csv" style="display:none;">
+                    <a href="campistry_me.html" style="background:#7C3AED; color:white; border:none; padding:8px 18px; border-radius:999px; font-size:0.85rem; cursor:pointer; font-weight:600; text-decoration:none; transition:all 0.15s ease;">
+                        Open Campistry Me
+                    </a>
                 </div>
             </div>
         `;
         
         target.prepend(card);
-        
-        // Event listeners
-        const downloadBtn = card.querySelector("#btn-download-template");
-        const uploadBtn = card.querySelector("#btn-trigger-upload");
-        const uploadInput = card.querySelector("#bulk-upload-input");
-        
-        downloadBtn.addEventListener("click", downloadTemplate);
-        
-        uploadBtn.addEventListener("click", () => uploadInput.click());
-        
-        uploadInput.addEventListener("change", (e) => {
-            if (e.target.files?.length > 0) {
-                handleBulkImport(e.target.files[0]);
-                e.target.value = "";
-            }
-        });
-        
-        // Hover effects
-        downloadBtn.addEventListener("mouseenter", () => {
-            downloadBtn.style.backgroundColor = "#F9FAFB";
-        });
-        downloadBtn.addEventListener("mouseleave", () => {
-            downloadBtn.style.backgroundColor = "white";
-        });
-        
-        uploadBtn.addEventListener("mouseenter", () => {
-            uploadBtn.style.backgroundColor = "#0084E8";
-        });
-        uploadBtn.addEventListener("mouseleave", () => {
-            uploadBtn.style.backgroundColor = "#0094FF";
-        });
     }
 
     // ==================== DIVISION OPERATIONS ====================
-    
-    function addDivision() {
-        if (!window.AccessControl?.checkSetupAccess('add divisions')) return;
-
-        const input = document.getElementById("divisionInput");
-        const name = (input?.value || "").trim();
-        
-        if (!name) return;
-        
-        if (state.availableDivisions.includes(name)) {
-            alert("That division already exists.");
-            input.value = "";
-            return;
-        }
-        
-        const color = getNextUniqueDivisionColor(state.divisions);
-        
-        state.availableDivisions.push(name);
-        state.divisions[name] = {
-            bunks: [],
-            color: color,
-            startTime: "",
-            endTime: ""
-        };
-        
-        state.selectedDivision = name;
-        input.value = "";
-        
-        syncSpine();
-        saveData();
-        setupDivisionButtons();
-        renderDivisionDetailPane();
-        window.initLeaguesTab?.();
-        window.updateTable?.();
-    }
-    
-    function deleteDivision(divName) {
-        if (!window.AccessControl?.canEraseData?.()) {
-            window.AccessControl?.showPermissionDenied?.('delete divisions');
-            return;
-        }
-        if (!confirm(`Delete division "${divName}"?`)) return;
-        
-        delete state.divisions[divName];
-        
-        const idx = state.availableDivisions.indexOf(divName);
-        if (idx !== -1) {
-            state.availableDivisions.splice(idx, 1);
-        }
-        
-        state.selectedDivision = state.availableDivisions[0] || null;
-        
-        syncSpine();
-        saveData();
-        setupDivisionButtons();
-        renderDivisionDetailPane();
-        window.initLeaguesTab?.();
-        window.updateTable?.();
-    }
-    
-    function renameDivision(oldName, newName) {
-        if (!window.AccessControl?.checkSetupAccess('rename divisions')) return false;
-
-        const trimmed = newName.trim();
-        
-        if (!trimmed || trimmed === oldName) return false;
-        
-        if (state.divisions[trimmed]) {
-            alert("A division with that name already exists.");
-            return false;
-        }
-        
-        // Move division data
-        state.divisions[trimmed] = state.divisions[oldName];
-        delete state.divisions[oldName];
-        
-        // Update available divisions
-        const idx = state.availableDivisions.indexOf(oldName);
-        if (idx !== -1) {
-            state.availableDivisions[idx] = trimmed;
-        }
-        
-        state.selectedDivision = trimmed;
-        
-        syncSpine();
-        saveData();
-        setupDivisionButtons();
-        renderDivisionDetailPane();
-        window.updateTable?.();
-        
-        return true;
-    }
+    // Divisions are now managed in Campistry Me - editing removed
 
     // ==================== UI RENDERING ====================
     
@@ -1080,7 +579,7 @@
         if (!state.availableDivisions?.length) {
             container.innerHTML = `
                 <p class="muted">
-                    No divisions created yet. Add one above or import via CSV.
+                    No divisions yet. <a href="campistry_me.html" style="color:#7C3AED; font-weight:600;">Open Campistry Me</a> to create divisions, grades, and bunks.
                 </p>
             `;
             renderDivisionDetailPane();
@@ -1135,24 +634,17 @@
         renderDivisionDetailPane();
     }
     
-    // Store cleanup functions for editable elements
-    let editableCleanups = [];
-    
     function renderDivisionDetailPane() {
         const pane = document.getElementById("division-detail-pane");
         if (!pane) return;
-        
-        // Clean up previous editable handlers
-        editableCleanups.forEach(cleanup => cleanup());
-        editableCleanups = [];
         
         pane.innerHTML = "";
         
         if (!state.selectedDivision || !state.divisions[state.selectedDivision]) {
             pane.innerHTML = `
                 <p class="muted">
-                    Click a division on the left to set its <strong>times</strong>, 
-                    color, and <strong>bunks</strong>.
+                    Click a division on the left to set its <strong>times</strong> 
+                    and view its <strong>bunks</strong>.
                 </p>
             `;
             return;
@@ -1172,27 +664,24 @@
             ? `${divObj.startTime} – ${divObj.endTime}`
             : "Times not set";
         
-        // Build the pane using innerHTML for better performance
+        // Build the pane - read-only for divisions/bunks, editable for times
         pane.innerHTML = `
             <div class="detail-header" style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #E5E7EB; padding-bottom:8px; margin-bottom:10px; column-gap:12px;">
                 <h3 style="margin:0; font-size:1rem; font-weight:600; color:#111827;">
-                    Division Details & Bunks
+                    Division Details
                 </h3>
-                <button id="delete-division-btn" style="background:#FFFFFF; color:#DC2626; border:1px solid #FECACA; padding:6px 16px; border-radius:999px; cursor:pointer; font-weight:600; font-size:0.85rem; box-shadow:0 4px 10px rgba(220,38,38,0.12); transition:all 0.15s ease;">
-                    Delete Division
-                </button>
             </div>
             
             <div class="division-color-row">
                 <span>Division color</span>
-                <input type="color" id="division-color-input" value="${escapeHtml(color)}">
+                <div style="width:24px; height:24px; border-radius:6px; background-color:${escapeHtml(color)}; border:1px solid rgba(15,23,42,0.12);"></div>
             </div>
             
             <div class="division-edit-shell">
                 <div class="division-edit-header">
                     <div class="division-header-left">
                         <span class="division-status-dot" style="background-color:${escapeHtml(color)}; box-shadow:0 0 0 4px ${escapeHtml(color)}33;"></span>
-                        <span class="division-name" id="division-name-editable">${escapeHtml(state.selectedDivision)}</span>
+                        <span class="division-name">${escapeHtml(state.selectedDivision)}</span>
                     </div>
                     <div class="division-header-summary">
                         ${bunkCount} bunks • <strong>${totalKids}</strong> campers • ${escapeHtml(timesSummary)}
@@ -1216,53 +705,15 @@
                     <div class="division-mini-card">
                         <div class="division-mini-header"><span>Bunks in this Division</span></div>
                         <p class="division-mini-help">
-                            Click to edit name/size. <strong>Double-click to delete.</strong>
+                            Bunks are managed in <a href="campistry_me.html" style="color:#7C3AED; font-weight:600;">Campistry Me</a>.
                         </p>
                         <div id="bunk-list" style="margin-top:6px; display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;"></div>
-                        <div style="display:flex; gap:6px; margin-top:10px;">
-                            <input id="add-bunk-input" placeholder="New Bunk Name" style="flex:1; padding:5px 10px; border-radius:999px; border:1px solid #D1D5DB; font-size:0.86rem;">
-                            <button id="add-bunk-btn" style="padding:5px 14px; border-radius:999px; border:none; background:#00C896; color:white; font-size:0.85rem; font-weight:600; cursor:pointer; transition:background 0.15s ease;">
-                                Add
-                            </button>
-                        </div>
                     </div>
                 </div>
             </div>
         `;
         
-        // Attach event listeners
-        const deleteBtn = pane.querySelector("#delete-division-btn");
-        deleteBtn?.addEventListener("click", () => deleteDivision(state.selectedDivision));
-        deleteBtn?.addEventListener("mouseenter", () => {
-            deleteBtn.style.backgroundColor = "#FEF2F2";
-        });
-        deleteBtn?.addEventListener("mouseleave", () => {
-            deleteBtn.style.backgroundColor = "#FFFFFF";
-        });
-        
-        // Color picker with debounce
-        const colorInput = pane.querySelector("#division-color-input");
-        const debouncedColorChange = debounce((newColor) => {
-            divObj.color = newColor;
-            syncSpine();
-            saveData();
-            setupDivisionButtons();
-            renderDivisionDetailPane();
-            window.updateTable?.();
-        }, DEBOUNCE_MS);
-        
-        colorInput?.addEventListener("input", (e) => debouncedColorChange(e.target.value));
-        
-        // Editable division name
-        const nameEl = pane.querySelector("#division-name-editable");
-        if (nameEl) {
-            const cleanup = makeEditable(nameEl, (newName) => {
-                renameDivision(state.selectedDivision, newName);
-            });
-            editableCleanups.push(cleanup);
-        }
-        
-        // Time inputs
+        // Time inputs (still editable)
         const startInput = pane.querySelector("#time-start-input");
         const endInput = pane.querySelector("#time-end-input");
         const saveTimesBtn = pane.querySelector("#save-times-btn");
@@ -1280,7 +731,7 @@
         startInput?.addEventListener("keydown", (e) => e.key === "Enter" && saveTimes());
         endInput?.addEventListener("keydown", (e) => e.key === "Enter" && saveTimes());
         
-        // Bunk list
+        // Bunk list (read-only pills)
         const bunkList = pane.querySelector("#bunk-list");
         if (bunkList) {
             if (!divObj.bunks?.length) {
@@ -1289,123 +740,17 @@
                 const sorted = [...divObj.bunks].sort(compareBunks);
                 sorted.forEach(bunkName => {
                     const meta = state.bunkMetaData[bunkName] || { size: 0 };
-                    const pill = createBunkPill(bunkName, meta.size);
+                    const pill = document.createElement("span");
+                    pill.className = "division-bunk-pill";
+                    pill.style.cursor = "default";
+                    pill.innerHTML = `
+                        ${escapeHtml(bunkName)} 
+                        <span class="bunk-size-badge">${meta.size || 0}</span>
+                    `;
                     bunkList.appendChild(pill);
                 });
             }
         }
-        
-        // Add bunk
-        const addBunkInput = pane.querySelector("#add-bunk-input");
-        const addBunkBtn = pane.querySelector("#add-bunk-btn");
-        
-        const doAddBunk = () => {
-            const name = addBunkInput?.value?.trim();
-            if (name) {
-                addBunkToDivision(state.selectedDivision, name);
-                addBunkInput.value = "";
-            }
-        };
-        
-        addBunkBtn?.addEventListener("click", doAddBunk);
-        addBunkInput?.addEventListener("keydown", (e) => e.key === "Enter" && doAddBunk());
-    }
-    
-    /**
-     * Create a bunk pill element with proper click/double-click handling
-     */
-    function createBunkPill(bunkName, size) {
-        const pill = document.createElement("span");
-        pill.className = "division-bunk-pill";
-        pill.innerHTML = `
-            ${escapeHtml(bunkName)} 
-            <span class="bunk-size-badge">${size || 0}</span>
-        `;
-        
-        let clickCount = 0;
-        let clickTimer = null;
-        
-        pill.addEventListener("click", (e) => {
-            e.stopPropagation();
-            clickCount++;
-            
-            if (clickCount === 1) {
-                clickTimer = setTimeout(() => {
-                    // Single click - edit mode
-                    if (clickCount === 1) {
-                        startInlineEdit(pill, bunkName, size);
-                    }
-                    clickCount = 0;
-                }, CLICK_DELAY_MS);
-            } else if (clickCount === 2) {
-                // Double click - delete
-                clearTimeout(clickTimer);
-                clickCount = 0;
-                
-                // Visual feedback
-                pill.classList.add("bunk-delete-confirm");
-                
-                if (confirm(`Delete bunk "${bunkName}" from this division?`)) {
-                    deleteBunkFromDivision(state.selectedDivision, bunkName);
-                } else {
-                    pill.classList.remove("bunk-delete-confirm");
-                }
-            }
-        });
-        
-        return pill;
-    }
-    
-    function startInlineEdit(pill, bunkName, currentSize) {
-        const form = document.createElement("span");
-        form.className = "bunk-edit-form";
-        
-        const nameInput = document.createElement("input");
-        nameInput.value = bunkName;
-        nameInput.className = "bunk-edit-input";
-        
-        const sizeInput = document.createElement("input");
-        sizeInput.type = "number";
-        sizeInput.min = "0";
-        sizeInput.value = currentSize || "";
-        sizeInput.placeholder = "#";
-        sizeInput.className = "bunk-edit-size";
-        
-        const saveBtn = document.createElement("button");
-        saveBtn.className = "bunk-edit-save";
-        saveBtn.innerHTML = "✓";
-        saveBtn.type = "button";
-        
-        const doSave = () => {
-            renameBunkEverywhere(bunkName, nameInput.value, sizeInput.value);
-        };
-        
-        const doCancel = () => {
-            renderDivisionDetailPane();
-        };
-        
-        saveBtn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            doSave();
-        });
-        
-        nameInput.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") doSave();
-            if (e.key === "Escape") doCancel();
-        });
-        
-        sizeInput.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") doSave();
-            if (e.key === "Escape") doCancel();
-        });
-        
-        form.appendChild(nameInput);
-        form.appendChild(sizeInput);
-        form.appendChild(saveBtn);
-        
-        pill.replaceWith(form);
-        nameInput.focus();
-        nameInput.select();
     }
 
     // ==================== PERSISTENCE ====================
@@ -1436,45 +781,94 @@
     function loadData() {
         const globalData = window.loadGlobalSettings?.() || {};
         const data = globalData.app1 || {};
+        const campStructure = globalData.campStructure || {};
         
         try {
-            // Priority: global_authority > app1 data > empty
-            const globalDivisions = window.getGlobalDivisions?.() || {};
-            const globalBunks = window.getGlobalBunks?.() || [];
-            
-            // Load divisions
-            if (Object.keys(globalDivisions).length > 0) {
-                state.divisions = deepClone(globalDivisions);
-            } else if (data.divisions && Object.keys(data.divisions).length > 0) {
-                state.divisions = deepClone(data.divisions);
-            } else {
-                state.divisions = {};
+            // Preserve any times already saved in app1
+            const existingTimes = {};
+            if (data.divisions) {
+                Object.entries(data.divisions).forEach(([name, div]) => {
+                    if (div?.startTime || div?.endTime) {
+                        existingTimes[name] = {
+                            startTime: div.startTime || "",
+                            endTime: div.endTime || ""
+                        };
+                    }
+                });
             }
             
-            // Load bunks
-            if (globalBunks.length > 0) {
-                state.bunks = deepClone(globalBunks);
-            } else if (data.bunks?.length > 0) {
-                state.bunks = deepClone(data.bunks);
+            // ============================================================
+            // SOURCE OF TRUTH: campStructure from Campistry Me
+            // Flatten grades → bunks for app1's flat division format
+            // Merge with app1's own times (startTime/endTime)
+            // ============================================================
+            if (Object.keys(campStructure).length > 0) {
+                console.log("[app1] Loading divisions from Campistry Me campStructure");
+                const meBasedDivisions = {};
+                const allBunks = [];
+                
+                Object.entries(campStructure).forEach(([divName, divData]) => {
+                    if (typeof divData !== 'object' || divData === null) return;
+                    
+                    const bunks = [];
+                    Object.values(divData.grades || {}).forEach(grade => {
+                        (grade.bunks || []).forEach(b => {
+                            bunks.push(b);
+                            if (!allBunks.includes(b)) allBunks.push(b);
+                        });
+                    });
+                    sortBunksInPlace(bunks);
+                    
+                    const times = existingTimes[divName] || {};
+                    meBasedDivisions[divName] = {
+                        startTime: times.startTime || "",
+                        endTime: times.endTime || "",
+                        bunks: bunks,
+                        color: divData.color || getNextUniqueDivisionColor(meBasedDivisions)
+                    };
+                });
+                
+                state.divisions = meBasedDivisions;
+                state.bunks = allBunks;
+                
             } else {
-                state.bunks = [];
+                // Fallback: use global authority > app1 data > empty
+                console.log("[app1] No campStructure found, falling back to app1/global data");
+                const globalDivisions = window.getGlobalDivisions?.() || {};
+                const globalBunks = window.getGlobalBunks?.() || [];
+                
+                if (Object.keys(globalDivisions).length > 0) {
+                    state.divisions = deepClone(globalDivisions);
+                } else if (data.divisions && Object.keys(data.divisions).length > 0) {
+                    state.divisions = deepClone(data.divisions);
+                } else {
+                    state.divisions = {};
+                }
+                
+                if (globalBunks.length > 0) {
+                    state.bunks = deepClone(globalBunks);
+                } else if (data.bunks?.length > 0) {
+                    state.bunks = deepClone(data.bunks);
+                } else {
+                    state.bunks = [];
+                }
+                
+                // Validate and fix division data
+                const validDivisions = {};
+                Object.entries(state.divisions).forEach(([divName, div]) => {
+                    if (typeof div !== 'object' || div === null) return;
+                    
+                    validDivisions[divName] = {
+                        startTime: div.startTime || "",
+                        endTime: div.endTime || "",
+                        bunks: Array.isArray(div.bunks) ? div.bunks : [],
+                        color: div.color || getNextUniqueDivisionColor(validDivisions)
+                    };
+                    
+                    sortBunksInPlace(validDivisions[divName].bunks);
+                });
+                state.divisions = validDivisions;
             }
-            
-            // Validate and fix division data
-            const validDivisions = {};
-            Object.entries(state.divisions).forEach(([divName, div]) => {
-                if (typeof div !== 'object' || div === null) return;
-                
-                validDivisions[divName] = {
-                    startTime: div.startTime || "",
-                    endTime: div.endTime || "",
-                    bunks: Array.isArray(div.bunks) ? div.bunks : [],
-                    color: div.color || getNextUniqueDivisionColor(validDivisions)
-                };
-                
-                sortBunksInPlace(validDivisions[divName].bunks);
-            });
-            state.divisions = validDivisions;
             
             // Update derived state
             state.availableDivisions = Object.keys(state.divisions);
@@ -1485,6 +879,21 @@
             state.allSports = Array.isArray(data.allSports) ? data.allSports : [...DEFAULT_SPORTS];
             state.savedSkeletons = data.savedSkeletons || {};
             state.skeletonAssignments = data.skeletonAssignments || {};
+            
+            // Compute bunk sizes from camperRoster if available
+            const camperRoster = data.camperRoster || {};
+            const bunkCounts = {};
+            Object.values(camperRoster).forEach(camper => {
+                if (camper?.bunk) {
+                    bunkCounts[camper.bunk] = (bunkCounts[camper.bunk] || 0) + 1;
+                }
+            });
+            Object.entries(bunkCounts).forEach(([bunk, count]) => {
+                if (!state.bunkMetaData[bunk]) state.bunkMetaData[bunk] = {};
+                if (!state.bunkMetaData[bunk].size) {
+                    state.bunkMetaData[bunk].size = count;
+                }
+            });
             
             // Update window.app1
             updateWindowApp1();
@@ -1529,14 +938,24 @@
         // Load data first
         loadData();
         
-        // Set up event listeners
-        const addDivisionBtn = document.getElementById("addDivisionBtn");
-        addDivisionBtn?.addEventListener("click", addDivision);
-        
+        // Hide the division input row (now managed in Campistry Me)
         const divisionInput = document.getElementById("divisionInput");
-        divisionInput?.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") addDivision();
-        });
+        const addDivisionBtn = document.getElementById("addDivisionBtn");
+        if (divisionInput) {
+            const fieldRow = divisionInput.closest('.setup-field-row');
+            if (fieldRow) fieldRow.style.display = 'none';
+        }
+        if (addDivisionBtn && !divisionInput) {
+            const fieldRow = addDivisionBtn.closest('.setup-field-row');
+            if (fieldRow) fieldRow.style.display = 'none';
+        }
+        
+        // Hide the enable color toggle
+        const enableColor = document.getElementById("enableColor");
+        if (enableColor) {
+            const label = enableColor.closest('label');
+            if (label) label.style.display = 'none';
+        }
         
         // Style detail pane
         const detailPane = document.getElementById("division-detail-pane");
@@ -1545,7 +964,7 @@
             detailPane.style.marginTop = "8px";
         }
         
-        // --- 🟢 NEW: Wire up the Erase All Button ---
+        // --- 🟢 Wire up the Erase All Button ---
         const eraseAllBtn = document.getElementById("eraseAllBtn");
         if (eraseAllBtn) {
             // Remove old listeners by cloning
@@ -1589,7 +1008,9 @@
         // Initial render
         setupDivisionButtons();
         renderDivisionDetailPane();
-        renderBulkImportUI();
+        renderCampistryMeLink();
+        
+        console.log(`[app1] v${VERSION} initialized - divisions sourced from Campistry Me`);
     }
 
     // ==================== WINDOW EXPORTS ====================
@@ -1657,7 +1078,11 @@
         saveData();
     };
     
-    window.addDivisionBunk = addBunkToDivision;
+    // Legacy export - now a no-op since bunks managed in Campistry Me
+    window.addDivisionBunk = (divName, bunkName) => {
+        console.warn("[app1] addDivisionBunk is deprecated - manage bunks in Campistry Me");
+        return false;
+    };
     
     // Color utilities
     window.getNextDivisionColor = getNextDivisionColor;
