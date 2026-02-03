@@ -1,21 +1,34 @@
 // =================================================================
-// app1.js — v5.0: Inline Division/Grade/Bunk Management
+// app1.js — v5.1: Grades Are The Scheduling Units (Read-Only Structure)
 //
 // THEME: Modern Pro Camp (Emerald/White)
-// VERSION: 5.0 - Hierarchical Division→Grade→Bunk creation in Setup
+// VERSION: 5.1 - Grades (not divisions) drive the scheduler
 // 
-// v5.0 CHANGES:
-// - Divisions, grades & bunks can now be created/deleted directly in Setup
-// - Hierarchical detail pane: Division → Grades → Bunks (like Campistry Me)
-// - campStructure written as source of truth for cross-page compat
-// - Times still editable per division
+// KEY CONCEPT:
+//   Division (e.g. "Juniors")    = organizational parent group
+//   Grade    (e.g. "1st Grade")  = the SCHEDULING UNIT (columns in builder)
+//   Bunk     (e.g. "1A", "1B")   = individual groups within a grade
+//
+// Previously "division 1" was the scheduling unit. Now grades fill that role.
+// state.divisions / window.divisions is keyed by GRADE name.
+// Master Builder, Daily Adjustments, Scheduler Core all consume
+// window.divisions — so they automatically get grades with zero changes.
+//
+// v5.1 CHANGES vs v5.0:
+// - Structure (divisions/grades/bunks) is READ-ONLY — managed in Campistry Me
+// - loadData() extracts GRADES as scheduling units from campStructure
+// - Each grade entry has parentDivision for grouping/color
+// - UI groups grades by parent division in the left panel
+// - Detail pane shows grade info with parent division context
+// - "Apply to All in [Division]" button for times
+// - Campistry Me link banner at top
 // - All window exports preserved for scheduler compatibility
 // =================================================================
 (function () {
     "use strict";
     
     // ==================== CONSTANTS ====================
-    const VERSION = "5.0";
+    const VERSION = "5.1";
     const DEBOUNCE_MS = 150;
     const DEFAULT_BUNK_SIZE = 0;
     
@@ -43,19 +56,17 @@
     // ==================== STATE ====================
     const state = {
         bunks: [],
-        divisions: {},          // Flat: { divName: { startTime, endTime, bunks:[], color } }
-        campStructure: {},      // Hierarchical: { divName: { color, grades: { gradeName: { bunks:[] } } } }
+        divisions: {},              // ★ Keyed by GRADE name: { gradeName: { startTime, endTime, bunks[], color, parentDivision } }
         specialActivities: [],
-        availableDivisions: [],
-        selectedDivision: null,
+        availableDivisions: [],     // ★ Array of GRADE names (the scheduling units)
+        selectedDivision: null,     // ★ Selected GRADE name
         bunkMetaData: {},
         sportMetaData: {},
         allSports: [...DEFAULT_SPORTS],
         savedSkeletons: {},
         skeletonAssignments: {},
-        // UI state for expand/collapse
-        expandedDivisions: new Set(),
-        expandedGrades: new Set()
+        // Parent division groups (for UI grouping only)
+        divisionGroups: {}          // { parentDivName: { color, grades: [gradeName, ...] } }
     };
 
     // ==================== UTILITIES ====================
@@ -162,212 +173,6 @@
         return getNextDivisionColor();
     }
 
-    function getNextUniqueStructureColor() {
-        const usedColors = new Set(
-            Object.values(state.campStructure || {}).map(d => d?.color).filter(Boolean)
-        );
-        const startIndex = getColorIndex();
-        for (let i = 0; i < DEFAULT_COLORS.length; i++) {
-            const index = (startIndex + i) % DEFAULT_COLORS.length;
-            const color = DEFAULT_COLORS[index];
-            if (!usedColors.has(color)) {
-                setColorIndex(index + 1);
-                return color;
-            }
-        }
-        return getNextDivisionColor();
-    }
-
-    // ==================== CAMP STRUCTURE ↔ FLAT DIVISIONS ====================
-
-    /**
-     * Rebuild flat state.divisions + state.bunks from state.campStructure
-     * Preserves existing times from state.divisions
-     */
-    function rebuildFlatDivisions() {
-        const existingTimes = {};
-        Object.entries(state.divisions).forEach(([name, div]) => {
-            if (div?.startTime || div?.endTime) {
-                existingTimes[name] = { startTime: div.startTime || "", endTime: div.endTime || "" };
-            }
-        });
-
-        const newDivisions = {};
-        const allBunks = [];
-
-        Object.entries(state.campStructure).forEach(([divName, divData]) => {
-            if (typeof divData !== 'object' || divData === null) return;
-            const bunks = [];
-            Object.values(divData.grades || {}).forEach(grade => {
-                (grade.bunks || []).forEach(b => {
-                    bunks.push(b);
-                    if (!allBunks.includes(b)) allBunks.push(b);
-                });
-            });
-            sortBunksInPlace(bunks);
-
-            const times = existingTimes[divName] || {};
-            newDivisions[divName] = {
-                startTime: times.startTime || "",
-                endTime: times.endTime || "",
-                bunks: bunks,
-                color: divData.color || getNextUniqueDivisionColor(newDivisions)
-            };
-        });
-
-        state.divisions = newDivisions;
-        state.bunks = allBunks;
-        state.availableDivisions = Object.keys(state.divisions);
-        syncSpine();
-    }
-
-    /**
-     * Migrate old flat divisions to hierarchical campStructure
-     */
-    function migrateToStructure(oldDivisions) {
-        const struct = {};
-        Object.entries(oldDivisions).forEach(([divName, divData]) => {
-            const bunks = (divData.bunks || []).map(b => typeof b === 'string' ? b : b.name);
-            struct[divName] = {
-                color: divData.color || DEFAULT_COLORS[Object.keys(struct).length % DEFAULT_COLORS.length],
-                grades: bunks.length > 0 ? { 'Default': { bunks } } : {}
-            };
-        });
-        return struct;
-    }
-
-    // ==================== DIVISION / GRADE / BUNK OPERATIONS ====================
-
-    function addDivision() {
-        const input = document.getElementById("divisionInput");
-        const name = input?.value?.trim();
-        if (!name) return;
-
-        if (state.campStructure[name]) {
-            alert("Division '" + name + "' already exists.");
-            return;
-        }
-
-        state.campStructure[name] = {
-            color: getNextUniqueStructureColor(),
-            grades: {}
-        };
-        state.expandedDivisions.add(name);
-
-        input.value = "";
-        rebuildFlatDivisions();
-        state.selectedDivision = name;
-        saveData();
-        setupDivisionButtons();
-        renderDivisionDetailPane();
-    }
-
-    function deleteDivision(divName) {
-        if (!confirm('Delete "' + divName + '" and all its grades & bunks?')) return;
-        delete state.campStructure[divName];
-        state.expandedDivisions.delete(divName);
-        // Clean any expanded grades for this division
-        [...state.expandedGrades].forEach(key => {
-            if (key.startsWith(divName + '||')) state.expandedGrades.delete(key);
-        });
-
-        rebuildFlatDivisions();
-        if (state.selectedDivision === divName) {
-            state.selectedDivision = state.availableDivisions[0] || null;
-        }
-        saveData();
-        setupDivisionButtons();
-        renderDivisionDetailPane();
-    }
-
-    function addGradeToDiv(divName) {
-        const input = document.getElementById("add-grade-input-" + CSS.escape(divName));
-        const gradeName = input?.value?.trim();
-        if (!gradeName) return;
-
-        const div = state.campStructure[divName];
-        if (!div) return;
-        if (!div.grades) div.grades = {};
-
-        if (div.grades[gradeName]) {
-            alert("Grade '" + gradeName + "' already exists in " + divName + ".");
-            return;
-        }
-
-        div.grades[gradeName] = { bunks: [] };
-        state.expandedGrades.add(divName + '||' + gradeName);
-        input.value = "";
-
-        rebuildFlatDivisions();
-        saveData();
-        renderDivisionDetailPane();
-
-        // Focus the bunk input for this new grade
-        setTimeout(() => {
-            document.getElementById("add-bunk-input-" + CSS.escape(divName) + "-" + CSS.escape(gradeName))?.focus();
-        }, 60);
-    }
-
-    function deleteGrade(divName, gradeName) {
-        if (!confirm('Delete grade "' + gradeName + '" and all its bunks?')) return;
-        const div = state.campStructure[divName];
-        if (!div?.grades) return;
-        delete div.grades[gradeName];
-        state.expandedGrades.delete(divName + '||' + gradeName);
-
-        rebuildFlatDivisions();
-        saveData();
-        renderDivisionDetailPane();
-    }
-
-    function addBunkToGrade(divName, gradeName) {
-        const inputId = "add-bunk-input-" + CSS.escape(divName) + "-" + CSS.escape(gradeName);
-        const input = document.getElementById(inputId);
-        const bunkName = input?.value?.trim();
-        if (!bunkName) return;
-
-        const gradeData = state.campStructure[divName]?.grades?.[gradeName];
-        if (!gradeData) return;
-        if (!gradeData.bunks) gradeData.bunks = [];
-
-        if (gradeData.bunks.includes(bunkName)) {
-            alert("Bunk '" + bunkName + "' already exists.");
-            return;
-        }
-
-        gradeData.bunks.push(bunkName);
-        input.value = "";
-
-        rebuildFlatDivisions();
-        saveData();
-        renderDivisionDetailPane();
-
-        setTimeout(() => document.getElementById(inputId)?.focus(), 60);
-    }
-
-    function deleteBunk(divName, gradeName, bunkName) {
-        const gradeData = state.campStructure[divName]?.grades?.[gradeName];
-        if (!gradeData) return;
-        gradeData.bunks = (gradeData.bunks || []).filter(b => b !== bunkName);
-
-        rebuildFlatDivisions();
-        saveData();
-        renderDivisionDetailPane();
-    }
-
-    function toggleDetailDivision(divName) {
-        if (state.expandedDivisions.has(divName)) state.expandedDivisions.delete(divName);
-        else state.expandedDivisions.add(divName);
-        renderDivisionDetailPane();
-    }
-
-    function toggleDetailGrade(divName, gradeName) {
-        const key = divName + '||' + gradeName;
-        if (state.expandedGrades.has(key)) state.expandedGrades.delete(key);
-        else state.expandedGrades.add(key);
-        renderDivisionDetailPane();
-    }
-
     // ==================== STYLES ====================
     
     function ensureSharedSetupStyles() {
@@ -391,7 +196,7 @@
                 border: 1px solid #E5E7EB;
                 background: #FFFFFF;
                 padding: 10px 16px;
-                margin: 8px 0;
+                margin: 4px 0;
                 box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
                 cursor: pointer;
                 transition: all 0.16s ease;
@@ -551,202 +356,30 @@
                 margin-bottom: 12px;
             }
 
-            /* ===== Hierarchy Detail Styles (v5.0) ===== */
-
-            .hierarchy-section {
-                margin-top: 14px;
-            }
-
-            .grade-block-detail {
-                background: #FFFFFF;
-                border: 1px solid #E5E7EB;
-                border-radius: 10px;
-                margin-bottom: 8px;
-                overflow: hidden;
-                transition: box-shadow 0.15s ease;
-            }
-
-            .grade-block-detail:hover {
-                box-shadow: 0 4px 12px rgba(15,23,42,0.06);
-            }
-
-            .grade-header-detail {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                padding: 8px 12px;
-                cursor: pointer;
-                transition: background 0.12s ease;
-                user-select: none;
-            }
-
-            .grade-header-detail:hover {
-                background: #F9FAFB;
-            }
-
-            .grade-header-left {
+            /* ===== Parent Division Group Headers (v5.1) ===== */
+            .parent-division-label {
                 display: flex;
                 align-items: center;
                 gap: 8px;
-            }
-
-            .grade-expand-icon {
-                transition: transform 0.2s ease;
-                color: #9CA3AF;
-                flex-shrink: 0;
-            }
-
-            .grade-expand-icon.collapsed {
-                transform: rotate(-90deg);
-            }
-
-            .grade-name-label {
-                font-weight: 600;
-                font-size: 0.85rem;
-                color: #111827;
-            }
-
-            .grade-bunk-count {
+                padding: 8px 4px 2px;
                 font-size: 0.72rem;
-                color: #9CA3AF;
-                background: #F3F4F6;
-                padding: 2px 8px;
-                border-radius: 999px;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                color: #6B7280;
             }
 
-            .grade-delete-btn {
-                background: none;
-                border: none;
-                cursor: pointer;
-                color: #D1D5DB;
-                padding: 4px;
-                border-radius: 6px;
-                transition: all 0.15s;
-                display: flex;
-                align-items: center;
-            }
-
-            .grade-delete-btn:hover {
-                color: #EF4444;
-                background: #FEF2F2;
-            }
-
-            .grade-body-detail {
-                padding: 8px 12px 12px;
-                border-top: 1px solid #F3F4F6;
-                background: #FAFBFC;
-            }
-
-            .grade-body-detail.collapsed {
-                display: none;
-            }
-
-            .bunks-wrap {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 6px;
-                align-items: center;
-            }
-
-            .bunk-chip-detail {
-                display: inline-flex;
-                align-items: center;
-                gap: 4px;
-                padding: 4px 10px;
-                background: #F1F5F9;
-                border: 1px solid #E2E8F0;
-                border-radius: 999px;
-                font-size: 0.78rem;
-                font-weight: 500;
-                color: #1E293B;
-                transition: all 0.12s;
-            }
-
-            .bunk-chip-detail:hover {
-                background: #E2E8F0;
-            }
-
-            .bunk-chip-x {
-                background: none;
-                border: none;
-                cursor: pointer;
-                color: #D1D5DB;
-                font-size: 0.75rem;
-                padding: 0 0 0 2px;
-                line-height: 1;
-                transition: color 0.12s;
-                display: flex;
-                align-items: center;
-            }
-
-            .bunk-chip-x:hover {
-                color: #EF4444;
-            }
-
-            .quick-add-row {
-                display: flex;
-                gap: 6px;
-                align-items: center;
-                margin-top: 6px;
-            }
-
-            .quick-add-row input {
-                flex: 1;
-                min-width: 80px;
-                padding: 5px 10px;
-                border: 1px solid #E5E7EB;
-                border-radius: 8px;
-                font-size: 0.8rem;
-                outline: none;
-                transition: border-color 0.15s;
-            }
-
-            .quick-add-row input:focus {
-                border-color: #00C896;
-                box-shadow: 0 0 0 2px rgba(0,200,150,0.15);
-            }
-
-            .quick-add-btn {
-                background: #F3F4F6;
-                border: 1px solid #E5E7EB;
-                border-radius: 8px;
-                padding: 5px 10px;
-                cursor: pointer;
-                color: #374151;
-                font-size: 0.8rem;
-                font-weight: 500;
-                transition: all 0.12s;
-                display: flex;
-                align-items: center;
-                gap: 4px;
-            }
-
-            .quick-add-btn:hover {
-                background: #E5E7EB;
-                border-color: #D1D5DB;
-            }
-
-            .add-grade-section {
+            .parent-division-label:not(:first-child) {
                 margin-top: 10px;
                 padding-top: 10px;
-                border-top: 1px dashed #E5E7EB;
+                border-top: 1px solid #F3F4F6;
             }
 
-            .delete-division-btn {
-                background: none;
-                border: 1px solid #FECACA;
-                color: #EF4444;
-                padding: 6px 14px;
-                border-radius: 8px;
-                font-size: 0.78rem;
-                cursor: pointer;
-                transition: all 0.12s;
-                font-weight: 500;
-            }
-
-            .delete-division-btn:hover {
-                background: #FEF2F2;
-                border-color: #EF4444;
+            .parent-division-dot {
+                width: 8px;
+                height: 8px;
+                border-radius: 50%;
+                flex-shrink: 0;
             }
 
             .bunk-delete-confirm {
@@ -764,11 +397,48 @@
         document.head.appendChild(style);
     }
 
-    // ==================== BUNK OPERATIONS (LEGACY COMPAT) ====================
-    // No-ops kept for any external callers
+    // ==================== CAMPISTRY ME LINK BANNER ====================
+
+    function renderCampistryMeLink() {
+        if (document.getElementById("me-link-banner")) return;
+        
+        const grid = document.querySelector(".setup-grid");
+        const target = grid || document.getElementById("division-detail-pane")?.parentNode;
+        if (!target) return;
+        
+        const card = document.createElement("section");
+        card.className = "setup-card setup-card-wide bulk-card";
+        card.id = "me-link-banner";
+        
+        card.innerHTML = `
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:20px; flex-wrap:wrap;">
+                <div style="flex:1; min-width:200px;">
+                    <h3 style="margin:0; font-size:1.1rem; color:#111827; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                        Camp Setup &amp; Configuration
+                        <span style="font-size:0.7rem; background:#8A5DFF; color:white; padding:2px 8px; border-radius:999px;">Step 1</span>
+                    </h3>
+                    <p class="muted" style="margin:4px 0 0;">
+                        Divisions, grades, bunks &amp; campers are managed in <a href="campistry_me.html" style="color:#7C3AED; font-weight:600;">Campistry Me</a>.
+                        Configure <strong>times</strong> and <strong>scheduling settings</strong> here.
+                        <br><span style="font-size:0.78rem; color:#9CA3AF;">Grades are the scheduling units — they appear as columns in the Master Builder and schedule grid.</span>
+                    </p>
+                </div>
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                    <a href="campistry_me.html" style="background:#7C3AED; color:white; border:none; padding:8px 18px; border-radius:999px; font-size:0.85rem; cursor:pointer; font-weight:600; text-decoration:none; transition:all 0.15s ease;">
+                        Open Campistry Me
+                    </a>
+                </div>
+            </div>
+        `;
+        
+        target.prepend(card);
+    }
 
     // ==================== UI RENDERING ====================
     
+    /**
+     * Render grade cards in the left panel, grouped by parent division
+     */
     function setupDivisionButtons() {
         const container = document.getElementById("divisionButtons");
         if (!container) return;
@@ -778,7 +448,7 @@
         if (!state.availableDivisions?.length) {
             container.innerHTML = `
                 <p class="muted">
-                    No divisions yet. Use the input above to create one.
+                    No grades yet. <a href="campistry_me.html" style="color:#7C3AED; font-weight:600;">Open Campistry Me</a> to create divisions, grades, and bunks.
                 </p>
             `;
             renderDivisionDetailPane();
@@ -787,57 +457,72 @@
         
         const fragment = document.createDocumentFragment();
         
-        state.availableDivisions.forEach((name) => {
-            const divObj = state.divisions[name];
-            if (!divObj) return;
+        // ★ v5.1: Group grades by parent division
+        const groupOrder = Object.keys(state.divisionGroups);
+        
+        groupOrder.forEach(parentDivName => {
+            const group = state.divisionGroups[parentDivName];
+            if (!group || !group.grades?.length) return;
             
-            let totalKids = 0;
-            (divObj.bunks || []).forEach(b => {
-                totalKids += state.bunkMetaData[b]?.size || 0;
-            });
-            
-            const card = document.createElement("div");
-            card.className = "division-card";
-            if (state.selectedDivision === name) {
-                card.classList.add("selected");
+            // Parent division header (only show if there are real named groups)
+            if (parentDivName !== "All") {
+                const groupHeader = document.createElement("div");
+                groupHeader.className = "parent-division-label";
+                groupHeader.innerHTML = `
+                    <span class="parent-division-dot" style="background-color:${escapeHtml(group.color)};"></span>
+                    ${escapeHtml(parentDivName)}
+                `;
+                fragment.appendChild(groupHeader);
             }
             
-            card.addEventListener("click", () => {
-                state.selectedDivision = name;
-                // Auto-expand when selecting
-                state.expandedDivisions.add(name);
-                const struct = state.campStructure[name];
-                if (struct?.grades) {
-                    Object.keys(struct.grades).forEach(g => state.expandedGrades.add(name + '||' + g));
+            // Grade cards within this parent division
+            group.grades.forEach(gradeName => {
+                const divObj = state.divisions[gradeName];
+                if (!divObj) return;
+                
+                let totalKids = 0;
+                (divObj.bunks || []).forEach(b => {
+                    totalKids += state.bunkMetaData[b]?.size || 0;
+                });
+                
+                const card = document.createElement("div");
+                card.className = "division-card";
+                if (state.selectedDivision === gradeName) {
+                    card.classList.add("selected");
                 }
-                saveData();
-                setupDivisionButtons();
-                renderDivisionDetailPane();
-            });
-            
-            const color = divObj.color || DEFAULT_COLORS[0];
-            const bunkCount = (divObj.bunks || []).length;
-            const gradeCount = Object.keys(state.campStructure[name]?.grades || {}).length;
-            
-            card.innerHTML = `
-                <div class="division-card-top">
-                    <div class="division-pill" style="background-color:${escapeHtml(color)}">
-                        ${escapeHtml(name)}
+                
+                card.addEventListener("click", () => {
+                    state.selectedDivision = gradeName;
+                    saveData();
+                    setupDivisionButtons();
+                    renderDivisionDetailPane();
+                });
+                
+                const color = divObj.color || DEFAULT_COLORS[0];
+                const bunkCount = (divObj.bunks || []).length;
+                
+                card.innerHTML = `
+                    <div class="division-card-top">
+                        <div class="division-pill" style="background-color:${escapeHtml(color)}">
+                            ${escapeHtml(gradeName)}
+                        </div>
                     </div>
-                    <div class="division-color-chip-list" style="background-color:${escapeHtml(color)}"></div>
-                </div>
-                <div class="division-card-subline">
-                    ${gradeCount} grade${gradeCount !== 1 ? 's' : ''} · ${bunkCount} bunk${bunkCount !== 1 ? 's' : ''} · <strong>${totalKids}</strong> camper${totalKids !== 1 ? 's' : ''}
-                </div>
-            `;
-            
-            fragment.appendChild(card);
+                    <div class="division-card-subline">
+                        ${bunkCount} bunk${bunkCount !== 1 ? 's' : ''} · <strong>${totalKids}</strong> camper${totalKids !== 1 ? 's' : ''}
+                    </div>
+                `;
+                
+                fragment.appendChild(card);
+            });
         });
         
         container.appendChild(fragment);
         renderDivisionDetailPane();
     }
     
+    /**
+     * Render grade detail pane — times are editable, structure is read-only
+     */
     function renderDivisionDetailPane() {
         const pane = document.getElementById("division-detail-pane");
         if (!pane) return;
@@ -847,37 +532,36 @@
         if (!state.selectedDivision || !state.divisions[state.selectedDivision]) {
             pane.innerHTML = `
                 <p class="muted">
-                    Click a division on the left to set its <strong>times</strong>,
-                    manage <strong>grades</strong>, and add <strong>bunks</strong>.
+                    Click a grade on the left to set its <strong>times</strong>
+                    and view its <strong>bunks</strong>.
                 </p>
             `;
             return;
         }
         
-        const divName = state.selectedDivision;
-        const divObj = state.divisions[divName];
-        const structDiv = state.campStructure[divName] || { grades: {} };
+        const gradeName = state.selectedDivision;
+        const divObj = state.divisions[gradeName];
         const color = divObj.color || DEFAULT_COLORS[0];
+        const parentDiv = divObj.parentDivision || "";
         
         let totalKids = 0;
         (divObj.bunks || []).forEach(b => { totalKids += state.bunkMetaData[b]?.size || 0; });
         
         const bunkCount = (divObj.bunks || []).length;
-        const gradeCount = Object.keys(structDiv.grades || {}).length;
         const timesSummary = divObj.startTime && divObj.endTime
             ? `${divObj.startTime} – ${divObj.endTime}` : "Times not set";
         
         // ====== HEADER ======
         pane.innerHTML = `
             <div class="detail-header" style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #E5E7EB; padding-bottom:8px; margin-bottom:10px; column-gap:12px;">
-                <h3 style="margin:0; font-size:1.1rem; font-weight:600; color:#111827;">
-                    ${escapeHtml(divName)}
+                <h3 style="margin:0; font-size:1rem; font-weight:600; color:#111827;">
+                    Grade Details
                 </h3>
-                <button class="delete-division-btn" id="delete-div-btn">Delete Division</button>
+                ${parentDiv ? `<span style="font-size:0.78rem; color:#9CA3AF; font-weight:400;">Division: <strong style="color:#6B7280;">${escapeHtml(parentDiv)}</strong></span>` : ''}
             </div>
             
             <div class="division-color-row">
-                <span>Division color</span>
+                <span>Color${parentDiv ? ` (from ${escapeHtml(parentDiv)})` : ''}</span>
                 <div style="width:24px; height:24px; border-radius:6px; background-color:${escapeHtml(color)}; border:1px solid rgba(15,23,42,0.12);"></div>
             </div>
             
@@ -885,52 +569,42 @@
                 <div class="division-edit-header">
                     <div class="division-header-left">
                         <span class="division-status-dot" style="background-color:${escapeHtml(color)}; box-shadow:0 0 0 4px ${escapeHtml(color)}33;"></span>
-                        <span class="division-name">${escapeHtml(divName)}</span>
+                        <span class="division-name">${escapeHtml(gradeName)}</span>
                     </div>
                     <div class="division-header-summary">
-                        ${gradeCount} grade${gradeCount !== 1 ? 's' : ''} · ${bunkCount} bunk${bunkCount !== 1 ? 's' : ''} · <strong>${totalKids}</strong> campers · ${escapeHtml(timesSummary)}
+                        ${bunkCount} bunk${bunkCount !== 1 ? 's' : ''} · <strong>${totalKids}</strong> camper${totalKids !== 1 ? 's' : ''} · ${escapeHtml(timesSummary)}
                     </div>
                 </div>
                 
                 <div class="division-edit-grid">
-                    <!-- TIMES CARD -->
+                    <!-- TIMES CARD (editable) -->
                     <div class="division-mini-card">
-                        <div class="division-mini-header"><span>Division Times</span></div>
-                        <p class="division-mini-help">Set the daily time window this division is in camp.</p>
+                        <div class="division-mini-header"><span>Grade Times</span></div>
+                        <p class="division-mini-help">Set the daily time window for this grade.</p>
                         <div style="display:flex; align-items:center; gap:8px; margin-top:4px; flex-wrap:wrap;">
                             <input id="time-start-input" value="${escapeHtml(divObj.startTime || "")}" placeholder="9:00am" style="width:80px; padding:4px 8px; border-radius:8px; border:1px solid #D1D5DB; font-size:0.85rem;">
                             <span style="color:#9CA3AF;">to</span>
                             <input id="time-end-input" value="${escapeHtml(divObj.endTime || "")}" placeholder="4:00pm" style="width:80px; padding:4px 8px; border-radius:8px; border:1px solid #D1D5DB; font-size:0.85rem;">
                             <button id="save-times-btn" style="background:#111827; color:white; border:none; padding:5px 14px; border-radius:8px; font-size:0.8rem; cursor:pointer; font-weight:500;">Save Times</button>
+                            ${parentDiv ? `<button id="apply-times-all-btn" style="background:#F3F4F6; color:#374151; border:1px solid #D1D5DB; padding:5px 14px; border-radius:8px; font-size:0.78rem; cursor:pointer; font-weight:500;" title="Apply these times to all grades in ${escapeHtml(parentDiv)}">Apply to All in ${escapeHtml(parentDiv)}</button>` : ''}
                         </div>
                     </div>
                     
-                    <!-- GRADES & BUNKS HIERARCHY -->
+                    <!-- BUNKS (read-only) -->
                     <div class="division-mini-card">
-                        <div class="division-mini-header"><span>Grades & Bunks</span></div>
-                        <p class="division-mini-help">Organize bunks within grades. Add grades first, then add bunks to each grade.</p>
-                        <div id="grades-hierarchy-container"></div>
-                        <div class="add-grade-section">
-                            <div class="quick-add-row">
-                                <input id="add-grade-input-${escapeHtml(divName)}" placeholder="+ Add grade (e.g. 3rd Grade)" style="flex:1;">
-                                <button class="quick-add-btn" id="add-grade-btn">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                                    Add Grade
-                                </button>
-                            </div>
-                        </div>
+                        <div class="division-mini-header"><span>Bunks</span></div>
+                        <p class="division-mini-help">Bunks in this grade. <a href="campistry_me.html" style="color:#7C3AED; font-weight:500;">Edit in Campistry Me</a></p>
+                        <div id="bunk-list" style="margin-top:6px; display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;"></div>
                     </div>
                 </div>
             </div>
         `;
         
-        // ====== WIRE UP: Delete Division ======
-        pane.querySelector("#delete-div-btn")?.addEventListener("click", () => deleteDivision(divName));
-
         // ====== WIRE UP: Times ======
         const startInput = pane.querySelector("#time-start-input");
         const endInput = pane.querySelector("#time-end-input");
         const saveTimesBtn = pane.querySelector("#save-times-btn");
+        const applyAllBtn = pane.querySelector("#apply-times-all-btn");
         
         const saveTimes = () => {
             divObj.startTime = startInput?.value || "";
@@ -945,117 +619,49 @@
         startInput?.addEventListener("keydown", (e) => e.key === "Enter" && saveTimes());
         endInput?.addEventListener("keydown", (e) => e.key === "Enter" && saveTimes());
         
-        // ====== WIRE UP: Add Grade ======
-        const addGradeBtn = pane.querySelector("#add-grade-btn");
-        const addGradeInput = pane.querySelector("#add-grade-input-" + CSS.escape(divName));
-        addGradeBtn?.addEventListener("click", () => addGradeToDiv(divName));
-        addGradeInput?.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") { e.preventDefault(); addGradeToDiv(divName); }
+        // ★ v5.1: "Apply to All in Division" — sets same times for all sibling grades
+        applyAllBtn?.addEventListener("click", () => {
+            const newStart = startInput?.value || "";
+            const newEnd = endInput?.value || "";
+            if (!newStart && !newEnd) return;
+            
+            const group = state.divisionGroups[parentDiv];
+            if (!group) return;
+            
+            group.grades.forEach(siblingGrade => {
+                const sibling = state.divisions[siblingGrade];
+                if (sibling) {
+                    sibling.startTime = newStart;
+                    sibling.endTime = newEnd;
+                }
+            });
+            
+            syncSpine();
+            saveData();
+            setupDivisionButtons();
+            renderDivisionDetailPane();
         });
         
-        // ====== RENDER GRADES HIERARCHY ======
-        renderGradesHierarchy(divName, structDiv);
-    }
-
-    /**
-     * Render the grades & bunks tree inside the detail pane
-     */
-    function renderGradesHierarchy(divName, structDiv) {
-        const container = document.getElementById("grades-hierarchy-container");
-        if (!container) return;
-
-        const grades = structDiv.grades || {};
-        const gradeNames = Object.keys(grades).sort();
-
-        if (gradeNames.length === 0) {
-            container.innerHTML = '<p style="color:#9CA3AF; font-size:0.82rem; margin:8px 0 0;">No grades yet. Add one below.</p>';
-            return;
-        }
-
-        container.innerHTML = "";
-
-        gradeNames.forEach(gradeName => {
-            const gradeKey = divName + '||' + gradeName;
-            const isExpanded = state.expandedGrades.has(gradeKey);
-            const bunks = grades[gradeName].bunks || [];
-
-            // --- Grade Block ---
-            const block = document.createElement("div");
-            block.className = "grade-block-detail";
-
-            // --- Grade Header ---
-            const header = document.createElement("div");
-            header.className = "grade-header-detail";
-            header.innerHTML = `
-                <div class="grade-header-left">
-                    <svg class="grade-expand-icon ${isExpanded ? '' : 'collapsed'}" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                    <span class="grade-name-label">${escapeHtml(gradeName)}</span>
-                    <span class="grade-bunk-count">${bunks.length} bunk${bunks.length !== 1 ? 's' : ''}</span>
-                </div>
-            `;
-
-            // Delete grade button (in header, right side)
-            const delBtn = document.createElement("button");
-            delBtn.className = "grade-delete-btn";
-            delBtn.title = "Delete grade";
-            delBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
-            delBtn.addEventListener("click", (e) => { e.stopPropagation(); deleteGrade(divName, gradeName); });
-            header.appendChild(delBtn);
-
-            header.addEventListener("click", (e) => {
-                if (e.target.closest('.grade-delete-btn')) return;
-                toggleDetailGrade(divName, gradeName);
-            });
-
-            block.appendChild(header);
-
-            // --- Grade Body (bunks) ---
-            const body = document.createElement("div");
-            body.className = "grade-body-detail" + (isExpanded ? "" : " collapsed");
-
-            const bunksWrap = document.createElement("div");
-            bunksWrap.className = "bunks-wrap";
-
-            bunks.sort(compareBunks).forEach(bunkName => {
-                const meta = state.bunkMetaData[bunkName] || { size: 0 };
-                const chip = document.createElement("span");
-                chip.className = "bunk-chip-detail";
-                chip.innerHTML = `
-                    ${escapeHtml(bunkName)}
-                    <span class="bunk-size-badge">${meta.size || 0}</span>
-                    <button class="bunk-chip-x" title="Remove bunk">
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                    </button>
-                `;
-                chip.querySelector(".bunk-chip-x").addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    deleteBunk(divName, gradeName, bunkName);
+        // ====== BUNK LIST (read-only pills) ======
+        const bunkList = pane.querySelector("#bunk-list");
+        if (bunkList) {
+            if (!divObj.bunks?.length) {
+                bunkList.innerHTML = '<p class="muted">No bunks assigned yet.</p>';
+            } else {
+                const sorted = [...divObj.bunks].sort(compareBunks);
+                sorted.forEach(bunkName => {
+                    const meta = state.bunkMetaData[bunkName] || { size: 0 };
+                    const pill = document.createElement("span");
+                    pill.className = "division-bunk-pill";
+                    pill.style.cursor = "default";
+                    pill.innerHTML = `
+                        ${escapeHtml(bunkName)} 
+                        <span class="bunk-size-badge">${meta.size || 0}</span>
+                    `;
+                    bunkList.appendChild(pill);
                 });
-                bunksWrap.appendChild(chip);
-            });
-
-            body.appendChild(bunksWrap);
-
-            // --- Add Bunk Row ---
-            const addRow = document.createElement("div");
-            addRow.className = "quick-add-row";
-            const addBunkInputId = "add-bunk-input-" + CSS.escape(divName) + "-" + CSS.escape(gradeName);
-            addRow.innerHTML = `
-                <input id="${addBunkInputId}" placeholder="+ Add bunk" style="flex:1;">
-                <button class="quick-add-btn" data-div="${escapeHtml(divName)}" data-grade="${escapeHtml(gradeName)}">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                    Add
-                </button>
-            `;
-            addRow.querySelector("button").addEventListener("click", () => addBunkToGrade(divName, gradeName));
-            addRow.querySelector("input").addEventListener("keydown", (e) => {
-                if (e.key === "Enter") { e.preventDefault(); addBunkToGrade(divName, gradeName); }
-            });
-
-            body.appendChild(addRow);
-            block.appendChild(body);
-            container.appendChild(block);
-        });
+            }
+        }
     }
 
     // ==================== PERSISTENCE ====================
@@ -1074,13 +680,13 @@
             skeletonAssignments: state.skeletonAssignments,
             specialActivities: state.specialActivities,
             bunkMetaData: state.bunkMetaData,
-            sportMetaData: state.sportMetaData
+            sportMetaData: state.sportMetaData,
+            divisionGroups: state.divisionGroups
         };
         
         window.saveGlobalSettings?.("app1", data);
-
-        // ★ Also save campStructure for cross-page compatibility (Campistry Me)
-        window.saveGlobalSettings?.("campStructure", state.campStructure);
+        
+        // NOTE: campStructure is NOT written from app1 — Campistry Me owns it
         
         updateWindowApp1();
     }
@@ -1091,7 +697,11 @@
         const campStructure = globalData.campStructure || {};
         
         try {
-            // Preserve any times already saved in app1
+            // ================================================================
+            // COLLECT EXISTING TIMES
+            // Times may be stored under grade names (new) or old division
+            // names (legacy). Collect both for fallback matching.
+            // ================================================================
             const existingTimes = {};
             if (data.divisions) {
                 Object.entries(data.divisions).forEach(([name, div]) => {
@@ -1104,52 +714,118 @@
                 });
             }
             
-            // ============================================================
-            // SOURCE OF TRUTH: campStructure
-            // If campStructure exists, use it. Otherwise migrate from flat.
-            // ============================================================
+            // ================================================================
+            // ★ SOURCE OF TRUTH: campStructure from Campistry Me
+            //
+            // KEY CHANGE in v5.1:
+            //   Division (e.g. "Juniors") = organizational parent group
+            //   Grade (e.g. "1st Grade")  = THE SCHEDULING UNIT
+            //
+            // state.divisions is now keyed by GRADE name.
+            // This means window.divisions, window.availableDivisions,
+            // and everything the Master Builder / Daily Adjustments /
+            // Scheduler Core reads is now grade-based.
+            // ================================================================
             if (Object.keys(campStructure).length > 0) {
-                console.log("[app1] Loading from campStructure");
-                state.campStructure = deepClone(campStructure);
-            } else if (data.divisions && Object.keys(data.divisions).length > 0) {
-                console.log("[app1] Migrating flat divisions to campStructure");
-                state.campStructure = migrateToStructure(data.divisions);
-            } else {
-                const globalDivisions = window.getGlobalDivisions?.() || {};
-                if (Object.keys(globalDivisions).length > 0) {
-                    state.campStructure = migrateToStructure(globalDivisions);
-                } else {
-                    state.campStructure = {};
-                }
-            }
-
-            // Build flat divisions from campStructure
-            const meBasedDivisions = {};
-            const allBunks = [];
-            
-            Object.entries(state.campStructure).forEach(([divName, divData]) => {
-                if (typeof divData !== 'object' || divData === null) return;
-                const bunks = [];
-                Object.values(divData.grades || {}).forEach(grade => {
-                    (grade.bunks || []).forEach(b => {
-                        bunks.push(b);
-                        if (!allBunks.includes(b)) allBunks.push(b);
+                console.log("[app1 v5.1] Loading GRADES as scheduling units from campStructure");
+                const gradeBasedDivisions = {};
+                const allBunks = [];
+                const divGroups = {};
+                
+                // Detect grade name collisions across parent divisions
+                const gradeNameCounts = {};
+                Object.entries(campStructure).forEach(([divName, divData]) => {
+                    if (typeof divData !== 'object' || divData === null) return;
+                    Object.keys(divData.grades || {}).forEach(gradeName => {
+                        gradeNameCounts[gradeName] = (gradeNameCounts[gradeName] || 0) + 1;
                     });
                 });
-                sortBunksInPlace(bunks);
                 
-                const times = existingTimes[divName] || {};
-                meBasedDivisions[divName] = {
-                    startTime: times.startTime || "",
-                    endTime: times.endTime || "",
-                    bunks: bunks,
-                    color: divData.color || getNextUniqueDivisionColor(meBasedDivisions)
-                };
-            });
+                Object.entries(campStructure).forEach(([divName, divData]) => {
+                    if (typeof divData !== 'object' || divData === null) return;
+                    
+                    const parentColor = divData.color || getNextUniqueDivisionColor(gradeBasedDivisions);
+                    const gradeNames = Object.keys(divData.grades || {});
+                    
+                    divGroups[divName] = { color: parentColor, grades: [] };
+                    
+                    gradeNames.forEach(gradeName => {
+                        const gradeData = divData.grades[gradeName];
+                        const bunks = gradeData.bunks || [];
+                        bunks.forEach(b => { if (!allBunks.includes(b)) allBunks.push(b); });
+                        
+                        // ★ If grade name collides across parent divisions, qualify it
+                        const key = gradeNameCounts[gradeName] > 1
+                            ? `${divName} > ${gradeName}`
+                            : gradeName;
+                        
+                        if (gradeNameCounts[gradeName] > 1) {
+                            console.warn(`[app1 v5.1] Grade "${gradeName}" exists in multiple divisions — using "${key}"`);
+                        }
+                        
+                        // ★ Look up times: qualified key → raw grade name → parent div name → empty
+                        const times = existingTimes[key] || existingTimes[gradeName] || existingTimes[divName] || {};
+                        
+                        gradeBasedDivisions[key] = {
+                            startTime: times.startTime || "",
+                            endTime: times.endTime || "",
+                            bunks: [...bunks].sort(compareBunks),
+                            color: parentColor,
+                            parentDivision: divName
+                        };
+                        
+                        divGroups[divName].grades.push(key);
+                    });
+                });
+                
+                state.divisions = gradeBasedDivisions;
+                state.bunks = allBunks;
+                state.divisionGroups = divGroups;
+                
+            } else {
+                // ============================================================
+                // FALLBACK: No campStructure — use old flat divisions as-is
+                // (These ARE the scheduling units already — the old "divisions"
+                //  were effectively grades under the old naming convention)
+                // ============================================================
+                console.log("[app1 v5.1] No campStructure found, falling back to flat divisions");
+                const globalDivisions = window.getGlobalDivisions?.() || {};
+                const globalBunks = window.getGlobalBunks?.() || [];
+                
+                if (Object.keys(globalDivisions).length > 0) {
+                    state.divisions = deepClone(globalDivisions);
+                } else if (data.divisions && Object.keys(data.divisions).length > 0) {
+                    state.divisions = deepClone(data.divisions);
+                } else {
+                    state.divisions = {};
+                }
+                
+                if (globalBunks.length > 0) {
+                    state.bunks = deepClone(globalBunks);
+                } else if (data.bunks?.length > 0) {
+                    state.bunks = deepClone(data.bunks);
+                } else {
+                    state.bunks = [];
+                }
+                
+                // Validate and fix division data
+                const validDivisions = {};
+                Object.entries(state.divisions).forEach(([divName, div]) => {
+                    if (typeof div !== 'object' || div === null) return;
+                    validDivisions[divName] = {
+                        startTime: div.startTime || "",
+                        endTime: div.endTime || "",
+                        bunks: Array.isArray(div.bunks) ? div.bunks : [],
+                        color: div.color || getNextUniqueDivisionColor(validDivisions)
+                    };
+                    sortBunksInPlace(validDivisions[divName].bunks);
+                });
+                state.divisions = validDivisions;
+                
+                // Single flat group for legacy mode
+                state.divisionGroups = { "All": { color: "#6B7280", grades: Object.keys(state.divisions) } };
+            }
             
-            state.divisions = meBasedDivisions;
-            state.bunks = allBunks;
-
             // Update derived state
             state.availableDivisions = Object.keys(state.divisions);
             state.specialActivities = data.specialActivities || [];
@@ -1174,11 +850,10 @@
                     state.bunkMetaData[bunk].size = count;
                 }
             });
-
-            // Auto-expand all divisions on first load
-            Object.keys(state.campStructure).forEach(d => state.expandedDivisions.add(d));
             
             updateWindowApp1();
+            
+            console.log(`[app1 v5.1] Loaded ${state.availableDivisions.length} grades as scheduling units:`, state.availableDivisions);
             
         } catch (e) {
             console.error("Error loading app1 data:", e);
@@ -1196,7 +871,8 @@
             increments: 30,
             get activities() { return state.specialActivities; },
             get bunkMetaData() { return state.bunkMetaData; },
-            get sportMetaData() { return state.sportMetaData; }
+            get sportMetaData() { return state.sportMetaData; },
+            get divisionGroups() { return state.divisionGroups; }
         };
         
         window.divisions = state.divisions;
@@ -1211,20 +887,16 @@
         ensureSharedSetupStyles();
         loadData();
         
-        // ★ v5.0: Re-enable division input (no longer hidden)
+        // ★ v5.1: Hide the division input row (managed in Campistry Me)
         const divisionInput = document.getElementById("divisionInput");
         const addDivisionBtn = document.getElementById("addDivisionBtn");
-        
-        // Wire up the Add Division button
-        if (addDivisionBtn) {
-            const newBtn = addDivisionBtn.cloneNode(true);
-            addDivisionBtn.parentNode.replaceChild(newBtn, addDivisionBtn);
-            newBtn.addEventListener("click", addDivision);
-        }
         if (divisionInput) {
-            divisionInput.addEventListener("keydown", (e) => {
-                if (e.key === "Enter") { e.preventDefault(); addDivision(); }
-            });
+            const fieldRow = divisionInput.closest('.setup-field-row');
+            if (fieldRow) fieldRow.style.display = 'none';
+        }
+        if (addDivisionBtn && !divisionInput) {
+            const fieldRow = addDivisionBtn.closest('.setup-field-row');
+            if (fieldRow) fieldRow.style.display = 'none';
         }
         
         // Hide the enable color toggle (auto-managed)
@@ -1283,15 +955,17 @@
         // Initial render
         setupDivisionButtons();
         renderDivisionDetailPane();
+        renderCampistryMeLink();
         
-        console.log(`[app1] v${VERSION} initialized - inline division/grade/bunk management`);
+        console.log(`[app1] v${VERSION} initialized — grades are scheduling units`);
     }
 
     // ==================== WINDOW EXPORTS ====================
     
+    // Core initialization
     window.initApp1 = initApp1;
     
-    // Getters
+    // Getters that always return current state
     window.getDivisions = () => state.divisions;
     window.getBunkMetaData = () => state.bunkMetaData;
     window.getSportMetaData = () => state.sportMetaData;
@@ -1299,7 +973,16 @@
     window.getAllGlobalSports = () => [...state.allSports].sort();
     window.getSavedSkeletons = () => state.savedSkeletons || {};
     window.getSkeletonAssignments = () => state.skeletonAssignments || {};
-    window.getCampStructure = () => state.campStructure;
+    
+    // ★ v5.1: New exports for parent division awareness
+    window.getDivisionGroups = () => state.divisionGroups;
+    window.getCampStructure = () => {
+        const globalData = window.loadGlobalSettings?.() || {};
+        return globalData.campStructure || {};
+    };
+    window.getParentDivision = (gradeName) => {
+        return state.divisions[gradeName]?.parentDivision || null;
+    };
     
     // Setters
     window.addGlobalSport = (sportName) => {
@@ -1351,23 +1034,10 @@
         saveData();
     };
     
-    // ★ v5.0: addDivisionBunk now works again (adds to Default grade)
+    // Legacy export — deprecated, structure managed in Campistry Me
     window.addDivisionBunk = (divName, bunkName) => {
-        if (!divName || !bunkName || !state.campStructure[divName]) return false;
-        const struct = state.campStructure[divName];
-        if (!struct.grades) struct.grades = {};
-        // Add to 'Default' grade if no grades exist
-        const targetGrade = Object.keys(struct.grades).length > 0 
-            ? Object.keys(struct.grades)[0] 
-            : 'Default';
-        if (!struct.grades[targetGrade]) struct.grades[targetGrade] = { bunks: [] };
-        if (struct.grades[targetGrade].bunks.includes(bunkName)) return false;
-        struct.grades[targetGrade].bunks.push(bunkName);
-        rebuildFlatDivisions();
-        saveData();
-        setupDivisionButtons();
-        renderDivisionDetailPane();
-        return true;
+        console.warn("[app1] addDivisionBunk is deprecated — manage bunks in Campistry Me");
+        return false;
     };
     
     // Color utilities
