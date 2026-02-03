@@ -400,15 +400,84 @@
             const grades = div.grades || {};
             const gradeNames = Object.keys(grades).sort();
             const camperCount = Object.values(camperRoster).filter(c => c.division === divName).length;
+            const divColor = div.color || COLOR_PRESETS[0];
 
+            // === Grades HTML ===
             const gradesHtml = gradeNames.map(gradeName => {
                 const gradeKey = divName + '||' + gradeName;
                 const isGradeExpanded = expandedGrades.has(gradeKey);
                 const bunks = grades[gradeName].bunks || [];
-                return '<div class="grade-block"><div class="grade-header" onclick="CampistryMe.toggleGrade(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\')"><div class="grade-left"><svg class="expand-icon ' + (isGradeExpanded ? '' : 'collapsed') + '" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg><span class="grade-info">' + esc(gradeName) + '</span><span class="grade-count">' + bunks.length + ' bunk' + (bunks.length !== 1 ? 's' : '') + '</span></div><div class="grade-actions"><button class="icon-btn danger" onclick="event.stopPropagation(); CampistryMe.deleteGrade(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></div></div><div class="bunk-list ' + (isGradeExpanded ? '' : 'collapsed') + '">' + bunks.map(b => '<div class="bunk-tag"><span>' + esc(b) + '</span><button class="bunk-remove" onclick="CampistryMe.deleteBunk(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\',\'' + esc(b) + '\')">×</button></div>').join('') + '<div class="quick-add" style="margin-top:4px"><input type="text" placeholder="+ Add bunk" style="width:130px" id="addBunk_' + esc(divName) + '_' + esc(gradeName) + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addBunkInline(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\');event.preventDefault();}"><button class="quick-add-btn" onclick="CampistryMe.addBunkInline(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div></div></div>';
+                const escDiv = esc(divName);
+                const escGrade = esc(gradeName);
+
+                const bunksHtml = bunks.map(b => {
+                    const escB = esc(b);
+                    return '<span class="bunk-chip">' + escB +
+                        '<button class="icon-btn danger" onclick="event.stopPropagation(); CampistryMe.deleteBunk(\'' + escDiv + '\',\'' + escGrade + '\',\'' + escB + '\')">' +
+                        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+                        '</button></span>';
+                }).join('');
+
+                const addBunkHtml = '<div class="quick-add">' +
+                    '<input type="text" placeholder="+ Bunk" id="addBunk_' + escDiv + '_' + escGrade + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addBunkInline(\'' + escDiv + '\',\'' + escGrade + '\');event.preventDefault();}">' +
+                    '<button class="quick-add-btn" onclick="CampistryMe.addBunkInline(\'' + escDiv + '\',\'' + escGrade + '\')">' +
+                    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
+                    '</button></div>';
+
+                return '<div class="grade-block">' +
+                    '<div class="grade-header" onclick="CampistryMe.toggleGrade(\'' + escDiv + '\',\'' + escGrade + '\')">' +
+                        '<div class="grade-left">' +
+                            '<svg class="expand-icon ' + (isGradeExpanded ? '' : 'collapsed') + '" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>' +
+                            '<span class="grade-info">' + escGrade + '</span>' +
+                            '<span class="grade-count">' + bunks.length + ' bunk' + (bunks.length !== 1 ? 's' : '') + '</span>' +
+                        '</div>' +
+                        '<div class="grade-actions" onclick="event.stopPropagation()">' +
+                            '<button class="icon-btn danger" onclick="CampistryMe.deleteGrade(\'' + escDiv + '\',\'' + escGrade + '\')">' +
+                            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
+                            '</button>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="grade-body ' + (isGradeExpanded ? '' : 'collapsed') + '">' +
+                        '<div class="bunks-list">' + bunksHtml + addBunkHtml + '</div>' +
+                    '</div>' +
+                '</div>';
             }).join('');
 
-            return '<div class="division-block"><div class="division-header" onclick="CampistryMe.toggleDivision(\'' + esc(divName) + '\')"><div class="division-left"><div class="division-dot" style="background:' + (div.color || '#6366F1') + '"></div><span class="division-name">' + esc(divName) + '</span><span class="division-meta">' + gradeNames.length + ' grade' + (gradeNames.length !== 1 ? 's' : '') + ' · ' + camperCount + ' camper' + (camperCount !== 1 ? 's' : '') + '</span></div><div class="division-actions"><button class="icon-btn" onclick="event.stopPropagation(); CampistryMe.editDivision(\'' + esc(divName) + '\')" title="Edit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button><button class="icon-btn danger" onclick="event.stopPropagation(); CampistryMe.deleteDivision(\'' + esc(divName) + '\')" title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button><svg class="expand-icon ' + (isExpanded ? '' : 'collapsed') + '" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></div></div><div class="division-body ' + (isExpanded ? '' : 'collapsed') + '"><div class="grades-section"><div class="grades-list">' + gradesHtml + '</div><div class="add-grade-inline"><div class="quick-add"><input type="text" placeholder="+ Add grade" style="width:150px" id="addGrade_' + esc(divName) + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addGradeInline(\'' + esc(divName) + '\');event.preventDefault();}"><button class="quick-add-btn" onclick="CampistryMe.addGradeInline(\'' + esc(divName) + '\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div></div></div></div></div>';
+            // === Add Grade ===
+            const escDiv = esc(divName);
+            const addGradeHtml = '<div class="add-grade-inline"><div class="quick-add">' +
+                '<input type="text" placeholder="+ Add grade" id="addGrade_' + escDiv + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addGradeInline(\'' + escDiv + '\');event.preventDefault();}">' +
+                '<button class="quick-add-btn" onclick="CampistryMe.addGradeInline(\'' + escDiv + '\')">' +
+                '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
+                '</button></div></div>';
+
+            // === Division block ===
+            return '<div class="division-block">' +
+                '<div class="division-header ' + (isExpanded ? '' : 'collapsed') + '" onclick="CampistryMe.toggleDivision(\'' + escDiv + '\')">' +
+                    '<div class="division-left">' +
+                        '<div class="division-color" style="background:' + divColor + '"></div>' +
+                        '<div class="division-info">' +
+                            '<h3>' + escDiv + '</h3>' +
+                            '<div class="division-meta">' + gradeNames.length + ' grade' + (gradeNames.length !== 1 ? 's' : '') + ' · ' + camperCount + ' camper' + (camperCount !== 1 ? 's' : '') + '</div>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="division-actions" onclick="event.stopPropagation()">' +
+                        '<button class="icon-btn" onclick="CampistryMe.editDivision(\'' + escDiv + '\')" title="Edit">' +
+                        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' +
+                        '</button>' +
+                        '<button class="icon-btn danger" onclick="CampistryMe.deleteDivision(\'' + escDiv + '\')" title="Delete">' +
+                        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
+                        '</button>' +
+                        '<svg class="expand-icon ' + (isExpanded ? '' : 'collapsed') + '" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="division-body ' + (isExpanded ? '' : 'collapsed') + '">' +
+                    '<div class="grades-section">' +
+                        '<div class="grades-list">' + gradesHtml + '</div>' +
+                        addGradeHtml +
+                    '</div>' +
+                '</div>' +
+            '</div>';
         }).join('');
     }
 
