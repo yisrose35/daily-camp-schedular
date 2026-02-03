@@ -1000,7 +1000,7 @@ label.override-checkbox span {
   align-items: center;
   justify-content: space-between;
   padding: 0.7rem 1.25rem;
-  height: 64px;
+  height: 80px;
   overflow: hidden;
   background: var(--bg-secondary, #FFFFFF);
   border-bottom: 1px solid var(--slate-200, #E2E8F0);
@@ -1088,8 +1088,8 @@ label.override-checkbox span {
 
 /* App Logo Images (full logos with icon + text) */
 .app-logo-full {
-  height: 400px;
-  max-height: 400px;
+  height: 600px;
+  max-height: 600px;
   width: auto;
   max-width: 250px;
   display: block;
