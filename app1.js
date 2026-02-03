@@ -1,34 +1,28 @@
 // =================================================================
-// app1.js — v5.1: Grades Are The Scheduling Units (Read-Only Structure)
+// app1.js — v5.2: Grades Are The Scheduling Units (Clean UI)
 //
 // THEME: Modern Pro Camp (Emerald/White)
-// VERSION: 5.1 - Grades (not divisions) drive the scheduler
+// VERSION: 5.2 - Cleaned UI: removed redundant elements, fixed selected border
 // 
 // KEY CONCEPT:
 //   Division (e.g. "Juniors")    = organizational parent group
 //   Grade    (e.g. "1st Grade")  = the SCHEDULING UNIT (columns in builder)
 //   Bunk     (e.g. "1A", "1B")   = individual groups within a grade
 //
-// Previously "division 1" was the scheduling unit. Now grades fill that role.
-// state.divisions / window.divisions is keyed by GRADE name.
-// Master Builder, Daily Adjustments, Scheduler Core all consume
-// window.divisions — so they automatically get grades with zero changes.
-//
-// v5.1 CHANGES vs v5.0:
-// - Structure (divisions/grades/bunks) is READ-ONLY — managed in Campistry Me
-// - loadData() extracts GRADES as scheduling units from campStructure
-// - Each grade entry has parentDivision for grouping/color
-// - UI groups grades by parent division in the left panel
-// - Detail pane shows grade info with parent division context
-// - "Apply to All in [Division]" button for times
-// - Campistry Me link banner at top
-// - All window exports preserved for scheduler compatibility
+// v5.2 CHANGES vs v5.1:
+// - Removed "🏕️ Camp Scheduler" page title
+// - Removed redundant static intro card ("Configure Your Camp Structure")
+// - Fixed green selection ring clipping (outline instead of box-shadow)
+// - Updated panel headers: "Divisions" → "Grades", cleaned descriptions
+// - Simplified Campistry Me link banner
+// - Removed legacy "All Divisions" subtitle (parent-division groups replace it)
+// - Cleaned up detail pane (removed redundant color row)
 // =================================================================
 (function () {
     "use strict";
     
     // ==================== CONSTANTS ====================
-    const VERSION = "5.1";
+    const VERSION = "5.2";
     const DEBOUNCE_MS = 150;
     const DEFAULT_BUNK_SIZE = 0;
     
@@ -56,17 +50,16 @@
     // ==================== STATE ====================
     const state = {
         bunks: [],
-        divisions: {},              // ★ Keyed by GRADE name: { gradeName: { startTime, endTime, bunks[], color, parentDivision } }
+        divisions: {},
         specialActivities: [],
-        availableDivisions: [],     // ★ Array of GRADE names (the scheduling units)
-        selectedDivision: null,     // ★ Selected GRADE name
+        availableDivisions: [],
+        selectedDivision: null,
         bunkMetaData: {},
         sportMetaData: {},
         allSports: [...DEFAULT_SPORTS],
         savedSkeletons: {},
         skeletonAssignments: {},
-        // Parent division groups (for UI grouping only)
-        divisionGroups: {}          // { parentDivName: { color, grades: [gradeName, ...] } }
+        divisionGroups: {}
     };
 
     // ==================== UTILITIES ====================
@@ -208,10 +201,18 @@
                 background-color: #F9FAFB;
             }
             
+            /* ★ v5.2 FIX: Use outline instead of box-shadow spread 
+               so the green ring doesn't get clipped by the parent container */
             .division-card.selected {
                 border-color: #00C896;
-                box-shadow: 0 0 0 1px rgba(0, 200, 150, 0.55);
+                outline: 2px solid rgba(0, 200, 150, 0.55);
+                outline-offset: 0px;
                 background: radial-gradient(circle at top left, #ECFDF5 0, #FFFFFF 65%);
+            }
+            
+            /* ★ v5.2: Give the grade list breathing room for outlines */
+            #divisionButtons.master-list {
+                padding: 3px;
             }
             
             .division-card-top {
@@ -356,7 +357,7 @@
                 margin-bottom: 12px;
             }
 
-            /* ===== Parent Division Group Headers (v5.1) ===== */
+            /* ===== Parent Division Group Headers ===== */
             .parent-division-label {
                 display: flex;
                 align-items: center;
@@ -402,36 +403,30 @@
     function renderCampistryMeLink() {
         if (document.getElementById("me-link-banner")) return;
         
-        const grid = document.querySelector(".setup-grid");
-        const target = grid || document.getElementById("division-detail-pane")?.parentNode;
-        if (!target) return;
+        const grid = document.querySelector("#setup .setup-grid");
+        if (!grid) return;
         
         const card = document.createElement("section");
-        card.className = "setup-card setup-card-wide bulk-card";
+        card.className = "setup-card setup-card-wide";
         card.id = "me-link-banner";
+        card.style.cssText = "padding: 14px 18px;";
         
         card.innerHTML = `
-            <div style="display:flex; align-items:center; justify-content:space-between; gap:20px; flex-wrap:wrap;">
-                <div style="flex:1; min-width:200px;">
-                    <h3 style="margin:0; font-size:1.1rem; color:#111827; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                        Camp Setup &amp; Configuration
-                        <span style="font-size:0.7rem; background:#8A5DFF; color:white; padding:2px 8px; border-radius:999px;">Step 1</span>
-                    </h3>
-                    <p class="muted" style="margin:4px 0 0;">
-                        Divisions, grades, bunks &amp; campers are managed in <a href="campistry_me.html" style="color:#7C3AED; font-weight:600;">Campistry Me</a>.
-                        Configure <strong>times</strong> and <strong>scheduling settings</strong> here.
-                        <br><span style="font-size:0.78rem; color:#9CA3AF;">Grades are the scheduling units — they appear as columns in the Master Builder and schedule grid.</span>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
+                <div style="flex:1; min-width:180px;">
+                    <p style="margin:0; font-size:0.85rem; color:#6B7280;">
+                        Divisions, grades, bunks &amp; campers are managed in 
+                        <a href="campistry_me.html" style="color:#7C3AED; font-weight:600;">Campistry Me</a>.
+                        Configure <strong>times</strong> here.
                     </p>
                 </div>
-                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                    <a href="campistry_me.html" style="background:#7C3AED; color:white; border:none; padding:8px 18px; border-radius:999px; font-size:0.85rem; cursor:pointer; font-weight:600; text-decoration:none; transition:all 0.15s ease;">
-                        Open Campistry Me
-                    </a>
-                </div>
+                <a href="campistry_me.html" style="background:#7C3AED; color:white; border:none; padding:7px 16px; border-radius:999px; font-size:0.82rem; cursor:pointer; font-weight:600; text-decoration:none; transition:all 0.15s ease; white-space:nowrap;">
+                    Open Campistry Me
+                </a>
             </div>
         `;
         
-        target.prepend(card);
+        grid.prepend(card);
     }
 
     // ==================== UI RENDERING ====================
@@ -457,7 +452,6 @@
         
         const fragment = document.createDocumentFragment();
         
-        // ★ v5.1: Group grades by parent division
         const groupOrder = Object.keys(state.divisionGroups);
         
         groupOrder.forEach(parentDivName => {
@@ -531,8 +525,8 @@
         
         if (!state.selectedDivision || !state.divisions[state.selectedDivision]) {
             pane.innerHTML = `
-                <p class="muted">
-                    Click a grade on the left to set its <strong>times</strong>
+                <p class="muted" style="padding: 20px 0; text-align: center;">
+                    Select a grade on the left to configure its <strong>times</strong>
                     and view its <strong>bunks</strong>.
                 </p>
             `;
@@ -553,23 +547,12 @@
         
         // ====== HEADER ======
         pane.innerHTML = `
-            <div class="detail-header" style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #E5E7EB; padding-bottom:8px; margin-bottom:10px; column-gap:12px;">
-                <h3 style="margin:0; font-size:1rem; font-weight:600; color:#111827;">
-                    Grade Details
-                </h3>
-                ${parentDiv ? `<span style="font-size:0.78rem; color:#9CA3AF; font-weight:400;">Division: <strong style="color:#6B7280;">${escapeHtml(parentDiv)}</strong></span>` : ''}
-            </div>
-            
-            <div class="division-color-row">
-                <span>Color${parentDiv ? ` (from ${escapeHtml(parentDiv)})` : ''}</span>
-                <div style="width:24px; height:24px; border-radius:6px; background-color:${escapeHtml(color)}; border:1px solid rgba(15,23,42,0.12);"></div>
-            </div>
-            
             <div class="division-edit-shell">
                 <div class="division-edit-header">
                     <div class="division-header-left">
                         <span class="division-status-dot" style="background-color:${escapeHtml(color)}; box-shadow:0 0 0 4px ${escapeHtml(color)}33;"></span>
                         <span class="division-name">${escapeHtml(gradeName)}</span>
+                        ${parentDiv ? `<span style="font-size:0.75rem; color:#9CA3AF; font-weight:400; margin-left:4px;">(${escapeHtml(parentDiv)})</span>` : ''}
                     </div>
                     <div class="division-header-summary">
                         ${bunkCount} bunk${bunkCount !== 1 ? 's' : ''} · <strong>${totalKids}</strong> camper${totalKids !== 1 ? 's' : ''} · ${escapeHtml(timesSummary)}
@@ -619,7 +602,7 @@
         startInput?.addEventListener("keydown", (e) => e.key === "Enter" && saveTimes());
         endInput?.addEventListener("keydown", (e) => e.key === "Enter" && saveTimes());
         
-        // ★ v5.1: "Apply to All in Division" — sets same times for all sibling grades
+        // "Apply to All in Division" — sets same times for all sibling grades
         applyAllBtn?.addEventListener("click", () => {
             const newStart = startInput?.value || "";
             const newEnd = endInput?.value || "";
@@ -686,8 +669,6 @@
         
         window.saveGlobalSettings?.("app1", data);
         
-        // NOTE: campStructure is NOT written from app1 — Campistry Me owns it
-        
         updateWindowApp1();
     }
     
@@ -697,11 +678,6 @@
         const campStructure = globalData.campStructure || {};
         
         try {
-            // ================================================================
-            // COLLECT EXISTING TIMES
-            // Times may be stored under grade names (new) or old division
-            // names (legacy). Collect both for fallback matching.
-            // ================================================================
             const existingTimes = {};
             if (data.divisions) {
                 Object.entries(data.divisions).forEach(([name, div]) => {
@@ -714,25 +690,12 @@
                 });
             }
             
-            // ================================================================
-            // ★ SOURCE OF TRUTH: campStructure from Campistry Me
-            //
-            // KEY CHANGE in v5.1:
-            //   Division (e.g. "Juniors") = organizational parent group
-            //   Grade (e.g. "1st Grade")  = THE SCHEDULING UNIT
-            //
-            // state.divisions is now keyed by GRADE name.
-            // This means window.divisions, window.availableDivisions,
-            // and everything the Master Builder / Daily Adjustments /
-            // Scheduler Core reads is now grade-based.
-            // ================================================================
             if (Object.keys(campStructure).length > 0) {
-                console.log("[app1 v5.1] Loading GRADES as scheduling units from campStructure");
+                console.log("[app1 v5.2] Loading GRADES as scheduling units from campStructure");
                 const gradeBasedDivisions = {};
                 const allBunks = [];
                 const divGroups = {};
                 
-                // Detect grade name collisions across parent divisions
                 const gradeNameCounts = {};
                 Object.entries(campStructure).forEach(([divName, divData]) => {
                     if (typeof divData !== 'object' || divData === null) return;
@@ -754,16 +717,14 @@
                         const bunks = gradeData.bunks || [];
                         bunks.forEach(b => { if (!allBunks.includes(b)) allBunks.push(b); });
                         
-                        // ★ If grade name collides across parent divisions, qualify it
                         const key = gradeNameCounts[gradeName] > 1
                             ? `${divName} > ${gradeName}`
                             : gradeName;
                         
                         if (gradeNameCounts[gradeName] > 1) {
-                            console.warn(`[app1 v5.1] Grade "${gradeName}" exists in multiple divisions — using "${key}"`);
+                            console.warn(`[app1 v5.2] Grade "${gradeName}" exists in multiple divisions — using "${key}"`);
                         }
                         
-                        // ★ Look up times: qualified key → raw grade name → parent div name → empty
                         const times = existingTimes[key] || existingTimes[gradeName] || existingTimes[divName] || {};
                         
                         gradeBasedDivisions[key] = {
@@ -783,12 +744,7 @@
                 state.divisionGroups = divGroups;
                 
             } else {
-                // ============================================================
-                // FALLBACK: No campStructure — use old flat divisions as-is
-                // (These ARE the scheduling units already — the old "divisions"
-                //  were effectively grades under the old naming convention)
-                // ============================================================
-                console.log("[app1 v5.1] No campStructure found, falling back to flat divisions");
+                console.log("[app1 v5.2] No campStructure found, falling back to flat divisions");
                 const globalDivisions = window.getGlobalDivisions?.() || {};
                 const globalBunks = window.getGlobalBunks?.() || [];
                 
@@ -808,7 +764,6 @@
                     state.bunks = [];
                 }
                 
-                // Validate and fix division data
                 const validDivisions = {};
                 Object.entries(state.divisions).forEach(([divName, div]) => {
                     if (typeof div !== 'object' || div === null) return;
@@ -822,11 +777,9 @@
                 });
                 state.divisions = validDivisions;
                 
-                // Single flat group for legacy mode
                 state.divisionGroups = { "All": { color: "#6B7280", grades: Object.keys(state.divisions) } };
             }
             
-            // Update derived state
             state.availableDivisions = Object.keys(state.divisions);
             state.specialActivities = data.specialActivities || [];
             state.bunkMetaData = data.bunkMetaData || {};
@@ -836,7 +789,6 @@
             state.savedSkeletons = data.savedSkeletons || {};
             state.skeletonAssignments = data.skeletonAssignments || {};
             
-            // Compute bunk sizes from camperRoster if available
             const camperRoster = data.camperRoster || {};
             const bunkCounts = {};
             Object.values(camperRoster).forEach(camper => {
@@ -853,7 +805,7 @@
             
             updateWindowApp1();
             
-            console.log(`[app1 v5.1] Loaded ${state.availableDivisions.length} grades as scheduling units:`, state.availableDivisions);
+            console.log(`[app1 v5.2] Loaded ${state.availableDivisions.length} grades as scheduling units:`, state.availableDivisions);
             
         } catch (e) {
             console.error("Error loading app1 data:", e);
@@ -881,13 +833,14 @@
         window.allSports = state.allSports;
     }
 
-    // ==================== INITIALIZATION ====================
+    // ==================== DOM CLEANUP (v5.2) ====================
     
-    function initApp1() {
-        ensureSharedSetupStyles();
-        loadData();
-        
-        // ★ v5.1: Hide the division input row (managed in Campistry Me)
+    /**
+     * ★ v5.2: Clean up legacy HTML elements that are now redundant
+     * since Campistry Me handles structure. This runs once on init.
+     */
+    function cleanupLegacyDOM() {
+        // Hide the divisionInput field row (legacy — managed in Campistry Me)
         const divisionInput = document.getElementById("divisionInput");
         const addDivisionBtn = document.getElementById("addDivisionBtn");
         if (divisionInput) {
@@ -899,12 +852,30 @@
             if (fieldRow) fieldRow.style.display = 'none';
         }
         
-        // Hide the enable color toggle (auto-managed)
+        // Hide the enableColor toggle (auto-managed by parent division color)
         const enableColor = document.getElementById("enableColor");
         if (enableColor) {
             const label = enableColor.closest('label');
             if (label) label.style.display = 'none';
         }
+        
+        // Hide "All Divisions" subtitle — parent-division group headers replace it
+        const divButtonsContainer = document.getElementById("divisionButtons");
+        const leftPanel = divButtonsContainer?.closest('.setup-card');
+        if (leftPanel) {
+            const subtitle = leftPanel.querySelector('.setup-subtitle');
+            if (subtitle) subtitle.style.display = 'none';
+        }
+    }
+
+    // ==================== INITIALIZATION ====================
+    
+    function initApp1() {
+        ensureSharedSetupStyles();
+        loadData();
+        
+        // ★ v5.2: Clean up all legacy DOM elements
+        cleanupLegacyDOM();
         
         // Style detail pane
         const detailPane = document.getElementById("division-detail-pane");
@@ -962,10 +933,8 @@
 
     // ==================== WINDOW EXPORTS ====================
     
-    // Core initialization
     window.initApp1 = initApp1;
     
-    // Getters that always return current state
     window.getDivisions = () => state.divisions;
     window.getBunkMetaData = () => state.bunkMetaData;
     window.getSportMetaData = () => state.sportMetaData;
@@ -974,7 +943,6 @@
     window.getSavedSkeletons = () => state.savedSkeletons || {};
     window.getSkeletonAssignments = () => state.skeletonAssignments || {};
     
-    // ★ v5.1: New exports for parent division awareness
     window.getDivisionGroups = () => state.divisionGroups;
     window.getCampStructure = () => {
         const globalData = window.loadGlobalSettings?.() || {};
@@ -984,7 +952,6 @@
         return state.divisions[gradeName]?.parentDivision || null;
     };
     
-    // Setters
     window.addGlobalSport = (sportName) => {
         if (!sportName) return;
         const s = sportName.trim();
@@ -1034,19 +1001,16 @@
         saveData();
     };
     
-    // Legacy export — deprecated, structure managed in Campistry Me
     window.addDivisionBunk = (divName, bunkName) => {
         console.warn("[app1] addDivisionBunk is deprecated — manage bunks in Campistry Me");
         return false;
     };
     
-    // Color utilities
     window.getNextDivisionColor = getNextDivisionColor;
     window.getNextUniqueDivisionColor = getNextUniqueDivisionColor;
     window.getColorIndex = getColorIndex;
     window.incrementColorIndex = () => setColorIndex(getColorIndex() + 1);
     
-    // Initialize window.app1 with getters
     updateWindowApp1();
 
 })();
