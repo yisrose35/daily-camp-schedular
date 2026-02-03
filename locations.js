@@ -461,14 +461,20 @@ function initLocationsTab(){
             transition: border-color 0.15s, box-shadow 0.15s;
         }
         .form-input:focus { outline: none; border-color: #10B981; box-shadow: 0 0 0 3px rgba(16,185,129,0.15); }
-        /* Select dropdown visibility fix */
+       /* Select dropdown visibility fix */
         select.form-input {
-            color: #111827;
-            background-color: #FFFFFF;
+            color: #111827 !important;
+            background-color: #FFFFFF !important;
             cursor: pointer;
-            appearance: auto;
-            -webkit-appearance: menulist;
+            appearance: menulist !important;
+            -webkit-appearance: menulist !important;
+            -moz-appearance: auto !important;
             min-height: 42px;
+        }
+        select.form-input option {
+            color: #111827 !important;
+            background-color: #FFFFFF !important;
+            padding: 6px 10px;
         }
         .form-input-small { width: 80px; text-align: center; }
 
