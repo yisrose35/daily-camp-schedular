@@ -7,7 +7,13 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="dashboard.css">
+   <!-- FOUC Prevention: hide page until CSS loads -->
+    <style>
+        html:not(.css-ready) body { opacity: 0; }
+        html.css-ready body { transition: opacity 0.15s ease; }
+    </style>
+    <link rel="stylesheet" href="dashboard.css" onload="document.documentElement.classList.add('css-ready')">
+    <noscript><style>html body { opacity: 1 !important; }</style></noscript>
     
     <style>
         /* ========================================= */
@@ -718,6 +724,6 @@
     <!-- 3. Optional: Access Control and Teams -->
     <script src="access_control.js"></script>
     <script src="team_subdivisions_ui.js"></script>
-
+<script>setTimeout(function(){ document.documentElement.classList.add('css-ready'); }, 3000);</script>
 </body>
 </html>
