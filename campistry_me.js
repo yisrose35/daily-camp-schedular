@@ -1,11 +1,18 @@
 // =============================================================================
-// campistry_me.js — Campistry Me v5.5
+// campistry_me.js — Campistry Me v6.0
 // Professional UI, Cloud Sync, Fast inline inputs
+// =============================================================================
+// v6.0 FIXES:
+// - ★ CRITICAL: Direct Supabase cloud sync (no dependency on integration_hooks.js)
+// - ★ CRITICAL: Data persists across cache clears via camp_state table
+// - ★ FIXED: localStorage key mismatch - now writes to BOTH keys for cross-page compat
+// - ★ NEW: Cloud hydration on startup with smart merge (local vs cloud freshness)
+// - ★ NEW: Debounced cloud save (800ms) to avoid excessive writes
 // =============================================================================
 
 (function() {
     'use strict';
-    console.log('[Me] Campistry Me v5.5 loading...');
+    console.log('[Me] Campistry Me v6.0 loading...');
 
     let structure = {};
     let camperRoster = {};
@@ -18,7 +25,173 @@
     let sortDirection = 'asc';
     let pendingCsvData = [];
 
+    // ★ Cloud sync state
+    let _cloudSaveTimeout = null;
+    const CLOUD_SAVE_DEBOUNCE_MS = 800;
+
     const COLOR_PRESETS = ['#00C896','#6366F1','#F59E0B','#EF4444','#8B5CF6','#3B82F6','#10B981','#EC4899','#F97316','#14B8A6','#84CC16','#A855F7','#06B6D4','#F43F5E','#22C55E','#FBBF24'];
+
+    // =========================================================================
+    // ★ CLOUD SYNC HELPERS (direct Supabase access)
+    // =========================================================================
+
+    function getSupabaseClient() {
+        return window.CampistryDB?.getClient?.() || window.supabase || null;
+    }
+
+    function getCampId() {
+        return window.CampistryDB?.getCampId?.() || 
+               localStorage.getItem('campistry_camp_id') || 
+               localStorage.getItem('campistry_user_id') || 
+               null;
+    }
+
+    async function loadFromCloud() {
+        const client = getSupabaseClient();
+        const campId = getCampId();
+        if (!client || !campId) {
+            console.log('[Me] No client/campId for cloud load');
+            return null;
+        }
+        try {
+            const { data, error } = await client
+                .from('camp_state')
+                .select('state')
+                .eq('camp_id', campId)
+                .single();
+            if (error) {
+                if (error.code === 'PGRST116') {
+                    console.log('[Me] No cloud state found (new camp)');
+                    return null;
+                }
+                console.warn('[Me] Cloud load error:', error.message);
+                return null;
+            }
+            if (data?.state) {
+                console.log('[Me] ☁️ Cloud data loaded:', {
+                    divisions: Object.keys(data.state.divisions || data.state.campStructure || {}).length,
+                    campers: Object.keys(data.state.app1?.camperRoster || {}).length,
+                    updated_at: data.state.updated_at
+                });
+                return data.state;
+            }
+            return null;
+        } catch (e) {
+            console.error('[Me] Cloud load exception:', e);
+            return null;
+        }
+    }
+
+    async function saveToCloud(mergeData) {
+        const client = getSupabaseClient();
+        const campId = getCampId();
+        if (!client || !campId) {
+            console.log('[Me] No client/campId for cloud save');
+            return false;
+        }
+        if (!navigator.onLine) {
+            console.log('[Me] Offline - cloud save skipped');
+            return false;
+        }
+        try {
+            // Fetch current cloud state to merge into (don't overwrite scheduler data!)
+            const { data: current, error: fetchError } = await client
+                .from('camp_state')
+                .select('state')
+                .eq('camp_id', campId)
+                .single();
+
+            if (fetchError && fetchError.code !== 'PGRST116') {
+                console.warn('[Me] Cloud fetch error:', fetchError.message);
+            }
+
+            const currentState = current?.state || {};
+            
+            // Merge: keep all existing cloud data, overlay our changes
+            const newState = {
+                ...currentState,
+                ...mergeData,
+                // Deep-merge app1 to preserve other app1 fields (like skeletons, sports, etc.)
+                app1: {
+                    ...(currentState.app1 || {}),
+                    ...(mergeData.app1 || {})
+                },
+                updated_at: new Date().toISOString()
+            };
+
+            const { error: upsertError } = await client
+                .from('camp_state')
+                .upsert({
+                    camp_id: campId,
+                    state: newState,
+                    updated_at: new Date().toISOString()
+                }, {
+                    onConflict: 'camp_id'
+                });
+
+            if (upsertError) {
+                console.error('[Me] Cloud save error:', upsertError.message);
+                return false;
+            }
+
+            console.log('[Me] ☁️ Cloud save complete:', {
+                campStructure: Object.keys(mergeData.campStructure || {}).length + ' divisions',
+                campers: Object.keys(mergeData.app1?.camperRoster || {}).length
+            });
+            return true;
+        } catch (e) {
+            console.error('[Me] Cloud save exception:', e);
+            return false;
+        }
+    }
+
+    function schedulCloudSave(mergeData) {
+        if (_cloudSaveTimeout) clearTimeout(_cloudSaveTimeout);
+        _cloudSaveTimeout = setTimeout(async () => {
+            const success = await saveToCloud(mergeData);
+            if (success) {
+                setSyncStatus('synced');
+            } else {
+                setSyncStatus('error');
+            }
+        }, CLOUD_SAVE_DEBOUNCE_MS);
+    }
+
+    // =========================================================================
+    // ★ UNIFIED LOCAL STORAGE (writes to BOTH keys for cross-page compat)
+    // =========================================================================
+
+    function readLocalSettings() {
+        // Try integration_hooks key first (used by Flow page)
+        try {
+            const raw1 = localStorage.getItem('campGlobalSettings_v1');
+            if (raw1) {
+                const parsed = JSON.parse(raw1);
+                if (Object.keys(parsed).length > 1) return parsed;
+            }
+        } catch (e) { /* ignore */ }
+        
+        // Fallback to legacy Me key
+        try {
+            const raw2 = localStorage.getItem('campistryGlobalSettings');
+            if (raw2) return JSON.parse(raw2);
+        } catch (e) { /* ignore */ }
+        
+        return {};
+    }
+
+    function writeLocalSettings(data) {
+        const json = JSON.stringify(data);
+        // Write to BOTH keys so Flow and Me stay in sync
+        localStorage.setItem('campistryGlobalSettings', json);
+        localStorage.setItem('campGlobalSettings_v1', json);
+        // Also update the CAMPISTRY_LOCAL_CACHE key that integration_hooks reads
+        localStorage.setItem('CAMPISTRY_LOCAL_CACHE', json);
+    }
+
+    // =========================================================================
+    // INIT / AUTH / LOAD
+    // =========================================================================
 
     async function init() {
         const authed = await checkAuth();
@@ -47,10 +220,66 @@
     async function loadAllData() {
         // Wait for CampistryDB if available
         if (window.CampistryDB?.ready) await window.CampistryDB.ready;
+
+        // ★ Step 1: Load from localStorage (fast, immediate)
+        let local = readLocalSettings();
         
-        // Load from localStorage/global settings system
-        let global = loadGlobalSettings();
+        // ★ Step 2: Load from cloud (may take a moment)
+        let cloud = null;
+        try {
+            cloud = await loadFromCloud();
+        } catch (e) {
+            console.warn('[Me] Cloud load failed, using local only:', e);
+        }
         
+        // ★ Step 3: Smart merge - pick the best source
+        let global;
+        const localHasData = Object.keys(local.campStructure || local.app1?.divisions || {}).length > 0 ||
+                             Object.keys(local.app1?.camperRoster || {}).length > 0;
+        const cloudHasData = cloud && (
+            Object.keys(cloud.campStructure || cloud.app1?.divisions || {}).length > 0 ||
+            Object.keys(cloud.app1?.camperRoster || {}).length > 0
+        );
+
+        if (cloudHasData && localHasData) {
+            // Both have data - use timestamps to decide
+            const cloudTime = new Date(cloud.updated_at || 0).getTime();
+            const localTime = new Date(local.updated_at || 0).getTime();
+            
+            if (localTime > cloudTime) {
+                global = { ...cloud, ...local, app1: { ...(cloud.app1 || {}), ...(local.app1 || {}) } };
+                console.log('[Me] Using local data (newer by', Math.round((localTime - cloudTime) / 1000), 'seconds)');
+                // Sync local→cloud since local is newer
+                schedulCloudSave({
+                    campStructure: global.campStructure,
+                    app1: global.app1,
+                    updated_at: new Date().toISOString()
+                });
+            } else {
+                global = cloud;
+                console.log('[Me] Using cloud data (newer)');
+                // Update local with cloud data
+                writeLocalSettings(cloud);
+            }
+        } else if (cloudHasData) {
+            global = cloud;
+            console.log('[Me] Using cloud data (local empty)');
+            writeLocalSettings(cloud);
+        } else if (localHasData) {
+            global = local;
+            console.log('[Me] Using local data (cloud empty)');
+            // Push local to cloud
+            schedulCloudSave({
+                campStructure: local.campStructure,
+                app1: local.app1,
+                updated_at: new Date().toISOString()
+            });
+        } else {
+            global = {};
+            console.log('[Me] No data found (fresh start)');
+        }
+
+        // ★ Step 4: Extract into working variables
         camperRoster = global?.app1?.camperRoster || {};
         structure = global?.campStructure || migrateOldStructure(global?.app1?.divisions || {});
         
@@ -78,33 +307,38 @@
         return newStructure;
     }
 
-    function loadGlobalSettings() {
-        try {
-            if (window.loadGlobalSettings) return window.loadGlobalSettings();
-            const raw = localStorage.getItem('campistryGlobalSettings');
-            return raw ? JSON.parse(raw) : {};
-        } catch (e) { return {}; }
-    }
+    // =========================================================================
+    // ★ SAVE DATA (localStorage + cloud)
+    // =========================================================================
 
     function saveData() {
         try {
             setSyncStatus('syncing');
-            const global = loadGlobalSettings();
+            
+            // Build the full settings object
+            const global = readLocalSettings();
             global.campStructure = structure;
             if (!global.app1) global.app1 = {};
             global.app1.camperRoster = camperRoster;
             global.app1.divisions = convertToOldFormat(structure);
+            global.updated_at = new Date().toISOString();
             
-            // Save to localStorage first (immediate)
-            localStorage.setItem('campistryGlobalSettings', JSON.stringify(global));
+            // ★ Save to localStorage immediately (both keys for cross-page compat)
+            writeLocalSettings(global);
             
-            // Then sync to cloud via existing system
-            if (window.saveGlobalSettings) {
+            // ★ Also call window.saveGlobalSettings if available (when loaded from Flow)
+            if (window.saveGlobalSettings && window.saveGlobalSettings._isAuthoritativeHandler) {
                 window.saveGlobalSettings('campStructure', structure);
                 window.saveGlobalSettings('app1', global.app1);
             }
             
-            setTimeout(() => setSyncStatus('synced'), 500);
+            // ★ Direct cloud sync (debounced) - this is the KEY fix
+            schedulCloudSave({
+                campStructure: structure,
+                app1: global.app1,
+                updated_at: global.updated_at
+            });
+            
         } catch (e) { 
             console.error('[Me] Save error:', e);
             setSyncStatus('error'); 
@@ -121,6 +355,10 @@
         return oldFormat;
     }
 
+    // =========================================================================
+    // SYNC STATUS UI
+    // =========================================================================
+
     function setSyncStatus(status) {
         const dot = document.getElementById('syncDot');
         const text = document.getElementById('syncText');
@@ -128,6 +366,10 @@
         else if (status === 'synced') { dot?.classList.remove('syncing'); if(dot) dot.style.background = '#059669'; if(text) text.textContent = 'Synced'; }
         else { dot?.classList.remove('syncing'); if(dot) dot.style.background = '#ef4444'; if(text) text.textContent = 'Error'; }
     }
+
+    // =========================================================================
+    // RENDER
+    // =========================================================================
 
     function renderAll() { updateStats(); renderHierarchy(); renderCamperTable(); }
 
@@ -163,12 +405,16 @@
                 const gradeKey = divName + '||' + gradeName;
                 const isGradeExpanded = expandedGrades.has(gradeKey);
                 const bunks = grades[gradeName].bunks || [];
-                return '<div class="grade-block"><div class="grade-header" onclick="CampistryMe.toggleGrade(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\')"><div class="grade-left"><svg class="expand-icon ' + (isGradeExpanded ? '' : 'collapsed') + '" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg><span class="grade-info">' + esc(gradeName) + '</span><span class="grade-count">' + bunks.length + ' bunk' + (bunks.length !== 1 ? 's' : '') + '</span></div><div class="grade-actions" onclick="event.stopPropagation()"><button class="icon-btn danger" onclick="CampistryMe.deleteGrade(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></div></div><div class="grade-body ' + (isGradeExpanded ? '' : 'collapsed') + '"><div class="bunks-list">' + bunks.map(b => '<span class="bunk-chip">' + esc(b) + '<button class="icon-btn danger" onclick="CampistryMe.deleteBunk(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\',\'' + esc(b) + '\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></span>').join('') + '<div class="quick-add"><input type="text" placeholder="+ Bunk" id="addBunk_' + esc(divName) + '_' + esc(gradeName) + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addBunkInline(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\');event.preventDefault();}"><button class="quick-add-btn" onclick="CampistryMe.addBunkInline(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div></div></div></div>';
+                return '<div class="grade-block"><div class="grade-header" onclick="CampistryMe.toggleGrade(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\')"><div class="grade-left"><svg class="expand-icon ' + (isGradeExpanded ? '' : 'collapsed') + '" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg><span class="grade-info">' + esc(gradeName) + '</span><span class="grade-count">' + bunks.length + ' bunk' + (bunks.length !== 1 ? 's' : '') + '</span></div><div class="grade-actions"><button class="icon-btn danger" onclick="event.stopPropagation(); CampistryMe.deleteGrade(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></div></div><div class="bunk-list ' + (isGradeExpanded ? '' : 'collapsed') + '">' + bunks.map(b => '<div class="bunk-tag"><span>' + esc(b) + '</span><button class="bunk-remove" onclick="CampistryMe.deleteBunk(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\',\'' + esc(b) + '\')">×</button></div>').join('') + '<div class="quick-add" style="margin-top:4px"><input type="text" placeholder="+ Add bunk" style="width:130px" id="addBunk_' + esc(divName) + '_' + esc(gradeName) + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addBunkInline(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\');event.preventDefault();}"><button class="quick-add-btn" onclick="CampistryMe.addBunkInline(\'' + esc(divName) + '\',\'' + esc(gradeName) + '\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div></div></div>';
             }).join('');
 
-            return '<div class="division-block"><div class="division-header ' + (isExpanded ? '' : 'collapsed') + '" onclick="CampistryMe.toggleDivision(\'' + esc(divName) + '\')"><div class="division-left"><div class="division-color" style="background:' + (div.color || COLOR_PRESETS[0]) + '"></div><div class="division-info"><h3>' + esc(divName) + '</h3><div class="division-meta">' + gradeNames.length + ' grade' + (gradeNames.length !== 1 ? 's' : '') + ' · ' + camperCount + ' camper' + (camperCount !== 1 ? 's' : '') + '</div></div></div><div class="division-actions" onclick="event.stopPropagation()"><button class="icon-btn" onclick="CampistryMe.editDivision(\'' + esc(divName) + '\')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button><button class="icon-btn danger" onclick="CampistryMe.deleteDivision(\'' + esc(divName) + '\')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button><svg class="expand-icon ' + (isExpanded ? '' : 'collapsed') + '" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></div></div><div class="division-body ' + (isExpanded ? '' : 'collapsed') + '"><div class="grades-section"><div class="grades-list">' + gradesHtml + '</div><div class="add-grade-inline"><div class="quick-add"><input type="text" placeholder="+ Add grade" style="width:150px" id="addGrade_' + esc(divName) + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addGradeInline(\'' + esc(divName) + '\');event.preventDefault();}"><button class="quick-add-btn" onclick="CampistryMe.addGradeInline(\'' + esc(divName) + '\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div></div></div></div></div>';
+            return '<div class="division-block"><div class="division-header" onclick="CampistryMe.toggleDivision(\'' + esc(divName) + '\')"><div class="division-left"><div class="division-dot" style="background:' + (div.color || '#6366F1') + '"></div><span class="division-name">' + esc(divName) + '</span><span class="division-meta">' + gradeNames.length + ' grade' + (gradeNames.length !== 1 ? 's' : '') + ' · ' + camperCount + ' camper' + (camperCount !== 1 ? 's' : '') + '</span></div><div class="division-actions"><button class="icon-btn" onclick="event.stopPropagation(); CampistryMe.editDivision(\'' + esc(divName) + '\')" title="Edit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button><button class="icon-btn danger" onclick="event.stopPropagation(); CampistryMe.deleteDivision(\'' + esc(divName) + '\')" title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button><svg class="expand-icon ' + (isExpanded ? '' : 'collapsed') + '" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></div></div><div class="division-body ' + (isExpanded ? '' : 'collapsed') + '"><div class="grades-section"><div class="grades-list">' + gradesHtml + '</div><div class="add-grade-inline"><div class="quick-add"><input type="text" placeholder="+ Add grade" style="width:150px" id="addGrade_' + esc(divName) + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addGradeInline(\'' + esc(divName) + '\');event.preventDefault();}"><button class="quick-add-btn" onclick="CampistryMe.addGradeInline(\'' + esc(divName) + '\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div></div></div></div></div>';
         }).join('');
     }
+
+    // =========================================================================
+    // STRUCTURE OPERATIONS
+    // =========================================================================
 
     function addGradeInline(divName) {
         const input = document.getElementById('addGrade_' + divName);
@@ -296,6 +542,10 @@
         saveData(); renderHierarchy(); updateStats(); toast('Bunk removed');
     }
 
+    // =========================================================================
+    // CAMPER TABLE
+    // =========================================================================
+
     function renderCamperTable() {
         const tbody = document.getElementById('camperTableBody');
         const empty = document.getElementById('campersEmptyState');
@@ -327,6 +577,10 @@
         html += campers.map(c => '<tr><td><span class="clickable" onclick="CampistryMe.editCamper(\'' + esc(c.name) + '\')">' + esc(c.name) + '</span></td><td>' + (esc(c.division) || '—') + '</td><td>' + (esc(c.grade) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (esc(c.team) || '—') + '</td><td><button class="icon-btn danger" onclick="CampistryMe.deleteCamper(\'' + esc(c.name) + '\')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></td></tr>').join('');
         tbody.innerHTML = html;
     }
+
+    // =========================================================================
+    // CAMPER OPERATIONS
+    // =========================================================================
 
     function updateQAGrades() {
         const divName = document.getElementById('qaDivision')?.value;
@@ -423,6 +677,10 @@
         saveData(); renderAll(); toast('All campers cleared');
     }
 
+    // =========================================================================
+    // CSV IMPORT / EXPORT
+    // =========================================================================
+
     function downloadTemplate() {
         const csv = 'Name,Division,Grade,Bunk,Team\nJohn Smith,Junior Boys,5th Grade,Bunk 1,Red Team\nJane Doe,Junior Girls,6th Grade,Bunk 2,Blue Team\nMike Johnson,Senior Boys,7th Grade,Bunk 3,Green Team';
         const blob = new Blob([csv], { type: 'text/csv' });
@@ -505,6 +763,10 @@
         a.click();
         toast('Exported ' + entries.length + ' campers');
     }
+
+    // =========================================================================
+    // UI HELPERS
+    // =========================================================================
 
     function setupTabs() {
         document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -606,6 +868,10 @@
         t.className = 'toast ' + type + ' show';
         setTimeout(() => t.classList.remove('show'), 3000);
     }
+
+    // =========================================================================
+    // PUBLIC API
+    // =========================================================================
 
     window.CampistryMe = {
         toggleDivision, toggleGrade, editDivision: openDivisionModal, deleteDivision,
