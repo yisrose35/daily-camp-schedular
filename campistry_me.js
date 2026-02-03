@@ -1,11 +1,11 @@
 // =============================================================================
-// campistry_me.js — Campistry Me v5.3
+// campistry_me.js — Campistry Me v5.5
 // Professional UI, Cloud Sync, Fast inline inputs
 // =============================================================================
 
 (function() {
     'use strict';
-    console.log('[Me] Campistry Me v5.3 loading...');
+    console.log('[Me] Campistry Me v5.5 loading...');
 
     let structure = {};
     let camperRoster = {};
@@ -48,8 +48,8 @@
         // Wait for CampistryDB if available
         if (window.CampistryDB?.ready) await window.CampistryDB.ready;
         
-        // Try to load from cloud first, then localStorage
-        let global = await loadFromCloud() || loadGlobalSettings();
+        // Load from localStorage/global settings system
+        let global = loadGlobalSettings();
         
         camperRoster = global?.app1?.camperRoster || {};
         structure = global?.campStructure || migrateOldStructure(global?.app1?.divisions || {});
@@ -64,30 +64,6 @@
         Object.keys(structure).forEach(d => expandedDivisions.add(d));
         
         console.log('[Me] Loaded', Object.keys(structure).length, 'divisions,', Object.keys(camperRoster).length, 'campers');
-    }
-
-    async function loadFromCloud() {
-        if (!window.supabase) return null;
-        try {
-            const { data: { session } } = await window.supabase.auth.getSession();
-            if (!session?.user?.id) return null;
-            
-            const { data, error } = await window.supabase
-                .from('user_settings')
-                .select('settings')
-                .eq('user_id', session.user.id)
-                .single();
-            
-            if (error || !data?.settings) return null;
-            
-            // Update localStorage with cloud data
-            localStorage.setItem('campistryGlobalSettings', JSON.stringify(data.settings));
-            console.log('[Me] Loaded from cloud');
-            return data.settings;
-        } catch (e) {
-            console.log('[Me] Cloud load failed, using localStorage');
-            return null;
-        }
     }
 
     function migrateOldStructure(oldDivisions) {
@@ -122,44 +98,16 @@
             // Save to localStorage first (immediate)
             localStorage.setItem('campistryGlobalSettings', JSON.stringify(global));
             
-            // Then sync to cloud
+            // Then sync to cloud via existing system
             if (window.saveGlobalSettings) {
                 window.saveGlobalSettings('campStructure', structure);
                 window.saveGlobalSettings('app1', global.app1);
-                setTimeout(() => setSyncStatus('synced'), 500);
-            } else {
-                // Direct supabase sync fallback
-                syncToCloud(global).then(() => {
-                    setSyncStatus('synced');
-                }).catch(() => {
-                    setSyncStatus('error');
-                });
             }
+            
+            setTimeout(() => setSyncStatus('synced'), 500);
         } catch (e) { 
             console.error('[Me] Save error:', e);
             setSyncStatus('error'); 
-        }
-    }
-
-    async function syncToCloud(global) {
-        if (!window.supabase) return;
-        try {
-            const { data: { session } } = await window.supabase.auth.getSession();
-            if (!session?.user?.id) return;
-            
-            const { error } = await window.supabase
-                .from('user_settings')
-                .upsert({
-                    user_id: session.user.id,
-                    settings: global,
-                    updated_at: new Date().toISOString()
-                }, { onConflict: 'user_id' });
-            
-            if (error) throw error;
-            console.log('[Me] Cloud sync successful');
-        } catch (e) {
-            console.error('[Me] Cloud sync failed:', e);
-            throw e;
         }
     }
 
@@ -271,39 +219,53 @@
 
     function openDivisionModal(editName = null) {
         currentEditDivision = editName;
-        document.getElementById('divisionModalTitle').textContent = editName ? 'Edit Division' : 'Add Division';
+        const isEdit = !!editName;
+        document.getElementById('divisionModalTitle').textContent = isEdit ? 'Edit Division' : 'Add Division';
         
-        // Ensure color presets are set up
-        setupColorPresets();
+        // Only show color picker when editing
+        const colorGroup = document.getElementById('colorPickerGroup');
+        if (colorGroup) {
+            colorGroup.style.display = isEdit ? 'block' : 'none';
+        }
         
-        if (editName && structure[editName]) {
+        if (isEdit && structure[editName]) {
             document.getElementById('divisionName').value = editName;
             document.getElementById('divisionColor').value = structure[editName].color || COLOR_PRESETS[0];
+            setupColorPresets();
             updateColorPresetSelection(structure[editName].color || COLOR_PRESETS[0]);
         } else {
             document.getElementById('divisionName').value = '';
-            const nextColor = COLOR_PRESETS[Object.keys(structure).length % COLOR_PRESETS.length];
-            document.getElementById('divisionColor').value = nextColor;
-            updateColorPresetSelection(nextColor);
         }
         openModal('divisionModal');
         setTimeout(() => document.getElementById('divisionName').focus(), 50);
     }
 
+    function getNextUniqueColor() {
+        const usedColors = new Set(Object.values(structure).map(d => d.color).filter(Boolean));
+        for (let i = 0; i < COLOR_PRESETS.length; i++) {
+            if (!usedColors.has(COLOR_PRESETS[i])) return COLOR_PRESETS[i];
+        }
+        return COLOR_PRESETS[Object.keys(structure).length % COLOR_PRESETS.length];
+    }
+
     function saveDivision() {
         const name = document.getElementById('divisionName').value.trim();
-        const color = document.getElementById('divisionColor').value;
         if (!name) { toast('Enter a name', 'error'); return; }
+        
         if (currentEditDivision && currentEditDivision !== name) {
+            // Renaming existing division
+            const color = document.getElementById('divisionColor').value;
             structure[name] = { ...structure[currentEditDivision], color };
             delete structure[currentEditDivision];
             Object.values(camperRoster).forEach(c => { if (c.division === currentEditDivision) c.division = name; });
             expandedDivisions.delete(currentEditDivision); expandedDivisions.add(name);
         } else if (currentEditDivision) {
-            structure[currentEditDivision].color = color;
+            // Editing existing division (same name)
+            structure[currentEditDivision].color = document.getElementById('divisionColor').value;
         } else {
+            // Adding new division - auto-assign color
             if (structure[name]) { toast('Division exists', 'error'); return; }
-            structure[name] = { color, grades: {} };
+            structure[name] = { color: getNextUniqueColor(), grades: {} };
             expandedDivisions.add(name);
         }
         saveData(); closeModal('divisionModal'); renderAll();
@@ -564,9 +526,9 @@
             console.warn('[Me] colorPresets container not found');
             return;
         }
-        // Use innerHTML with inline onclick - more reliable across browsers
+        // Use divs instead of buttons to avoid browser button sizing issues
         container.innerHTML = COLOR_PRESETS.map(c => 
-            `<button type="button" class="color-preset" style="background:${c}" data-color="${c}" onclick="event.stopPropagation(); CampistryMe.selectColorPreset('${c}')"></button>`
+            `<div class="color-preset" style="background:${c}" data-color="${c}" onclick="event.stopPropagation(); CampistryMe.selectColorPreset('${c}')"></div>`
         ).join('');
         console.log('[Me] Color presets initialized:', COLOR_PRESETS.length);
     }
