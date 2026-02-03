@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
-    <title>Camp Scheduler</title>
+    <title>Campistry Flow</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -196,7 +196,7 @@
                 <div class="app-title">
                     <div class="app-logo-circle">CS</div>
                     <div class="app-title-text">
-                        <div class="app-title-main">Camp Scheduler</div>
+                        <div class="app-title-main">Campistry Flow</div>
                         <div class="app-title-sub">Smart Daily Scheduling</div>
                     </div>
                 </div>
@@ -275,65 +275,37 @@
             <!-- MAIN CONTENT -->
             <!-- ======================================================= -->
             <main class="app-content">
-                <h1 class="app-page-title">🏕️ Camp Scheduler</h1>
 
                 <!-- =================================================== -->
                 <!-- SETUP TAB -->
                 <!-- =================================================== -->
                 <div id="setup" class="tab-content active">
                     <div class="setup-grid">
-                        <!-- Intro Card -->
-                        <section class="setup-card setup-card-wide">
-                            <div class="setup-card-header">
-                                <div class="setup-step-pill setup-step-pill-muted">Setup</div>
-                                <div class="setup-card-text">
-                                    <h3>Configure Your Camp Structure</h3>
-                                    <p>
-                                        Create <strong>divisions</strong> and assign <strong>bunks</strong>.
-                                        These settings drive all scheduling logic.
-                                    </p>
-                                </div>
-                            </div>
-                        </section>
 
-                        <!-- Left Panel: Divisions -->
+                        <!-- Left Panel: Grades -->
                         <section class="setup-card">
                             <div class="setup-card-header">
-                                <div class="setup-step-pill">Step 1</div>
+                                <div class="setup-step-pill">Grades</div>
                                 <div class="setup-card-text">
-                                    <h3>Divisions</h3>
-                                    <p>Create divisions and click one to edit.</p>
+                                    <h3>Scheduling Grades</h3>
+                                    <p>Select a grade to configure its times.</p>
                                 </div>
                             </div>
-                            <div class="setup-field-row">
-                                <input id="divisionInput" placeholder="Enter division…" />
-                                <button id="addDivisionBtn">Add Division</button>
-                            </div>
-                            <label class="setup-inline-toggle">
-                                <input type="checkbox" id="enableColor" checked />
-                                <span>Enable automatic division colors</span>
-                            </label>
-                            <div class="setup-subtitle">All Divisions</div>
                             <div id="divisionButtons" class="master-list"></div>
                         </section>
 
-                        <!-- Right Panel: Division Details -->
+                        <!-- Right Panel: Grade Configuration -->
                         <section class="setup-card">
                             <div class="setup-card-header">
-                                <div class="setup-step-pill">Step 2</div>
+                                <div class="setup-step-pill">Times</div>
                                 <div class="setup-card-text">
-                                    <h3>Division Details & Bunks</h3>
-                                    <p>
-                                        Select a division to configure its time, color, and bunks.
-                                    </p>
+                                    <h3>Grade Configuration</h3>
+                                    <p>Set scheduling times for the selected grade.</p>
                                 </div>
                             </div>
                             <div id="division-detail-pane" class="detail-pane">
                                 <p class="muted">
-                                    Select a division to edit:
-                                    <br>– Times
-                                    <br>– Color
-                                    <br>– Bunks
+                                    Select a grade to configure its times and view its bunks.
                                 </p>
                             </div>
                         </section>
