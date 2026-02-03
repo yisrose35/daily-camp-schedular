@@ -1066,19 +1066,7 @@ label.override-checkbox span {
   gap: 0.7rem;
 }
 
-.app-logo-circle {
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-full, 999px);
-  background: linear-gradient(135deg, var(--camp-green, #0D7C5C), var(--camp-green-light, #10B981));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 0.9rem;
-  color: #ffffff;
-  box-shadow: 0 4px 12px rgba(13, 124, 92, 0.35);
-}
+/* .app-logo-circle replaced by .app-logo-icon (see App Logo Icons section) */
 
 .app-title-text {
   display: flex;
@@ -1096,65 +1084,68 @@ label.override-checkbox span {
   color: var(--slate-500, #64748B);
 }
 
-/* Product Switcher (Flow ↔ Me) */
-.product-switcher {
-  display: flex;
-  align-items: stretch;
-  gap: 2px;
-  background: var(--slate-100, #F1F5F9);
+/* App Logo Icons (Flow green, Me orange) */
+.app-logo-icon {
+  width: 36px;
+  height: 36px;
   border-radius: 10px;
-  padding: 3px;
-  border: 1px solid var(--slate-200, #E2E8F0);
-}
-
-.product-switcher-tab {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  padding: 5px 16px;
-  border-radius: 8px;
-  text-decoration: none;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  min-width: 80px;
-  position: relative;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
-.product-switcher-tab.active {
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1), 0 1px 2px rgba(0,0,0,0.06);
+.app-logo-flow {
+  background: linear-gradient(135deg, var(--camp-green, #0D7C5C), var(--camp-green-light, #10B981));
+  box-shadow: 0 4px 12px rgba(13, 124, 92, 0.35);
 }
 
-.product-switcher-tab:not(.active):hover {
-  background: var(--slate-200, #E2E8F0);
+.app-logo-me {
+  background: linear-gradient(135deg, #E67E22, #F39C12);
+  box-shadow: 0 4px 12px rgba(230, 126, 34, 0.35);
 }
 
-.product-switcher-name {
-  font-size: 0.85rem;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.product-switcher-tab.active .product-switcher-name {
+.brand-accent-flow {
   color: var(--camp-green, #0D7C5C);
 }
 
-.product-switcher-tab:not(.active) .product-switcher-name {
-  color: var(--slate-600, #475569);
+.brand-accent-me {
+  color: #E67E22;
 }
 
-.product-switcher-desc {
-  font-size: 0.65rem;
-  font-weight: 500;
-  letter-spacing: 0.02em;
+/* Header App Switch Link (Campistry Me box in Flow header) */
+.header-app-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px 6px 6px;
+  margin-left: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--slate-200, #E2E8F0);
+  background: var(--slate-50, #F8FAFC);
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
 }
 
-.product-switcher-tab.active .product-switcher-desc {
-  color: var(--slate-500, #64748B);
+.header-app-switch:hover {
+  background: #FEF3E2;
+  border-color: #F5C77E;
+  box-shadow: 0 4px 12px rgba(230, 126, 34, 0.15);
+  transform: translateY(-1px);
 }
 
-.product-switcher-tab:not(.active) .product-switcher-desc {
-  color: var(--slate-400, #94A3B8);
+.header-app-switch .app-logo-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+
+.header-app-switch-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--slate-700, #334155);
+  white-space: nowrap;
 }
 
 .app-page-title {
