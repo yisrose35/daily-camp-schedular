@@ -1091,7 +1091,7 @@ label.override-checkbox span {
   height: 600px;
   max-height: 600px;
   width: auto;
-  max-width: 250px;
+  max-width: none;
   display: block;
   flex-shrink: 0;
   object-fit: contain;
