@@ -7,7 +7,13 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="landing.css">
+   <!-- FOUC Prevention: hide page until CSS loads -->
+    <style>
+        html:not(.css-ready) body { opacity: 0; }
+        html.css-ready body { transition: opacity 0.15s ease; }
+    </style>
+    <link rel="stylesheet" href="landing.css" onload="document.documentElement.classList.add('css-ready')">
+    <noscript><style>html body { opacity: 1 !important; }</style></noscript>
 </head>
 <body>
     <!-- ========================================= -->
@@ -553,5 +559,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="supabase_client.js"></script>
     <script src="landing.js"></script>
+    <!-- Fallback: show page even if CSS onload fails -->
+    <script>setTimeout(function(){ document.documentElement.classList.add('css-ready'); }, 3000);</script>
 </body>
 </html>
