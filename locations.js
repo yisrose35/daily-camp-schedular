@@ -461,6 +461,15 @@ function initLocationsTab(){
             transition: border-color 0.15s, box-shadow 0.15s;
         }
         .form-input:focus { outline: none; border-color: #10B981; box-shadow: 0 0 0 3px rgba(16,185,129,0.15); }
+        /* Select dropdown visibility fix */
+        select.form-input {
+            color: #111827;
+            background-color: #FFFFFF;
+            cursor: pointer;
+            appearance: auto;
+            -webkit-appearance: menulist;
+            min-height: 42px;
+        }
         .form-input-small { width: 80px; text-align: center; }
 
         /* Muted text */
