@@ -75,7 +75,7 @@ const TILES=[
   {type:'lunch', name:'Lunch', style:'background:#fca5a5;color:#7f1d1d;', description:'Pinned.'},
   {type:'snacks', name:'Snacks', style:'background:#fde047;color:#713f12;', description:'Pinned.'},
   {type:'dismissal', name:'Dismissal', style:'background:#f87171;color:#fff;', description:'Pinned.'},
-  {type:'custom', name:'Custom Pinned', style:'background:#cbd5e1;color:#334155;', description:'Pinned custom (e.g., Regroup).'}
+  {type:'custom', name:'Custom Pinned', style:'background:#d1d5db;color:#374151;', description:'Pinned custom (e.g., Regroup).'}
 ];
 
 function mapEventNameForOptimizer(name){
@@ -1125,7 +1125,14 @@ function addClickToSelectListeners() {
 function renderEventTile(ev, top, height) {
   let tile = TILES.find(t => t.name === ev.event);
   if (!tile && ev.type) tile = TILES.find(t => t.type === ev.type);
-  const style = tile ? tile.style : 'background:#6b7280;color:#fff;';
+  // ★ v2.5: Match DA's fallback logic for slot-type events that don't match by name/type
+  if (!tile) {
+    if (ev.event === 'General Activity Slot') tile = TILES.find(t => t.type === 'activity');
+    else if (ev.event === 'Sports Slot') tile = TILES.find(t => t.type === 'sports');
+    else if (ev.event === 'Special Activity') tile = TILES.find(t => t.type === 'special');
+    else tile = TILES.find(t => t.type === 'custom');
+  }
+  const style = tile ? tile.style : 'background:#d1d5db;color:#374151;';
   
   // Add 1px gap at bottom to prevent overlap with next tile
   const adjustedHeight = Math.max(height - 1, 10);
