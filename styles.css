@@ -1112,6 +1112,8 @@ label.override-checkbox span {
   height: 40px;
   max-height: 40px;
   width: auto;
+  position: relative;
+  bottom: 3px;
 }
 
 .brand-accent-flow {
