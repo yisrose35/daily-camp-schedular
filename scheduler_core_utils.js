@@ -2108,6 +2108,6 @@
     // =================================================================
     // END OF FILE
     // =================================================================
-    console.log("✅ SchedulerCoreUtils v7.5 Loaded (Enhanced Field Property Checks)");
+    console.log("✅ SchedulerCoreUtils v7.6 Loaded (v3.0 Sharing Model)");
 
 })();
