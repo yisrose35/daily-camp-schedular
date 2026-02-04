@@ -1,8 +1,9 @@
 // ============================================================================
-// total_solver_engine.js (ENHANCED v9.8 - CROSS-DIVISION CONFLICT FIX)
+// total_solver_engine.js (ENHANCED v9.9 - v3.0 SHARING MODEL)
 // Backtracking Constraint Solver + League Engine
 // ----------------------------------------------------------------------------
 // ★★★ NOW DELEGATES ALL ROTATION LOGIC TO rotation_engine.js ★★★
+// ★★★ v9.9: v3.0 SHARING MODEL (same_division / not_sharable / all) ★★★
 //
 // The RotationEngine is the SINGLE SOURCE OF TRUTH for:
 // - Activity history tracking
@@ -611,6 +612,12 @@
         let maxCapacity = 1;
         if (sharableWith.type === 'all') {
             maxCapacity = 999;
+        } else if (sharableWith.type === 'same_division') {
+            // ★★★ v9.9: same-grade sharing - capacity 2-20 ★★★
+            maxCapacity = parseInt(sharableWith.capacity) || 2;
+        } else if (sharableWith.type === 'not_sharable') {
+            // ★★★ v9.9: explicit no-sharing ★★★
+            maxCapacity = 1;
         } else if (sharableWith.type === 'custom') {
             maxCapacity = parseInt(sharableWith.capacity) || 2;
         } else if (sharableWith.capacity) {
@@ -957,6 +964,9 @@
             let maxCapacity = 1; // Default: not sharable
             if (sharableWith.type === 'all') {
                 maxCapacity = 999;
+            } else if (sharableWith.type === 'same_division') {
+                // ★★★ v9.9: same-grade sharing - capacity 2-20 ★★★
+                maxCapacity = parseInt(sharableWith.capacity) || 2;
             } else if (sharableWith.type === 'not_sharable') {
                 maxCapacity = 1;
             } else if (sharableWith.type === 'custom') {
@@ -1502,6 +1512,6 @@
     window.debugCrossDivisionConflict = Solver.debugCrossDivisionConflict;
     window.testCrossDivisionDetection = Solver.testCrossDivisionDetection;
 
-    console.log('[SOLVER] v9.8 loaded - ★ FIXED CROSS-DIVISION CONFLICT DETECTION ★');
+    console.log('[SOLVER] v9.9 loaded - ★ v3.0 SHARING MODEL (same_division/not_sharable/all) ★');
 
 })();
