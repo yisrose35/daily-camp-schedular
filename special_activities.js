@@ -312,7 +312,8 @@ function validateSpecialActivity(activity, activityName) {
             : null,
         frequencyWeeks: parseInt(activity.frequencyWeeks, 10) || 0,
         rainyDayExclusive: activity.rainyDayExclusive === true,
-        rainyDayOnly: activity.rainyDayOnly === true, // Legacy support
+       rainyDayOnly: activity.rainyDayOnly === true, // Legacy support
+        location: activity.location || null, // ★ v2.5: Field/location this activity takes place on
         // ★ v2.3: Indoor/Outdoor availability (matches fields.js pattern)
         isIndoor: isIndoor,
         rainyDayAvailable: isIndoor, // Keep in sync for backward compatibility
