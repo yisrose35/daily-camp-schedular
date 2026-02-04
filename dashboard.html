@@ -7,433 +7,13 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
-   <!-- FOUC Prevention: hide page until CSS loads -->
+    <!-- FOUC Prevention -->
     <style>
         html:not(.css-ready) body { opacity: 0; }
         html.css-ready body { transition: opacity 0.15s ease; }
     </style>
     <link rel="stylesheet" href="dashboard.css" onload="document.documentElement.classList.add('css-ready')">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
-    
-    <style>
-        /* ========================================= */
-        /* BASE STYLES                              */
-        /* ========================================= */
-        :root {
-            --slate-50: #f8fafc;
-            --slate-100: #f1f5f9;
-            --slate-200: #e2e8f0;
-            --slate-400: #94a3b8;
-            --slate-500: #64748b;
-            --slate-600: #475569;
-            --slate-700: #334155;
-            --slate-800: #1e293b;
-            --slate-900: #0f172a;
-            --primary: #4F46E5;
-            --primary-hover: #4338ca;
-        }
-        * { box-sizing: border-box; }
-        body {
-            margin: 0;
-            font-family: 'Outfit', sans-serif;
-            background-color: var(--slate-50);
-            color: var(--slate-800);
-            line-height: 1.5;
-        }
-        /* Navigation */
-        .nav {
-            background: white;
-            border-bottom: 1px solid var(--slate-200);
-            padding: 1rem 0;
-            margin-bottom: 2rem;
-        }
-        .nav-inner {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 1.5rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .nav-logo {
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            font-weight: 700;
-            font-size: 1.25rem;
-            color: var(--slate-900);
-        }
-        /* Dashboard nav logo image */
-        .dash-nav-logo-img {
-            height: 36px;
-            width: auto;
-            display: block;
-            flex-shrink: 0;
-            object-fit: contain;
-        }
-        .nav-actions { display: flex; align-items: center; gap: 1rem; }
-        .nav-user { color: var(--slate-600); font-size: 0.9rem; }
-        /* Dashboard Layout */
-        .dashboard {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 1.5rem 4rem;
-        }
-        .dashboard-header { margin-bottom: 2rem; }
-        .welcome-title { font-family: 'Playfair Display', serif; font-size: 2rem; margin: 0; }
-        .welcome-sub { color: var(--slate-600); margin-top: 0.5rem; }
-        /* Main Grid */
-        .dashboard-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 1.5rem;
-            margin-bottom: 2rem;
-        }
-        .dashboard-card {
-            background: white;
-            border-radius: 1rem;
-            padding: 1.5rem;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-            border: 1px solid var(--slate-200);
-        }
-        .card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1.5rem;
-        }
-        .card-header h2 { margin: 0; font-size: 1.25rem; }
-        /* Profile Rows */
-        .profile-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 0.75rem 0;
-            border-bottom: 1px solid var(--slate-100);
-        }
-        .profile-label { color: var(--slate-600); font-weight: 500; }
-        .profile-value { font-weight: 600; }
-        /* Stats */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 1rem;
-            text-align: center;
-            margin-bottom: 1rem;
-        }
-        .stat-value { display: block; font-size: 1.5rem; font-weight: 800; color: var(--primary); }
-        .stat-label { font-size: 0.875rem; color: var(--slate-600); }
-        .stats-note { font-size: 0.75rem; color: var(--slate-600); text-align: center; font-style: italic; }
-        .stats-note a { color: #d97706; text-decoration: none; }
-        .stats-note a:hover { text-decoration: underline; }
-        /* Products Section */
-        .products-section { margin-top: 3rem; }
-        
-        /* FIXED: Separate class for products section title */
-        .products-section-title { 
-            font-size: 1.5rem; 
-            margin-bottom: 1.5rem; 
-            color: var(--slate-900); 
-        }
-        
-        .products-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 1.5rem;
-        }
-        .product-tile {
-            display: flex;
-            align-items: center;
-            background: white;
-            padding: 1.5rem;
-            border-radius: 1rem;
-            text-decoration: none;
-            color: inherit;
-            border: 1px solid var(--slate-200);
-            transition: transform 0.2s, box-shadow 0.2s;
-            position: relative;
-            overflow: hidden;
-        }
-        .product-tile:hover:not(.disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-            border-color: var(--primary);
-        }
-        .product-tile.disabled { opacity: 0.7; cursor: default; background: var(--slate-50); }
-        
-        .product-icon { font-size: 2rem; margin-right: 1rem; flex-shrink: 0; }
-        .product-info h3 { margin: 0 0 0.25rem; font-size: 1.1rem; }
-        .product-info p { margin: 0; font-size: 0.875rem; color: var(--slate-600); }
-        
-        /* Product tile logo images */
-        .product-tile-logo {
-            height: 40px;
-            width: auto;
-            max-width: 120px;
-            display: block;
-            flex-shrink: 0;
-            object-fit: contain;
-            margin-right: 1rem;
-        }
-
-        .product-status {
-            position: absolute;
-            top: 1rem;
-            right: 1rem;
-            font-size: 0.7rem;
-            padding: 0.25rem 0.5rem;
-            border-radius: 99px;
-            font-weight: 600;
-        }
-        .status-active { background: #dcfce7; color: #166534; }
-        .status-coming-soon { background: #f3f4f6; color: #4b5563; }
-        .product-arrow { margin-left: auto; color: var(--slate-200); }
-        .product-tile:hover:not(.disabled) .product-arrow { color: var(--primary); }
-        
-        /* Campistry Me hover color */
-        .product-tile.product-me:hover {
-            border-color: #d97706;
-        }
-        .product-tile.product-me:hover .product-arrow {
-            color: #d97706;
-        }
-        /* Quick Links */
-        .quick-links {
-            margin-top: 3rem;
-            display: flex;
-            gap: 1.5rem;
-            justify-content: center;
-            flex-wrap: wrap;
-        }
-        .quick-link {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            color: var(--slate-600);
-            text-decoration: none;
-            font-weight: 500;
-        }
-        .quick-link:hover { color: var(--primary); }
-        /* ============================================================================
-           RBAC Dashboard Styles
-           ============================================================================ */
-        
-        /* Section Layout */
-        .dashboard-section {
-            margin-bottom: 32px;
-            margin-top: 2rem;
-        }
-        /* RBAC section title - distinct from products title */
-        .rbac-section-title {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-size: 1.3rem;
-            color: var(--slate-900);
-            margin-bottom: 20px;
-            padding-bottom: 12px;
-            border-bottom: 2px solid var(--slate-200);
-        }
-        .section-icon {
-            font-size: 1.5rem;
-        }
-        .team-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 24px;
-        }
-        /* Account Section */
-        .account-section h3 {
-            font-size: 1rem;
-            margin: 0 0 1rem;
-            color: var(--slate-700);
-        }
-        /* Button Styles */
-        .btn-edit {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 14px;
-            background: var(--slate-100);
-            color: var(--slate-700);
-            border: none;
-            border-radius: 8px;
-            font-size: 0.85rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-        .btn-edit:hover {
-            background: var(--slate-200);
-        }
-        .btn-primary {
-            padding: 10px 20px;
-            background: linear-gradient(135deg, #6366F1, #4F46E5);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-        .btn-primary:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
-        }
-        .btn-primary:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-        }
-        .btn-secondary {
-            padding: 10px 20px;
-            background: var(--slate-100);
-            color: var(--slate-700);
-            border: none;
-            border-radius: 8px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-        .btn-secondary:hover {
-            background: var(--slate-200);
-        }
-        .btn-ghost {
-            padding: 8px 14px;
-            background: transparent;
-            color: var(--slate-600);
-            border: none;
-            border-radius: 6px;
-            font-size: 0.85rem;
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-        .btn-ghost:hover {
-            background: var(--slate-100);
-            color: var(--slate-800);
-        }
-        /* Form Styles */
-        .form-group {
-            margin-bottom: 16px;
-        }
-        .form-group label {
-            display: block;
-            font-size: 0.9rem;
-            font-weight: 500;
-            color: var(--slate-700);
-            margin-bottom: 6px;
-        }
-        .form-group input,
-        .form-group select,
-        .form-group textarea {
-            width: 100%;
-            padding: 10px 14px;
-            border: 2px solid var(--slate-200);
-            border-radius: 8px;
-            font-size: 0.95rem;
-            font-family: inherit;
-            transition: border-color 0.15s, box-shadow 0.15s;
-        }
-        .form-group input:focus,
-        .form-group select:focus,
-        .form-group textarea:focus {
-            outline: none;
-            border-color: #6366F1;
-            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
-        }
-        .form-group input[type="color"] {
-            padding: 4px;
-            height: 44px;
-            cursor: pointer;
-        }
-        .form-actions {
-            display: flex;
-            justify-content: flex-end;
-            gap: 12px;
-            margin-top: 20px;
-            padding-top: 16px;
-            border-top: 1px solid var(--slate-200);
-        }
-        .form-error {
-            color: #DC2626;
-            background: #FEE2E2;
-            padding: 10px 14px;
-            border-radius: 8px;
-            font-size: 0.9rem;
-            margin-top: 12px;
-        }
-        .form-error:empty {
-            display: none;
-        }
-        .form-success {
-            color: #059669;
-            background: #D1FAE5;
-            padding: 10px 14px;
-            border-radius: 8px;
-            font-size: 0.9rem;
-            margin-top: 12px;
-        }
-        .form-success:empty {
-            display: none;
-        }
-        /* Role Badges */
-        .role-owner { 
-            color: #7C3AED; 
-            background: rgba(124, 58, 237, 0.1); 
-            padding: 2px 8px; 
-            border-radius: 4px; 
-            font-size: 0.8rem;
-            font-weight: 600;
-        }
-        .role-admin { 
-            color: #2563EB; 
-            background: rgba(37, 99, 235, 0.1); 
-            padding: 2px 8px; 
-            border-radius: 4px; 
-            font-size: 0.8rem;
-            font-weight: 600;
-        }
-        .role-scheduler { 
-            color: #059669; 
-            background: rgba(5, 150, 105, 0.1); 
-            padding: 2px 8px; 
-            border-radius: 4px; 
-            font-size: 0.8rem;
-            font-weight: 600;
-        }
-        .role-viewer { 
-            color: #6B7280; 
-            background: rgba(107, 114, 128, 0.1); 
-            padding: 2px 8px; 
-            border-radius: 4px; 
-            font-size: 0.8rem;
-            font-weight: 600;
-        }
-        /* Responsive */
-        @media (max-width: 768px) {
-            .team-grid {
-                grid-template-columns: 1fr;
-            }
-            .form-actions {
-                flex-direction: column;
-            }
-            .form-actions button {
-                width: 100%;
-            }
-            .dashboard-grid {
-                grid-template-columns: 1fr;
-            }
-            .stats-grid {
-                grid-template-columns: 1fr;
-                gap: 0.5rem;
-            }
-            .quick-links {
-                flex-direction: column;
-                align-items: center;
-            }
-        }
-    </style>
 </head>
 <body>
     <!-- ========================================= -->
@@ -450,21 +30,25 @@
             </div>
         </div>
     </nav>
+
     <!-- ========================================= -->
     <!-- MAIN DASHBOARD -->
     <!-- ========================================= -->
     <main class="dashboard">
+
         <!-- Welcome Header -->
         <header class="dashboard-header">
             <div class="welcome-section">
                 <h1 class="welcome-title">Welcome back, <span id="campNameDisplay">Your Camp</span>!</h1>
-                <p class="welcome-sub">Manage your camp and access all Campistry products from here.</p>
+                <p class="welcome-sub" id="welcomeSubtitle">Manage your camp and access all Campistry products from here.</p>
             </div>
         </header>
+
         <!-- Dashboard Grid -->
         <div class="dashboard-grid">
+
             <!-- ===== CAMP PROFILE CARD ===== -->
-            <section class="dashboard-card profile-card">
+            <section class="dashboard-card">
                 <div class="card-header">
                     <h2>Camp Profile</h2>
                     <button class="btn-edit" id="editProfileBtn" onclick="toggleEditMode()">
@@ -475,7 +59,6 @@
                         Edit
                     </button>
                 </div>
-                
                 <div class="profile-content" id="profileView">
                     <div class="profile-row">
                         <span class="profile-label">Camp Name</span>
@@ -491,7 +74,7 @@
                     </div>
                 </div>
                 <!-- Edit Form (hidden by default) -->
-                <form class="profile-edit-form" id="profileEditForm" style="display: none;">
+                <form class="profile-edit-form" id="profileEditForm" style="display: none;" onsubmit="event.preventDefault(); saveProfile();">
                     <div class="form-group">
                         <label for="editCampName">Camp Name</label>
                         <input type="text" id="editCampName" placeholder="Enter camp name">
@@ -508,15 +91,15 @@
                     <div id="profileSuccess" class="form-success"></div>
                 </form>
             </section>
+
             <!-- ===== ACCOUNT SETTINGS CARD ===== -->
-            <section class="dashboard-card account-card">
+            <section class="dashboard-card">
                 <div class="card-header">
                     <h2>Account Settings</h2>
                 </div>
-                
                 <div class="account-section">
                     <h3>Change Password</h3>
-                    <form id="passwordForm" class="password-form">
+                    <form id="passwordForm" class="password-form" onsubmit="event.preventDefault(); changePassword();">
                         <div class="form-group">
                             <label for="newPassword">New Password</label>
                             <input type="password" id="newPassword" placeholder="Enter new password" minlength="6">
@@ -531,41 +114,47 @@
                     </form>
                 </div>
             </section>
-            <!-- ===== STATS CARD ===== -->
+
+            <!-- ===== CAMP OVERVIEW (STATS) CARD ===== -->
             <section class="dashboard-card stats-card">
                 <div class="card-header">
                     <h2>Camp Overview</h2>
                 </div>
                 <div class="stats-grid">
-                    <div class="stat-item">
+                    <div class="stat-item stat-divisions">
                         <span class="stat-value" id="statDivisions">—</span>
                         <span class="stat-label">Divisions</span>
                     </div>
-                    <div class="stat-item">
+                    <div class="stat-item stat-bunks">
                         <span class="stat-value" id="statBunks">—</span>
                         <span class="stat-label">Bunks</span>
                     </div>
-                    <div class="stat-item">
+                    <div class="stat-item stat-campers">
                         <span class="stat-value" id="statCampers">—</span>
                         <span class="stat-label">Campers</span>
                     </div>
                 </div>
-                <p class="stats-note">Manage campers in <a href="campistry_me.html">Campistry Me</a></p>
+                <p class="stats-note">Manage structure &amp; campers in <a href="campistry_me.html">Campistry Me</a></p>
             </section>
+
         </div>
+
         <!-- ============================================================================
              RBAC Team & Access Section (Only visible to owners)
              ============================================================================ -->
         <section id="team-access-section" class="dashboard-section" style="display: none;">
-            <h2 class="rbac-section-title">
-                <span class="section-icon">👥</span>
-                Team & Access
+            <h2 class="section-title-bar">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                    <circle cx="9" cy="7" r="4"/>
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                </svg>
+                Team &amp; Access
             </h2>
-            
             <div class="team-grid">
                 <!-- Subdivisions Card -->
                 <div id="subdivisions-card" class="dashboard-card">
-                    <!-- Rendered dynamically by team_subdivisions_ui.js -->
                     <div class="card-header">
                         <h2>Subdivisions</h2>
                         <button class="btn-edit" id="add-subdivision-btn-placeholder">
@@ -576,57 +165,53 @@
                             Add
                         </button>
                     </div>
-                    <p style="color: var(--slate-500); font-size: 0.9rem; margin-bottom: 1rem;">
-                        Group divisions together and assign schedulers to specific subdivisions.
-                    </p>
-                    <!-- Placeholder content -->
-                    <div id="subdivisions-placeholder" style="border: 1px dashed var(--slate-300); border-radius: 8px; padding: 20px; text-align: center; background: var(--slate-50);">
-                        <div style="font-weight: 600; margin-bottom: 5px;">Upper Camp</div>
-                        <div style="font-size: 0.8rem; color: var(--slate-500);">Grades 5-8</div>
-                        <hr style="border: 0; border-top: 1px solid var(--slate-200); margin: 10px 0;">
-                        <div style="font-weight: 600; margin-bottom: 5px;">Lower Camp</div>
-                        <div style="font-size: 0.8rem; color: var(--slate-500);">Grades 1-4</div>
+                    <p class="card-desc">Group divisions together and assign schedulers to specific subdivisions.</p>
+                    <div id="subdivisions-placeholder" class="placeholder-box">
+                        <div class="placeholder-item">
+                            <strong>Upper Camp</strong>
+                            <span>Grades 5-8</span>
+                        </div>
+                        <hr>
+                        <div class="placeholder-item">
+                            <strong>Lower Camp</strong>
+                            <span>Grades 1-4</span>
+                        </div>
                     </div>
                 </div>
-                
                 <!-- Team Members Card -->
                 <div id="team-card" class="dashboard-card">
-                    <!-- Rendered dynamically by team_subdivisions_ui.js -->
                     <div class="card-header">
                         <h2>Team Members</h2>
                         <button class="btn-edit" id="invite-member-btn-placeholder">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                                <circle cx="8.5" cy="7" r="4"></circle>
-                                <line x1="20" y1="8" x2="20" y2="14"></line>
-                                <line x1="17" y1="11" x2="23" y2="11"></line>
+                                <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                                <circle cx="8.5" cy="7" r="4"/>
+                                <line x1="20" y1="8" x2="20" y2="14"/>
+                                <line x1="17" y1="11" x2="23" y2="11"/>
                             </svg>
                             Invite
                         </button>
                     </div>
-                    <p style="color: var(--slate-500); font-size: 0.9rem; margin-bottom: 1rem;">
-                        Manage who can access and edit your camp schedules.
-                    </p>
-                    <!-- Placeholder content -->
-                    <ul id="team-placeholder" style="list-style: none; padding: 0; margin: 0;">
-                        <li style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--slate-100);">
+                    <p class="card-desc">Manage who can access and edit your camp schedules.</p>
+                    <ul id="team-placeholder" class="team-member-list">
+                        <li>
                             <div>
-                                <div style="font-weight: 500;">Sarah Miller</div>
-                                <div style="font-size: 0.8rem; color: var(--slate-500);">sarah@example.com</div>
+                                <div class="member-name">Sarah Miller</div>
+                                <div class="member-email">sarah@example.com</div>
                             </div>
                             <span class="role-owner">Owner</span>
                         </li>
-                        <li style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--slate-100);">
+                        <li>
                             <div>
-                                <div style="font-weight: 500;">Mike Johnson</div>
-                                <div style="font-size: 0.8rem; color: var(--slate-500);">mike@example.com</div>
+                                <div class="member-name">Mike Johnson</div>
+                                <div class="member-email">mike@example.com</div>
                             </div>
                             <span class="role-scheduler">Scheduler</span>
                         </li>
-                        <li style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0;">
+                        <li>
                             <div>
-                                <div style="font-weight: 500;">Jane Doe</div>
-                                <div style="font-size: 0.8rem; color: var(--slate-500);">jane@example.com</div>
+                                <div class="member-name">Jane Doe</div>
+                                <div class="member-email">jane@example.com</div>
                             </div>
                             <span class="role-viewer">Viewer</span>
                         </li>
@@ -634,20 +219,29 @@
                 </div>
             </div>
         </section>
+
         <!-- ===== PRODUCTS SECTION ===== -->
         <section class="products-section">
-            <h2 class="products-section-title">Your Products</h2>
+            <h2 class="section-title-bar">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="7" height="7"/>
+                    <rect x="14" y="3" width="7" height="7"/>
+                    <rect x="14" y="14" width="7" height="7"/>
+                    <rect x="3" y="14" width="7" height="7"/>
+                </svg>
+                Your Products
+            </h2>
             <div class="products-grid">
                 <!-- FLOW -->
                 <a href="flow.html" class="product-tile product-flow">
                     <img src="Flow_clean.png" alt="Campistry Flow" class="product-tile-logo">
                     <div class="product-info">
                         <h3>Campistry Flow</h3>
-                        <p>Daily scheduling & activity management</p>
+                        <p>Daily scheduling &amp; activity management</p>
                     </div>
-                    <span class="product-status status-active">Active</span>
+                    <span class="product-status active">Active</span>
                     <div class="product-arrow">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M5 12h14M12 5l7 7-7 7"/>
                         </svg>
                     </div>
@@ -657,58 +251,55 @@
                     <div class="product-icon">🚌</div>
                     <div class="product-info">
                         <h3>Campistry Go</h3>
-                        <p>Bus routing & transportation</p>
+                        <p>Bus routing &amp; transportation</p>
                     </div>
-                    <span class="product-status status-coming-soon">Coming Soon</span>
+                    <span class="product-status coming-soon">Coming Soon</span>
                 </div>
                 <!-- ME -->
                 <a href="campistry_me.html" class="product-tile product-me">
                     <img src="Me_clean.png" alt="Campistry Me" class="product-tile-logo">
                     <div class="product-info">
                         <h3>Campistry Me</h3>
-                        <p>Camper management & profiles</p>
+                        <p>Camper management &amp; profiles</p>
                     </div>
-                    <span class="product-status status-active">Active</span>
+                    <span class="product-status active">Active</span>
                     <div class="product-arrow">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M5 12h14M12 5l7 7-7 7"/>
                         </svg>
                     </div>
                 </a>
             </div>
         </section>
+
         <!-- ===== QUICK LINKS ===== -->
         <section class="quick-links">
-            <a href="mailto:Campistry@gmail.com" class="quick-link">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <a href="mailto:campistryoffice@gmail.com" class="quick-link">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
                     <polyline points="22,6 12,13 2,6"/>
                 </svg>
                 Contact Support
             </a>
             <a href="#" class="quick-link">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/>
                     <line x1="1" y1="10" x2="23" y2="10"/>
                 </svg>
-                Billing & Pricing
+                Billing &amp; Pricing
             </a>
         </section>
     </main>
+
     <!-- ========================================= -->
     <!-- SCRIPTS -->
     <!-- ========================================= -->
-    
-    <!-- 1. Load Supabase Client (Connects to database) -->
-  <script src="demo_mode.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="demo_mode.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="supabase_client.js"></script>
-    <!-- 2. Load Dashboard Logic (Fetches your real data) -->
     <script src="dashboard.js"></script>
-    
-    <!-- 3. Optional: Access Control and Teams -->
     <script src="access_control.js"></script>
     <script src="team_subdivisions_ui.js"></script>
-<script>setTimeout(function(){ document.documentElement.classList.add('css-ready'); }, 3000);</script>
+    <script>setTimeout(function(){ document.documentElement.classList.add('css-ready'); }, 3000);</script>
 </body>
 </html>
