@@ -49,8 +49,8 @@ let activeEventListeners = [];
 // CLEANUP HELPER - Remove orphaned panels and event listeners
 // =========================================================================
 function cleanupDropdownPanels() {
-    // Remove any orphaned dropdown panels from body
-    const existingPanels = document.querySelectorAll('.multi-select-options, .pinned-loc-options');
+    // Remove any orphaned MULTI-SELECT panels from body (NOT pinned-loc - those are managed separately)
+    const existingPanels = document.querySelectorAll('.multi-select-options');
     existingPanels.forEach(p => p.remove());
     
     // Remove tracked event listeners (handle both window and document targets)
@@ -1451,7 +1451,8 @@ function addZone(){
 // PINNED TILE DEFAULTS (Hub for managing default locations)
 // ★ REWRITTEN: Uses custom dropdown instead of native <select>
 //------------------------------------------------------------------
-let _pinnedLocOptionsPanel = null;  // Track the body-appended options panel
+let _pinnedLocOptionsPanel = null;
+let _pinnedLocListeners = [];  // ★ Separate from activeEventListeners to survive cleanupDropdownPanels  // Track the body-appended options panel
 
 function initPinnedTileDefaultsSection(){
     const listEl = document.getElementById("pinned-defaults-list");
@@ -1498,6 +1499,13 @@ function initPinnedTileDefaultsSection(){
 
 function buildPinnedLocationPicker(pickerContainer) {
     pickerContainer.innerHTML = '';
+    
+    // ★ Cleanup previous pinned picker listeners
+    _pinnedLocListeners.forEach(({ type, handler, options, target }) => {
+        const eventTarget = target || window;
+        try { eventTarget.removeEventListener(type, handler, options); } catch (e) {}
+    });
+    _pinnedLocListeners = [];
     
     // Create trigger
     const trigger = document.createElement('div');
@@ -1570,8 +1578,8 @@ function buildPinnedLocationPicker(pickerContainer) {
     };
     window.addEventListener('scroll', repositionHandler, true);
     window.addEventListener('resize', repositionHandler);
-    activeEventListeners.push({ type: 'scroll', handler: repositionHandler, options: true, target: window });
-    activeEventListeners.push({ type: 'resize', handler: repositionHandler, options: undefined, target: window });
+    _pinnedLocListeners.push({ type: 'scroll', handler: repositionHandler, options: true, target: window });
+    _pinnedLocListeners.push({ type: 'resize', handler: repositionHandler, options: undefined, target: window });
     
     // Close on outside click
     const closeHandler = (e) => {
@@ -1581,7 +1589,7 @@ function buildPinnedLocationPicker(pickerContainer) {
         }
     };
     document.addEventListener('click', closeHandler);
-    activeEventListeners.push({ type: 'click', handler: closeHandler, options: undefined, target: document });
+    _pinnedLocListeners.push({ type: 'click', handler: closeHandler, options: undefined, target: document });
 }
 
 function renderPinnedLocationOptions(optionsPanel) {
@@ -1879,6 +1887,12 @@ window.cleanupLocationsModule = function() {
         _pinnedLocOptionsPanel.remove();
         _pinnedLocOptionsPanel = null;
     }
+    // ★ Cleanup pinned picker listeners separately
+    _pinnedLocListeners.forEach(({ type, handler, options, target }) => {
+        const eventTarget = target || window;
+        try { eventTarget.removeEventListener(type, handler, options); } catch (e) {}
+    });
+    _pinnedLocListeners = [];
     cleanupDropdownPanels();
     cleanupTabListeners();
     _isInitialized = false;
