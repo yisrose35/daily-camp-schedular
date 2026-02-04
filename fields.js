@@ -1031,12 +1031,18 @@ function section(title, summary, builder){
 // CONTENT GENERATORS
 //------------------------------------------------------------------
 function summaryActivities(f){ return f.activities.length ? `${f.activities.length} sports selected` : "No sports selected"; }
-function summarySharing(f){ return f.sharableWith.type === "not_sharable" ? "Not sharable" : `Sharable (Max ${f.sharableWith.capacity})`; }
-function summaryAccess(f){ 
-    if(!f.limitUsage.enabled) return "Open to All Divisions";
-    const allowedCount = Object.keys(f.limitUsage.divisions || {}).length;
-    if (allowedCount === 0) return "Restricted (none selected)";
-    return `${allowedCount} division${allowedCount !== 1 ? 's' : ''} with priority`;
+function summarySharing(f){
+    const rules = f.sharableWith;
+    if (!rules || rules.type === 'not_sharable') return "No sharing (1 bunk only)";
+    const cap = parseInt(rules.capacity) || 2;
+    return `Up to ${cap} bunks (same grade)`;
+}
+function summaryAccess(f){
+    if (!f.limitUsage?.enabled) return "Open to all grades";
+    const count = Object.keys(f.limitUsage.divisions || {}).length;
+    if (count === 0) return "⚠ Restricted (none selected)";
+    const pStr = f.limitUsage.usePriority ? " · prioritized" : "";
+    return `${count} grade${count !== 1 ? 's' : ''} allowed${pStr}`;
 }
 function summaryTime(f){ return f.timeRules.length ? `${f.timeRules.length} rule(s) active` : "Available all day"; }
 function summaryWeather(f) { return f.rainyDayAvailable ? "🏠 Indoor (Rain OK)" : "🌳 Outdoor"; }
