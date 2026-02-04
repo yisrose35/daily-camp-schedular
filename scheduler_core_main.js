@@ -1333,7 +1333,18 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     _bunkOverride: true
                 }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
 
-                registerActivityAtLocation(activityName, locName, slots, divName);
+               registerActivityAtLocation(activityName, locName, slots, divName);
+
+                // ★ v17.11: Lock field if special has a location assigned
+                if (locName && window.GlobalFieldLocks) {
+                    window.GlobalFieldLocks.lockField(locName, slots, {
+                        lockedBy: 'special_activity_location',
+                        division: divName,
+                        activity: `${activityName} (special @ ${locName})`
+                    });
+                    console.log(`   → Locked field "${locName}" for special "${activityName}"`);
+                }
+
                 console.log(`   → Special ${activityName} assigned to ${bunk}`);
 
             } else {
