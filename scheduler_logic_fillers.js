@@ -492,11 +492,26 @@
             console.log(`[findBestSpecial]    ✅ After filter: ${specials.length} specials (${rainyOnlyCount} rainy-only)`);
         }
 
-        const available = specials.filter(pick => {
+       const available = specials.filter(pick => {
             const actName = pick._activity;
             const fieldName = fieldLabel(pick.field);
 
             if (isFieldUnavailable(fieldName, block)) {
+                return false;
+            }
+
+            // ★ v6.5: Skip special if its assigned location/field is already locked
+            const specialLocation = window.getLocationForActivity?.(actName);
+            if (specialLocation) {
+                const locSlots = block.slots || [];
+                const divCtx = block.divName || block.division;
+                if (window.GlobalFieldLocks?.isFieldLocked(specialLocation, locSlots, divCtx)) {
+                    console.log(`[findBestSpecial] ❌ "${actName}" skipped - location "${specialLocation}" is locked`);
+                    return false;
+                }
+            }
+
+            if (doneToday.has((actName || '').toLowerCase().trim())) {
                 return false;
             }
 
