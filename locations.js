@@ -1596,7 +1596,24 @@ function renderPinnedLocationOptions(optionsPanel) {
     if (!optionsPanel) return;
     optionsPanel.innerHTML = '';
     
-    const allLocations = window.getAllLocations?.() || [];
+    // ★ FIX: Read directly from local locationZones state (not window.getAllLocations which may be overridden)
+    // ★ FIX: Filter out special activities — only show actual facilities (Pool, Lunchroom, Gym, etc.)
+    const specialNames = new Set((window.getAllSpecialActivities?.() || []).map(s => s.name));
+    const fieldNames = new Set((window.getFields?.() || []).map(f => f.name));
+    
+    const allLocations = [];
+    Object.entries(locationZones).forEach(([zoneName, zone]) => {
+        if (!zone || typeof zone !== 'object') return;
+        Object.keys(zone.locations || {}).forEach(locName => {
+            // Skip if this is actually a special activity or field name stored as a location
+            if (specialNames.has(locName) || fieldNames.has(locName)) return;
+            allLocations.push({
+                name: locName,
+                zone: zoneName,
+                displayName: `${locName} (${zoneName})`
+            });
+        });
+    });
     
     if (allLocations.length === 0) {
         const empty = document.createElement('div');
@@ -1767,9 +1784,14 @@ window.getAllLocations = function(){
     const zones = settings.locationZones || {};
     const locations = [];
     
+    // ★ FIX: Filter out special activities and fields — only return actual facilities
+    const specialNames = new Set((window.getAllSpecialActivities?.() || []).map(s => s.name));
+    const fieldNames = new Set((window.getFields?.() || []).map(f => f.name));
+    
     Object.entries(zones).forEach(([zoneName, zone]) => {
         if (!zone || typeof zone !== 'object') return;
         Object.keys(zone.locations || {}).forEach(locName => {
+            if (specialNames.has(locName) || fieldNames.has(locName)) return;
             locations.push({
                 name: locName,
                 zone: zoneName,
