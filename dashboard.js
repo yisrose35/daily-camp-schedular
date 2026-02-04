@@ -1,4 +1,3 @@
-
 // ============================================================================
 // dashboard.js — Campistry Dashboard Logic (Multi-Tenant) v2.3
 // 
@@ -247,23 +246,23 @@
         const welcomeSubtitle = document.querySelector('.welcome-section p, .welcome-subtitle, #welcomeSubtitle');
         
         // Build the personalized welcome
-        // Use stored name, or email prefix as fallback
-        const displayName = userName || currentUser.email.split('@')[0];
-        const displayCamp = campName || 'Your Camp';
+        // Use camp name as primary display, fallback to owner_name, then user_metadata, then email prefix
+        const displayName = campName || userName || currentUser.user_metadata?.camp_name || currentUser.email.split('@')[0];
+        const displayCamp = campName || currentUser.user_metadata?.camp_name || 'Your Camp';
         
         console.log('📊 Updating welcome:', { displayName, displayCamp, userName, campName });
         
-        // Update the title
+        // Update the title — show camp name, not email
         if (welcomeTitle) {
-            welcomeTitle.textContent = `Welcome, ${displayName}!`;
+            welcomeTitle.innerHTML = `Welcome back, <span>${displayName}</span>!`;
         }
         
-        // Update the subtitle to show camp name
+        // Update the subtitle
         if (welcomeSubtitle) {
-            welcomeSubtitle.innerHTML = `<span style="color: var(--primary, #6366F1); font-weight: 600;">${displayCamp}</span> — Manage your camp and access all Campistry products.`;
+            welcomeSubtitle.textContent = 'Manage your camp and access all Campistry products from here.';
         }
         
-        // Also update the campNameDisplay if it exists (legacy support)
+        // Also update the campNameDisplay if it exists
         if (campNameDisplay) {
             campNameDisplay.textContent = displayCamp;
         }
@@ -310,21 +309,21 @@
         roleBadge.className = 'role-badge-large';
         
         roleBadge.innerHTML = `
-            <span class="role-icon">${getRoleIcon(userRole)}</span>
             <span class="role-text">${getRoleDisplayName(userRole)}</span>
         `;
         roleBadge.style.cssText = `
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            padding: 8px 16px;
-            background: ${getRoleColor(userRole)}15;
+            padding: 6px 16px;
+            background: ${getRoleColor(userRole)}12;
             color: ${getRoleColor(userRole)};
             border-radius: 999px;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             margin-top: 12px;
-            border: 1px solid ${getRoleColor(userRole)}30;
+            border: 1px solid ${getRoleColor(userRole)}25;
             font-weight: 600;
+            letter-spacing: 0.02em;
         `;
         
         welcomeSection.appendChild(roleBadge);
@@ -345,7 +344,6 @@
             if (subdivisions && subdivisions.length > 0) {
                 const names = subdivisions.map(s => s.name).join(', ');
                 badgeElement.innerHTML = `
-                    <span class="role-icon">${getRoleIcon(userRole)}</span>
                     <span class="role-text">Scheduler for ${names}</span>
                 `;
             }
@@ -370,11 +368,11 @@
         if (membership && membership.subdivision_ids && membership.subdivision_ids.length > 0) {
             divisionsHtml = '<p style="color: var(--slate-500);">Loading assigned divisions...</p>';
         } else if (userRole === 'admin') {
-            divisionsHtml = '<p style="color: var(--slate-600);"><strong>All divisions</strong> - Full access</p>';
+            divisionsHtml = '<p style="color: var(--slate-600);"><strong>All divisions</strong> — Full access</p>';
         } else if (userRole === 'viewer') {
             divisionsHtml = '<p style="color: var(--slate-500);">View-only access to all divisions</p>';
         } else if (userRole === 'scheduler') {
-            divisionsHtml = '<p style="color: var(--slate-600);"><strong>All divisions</strong> - No restrictions</p>';
+            divisionsHtml = '<p style="color: var(--slate-600);"><strong>All divisions</strong> — No restrictions</p>';
         }
         
         permissionsCard.innerHTML = `
@@ -385,22 +383,22 @@
                 <div class="permission-row">
                     <span class="permission-label">Role</span>
                     <span class="permission-value">
-                        <span class="role-badge-small" style="background: ${getRoleColor(userRole)}15; color: ${getRoleColor(userRole)}; padding: 4px 12px; border-radius: 999px; font-weight: 600;">
-                            ${getRoleIcon(userRole)} ${getRoleDisplayName(userRole)}
+                        <span class="role-badge-small" style="background: ${getRoleColor(userRole)}12; color: ${getRoleColor(userRole)}; padding: 4px 12px; border-radius: 999px; font-weight: 600;">
+                            ${getRoleDisplayName(userRole)}
                         </span>
                     </span>
                 </div>
                 <div class="permission-row">
                     <span class="permission-label">Can Edit Schedules</span>
-                    <span class="permission-value">${userRole === 'viewer' ? '❌ No' : '✅ Yes'}</span>
+                    <span class="permission-value">${userRole === 'viewer' ? '✕ No' : '✓ Yes'}</span>
                 </div>
                 <div class="permission-row">
                     <span class="permission-label">Can Print</span>
-                    <span class="permission-value">✅ Yes</span>
+                    <span class="permission-value">✓ Yes</span>
                 </div>
                 <div class="permission-row">
                     <span class="permission-label">Can Use Camper Locator</span>
-                    <span class="permission-value">✅ Yes</span>
+                    <span class="permission-value">✓ Yes</span>
                 </div>
                 <div class="permission-divider"></div>
                 <div class="permission-row">
@@ -426,9 +424,12 @@
                 .permission-label {
                     color: var(--slate-600);
                     font-weight: 500;
+                    font-size: 0.9rem;
                 }
                 .permission-value {
                     color: var(--slate-800);
+                    font-weight: 500;
+                    font-size: 0.9rem;
                 }
                 .permission-divider {
                     height: 1px;
@@ -467,18 +468,18 @@
         if (!container) return;
         
         if (userRole === 'admin') {
-            container.innerHTML = '<p style="color: var(--slate-600);"><strong>All divisions</strong> - Full admin access</p>';
+            container.innerHTML = '<p style="color: var(--slate-600);"><strong>All divisions</strong> — Full admin access</p>';
             return;
         }
         
         if (userRole === 'viewer') {
-            container.innerHTML = '<p style="color: var(--slate-500);">View-only access - cannot edit any divisions</p>';
+            container.innerHTML = '<p style="color: var(--slate-500);">View-only access — cannot edit any divisions</p>';
             return;
         }
         
         // For schedulers, load their assigned subdivisions
         if (!membership || !membership.subdivision_ids || membership.subdivision_ids.length === 0) {
-            container.innerHTML = '<p style="color: var(--slate-600);"><strong>All divisions</strong> - No restrictions</p>';
+            container.innerHTML = '<p style="color: var(--slate-600);"><strong>All divisions</strong> — No restrictions</p>';
             return;
         }
         
@@ -534,13 +535,8 @@
     }
     
     function getRoleIcon(role) {
-        const icons = {
-            owner: '👑',
-            admin: '⚡',
-            scheduler: '📅',
-            viewer: '👁️'
-        };
-        return icons[role] || '👤';
+        // No emoji icons — role badges are styled with CSS only
+        return '';
     }
 
     // ========================================
@@ -675,41 +671,53 @@
     }
 
     // ========================================
-    // LOAD STATS
+    // LOAD STATS (from Campistry Me data)
     // ========================================
     
     async function loadStats() {
         try {
-            // Get camp ID - for team members, this is the camp they belong to
             const campId = localStorage.getItem('campistry_user_id') || currentUser.id;
-            
+
             const { data, error } = await window.supabase
                 .from('camp_state')
                 .select('state')
                 .eq('camp_id', campId)
                 .maybeSingle();
-            
+
             if (data?.state) {
                 const state = data.state;
-                
-                // Count divisions
-                const divisions = state.divisions || state.app1?.divisions || {};
-                const divisionCount = Object.keys(divisions).length;
-                
-                // Count bunks
-                const bunks = state.bunks || state.app1?.bunks || [];
-                const bunkCount = bunks.length;
-                
-                // Count campers
-                let camperCount = 0;
-                const bunkMeta = state.bunkMetaData || state.app1?.bunkMetaData || {};
-                Object.values(bunkMeta).forEach(meta => {
-                    camperCount += meta?.size || 0;
-                });
-                
+
+                // ★ Divisions: prefer campStructure (Campistry Me format) over old app1 format
+                const campStructure = state.campStructure || {};
+                const oldDivisions = state.divisions || state.app1?.divisions || {};
+                const divisionCount = Object.keys(campStructure).length || Object.keys(oldDivisions).length;
+
+                // ★ Bunks: count from campStructure grades → bunks arrays, fallback to old flat list
+                let bunkCount = 0;
+                if (Object.keys(campStructure).length > 0) {
+                    Object.values(campStructure).forEach(div => {
+                        Object.values(div.grades || {}).forEach(grade => {
+                            bunkCount += (grade.bunks || []).length;
+                        });
+                    });
+                } else {
+                    const bunks = state.bunks || state.app1?.bunks || [];
+                    bunkCount = bunks.length;
+                }
+
+                // ★ Campers: count actual roster entries (Campistry Me), fallback to bunkMetaData estimates
+                const camperRoster = state.app1?.camperRoster || {};
+                let camperCount = Object.keys(camperRoster).length;
+                if (camperCount === 0) {
+                    const bunkMeta = state.bunkMetaData || state.app1?.bunkMetaData || {};
+                    Object.values(bunkMeta).forEach(meta => {
+                        camperCount += meta?.size || 0;
+                    });
+                }
+
                 // Update UI
-                if (statDivisions) statDivisions.textContent = divisionCount;
-                if (statBunks) statBunks.textContent = bunkCount;
+                if (statDivisions) statDivisions.textContent = divisionCount || '—';
+                if (statBunks) statBunks.textContent = bunkCount || '—';
                 if (statCampers) statCampers.textContent = camperCount > 0 ? camperCount : '—';
             }
         } catch (e) {
@@ -736,8 +744,8 @@
         const editBtn = document.getElementById('editProfileBtn');
         if (editBtn) {
             editBtn.innerHTML = isEditMode 
-                ? '<span class="icon">✕</span> Cancel'
-                : '<span class="icon">✎</span> Edit';
+                ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Cancel'
+                : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Edit';
         }
     };
     
@@ -836,6 +844,14 @@
             console.error('Error saving profile:', e);
             if (profileError) profileError.textContent = 'Error saving profile. Please try again.';
         }
+    };
+
+    // ========================================
+    // CANCEL EDIT
+    // ========================================
+    
+    window.cancelEdit = function() {
+        window.toggleEditMode();
     };
 
     // ========================================
