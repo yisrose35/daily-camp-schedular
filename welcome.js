@@ -87,10 +87,15 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
     }
 
-    // Show main app
+    // Show main app immediately once session is verified
     const mainAppContainer = document.getElementById('main-app-container');
     if (mainAppContainer) mainAppContainer.style.display = 'block';
 
+    // Hide the auth loading screen
+    const loadingScreen = document.getElementById('auth-loading-screen');
+    if (loadingScreen) loadingScreen.style.display = 'none';
+
+    // Hide welcome screen if it exists
     const welcomeScreen = document.getElementById('welcome-screen');
     if (welcomeScreen) welcomeScreen.style.display = 'none';
 
