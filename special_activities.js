@@ -224,7 +224,7 @@ function validateSpecialActivity(activity, activityName) {
         sharableWith = { type: 'not_sharable', divisions: [], capacity: 2 };
     } else {
         // Validate type
-        if (!['not_sharable', 'custom', 'all'].includes(sharableWith.type)) {
+        if (!['not_sharable', 'same_division', 'custom', 'all'].includes(sharableWith.type)) {
             sharableWith.type = 'not_sharable';
         }
         // Validate divisions array and remove orphans
