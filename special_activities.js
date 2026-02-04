@@ -277,7 +277,7 @@ function validateSpecialActivity(activity, activityName) {
         }
     }
     
-    // ★ Validate timeRules with parsed times
+    // ★ Validate timeRules with parsed times (v3.1: preserve divisions)
     let timeRules = activity.timeRules;
     if (!Array.isArray(timeRules)) {
         timeRules = [];
@@ -287,7 +287,8 @@ function validateSpecialActivity(activity, activityName) {
             start: rule.start || '',
             end: rule.end || '',
             startMin: rule.startMin ?? parseTimeToMinutes(rule.start),
-            endMin: rule.endMin ?? parseTimeToMinutes(rule.end)
+            endMin: rule.endMin ?? parseTimeToMinutes(rule.end),
+            ...(rule.divisions && rule.divisions.length > 0 ? { divisions: [...rule.divisions] } : {})
         })).filter(rule => rule.start && rule.end);
     }
     
