@@ -370,7 +370,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 
                 const { error } = await supabase.auth.resetPasswordForEmail(email, {
-                    redirectTo: window.location.origin + '/landing.html#reset-password'
+                    redirectTo: window.location.origin + '/index.html#reset-password'
                 });
                 
                 if (error) throw error;
