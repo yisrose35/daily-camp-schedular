@@ -938,6 +938,11 @@ function summaryWeather(item) {
     return item.isIndoor ? "🏠 Indoor - Available on rainy days" : "🌳 Outdoor - Disabled on rainy days";
 }
 
+// ★ v2.5: Location summary
+function summaryLocation(item) {
+    return item.location ? `📍 ${item.location}` : "No field assigned";
+}
+
 // =========================================================================
 // CONTENT RENDERERS
 // =========================================================================
