@@ -843,7 +843,7 @@
                 }
             }
 
-            if (!Utils.isTimeAvailable(idx, effectiveProps)) {
+           if (!Utils.isTimeAvailable(idx, divFilteredProps)) {
                 if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - time not available at slot ${idx}`);
                 return false;
             }
