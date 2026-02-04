@@ -1,53 +1,14 @@
 // ============================================================================
-// welcome.js — CAMPISTRY BOOT ENGINE (PROTECTED)
+// welcome.js — CAMPISTRY BOOT ENGINE v2.0 (CLEAN)
 // 
-// Updated to include Auth Protection and Session Verification.
+// Handles app bootstrapping for Campistry Flow.
+// Auth is handled by the inline script in flow.html.
+// This file provides bootApp() and acts as a fallback if the inline
+// auth script is not present.
 // ============================================================================
 
-document.addEventListener("DOMContentLoaded", async () => {
-    console.log("🚀 Starting Campistry Flow...");
-
-    // Wait for Supabase to be available before checking session
-    let attempts = 0;
-    while (!window.supabase && attempts < 30) {
-        await new Promise(r => setTimeout(r, 100));
-        attempts++;
-    }
-
-    // --- FIX #1: Auth Protection ---
-    // Check for valid session before showing app or proceeding
-    const { data: { session } } = await window.supabase?.auth?.getSession() || { data: { session: null } };
-    
-    if (!session) {
-        console.warn('[Welcome] No active session, redirecting to login');
-        window.location.href = 'landing.html';
-        return; // Halt execution
-    }
-    // -------------------------------
-
-    // Show main app immediately once session is verified
-    const mainAppContainer = document.getElementById('main-app-container');
-    if (mainAppContainer) mainAppContainer.style.display = 'block';
-
-    // Hide welcome screen if it exists
-    const welcomeScreen = document.getElementById('welcome-screen');
-    if (welcomeScreen) welcomeScreen.style.display = 'none';
-
-    // Boot the app
-    await bootApp();
-
-    // Listen for sign out (redirect to landing)
-    if (window.supabase?.auth) {
-        window.supabase.auth.onAuthStateChange((event) => {
-            if (event === 'SIGNED_OUT') {
-                window.location.href = 'landing.html';
-            }
-        });
-    }
-});
-
 // ============================================================================
-// BOOT APP
+// BOOT APP — Called by inline auth script after session is verified
 // ============================================================================
 
 async function bootApp() {
@@ -88,13 +49,60 @@ async function bootApp() {
     window.initScheduleSystem?.();
     window.initDailyAdjustments?.();
 
-    console.log("✅ Campistry ready");
+    console.log("✅ Campistry Flow loaded");
 }
 
-// Re-init UI after cloud hydration
-window.addEventListener('campistry-cloud-hydrated', () => {
-    if (window.__CAMPISTRY_BOOTED__) {
-        window.refreshGlobalRegistry?.();
-        window.initApp1?.();
+// Make bootApp available globally
+window.bootApp = bootApp;
+
+// ============================================================================
+// FALLBACK AUTH CHECK
+// Only runs if the inline auth script in flow.html is NOT present.
+// This keeps backward compatibility if welcome.js is loaded on a page
+// that doesn't have the inline auth block.
+// ============================================================================
+
+document.addEventListener("DOMContentLoaded", async () => {
+    // If inline auth script is handling things, skip entirely
+    if (window.__CAMPISTRY_AUTH_INLINE__) {
+        console.log("🚀 [welcome.js] Inline auth script present, deferring to it");
+        return;
+    }
+
+    console.log("🚀 [welcome.js] No inline auth detected, running fallback auth check...");
+
+    // Wait for Supabase
+    let attempts = 0;
+    while (!window.supabase && attempts < 30) {
+        await new Promise(r => setTimeout(r, 100));
+        attempts++;
+    }
+
+    // Check session
+    const { data: { session } } = await window.supabase?.auth?.getSession() || { data: { session: null } };
+
+    if (!session) {
+        console.warn('[welcome.js] No active session, redirecting to login');
+        window.location.href = 'index.html';
+        return;
+    }
+
+    // Show main app
+    const mainAppContainer = document.getElementById('main-app-container');
+    if (mainAppContainer) mainAppContainer.style.display = 'block';
+
+    const welcomeScreen = document.getElementById('welcome-screen');
+    if (welcomeScreen) welcomeScreen.style.display = 'none';
+
+    // Boot
+    await bootApp();
+
+    // Listen for sign out
+    if (window.supabase?.auth) {
+        window.supabase.auth.onAuthStateChange((event) => {
+            if (event === 'SIGNED_OUT') {
+                window.location.href = 'index.html';
+            }
+        });
     }
 });
