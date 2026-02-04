@@ -81,7 +81,7 @@
         
         if (!window.supabase) {
             console.error('Supabase not available');
-            window.location.href = 'landing.html';
+            window.location.href = 'index.html';
             return;
         }
         
