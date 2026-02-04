@@ -40,7 +40,6 @@
             color: var(--slate-800);
             line-height: 1.5;
         }
-
         /* Navigation */
         .nav {
             background: white;
@@ -65,9 +64,16 @@
             font-size: 1.25rem;
             color: var(--slate-900);
         }
+        /* Dashboard nav logo image */
+        .dash-nav-logo-img {
+            height: 36px;
+            width: auto;
+            display: block;
+            flex-shrink: 0;
+            object-fit: contain;
+        }
         .nav-actions { display: flex; align-items: center; gap: 1rem; }
         .nav-user { color: var(--slate-600); font-size: 0.9rem; }
-
         /* Dashboard Layout */
         .dashboard {
             max-width: 1200px;
@@ -77,7 +83,6 @@
         .dashboard-header { margin-bottom: 2rem; }
         .welcome-title { font-family: 'Playfair Display', serif; font-size: 2rem; margin: 0; }
         .welcome-sub { color: var(--slate-600); margin-top: 0.5rem; }
-
         /* Main Grid */
         .dashboard-grid {
             display: grid;
@@ -99,7 +104,6 @@
             margin-bottom: 1.5rem;
         }
         .card-header h2 { margin: 0; font-size: 1.25rem; }
-
         /* Profile Rows */
         .profile-row {
             display: flex;
@@ -109,7 +113,6 @@
         }
         .profile-label { color: var(--slate-600); font-weight: 500; }
         .profile-value { font-weight: 600; }
-
         /* Stats */
         .stats-grid {
             display: grid;
@@ -123,7 +126,6 @@
         .stats-note { font-size: 0.75rem; color: var(--slate-600); text-align: center; font-style: italic; }
         .stats-note a { color: #d97706; text-decoration: none; }
         .stats-note a:hover { text-decoration: underline; }
-
         /* Products Section */
         .products-section { margin-top: 3rem; }
         
@@ -159,10 +161,21 @@
         }
         .product-tile.disabled { opacity: 0.7; cursor: default; background: var(--slate-50); }
         
-        .product-icon { font-size: 2rem; margin-right: 1rem; }
+        .product-icon { font-size: 2rem; margin-right: 1rem; flex-shrink: 0; }
         .product-info h3 { margin: 0 0 0.25rem; font-size: 1.1rem; }
         .product-info p { margin: 0; font-size: 0.875rem; color: var(--slate-600); }
         
+        /* Product tile logo images */
+        .product-tile-logo {
+            height: 40px;
+            width: auto;
+            max-width: 120px;
+            display: block;
+            flex-shrink: 0;
+            object-fit: contain;
+            margin-right: 1rem;
+        }
+
         .product-status {
             position: absolute;
             top: 1rem;
@@ -184,7 +197,6 @@
         .product-tile.product-me:hover .product-arrow {
             color: #d97706;
         }
-
         /* Quick Links */
         .quick-links {
             margin-top: 3rem;
@@ -202,7 +214,6 @@
             font-weight: 500;
         }
         .quick-link:hover { color: var(--primary); }
-
         /* ============================================================================
            RBAC Dashboard Styles
            ============================================================================ */
@@ -212,7 +223,6 @@
             margin-bottom: 32px;
             margin-top: 2rem;
         }
-
         /* RBAC section title - distinct from products title */
         .rbac-section-title {
             display: flex;
@@ -224,24 +234,20 @@
             padding-bottom: 12px;
             border-bottom: 2px solid var(--slate-200);
         }
-
         .section-icon {
             font-size: 1.5rem;
         }
-
         .team-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
             gap: 24px;
         }
-
         /* Account Section */
         .account-section h3 {
             font-size: 1rem;
             margin: 0 0 1rem;
             color: var(--slate-700);
         }
-
         /* Button Styles */
         .btn-edit {
             display: flex;
@@ -260,7 +266,6 @@
         .btn-edit:hover {
             background: var(--slate-200);
         }
-
         .btn-primary {
             padding: 10px 20px;
             background: linear-gradient(135deg, #6366F1, #4F46E5);
@@ -281,7 +286,6 @@
             transform: none;
             box-shadow: none;
         }
-
         .btn-secondary {
             padding: 10px 20px;
             background: var(--slate-100);
@@ -295,7 +299,6 @@
         .btn-secondary:hover {
             background: var(--slate-200);
         }
-
         .btn-ghost {
             padding: 8px 14px;
             background: transparent;
@@ -310,7 +313,6 @@
             background: var(--slate-100);
             color: var(--slate-800);
         }
-
         /* Form Styles */
         .form-group {
             margin-bottom: 16px;
@@ -345,7 +347,6 @@
             height: 44px;
             cursor: pointer;
         }
-
         .form-actions {
             display: flex;
             justify-content: flex-end;
@@ -354,7 +355,6 @@
             padding-top: 16px;
             border-top: 1px solid var(--slate-200);
         }
-
         .form-error {
             color: #DC2626;
             background: #FEE2E2;
@@ -366,7 +366,6 @@
         .form-error:empty {
             display: none;
         }
-
         .form-success {
             color: #059669;
             background: #D1FAE5;
@@ -378,7 +377,6 @@
         .form-success:empty {
             display: none;
         }
-
         /* Role Badges */
         .role-owner { 
             color: #7C3AED; 
@@ -412,7 +410,6 @@
             font-size: 0.8rem;
             font-weight: 600;
         }
-
         /* Responsive */
         @media (max-width: 768px) {
             .team-grid {
@@ -445,8 +442,7 @@
     <nav class="nav">
         <div class="nav-inner">
             <a href="index.html" class="nav-logo">
-                <span class="logo-icon">⛺</span>
-                <span class="logo-text">Campistry</span>
+                <img src="Campistry_clean.png" alt="Campistry" class="dash-nav-logo-img">
             </a>
             <div class="nav-actions">
                 <span class="nav-user" id="navUserEmail">Loading...</span>
@@ -454,7 +450,6 @@
             </div>
         </div>
     </nav>
-
     <!-- ========================================= -->
     <!-- MAIN DASHBOARD -->
     <!-- ========================================= -->
@@ -466,7 +461,6 @@
                 <p class="welcome-sub">Manage your camp and access all Campistry products from here.</p>
             </div>
         </header>
-
         <!-- Dashboard Grid -->
         <div class="dashboard-grid">
             <!-- ===== CAMP PROFILE CARD ===== -->
@@ -496,7 +490,6 @@
                         <span class="profile-value" id="profileEmail">Loading...</span>
                     </div>
                 </div>
-
                 <!-- Edit Form (hidden by default) -->
                 <form class="profile-edit-form" id="profileEditForm" style="display: none;">
                     <div class="form-group">
@@ -515,7 +508,6 @@
                     <div id="profileSuccess" class="form-success"></div>
                 </form>
             </section>
-
             <!-- ===== ACCOUNT SETTINGS CARD ===== -->
             <section class="dashboard-card account-card">
                 <div class="card-header">
@@ -539,7 +531,6 @@
                     </form>
                 </div>
             </section>
-
             <!-- ===== STATS CARD ===== -->
             <section class="dashboard-card stats-card">
                 <div class="card-header">
@@ -562,7 +553,6 @@
                 <p class="stats-note">Manage campers in <a href="campistry_me.html">Campistry Me</a></p>
             </section>
         </div>
-
         <!-- ============================================================================
              RBAC Team & Access Section (Only visible to owners)
              ============================================================================ -->
@@ -644,14 +634,13 @@
                 </div>
             </div>
         </section>
-
         <!-- ===== PRODUCTS SECTION ===== -->
         <section class="products-section">
             <h2 class="products-section-title">Your Products</h2>
             <div class="products-grid">
                 <!-- FLOW -->
                 <a href="flow.html" class="product-tile product-flow">
-                    <div class="product-icon">📅</div>
+                    <img src="Flow_clean.png" alt="Campistry Flow" class="product-tile-logo">
                     <div class="product-info">
                         <h3>Campistry Flow</h3>
                         <p>Daily scheduling & activity management</p>
@@ -663,7 +652,6 @@
                         </svg>
                     </div>
                 </a>
-
                 <!-- GO -->
                 <div class="product-tile product-go disabled">
                     <div class="product-icon">🚌</div>
@@ -673,10 +661,9 @@
                     </div>
                     <span class="product-status status-coming-soon">Coming Soon</span>
                 </div>
-
                 <!-- ME -->
                 <a href="campistry_me.html" class="product-tile product-me">
-                    <div class="product-icon">👤</div>
+                    <img src="Me_clean.png" alt="Campistry Me" class="product-tile-logo">
                     <div class="product-info">
                         <h3>Campistry Me</h3>
                         <p>Camper management & profiles</p>
@@ -690,7 +677,6 @@
                 </a>
             </div>
         </section>
-
         <!-- ===== QUICK LINKS ===== -->
         <section class="quick-links">
             <a href="mailto:Campistry@gmail.com" class="quick-link">
@@ -709,7 +695,6 @@
             </a>
         </section>
     </main>
-
     <!-- ========================================= -->
     <!-- SCRIPTS -->
     <!-- ========================================= -->
@@ -718,7 +703,6 @@
   <script src="demo_mode.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="supabase_client.js"></script>
-
     <!-- 2. Load Dashboard Logic (Fetches your real data) -->
     <script src="dashboard.js"></script>
     
