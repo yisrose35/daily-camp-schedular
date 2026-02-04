@@ -109,7 +109,7 @@
             
         } catch (e) {
             console.error('Auth check failed:', e);
-            window.location.href = 'landing.html';
+            window.location.href = 'index.html';
         }
     }
 
@@ -888,10 +888,10 @@
             localStorage.removeItem('campistry_camp_id');
             
             await window.supabase.auth.signOut();
-            window.location.href = 'landing.html';
+            window.location.href = 'index.html';
         } catch (e) {
             console.error('Error logging out:', e);
-            window.location.href = 'landing.html';
+            window.location.href = 'index.html';
         }
     };
     
