@@ -332,7 +332,7 @@ function createDefaultActivity(name) {
         type: 'Special', // ★ v2.4 FIX: Always ensure type is set for scheduler filtering
         available: true,
         sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
-        limitUsage: { enabled: false, divisions: {}, priorityList: [] },
+         limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
         timeRules: [],
         maxUsage: null,
         frequencyWeeks: 0,
@@ -921,10 +921,9 @@ function renderDetailPane() {
 // SUMMARIES
 // =========================================================================
 function summarySharing(item) { 
-    if (!item.sharableWith) return "Not sharable";
-    return item.sharableWith.type === "not_sharable" 
-        ? "Not sharable" 
-        : `Sharable (Max ${parseInt(item.sharableWith.capacity, 10) || 2})`; 
+    if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "No sharing (1 bunk only)";
+    const cap = parseInt(item.sharableWith.capacity, 10) || 2;
+    return `Up to ${cap} bunks (same grade)`; 
 }
 
 function summaryAccess(item) {
