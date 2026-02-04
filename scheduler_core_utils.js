@@ -778,7 +778,20 @@
             }
 
             // =================================================================
-            // ★★★ NEW v7.5: sharableWith.divisions CHECK FOR CUSTOM SHARING ★★★
+            // ★★★ v7.6: same_division ENFORCEMENT ★★★
+            // When type="same_division", ONLY bunks from the same division can share
+            // =================================================================
+            if (effectiveProps.sharableWith?.type === 'same_division' && currentCount > 0) {
+                for (const existingDiv of allDivisions) {
+                    if (existingDiv !== myDivision) {
+                        if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - same_division: existing division ${existingDiv} != my division ${myDivision}`);
+                        return false;
+                    }
+                }
+            }
+
+            // =================================================================
+            // ★★★ v7.5: sharableWith.divisions CHECK FOR CUSTOM SHARING ★★★
             // When type="custom", only allow sharing with specified divisions
             // =================================================================
             if (effectiveProps.sharableWith?.type === 'custom' && currentCount > 0) {
