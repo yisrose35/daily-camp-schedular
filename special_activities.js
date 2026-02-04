@@ -869,6 +869,7 @@ function renderDetailPane() {
     // -- 2. COLLAPSIBLE SECTIONS --
     // ★ v2.3: Added Weather & Availability section (only for regular specials, not rainy-day-only)
     const sections = [
+        { title: "Field / Location", summary: summaryLocation(item), render: () => renderLocationSettings(item) },
         { title: "Sharing Rules", summary: summarySharing(item), render: () => renderSharing(item) },
         { title: "Division Access", summary: summaryAccess(item), render: () => renderAccess(item) },
         { title: "Time Availability", summary: summaryTime(item), render: () => renderTimeRules(item) }
