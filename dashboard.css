@@ -2,7 +2,6 @@
    dashboard.css — Campistry Dashboard Styles
    Premium camp-themed design
    ============================================ */
-
 /* ===== CSS VARIABLES ===== */
 :root {
     --camp-green: #0D7C5C;
@@ -33,18 +32,15 @@
     --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
     --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
 }
-
 /* ===== RESET & BASE ===== */
 *, *::before, *::after {
     box-sizing: border-box;
     margin: 0;
     padding: 0;
 }
-
 html {
     scroll-behavior: smooth;
 }
-
 body {
     font-family: var(--font-body);
     font-size: 16px;
@@ -53,7 +49,6 @@ body {
     background: linear-gradient(135deg, #F0FDF9 0%, #FFFFFF 50%, #F8FAFC 100%);
     min-height: 100vh;
 }
-
 /* ===== NAVIGATION ===== */
 .nav {
     position: sticky;
@@ -64,7 +59,6 @@ body {
     border-bottom: 1px solid var(--slate-200);
     padding: 16px 24px;
 }
-
 .nav-inner {
     max-width: 1200px;
     margin: 0 auto;
@@ -72,7 +66,6 @@ body {
     justify-content: space-between;
     align-items: center;
 }
-
 .nav-logo {
     display: flex;
     align-items: center;
@@ -80,28 +73,32 @@ body {
     text-decoration: none;
     color: var(--slate-900);
 }
-
+/* Dashboard nav — actual logo image */
+.dash-nav-logo-img {
+    height: 36px;
+    width: auto;
+    display: block;
+    flex-shrink: 0;
+    object-fit: contain;
+}
+/* Legacy text fallbacks (kept for compatibility) */
 .nav-logo .logo-icon {
     font-size: 1.5rem;
 }
-
 .nav-logo .logo-text {
     font-family: var(--font-display);
     font-size: 1.4rem;
     font-weight: 700;
 }
-
 .nav-actions {
     display: flex;
     align-items: center;
     gap: 16px;
 }
-
 .nav-user {
     font-size: 0.9rem;
     color: var(--slate-600);
 }
-
 .btn-ghost {
     padding: 8px 16px;
     font-size: 0.9rem;
@@ -113,24 +110,20 @@ body {
     cursor: pointer;
     transition: all 0.2s ease;
 }
-
 .btn-ghost:hover {
     background: var(--slate-100);
     border-color: var(--slate-400);
 }
-
 /* ===== DASHBOARD LAYOUT ===== */
 .dashboard {
     max-width: 1200px;
     margin: 0 auto;
     padding: 40px 24px 80px;
 }
-
 /* ===== WELCOME HEADER ===== */
 .dashboard-header {
     margin-bottom: 40px;
 }
-
 .welcome-title {
     font-family: var(--font-display);
     font-size: 2.5rem;
@@ -138,16 +131,13 @@ body {
     color: var(--slate-900);
     margin-bottom: 8px;
 }
-
 .welcome-title span {
     color: var(--camp-green);
 }
-
 .welcome-sub {
     font-size: 1.1rem;
     color: var(--slate-600);
 }
-
 /* ===== DASHBOARD GRID ===== */
 .dashboard-grid {
     display: grid;
@@ -155,7 +145,6 @@ body {
     gap: 24px;
     margin-bottom: 48px;
 }
-
 /* ===== DASHBOARD CARDS ===== */
 .dashboard-card {
     background: white;
@@ -165,11 +154,9 @@ body {
     box-shadow: var(--shadow-md);
     transition: all 0.3s ease;
 }
-
 .dashboard-card:hover {
     box-shadow: var(--shadow-lg);
 }
-
 .card-header {
     display: flex;
     justify-content: space-between;
@@ -178,13 +165,11 @@ body {
     padding-bottom: 16px;
     border-bottom: 1px solid var(--slate-200);
 }
-
 .card-header h2 {
     font-size: 1.1rem;
     font-weight: 600;
     color: var(--slate-800);
 }
-
 .btn-edit {
     display: flex;
     align-items: center;
@@ -199,12 +184,10 @@ body {
     cursor: pointer;
     transition: all 0.2s ease;
 }
-
 .btn-edit:hover {
     background: #ECFDF5;
     border-color: var(--camp-green-light);
 }
-
 /* ===== PROFILE CARD ===== */
 .profile-row {
     display: flex;
@@ -213,22 +196,18 @@ body {
     padding: 12px 0;
     border-bottom: 1px solid var(--slate-100);
 }
-
 .profile-row:last-child {
     border-bottom: none;
 }
-
 .profile-label {
     font-size: 0.9rem;
     color: var(--slate-500);
 }
-
 .profile-value {
     font-size: 0.95rem;
     font-weight: 500;
     color: var(--slate-800);
 }
-
 /* ===== EDIT FORM ===== */
 .profile-edit-form,
 .password-form {
@@ -236,19 +215,16 @@ body {
     flex-direction: column;
     gap: 16px;
 }
-
 .form-group {
     display: flex;
     flex-direction: column;
     gap: 6px;
 }
-
 .form-group label {
     font-size: 0.85rem;
     font-weight: 500;
     color: var(--slate-700);
 }
-
 .form-group input {
     padding: 10px 14px;
     font-size: 0.95rem;
@@ -257,19 +233,16 @@ body {
     border-radius: 10px;
     transition: all 0.2s ease;
 }
-
 .form-group input:focus {
     outline: none;
     border-color: var(--camp-green);
     box-shadow: 0 0 0 3px rgba(13, 124, 92, 0.15);
 }
-
 .form-actions {
     display: flex;
     gap: 12px;
     margin-top: 8px;
 }
-
 .btn-primary {
     padding: 10px 20px;
     font-size: 0.9rem;
@@ -281,11 +254,9 @@ body {
     cursor: pointer;
     transition: all 0.2s ease;
 }
-
 .btn-primary:hover {
     background: var(--camp-green-dark);
 }
-
 .btn-secondary {
     padding: 10px 20px;
     font-size: 0.9rem;
@@ -297,21 +268,17 @@ body {
     cursor: pointer;
     transition: all 0.2s ease;
 }
-
 .btn-secondary:hover {
     background: var(--slate-50);
 }
-
 .form-error {
     font-size: 0.85rem;
     color: #DC2626;
 }
-
 .form-success {
     font-size: 0.85rem;
     color: #059669;
 }
-
 /* ===== ACCOUNT SECTION ===== */
 .account-section h3 {
     font-size: 0.95rem;
@@ -319,7 +286,6 @@ body {
     color: var(--slate-700);
     margin-bottom: 16px;
 }
-
 /* ===== STATS CARD ===== */
 .stats-grid {
     display: grid;
@@ -327,14 +293,12 @@ body {
     gap: 16px;
     margin-bottom: 16px;
 }
-
 .stat-item {
     text-align: center;
     padding: 16px 8px;
     background: var(--slate-50);
     border-radius: 12px;
 }
-
 .stat-value {
     display: block;
     font-size: 2rem;
@@ -342,26 +306,22 @@ body {
     color: var(--camp-green);
     line-height: 1.2;
 }
-
 .stat-label {
     font-size: 0.8rem;
     color: var(--slate-500);
     text-transform: uppercase;
     letter-spacing: 0.05em;
 }
-
 .stats-note {
     font-size: 0.8rem;
     color: var(--slate-400);
     text-align: center;
     font-style: italic;
 }
-
 /* ===== PRODUCTS SECTION ===== */
 .products-section {
     margin-bottom: 48px;
 }
-
 .section-title {
     font-family: var(--font-display);
     font-size: 1.5rem;
@@ -369,13 +329,11 @@ body {
     color: var(--slate-900);
     margin-bottom: 24px;
 }
-
 .products-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
     gap: 20px;
 }
-
 .product-tile {
     display: flex;
     align-items: center;
@@ -390,39 +348,41 @@ body {
     position: relative;
     overflow: hidden;
 }
-
 .product-tile:not(.disabled):hover {
     border-color: var(--camp-green);
     transform: translateY(-2px);
     box-shadow: var(--shadow-lg);
 }
-
 .product-tile.disabled {
     opacity: 0.6;
     cursor: not-allowed;
 }
-
 .product-icon {
     font-size: 2.5rem;
     flex-shrink: 0;
 }
-
+/* Product tile logo images (replaces emoji icons) */
+.product-tile-logo {
+    height: 40px;
+    width: auto;
+    max-width: 120px;
+    display: block;
+    flex-shrink: 0;
+    object-fit: contain;
+}
 .product-info {
     flex: 1;
 }
-
 .product-info h3 {
     font-size: 1.15rem;
     font-weight: 600;
     color: var(--slate-900);
     margin-bottom: 4px;
 }
-
 .product-info p {
     font-size: 0.9rem;
     color: var(--slate-500);
 }
-
 .product-status {
     position: absolute;
     top: 12px;
@@ -434,40 +394,32 @@ body {
     letter-spacing: 0.05em;
     border-radius: 999px;
 }
-
 .product-status.active {
     background: #ECFDF5;
     color: #059669;
 }
-
 .product-status.coming-soon {
     background: var(--slate-100);
     color: var(--slate-500);
 }
-
 .product-arrow {
     color: var(--slate-400);
     transition: all 0.2s ease;
 }
-
 .product-tile:not(.disabled):hover .product-arrow {
     color: var(--camp-green);
     transform: translateX(4px);
 }
-
 /* Product-specific accent colors */
 .product-flow {
     border-left: 4px solid var(--flow-color);
 }
-
 .product-go {
     border-left: 4px solid var(--go-color);
 }
-
 .product-me {
     border-left: 4px solid var(--me-color);
 }
-
 /* ===== QUICK LINKS ===== */
 .quick-links {
     display: flex;
@@ -476,7 +428,6 @@ body {
     padding-top: 24px;
     border-top: 1px solid var(--slate-200);
 }
-
 .quick-link {
     display: flex;
     align-items: center;
@@ -486,19 +437,15 @@ body {
     text-decoration: none;
     transition: color 0.2s ease;
 }
-
 .quick-link:hover {
     color: var(--camp-green);
 }
-
 .quick-link svg {
     color: var(--slate-400);
 }
-
 .quick-link:hover svg {
     color: var(--camp-green);
 }
-
 /* ===== RESPONSIVE ===== */
 @media (max-width: 768px) {
     .dashboard {
@@ -536,7 +483,6 @@ body {
         display: none;
     }
 }
-
 @media (max-width: 480px) {
     .form-actions {
         flex-direction: column;
