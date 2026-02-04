@@ -1249,10 +1249,23 @@ function renderTimeRules(item) {
                 row.style.borderRadius = "6px";
                 row.style.border = "1px solid #E5E7EB";
 
+               const leftSide = document.createElement("div");
+                leftSide.style.flex = "1";
+
                 const txt = document.createElement("span");
                 const colorClass = r.type === 'Available' ? '#10B981' : '#DC2626';
                 txt.innerHTML = `<strong style="color:${colorClass}">${escapeHtml(r.type)}</strong> ${escapeHtml(r.start)} - ${escapeHtml(r.end)}`;
-                row.appendChild(txt);
+                leftSide.appendChild(txt);
+
+                // ★ v3.1: Show division restrictions if any
+                if (r.divisions && r.divisions.length > 0) {
+                    const divInfo = document.createElement("div");
+                    divInfo.style.cssText = "font-size:0.75rem; color:#6B7280; margin-top:4px;";
+                    divInfo.innerHTML = '⚡ ' + r.divisions.map(d => '<span style="background:#ECFDF5;color:#047857;padding:2px 6px;border-radius:999px;font-size:0.7rem;margin-right:3px;">' + escapeHtml(d) + '</span>').join('');
+                    leftSide.appendChild(divInfo);
+                }
+
+                row.appendChild(leftSide);
 
                 const delBtn = document.createElement("button");
                 delBtn.textContent = "✕";
