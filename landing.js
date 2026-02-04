@@ -190,7 +190,21 @@ function showAuthError(message) {
         authError.style.display = message ? 'block' : 'none';
     }
 }
-
+// ========================================
+// LOGOUT (for logged-in nav state)
+// ========================================
+function handleLogout() {
+    const supabase = getSupabase();
+    if (supabase) {
+        supabase.auth.signOut().then(() => {
+            window.location.reload();
+        }).catch(() => {
+            window.location.reload();
+        });
+    } else {
+        window.location.reload();
+    }
+}
 // ========================================
 // MOBILE MENU TOGGLE
 // ========================================
