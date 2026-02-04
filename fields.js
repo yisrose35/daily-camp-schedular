@@ -1495,14 +1495,26 @@ function renderTimeRules(item){
             row.style.display="flex"; row.style.justifyContent="space-between"; row.style.alignItems="center";
             row.style.background="#F9FAFB"; row.style.padding="8px"; row.style.marginBottom="6px"; row.style.borderRadius="6px"; row.style.border="1px solid #E5E7EB";
             
+            const leftSide = document.createElement("div");
+            leftSide.style.flex = "1";
+            
             const txt = document.createElement("span");
             txt.innerHTML = `<strong style="color:${r.type==='Available'?'#059669':'#DC2626'}">${escapeHtml(r.type)}</strong>: ${escapeHtml(r.start)} to ${escapeHtml(r.end)}`;
+            leftSide.appendChild(txt);
+            
+            // ★ v3.1: Show division restrictions if any
+            if (r.divisions && r.divisions.length > 0) {
+                const divInfo = document.createElement("div");
+                divInfo.style.cssText = "font-size:0.75rem; color:#6B7280; margin-top:4px;";
+                divInfo.innerHTML = '⚡ ' + r.divisions.map(d => '<span style="background:#ECFDF5;color:#047857;padding:2px 6px;border-radius:999px;font-size:0.7rem;margin-right:3px;">' + escapeHtml(d) + '</span>').join('');
+                leftSide.appendChild(divInfo);
+            }
             
             const del = document.createElement("button");
             del.textContent="✕"; del.style.border="none"; del.style.background="transparent"; del.style.color="#9CA3AF"; del.style.cursor="pointer";
             del.onclick = ()=>{ item.timeRules.splice(i,1); saveData(); renderDetailPane(); };
             
-            row.appendChild(txt); 
+            row.appendChild(leftSide); 
             row.appendChild(del);
             container.appendChild(row);
         });
