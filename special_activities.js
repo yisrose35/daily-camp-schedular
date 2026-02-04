@@ -927,10 +927,11 @@ function summarySharing(item) {
 }
 
 function summaryAccess(item) {
-    if (!item.limitUsage || !item.limitUsage.enabled) return "Open to All Divisions";
+    if (!item.limitUsage || !item.limitUsage.enabled) return "Open to all grades";
     const allowedCount = Object.keys(item.limitUsage.divisions || {}).length;
-    if (allowedCount === 0) return "Restricted (none selected)";
-    return `${allowedCount} division${allowedCount !== 1 ? 's' : ''} with priority`;
+    if (allowedCount === 0) return "⚠ Restricted (none selected)";
+    const pStr = item.limitUsage.usePriority ? " · prioritized" : "";
+    return `${allowedCount} grade${allowedCount !== 1 ? 's' : ''} allowed${pStr}`;
 }
 
 function summaryTime(item) { 
