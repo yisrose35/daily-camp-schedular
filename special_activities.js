@@ -1,5 +1,5 @@
 // ============================================================================
-// special_activities.js — PRODUCTION-READY v2.4
+// special_activities.js — PRODUCTION-READY v3.0 (GRADE RESTRICTIONS / SAME-DIVISION SHARING)
 // ============================================================================
 // 1. Layout: Apple-inspired Two-Pane with Collapsible Detail Sections.
 // 2. Logic: Retains Sharing, Frequency, and Time Rules.
