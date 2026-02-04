@@ -474,6 +474,12 @@
 (function() {
     'use strict';
     
+    (function() {
+    'use strict';
+    
+    // Flag so welcome.js knows inline auth is handling boot
+    window.__CAMPISTRY_AUTH_INLINE__ = true;
+    
     const loadingScreen = document.getElementById('auth-loading-screen');
     const mainApp = document.getElementById('main-app-container');
     
