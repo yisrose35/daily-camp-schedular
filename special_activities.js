@@ -1332,6 +1332,127 @@ function renderTimeRules(item) {
     renderContent();
     return container;
 }
+// ★ v2.5: FIELD / LOCATION ASSIGNMENT
+function renderLocationSettings(item) {
+    const container = document.createElement("div");
+    
+    const updateSummary = () => {
+        const summaryEl = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (summaryEl) summaryEl.textContent = summaryLocation(item);
+    };
+    
+    const renderContent = () => {
+        container.innerHTML = "";
+        
+        // Description
+        const desc = document.createElement("p");
+        desc.style.cssText = "font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;";
+        desc.textContent = "Assign a field or facility where this activity takes place. When scheduled, that field will be locked so no other activity can use it at the same time.";
+        container.appendChild(desc);
+        
+        // Current assignment display
+        if (item.location) {
+            const current = document.createElement("div");
+            current.style.cssText = "display:flex; align-items:center; gap:10px; padding:12px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; margin-bottom:12px;";
+            current.innerHTML = `
+                <span style="font-size:24px;">📍</span>
+                <div style="flex:1;">
+                    <div style="font-weight:600; color:#065f46;">${escapeHtml(item.location)}</div>
+                    <div style="font-size:0.8rem; color:#047857;">Field will be locked when this activity is scheduled</div>
+                </div>
+            `;
+            const clearBtn = document.createElement("button");
+            clearBtn.textContent = "✕ Remove";
+            clearBtn.style.cssText = "padding:4px 10px; background:#fef2f2; color:#dc2626; border:1px solid #fecaca; border-radius:6px; cursor:pointer; font-size:0.8rem;";
+            clearBtn.onclick = () => {
+                item.location = null;
+                saveData();
+                renderContent();
+                updateSummary();
+                renderMasterList();
+            };
+            current.appendChild(clearBtn);
+            container.appendChild(current);
+        }
+        
+        // Field picker
+        const pickerLabel = document.createElement("div");
+        pickerLabel.style.cssText = "font-size:0.85rem; font-weight:500; margin-bottom:6px;";
+        pickerLabel.textContent = item.location ? "Change field:" : "Select a field:";
+        container.appendChild(pickerLabel);
+        
+        const select = document.createElement("select");
+        select.style.cssText = "width:100%; padding:8px 10px; border:1px solid #E5E7EB; border-radius:8px; font-size:0.9rem; background:white; cursor:pointer;";
+        
+        // Default option
+        const defaultOpt = document.createElement("option");
+        defaultOpt.value = "";
+        defaultOpt.textContent = "-- None (no field assigned) --";
+        select.appendChild(defaultOpt);
+        
+        // Fields group
+        const allFields = window.getFields?.() || [];
+        if (allFields.length > 0) {
+            const fieldGroup = document.createElement("optgroup");
+            fieldGroup.label = "\u{1F3DF}\uFE0F Fields";
+            allFields.sort((a, b) => a.name.localeCompare(b.name)).forEach(field => {
+                if (!field.name) return;
+                const opt = document.createElement("option");
+                opt.value = field.name;
+                opt.textContent = field.name + (field.rainyDayAvailable ? ' \u{1F3E0}' : '');
+                if (item.location === field.name) opt.selected = true;
+                fieldGroup.appendChild(opt);
+            });
+            select.appendChild(fieldGroup);
+        }
+        
+        // Facilities group (from locations/zones)
+        const settings = window.loadGlobalSettings?.() || {};
+        const zones = settings.locationZones || {};
+        const facilities = [];
+        Object.entries(zones).forEach(([zoneName, zone]) => {
+            if (!zone || typeof zone !== 'object') return;
+            Object.keys(zone.locations || {}).forEach(locName => {
+                facilities.push({ name: locName, zone: zoneName });
+            });
+        });
+        
+        if (facilities.length > 0) {
+            const facGroup = document.createElement("optgroup");
+            facGroup.label = "\u{1F3E2} Facilities";
+            facilities.sort((a, b) => a.name.localeCompare(b.name)).forEach(fac => {
+                const opt = document.createElement("option");
+                opt.value = fac.name;
+                opt.textContent = `${fac.name} (${fac.zone})`;
+                if (item.location === fac.name) opt.selected = true;
+                facGroup.appendChild(opt);
+            });
+            select.appendChild(facGroup);
+        }
+        
+        select.onchange = () => {
+            item.location = select.value || null;
+            saveData();
+            renderContent();
+            updateSummary();
+            renderMasterList();
+        };
+        
+        container.appendChild(select);
+        
+        // Info box
+        const infoBox = document.createElement("div");
+        infoBox.style.cssText = "background:#f9fafb; border-radius:8px; padding:12px; font-size:0.85rem; color:#4b5563; margin-top:12px;";
+        infoBox.innerHTML = `<strong>\u{1F4A1} How it works:</strong> When the scheduler assigns this special activity to a bunk, 
+            the selected field will be automatically locked via Global Field Locks. 
+            No other sport or activity can use that field during the same time slots.`;
+        container.appendChild(infoBox);
+    };
+    
+    renderContent();
+    return container;
+}
+
 
 // ★ v2.3: 4. WEATHER & AVAILABILITY (matches fields.js pattern)
 function renderWeatherSettings(item) {
