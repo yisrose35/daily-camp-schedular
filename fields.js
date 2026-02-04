@@ -14,6 +14,7 @@
 // 10. ★★★ v2.1: DELETION CLEANUP - removes field refs from schedules ★★★
 // 11. ★★★ v2.1: RENAME PROPAGATION - updates all field references ★★★
 // 12. ★★★ v2.1: DIVISION VALIDATION - removes stale division refs ★★★
+// 13. ★★★ v3.0: GRADE RESTRICTIONS / SAME-DIVISION SHARING / PRIORITY ★★★
 // ============================================================================
 (function(){
 'use strict';
@@ -257,8 +258,10 @@ function loadData(){
         if(!f.sharableWith.capacity) f.sharableWith.capacity = 2;
         if(!f.sharableWith.divisions) f.sharableWith.divisions = [];
         
-        f.limitUsage = f.limitUsage || { enabled:false, divisions:{}, priorityList:[] };
+        f.limitUsage = f.limitUsage || { enabled:false, divisions:{}, priorityList:[], usePriority: false };
         if(!f.limitUsage.priorityList) f.limitUsage.priorityList = [];
+        // ★★★ v3.0: Migrate usePriority ★★★
+        if (f.limitUsage.usePriority === undefined) f.limitUsage.usePriority = false;
 
         // Rainy Day Default
         f.rainyDayAvailable = f.rainyDayAvailable ?? false;
@@ -587,11 +590,12 @@ function saveData(){
                 capacity: parseInt(f.sharableWith?.capacity) || (f.sharableWith?.type === 'not_sharable' ? 1 : 2)
             },
             
-            // ★ Access restrictions - ensure complete structure  
+            // ★ Access restrictions - ensure complete structure (v3.0: usePriority)
             limitUsage: {
                 enabled: f.limitUsage?.enabled === true,
                 divisions: typeof f.limitUsage?.divisions === 'object' ? f.limitUsage.divisions : {},
-                priorityList: Array.isArray(f.limitUsage?.priorityList) ? f.limitUsage.priorityList : []
+                priorityList: Array.isArray(f.limitUsage?.priorityList) ? f.limitUsage.priorityList : [],
+                usePriority: f.limitUsage?.usePriority === true
             },
             
             // ★ Time rules - ensure array with parsed times
@@ -1204,84 +1208,89 @@ function renderActivities(item, allSports){
     return box;
 }
 
-// 2. SHARING
+// ★★★ v3.0: SHARING — Toggle + same-division capacity ★★★
 function renderSharing(item){
     const container = document.createElement("div");
 
-    // Helper to update the summary in the accordion header
     const updateSummary = () => {
         const summaryEl = container.closest('.detail-section')?.querySelector('.detail-section-summary');
         if(summaryEl) summaryEl.textContent = summarySharing(item);
     };
 
-    // Main render function for this section
     const renderContent = () => {
         container.innerHTML = "";
         
-        const rules = item.sharableWith;
+        const rules = item.sharableWith || { type: 'not_sharable', divisions: [], capacity: 1 };
+        const isSharable = rules.type !== 'not_sharable';
 
+        // Toggle row
+        const toggleRow = document.createElement("div");
+        toggleRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:16px;";
+        
         const tog = document.createElement("label"); 
         tog.className = "switch";
         const cb = document.createElement("input"); 
         cb.type = "checkbox";
-        cb.checked = rules.type !== 'not_sharable';
-
-        cb.onchange = ()=>{
-            rules.type = cb.checked ? 'all' : 'not_sharable';
+        cb.checked = isSharable;
+        cb.onchange = () => {
+            if (cb.checked) {
+                rules.type = 'same_division';
+                rules.capacity = rules.capacity > 1 ? rules.capacity : 2;
+            } else {
+                rules.type = 'not_sharable';
+                rules.capacity = 1;
+            }
             rules.divisions = [];
+            item.sharableWith = rules;
             saveData();
             renderContent();
             updateSummary();
         };
-
         const sl = document.createElement("span"); 
         sl.className = "slider";
         tog.appendChild(cb); 
         tog.appendChild(sl);
         
-        const header = document.createElement("div");
-        header.style.display="flex"; header.style.alignItems="center"; header.style.gap="10px";
-        header.appendChild(tog);
-        header.appendChild(document.createTextNode("Allow Sharing (Multiple bunks at once)"));
-        container.appendChild(header);
+        const label = document.createElement("span");
+        label.style.cssText = "font-weight:500; font-size:0.9rem;";
+        label.textContent = "Allow Sharing";
+        
+        toggleRow.appendChild(tog);
+        toggleRow.appendChild(label);
+        container.appendChild(toggleRow);
 
-        if(rules.type !== 'not_sharable'){
+        if (!isSharable) {
+            const note = document.createElement("div");
+            note.style.cssText = "color:#6B7280; font-size:0.85rem; padding:10px; background:#F9FAFB; border-radius:8px;";
+            note.textContent = "Only 1 bunk can use this field at a time.";
+            container.appendChild(note);
+        } else {
             const det = document.createElement("div");
-            det.style.marginTop="16px"; det.style.paddingLeft="12px"; det.style.borderLeft="2px solid #E5E7EB";
+            det.style.cssText = "margin-top:4px; padding-left:12px; border-left:2px solid #10B981;";
 
-            // Capacity
+            // Capacity input
             const capRow = document.createElement("div");
-            capRow.style.marginBottom="12px";
-            capRow.innerHTML = `<span>Max Capacity: </span>`;
+            capRow.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:12px;";
+            capRow.innerHTML = `<span style="font-size:0.85rem;">Max bunks at once:</span>`;
             const capIn = document.createElement("input"); 
-            capIn.type="number"; capIn.min="2"; capIn.value=rules.capacity;
-            capIn.style.width="60px"; capIn.style.marginLeft="8px"; capIn.style.padding="4px";
-            capIn.onchange = ()=>{ rules.capacity = Math.max(2, parseInt(capIn.value)||2); saveData(); updateSummary(); };
+            capIn.type = "number"; capIn.min = "2"; capIn.max = "20";
+            capIn.value = rules.capacity || 2;
+            capIn.style.cssText = "width:60px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;";
+            capIn.onchange = () => { 
+                rules.capacity = Math.min(20, Math.max(2, parseInt(capIn.value) || 2)); 
+                capIn.value = rules.capacity;
+                item.sharableWith = rules;
+                saveData(); 
+                updateSummary(); 
+            };
             capRow.appendChild(capIn);
             det.appendChild(capRow);
 
-            // Limit Divisions
-            const divLabel = document.createElement("div");
-            divLabel.textContent = "Limit sharing to specific divisions (Optional):";
-            divLabel.style.fontSize="0.85rem"; divLabel.style.marginBottom="6px";
-            det.appendChild(divLabel);
-
-            const allDivs = window.availableDivisions || Object.keys(window.divisions || {});
-            allDivs.forEach(d => {
-                const isActive = rules.divisions.includes(d);
-                const chip = document.createElement("span");
-                chip.className = "chip " + (isActive ? "active" : "inactive");
-                chip.textContent = d;
-                chip.onclick = ()=>{
-                    if(isActive) rules.divisions = rules.divisions.filter(x=>x!==d);
-                    else rules.divisions.push(d);
-                    rules.type = rules.divisions.length > 0 ? 'custom' : 'all';
-                    saveData();
-                    chip.className = "chip " + (rules.divisions.includes(d) ? "active" : "inactive");
-                    updateSummary();
-                };
-                det.appendChild(chip);
-            });
+            // Explanation
+            const note = document.createElement("div");
+            note.style.cssText = "color:#6B7280; font-size:0.8rem; padding:10px; background:#F0FDF4; border-radius:8px; line-height:1.5;";
+            note.innerHTML = `Up to <strong>${rules.capacity || 2}</strong> bunks <strong>within the same grade</strong> can use this simultaneously.<br>Bunks from different grades <strong>cannot</strong> share at the same time.`;
+            det.appendChild(note);
 
             container.appendChild(det);
         }
@@ -1291,144 +1300,71 @@ function renderSharing(item){
     return container;
 }
 
-// 3. ACCESS & PRIORITY
+// ★★★ v3.0: ACCESS & PRIORITY — Grade toggle + chips + priority reorder ★★★
 function renderAccess(item){
     const container = document.createElement("div");
 
-    // Helper to update the summary in the accordion header
     const updateSummary = () => {
         const summaryEl = container.closest('.detail-section')?.querySelector('.detail-section-summary');
         if(summaryEl) summaryEl.textContent = summaryAccess(item);
     };
 
-    // Main render function for this section
     const renderContent = () => {
         container.innerHTML = "";
         
-        const rules = item.limitUsage;
-        
-        // Ensure priorityList exists
-        if (!rules.priorityList) rules.priorityList = [];
+        const rules = item.limitUsage || { enabled: false, divisions: {}, priorityList: [], usePriority: false };
+        if (!rules.priorityList) rules.priorityList = Object.keys(rules.divisions || {});
+        if (rules.usePriority === undefined) rules.usePriority = false;
 
-        // Toggle Mode Buttons
+        // ── STEP 1: Grade Access Toggle ──
         const modeWrap = document.createElement("div");
-        modeWrap.style.display="flex"; modeWrap.style.gap="12px"; modeWrap.style.marginBottom="16px";
-        
+        modeWrap.style.cssText = "display:flex; gap:12px; margin-bottom:16px;";
+
         const btnAll = document.createElement("button");
-        btnAll.textContent = "Open to All";
+        btnAll.textContent = "Open to All Grades";
         btnAll.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:${!rules.enabled ? '#ECFDF5' : '#fff'}; color:${!rules.enabled ? '#047857' : '#333'}; border-color:${!rules.enabled ? '#10B981' : '#E5E7EB'}; font-weight:${!rules.enabled ? '600' : '400'}; transition:all 0.2s;`;
-        
+
         const btnRes = document.createElement("button");
-        btnRes.textContent = "Restricted";
+        btnRes.textContent = "Specific Grades Only";
         btnRes.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:${rules.enabled ? '#ECFDF5' : '#fff'}; color:${rules.enabled ? '#047857' : '#333'}; border-color:${rules.enabled ? '#10B981' : '#E5E7EB'}; font-weight:${rules.enabled ? '600' : '400'}; transition:all 0.2s;`;
 
-        btnAll.onclick = ()=>{ 
-            rules.enabled=false; 
-            rules.divisions = {};
-            rules.priorityList = [];
-            saveData(); 
-            renderContent(); 
-            updateSummary();
-        };
-
-        btnRes.onclick = ()=>{ 
-            rules.enabled=true; 
-            saveData(); 
-            renderContent(); 
-            updateSummary();
-        };
+        btnAll.onclick = () => { rules.enabled = false; item.limitUsage = rules; saveData(); renderContent(); updateSummary(); };
+        btnRes.onclick = () => { rules.enabled = true; item.limitUsage = rules; saveData(); renderContent(); updateSummary(); };
 
         modeWrap.appendChild(btnAll);
         modeWrap.appendChild(btnRes);
         container.appendChild(modeWrap);
 
-        if(rules.enabled){
+        // Get available grades/divisions
+        const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+
+        // ── STEP 2: Grade Chips (when restricted) ──
+        if (rules.enabled) {
             const body = document.createElement("div");
+            body.style.cssText = "padding-left:12px; border-left:2px solid #10B981; margin-bottom:16px;";
 
-            // Priority List Header
-            const pHeader = document.createElement("div");
-            pHeader.textContent = "Priority Order (Top = First Choice):";
-            pHeader.style.fontSize="0.85rem"; pHeader.style.fontWeight="600"; pHeader.style.marginBottom="6px";
-            body.appendChild(pHeader);
-
-            const listContainer = document.createElement("div");
-            
-            // Clean up priorityList to only include divisions that are in rules.divisions
-            rules.priorityList = (rules.priorityList || []).filter(d => rules.divisions.hasOwnProperty(d));
-
-            if(rules.priorityList.length === 0) {
-                listContainer.innerHTML = `<div class="muted" style="font-size:0.8rem; font-style:italic; padding:4px; color:#6B7280;">No divisions selected. Click divisions below to allow access.</div>`;
-            }
-            
-            rules.priorityList.forEach((divName, idx) => {
-                const row = document.createElement("div"); 
-                row.className = "priority-list-item";
-                row.innerHTML = `<span style="font-weight:bold; color:#10B981; width:20px;">${idx+1}</span> <span style="flex:1;">${escapeHtml(divName)}</span>`;
-                
-                const ctrls = document.createElement("div"); 
-                ctrls.style.display="flex"; 
-                ctrls.style.gap="4px";
-                
-                const mkBtn = (txt, fn, dis) => {
-                    const b = document.createElement("button"); 
-                    b.className="priority-btn"; 
-                    b.textContent=txt;
-                    if(dis) b.disabled=true; 
-                    else b.onclick=fn;
-                    return b;
-                };
-                
-                ctrls.appendChild(mkBtn("↑", ()=>{ 
-                    [rules.priorityList[idx-1], rules.priorityList[idx]] = [rules.priorityList[idx], rules.priorityList[idx-1]]; 
-                    saveData(); 
-                    renderContent(); 
-                }, idx===0));
-                
-                ctrls.appendChild(mkBtn("↓", ()=>{ 
-                    [rules.priorityList[idx+1], rules.priorityList[idx]] = [rules.priorityList[idx], rules.priorityList[idx+1]]; 
-                    saveData(); 
-                    renderContent(); 
-                }, idx===rules.priorityList.length-1));
-                
-                const rm = mkBtn("✕", ()=>{ 
-                    rules.priorityList = rules.priorityList.filter(d=>d!==divName);
-                    delete rules.divisions[divName];
-                    saveData(); 
-                    renderContent();
-                    updateSummary();
-                }, false);
-                rm.style.color="#DC2626"; 
-                rm.style.borderColor="#FECACA";
-                ctrls.appendChild(rm);
-
-                row.appendChild(ctrls);
-                listContainer.appendChild(row);
-            });
-
-            body.appendChild(listContainer);
-
-            // Division Selector Chips
-            const divHeader = document.createElement("div");
-            divHeader.textContent = "Allowed Divisions (Click to add/remove):";
-            divHeader.style.fontSize="0.85rem"; divHeader.style.fontWeight="600"; divHeader.style.marginTop="16px"; divHeader.style.marginBottom="6px";
-            body.appendChild(divHeader);
+            const chipLabel = document.createElement("div");
+            chipLabel.style.cssText = "font-size:0.85rem; font-weight:500; margin-bottom:8px; color:#374151;";
+            chipLabel.textContent = "Select allowed grades:";
+            body.appendChild(chipLabel);
 
             const chipWrap = document.createElement("div");
-            const availableDivisions = window.availableDivisions || Object.keys(window.divisions || {});
+            chipWrap.style.cssText = "display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px;";
 
-            availableDivisions.forEach(divName => {
-                const isAllowed = divName in rules.divisions;
+            allDivs.forEach(divName => {
+                const isAllowed = !!rules.divisions[divName];
                 const c = document.createElement("span");
                 c.className = "chip " + (isAllowed ? "active" : "inactive");
                 c.textContent = divName;
-                c.onclick = ()=>{
-                    if(isAllowed){
+                c.onclick = () => {
+                    if (isAllowed) {
                         delete rules.divisions[divName];
                         rules.priorityList = rules.priorityList.filter(d => d !== divName);
                     } else {
                         rules.divisions[divName] = [];
-                        if(!rules.priorityList.includes(divName)) rules.priorityList.push(divName);
+                        if (!rules.priorityList.includes(divName)) rules.priorityList.push(divName);
                     }
+                    item.limitUsage = rules;
                     saveData();
                     renderContent();
                     updateSummary();
@@ -1437,7 +1373,110 @@ function renderAccess(item){
             });
 
             body.appendChild(chipWrap);
+
+            const allowedCount = Object.keys(rules.divisions).length;
+            if (allowedCount === 0) {
+                const warn = document.createElement("div");
+                warn.style.cssText = "color:#DC2626; font-size:0.8rem; padding:8px; background:#FEF2F2; border-radius:6px; margin-top:4px;";
+                warn.textContent = "⚠ No grades selected — no bunks will be able to use this field.";
+                body.appendChild(warn);
+            }
+
             container.appendChild(body);
+        }
+
+        // ── STEP 3: Priority Order ──
+        const availableGrades = rules.enabled ? Object.keys(rules.divisions) : allDivs;
+
+        if (availableGrades.length >= 2) {
+            const prioritySection = document.createElement("div");
+            prioritySection.style.cssText = "border:1px solid #E5E7EB; border-radius:10px; padding:14px; background:#FAFAFA;";
+
+            const priToggleRow = document.createElement("div");
+            priToggleRow.style.cssText = "display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;";
+            
+            const priLabel = document.createElement("span");
+            priLabel.style.cssText = "font-weight:600; font-size:0.9rem;";
+            priLabel.textContent = "Priority Order";
+            
+            const priTog = document.createElement("label"); priTog.className = "switch";
+            const priCb = document.createElement("input"); priCb.type = "checkbox";
+            priCb.checked = rules.usePriority === true;
+            priCb.onchange = () => {
+                rules.usePriority = priCb.checked;
+                if (priCb.checked && rules.priorityList.length === 0) {
+                    rules.priorityList = [...availableGrades];
+                }
+                item.limitUsage = rules;
+                saveData(); renderContent(); updateSummary();
+            };
+            const priSl = document.createElement("span"); priSl.className = "slider";
+            priTog.appendChild(priCb); priTog.appendChild(priSl);
+
+            priToggleRow.appendChild(priLabel);
+            priToggleRow.appendChild(priTog);
+            prioritySection.appendChild(priToggleRow);
+
+            const priDesc = document.createElement("div");
+            priDesc.style.cssText = "font-size:0.8rem; color:#6B7280; margin-bottom:10px;";
+            priDesc.textContent = rules.usePriority 
+                ? "Grades higher in the list get first access when scheduling." 
+                : "Generator assigns grades freely with no preference.";
+            prioritySection.appendChild(priDesc);
+
+            if (rules.usePriority) {
+                const validPriority = rules.priorityList.filter(d => availableGrades.includes(d));
+                const missing = availableGrades.filter(d => !validPriority.includes(d));
+                rules.priorityList = [...validPriority, ...missing];
+
+                const listEl = document.createElement("div");
+                listEl.style.cssText = "display:flex; flex-direction:column; gap:4px;";
+
+                rules.priorityList.forEach((divName, idx) => {
+                    const row = document.createElement("div");
+                    row.style.cssText = "display:flex; align-items:center; gap:8px; padding:6px 10px; background:#fff; border:1px solid #E5E7EB; border-radius:6px;";
+                    
+                    const num = document.createElement("span");
+                    num.style.cssText = "width:20px; text-align:center; font-weight:600; color:#10B981; font-size:0.85rem;";
+                    num.textContent = idx + 1;
+                    
+                    const nameEl = document.createElement("span");
+                    nameEl.style.cssText = "flex:1; font-size:0.85rem;";
+                    nameEl.textContent = divName;
+
+                    const btnUp = document.createElement("button");
+                    btnUp.textContent = "↑";
+                    btnUp.style.cssText = "border:1px solid #D1D5DB; background:#fff; border-radius:4px; width:24px; height:24px; cursor:pointer; font-size:0.8rem;";
+                    btnUp.disabled = idx === 0;
+                    if (idx === 0) btnUp.style.opacity = "0.3";
+                    btnUp.onclick = () => {
+                        [rules.priorityList[idx - 1], rules.priorityList[idx]] = [rules.priorityList[idx], rules.priorityList[idx - 1]];
+                        item.limitUsage = rules;
+                        saveData(); renderContent(); updateSummary();
+                    };
+
+                    const btnDown = document.createElement("button");
+                    btnDown.textContent = "↓";
+                    btnDown.style.cssText = "border:1px solid #D1D5DB; background:#fff; border-radius:4px; width:24px; height:24px; cursor:pointer; font-size:0.8rem;";
+                    btnDown.disabled = idx === rules.priorityList.length - 1;
+                    if (idx === rules.priorityList.length - 1) btnDown.style.opacity = "0.3";
+                    btnDown.onclick = () => {
+                        [rules.priorityList[idx], rules.priorityList[idx + 1]] = [rules.priorityList[idx + 1], rules.priorityList[idx]];
+                        item.limitUsage = rules;
+                        saveData(); renderContent(); updateSummary();
+                    };
+
+                    row.appendChild(num);
+                    row.appendChild(nameEl);
+                    row.appendChild(btnUp);
+                    row.appendChild(btnDown);
+                    listEl.appendChild(row);
+                });
+
+                prioritySection.appendChild(listEl);
+            }
+
+            container.appendChild(prioritySection);
         }
     };
 
@@ -1666,7 +1705,7 @@ function addField(){
         activities: [],
         available: true,
         sharableWith: { type:'not_sharable', divisions:[], capacity:1 },
-        limitUsage: { enabled:false, divisions:{}, priorityList:[] },
+        limitUsage: { enabled:false, divisions:{}, priorityList:[], usePriority: false },
         timeRules: [],
         rainyDayAvailable: false
     });
@@ -1729,7 +1768,12 @@ window.refreshActivityPropertiesFromFields = function() {
             available: f.available !== false,
             sharable: normalizedShareable.type !== 'not_sharable',
             sharableWith: normalizedShareable,
-            limitUsage: f.limitUsage || null,
+            limitUsage: f.limitUsage ? {
+                enabled: f.limitUsage.enabled === true,
+                divisions: f.limitUsage.divisions || {},
+                priorityList: f.limitUsage.priorityList || [],
+                usePriority: f.limitUsage.usePriority === true
+            } : null,
             timeRules: Array.isArray(f.timeRules) ? f.timeRules : [],
             rainyDayAvailable: f.rainyDayAvailable === true,
             activities: Array.isArray(f.activities) ? f.activities : []
