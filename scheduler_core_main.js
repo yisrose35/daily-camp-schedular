@@ -239,10 +239,17 @@
     }
 
     function getLocationForPinnedEvent(skeletonEvent) {
+        // 1. Direct location on skeleton item
         if (skeletonEvent.location) {
             return skeletonEvent.location;
         }
-        return getLocationForActivity(skeletonEvent.event);
+        // 2. Special activity with assigned location
+        const specialLoc = getLocationForActivity(skeletonEvent.event);
+        if (specialLoc) return specialLoc;
+        // 3. ★ v17.11: Pinned tile default location (Snacks→Lunchroom, Lunch→Lunchroom, etc.)
+        const pinnedDefault = window.getPinnedTileDefaultLocation?.(skeletonEvent.event);
+        if (pinnedDefault) return pinnedDefault;
+        return null;
     }
 
     // --- SCHEDULER API EXPORTS ---
