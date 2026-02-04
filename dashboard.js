@@ -90,8 +90,8 @@
             const { data: { session } } = await window.supabase.auth.getSession();
             
             if (!session?.user) {
-                console.log('No session, redirecting to landing');
-                window.location.href = 'landing.html';
+               console.log('No session, redirecting to login');
+                window.location.href = 'index.html';
                 return;
             }
             
