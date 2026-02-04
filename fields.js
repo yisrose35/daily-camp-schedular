@@ -1522,9 +1522,13 @@ function renderTimeRules(item){
         container.innerHTML = `<div class="muted" style="font-size:0.8rem; margin-bottom:10px;">No specific time rules (Available all day).</div>`;
     }
 
-    // Add New
+    // Add New — ★ v3.1: With division restriction selector
+    const addSection = document.createElement("div");
+    addSection.style.cssText = "margin-top:12px; padding-top:12px; border-top:1px dashed #E5E7EB;";
+
+    // Row 1: Type, Start, End
     const addRow = document.createElement("div");
-    addRow.style.display="flex"; addRow.style.gap="8px"; addRow.style.marginTop="12px"; addRow.style.paddingTop="12px"; addRow.style.borderTop="1px dashed #E5E7EB"; addRow.style.flexWrap="wrap"; addRow.style.alignItems="center";
+    addRow.style.cssText = "display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px;";
     
     const typeSel = document.createElement("select");
     typeSel.innerHTML = `<option>Available</option><option>Unavailable</option>`;
@@ -1537,7 +1541,73 @@ function renderTimeRules(item){
     const endIn = document.createElement("input"); 
     endIn.placeholder="10:00am"; 
     endIn.style.width="70px"; endIn.style.padding="4px"; endIn.style.borderRadius="6px"; endIn.style.border="1px solid #D1D5DB";
+
+    addRow.appendChild(typeSel);
+    addRow.appendChild(startIn);
+    addRow.appendChild(document.createTextNode(" to "));
+    addRow.appendChild(endIn);
+    addSection.appendChild(addRow);
+
+    // Row 2: Division restrictions — ★ v3.1 NEW
+    const divRow = document.createElement("div");
+    divRow.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap;";
     
+    const divLabel = document.createElement("span");
+    divLabel.style.cssText = "font-size:0.8rem; color:#6B7280; white-space:nowrap;";
+    divLabel.textContent = "Applies to:";
+    divRow.appendChild(divLabel);
+
+    const allGradesBtn = document.createElement("button");
+    allGradesBtn.textContent = "All Grades";
+    allGradesBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #10B981; background:#ECFDF5; color:#047857; font-size:0.8rem; cursor:pointer; font-weight:600;";
+
+    const specificBtn = document.createElement("button");
+    specificBtn.textContent = "Specific Grades";
+    specificBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #E5E7EB; background:#fff; color:#333; font-size:0.8rem; cursor:pointer;";
+
+    let selectedDivisions = [];
+
+    const divChipsWrap = document.createElement("div");
+    divChipsWrap.style.cssText = "display:none; flex-wrap:wrap; gap:4px; margin-top:6px; margin-bottom:8px; width:100%;";
+
+    const allDivs = window.availableDivisions || Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+
+    function rebuildDivChips() {
+        divChipsWrap.innerHTML = "";
+        allDivs.forEach(d => {
+            const isActive = selectedDivisions.includes(d);
+            const c = document.createElement("span");
+            c.className = "chip " + (isActive ? "active" : "inactive");
+            c.textContent = d;
+            c.onclick = () => {
+                if (isActive) selectedDivisions = selectedDivisions.filter(x => x !== d);
+                else selectedDivisions.push(d);
+                rebuildDivChips();
+            };
+            divChipsWrap.appendChild(c);
+        });
+    }
+
+    allGradesBtn.onclick = () => {
+        selectedDivisions = [];
+        allGradesBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #10B981; background:#ECFDF5; color:#047857; font-size:0.8rem; cursor:pointer; font-weight:600;";
+        specificBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #E5E7EB; background:#fff; color:#333; font-size:0.8rem; cursor:pointer;";
+        divChipsWrap.style.display = "none";
+    };
+
+    specificBtn.onclick = () => {
+        specificBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #10B981; background:#ECFDF5; color:#047857; font-size:0.8rem; cursor:pointer; font-weight:600;";
+        allGradesBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #E5E7EB; background:#fff; color:#333; font-size:0.8rem; cursor:pointer;";
+        divChipsWrap.style.display = "flex";
+        rebuildDivChips();
+    };
+
+    divRow.appendChild(allGradesBtn);
+    divRow.appendChild(specificBtn);
+    addSection.appendChild(divRow);
+    addSection.appendChild(divChipsWrap);
+
+    // Add button
     const btn = document.createElement("button");
     btn.textContent="Add"; 
     btn.style.background="#111"; btn.style.color="white"; btn.style.border="none"; btn.style.borderRadius="6px"; btn.style.padding="4px 12px"; btn.style.cursor="pointer";
@@ -1557,25 +1627,24 @@ function renderTimeRules(item){
             alert("Invalid End Time format. Use format like 10:00am"); 
             return; 
         }
-        // ★★★ Save with pre-parsed minutes ★★★
-        item.timeRules.push({ 
+        // ★★★ Save with pre-parsed minutes + optional division restrictions ★★★
+        const newRule = { 
             type: typeSel.value, 
             start: startIn.value, 
             end: endIn.value,
             startMin: startMinParsed,
             endMin: endMinParsed
-        });
+        };
+        if (selectedDivisions.length > 0) {
+            newRule.divisions = [...selectedDivisions];
+        }
+        item.timeRules.push(newRule);
         saveData();
         renderDetailPane();
     };
 
-    addRow.appendChild(typeSel);
-    addRow.appendChild(startIn);
-    addRow.appendChild(document.createTextNode(" to "));
-    addRow.appendChild(endIn);
-    addRow.appendChild(btn);
-    
-    container.appendChild(addRow);
+    addSection.appendChild(btn);
+    container.appendChild(addSection);
     return container;
 }
 
