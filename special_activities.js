@@ -331,6 +331,7 @@ function createDefaultActivity(name) {
         maxUsage: null,
         frequencyWeeks: 0,
         rainyDayExclusive: false,
+        location: null, // ★ v2.5: Field/location this activity takes place on
         // ★ v2.3: Default special activities to indoor (typically arts, canteen, etc.)
         isIndoor: true,
         rainyDayAvailable: true,
