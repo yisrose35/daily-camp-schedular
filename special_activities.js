@@ -39,7 +39,7 @@
 (function() {
 'use strict';
 
-console.log("[SPECIAL_ACTIVITIES] Module v2.4 loading...");
+console.log("[SPECIAL_ACTIVITIES] Module v3.0 loading...");
 
 // =========================================================================
 // STATE - Internal variables
@@ -2099,6 +2099,6 @@ window.diagnoseSpecialActivities = function() {
     return { activities: storedActivities.length, issues: issues.length };
 };
 
-console.log("[SPECIAL_ACTIVITIES] Module v2.4 loaded");
+console.log("[SPECIAL_ACTIVITIES] Module v3.0 loaded");
 
 })();
