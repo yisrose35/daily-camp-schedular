@@ -676,7 +676,7 @@
                 } else {
                     console.log(`[SmartTile] ${bunk} -> DIRECT FILL: ${activityLabel}`);
 
-                    window.fillBlock({
+                   window.fillBlock({
                         divName,
                         bunk,
                         startTime: startMin,
@@ -688,6 +688,17 @@
                         _fixed: true,
                         _activity: activityLabel
                     }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+
+                    // ★ v17.11: Lock field if special activity has a location
+                    const smartLocName = getLocationForActivity(activityLabel);
+                    if (smartLocName && window.GlobalFieldLocks) {
+                        window.GlobalFieldLocks.lockField(smartLocName, slots, {
+                            lockedBy: 'smart_tile_special_location',
+                            division: divName,
+                            activity: `${activityLabel} (smart tile @ ${smartLocName})`
+                        });
+                        console.log(`[SmartTile] → Locked field "${smartLocName}" for "${activityLabel}"`);
+                    }
                 }
             }
 
