@@ -598,13 +598,14 @@ function saveData(){
                 usePriority: f.limitUsage?.usePriority === true
             },
             
-            // ★ Time rules - ensure array with parsed times
+            // ★ Time rules - ensure array with parsed times (v3.1: preserve divisions)
             timeRules: Array.isArray(f.timeRules) ? f.timeRules.map(r => ({
                 type: r.type || 'Available',
                 start: r.start || '',
                 end: r.end || '',
                 startMin: r.startMin ?? parseTimeToMinutes(r.start),
-                endMin: r.endMin ?? parseTimeToMinutes(r.end)
+                endMin: r.endMin ?? parseTimeToMinutes(r.end),
+                ...(r.divisions && r.divisions.length > 0 ? { divisions: [...r.divisions] } : {})
             })) : [],
             
             // ★ Indoor/Outdoor for rainy day
