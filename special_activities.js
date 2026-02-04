@@ -264,11 +264,16 @@ function validateSpecialActivity(activity, activityName) {
             });
         }
         
-        // ★ FIX: Ensure priorityList exists and is valid (like fields.js)
+       // ★ FIX: Ensure priorityList exists and is valid (like fields.js)
         if (!Array.isArray(limitUsage.priorityList)) {
             limitUsage.priorityList = Object.keys(limitUsage.divisions);
         } else if (validDivisions && validDivisions.size > 0) {
             limitUsage.priorityList = limitUsage.priorityList.filter(d => validDivisions.has(d));
+        }
+        
+        // ★★★ v3.0: Ensure usePriority exists ★★★
+        if (limitUsage.usePriority === undefined) {
+            limitUsage.usePriority = false;
         }
     }
     
