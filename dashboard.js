@@ -9,7 +9,7 @@
 //       FIXED - Prevent team members from creating camps
 //
 // Handles:
-// - Auth check (redirect to landing if not logged in)
+// - Auth check (redirect to index/login if not logged in)
 // - Load/display camp profile (for owners AND team members)
 // - Personalized welcome message with user name and camp name
 // - Show role badge for ALL users (owner, admin, scheduler, viewer)
