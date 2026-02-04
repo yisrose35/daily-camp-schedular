@@ -768,6 +768,14 @@
         const mySize = bunkMeta[block.bunk]?.size || 0;
         const myDivision = block.divName || Utils.getDivisionForBunk(block.bunk);
 
+        // ★★★ v7.7: Create division-filtered props for isTimeAvailable ★★★
+        const divFilteredProps = { ...effectiveProps };
+        if (divFilteredProps.timeRules && divFilteredProps.timeRules.length > 0) {
+            divFilteredProps.timeRules = divFilteredProps.timeRules.filter(r =>
+                !r.divisions || r.divisions.length === 0 || r.divisions.includes(myDivision)
+            );
+        }
+
         for (const idx of uniqueSlots) {
             const trackedUsage = getFieldUsageAtSlot(idx, fieldName, fieldUsageBySlot);
             const scheduleUsage = getScheduleUsageAtSlot(idx, fieldName);
