@@ -318,9 +318,15 @@
             // 5. Calculate capacity from special_activities.js / fields.js
             let capacity = 1; // Default
             
-            if (props.sharableWith?.capacity) {
+            if (props.sharableWith?.type === 'same_division') {
+                capacity = parseInt(props.sharableWith.capacity) || 2;
+            } else if (props.sharableWith?.type === 'all') {
+                capacity = parseInt(props.sharableWith.capacity) || 999;
+            } else if (props.sharableWith?.type === 'custom') {
+                capacity = parseInt(props.sharableWith.capacity) || 2;
+            } else if (props.sharableWith?.capacity) {
                 capacity = parseInt(props.sharableWith.capacity) || 1;
-            } else if (props.sharableWith?.type === 'all' || props.sharable) {
+            } else if (props.sharable) {
                 capacity = 2;
             }
 
