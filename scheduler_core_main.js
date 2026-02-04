@@ -1513,6 +1513,17 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     });
                     
                     console.log(`[SKELETON] ✅ Filled pinned "${eventName}" for ${divName} (${bunkList.length} bunks)`);
+
+                    // ★ v17.11: Lock physical location if pinned event uses one
+                    const pinnedLocName = getLocationForPinnedEvent(item);
+                    if (pinnedLocName && window.GlobalFieldLocks) {
+                        window.GlobalFieldLocks.lockField(pinnedLocName, slots, {
+                            lockedBy: 'pinned_event_location',
+                            division: divName,
+                            activity: `${eventName} (pinned @ ${pinnedLocName})`
+                        });
+                        console.log(`[SKELETON] 🔒 Locked "${pinnedLocName}" for pinned "${eventName}" in ${divName}`);
+                    }
                 }
                 return; // Done with this item
             }
