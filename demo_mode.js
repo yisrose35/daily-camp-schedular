@@ -407,25 +407,45 @@
     };
 
     // =========================================================================
-    // 9. INSTALL MOCK — set `window.supabase` BEFORE the CDN would load
+    // 9. INSTALL MOCK — protect window.supabase so the CDN can't overwrite it
     // =========================================================================
+    //
+    // The Supabase CDN <script> tag stays as-is in the HTML (no document.write).
+    // We use Object.defineProperty so that:
+    //   - Our mock is returned when anything reads `window.supabase`
+    //   - The CDN's attempt to set `window.supabase = factory` is silently ignored
+    //   - supabase_client.js's `window.supabase = _client` is accepted (it's our mock)
+    //
+    // When offline at the expo, the CDN script fails to load (harmless console
+    // error) but the mock is already in place so the app works perfectly.
+    //
 
-    // This object mimics what the Supabase CDN normally creates.
-    // supabase_client.js checks: typeof supabase.createClient === 'function'
-    window.supabase = {
+    let _demoSupabase = {
         createClient(url, key, opts) {
             console.log('🎭 [Demo] Mock Supabase client created (offline mode)');
-            // After supabase_client.js calls createClient, it sets
-            // window.supabase = _client, which will be our MOCK_CLIENT.
+            // After this, supabase_client.js sets window.supabase = _client
+            // which triggers our setter below with the MOCK_CLIENT value.
             return MOCK_CLIENT;
         }
     };
 
-    // Also mock the `supabase` global that the CDN would set
-    // (some code references it without `window.`)
-    if (typeof globalThis !== 'undefined') {
-        globalThis.supabase = window.supabase;
-    }
+    Object.defineProperty(window, 'supabase', {
+        configurable: true,
+        enumerable: true,
+        get() {
+            return _demoSupabase;
+        },
+        set(val) {
+            // Accept writes that look like an initialized client (from supabase_client.js)
+            // These have .auth (object) and .from (function) — i.e. MOCK_CLIENT
+            if (val && typeof val.auth === 'object' && typeof val.from === 'function') {
+                _demoSupabase = val;
+                return;
+            }
+            // Silently ignore everything else (CDN trying to overwrite with factory)
+            console.log('🎭 [Demo] Blocked CDN overwrite of window.supabase');
+        }
+    });
 
     // =========================================================================
     // 10. INTERCEPT fetch() FOR SUPABASE REST CALLS (rawQuery uses fetch)
