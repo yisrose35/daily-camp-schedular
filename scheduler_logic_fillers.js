@@ -720,11 +720,20 @@
             return true;
         });
 
-        specials.forEach(special => {
+       specials.forEach(special => {
             const actName = special.name;
             const fieldName = fieldLabel(actName);
 
             if (isFieldUnavailable(fieldName, block)) return;
+
+            // ★ v6.5: Skip special if its assigned location/field is already locked
+            const specialLocation = window.getLocationForActivity?.(actName);
+            if (specialLocation) {
+                const locSlots = block.slots || [];
+                const divCtx = block.divName || block.division;
+                if (window.GlobalFieldLocks?.isFieldLocked(specialLocation, locSlots, divCtx)) return;
+            }
+
             if (doneToday.has((actName || '').toLowerCase().trim())) return;
 
             if (!canShareWithActivity(fieldName, block, actName, activityProperties)) return;
