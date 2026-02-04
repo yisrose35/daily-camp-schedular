@@ -711,11 +711,20 @@
                 const availableRules = effectiveProps.timeRules.filter(r => r.type === 'Available' || r.available === true);
                 const unavailableRules = effectiveProps.timeRules.filter(r => r.type === 'Unavailable' || r.available === false);
                 
-                // If there are "Available" rules, block must be WITHIN at least one
-                if (availableRules.length > 0) {
+                // ★★★ v7.7: Filter rules by division applicability ★★★
+                const blockDivision = block.divName;
+                const applicableAvailableRules = availableRules.filter(r =>
+                    !r.divisions || r.divisions.length === 0 || r.divisions.includes(blockDivision)
+                );
+                const applicableUnavailableRules = unavailableRules.filter(r =>
+                    !r.divisions || r.divisions.length === 0 || r.divisions.includes(blockDivision)
+                );
+                
+                // If there are applicable "Available" rules, block must be WITHIN at least one
+                if (applicableAvailableRules.length > 0) {
                     let withinAvailable = false;
                     
-                    for (const rule of availableRules) {
+                    for (const rule of applicableAvailableRules) {
                         const ruleStart = rule.startMin ?? Utils.parseTimeToMinutes(rule.startTime || rule.start);
                         const ruleEnd = rule.endMin ?? Utils.parseTimeToMinutes(rule.endTime || rule.end);
                         
@@ -729,13 +738,13 @@
                     }
                     
                     if (!withinAvailable) {
-                        if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - not within any Available time window`);
+                        if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - not within any Available time window for division ${blockDivision}`);
                         return false;
                     }
                 }
                 
-                // Check "Unavailable" rules - block must NOT overlap
-                for (const rule of unavailableRules) {
+                // Check applicable "Unavailable" rules - block must NOT overlap
+                for (const rule of applicableUnavailableRules) {
                     const ruleStart = rule.startMin ?? Utils.parseTimeToMinutes(rule.startTime || rule.start);
                     const ruleEnd = rule.endMin ?? Utils.parseTimeToMinutes(rule.endTime || rule.end);
                     
