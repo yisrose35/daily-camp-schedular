@@ -40,6 +40,7 @@ let detailPaneEl = null;
 let addZoneInput = null;
 let _isInitialized = false;
 let _refreshTimeout = null;
+let _selectedPinnedLocation = { name: '', displayName: '' };  // ★ FIX: Custom dropdown state
 
 // ★ FIX: Track active event listeners for cleanup (with target info)
 let activeEventListeners = [];
@@ -49,7 +50,7 @@ let activeEventListeners = [];
 // =========================================================================
 function cleanupDropdownPanels() {
     // Remove any orphaned dropdown panels from body
-    const existingPanels = document.querySelectorAll('.multi-select-options');
+    const existingPanels = document.querySelectorAll('.multi-select-options, .pinned-loc-options');
     existingPanels.forEach(p => p.remove());
     
     // Remove tracked event listeners (handle both window and document targets)
@@ -461,22 +462,71 @@ function initLocationsTab(){
             transition: border-color 0.15s, box-shadow 0.15s;
         }
         .form-input:focus { outline: none; border-color: #10B981; box-shadow: 0 0 0 3px rgba(16,185,129,0.15); }
-       /* Select dropdown visibility fix */
-        select.form-input {
-            color: #111827 !important;
-            background-color: #FFFFFF !important;
-            cursor: pointer;
-            appearance: menulist !important;
-            -webkit-appearance: menulist !important;
-            -moz-appearance: auto !important;
-            min-height: 42px;
-        }
-        select.form-input option {
-            color: #111827 !important;
-            background-color: #FFFFFF !important;
-            padding: 6px 10px;
-        }
         .form-input-small { width: 80px; text-align: center; }
+
+        /* ★ Custom location picker for pinned tile defaults (replaces native <select>) */
+        .pinned-loc-picker { position: relative; }
+        .pinned-loc-trigger {
+            padding: 10px 14px;
+            border: 1px solid #D1D5DB;
+            border-radius: 10px;
+            background: #fff;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            min-height: 42px;
+            font-size: 0.9rem;
+            color: #111827;
+            transition: border-color 0.15s, box-shadow 0.15s;
+            user-select: none;
+        }
+        .pinned-loc-trigger:hover { border-color: #9CA3AF; }
+        .pinned-loc-trigger.open { border-color: #10B981; box-shadow: 0 0 0 3px rgba(16,185,129,0.15); }
+        .pinned-loc-trigger .ploc-placeholder { color: #9CA3AF; }
+        .pinned-loc-trigger .ploc-selected { color: #111827; font-weight: 500; }
+        .pinned-loc-options {
+            position: fixed;
+            z-index: 999999;
+            background: #fff;
+            border: 1px solid #E5E7EB;
+            border-radius: 12px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            overscroll-behavior: contain;
+            max-height: 260px;
+            box-shadow: 0 20px 50px rgba(15,23,42,0.2), 0 0 0 1px rgba(0,0,0,0.05);
+            display: none;
+        }
+        .pinned-loc-options.show { display: block; }
+        .pinned-loc-option {
+            padding: 10px 14px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            color: #111827;
+            border-bottom: 1px solid #F3F4F6;
+            transition: background 0.1s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .pinned-loc-option:last-child { border-bottom: none; }
+        .pinned-loc-option:hover { background: #F0FDF4; }
+        .pinned-loc-option.selected { background: #ECFDF5; color: #047857; font-weight: 500; }
+        .pinned-loc-option .ploc-zone-badge {
+            font-size: 0.7rem;
+            color: #6B7280;
+            background: #F3F4F6;
+            padding: 2px 8px;
+            border-radius: 999px;
+            margin-left: auto;
+        }
+        .pinned-loc-option-empty {
+            padding: 16px;
+            color: #9CA3AF;
+            text-align: center;
+            font-size: 0.85rem;
+        }
 
         /* Muted text */
         .muted { color: #6B7280; font-size: 0.85rem; }
@@ -516,7 +566,7 @@ function initLocationsTab(){
                   <div id="pinned-defaults-list" style="margin-bottom:12px;"></div>
                   <div style="display:flex; gap:8px; align-items:center;">
                     <input id="new-pinned-tile-input" class="form-input" placeholder="Tile name" style="flex:1;">
-                  <select id="new-pinned-tile-location" class="form-input" style="flex:1; color:#111827; background:#fff; -webkit-appearance:menulist;"></select>
+                    <div id="pinned-location-picker" class="pinned-loc-picker" style="flex:1;"></div>
                     <button id="add-pinned-default-btn" style="background:#10B981; color:white; border:none; border-radius:8px; padding:8px 12px; cursor:pointer; font-size:0.85rem;">Add</button>
                   </div>
                 </div>
@@ -1399,22 +1449,28 @@ function addZone(){
 
 //------------------------------------------------------------------
 // PINNED TILE DEFAULTS (Hub for managing default locations)
+// ★ REWRITTEN: Uses custom dropdown instead of native <select>
 //------------------------------------------------------------------
+let _pinnedLocOptionsPanel = null;  // Track the body-appended options panel
+
 function initPinnedTileDefaultsSection(){
     const listEl = document.getElementById("pinned-defaults-list");
     const tileInput = document.getElementById("new-pinned-tile-input");
-    const locationSelect = document.getElementById("new-pinned-tile-location");
+    const pickerContainer = document.getElementById("pinned-location-picker");
     const addBtn = document.getElementById("add-pinned-default-btn");
     
-    if(!listEl || !tileInput || !locationSelect || !addBtn) return;
+    if(!listEl || !tileInput || !pickerContainer || !addBtn) return;
     
-    // Populate location dropdown
-    populateLocationDropdown(locationSelect);
+    // Reset selected location
+    _selectedPinnedLocation = { name: '', displayName: '' };
+    
+    // Build custom location picker
+    buildPinnedLocationPicker(pickerContainer);
     
     // Add button handler
     addBtn.onclick = () => {
         const tileName = tileInput.value.trim();
-        const location = locationSelect.value;
+        const location = _selectedPinnedLocation.name;
         
         if(!tileName){
             alert("Please enter a tile name (e.g., Lunch, Swim, Assembly)");
@@ -1428,7 +1484,10 @@ function initPinnedTileDefaultsSection(){
         pinnedTileDefaults[tileName] = location;
         saveData();
         tileInput.value = "";
+        _selectedPinnedLocation = { name: '', displayName: '' };
         renderPinnedTileDefaults();
+        // Re-render the picker trigger to show placeholder again
+        updatePinnedPickerTrigger();
     };
     
     tileInput.onkeyup = (e) => { if(e.key === "Enter") addBtn.click(); };
@@ -1437,29 +1496,175 @@ function initPinnedTileDefaultsSection(){
     renderPinnedTileDefaults();
 }
 
-function populateLocationDropdown(selectEl){
-    if (!selectEl) return;
+function buildPinnedLocationPicker(pickerContainer) {
+    pickerContainer.innerHTML = '';
     
-    selectEl.innerHTML = '<option value="">-- Select Location --</option>';
+    // Create trigger
+    const trigger = document.createElement('div');
+    trigger.className = 'pinned-loc-trigger';
+    trigger.id = 'pinned-loc-trigger';
+    
+    const labelSpan = document.createElement('span');
+    labelSpan.id = 'pinned-loc-label';
+    labelSpan.className = 'ploc-placeholder';
+    labelSpan.textContent = '-- Select Location --';
+    trigger.appendChild(labelSpan);
+    
+    const chevron = document.createElement('span');
+    chevron.innerHTML = `<svg width="16" height="16" fill="none" stroke="#9CA3AF" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>`;
+    trigger.appendChild(chevron);
+    
+    pickerContainer.appendChild(trigger);
+    
+    // Create options panel (appended to body to escape overflow)
+    if (_pinnedLocOptionsPanel) {
+        _pinnedLocOptionsPanel.remove();
+    }
+    const optionsPanel = document.createElement('div');
+    optionsPanel.className = 'pinned-loc-options';
+    optionsPanel.id = 'pinned-loc-options';
+    document.body.appendChild(optionsPanel);
+    _pinnedLocOptionsPanel = optionsPanel;
+    
+    // Populate options
+    renderPinnedLocationOptions(optionsPanel);
+    
+    // Position helper
+    const positionPanel = () => {
+        const rect = trigger.getBoundingClientRect();
+        const viewportHeight = window.innerHeight;
+        const spaceBelow = viewportHeight - rect.bottom - 20;
+        const spaceAbove = rect.top - 20;
+        
+        if (spaceBelow >= 120 || spaceBelow >= spaceAbove) {
+            optionsPanel.style.top = (rect.bottom + 4) + 'px';
+            optionsPanel.style.bottom = 'auto';
+            optionsPanel.style.maxHeight = Math.min(260, spaceBelow) + 'px';
+        } else {
+            optionsPanel.style.bottom = (viewportHeight - rect.top + 4) + 'px';
+            optionsPanel.style.top = 'auto';
+            optionsPanel.style.maxHeight = Math.min(260, spaceAbove) + 'px';
+        }
+        
+        optionsPanel.style.left = rect.left + 'px';
+        optionsPanel.style.width = Math.max(rect.width, 220) + 'px';
+    };
+    
+    // Toggle
+    trigger.onclick = () => {
+        const isOpen = optionsPanel.classList.contains('show');
+        if (!isOpen) {
+            // Refresh options in case locations changed
+            renderPinnedLocationOptions(optionsPanel);
+            positionPanel();
+        }
+        optionsPanel.classList.toggle('show');
+        trigger.classList.toggle('open');
+    };
+    
+    // Reposition on scroll/resize
+    const repositionHandler = () => {
+        if (optionsPanel.classList.contains('show')) {
+            positionPanel();
+        }
+    };
+    window.addEventListener('scroll', repositionHandler, true);
+    window.addEventListener('resize', repositionHandler);
+    activeEventListeners.push({ type: 'scroll', handler: repositionHandler, options: true, target: window });
+    activeEventListeners.push({ type: 'resize', handler: repositionHandler, options: undefined, target: window });
+    
+    // Close on outside click
+    const closeHandler = (e) => {
+        if (!pickerContainer.contains(e.target) && !optionsPanel.contains(e.target)) {
+            optionsPanel.classList.remove('show');
+            trigger.classList.remove('open');
+        }
+    };
+    document.addEventListener('click', closeHandler);
+    activeEventListeners.push({ type: 'click', handler: closeHandler, options: undefined, target: document });
+}
+
+function renderPinnedLocationOptions(optionsPanel) {
+    if (!optionsPanel) return;
+    optionsPanel.innerHTML = '';
     
     const allLocations = window.getAllLocations?.() || [];
     
+    if (allLocations.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'pinned-loc-option-empty';
+        empty.textContent = 'No locations created yet. Add locations inside a zone first.';
+        optionsPanel.appendChild(empty);
+        return;
+    }
+    
+    // Group by zone
+    const byZone = {};
     allLocations.forEach(loc => {
-        const opt = document.createElement('option');
-        opt.value = loc.name;
-        opt.textContent = loc.displayName;
-        selectEl.appendChild(opt);
+        if (!byZone[loc.zone]) byZone[loc.zone] = [];
+        byZone[loc.zone].push(loc);
     });
+    
+    Object.entries(byZone).forEach(([zoneName, locs]) => {
+        // Zone header
+        const header = document.createElement('div');
+        header.style.cssText = 'padding:8px 14px; background:#F9FAFB; border-bottom:1px solid #E5E7EB; font-size:0.75rem; font-weight:600; color:#6B7280; text-transform:uppercase; letter-spacing:0.03em; position:sticky; top:0; z-index:1;';
+        header.textContent = `🏢 ${zoneName}`;
+        optionsPanel.appendChild(header);
+        
+        locs.forEach(loc => {
+            const option = document.createElement('div');
+            option.className = 'pinned-loc-option' + (_selectedPinnedLocation.name === loc.name ? ' selected' : '');
+            
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = loc.name;
+            nameSpan.style.color = '#111827';
+            option.appendChild(nameSpan);
+            
+            const zoneBadge = document.createElement('span');
+            zoneBadge.className = 'ploc-zone-badge';
+            zoneBadge.textContent = zoneName;
+            option.appendChild(zoneBadge);
+            
+            option.onclick = (e) => {
+                e.stopPropagation();
+                _selectedPinnedLocation = { name: loc.name, displayName: loc.displayName };
+                updatePinnedPickerTrigger();
+                // Close panel
+                optionsPanel.classList.remove('show');
+                const trigger = document.getElementById('pinned-loc-trigger');
+                if (trigger) trigger.classList.remove('open');
+                // Re-render to update selected state
+                renderPinnedLocationOptions(optionsPanel);
+            };
+            
+            optionsPanel.appendChild(option);
+        });
+    });
+}
+
+function updatePinnedPickerTrigger() {
+    const labelEl = document.getElementById('pinned-loc-label');
+    if (!labelEl) return;
+    
+    if (_selectedPinnedLocation.name) {
+        labelEl.textContent = _selectedPinnedLocation.displayName || _selectedPinnedLocation.name;
+        labelEl.className = 'ploc-selected';
+    } else {
+        labelEl.textContent = '-- Select Location --';
+        labelEl.className = 'ploc-placeholder';
+    }
 }
 
 function renderPinnedTileDefaults(){
     const listEl = document.getElementById("pinned-defaults-list");
-    const locationSelect = document.getElementById("new-pinned-tile-location");
     
     if(!listEl) return;
     
-    // Refresh dropdown options
-    if(locationSelect) populateLocationDropdown(locationSelect);
+    // ★ Refresh the custom picker options (in case locations changed)
+    if (_pinnedLocOptionsPanel) {
+        renderPinnedLocationOptions(_pinnedLocOptionsPanel);
+    }
     
     const entries = Object.entries(pinnedTileDefaults);
     
@@ -1669,6 +1874,11 @@ window.refreshPinnedTileDefaultsUI = renderPinnedTileDefaults;
 
 // ★ FIX: Export cleanup function
 window.cleanupLocationsModule = function() {
+    // Also cleanup the pinned location options panel
+    if (_pinnedLocOptionsPanel) {
+        _pinnedLocOptionsPanel.remove();
+        _pinnedLocOptionsPanel = null;
+    }
     cleanupDropdownPanels();
     cleanupTabListeners();
     _isInitialized = false;
