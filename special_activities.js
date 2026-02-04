@@ -1282,13 +1282,13 @@ function renderTimeRules(item) {
             });
         }
 
-        // Add New Rule
+        // Add New Rule — ★ v3.1: With division restriction selector
+        const addSection = document.createElement("div");
+        addSection.style.cssText = "margin-top:12px;";
+
+        // Row 1: Type, Start, End
         const addRow = document.createElement("div");
-        addRow.style.display = "flex";
-        addRow.style.gap = "8px";
-        addRow.style.alignItems = "center";
-        addRow.style.flexWrap = "wrap";
-        addRow.style.marginTop = "12px";
+        addRow.style.cssText = "display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;";
 
         const typeSel = document.createElement("select");
         typeSel.innerHTML = `<option value="Available">Available</option><option value="Unavailable">Unavailable</option>`;
@@ -1304,6 +1304,72 @@ function renderTimeRules(item) {
         endIn.placeholder = "10:00am";
         endIn.style.cssText = "width:80px; padding:6px; border:1px solid #E5E7EB; border-radius:4px;";
 
+        addRow.appendChild(typeSel);
+        addRow.appendChild(startIn);
+        addRow.appendChild(document.createTextNode(" to "));
+        addRow.appendChild(endIn);
+        addSection.appendChild(addRow);
+
+        // Row 2: Division restrictions — ★ v3.1 NEW
+        const divRow = document.createElement("div");
+        divRow.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap;";
+
+        const divLabel = document.createElement("span");
+        divLabel.style.cssText = "font-size:0.8rem; color:#6B7280; white-space:nowrap;";
+        divLabel.textContent = "Applies to:";
+        divRow.appendChild(divLabel);
+
+        const allGradesBtn = document.createElement("button");
+        allGradesBtn.textContent = "All Grades";
+        allGradesBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #10B981; background:#ECFDF5; color:#047857; font-size:0.8rem; cursor:pointer; font-weight:600;";
+
+        const specificBtn = document.createElement("button");
+        specificBtn.textContent = "Specific Grades";
+        specificBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #E5E7EB; background:#fff; color:#333; font-size:0.8rem; cursor:pointer;";
+
+        let selectedDivisions = [];
+
+        const divChipsWrap = document.createElement("div");
+        divChipsWrap.style.cssText = "display:none; flex-wrap:wrap; gap:4px; margin-top:6px; margin-bottom:8px; width:100%;";
+
+        const allDivs = window.availableDivisions || Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+
+        function rebuildDivChips() {
+            divChipsWrap.innerHTML = "";
+            allDivs.forEach(d => {
+                const isActive = selectedDivisions.includes(d);
+                const c = document.createElement("span");
+                c.className = "chip " + (isActive ? "active" : "inactive");
+                c.textContent = d;
+                c.onclick = () => {
+                    if (isActive) selectedDivisions = selectedDivisions.filter(x => x !== d);
+                    else selectedDivisions.push(d);
+                    rebuildDivChips();
+                };
+                divChipsWrap.appendChild(c);
+            });
+        }
+
+        allGradesBtn.onclick = () => {
+            selectedDivisions = [];
+            allGradesBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #10B981; background:#ECFDF5; color:#047857; font-size:0.8rem; cursor:pointer; font-weight:600;";
+            specificBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #E5E7EB; background:#fff; color:#333; font-size:0.8rem; cursor:pointer;";
+            divChipsWrap.style.display = "none";
+        };
+
+        specificBtn.onclick = () => {
+            specificBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #10B981; background:#ECFDF5; color:#047857; font-size:0.8rem; cursor:pointer; font-weight:600;";
+            allGradesBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #E5E7EB; background:#fff; color:#333; font-size:0.8rem; cursor:pointer;";
+            divChipsWrap.style.display = "flex";
+            rebuildDivChips();
+        };
+
+        divRow.appendChild(allGradesBtn);
+        divRow.appendChild(specificBtn);
+        addSection.appendChild(divRow);
+        addSection.appendChild(divChipsWrap);
+
+        // Add button
         const btn = document.createElement("button");
         btn.textContent = "+ Add";
         btn.style.cssText = "padding:6px 12px; background:#10B981; color:white; border:none; border-radius:4px; cursor:pointer;";
@@ -1326,25 +1392,25 @@ function renderTimeRules(item) {
                 alert("End time must be after start time.");
                 return;
             }
-            item.timeRules.push({
+            // ★★★ Save with optional division restrictions ★★★
+            const newRule = {
                 type: typeSel.value,
                 start: startIn.value,
                 end: endIn.value,
                 startMin: startMin,
                 endMin: endMin
-            });
+            };
+            if (selectedDivisions.length > 0) {
+                newRule.divisions = [...selectedDivisions];
+            }
+            item.timeRules.push(newRule);
             saveData();
             renderContent();
             updateSummary();
         };
 
-        addRow.appendChild(typeSel);
-        addRow.appendChild(startIn);
-        addRow.appendChild(document.createTextNode(" to "));
-        addRow.appendChild(endIn);
-        addRow.appendChild(btn);
-
-        container.appendChild(addRow);
+        addSection.appendChild(btn);
+        container.appendChild(addSection);
     };
 
     renderContent();
