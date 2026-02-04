@@ -1,5 +1,5 @@
 // ============================================================================
-// scheduler_core_utils.js (FIXED v7.5 - ENHANCED FIELD PROPERTY CHECKS)
+// scheduler_core_utils.js (FIXED v7.6 - ENHANCED FIELD PROPERTY CHECKS)
 //
 // PART 1: THE FOUNDATION & CONSOLIDATED UTILITIES
 //
@@ -484,14 +484,17 @@
     // =================================================================
     // ★★★ NEW: GET FIELD CAPACITY (SINGLE SOURCE OF TRUTH) ★★★
     // =================================================================
-    Utils.getFieldCapacity = function(fieldName, activityProperties) {
+   Utils.getFieldCapacity = function(fieldName, activityProperties) {
         const props = activityProperties?.[fieldName];
         if (!props) return 1;
         
-        // Check sharableWith config
+        // ★★★ v7.6: v3.0 sharing model ★★★
         if (props.sharableWith) {
-            // ★★★ FIX v7.5: type="all" means unlimited sharing ★★★
             if (props.sharableWith.type === 'all') return 999;
+            if (props.sharableWith.type === 'same_division') {
+                return parseInt(props.sharableWith.capacity) || 2;
+            }
+            if (props.sharableWith.type === 'not_sharable') return 1;
             if (props.sharableWith.type === 'custom') {
                 return parseInt(props.sharableWith.capacity) || 2;
             }
