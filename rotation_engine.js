@@ -141,7 +141,9 @@
 
     let _historyCache = new Map();
     let _historyCacheDate = null;
-
+// ★★★ v2.3: Activity-done-today cache ★★★
+var _todayActivityCache = new Map();
+var _todayCacheGeneration = 0;
     /**
      * Build comprehensive activity history for a bunk by scanning saved schedules
      * This is the KEY improvement - looks at REAL data
