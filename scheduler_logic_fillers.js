@@ -173,7 +173,7 @@
         if (props.sharableWith) {
             // ★★★ FIX: type='all' = unlimited (999) ★★★
             if (props.sharableWith.type === 'all') {
-                return 999;
+                return parseInt(props.sharableWith.capacity) || 999;
             }
             // type='custom' uses configured capacity
             if (props.sharableWith.type === 'custom') {
