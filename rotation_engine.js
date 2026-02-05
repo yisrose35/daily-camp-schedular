@@ -1,5 +1,5 @@
 // ============================================================================
-// rotation_engine.js - SUPERCHARGED ACTIVITY ROTATION SYSTEM v2.2
+// rotation_engine.js - SUPERCHARGED ACTIVITY ROTATION SYSTEM v2.3
 // ============================================================================
 // ★★★ SINGLE SOURCE OF TRUTH FOR ALL ROTATION LOGIC ★★★
 //
@@ -314,9 +314,11 @@ RotationEngine.invalidateBunkTodayCache = function(bunkName) {
      * Call this after schedule changes or at generation start
      */
     RotationEngine.rebuildAllHistory = function() {
-        console.log('[RotationEngine] Rebuilding all history...');
-        _historyCache.clear();
-        _historyCacheDate = null;
+    console.log('[RotationEngine] Rebuilding all history...');
+    _historyCache.clear();
+    _todayActivityCache.clear();
+    _historyCacheDate = null;
+    _todayCacheGeneration++;
         
         // Optionally pre-warm cache for all bunks
         const divisions = window.divisions || {};
