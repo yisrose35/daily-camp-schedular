@@ -814,7 +814,7 @@
             if (prefIdx !== -1) {
                 penalty -= (50 - prefIdx * 5);
             } else {
-                penalty += 2000;
+                penalty += 8000;
             }
         } else {
             var actPrefProps2 = activityProperties[act];
@@ -823,7 +823,7 @@
                 if (prefIdx2 !== -1) {
                     penalty -= (50 - prefIdx2 * 5);
                 } else {
-                    penalty += 2000;
+                    penalty += 8000;
                 }
             }
         }
