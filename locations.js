@@ -281,10 +281,10 @@ function initLocationsTab(){
         .list-item { padding: 12px 14px; border-bottom: 1px solid #F3F4F6; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background 0.15s; }
         .list-item:last-child { border-bottom: none; }
         .list-item:hover { background: #F9FAFB; }
-        .list-item.selected { background: #F0FDF4; border-left: 3px solid #10B981; }
+        .list-item.selected { background: #f0f9fb; border-left: 3px solid #147D91; }
         .list-item-name { font-weight: 500; color: #1F2937; font-size: 0.9rem; }
         .list-item-meta { font-size: 0.75rem; color: #6B7280; margin-left: 6px; }
-        .list-item-badge { font-size: 0.65rem; padding: 2px 8px; border-radius: 999px; background: #10B981; color: #fff; margin-left: 8px; font-weight: 500; }
+        .list-item-badge { font-size: 0.65rem; padding: 2px 8px; border-radius: 999px; background: #147D91; color: #fff; margin-left: 8px; font-weight: 500; }
 
         /* Accordion / Collapsible Sections - matches fields.js */
         .detail-section { margin-bottom: 12px; border: 1px solid #E5E7EB; border-radius: 12px; background: #fff; overflow: hidden; }
@@ -296,7 +296,7 @@ function initLocationsTab(){
 
         /* Chips - matches fields.js */
         .chip { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; cursor: pointer; border: 1px solid #E5E7EB; margin-right: 4px; margin-bottom: 4px; transition: all 0.2s; }
-        .chip.active { background: #10B981; color: white; border-color: #10B981; box-shadow: 0 2px 5px rgba(16, 185, 129, 0.3); }
+        .chip.active { background: #147D91; color: white; border-color: #147D91; box-shadow: 0 2px 5px rgba(20, 125, 145, 0.3); }
         .chip.inactive { background: #F3F4F6; color: #374151; }
         .chip:hover { transform: translateY(-1px); }
 
@@ -305,7 +305,7 @@ function initLocationsTab(){
         .switch input { opacity: 0; width: 0; height: 0; }
         .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
         .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
-        input:checked + .slider { background-color: #10B981; }
+        input:checked + .slider { background-color: #147D91; }
         input:checked + .slider:before { transform: translateX(14px); }
 
         /* Multi-select dropdown trigger */
@@ -326,11 +326,11 @@ function initLocationsTab(){
             transition: border-color 0.15s, box-shadow 0.15s;
         }
         .multi-select-trigger:hover { border-color: #9CA3AF; }
-        .multi-select-trigger.open { border-color: #10B981; box-shadow: 0 0 0 3px rgba(16,185,129,0.15); }
+        .multi-select-trigger.open { border-color: #147D91; box-shadow: 0 0 0 3px rgba(20, 125, 145, 0.15); }
         .multi-select-placeholder { color: #9CA3AF; font-size: 0.9rem; }
         .multi-select-tag { 
-            background: #ECFDF5; 
-            color: #047857; 
+            background: #e6f4f7; 
+            color: #0F5F6E; 
             padding: 4px 10px; 
             border-radius: 6px; 
             font-size: 0.8rem; 
@@ -338,7 +338,7 @@ function initLocationsTab(){
             display: inline-flex; 
             align-items: center; 
             gap: 6px;
-            border: 1px solid #A7F3D0;
+            border: 1px solid #b2dce6;
         }
         .multi-select-tag.special-tag {
             background: #FEF3C7;
@@ -379,13 +379,13 @@ function initLocationsTab(){
         }
         .multi-select-option:last-child { border-bottom: none; }
         .multi-select-option:hover { background: #F9FAFB; }
-        .multi-select-option.selected { background: #F0FDF4; }
+        .multi-select-option.selected { background: #f0f9fb; }
         .multi-select-option.disabled { opacity: 0.5; cursor: not-allowed; }
         .multi-select-option.disabled:hover { background: transparent; }
         .multi-select-checkbox { 
             width: 18px; 
             height: 18px; 
-            accent-color: #10B981; 
+            accent-color: #147D91; 
             flex-shrink: 0;
         }
         .multi-select-option-label { 
@@ -438,7 +438,7 @@ function initLocationsTab(){
             margin-bottom: 8px; 
             transition: all 0.15s;
         }
-        .location-item:hover { background: #F0FDF4; border-color: #A7F3D0; }
+        .location-item:hover { background: #f0f9fb; border-color: #b2dce6; }
         .location-item-name { font-weight: 500; color: #111827; font-size: 0.9rem; }
         .location-item-actions { display: flex; gap: 8px; align-items: center; }
         .location-delete-btn { 
@@ -461,7 +461,7 @@ function initLocationsTab(){
             font-size: 0.9rem; 
             transition: border-color 0.15s, box-shadow 0.15s;
         }
-        .form-input:focus { outline: none; border-color: #10B981; box-shadow: 0 0 0 3px rgba(16,185,129,0.15); }
+        .form-input:focus { outline: none; border-color: #147D91; box-shadow: 0 0 0 3px rgba(20, 125, 145, 0.15); }
         .form-input-small { width: 80px; text-align: center; }
 
         /* ★ Custom location picker for pinned tile defaults (replaces native <select>) */
@@ -482,7 +482,7 @@ function initLocationsTab(){
             user-select: none;
         }
         .pinned-loc-trigger:hover { border-color: #9CA3AF; }
-        .pinned-loc-trigger.open { border-color: #10B981; box-shadow: 0 0 0 3px rgba(16,185,129,0.15); }
+        .pinned-loc-trigger.open { border-color: #147D91; box-shadow: 0 0 0 3px rgba(20, 125, 145, 0.15); }
         .pinned-loc-trigger .ploc-placeholder { color: #9CA3AF; }
         .pinned-loc-trigger .ploc-selected { color: #111827; font-weight: 500; }
         .pinned-loc-options {
@@ -511,8 +511,8 @@ function initLocationsTab(){
             gap: 8px;
         }
         .pinned-loc-option:last-child { border-bottom: none; }
-        .pinned-loc-option:hover { background: #F0FDF4; }
-        .pinned-loc-option.selected { background: #ECFDF5; color: #047857; font-weight: 500; }
+        .pinned-loc-option:hover { background: #f0f9fb; }
+        .pinned-loc-option.selected { background: #e6f4f7; color: #0F5F6E; font-weight: 500; }
         .pinned-loc-option .ploc-zone-badge {
             font-size: 0.7rem;
             color: #6B7280;
@@ -567,7 +567,7 @@ function initLocationsTab(){
                   <div style="display:flex; gap:8px; align-items:center;">
                     <input id="new-pinned-tile-input" class="form-input" placeholder="Tile name" style="flex:1;">
                     <div id="pinned-location-picker" class="pinned-loc-picker" style="flex:1;"></div>
-                    <button id="add-pinned-default-btn" style="background:#10B981; color:white; border:none; border-radius:8px; padding:8px 12px; cursor:pointer; font-size:0.85rem;">Add</button>
+                    <button id="add-pinned-default-btn" style="background:#147D91; color:white; border:none; border-radius:8px; padding:8px 12px; cursor:pointer; font-size:0.85rem;">Add</button>
                   </div>
                 </div>
               </div>
@@ -859,7 +859,7 @@ function renderDetailPane(){
     // -- DEFAULT INDICATOR --
     if(zone.isDefault){
         const defaultStrip = document.createElement("div");
-        defaultStrip.style.cssText = "padding:10px 14px; background:linear-gradient(135deg, rgba(37,99,235,0.1), rgba(14,165,233,0.1)); border:1px solid rgba(59,130,246,0.3); border-radius:999px; margin-bottom:16px; color:#1d4ed8; font-size:0.85rem;";
+        defaultStrip.style.cssText = "padding:10px 14px; background:linear-gradient(135deg, rgba(20,125,145,0.1), rgba(10,74,86,0.1)); border:1px solid rgba(20,125,145,0.3); border-radius:999px; margin-bottom:16px; color:#0F5F6E; font-size:0.85rem;";
         defaultStrip.innerHTML = `<strong>Default Zone</strong> — Items not assigned to any zone will use these settings.`;
         detailPaneEl.appendChild(defaultStrip);
     }
@@ -1709,7 +1709,7 @@ function renderPinnedTileDefaults(){
             <div>
                 <span style="font-weight:500; color:#111827;">${escapeHtml(tileName)}</span>
                 <span style="color:#6B7280; margin:0 8px;">→</span>
-                <span style="color:#10B981;">${escapeHtml(locationName)}</span>
+                <span style="color:#147D91;">${escapeHtml(locationName)}</span>
             </div>
             <button style="background:transparent; border:none; color:#DC2626; cursor:pointer; padding:4px 8px; border-radius:4px;" data-tile="${escapeHtml(tileName)}">✕</button>
         `;
@@ -1738,7 +1738,7 @@ function makeEditable(el, save){
     el.ondblclick = () => {
         const inp = document.createElement("input"); 
         inp.value = el.textContent.replace(/Default$/, '').trim();
-        inp.style.cssText = "font-size:inherit; font-weight:inherit; border:1px solid #3B82F6; outline:none; border-radius:4px; padding:2px 6px; width:" + Math.max(100, el.offsetWidth + 20) + "px;";
+        inp.style.cssText = "font-size:inherit; font-weight:inherit; border:1px solid #147D91; outline:none; border-radius:4px; padding:2px 6px; width:" + Math.max(100, el.offsetWidth + 20) + "px;";
 
         el.replaceWith(inp); 
         inp.focus();
