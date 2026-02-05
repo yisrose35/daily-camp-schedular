@@ -497,8 +497,8 @@
             score = window.RotationEngine.calculateRotationScore({
                 bunkName: bunk,
                 activityName: activityName,
-                divisionName: getBunkDivision(bunk),
-                beforeSlotIndex: 0,
+               divisionName: getBunkDivision(bunk),
+                beforeSlotIndex: 999,
                 allActivities: null,
                 activityProperties: activityProperties
             });
