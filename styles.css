@@ -580,6 +580,27 @@ label.override-checkbox span {
 /* League Standings               */
 /* =============================== */
 /* ---------------------------------------------------------------
+   LEAGUES MASTER LIST — Spacing Fix
+   --------------------------------------------------------------- */
+#leagues-master-list .list-item,
+#sl-master-list .list-item {
+  padding: 12px 14px;
+  margin-bottom: 4px;
+  border-radius: var(--radius-sm, 8px);
+  border: 1px solid transparent;
+}
+
+#leagues-master-list .list-item:hover,
+#sl-master-list .list-item:hover {
+  background: var(--slate-50, #F8FAFC);
+}
+
+#leagues-master-list .list-item.selected,
+#sl-master-list .list-item.selected {
+  background: var(--teal-tint-bg, #f0f9fb);
+  border-color: var(--teal-border, #b2dce6);
+}
+/* ---------------------------------------------------------------
    LEAGUE PANEL LAYOUT (initLeaguesPanel)
    --------------------------------------------------------------- */
 .league-panel-grid {
