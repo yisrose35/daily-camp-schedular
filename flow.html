@@ -4,14 +4,15 @@
     <meta charset="UTF-8" />
     <title>Campistry Flow</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="Campistry_clean.png">
     
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&family=Fraunces:wght@600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="design-system.css" />
     <link rel="stylesheet" href="styles.css" />
     
-    <!-- ⭐ FIX: Hide app container initially to prevent flash -->
+    <!-- FIX: Hide app container initially to prevent flash -->
     <style>
         #main-app-container {
             display: none;
@@ -22,14 +23,14 @@
             align-items: center;
             justify-content: center;
             min-height: 100vh;
-            background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 50%, #f0fdfa 100%);
-            font-family: 'Outfit', sans-serif;
+            background: linear-gradient(135deg, #f0f9fb 0%, #e6f7fa 50%, #edf8fa 100%);
+            font-family: 'DM Sans', sans-serif;
         }
         .auth-loading-spinner {
             width: 48px;
             height: 48px;
             border: 4px solid #e5e7eb;
-            border-top-color: #10b981;
+            border-top-color: #1AACCA;
             border-radius: 50%;
             animation: spin 1s linear infinite;
         }
@@ -116,11 +117,11 @@
             transition: all 0.15s;
         }
         .lock-btn.can-lock {
-            background: #10b981;
+            background: #147D91;
             color: white;
         }
         .lock-btn.can-lock:hover {
-            background: #059669;
+            background: #0F5F6E;
         }
         .lock-btn.can-unlock {
             background: #f59e0b;
@@ -145,7 +146,7 @@
             position: relative;
         }
         .bunk-row.locked-by-other::after {
-            content: '🔒';
+            content: '\1F512';
             position: absolute;
             right: 4px;
             top: 50%;
@@ -186,7 +187,7 @@
         <header class="app-header">
             <div class="header-left">
                 <!-- DASHBOARD LINK -->
-                <a href="dashboard.html" style="color:#0D7C5C; text-decoration:none; font-weight:500; margin-right:16px;">← Dashboard</a>
+                <a href="dashboard.html" style="color:#147D91; text-decoration:none; font-weight:500; margin-right:16px;">&larr; Dashboard</a>
 
                 <!-- Hamburger -->
                 <button id="hamburgerBtn" class="hamburger-btn" aria-label="Toggle Navigation">
@@ -198,7 +199,7 @@
                 </div>
 
                 <!-- Quick Link: Campistry Me -->
-                <a href="campistry_me.html" class="header-app-switch" title="Open Campistry Me — Structure & Campers">
+                <a href="campistry_me.html" class="header-app-switch" title="Open Campistry Me — Structure &amp; Campers">
                     <img src="Me_clean.png" alt="Campistry Me" class="app-logo-full app-logo-me-img">
                 </a>
             </div>
@@ -224,7 +225,7 @@
                         <span class="sidebar-dot"></span> Setup (Bunks / Divisions)
                     </button>
                     <button class="sidebar-item" data-tab="locations">
-                        <span class="sidebar-dot"></span> 🗺️ Location Zones
+                        <span class="sidebar-dot"></span> Location Zones
                     </button>
                     <button class="sidebar-item" data-tab="fields">
                         <span class="sidebar-dot"></span> Fields
@@ -236,12 +237,12 @@
                         <span class="sidebar-dot"></span> Leagues
                     </button>
                     <button class="sidebar-item" data-tab="specialty-leagues">
-                        <span class="sidebar-dot"></span> 🏆 Specialty Leagues
+                        <span class="sidebar-dot"></span> Specialty Leagues
                     </button>
 
                     <div class="sidebar-label" style="margin-top:12px;">Scheduling</div>
                     <button class="sidebar-item" data-tab="master-scheduler">
-                        <span class="sidebar-dot"></span> 🗓️ Master Scheduler
+                        <span class="sidebar-dot"></span> Master Scheduler
                     </button>
                     <button class="sidebar-item" data-tab="daily-adjustments">
                         <span class="sidebar-dot"></span> Daily Adjustments
@@ -250,21 +251,21 @@
                         <span class="sidebar-dot"></span> Daily Schedule (View)
                     </button>
 
-                    <div class="sidebar-label" style="margin-top:12px;">Output & Help</div>
+                    <div class="sidebar-label" style="margin-top:12px;">Output &amp; Help</div>
                     <button class="sidebar-item" data-tab="camper-locator">
-                        <span class="sidebar-dot" style="background:#0284c7;"></span> 🔍 Camper Check
+                        <span class="sidebar-dot" style="background:#0284c7;"></span> Camper Check
                     </button>
                     <button class="sidebar-item" data-tab="report">
                         <span class="sidebar-dot"></span> Report
                     </button>
                     <button class="sidebar-item" data-tab="print">
-                        <span class="sidebar-dot"></span> 🖨️ Print Center
+                        <span class="sidebar-dot"></span> Print Center
                     </button>
                     <button class="sidebar-item" data-tab="updates">
                         <span class="sidebar-dot"></span> Updates
                     </button>
                     <button class="sidebar-item" data-tab="helper">
-                        <span class="sidebar-dot"></span> Help & Guide
+                        <span class="sidebar-dot"></span> Help &amp; Guide
                     </button>
                 </nav>
             </aside>
@@ -316,14 +317,14 @@
                             <div class="setup-card-header">
                                 <div class="setup-step-pill setup-step-pill-muted">Tools</div>
                                 <div class="setup-card-text">
-                                    <h3>Data & Maintenance</h3>
-                                    <p>Manage schedules, history & backups.</p>
+                                    <h3>Data &amp; Maintenance</h3>
+                                    <p>Manage schedules, history &amp; backups.</p>
                                 </div>
                             </div>
 
                             <!-- Clear History -->
                             <div class="setup-group">
-                                <h4>Clear Schedules & History</h4>
+                                <h4>Clear Schedules &amp; History</h4>
                                 <p class="setup-group-help">
                                     Erase generated data without touching setup.
                                 </p>
@@ -353,22 +354,22 @@
                                     <button id="newHalfBtn"
                                             style="background:#0d9488;color:#fff;border:none;"
                                             onclick="window.startNewHalf?.();">
-                                        🔄 New Half
+                                        New Half
                                     </button>
                                 </div>
                             </div>
 
                             <!-- Backup -->
                             <div class="setup-group">
-                                <h4>Backup & Restore</h4>
+                                <h4>Backup &amp; Restore</h4>
                                 <p class="setup-group-help">Download or upload full application data.</p>
                                 <div class="setup-button-row">
                                     <button id="exportBackupBtn"
-                                            style="background:#007bff;color:#fff;border:none;">
+                                            style="background:#147D91;color:#fff;border:none;">
                                         Export Data to File
                                     </button>
                                     <button id="importBackupBtn"
-                                            style="background:#28a745;color:#fff;border:none;">
+                                            style="background:#1AACCA;color:#fff;border:none;">
                                         Import Data
                                     </button>
                                     <input type="file" id="importFileInput" accept=".json" style="display:none;" />
@@ -378,7 +379,7 @@
                                         Restore Last Auto-Save
                                     </button>
                                     <button id="forceSaveBtn"
-                                            style="background:#17a2b8;color:#fff;border:none;"
+                                            style="background:#0F5F6E;color:#fff;border:none;"
                                             onclick="window.forceAutoSave?.()">
                                         Save Now
                                     </button>
@@ -388,7 +389,7 @@
                             <!-- Full Wipe -->
                             <div class="setup-group setup-group-danger">
                                 <h4>Erase All Data</h4>
-                                <p class="setup-group-help">⚠️ This resets EVERYTHING – setup + schedules.</p>
+                                <p class="setup-group-help">This resets EVERYTHING &ndash; setup + schedules.</p>
                                 <div class="setup-button-row">
                                     <button id="eraseAllBtn"
                                             style="background:#c0392b;color:#fff;border:none;">
@@ -411,7 +412,7 @@
                 <div id="specialty-leagues" class="tab-content"></div>
 
                 <div id="master-scheduler" class="tab-content">
-                    <!-- ⭐ MULTI-SCHEDULER: Subdivision Status Panel will be inserted here -->
+                    <!-- MULTI-SCHEDULER: Subdivision Status Panel will be inserted here -->
                     <div id="subdivision-status-container"></div>
                     <div id="master-scheduler-content"></div>
                 </div>
@@ -425,7 +426,7 @@
                         <h3>Daily Schedule (View)</h3>
                         <button onclick="window.validateSchedule?.()"
                             style="background:#ff9800;color:white;border:none;padding:8px 16px;border-radius:4px;font-weight:bold;">
-                            ⚠️ Validate Schedule
+                            Validate Schedule
                         </button>
                     </div>
                     <div id="scheduleTable"></div>
@@ -449,33 +450,22 @@
 <!-- SCRIPT LOADING (ORDER MATTERS) -->
 <!-- =============================================================== -->
 
-<!-- =============================================================== -->
 <!-- CLOUD FOUNDATION (MUST LOAD FIRST) -->
-<!-- =============================================================== -->
 <script src="demo_mode.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="supabase_client.js"></script>
-    <script src="supabase_permissions.js"></script>
+<script src="supabase_permissions.js"></script>
 <script src="supabase_schedules.js"></script>
 <script src="supabase_sync.js"></script>
 <script src="integration_hooks.js"></script>
 
-    <script src="schedule_versions_db.js"></script>
+<script src="schedule_versions_db.js"></script>
 <script src="global_authority.js"></script>
-    <script src="cloud_sync_helpers.js"></script>
-    
+<script src="cloud_sync_helpers.js"></script>
 
-
-    
-
-<!-- =============================================================== -->
-<!-- ⭐ AUTH CHECK - Must run before app loads -->
-<!-- =============================================================== -->
+<!-- AUTH CHECK - Must run before app loads -->
 <script>
 (function() {
-    'use strict';
-    
-    (function() {
     'use strict';
     
     // Flag so welcome.js knows inline auth is handling boot
@@ -485,73 +475,42 @@
     const mainApp = document.getElementById('main-app-container');
     
     async function checkAuthAndBoot() {
-        console.log("🔐 Checking authentication status...");
-        
         try {
-            // Wait for Supabase to be ready
             let attempts = 0;
             while (!window.supabase && attempts < 20) {
                 await new Promise(r => setTimeout(r, 100));
                 attempts++;
             }
             
-            if (!window.supabase) {
-                console.error("🔐 Supabase not available");
-                redirectToLogin();
-                return;
-            }
+            if (!window.supabase) { redirectToLogin(); return; }
             
-            // Check for existing session
             const { data: { session }, error } = await window.supabase.auth.getSession();
             
-            if (error) {
-                console.error("🔐 Session check error:", error);
-                redirectToLogin();
-                return;
-            }
+            if (error || !session) { redirectToLogin(); return; }
             
-            if (!session) {
-                console.log("🔐 No active session, redirecting to login");
-                redirectToLogin();
-                return;
-            }
-            
-            console.log("🔐 Session found for:", session.user.email);
-            
-            // Update loading text
             if (loadingScreen) {
                 const subtext = loadingScreen.querySelector('.auth-loading-subtext');
                 if (subtext) subtext.textContent = 'Loading your camp data...';
             }
             
-            // Wait for cloud hydration
             await waitForCloudHydration();
-            
-            // Show the app
             showApp();
             
         } catch (e) {
-            console.error("🔐 Auth check failed:", e);
+            console.error("Auth check failed:", e);
             redirectToLogin();
         }
     }
     
-   function redirectToLogin() {
+    function redirectToLogin() {
         window.location.href = 'index.html';
     }
     
     async function waitForCloudHydration() {
         return new Promise((resolve) => {
-            // Check if already ready
-            if (window.__CAMPISTRY_CLOUD_READY__) {
-                console.log("🔐 Cloud already ready");
-                resolve();
-                return;
-            }
+            if (window.__CAMPISTRY_CLOUD_READY__) { resolve(); return; }
             
-            // Listen for hydration event
             const handler = () => {
-                console.log("🔐 Cloud hydration complete");
                 window.removeEventListener('campistry-cloud-hydrated', handler);
                 clearTimeout(timeout);
                 resolve();
@@ -559,9 +518,7 @@
             
             window.addEventListener('campistry-cloud-hydrated', handler);
             
-            // Timeout after 5 seconds
             const timeout = setTimeout(() => {
-                console.warn("🔐 Cloud hydration timeout, proceeding anyway");
                 window.removeEventListener('campistry-cloud-hydrated', handler);
                 resolve();
             }, 5000);
@@ -569,52 +526,36 @@
     }
     
     function showApp() {
-        console.log("🔐 Showing application");
-        
-        // Hide loading, show app
         if (loadingScreen) loadingScreen.style.display = 'none';
         if (mainApp) mainApp.style.display = 'block';
         
-        // Mark as booted
         window.__CAMPISTRY_BOOTED__ = true;
         
-        // Initialize UI components
         window.refreshGlobalRegistry?.();
         window.initCalendar?.();
         window.initApp1?.();
         window.initLeagues?.();
         window.initScheduleSystem?.();
         window.initDailyAdjustments?.();
-        
-        console.log("✅ Campistry Flow loaded");
     }
     
-    // Listen for sign out
     if (window.supabase) {
         window.supabase.auth.onAuthStateChange((event, session) => {
-            if (event === 'SIGNED_OUT') {
-                console.log("🔐 User signed out, redirecting...");
-                redirectToLogin();
-            }
+            if (event === 'SIGNED_OUT') redirectToLogin();
         });
     }
     
-    // Start auth check when DOM is ready
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', checkAuthAndBoot);
     } else {
-        // Small delay to ensure Supabase is initialized
         setTimeout(checkAuthAndBoot, 100);
     }
 })();
 </script>
 
-<!-- =============================================================== -->
 <!-- CORE APP -->
-<!-- =============================================================== -->
 <script src="welcome.js"></script>
 <script src="calendar.js"></script>
-   
 <script src="app1.js"></script>
 <script src="locations.js"></script>
 <script src="skeleton_sandbox.js"></script>
@@ -626,27 +567,19 @@
 <script src="specialty_leagues.js"></script>
 <script src="master_schedule_builder.js"></script>
 <script src="smart_logic_adapter.js"></script>
-    
-    <!-- =============================================================== -->
-<!-- ⭐ NEW: PERMISSIONS & VERSIONING SYSTEM -->
-<!-- =============================================================== -->
+
+<!-- PERMISSIONS & VERSIONING SYSTEM -->
 <script src="permissions_guard.js"></script>
 
-
-<!-- =============================================================== -->
-<!-- ⭐ RBAC & MULTI-SCHEDULER SYSTEM (LOAD BEFORE SCHEDULER CORE) -->
-<!-- =============================================================== -->
+<!-- RBAC & MULTI-SCHEDULER SYSTEM (LOAD BEFORE SCHEDULER CORE) -->
 <script src="access_control.js"></script>
 <script src="subdivision_schedule_manager.js"></script>
-
-
 <script src="rbac_init.js"></script>
-    
+
 <script src="division_times_system.js"></script>
 <script src="division_times_integration.js"></script>
-<!-- =============================================================== -->
+
 <!-- SCHEDULER CORE -->
-<!-- =============================================================== -->
 <script src="scheduler_core_loader.js"></script>
 <script src="global_field_locks.js"></script>
 <script src="scheduler_core_utils.js"></script>
@@ -658,33 +591,22 @@
 <script src="scheduler_core_main.js"></script>
 <script src="schedule_orchestrator.js"></script>
 
-    <!-- UNIFIED SCHEDULE SYSTEM (add after scheduler_core files) -->
+<!-- UNIFIED SCHEDULE SYSTEM -->
 <script src="unified_schedule_system.js"></script>
-   <script src="post_edit_system.js"></script>
-    
+<script src="post_edit_system.js"></script>
 
-
-<!-- NEW: Pinned preservation (must come after scheduler_core_main.js) -->
+<!-- Pinned preservation (must come after scheduler_core_main.js) -->
 <script src="pinned_activity_preservation.js"></script>
 
-    
-    
-
-<!-- =============================================================== -->
 <!-- OUTPUT / HELP -->
-<!-- =============================================================== -->
 <script src="analytics.js"></script>
 <script src="camper_locator.js"></script>
 <script src="validator.js"></script>
 <script src="print_center.js"></script>
 <script src="helper.js"></script>
 <script src="updates.js"></script>
-    
 
-
-<!-- =============================================================== -->
 <!-- TAB NAVIGATION & SIDEBAR HANDLING -->
-<!-- =============================================================== -->
 <script>
 /* TAB SWITCHING */
 function showTab(id) {
@@ -704,7 +626,6 @@ function showTab(id) {
     if (id === "specialty-leagues") window.initSpecialtyLeagues?.();
     if (id === "master-scheduler") {
         window.initMasterScheduler?.();
-        // ⭐ MULTI-SCHEDULER: Render subdivision status panel
         const container = document.getElementById('subdivision-status-container');
         if (container) {
             window.SchedulerSubdivisionIntegration?.createSubdivisionStatusPanel?.(container);
