@@ -660,13 +660,26 @@
     // PENALTY ENGINE (uses pre-computed lookups)
     // ========================================================================
 
-    function calculatePenaltyCost(block, pick) {
+   
+
+        function calculatePenaltyCost(block, pick) {
         var penalty = 0;
         var bunk = block.bunk;
         var act = pick._activity;
         var fieldName = pick.field;
 
-        // ★★★ v12.0: Use pre-computed rotation score ★★★
+        // ★★★ v12.1 FIX: REAL-TIME same-day duplicate check ★★★
+        // Pre-computed rotation scores use beforeSlotIndex=0 so they miss
+        // same-day duplicates. Check LIVE schedule state here.
+        var actNormCheck = normName(act);
+        if (actNormCheck && actNormCheck !== 'free' && actNormCheck !== 'free play') {
+            var todayCheck = getActivitiesDoneToday(bunk, block.slots?.[0] ?? 999);
+            if (todayCheck.has(actNormCheck)) {
+                return 999999; // Same-day duplicate — BLOCKED
+            }
+        }
+
+        // ★★★ v12.0: Use pre-computed rotation score (for recency/streak/variety) ★★★
         var rotationPenalty = getPrecomputedRotationScore(bunk, act);
         if (rotationPenalty === Infinity) return 999999;
         penalty += rotationPenalty;
