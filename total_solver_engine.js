@@ -516,7 +516,7 @@
         return score;
     }
 
-   function invalidateRotationCacheForBunk(bunk) {
+  function invalidateRotationCacheForBunk(bunk) {
         // Invalidate all entries for this bunk
         for (var [key] of _rotationScoreCache) {
             if (key.startsWith(bunk + '|')) _rotationScoreCache.delete(key);
@@ -524,8 +524,7 @@
         for (var [key2] of _rotationScoreMap) {
             if (key2.startsWith(bunk + '|')) _rotationScoreMap.delete(key2);
         }
-        // ★★★ v12.1 FIX: Clear ALL today-cache entries for this bunk ★★★
-        // Keys are "bunk:slotIdx" format, so we must iterate
+        // ★★★ v12.1 FIX: Cache keys are "bunk:slotIdx", not just "bunk" ★★★
         for (var [key3] of _todayCache) {
             if (key3.startsWith(bunk + ':')) _todayCache.delete(key3);
         }
