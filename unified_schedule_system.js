@@ -550,19 +550,57 @@ function shouldHighlightBunk(bunkName) {
             return usage;
         },
         
-        checkAvailability: function(fieldName, startMin, endMin, capacity = 1, excludeBunk = null) {
+       checkAvailability: function(fieldName, startMin, endMin, capacity = 1, excludeBunk = null, forDivision = null) {
             const usage = this.getUsageAtTime(fieldName, startMin, endMin, excludeBunk);
             
-            // Find max concurrent usage
+            // ★★★ v4.1.1: Cross-division sharing enforcement ★★★
+            const props = (window.activityProperties || {})[fieldName] || {};
+            const sharableWith = props.sharableWith || {};
+            const sharingType = sharableWith.type || (props.sharable ? 'same_division' : 'not_sharable');
+            const callerDiv = forDivision || (excludeBunk ? getDivisionForBunk(excludeBunk) : null);
+            
+            // If same_division sharing, check for cross-division conflicts first
+            if (callerDiv && sharingType !== 'all') {
+                const crossDivConflict = usage.some(u => u.division && u.division !== callerDiv);
+                if (crossDivConflict && (sharingType === 'same_division' || sharingType === 'not_sharable')) {
+                    return {
+                        available: false,
+                        currentUsage: usage.length,
+                        capacity,
+                        conflicts: usage,
+                        reason: 'cross_division_conflict'
+                    };
+                }
+                if (crossDivConflict && sharingType === 'custom') {
+                    const allowedDivs = sharableWith.divisions || [];
+                    const badCross = usage.find(u => u.division !== callerDiv && 
+                        (!allowedDivs.includes(u.division) || !allowedDivs.includes(callerDiv)));
+                    if (badCross) {
+                        return {
+                            available: false,
+                            currentUsage: usage.length,
+                            capacity,
+                            conflicts: usage,
+                            reason: 'custom_division_conflict'
+                        };
+                    }
+                }
+            }
+            
+            // Find max concurrent usage (same-division only for same_division type)
             let maxConcurrent = 0;
             const timePoints = new Set();
-            usage.forEach(u => {
+            const relevantUsage = (callerDiv && sharingType === 'same_division') 
+                ? usage.filter(u => u.division === callerDiv)
+                : usage;
+            
+            relevantUsage.forEach(u => {
                 timePoints.add(u.timeStart);
                 timePoints.add(u.timeEnd);
             });
             
             for (const t of timePoints) {
-                const concurrent = usage.filter(u => u.timeStart <= t && u.timeEnd > t).length;
+                const concurrent = relevantUsage.filter(u => u.timeStart <= t && u.timeEnd > t).length;
                 maxConcurrent = Math.max(maxConcurrent, concurrent);
             }
             
