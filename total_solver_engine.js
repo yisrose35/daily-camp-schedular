@@ -760,7 +760,31 @@
 
         // ── Rotation score ───────────────────────────────────────────────
         penalty += rotationPenalty;
-
+// ── ★★★ v12.1: Live sport/special type balance ★★★ ────────────
+        // General Activity Slots should distribute evenly between sports and specials.
+        // Without this, sports dominate due to having more field×activity combinations.
+        if (block.event === 'General Activity Slot' || block.event === 'general activity slot') {
+            var typeBalance = getLiveTypeBalance(bunk, slots[0] ?? 0);
+            var pickIsSpecial = (pick._type === 'special');
+            var imbalance = typeBalance.sports - typeBalance.specials;
+            
+            if (!pickIsSpecial && imbalance >= 2) {
+                // Already 2+ more sports than specials — strong penalty on more sports
+                penalty += 3000 + (imbalance - 1) * 1000;
+            } else if (!pickIsSpecial && imbalance >= 1) {
+                // 1 more sport than special — moderate penalty
+                penalty += 1500;
+            } else if (pickIsSpecial && imbalance >= 2) {
+                // Specials behind by 2+ — strong bonus for picking special
+                penalty -= 2000;
+            } else if (pickIsSpecial && imbalance >= 1) {
+                // Specials behind by 1 — moderate bonus
+                penalty -= 1000;
+            } else if (pickIsSpecial && typeBalance.specials > typeBalance.sports + 1) {
+                // Too many specials — gentle penalty
+                penalty += 1500;
+            }
+        }
         // ── Bunk size vs field capacity ──────────────────────────────────
         var bunkMeta = window.getBunkMetaData?.(bunk) || globalConfig?.bunkMetaData?.[bunk] || {};
         if (bunkMeta.size) {
