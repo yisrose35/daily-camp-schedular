@@ -8,8 +8,8 @@
 /* ========================= */
 body {
   margin: 0;
-  font-family: var(--font-body, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
-  background: var(--bg-primary, #FAFCFB);
+  font-family: var(--font-body, 'DM Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif);
+  background: var(--bg-primary, #FAFBFC);
   color: var(--slate-900, #0F172A);
 }
 
@@ -30,22 +30,21 @@ button:hover {
   background: var(--slate-50, #F8FAFC);
   border-color: var(--slate-400, #94A3B8);
   box-shadow: var(--shadow-md, 0 4px 8px rgba(15, 23, 42, 0.08));
-  transform: translateY(-0.5px);
 }
 
 /* Primary action buttons */
 button.primary,
 button[data-primary="true"] {
-  background: linear-gradient(135deg, var(--camp-green, #0D7C5C) 0%, var(--camp-green-light, #10B981) 100%);
+  background: var(--camp-green, #147D91);
   color: white;
-  border-color: var(--camp-green-dark, #065F46);
-  box-shadow: 0 4px 12px rgba(13, 124, 92, 0.3);
+  border-color: var(--camp-green-dark, #0F5F6E);
+  box-shadow: 0 1px 3px rgba(20, 125, 145, 0.2);
 }
 
 button.primary:hover,
 button[data-primary="true"]:hover {
-  box-shadow: 0 6px 16px rgba(13, 124, 92, 0.4), var(--glow-green, 0 0 20px rgba(13, 124, 92, 0.3));
-  transform: translateY(-2px);
+  background: var(--camp-green-dark, #0F5F6E);
+  box-shadow: 0 2px 8px rgba(20, 125, 145, 0.3);
 }
 
 /* Destructive buttons */
@@ -101,8 +100,8 @@ input[type="password"]:focus,
 select:focus,
 textarea:focus {
   outline: none;
-  border-color: var(--camp-green, #0D7C5C);
-  box-shadow: 0 0 0 3px rgba(13, 124, 92, 0.15);
+  border-color: var(--camp-green, #147D91);
+  box-shadow: 0 0 0 3px rgba(20, 125, 145, 0.15);
 }
 
 /* Tab panels (each main section) */
@@ -169,12 +168,11 @@ caption {
 }
 
 .bunk-button:hover {
-  transform: translateY(-1px);
   box-shadow: var(--shadow-lg, 0 8px 16px rgba(15, 23, 42, 0.15));
 }
 
 .selected {
-  outline: 3px solid var(--camp-green-light, #10B981);
+  outline: 3px solid var(--camp-green-light, #1AACCA);
   outline-offset: 2px;
 }
 
@@ -254,10 +252,10 @@ caption {
 }
 
 .activity-button.active {
-  background: var(--camp-green, #0D7C5C);
+  background: var(--camp-green, #147D91);
   color: white;
-  border-color: var(--camp-green-dark, #065F46);
-  box-shadow: 0 2px 8px rgba(13, 124, 92, 0.25);
+  border-color: var(--camp-green-dark, #0F5F6E);
+  box-shadow: 0 2px 8px rgba(20, 125, 145, 0.25);
 }
 
 /* Fixed Activities List Items */
@@ -315,7 +313,7 @@ caption {
 }
 
 input:checked + .slider {
-  background-color: var(--camp-green, #0D7C5C);
+  background-color: var(--camp-green, #147D91);
 }
 
 input:checked + .slider:before {
@@ -328,7 +326,7 @@ input:checked + .slider:before {
 }
 
 .league-pill {
-  background: var(--camp-green, #0D7C5C);
+  background: var(--camp-green, #147D91);
   color: #fff;
   padding: 3px 10px;
   border-radius: var(--radius-full, 999px);
@@ -366,9 +364,9 @@ input:checked + .slider:before {
 }
 
 .chip-toggle[aria-pressed="true"] {
-  background: rgba(13, 124, 92, 0.1);
-  border-color: var(--camp-green, #0D7C5C);
-  color: var(--camp-green-dark, #065F46);
+  background: rgba(20, 125, 145, 0.1);
+  border-color: var(--camp-green, #147D91);
+  color: var(--camp-green-dark, #0F5F6E);
 }
 
 .chip-actions {
@@ -387,8 +385,8 @@ input:checked + .slider:before {
 }
 
 .chip-ghost:hover {
-  border-color: var(--camp-green, #0D7C5C);
-  color: var(--camp-green, #0D7C5C);
+  border-color: var(--camp-green, #147D91);
+  color: var(--camp-green, #147D91);
 }
 
 /* =============================== */
@@ -421,7 +419,7 @@ label.override-checkbox input {
   height: 18px;
   margin-right: 10px;
   vertical-align: middle;
-  accent-color: var(--camp-green, #0D7C5C);
+  accent-color: var(--camp-green, #147D91);
 }
 
 label.override-checkbox span {
@@ -429,7 +427,7 @@ label.override-checkbox span {
 }
 
 .report-title {
-  border-bottom: 2px solid var(--camp-green, #0D7C5C);
+  border-bottom: 2px solid var(--camp-green, #147D91);
   padding-bottom: 12px;
   color: var(--slate-900, #0F172A);
 }
@@ -536,11 +534,11 @@ label.override-checkbox span {
 }
 
 .report-row-fresh {
-  background-color: rgba(13, 124, 92, 0.08);
+  background-color: rgba(20, 125, 145, 0.08);
 }
 
 .report-row-fresh td {
-  color: var(--camp-green-dark, #065F46);
+  color: var(--camp-green-dark, #0F5F6E);
   font-weight: 600;
 }
 
@@ -673,19 +671,19 @@ label.override-checkbox span {
   padding: 12px 24px;
   font-size: 1rem;
   font-weight: 600;
-  background: linear-gradient(135deg, var(--camp-green, #0D7C5C) 0%, var(--camp-green-light, #10B981) 100%);
+  background: var(--camp-green, #147D91);
   color: white;
   border: none;
   border-radius: var(--radius-md, 12px);
   cursor: pointer;
   margin-top: 12px;
-  box-shadow: 0 4px 12px rgba(13, 124, 92, 0.3);
+  box-shadow: 0 1px 3px rgba(20, 125, 145, 0.2);
   transition: all var(--transition-base, 0.2s) var(--ease-out);
 }
 
 .update-standings-btn:hover {
-  box-shadow: 0 6px 16px rgba(13, 124, 92, 0.4);
-  transform: translateY(-2px);
+  background: var(--camp-green-dark, #0F5F6E);
+  box-shadow: 0 2px 8px rgba(20, 125, 145, 0.3);
 }
 
 /* =============================== */
@@ -725,9 +723,9 @@ label.override-checkbox span {
 
 .avail-check {
   font-size: 1.4em;
-  color: var(--camp-green, #0D7C5C);
+  color: var(--camp-green, #147D91);
   font-weight: 900;
-  background-color: rgba(13, 124, 92, 0.1);
+  background-color: rgba(20, 125, 145, 0.1);
 }
 
 .avail-x {
@@ -757,7 +755,7 @@ label.override-checkbox span {
   left: 0;
   width: 100%;
   height: 100%;
-  background: var(--bg-primary, #FAFCFB);
+  background: var(--bg-primary, #FAFBFC);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -778,7 +776,7 @@ label.override-checkbox span {
   font-size: 2rem;
   color: var(--slate-900, #0F172A);
   margin-bottom: 12px;
-  font-family: var(--font-display, Georgia, serif);
+  font-family: var(--font-display, 'Fraunces', Georgia, serif);
 }
 
 #welcome-screen p {
@@ -799,8 +797,8 @@ label.override-checkbox span {
 }
 
 #camp-name-input:focus {
-  border-color: var(--camp-green, #0D7C5C);
-  box-shadow: 0 0 0 3px rgba(13, 124, 92, 0.15);
+  border-color: var(--camp-green, #147D91);
+  box-shadow: 0 0 0 3px rgba(20, 125, 145, 0.15);
 }
 
 #begin-btn {
@@ -809,17 +807,17 @@ label.override-checkbox span {
   padding: 14px 36px;
   border-radius: var(--radius-lg, 16px);
   border: none;
-  background: linear-gradient(135deg, var(--camp-green, #0D7C5C) 0%, var(--camp-green-light, #10B981) 100%);
+  background: var(--camp-green, #147D91);
   color: white;
   cursor: pointer;
   margin-top: 18px;
-  box-shadow: 0 4px 12px rgba(13, 124, 92, 0.3);
+  box-shadow: 0 2px 8px rgba(20, 125, 145, 0.25);
   transition: all var(--transition-base, 0.2s) var(--ease-out);
 }
 
 #begin-btn:hover {
-  box-shadow: 0 6px 16px rgba(13, 124, 92, 0.4), var(--glow-green, 0 0 20px rgba(13, 124, 92, 0.3));
-  transform: translateY(-2px);
+  background: var(--camp-green-dark, #0F5F6E);
+  box-shadow: 0 4px 12px rgba(20, 125, 145, 0.3);
 }
 
 /* =============================== */
@@ -845,24 +843,23 @@ label.override-checkbox span {
   border-radius: var(--radius-lg, 16px);
   padding: 20px;
   box-shadow: var(--shadow-md, 0 4px 8px rgba(15, 23, 42, 0.08));
-  transition: all var(--transition-base, 0.2s) var(--ease-out);
+  transition: box-shadow var(--transition-base, 0.2s) var(--ease-out);
 }
 
 .help-card:hover {
-  transform: translateY(-2px);
   box-shadow: var(--shadow-lg, 0 8px 16px rgba(15, 23, 42, 0.1));
 }
 
 .help-card h3 {
   margin-top: 0;
-  color: var(--camp-green, #0D7C5C);
+  color: var(--camp-green, #147D91);
   border-bottom: 1px solid var(--slate-100, #F1F5F9);
   padding-bottom: 10px;
 }
 
 .help-card.highlight-card {
-  border-left: 4px solid var(--camp-green, #0D7C5C);
-  background: rgba(13, 124, 92, 0.03);
+  border-left: 4px solid var(--camp-green, #147D91);
+  background: rgba(20, 125, 145, 0.03);
 }
 
 .help-card ul,
@@ -878,15 +875,15 @@ label.override-checkbox span {
 
 .help-footer {
   margin-top: 30px;
-  background: rgba(13, 124, 92, 0.08);
-  border: 1px solid rgba(13, 124, 92, 0.2);
+  background: rgba(20, 125, 145, 0.08);
+  border: 1px solid rgba(20, 125, 145, 0.2);
   border-radius: var(--radius-lg, 16px);
   padding: 20px;
 }
 
 .help-footer h3 {
   margin-top: 0;
-  color: var(--camp-green-dark, #065F46);
+  color: var(--camp-green-dark, #0F5F6E);
 }
 
 /* =============================== */
@@ -909,7 +906,7 @@ label.override-checkbox span {
   background: var(--slate-50, #F8FAFC);
   flex: 1;
   min-width: 260px;
-  transition: all var(--transition-base, 0.2s) var(--ease-out);
+  transition: box-shadow var(--transition-base, 0.2s) var(--ease-out);
 }
 
 .print-card:hover {
@@ -918,7 +915,7 @@ label.override-checkbox span {
 
 .print-card h3 {
   margin-top: 0;
-  color: var(--camp-green, #0D7C5C);
+  color: var(--camp-green, #147D91);
 }
 
 .print-card select {
@@ -930,18 +927,18 @@ label.override-checkbox span {
 .print-card button {
   width: 100%;
   padding: 12px;
-  background: linear-gradient(135deg, var(--camp-green, #0D7C5C) 0%, var(--camp-green-light, #10B981) 100%);
+  background: var(--camp-green, #147D91);
   color: white;
   border: none;
   border-radius: var(--radius-md, 12px);
   cursor: pointer;
   font-weight: 600;
-  box-shadow: 0 4px 12px rgba(13, 124, 92, 0.3);
+  box-shadow: 0 1px 3px rgba(20, 125, 145, 0.2);
 }
 
 .print-card button:hover {
-  box-shadow: 0 6px 16px rgba(13, 124, 92, 0.4);
-  transform: translateY(-1px);
+  background: var(--camp-green-dark, #0F5F6E);
+  box-shadow: 0 2px 8px rgba(20, 125, 145, 0.3);
 }
 
 /* Printable area */
@@ -1057,8 +1054,7 @@ label.override-checkbox span {
 
 .hamburger-btn:hover {
   background: var(--slate-200, #E2E8F0);
-  border-color: var(--camp-green, #0D7C5C);
-  transform: translateY(-1px);
+  border-color: var(--camp-green, #147D91);
 }
 
 /* Title / Logo */
@@ -1067,8 +1063,6 @@ label.override-checkbox span {
   align-items: center;
   gap: 0.7rem;
 }
-
-/* .app-logo-circle replaced by .app-logo-icon (see App Logo Icons section) */
 
 .app-title-text {
   display: flex;
@@ -1119,11 +1113,11 @@ label.override-checkbox span {
 }
 
 .brand-accent-flow {
-  color: var(--camp-green, #0D7C5C);
+  color: var(--camp-green, #147D91);
 }
 
 .brand-accent-me {
-  color: #E67E22;
+  color: var(--me-color, #F59E0B);
 }
 
 /* Header App Switch Link (clickable logo link) */
@@ -1139,8 +1133,6 @@ label.override-checkbox span {
 .header-app-switch:hover {
   opacity: 0.75;
 }
-
-/* padding adjusted for image-only content */
 
 .header-app-switch-label {
   font-size: 0.82rem;
@@ -1221,17 +1213,16 @@ label.override-checkbox span {
 .sidebar-item:hover {
   background: rgba(148, 163, 184, 0.15);
   color: var(--slate-200, #E2E8F0);
-  transform: translateX(2px);
 }
 
 .sidebar-item.active {
-  background: linear-gradient(135deg, rgba(13, 124, 92, 0.25), rgba(16, 185, 129, 0.3));
-  border-color: var(--camp-green, #0D7C5C);
+  background: rgba(20, 125, 145, 0.2);
+  border-color: var(--camp-green, #147D91);
   color: white;
 }
 
 .sidebar-item.active .sidebar-dot {
-  background: var(--camp-green-light, #10B981);
+  background: var(--camp-green-light, #1AACCA);
 }
 
 /* Sidebar backdrop */
@@ -1289,15 +1280,11 @@ body.sidebar-open .sidebar-backdrop {
   border: 1px solid var(--slate-200, #E2E8F0);
   padding: 16px 18px 18px;
   box-shadow: var(--shadow-lg, 0 8px 16px rgba(15, 23, 42, 0.1));
-  transition: all var(--transition-base, 0.2s) var(--ease-out);
+  transition: box-shadow var(--transition-base, 0.2s) var(--ease-out);
 }
 
 .setup-card:hover {
   box-shadow: var(--shadow-xl, 0 12px 24px rgba(15, 23, 42, 0.12));
-}
-
-.setup-card-wide {
-  /* can grow wider when we later use columns on desktop */
 }
 
 .setup-card-header {
@@ -1310,19 +1297,19 @@ body.sidebar-open .sidebar-backdrop {
 .setup-step-pill {
   padding: 5px 12px;
   border-radius: var(--radius-full, 999px);
-  background: linear-gradient(135deg, var(--camp-green, #0D7C5C), var(--camp-green-light, #10B981));
+  background: var(--camp-green, #147D91);
   color: white;
   font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   flex-shrink: 0;
-  box-shadow: 0 4px 10px rgba(13, 124, 92, 0.3);
+  box-shadow: 0 2px 6px rgba(20, 125, 145, 0.25);
 }
 
 .setup-step-pill-muted {
-  background: linear-gradient(135deg, var(--slate-500, #64748B), var(--slate-600, #475569));
-  box-shadow: 0 4px 10px rgba(71, 85, 105, 0.25);
+  background: var(--slate-500, #64748B);
+  box-shadow: 0 2px 6px rgba(71, 85, 105, 0.2);
 }
 
 .setup-card-text h3 {
@@ -1366,7 +1353,7 @@ body.sidebar-open .sidebar-backdrop {
 .setup-inline-toggle input {
   width: 18px;
   height: 18px;
-  accent-color: var(--camp-green, #0D7C5C);
+  accent-color: var(--camp-green, #147D91);
 }
 
 .setup-subtitle {
@@ -1414,7 +1401,6 @@ body.sidebar-open .sidebar-backdrop {
   gap: 10px;
 }
 
-/* Slightly shrink general buttons inside setup so they don't overpower the UI */
 .setup-button-row button {
   font-size: 0.8rem;
 }
@@ -1448,7 +1434,7 @@ body.sidebar-open .sidebar-backdrop {
   border-radius: var(--radius-lg, 16px);
   padding: 12px 14px;
   box-shadow: var(--shadow-sm, 0 2px 4px rgba(15, 23, 42, 0.06));
-  transition: all var(--transition-base, 0.2s) var(--ease-out);
+  transition: box-shadow var(--transition-base, 0.2s) var(--ease-out);
 }
 
 .master-card:hover {
@@ -1476,8 +1462,8 @@ body.sidebar-open .sidebar-backdrop {
   border-radius: var(--radius-full, 999px);
   font-size: 0.75rem;
   font-weight: 500;
-  background: rgba(13, 124, 92, 0.12);
-  color: var(--camp-green-dark, #065F46);
+  background: rgba(20, 125, 145, 0.12);
+  color: var(--camp-green-dark, #0F5F6E);
 }
 
 .master-card-empty {
@@ -1511,35 +1497,33 @@ body.sidebar-open .sidebar-backdrop {
 /* =============================== */
 /* Snappier Setup: Divisions UI   */
 /* =============================== */
-/* Cards: a bit more glassy & animated */
 #setup .setup-card {
   border-radius: var(--radius-xl, 20px);
-  background: radial-gradient(circle at top left, var(--slate-50, #F8FAFC) 0, var(--bg-secondary, #FFFFFF) 55%, var(--slate-100, #F1F5F9) 100%);
+  background: var(--bg-secondary, #FFFFFF);
   border: 1px solid var(--slate-200, #E2E8F0);
   box-shadow: var(--shadow-xl, 0 12px 24px rgba(15, 23, 42, 0.12));
-  transition: all 0.2s var(--ease-out);
+  transition: box-shadow 0.2s var(--ease-out), border-color 0.2s var(--ease-out);
 }
 
 #setup .setup-card:hover {
-  transform: translateY(-1px);
   box-shadow: var(--shadow-2xl, 0 20px 40px rgba(15, 23, 42, 0.15));
   border-color: var(--slate-300, #CBD5E1);
 }
 
-/* Step pills a bit bolder */
+/* Step pills */
 #setup .setup-step-pill {
-  background: linear-gradient(135deg, var(--camp-green, #0D7C5C), var(--camp-green-light, #10B981));
+  background: var(--camp-green, #147D91);
   color: white;
-  box-shadow: 0 6px 14px rgba(13, 124, 92, 0.35);
+  box-shadow: 0 2px 8px rgba(20, 125, 145, 0.3);
 }
 
 #setup .setup-step-pill.setup-step-pill-muted {
-  background: linear-gradient(135deg, var(--slate-500, #64748B), var(--slate-600, #475569));
+  background: var(--slate-500, #64748B);
   color: var(--slate-200, #E2E8F0);
-  box-shadow: 0 4px 10px rgba(55, 65, 81, 0.3);
+  box-shadow: 0 2px 6px rgba(55, 65, 81, 0.2);
 }
 
-/* Divisions master list – pill rows, clearer hover + select state */
+/* Divisions master list */
 #setup .master-list {
   display: flex;
   flex-direction: column;
@@ -1559,7 +1543,6 @@ body.sidebar-open .sidebar-backdrop {
   transition: all var(--transition-base, 0.2s) var(--ease-out);
 }
 
-/* generic "color bar" if you are rendering a small block in JS */
 #setup .master-list .list-item > .color-bar {
   width: 6px;
   border-radius: var(--radius-full, 999px);
@@ -1574,23 +1557,22 @@ body.sidebar-open .sidebar-backdrop {
 
 #setup .master-list .list-item:hover {
   background: var(--slate-50, #F8FAFC);
-  border-color: rgba(13, 124, 92, 0.4);
-  box-shadow: 0 8px 20px rgba(13, 124, 92, 0.15);
-  transform: translateY(-0.5px);
+  border-color: rgba(20, 125, 145, 0.4);
+  box-shadow: 0 4px 12px rgba(20, 125, 145, 0.1);
 }
 
 #setup .master-list .list-item.selected {
-  background: rgba(13, 124, 92, 0.08);
-  border-color: var(--camp-green, #0D7C5C);
-  box-shadow: 0 0 0 1px rgba(13, 124, 92, 0.3),
-              0 12px 30px rgba(13, 124, 92, 0.18);
+  background: rgba(20, 125, 145, 0.08);
+  border-color: var(--camp-green, #147D91);
+  box-shadow: 0 0 0 1px rgba(20, 125, 145, 0.3),
+              0 4px 16px rgba(20, 125, 145, 0.12);
 }
 
-/* Division detail pane – more "panel" feeling */
+/* Division detail pane */
 #setup #division-detail-pane.detail-pane {
   border-radius: var(--radius-xl, 20px);
   border: 1px solid var(--slate-200, #E2E8F0);
-  background: radial-gradient(circle at top left, rgba(13, 124, 92, 0.05) 0, var(--bg-secondary, #FFFFFF) 55%, var(--slate-50, #F8FAFC) 100%);
+  background: var(--bg-secondary, #FFFFFF);
   box-shadow: var(--shadow-xl, 0 12px 24px rgba(15, 23, 42, 0.12));
 }
 
@@ -1639,13 +1621,12 @@ body.sidebar-open .sidebar-backdrop {
 
 #setup #division-detail-pane .bunk-chip:hover,
 #setup #division-detail-pane .bunk-pill:hover {
-  background: rgba(13, 124, 92, 0.15);
-  border-color: var(--camp-green, #0D7C5C);
-  box-shadow: 0 4px 10px rgba(13, 124, 92, 0.2);
-  transform: translateY(-0.5px);
+  background: rgba(20, 125, 145, 0.15);
+  border-color: var(--camp-green, #147D91);
+  box-shadow: 0 2px 6px rgba(20, 125, 145, 0.15);
 }
 
-/* Tiny "×" remove icon inside bunk chip (button or span) */
+/* Tiny "×" remove icon inside bunk chip */
 #setup #division-detail-pane .bunk-chip button,
 #setup #division-detail-pane .bunk-pill button {
   border: none;
@@ -1661,7 +1642,7 @@ body.sidebar-open .sidebar-backdrop {
   color: #DC2626;
 }
 
-/* Times row buttons a bit tighter */
+/* Times row buttons */
 #setup #division-detail-pane .time-row button {
   padding-inline: 14px;
 }
@@ -1677,18 +1658,18 @@ body.sidebar-open .sidebar-backdrop {
 }
 
 #setup #division-detail-pane .bunk-pill.activity-button:hover {
-  background: rgba(13, 124, 92, 0.15);
-  border-color: var(--camp-green, #0D7C5C);
+  background: rgba(20, 125, 145, 0.15);
+  border-color: var(--camp-green, #147D91);
 }
 
-/* Inline edit input that replaces a pill on double tap */
+/* Inline edit input */
 #setup #division-detail-pane .bunk-edit-input {
   font-size: 0.8rem;
   padding: 6px 12px;
   border-radius: var(--radius-full, 999px);
-  border: 1px solid var(--camp-green, #0D7C5C);
+  border: 1px solid var(--camp-green, #147D91);
   outline: none;
-  box-shadow: 0 0 0 2px rgba(13, 124, 92, 0.2);
+  box-shadow: 0 0 0 2px rgba(20, 125, 145, 0.2);
   min-width: 80px;
 }
 
@@ -1696,18 +1677,18 @@ body.sidebar-open .sidebar-backdrop {
 /* Back to Dashboard Link         */
 /* =============================== */
 .back-to-dashboard {
-  color: var(--camp-green, #0D7C5C);
+  color: var(--camp-green, #147D91);
   text-decoration: none;
   font-weight: 500;
   font-size: 0.9rem;
   margin-right: 16px;
   padding: 8px 14px;
   border-radius: var(--radius-md, 12px);
-  transition: all var(--transition-base, 0.2s) var(--ease-out);
+  transition: background var(--transition-base, 0.2s) var(--ease-out);
 }
 
 .back-to-dashboard:hover {
-  background: rgba(13, 124, 92, 0.1);
+  background: rgba(20, 125, 145, 0.1);
 }
 
 /* =============================== */
@@ -1715,8 +1696,8 @@ body.sidebar-open .sidebar-backdrop {
 /* =============================== */
 .badge-success,
 .status-success {
-  background: rgba(13, 124, 92, 0.12);
-  color: var(--camp-green-dark, #065F46);
+  background: rgba(20, 125, 145, 0.12);
+  color: var(--camp-green-dark, #0F5F6E);
 }
 
 .badge-warning,
@@ -1747,13 +1728,12 @@ body.sidebar-open .sidebar-backdrop {
 /* =============================== */
 /* OVERRIDE LEGACY BLUE COLORS    */
 /* =============================== */
-/* Force Campistry green over any legacy blue */
 a {
-  color: var(--camp-green, #0D7C5C);
+  color: var(--camp-green, #147D91);
 }
 
 a:hover {
-  color: var(--camp-green-dark, #065F46);
+  color: var(--camp-green-dark, #0F5F6E);
 }
 
 /* Override common blue classes/patterns */
@@ -1765,7 +1745,7 @@ a:hover {
 [style*="color:#2563eb"],
 [style*="color: #1a5fb4"],
 [style*="color:#1a5fb4"] {
-  color: var(--camp-green, #0D7C5C) !important;
+  color: var(--camp-green, #147D91) !important;
 }
 
 .bg-blue-600,
@@ -1776,18 +1756,18 @@ a:hover {
 [style*="background:#2563eb"],
 [style*="background: #1a5fb4"],
 [style*="background:#1a5fb4"] {
-  background: var(--camp-green, #0D7C5C) !important;
+  background: var(--camp-green, #147D91) !important;
 }
 
 .border-blue-600,
 [style*="border-color: #007bff"],
 [style*="border-color:#007bff"] {
-  border-color: var(--camp-green, #0D7C5C) !important;
+  border-color: var(--camp-green, #147D91) !important;
 }
 
 /* Override specific legacy patterns */
 .report-title {
-  border-bottom-color: var(--camp-green, #0D7C5C);
+  border-bottom-color: var(--camp-green, #147D91);
 }
 
 /* =============================== */
@@ -1804,7 +1784,7 @@ a:hover {
 }
 
 .toast-success {
-  background: var(--camp-green, #0D7C5C);
+  background: var(--camp-green, #147D91);
 }
 
 .toast-error {
@@ -1859,7 +1839,7 @@ a:hover {
 /* =============================== */
 .loading-spinner {
   border: 3px solid var(--slate-200, #E2E8F0);
-  border-top-color: var(--camp-green, #0D7C5C);
+  border-top-color: var(--camp-green, #147D91);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -1941,8 +1921,8 @@ a:hover {
 }
 
 .dropdown-item.active {
-  background: rgba(13, 124, 92, 0.1);
-  color: var(--camp-green-dark, #065F46);
+  background: rgba(20, 125, 145, 0.1);
+  color: var(--camp-green-dark, #0F5F6E);
 }
 
 .dropdown-divider {
@@ -1973,7 +1953,7 @@ a:hover {
   border-radius: var(--radius-lg, 16px);
   padding: 20px;
   box-shadow: var(--shadow-md, 0 4px 8px rgba(15, 23, 42, 0.08));
-  transition: all var(--transition-base, 0.2s) var(--ease-out);
+  transition: box-shadow var(--transition-base, 0.2s) var(--ease-out);
 }
 
 .card:hover {
@@ -2003,7 +1983,7 @@ a:hover {
 /* FOCUS STATES - Accessibility   */
 /* =============================== */
 :focus-visible {
-  outline: 2px solid var(--camp-green, #0D7C5C);
+  outline: 2px solid var(--camp-green, #147D91);
   outline-offset: 2px;
 }
 
@@ -2033,6 +2013,6 @@ a:hover {
 /* SELECTION STYLING              */
 /* =============================== */
 ::selection {
-  background: rgba(13, 124, 92, 0.2);
+  background: rgba(20, 125, 145, 0.2);
   color: var(--slate-900, #0F172A);
 }
