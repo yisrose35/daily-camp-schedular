@@ -1605,6 +1605,111 @@ label.override-checkbox span {
 /* =============================== */
 /* Print Center                   */
 /* =============================== */
+/* ======================================== */
+/* PRINT CENTER - Additional Print Styles  */
+/* Add these to your existing styles.css   */
+/* ======================================== */
+
+/* Hide modal during actual print */
+@media print {
+    .print-preview-modal-overlay {
+        display: none !important;
+    }
+    
+    .print-dashboard > *:not(#printable-area) {
+        display: none !important;
+    }
+    
+    #printable-area {
+        display: block !important;
+    }
+    
+    .print-page {
+        page-break-after: always;
+        margin: 0;
+        padding: 20px;
+    }
+    
+    .print-page:last-child {
+        page-break-after: avoid;
+    }
+    
+    .page-break {
+        page-break-after: always;
+        height: 0;
+        visibility: hidden;
+    }
+    
+    .print-camp-name {
+        font-size: 16pt !important;
+        color: #000 !important;
+        margin-bottom: 8px;
+    }
+    
+    .print-header h2 {
+        font-size: 14pt !important;
+    }
+    
+    .print-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    
+    .print-table th,
+    .print-table td {
+        border: 1px solid #000 !important;
+    }
+    
+    .print-table th {
+        background: #e0e0e0 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    
+    /* Font size variations for print */
+    .print-font-small .print-table { font-size: 8pt !important; }
+    .print-font-small .print-table th,
+    .print-font-small .print-table td { padding: 3px 5px !important; }
+    
+    .print-font-medium .print-table { font-size: 10pt !important; }
+    .print-font-medium .print-table th,
+    .print-font-medium .print-table td { padding: 6px 8px !important; }
+    
+    .print-font-large .print-table { font-size: 12pt !important; }
+    .print-font-large .print-table th,
+    .print-font-large .print-table td { padding: 8px 10px !important; }
+    
+    /* Compact mode */
+    .print-compact .print-table th,
+    .print-compact .print-table td { padding: 2px 4px !important; }
+    .print-compact .print-header { margin-bottom: 6px !important; }
+    
+    /* Grayscale mode */
+    .print-grayscale,
+    .print-grayscale * {
+        color: #000 !important;
+    }
+    
+    .print-grayscale .print-table th {
+        background: #ccc !important;
+    }
+    
+    .print-grayscale td[style*="background"] {
+        background: #eee !important;
+    }
+    
+    /* Landscape pages */
+    .print-page.landscape {
+        size: landscape;
+    }
+}
+
+/* No-print class for elements that shouldn't appear in print */
+@media print {
+    .no-print {
+        display: none !important;
+    }
+}
 .print-dashboard {
   padding: 20px;
 }
