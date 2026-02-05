@@ -225,7 +225,7 @@
             if (fieldProps.sharableWith) {
                 var sw = fieldProps.sharableWith;
                 if (sw.type === 'not_sharable') { capacity = 1; sharingType = 'not_sharable'; }
-                else if (sw.type === 'all') { capacity = 999; sharingType = 'all'; }
+                else if (sw.type === 'all') { capacity = parseInt(sw.capacity) || 999; sharingType = 'all'; }
                 else if (sw.type === 'same_division') { capacity = parseInt(sw.capacity) || 2; sharingType = 'same_division'; }
                 else if (sw.type === 'custom') { capacity = parseInt(sw.capacity) || 2; sharingType = 'custom'; }
                 else if (sw.capacity) { capacity = parseInt(sw.capacity); sharingType = 'same_division'; }
@@ -704,6 +704,13 @@
                     if (sameDivUse >= (fieldPropCross ? fieldPropCross.capacity : getFieldCapacity(fieldName))) return 999999;
                 } else if (sharingTypeCheck === 'custom') {
                     if (checkCrossDivisionTimeConflict(fieldName, blockDivName, blockStart, blockEnd, bunk)) return 999999;
+                    var customDivUse = countSameDivisionUsage(fieldName, blockDivName, blockStart, blockEnd, bunk);
+                    if (customDivUse >= (fieldPropCross ? fieldPropCross.capacity : getFieldCapacity(fieldName))) return 999999;
+                } else {
+                    // type 'all' or any other — enforce total capacity from time index
+                    var totalUse = getFieldUsageFromTimeIndex(normName(fieldName), blockStart, blockEnd, bunk);
+                    var totalCap = fieldPropCross ? fieldPropCross.capacity : getFieldCapacity(fieldName);
+                    if (totalUse >= totalCap) return 999999;
                 }
             }
         }
