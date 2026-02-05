@@ -81,7 +81,7 @@
         UNDER_UTILIZED_BONUS: -2000,             // Significantly under-utilized
         SLIGHTLY_UNDER_BONUS: -800,              // Slightly under average
         GOOD_VARIETY_BONUS: -400,                // General variety bonus
-        BALANCE_BONUS: -600,                     // Balancing sports vs specials
+        BALANCE_BONUS: -800,                     // Balancing sports vs specials
 
         // =====================================================================
         // ★★★ ENHANCED DISTRIBUTION PENALTIES - CROSS-BUNK FAIRNESS ★★★
