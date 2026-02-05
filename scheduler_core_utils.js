@@ -490,7 +490,7 @@
         
         // ★★★ v7.6: v3.0 sharing model ★★★
         if (props.sharableWith) {
-            if (props.sharableWith.type === 'all') return 999;
+            if (props.sharableWith.type === 'all') return parseInt(props.sharableWith.capacity) || 999;
             if (props.sharableWith.type === 'same_division') {
                 return parseInt(props.sharableWith.capacity) || 2;
             }
