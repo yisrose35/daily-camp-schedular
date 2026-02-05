@@ -9,6 +9,15 @@
     --camp-green-dark: #0F5F6E;
     --camp-forest: #0A4A56;
     
+    /* Teal semantic aliases (used by setup tabs) */
+    --teal-primary: #147D91;
+    --teal-dark: #0F5F6E;
+    --teal-darker: #0F6A7A;
+    --teal-darkest: #0A4A56;
+    --teal-tint: #e6f4f7;
+    --teal-tint-bg: #f0f9fb;
+    --teal-border: #b2dce6;
+    
     --camp-gold: #F59E0B;
     --camp-gold-light: #FCD34D;
     
