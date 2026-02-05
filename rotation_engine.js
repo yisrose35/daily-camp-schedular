@@ -363,22 +363,30 @@ var _todayCacheGeneration = 0;
      * Get all activities done by a bunk TODAY (before a specific slot)
      */
     RotationEngine.getActivitiesDoneToday = function(bunkName, beforeSlotIndex) {
-        if (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getActivitiesDoneToday) {
-            return window.SchedulerCoreUtils.getActivitiesDoneToday(bunkName, beforeSlotIndex);
-        }
-        // Fallback
-        var activities = new Set();
+    var cacheKey = bunkName + '|' + beforeSlotIndex;
+    
+    var cached = _todayActivityCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+
+    var activities;
+    if (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getActivitiesDoneToday) {
+        activities = window.SchedulerCoreUtils.getActivitiesDoneToday(bunkName, beforeSlotIndex);
+    } else {
+        activities = new Set();
         var schedule = window.scheduleAssignments && window.scheduleAssignments[bunkName];
-        if (!schedule) return activities;
-        
-        for (var i = 0; i < beforeSlotIndex && i < schedule.length; i++) {
-            var entry = schedule[i];
-            if (entry && entry._activity && !entry._isTransition && !entry.continuation) {
-                activities.add(entry._activity.toLowerCase().trim());
+        if (schedule) {
+            for (var i = 0; i < beforeSlotIndex && i < schedule.length; i++) {
+                var entry = schedule[i];
+                if (entry && entry._activity && !entry._isTransition && !entry.continuation) {
+                    activities.add(entry._activity.toLowerCase().trim());
+                }
             }
         }
-        return activities;
-    };
+    }
+
+    _todayActivityCache.set(cacheKey, activities);
+    return activities;
+};
 
     /**
      * Get activities done by a bunk YESTERDAY
