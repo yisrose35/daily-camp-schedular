@@ -1,5 +1,5 @@
 // ============================================================================
-// rotation_engine.js - SUPERCHARGED ACTIVITY ROTATION SYSTEM v2.3
+// rotation_engine.js - SUPERCHARGED ACTIVITY ROTATION SYSTEM v2.4
 // ============================================================================
 // ★★★ SINGLE SOURCE OF TRUTH FOR ALL ROTATION LOGIC ★★★
 //
@@ -21,12 +21,22 @@
 // - rebuildAllHistory and verifyRotationScores utilities
 // - Better edge case handling
 //
+// KEY FIXES IN v2.4:
+// - ★★★ GOTCHA 1: Recency now checked BEFORE novelty bonuses ★★★
+//   (Activity done yesterday but only once no longer gets a bonus)
+// - ★★★ GOTCHA 2: Variety balance + general variety combined, not early-return ★★★
+//   (Variety bonus no longer gets MORE generous as day fills up)
+// - ★★★ GOTCHA 3: Streak weekCount fallback penalties strengthened ★★★
+//   (No more 20x cliff between streak detection and weekCount fallback)
+// - ★★★ GOTCHA 4: Recency fallback now has 4-day and 5-day checks ★★★
+// - ★★★ GOTCHA 5: Coverage bonus scaled by existing coverage ratio ★★★
+//
 // SCORING PHILOSOPHY:
 // - Lower scores = BETTER (we minimize penalty)
 // - Same day repeat = IMPOSSIBLE (returns Infinity)
 // - Yesterday repeat = EXTREMELY BAD (+12000)
 // - Streaks = ESCALATING penalties (2x, 4x, 8x multipliers)
-// - Never done before = HUGE BONUS (-5000)
+// - Never done before = HUGE BONUS (-5000) BUT only if not recent
 //
 // ★★★ ALL OTHER FILES SHOULD DELEGATE TO THIS ENGINE ★★★
 // ============================================================================
@@ -76,8 +86,8 @@
         // ★★★ ENHANCED VARIETY BONUSES - MUCH STRONGER ★★★
         // =====================================================================
         NEVER_DONE_BONUS: -5000,                 // NEVER done - HUGE bonus!
-        DONE_ONCE_BONUS: -3000,                  // Only done once ever
-        DONE_TWICE_BONUS: -1500,                 // Only done twice
+        DONE_ONCE_BONUS: -3000,                  // Only done once ever (only if recency safe)
+        DONE_TWICE_BONUS: -1500,                 // Only done twice (only if recency safe)
         UNDER_UTILIZED_BONUS: -2000,             // Significantly under-utilized
         SLIGHTLY_UNDER_BONUS: -800,              // Slightly under average
         GOOD_VARIETY_BONUS: -400,                // General variety bonus
@@ -579,8 +589,13 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
     // =========================================================================
 
     /**
-     * Calculate RECENCY score with real history scanning
+     * ★★★ GOTCHA 1 FIX: Calculate RECENCY score with real history scanning ★★★
      * LOWER IS BETTER
+     * 
+     * OLD BUG: count===1 returned DONE_ONCE_BONUS (-3000) BEFORE checking daysSince.
+     *   Activity done yesterday but only once → got -3000 bonus instead of +12000 penalty!
+     * 
+     * FIX: Always check daysSince FIRST. Novelty bonuses only apply when recency is safe.
      */
     RotationEngine.calculateRecencyScore = function(bunkName, activityName, beforeSlotIndex) {
         var actLower = (activityName || '').toLowerCase().trim();
@@ -595,17 +610,9 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var history = RotationEngine.getBunkHistory(bunkName);
         var actHistory = history.byActivity[activityName];
         
-        // Never done at all - HUGE bonus!
+        // Never done at all - HUGE bonus! (no recency conflict possible)
         if (!actHistory || actHistory.count === 0) {
             return CONFIG.NEVER_DONE_BONUS;
-        }
-        
-        // Check total count for novelty bonuses
-        if (actHistory.count === 1) {
-            return CONFIG.DONE_ONCE_BONUS;
-        }
-        if (actHistory.count === 2) {
-            return CONFIG.DONE_TWICE_BONUS;
         }
         
         var daysSince = actHistory.daysSinceLast;
@@ -615,21 +622,38 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             return RotationEngine.calculateRecencyScoreFallback(bunkName, activityName, beforeSlotIndex);
         }
         
-        // Apply recency penalties based on actual days
-        if (daysSince === 1) return CONFIG.YESTERDAY_PENALTY;
-        if (daysSince === 2) return CONFIG.TWO_DAYS_AGO_PENALTY;
-        if (daysSince === 3) return CONFIG.THREE_DAYS_AGO_PENALTY;
-        if (daysSince === 4) return CONFIG.FOUR_DAYS_AGO_PENALTY;
-        if (daysSince === 5) return CONFIG.FIVE_DAYS_AGO_PENALTY;
-        if (daysSince <= 7) return CONFIG.SIX_SEVEN_DAYS_PENALTY;
+        // ★★★ v2.4 FIX: Apply recency penalties FIRST — these are non-negotiable ★★★
+        var recencyPenalty = 0;
+        if (daysSince === 1) recencyPenalty = CONFIG.YESTERDAY_PENALTY;
+        else if (daysSince === 2) recencyPenalty = CONFIG.TWO_DAYS_AGO_PENALTY;
+        else if (daysSince === 3) recencyPenalty = CONFIG.THREE_DAYS_AGO_PENALTY;
+        else if (daysSince === 4) recencyPenalty = CONFIG.FOUR_DAYS_AGO_PENALTY;
+        else if (daysSince === 5) recencyPenalty = CONFIG.FIVE_DAYS_AGO_PENALTY;
+        else if (daysSince <= 7) recencyPenalty = CONFIG.SIX_SEVEN_DAYS_PENALTY;
+        else {
+            var weeksAgo = Math.floor(daysSince / 7);
+            recencyPenalty = Math.max(50, CONFIG.WEEK_PLUS_PENALTY * Math.pow(CONFIG.RECENCY_DECAY_FACTOR, weeksAgo));
+        }
         
-        // More than a week ago - apply decay
-        var weeksAgo = Math.floor(daysSince / 7);
-        return Math.max(50, CONFIG.WEEK_PLUS_PENALTY * Math.pow(CONFIG.RECENCY_DECAY_FACTOR, weeksAgo));
+        // ★★★ v2.4 FIX: Only apply novelty bonuses when recency is SAFE (4+ days ago) ★★★
+        // This prevents "done once yesterday" from getting a bonus instead of a penalty
+        if (daysSince >= 4) {
+            if (actHistory.count === 1) {
+                // Done only once AND last time was 4+ days ago — safe to give novelty bonus
+                recencyPenalty = Math.min(recencyPenalty, CONFIG.DONE_ONCE_BONUS);
+            } else if (actHistory.count === 2) {
+                // Done only twice AND last time was 4+ days ago — moderate novelty bonus
+                recencyPenalty = Math.min(recencyPenalty, CONFIG.DONE_TWICE_BONUS);
+            }
+        }
+        
+        return recencyPenalty;
     };
 
     /**
-     * Fallback recency calculation if history scanning fails
+     * ★★★ GOTCHA 4 FIX: Fallback recency with all day checks ★★★
+     * 
+     * OLD BUG: Missing 4-day and 5-day penalty checks (jumped from 3 days to <=7)
      */
     RotationEngine.calculateRecencyScoreFallback = function(bunkName, activityName, beforeSlotIndex) {
         var daysSince = RotationEngine.getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
@@ -639,6 +663,8 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         if (daysSince === 1) return CONFIG.YESTERDAY_PENALTY;
         if (daysSince === 2) return CONFIG.TWO_DAYS_AGO_PENALTY;
         if (daysSince === 3) return CONFIG.THREE_DAYS_AGO_PENALTY;
+        if (daysSince === 4) return CONFIG.FOUR_DAYS_AGO_PENALTY;
+        if (daysSince === 5) return CONFIG.FIVE_DAYS_AGO_PENALTY;
         if (daysSince <= 7) return CONFIG.SIX_SEVEN_DAYS_PENALTY;
         
         var weeksAgo = Math.floor(daysSince / 7);
@@ -646,8 +672,13 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
     };
 
     /**
-     * ★★★ STREAK DETECTION SCORE ★★★
+     * ★★★ GOTCHA 3 FIX: STREAK DETECTION SCORE ★★★
      * Escalating penalties for doing same activity multiple recent days
+     * 
+     * OLD BUG: streak>=2 → 24,000 but weekCount=2 (if streak detection missed) → only 1,200
+     *   That's a 20x cliff if streak detection has a gap day.
+     * 
+     * FIX: Strengthen weekCount penalties to bridge the cliff.
      */
     RotationEngine.calculateStreakScore = function(bunkName, activityName) {
         var history = RotationEngine.getBunkHistory(bunkName);
@@ -665,17 +696,21 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             return CONFIG.YESTERDAY_PENALTY * CONFIG.STREAK_TWO_DAYS_MULTIPLIER;
         }
         
-        // Also check frequency in last week (even if not consecutive)
+        // ★★★ v2.4 FIX: Stronger weekCount penalties to close the cliff ★★★
+        // Old: weekCount>=2 → ABOVE_AVERAGE_PENALTY (1200). New: escalated properly.
         var weekCount = history.recentWeek[activityName] || 0;
         
         if (weekCount >= 4) {
-            return CONFIG.HIGH_FREQUENCY_PENALTY * 2;
+            // 4+ times this week (non-consecutive) — nearly as bad as a 3-day streak
+            return CONFIG.YESTERDAY_PENALTY * CONFIG.STREAK_THREE_DAYS_MULTIPLIER * 0.8;
         }
         if (weekCount >= 3) {
-            return CONFIG.HIGH_FREQUENCY_PENALTY;
+            // 3 times this week — as bad as a 2-day streak
+            return CONFIG.YESTERDAY_PENALTY * CONFIG.STREAK_TWO_DAYS_MULTIPLIER * 0.8;
         }
         if (weekCount >= 2) {
-            return CONFIG.ABOVE_AVERAGE_PENALTY;
+            // 2 times this week — significant penalty (bridges the cliff)
+            return CONFIG.YESTERDAY_PENALTY * 0.8;
         }
         
         return 0;
@@ -698,7 +733,15 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
     };
 
     /**
-     * Calculate VARIETY score - enhanced version
+     * ★★★ GOTCHA 2 FIX: Calculate VARIETY score ★★★
+     * 
+     * OLD BUG #1: Returned BALANCE_BONUS early, skipping general variety calculation.
+     *   If balance was relevant, variety-of-today check was completely ignored.
+     * 
+     * OLD BUG #2: GOOD_VARIETY_BONUS - (50 * uniqueToday) got MORE generous as day fills.
+     *   uniqueToday=0: -400, uniqueToday=4: -600. Should be the opposite.
+     * 
+     * FIX: Combine balance + variety instead of early return. Fix scaling direction.
      */
     RotationEngine.calculateVarietyScore = function(bunkName, activityName, beforeSlotIndex) {
         var todayActivities = RotationEngine.getActivitiesDoneToday(bunkName, beforeSlotIndex);
@@ -709,7 +752,8 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             return CONFIG.SAME_DAY_PENALTY;
         }
 
-        // Check activity type balance (sports vs specials)
+        // --- Score component 1: Type balance (sports vs specials) ---
+        var balanceScore = 0;
         var todaySports = 0;
         var todaySpecials = 0;
 
@@ -723,24 +767,30 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
 
         var thisIsSpecial = RotationEngine.isSpecialActivity(activityName);
 
-        // Strong bonus for balancing the day
         if (thisIsSpecial && todaySports > todaySpecials + 1) {
-            return CONFIG.BALANCE_BONUS * 2;
-        }
-        if (thisIsSpecial && todaySports > todaySpecials) {
-            return CONFIG.BALANCE_BONUS;
+            balanceScore = CONFIG.BALANCE_BONUS * 2;   // Strong bonus — specials way behind
+        } else if (thisIsSpecial && todaySports > todaySpecials) {
+            balanceScore = CONFIG.BALANCE_BONUS;        // Moderate bonus
+        } else if (!thisIsSpecial && todaySpecials > todaySports + 1) {
+            balanceScore = CONFIG.BALANCE_BONUS * 2;   // Strong bonus — sports way behind
+        } else if (!thisIsSpecial && todaySpecials > todaySports) {
+            balanceScore = CONFIG.BALANCE_BONUS;        // Moderate bonus
+        } else if (thisIsSpecial && todaySpecials > todaySports + 1) {
+            balanceScore = -CONFIG.BALANCE_BONUS;       // Penalty — too many specials already
+        } else if (!thisIsSpecial && todaySports > todaySpecials + 1) {
+            balanceScore = -CONFIG.BALANCE_BONUS;       // Penalty — too many sports already
         }
 
-        if (!thisIsSpecial && todaySpecials > todaySports + 1) {
-            return CONFIG.BALANCE_BONUS * 2;
-        }
-        if (!thisIsSpecial && todaySpecials > todaySports) {
-            return CONFIG.BALANCE_BONUS;
-        }
-
-        // General variety bonus
+        // --- Score component 2: General variety ---
+        // ★★★ v2.4 FIX: Bonus DECREASES as day fills (more things already done = less urgent) ★★★
         var uniqueToday = todayActivities.size;
-        return CONFIG.GOOD_VARIETY_BONUS - (50 * Math.min(uniqueToday, 4));
+        var generalVariety = CONFIG.GOOD_VARIETY_BONUS + (50 * Math.min(uniqueToday, 4));
+        // uniqueToday=0: -400 (strong bonus for first activity of the day)
+        // uniqueToday=2: -300
+        // uniqueToday=4: -200 (weaker — day is already varied)
+
+        // ★★★ v2.4 FIX: COMBINE both scores instead of early-returning on balance ★★★
+        return balanceScore + generalVariety;
     };
 
     /**
@@ -793,8 +843,13 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
     };
 
     /**
-     * ★★★ ACTIVITY COVERAGE SCORE ★★★
+     * ★★★ GOTCHA 5 FIX: ACTIVITY COVERAGE SCORE ★★★
      * Encourage bunks to try ALL available activities
+     * 
+     * OLD BUG: Returned MISSING_ACTIVITY_BONUS (-3500) even if bunk has 95% coverage.
+     *   Combined with other bonuses, this could overpower strong recency penalties.
+     * 
+     * FIX: Scale the bonus by how much coverage the bunk still needs.
      */
     RotationEngine.calculateCoverageScore = function(bunkName, activityName) {
         var allActivities = RotationEngine.getAllActivityNames();
@@ -808,7 +863,13 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var hasTriedThis = history.byActivity[activityName] && history.byActivity[activityName].count > 0;
         
         if (!hasTriedThis) {
-            return CONFIG.MISSING_ACTIVITY_BONUS;
+            // ★★★ v2.4 FIX: Scale bonus by how much coverage is still needed ★★★
+            // Low coverage (tried 20% of activities) → full bonus
+            // High coverage (tried 80% of activities) → reduced bonus
+            // This prevents the last untried activity from overpowering recency
+            var needRatio = 1 - coverageRatio;  // 0.0 (tried everything) to 1.0 (tried nothing)
+            var scaledBonus = CONFIG.MISSING_ACTIVITY_BONUS * Math.max(0.3, needRatio);
+            return scaledBonus;
         }
         
         // Low overall coverage - bonus for trying less-used activities
@@ -1073,7 +1134,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
     };
 
     RotationEngine.debugConfig = function() {
-        console.log('\n=== SUPERCHARGED ROTATION CONFIG v2.2 ===');
+        console.log('\n=== SUPERCHARGED ROTATION CONFIG v2.4 ===');
         console.log('Same Day:', CONFIG.SAME_DAY_PENALTY);
         console.log('Yesterday:', CONFIG.YESTERDAY_PENALTY);
         console.log('2 Days Ago:', CONFIG.TWO_DAYS_AGO_PENALTY);
@@ -1085,9 +1146,9 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         });
         console.log('\nBonuses:');
         console.log('  Never Done:', CONFIG.NEVER_DONE_BONUS);
-        console.log('  Done Once:', CONFIG.DONE_ONCE_BONUS);
-        console.log('  Done Twice:', CONFIG.DONE_TWICE_BONUS);
-        console.log('  Missing Activity:', CONFIG.MISSING_ACTIVITY_BONUS);
+        console.log('  Done Once:', CONFIG.DONE_ONCE_BONUS, '(only if 4+ days ago)');
+        console.log('  Done Twice:', CONFIG.DONE_TWICE_BONUS, '(only if 4+ days ago)');
+        console.log('  Missing Activity:', CONFIG.MISSING_ACTIVITY_BONUS, '(scaled by coverage need)');
         console.log('\nDistribution Penalties:');
         console.log('  Most in Division:', CONFIG.MOST_IN_DIVISION_PENALTY);
         console.log('  Severe Imbalance:', CONFIG.SEVERE_IMBALANCE_PENALTY);
@@ -1130,5 +1191,5 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
     window.debugDivisionRotation = RotationEngine.debugDivisionRotation;
     window.debugRotationConfig = RotationEngine.debugConfig;
 
-    console.log('[RotationEngine] v2.2 SUPERCHARGED loaded - Single Source of Truth');
+    console.log('[RotationEngine] v2.4 loaded - Gotcha fixes: recency>novelty, balanced variety, streak cliff, coverage scaling');
 })();
