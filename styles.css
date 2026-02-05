@@ -579,6 +579,697 @@ label.override-checkbox span {
 /* =============================== */
 /* League Standings               */
 /* =============================== */
+/* ---------------------------------------------------------------
+   LEAGUE PANEL LAYOUT (initLeaguesPanel)
+   --------------------------------------------------------------- */
+.league-panel-grid {
+  display: flex;
+  gap: 24px;
+}
+
+.league-panel-sidebar {
+  flex: 0 0 260px;
+}
+
+.league-panel-sidebar h3 {
+  margin: 0 0 12px 0;
+  font-size: 1rem;
+  color: var(--slate-900, #0F172A);
+}
+
+.league-add-row {
+  margin-bottom: 12px;
+  display: flex;
+  gap: 8px;
+}
+
+.league-add-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--slate-300, #CBD5E1);
+  border-radius: var(--radius-sm, 8px);
+  font-size: 0.9rem;
+  color: var(--slate-900, #0F172A);
+}
+
+.league-add-input:focus {
+  outline: none;
+  border-color: var(--camp-green, #147D91);
+  box-shadow: 0 0 0 3px rgba(20, 125, 145, 0.15);
+}
+
+.league-add-btn {
+  padding: 8px 14px;
+  background: var(--camp-green, #147D91);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm, 8px);
+  cursor: pointer;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(20, 125, 145, 0.2);
+  transition: all var(--transition-base, 0.2s) var(--ease-out);
+}
+
+.league-add-btn:hover {
+  background: var(--camp-green-dark, #0F5F6E);
+  box-shadow: 0 2px 8px rgba(20, 125, 145, 0.3);
+}
+
+.league-panel-main {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------
+   DETAIL PANE HEADER
+   --------------------------------------------------------------- */
+.league-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+  border-bottom: 2px solid var(--slate-200, #E2E8F0);
+  padding-bottom: 10px;
+}
+
+.league-detail-title {
+  margin: 0;
+  font-size: 1.1rem;
+  color: var(--slate-900, #0F172A);
+}
+
+.league-btn-group {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---------------------------------------------------------------
+   BUTTONS — Edit Setup / Delete / Import / Add Game / Tab
+   --------------------------------------------------------------- */
+.league-btn-neutral {
+  background: var(--bg-secondary, #FFFFFF);
+  color: var(--slate-900, #0F172A);
+  border: 1px solid var(--slate-300, #CBD5E1);
+  border-radius: var(--radius-full, 999px);
+  font-weight: 500;
+  cursor: pointer;
+  padding: 6px 14px;
+  transition: all var(--transition-base, 0.2s) var(--ease-out);
+}
+
+.league-btn-neutral:hover {
+  background: var(--slate-100, #F1F5F9);
+  border-color: var(--slate-400, #94A3B8);
+}
+
+.league-btn-neutral.active {
+  background: var(--slate-100, #F1F5F9);
+}
+
+.league-btn-delete {
+  background: var(--bg-secondary, #FFFFFF);
+  color: #DC2626;
+  border: 1px solid #FECACA;
+  border-radius: var(--radius-full, 999px);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 6px 14px;
+  box-shadow: 0 4px 10px rgba(220, 38, 38, 0.18);
+  transition: all var(--transition-base, 0.2s) var(--ease-out);
+}
+
+.league-btn-delete:hover {
+  background: #FEE2E2;
+  border-color: #F87171;
+}
+
+.league-btn-import {
+  padding: 8px 16px;
+  border-radius: var(--radius-sm, 8px);
+  background: var(--slate-900, #0F172A);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.85rem;
+  transition: all var(--transition-base, 0.2s) var(--ease-out);
+}
+
+.league-btn-import:hover {
+  background: var(--slate-800, #1E293B);
+  box-shadow: var(--shadow-md, 0 4px 8px rgba(15, 23, 42, 0.08));
+}
+
+.league-btn-add-game {
+  padding: 10px 16px;
+  border: 1px solid var(--slate-200, #E2E8F0);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--bg-secondary, #FFFFFF);
+  cursor: pointer;
+  color: var(--slate-500, #64748B);
+  font-weight: 500;
+  font-size: 0.875rem;
+  width: 100%;
+  transition: all var(--transition-base, 0.2s) var(--ease-out);
+}
+
+.league-btn-add-game:hover {
+  border-color: var(--slate-900, #0F172A);
+  color: var(--slate-900, #0F172A);
+}
+
+/* ---------------------------------------------------------------
+   CONFIG CONTAINER (collapsible setup)
+   --------------------------------------------------------------- */
+.league-config-container {
+  display: none;
+  margin-bottom: 20px;
+  animation: fadeIn 0.2s ease-in-out;
+}
+
+.league-config-container.open {
+  display: block;
+}
+
+/* ---------------------------------------------------------------
+   PRIORITY DESCRIPTION / NOTE
+   --------------------------------------------------------------- */
+.league-priority-desc {
+  font-size: 0.8rem;
+  color: var(--slate-500, #64748B);
+  margin: 0 0 10px 0;
+}
+
+.league-priority-note {
+  font-size: 0.75rem;
+  color: var(--slate-400, #94A3B8);
+  margin: 8px 0 0 0;
+  font-style: italic;
+}
+
+.league-priority-sub {
+  font-size: 0.7rem;
+  opacity: 0.85;
+}
+
+/* ---------------------------------------------------------------
+   LEAGUE SECTION CARD (override inline — DS vars)
+   --------------------------------------------------------------- */
+.league-section-card {
+  border: 1px solid var(--slate-200, #E2E8F0);
+  border-radius: var(--radius-md, 12px);
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  background: var(--bg-secondary, #FFFFFF);
+}
+
+.league-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.league-section-title {
+  font-weight: 600;
+  color: var(--slate-900, #0F172A);
+  font-size: 0.9rem;
+}
+
+/* ---------------------------------------------------------------
+   PRIORITY TOGGLE (camp-green instead of #00C896)
+   --------------------------------------------------------------- */
+.priority-toggle {
+  display: flex;
+  gap: 10px;
+}
+
+.priority-toggle-btn {
+  flex: 1;
+  padding: 12px;
+  border: 2px solid var(--slate-200, #E2E8F0);
+  border-radius: var(--radius-md, 12px);
+  background: var(--bg-secondary, #FFFFFF);
+  cursor: pointer;
+  text-align: center;
+  transition: all var(--transition-base, 0.2s) var(--ease-out);
+}
+
+.priority-toggle-btn:hover {
+  border-color: var(--camp-green, #147D91);
+}
+
+.priority-toggle-btn.active {
+  border-color: var(--camp-green, #147D91);
+  background: linear-gradient(135deg, var(--camp-green, #147D91) 0%, var(--camp-green-dark, #0F5F6E) 100%);
+  color: #fff;
+}
+
+/* ---------------------------------------------------------------
+   TEAM INPUT
+   --------------------------------------------------------------- */
+.league-team-input {
+  margin-top: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--slate-300, #CBD5E1);
+  border-radius: var(--radius-sm, 8px);
+  font-size: 0.85rem;
+  color: var(--slate-900, #0F172A);
+}
+
+.league-team-input:focus {
+  outline: none;
+  border-color: var(--camp-green, #147D91);
+  box-shadow: 0 0 0 3px rgba(20, 125, 145, 0.15);
+}
+
+/* ---------------------------------------------------------------
+   TAB NAV (camp-green instead of #00C896)
+   --------------------------------------------------------------- */
+.league-tab-nav {
+  margin-bottom: 15px;
+  display: flex;
+  gap: 8px;
+}
+
+.league-tab-btn {
+  border-radius: var(--radius-full, 999px);
+  padding: 8px 16px;
+  border: 1px solid var(--slate-300, #CBD5E1);
+  background: var(--slate-100, #F1F5F9);
+  color: var(--slate-900, #0F172A);
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.875rem;
+  box-shadow: none;
+  transition: all var(--transition-base, 0.2s) var(--ease-out);
+}
+
+.league-tab-btn:hover {
+  background: var(--slate-200, #E2E8F0);
+}
+
+.league-tab-btn.active {
+  background: var(--camp-green, #147D91);
+  color: white;
+  border-color: var(--camp-green, #147D91);
+  box-shadow: 0 3px 8px rgba(20, 125, 145, 0.35);
+}
+
+/* ---------------------------------------------------------------
+   STANDINGS TABLE
+   --------------------------------------------------------------- */
+.league-standings-instructions {
+  font-size: 0.75rem;
+  color: var(--slate-400, #94A3B8);
+  margin-bottom: 12px;
+}
+
+.league-standings-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--bg-secondary, #FFFFFF);
+  border: 1px solid var(--slate-200, #E2E8F0);
+  border-radius: var(--radius-sm, 8px);
+  overflow: hidden;
+}
+
+.league-standings-table thead tr {
+  background: var(--slate-50, #F8FAFC);
+}
+
+.league-standings-table th {
+  padding: 10px 12px;
+  font-weight: 600;
+  color: var(--slate-500, #64748B);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--slate-200, #E2E8F0);
+}
+
+.league-standings-table th.text-center,
+.league-standings-table td.text-center {
+  text-align: center;
+}
+
+.league-standings-table th.text-left,
+.league-standings-table td.text-left {
+  text-align: left;
+}
+
+.league-standings-table tbody tr {
+  transition: background 0.1s;
+}
+
+.league-standings-table tbody tr:hover {
+  background: var(--slate-50, #F8FAFC);
+}
+
+.league-standings-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--slate-100, #F1F5F9);
+}
+
+.league-standings-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.league-rank-cell {
+  font-weight: 600;
+  color: var(--slate-900, #0F172A);
+  text-align: center;
+}
+
+.league-team-cell {
+  font-weight: 500;
+  color: var(--slate-900, #0F172A);
+}
+
+.league-stat-cell {
+  text-align: center;
+  font-weight: 600;
+}
+
+.league-stat-cell.wins { color: #059669; }
+.league-stat-cell.losses { color: #DC2626; }
+.league-stat-cell.ties { color: var(--slate-500, #64748B); }
+
+.league-diff-cell {
+  text-align: center;
+  font-weight: 500;
+}
+
+.league-diff-cell.positive { color: #059669; }
+.league-diff-cell.negative { color: #DC2626; }
+.league-diff-cell.neutral { color: var(--slate-500, #64748B); }
+
+.league-manual-badge {
+  margin-left: 8px;
+  font-size: 0.65rem;
+  background: rgba(245, 158, 11, 0.15);
+  color: #92400E;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.league-stat-editable {
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background 0.1s;
+}
+
+.league-stat-editable:hover {
+  background: var(--slate-100, #F1F5F9);
+}
+
+.league-stat-input {
+  width: 40px;
+  text-align: center;
+  padding: 4px;
+  border: 1px solid var(--camp-green, #147D91);
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: inherit;
+  color: inherit;
+  box-shadow: 0 0 0 2px rgba(20, 125, 145, 0.15);
+}
+
+/* ---------------------------------------------------------------
+   GAME ENTRY SECTION
+   --------------------------------------------------------------- */
+.league-games-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--slate-200, #E2E8F0);
+}
+
+.league-games-title {
+  font-weight: 600;
+  font-size: 1.1rem;
+  color: var(--slate-900, #0F172A);
+}
+
+.league-empty-state {
+  text-align: center;
+  padding: 20px;
+  color: var(--slate-500, #64748B);
+}
+
+/* ---------------------------------------------------------------
+   GAME CARD
+   --------------------------------------------------------------- */
+.league-game-card {
+  background: var(--bg-secondary, #FFFFFF);
+  border: 1px solid var(--slate-200, #E2E8F0);
+  border-radius: var(--radius-sm, 8px);
+  margin-bottom: 12px;
+  overflow: hidden;
+  transition: box-shadow var(--transition-base, 0.2s) var(--ease-out);
+}
+
+.league-game-card:hover {
+  box-shadow: var(--shadow-sm, 0 2px 4px rgba(15, 23, 42, 0.06));
+}
+
+.league-game-card.highlight {
+  box-shadow: 0 0 0 2px var(--camp-green, #147D91);
+}
+
+.league-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: var(--slate-50, #F8FAFC);
+  border-bottom: 1px solid var(--slate-200, #E2E8F0);
+}
+
+.league-card-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--slate-900, #0F172A);
+}
+
+.league-card-date {
+  font-size: 0.8rem;
+  color: var(--slate-500, #64748B);
+}
+
+.league-card-sport {
+  font-size: 0.75rem;
+  color: var(--slate-400, #94A3B8);
+}
+
+/* ---------------------------------------------------------------
+   MATCH ROW
+   --------------------------------------------------------------- */
+.league-match-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--slate-100, #F1F5F9);
+}
+
+.league-match-row:last-child {
+  border-bottom: none;
+}
+
+.league-match-team {
+  font-size: 0.9rem;
+  font-weight: 400;
+  color: var(--slate-500, #64748B);
+}
+
+.league-match-team.team-a {
+  text-align: right;
+  padding-right: 12px;
+}
+
+.league-match-team.team-b {
+  padding-left: 12px;
+}
+
+.league-match-team.winner {
+  font-weight: 600;
+  color: var(--slate-900, #0F172A);
+}
+
+.league-scores-container {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.league-score-input {
+  width: 40px;
+  text-align: center;
+  padding: 6px 4px;
+  border: 1px solid var(--slate-200, #E2E8F0);
+  border-radius: 4px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--slate-900, #0F172A);
+  background: var(--bg-secondary, #FFFFFF);
+  transition: border-color 0.15s;
+}
+
+.league-score-input:focus {
+  outline: none;
+  border-color: var(--camp-green, #147D91);
+  box-shadow: 0 0 0 2px rgba(20, 125, 145, 0.15);
+}
+
+.league-score-input:disabled {
+  background: var(--slate-50, #F8FAFC);
+  color: var(--slate-500, #64748B);
+}
+
+.league-score-input.winner-bg {
+  background: #F0FDF4;
+}
+
+.league-score-input.tie-bg {
+  background: #FFFBEB;
+}
+
+.league-score-separator {
+  color: var(--slate-300, #CBD5E1);
+  font-weight: 400;
+  padding: 0 2px;
+}
+
+.league-match-actions {
+  padding-left: 12px;
+}
+
+.league-match-delete {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--slate-300, #CBD5E1);
+  font-size: 1.1rem;
+  padding: 4px 8px;
+  transition: all 0.15s;
+  line-height: 1;
+  border-radius: var(--radius-xs, 6px);
+}
+
+.league-match-delete:hover {
+  color: #DC2626;
+  background: #FEF2F2;
+}
+
+/* ---------------------------------------------------------------
+   GAME CARD FOOTER
+   --------------------------------------------------------------- */
+.league-card-footer {
+  padding: 8px 16px;
+  border-top: 1px solid var(--slate-100, #F1F5F9);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.league-add-match-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--slate-500, #64748B);
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 4px 0;
+  transition: color 0.15s;
+}
+
+.league-add-match-btn:hover {
+  color: var(--slate-900, #0F172A);
+}
+
+.league-save-status {
+  font-size: 0.75rem;
+  color: var(--camp-green, #147D91);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.league-save-status.visible {
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------------
+   PAST GAMES (collapsible history)
+   --------------------------------------------------------------- */
+.league-past-header {
+  padding: 12px 0;
+  font-weight: 600;
+  color: var(--slate-500, #64748B);
+  cursor: pointer;
+  font-size: 0.9rem;
+  user-select: none;
+  border-top: 1px solid var(--slate-200, #E2E8F0);
+  margin-top: 16px;
+  transition: color 0.15s;
+}
+
+.league-past-header:hover {
+  color: var(--slate-900, #0F172A);
+}
+
+/* ---------------------------------------------------------------
+   INLINE EDIT HELPER (makeEditable)
+   --------------------------------------------------------------- */
+.league-inline-edit {
+  border: none;
+  background: transparent;
+  font: inherit;
+  padding: 0;
+  width: 100%;
+  outline: 2px solid var(--camp-green, #147D91);
+  border-radius: 4px;
+}
+
+/* ---------------------------------------------------------------
+   CHIP REMOVE (x on active team chips)
+   --------------------------------------------------------------- */
+.league-chip-remove {
+  opacity: 0.6;
+  margin-left: 4px;
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------------------
+   TIEBREAKER NOTES
+   --------------------------------------------------------------- */
+.league-tiebreaker-notes {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: var(--slate-50, #F8FAFC);
+  border: 1px solid var(--slate-200, #E2E8F0);
+  border-radius: var(--radius-sm, 8px);
+  font-size: 0.8rem;
+  color: var(--slate-500, #64748B);
+}
+
+.league-tiebreaker-notes p {
+  margin: 4px 0;
+}
+
+/* ---------------------------------------------------------------
+   ANIMATIONS (may already exist in styles.css)
+   --------------------------------------------------------------- */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
 .league-nav {
   padding: 12px 16px;
   background: var(--slate-100, #F1F5F9);
