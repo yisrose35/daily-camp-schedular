@@ -585,6 +585,25 @@
         return name ? KNOWN_SPORTS.has(normName(name)) : false;
     }
 
+    // ★★★ v12.1: LIVE type-balance check for General Activity Slot fairness ★★★
+    function isSpecialCandidate(cand) {
+        return cand && (cand.type === 'special' || cand._type === 'special');
+    }
+
+    function getLiveTypeBalance(bunk, beforeSlot) {
+        var todayDone = getActivitiesDoneToday(bunk, beforeSlot);
+        var sports = 0;
+        var specials = 0;
+        todayDone.forEach(function(act) {
+            if (window.RotationEngine?.isSpecialActivity?.(act)) {
+                specials++;
+            } else if (act !== 'free' && act !== 'free play' && act !== 'lunch' && act !== 'snacks' && act !== 'swim' && act !== 'dismissal') {
+                sports++;
+            }
+        });
+        return { sports: sports, specials: specials };
+    }
+
     function buildAllCandidateOptions(config) {
         var options = [];
         var seenKeys = new Set();
