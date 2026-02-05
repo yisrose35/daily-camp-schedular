@@ -1464,24 +1464,31 @@ function findBestActivityForBunkDivisionAware(bunk, slots, divName, fieldUsageBy
 }
 
 
+
 // =========================================================================
-// HELPER: Check Field Available By Time (CROSS-DIVISION SAFE)
+// HELPER: Check Field Available By Time (CROSS-DIVISION SAFE v2)
+// ★★★ v4.1.1: Now enforces sharableWith.type for cross-division rules ★★★
 // =========================================================================
 function checkFieldAvailableByTime(fieldName, startMin, endMin, excludeBunk, activityProperties) {
     if (startMin === null || endMin === null) return true;
     
     const props = activityProperties?.[fieldName] || {};
-    let maxCapacity = props.sharableWith?.capacity ? parseInt(props.sharableWith.capacity) || 1 : (props.sharable ? 2 : 1);
+    const sharableWith = props.sharableWith || {};
+    const sharingType = sharableWith.type || (props.sharable ? 'same_division' : 'not_sharable');
+    let maxCapacity = 1;
     
-    // Use TimeBasedFieldUsage if available
-    if (window.TimeBasedFieldUsage?.checkAvailability) {
-        const result = window.TimeBasedFieldUsage.checkAvailability(fieldName, startMin, endMin, maxCapacity, excludeBunk);
-        return result.available;
-    }
+    if (sharingType === 'all') { maxCapacity = parseInt(sharableWith.capacity) || 999; }
+    else if (sharingType === 'not_sharable') { maxCapacity = 1; }
+    else if (sharingType === 'same_division') { maxCapacity = parseInt(sharableWith.capacity) || 2; }
+    else if (sharingType === 'custom') { maxCapacity = parseInt(sharableWith.capacity) || 2; }
+    else if (sharableWith.capacity) { maxCapacity = parseInt(sharableWith.capacity); }
+    else if (props.sharable) { maxCapacity = 2; }
     
-    // Fallback: manual check across all divisions
+    // ★★★ v4.1.1: Determine the division of the bunk being placed ★★★
+    const myDivision = getDivisionForBunk(excludeBunk);
+    
     const divisions = window.divisions || {};
-    let usageCount = 0;
+    let sameDivUsage = 0;
     
     for (const [dName, divData] of Object.entries(divisions)) {
         const dSlots = window.divisionTimes?.[dName] || [];
@@ -1502,8 +1509,29 @@ function checkFieldAvailableByTime(fieldName, startMin, endMin, excludeBunk, act
                     
                     const entryField = fieldLabel(entry.field) || entry._activity;
                     if (entryField?.toLowerCase() === fieldName.toLowerCase()) {
-                        usageCount++;
-                        if (usageCount >= maxCapacity) return false;
+                        
+                        // ★★★ CROSS-DIVISION ENFORCEMENT ★★★
+                        if (sharingType === 'not_sharable') {
+                            return false; // Any overlapping usage = blocked
+                        }
+                        
+                        if (sharingType === 'same_division' && dName !== myDivision) {
+                            // Different division using this field at overlapping time — BLOCKED
+                            return false;
+                        }
+                        
+                        if (sharingType === 'custom') {
+                            const allowedDivs = sharableWith.divisions || [];
+                            if (dName !== myDivision) {
+                                if (!allowedDivs.includes(dName) || !allowedDivs.includes(myDivision)) {
+                                    return false;
+                                }
+                            }
+                        }
+                        
+                        // Same division (or type='all') — count toward capacity
+                        sameDivUsage++;
+                        if (sameDivUsage >= maxCapacity) return false;
                     }
                 }
             }
