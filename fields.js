@@ -48,7 +48,7 @@ function initFieldsTab(){
         .list-item { padding: 12px 14px; border-bottom: 1px solid #F3F4F6; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background 0.15s; }
         .list-item:last-child { border-bottom: none; }
         .list-item:hover { background: #F9FAFB; }
-        .list-item.selected { background: #F0FDF4; border-left: 3px solid #10B981; }
+        .list-item.selected { background: #f0f9fb; border-left: 3px solid #147D91; }
         .list-item-name { font-weight: 500; color: #1F2937; font-size: 0.9rem; }
         .list-item-meta { font-size: 0.75rem; color: #6B7280; margin-left: 6px; }
 
@@ -62,25 +62,25 @@ function initFieldsTab(){
         
         /* Inner Controls (Chips, Priority Lists) */
         .chip { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; cursor: pointer; border: 1px solid #E5E7EB; margin-right: 4px; margin-bottom: 4px; transition: all 0.2s; }
-        .chip.active { background: #10B981; color: white; border-color: #10B981; box-shadow: 0 2px 5px rgba(16, 185, 129, 0.3); }
+        .chip.active { background: #147D91; color: white; border-color: #147D91; box-shadow: 0 2px 5px rgba(20, 125, 145, 0.3); }
         .chip.inactive { background: #F3F4F6; color: #374151; }
         .chip:hover { transform: translateY(-1px); }
         
         .priority-list-item { display: flex; align-items: center; gap: 10px; padding: 8px; background: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px; margin-bottom: 6px; }
         .priority-btn { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border: 1px solid #D1D5DB; border-radius: 4px; background: white; cursor: pointer; font-size: 0.8rem; transition: all 0.15s; }
-        .priority-btn:hover:not(:disabled) { border-color: #10B981; color: #10B981; }
+        .priority-btn:hover:not(:disabled) { border-color: #147D91; color: #147D91; }
         .priority-btn:disabled { opacity: 0.4; cursor: default; }
 
         .activity-button { padding: 6px 12px; border: 1px solid #E5E7EB; border-radius: 8px; background: white; cursor: pointer; font-size: 0.85rem; transition: all 0.2s; }
         .activity-button:hover { background: #F9FAFB; }
-        .activity-button.active { background: #ECFDF5; color: #047857; border-color: #10B981; font-weight: 500; }
+        .activity-button.active { background: #e6f4f7; color: #0F5F6E; border-color: #147D91; font-weight: 500; }
         
         /* Switch/Toggle */
         .switch { position: relative; display: inline-block; width: 34px; height: 20px; flex-shrink: 0; }
         .switch input { opacity: 0; width: 0; height: 0; }
         .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
         .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
-        input:checked + .slider { background-color: #10B981; }
+        input:checked + .slider { background-color: #147D91; }
         input:checked + .slider:before { transform: translateX(14px); }
 
         /* Sport Rules Card */
@@ -88,7 +88,7 @@ function initFieldsTab(){
             border: 1px solid #E5E7EB;
             border-radius: 16px;
             padding: 20px;
-            background: linear-gradient(135deg, #F0FDF4 0%, #FFFFFF 100%);
+            background: linear-gradient(135deg, #f0f9fb 0%, #FFFFFF 100%);
             margin-bottom: 24px;
         }
         .sport-rules-header {
@@ -107,7 +107,7 @@ function initFieldsTab(){
             gap: 8px;
         }
         .sport-rules-badge {
-            background: #10B981;
+            background: #147D91;
             color: white;
             padding: 2px 10px;
             border-radius: 999px;
@@ -153,8 +153,8 @@ function initFieldsTab(){
         }
         .sport-rule-input:focus {
             outline: none;
-            border-color: #10B981;
-            box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+            border-color: #147D91;
+            box-shadow: 0 0 0 2px rgba(20, 125, 145, 0.2);
         }
         .sport-rules-hint {
             font-size: 0.85rem;
@@ -163,7 +163,7 @@ function initFieldsTab(){
             padding: 12px;
             background: #F9FAFB;
             border-radius: 8px;
-            border-left: 3px solid #10B981;
+            border-left: 3px solid #147D91;
         }
 
         /* Form inputs */
@@ -176,8 +176,8 @@ function initFieldsTab(){
         }
         .field-input:focus {
             outline: none;
-            border-color: #10B981;
-            box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+            border-color: #147D91;
+            box-shadow: 0 0 0 2px rgba(20, 125, 145, 0.2);
         }
 
         .muted {
@@ -738,7 +738,7 @@ function renderSportRulesSection() {
                     ${sportsHTML}
                 </div>
                 <div style="margin-top:20px; text-align:right;">
-                      <button id="save-sport-rules-btn" style="background:#10B981; color:white; border:none; padding:8px 24px; border-radius:999px; cursor:pointer; font-weight:600; font-size:0.9rem; box-shadow: 0 2px 5px rgba(16,185,129,0.3);">
+                      <button id="save-sport-rules-btn" style="background:#147D91; color:white; border:none; padding:8px 24px; border-radius:999px; cursor:pointer; font-weight:600; font-size:0.9rem; box-shadow: 0 2px 5px rgba(20, 125, 145, 0.3);">
                         Save Rules
                     </button>
                 </div>
@@ -800,10 +800,10 @@ function renderSportRulesSection() {
             // Visual feedback
             const originalText = saveBtn.textContent;
             saveBtn.textContent = '✓ Saved!';
-            saveBtn.style.background = '#059669';
+            saveBtn.style.background = '#0F6A7A';
             setTimeout(() => {
                 saveBtn.textContent = originalText;
-                saveBtn.style.background = '#10B981';
+                saveBtn.style.background = '#147D91';
             }, 1500);
         };
     }
@@ -959,9 +959,9 @@ function renderDetailPane(){
     availability.style.padding = "12px";
     availability.style.borderRadius = "8px";
     availability.style.marginBottom = "20px";
-    availability.style.background = item.available ? "#ECFDF5" : "#FEF2F2";
-    availability.style.border = item.available ? "1px solid #A7F3D0" : "1px solid #FECACA";
-    availability.style.color = item.available ? "#065F46" : "#991B1B";
+    availability.style.background = item.available ? "#e6f4f7" : "#FEF2F2";
+    availability.style.border = item.available ? "1px solid #b2dce6" : "1px solid #FECACA";
+    availability.style.color = item.available ? "#0A4A56" : "#991B1B";
     availability.style.fontSize = "0.9rem";
     availability.style.display = "flex";
     availability.style.justifyContent = "space-between";
@@ -1267,7 +1267,7 @@ function renderSharing(item){
             container.appendChild(note);
         } else {
             const det = document.createElement("div");
-            det.style.cssText = "margin-top:4px; padding-left:12px; border-left:2px solid #10B981;";
+            det.style.cssText = "margin-top:4px; padding-left:12px; border-left:2px solid #147D91;";
 
             // Capacity input
             const capRow = document.createElement("div");
@@ -1289,7 +1289,7 @@ function renderSharing(item){
 
             // Explanation
             const note = document.createElement("div");
-            note.style.cssText = "color:#6B7280; font-size:0.8rem; padding:10px; background:#F0FDF4; border-radius:8px; line-height:1.5;";
+            note.style.cssText = "color:#6B7280; font-size:0.8rem; padding:10px; background:#f0f9fb; border-radius:8px; line-height:1.5;";
             note.innerHTML = `Up to <strong>${rules.capacity || 2}</strong> bunks <strong>within the same grade</strong> can use this simultaneously.<br>Bunks from different grades <strong>cannot</strong> share at the same time.`;
             det.appendChild(note);
 
@@ -1323,11 +1323,11 @@ function renderAccess(item){
 
         const btnAll = document.createElement("button");
         btnAll.textContent = "Open to All Grades";
-        btnAll.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:${!rules.enabled ? '#ECFDF5' : '#fff'}; color:${!rules.enabled ? '#047857' : '#333'}; border-color:${!rules.enabled ? '#10B981' : '#E5E7EB'}; font-weight:${!rules.enabled ? '600' : '400'}; transition:all 0.2s;`;
+        btnAll.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:${!rules.enabled ? '#e6f4f7' : '#fff'}; color:${!rules.enabled ? '#0F5F6E' : '#333'}; border-color:${!rules.enabled ? '#147D91' : '#E5E7EB'}; font-weight:${!rules.enabled ? '600' : '400'}; transition:all 0.2s;`;
 
         const btnRes = document.createElement("button");
         btnRes.textContent = "Specific Grades Only";
-        btnRes.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:${rules.enabled ? '#ECFDF5' : '#fff'}; color:${rules.enabled ? '#047857' : '#333'}; border-color:${rules.enabled ? '#10B981' : '#E5E7EB'}; font-weight:${rules.enabled ? '600' : '400'}; transition:all 0.2s;`;
+        btnRes.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:${rules.enabled ? '#e6f4f7' : '#fff'}; color:${rules.enabled ? '#0F5F6E' : '#333'}; border-color:${rules.enabled ? '#147D91' : '#E5E7EB'}; font-weight:${rules.enabled ? '600' : '400'}; transition:all 0.2s;`;
 
         btnAll.onclick = () => { rules.enabled = false; item.limitUsage = rules; saveData(); renderContent(); updateSummary(); };
         btnRes.onclick = () => { rules.enabled = true; item.limitUsage = rules; saveData(); renderContent(); updateSummary(); };
@@ -1342,7 +1342,7 @@ function renderAccess(item){
         // ── STEP 2: Grade Chips (when restricted) ──
         if (rules.enabled) {
             const body = document.createElement("div");
-            body.style.cssText = "padding-left:12px; border-left:2px solid #10B981; margin-bottom:16px;";
+            body.style.cssText = "padding-left:12px; border-left:2px solid #147D91; margin-bottom:16px;";
 
             const chipLabel = document.createElement("div");
             chipLabel.style.cssText = "font-size:0.85rem; font-weight:500; margin-bottom:8px; color:#374151;";
@@ -1438,7 +1438,7 @@ function renderAccess(item){
                     row.style.cssText = "display:flex; align-items:center; gap:8px; padding:6px 10px; background:#fff; border:1px solid #E5E7EB; border-radius:6px;";
                     
                     const num = document.createElement("span");
-                    num.style.cssText = "width:20px; text-align:center; font-weight:600; color:#10B981; font-size:0.85rem;";
+                    num.style.cssText = "width:20px; text-align:center; font-weight:600; color:#147D91; font-size:0.85rem;";
                     num.textContent = idx + 1;
                     
                     const nameEl = document.createElement("span");
@@ -1500,14 +1500,14 @@ function renderTimeRules(item){
             leftSide.style.flex = "1";
             
             const txt = document.createElement("span");
-            txt.innerHTML = `<strong style="color:${r.type==='Available'?'#059669':'#DC2626'}">${escapeHtml(r.type)}</strong>: ${escapeHtml(r.start)} to ${escapeHtml(r.end)}`;
+            txt.innerHTML = `<strong style="color:${r.type==='Available'?'#0F6A7A':'#DC2626'}">${escapeHtml(r.type)}</strong>: ${escapeHtml(r.start)} to ${escapeHtml(r.end)}`;
             leftSide.appendChild(txt);
             
             // ★ v3.1: Show division restrictions if any
             if (r.divisions && r.divisions.length > 0) {
                 const divInfo = document.createElement("div");
                 divInfo.style.cssText = "font-size:0.75rem; color:#6B7280; margin-top:4px;";
-                divInfo.innerHTML = '⚡ ' + r.divisions.map(d => '<span style="background:#ECFDF5;color:#047857;padding:2px 6px;border-radius:999px;font-size:0.7rem;margin-right:3px;">' + escapeHtml(d) + '</span>').join('');
+                divInfo.innerHTML = '⚡ ' + r.divisions.map(d => '<span style="background:#e6f4f7;color:#0F5F6E;padding:2px 6px;border-radius:999px;font-size:0.7rem;margin-right:3px;">' + escapeHtml(d) + '</span>').join('');
                 leftSide.appendChild(divInfo);
             }
             
@@ -1560,7 +1560,7 @@ function renderTimeRules(item){
 
     const allGradesBtn = document.createElement("button");
     allGradesBtn.textContent = "All Grades";
-    allGradesBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #10B981; background:#ECFDF5; color:#047857; font-size:0.8rem; cursor:pointer; font-weight:600;";
+    allGradesBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #147D91; background:#e6f4f7; color:#0F5F6E; font-size:0.8rem; cursor:pointer; font-weight:600;";
 
     const specificBtn = document.createElement("button");
     specificBtn.textContent = "Specific Grades";
@@ -1591,13 +1591,13 @@ function renderTimeRules(item){
 
     allGradesBtn.onclick = () => {
         selectedDivisions = [];
-        allGradesBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #10B981; background:#ECFDF5; color:#047857; font-size:0.8rem; cursor:pointer; font-weight:600;";
+        allGradesBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #147D91; background:#e6f4f7; color:#0F5F6E; font-size:0.8rem; cursor:pointer; font-weight:600;";
         specificBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #E5E7EB; background:#fff; color:#333; font-size:0.8rem; cursor:pointer;";
         divChipsWrap.style.display = "none";
     };
 
     specificBtn.onclick = () => {
-        specificBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #10B981; background:#ECFDF5; color:#047857; font-size:0.8rem; cursor:pointer; font-weight:600;";
+        specificBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #147D91; background:#e6f4f7; color:#0F5F6E; font-size:0.8rem; cursor:pointer; font-weight:600;";
         allGradesBtn.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #E5E7EB; background:#fff; color:#333; font-size:0.8rem; cursor:pointer;";
         divChipsWrap.style.display = "flex";
         rebuildDivChips();
@@ -1663,15 +1663,15 @@ function renderWeatherSettings(item) {
             </p>
             
             <div style="display: flex; align-items: center; gap: 12px; padding: 14px; 
-                        background: ${isIndoor ? '#ecfdf5' : '#fef3c7'}; 
-                        border: 1px solid ${isIndoor ? '#a7f3d0' : '#fcd34d'};
+                        background: ${isIndoor ? '#e6f4f7' : '#fef3c7'}; 
+                        border: 1px solid ${isIndoor ? '#b2dce6' : '#fcd34d'};
                         border-radius: 10px; transition: all 0.2s ease;">
                 <span style="font-size: 28px;">${isIndoor ? '🏠' : '🌳'}</span>
                 <div style="flex: 1;">
-                    <div style="font-weight: 600; color: ${isIndoor ? '#065f46' : '#92400e'};">
+                    <div style="font-weight: 600; color: ${isIndoor ? '#0a4a56' : '#92400e'};">
                         ${isIndoor ? 'Indoor / Covered' : 'Outdoor'}
                     </div>
-                    <div style="font-size: 0.85rem; color: ${isIndoor ? '#047857' : '#b45309'};">
+                    <div style="font-size: 0.85rem; color: ${isIndoor ? '#0F5F6E' : '#b45309'};">
                         ${isIndoor ? 'Available on rainy days' : 'Disabled during rainy days'}
                     </div>
                 </div>
@@ -1723,7 +1723,7 @@ function makeEditable(el, save){
         inp.value = el.textContent;
         inp.style.fontSize = "inherit"; 
         inp.style.fontWeight = "inherit"; 
-        inp.style.border="1px solid #10B981"; 
+        inp.style.border="1px solid #147D91"; 
         inp.style.outline="none"; 
         inp.style.borderRadius="4px";
         inp.style.padding = "2px 6px";
