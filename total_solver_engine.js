@@ -683,6 +683,31 @@
             }
         }
 
+       // ★★★ v12.1 FIX: REAL-TIME cross-division conflict check ★★★
+        // Domains built at Step 5 go stale as Steps 6-8 assign blocks.
+        // Check the LIVE field time index so backjump/post-solve can't
+        // sneak a cross-division assignment past stale domain filters.
+        if (fieldName && fieldName !== 'Free') {
+            var blockDivName = block.divName || '';
+            var blockStart = block.startTime;
+            var blockEnd = block.endTime;
+            if (blockDivName && blockStart !== undefined && blockEnd !== undefined) {
+                var fieldPropCross = _fieldPropertyMap.get(fieldName);
+                var sharingTypeCheck = fieldPropCross ? fieldPropCross.sharingType : getSharingType(fieldName);
+
+                if (sharingTypeCheck === 'not_sharable') {
+                    var existingUse = getFieldUsageFromTimeIndex(normName(fieldName), blockStart, blockEnd, bunk);
+                    if (existingUse >= (fieldPropCross ? fieldPropCross.capacity : 1)) return 999999;
+                } else if (sharingTypeCheck === 'same_division') {
+                    if (checkCrossDivisionTimeConflict(fieldName, blockDivName, blockStart, blockEnd, bunk)) return 999999;
+                    var sameDivUse = countSameDivisionUsage(fieldName, blockDivName, blockStart, blockEnd, bunk);
+                    if (sameDivUse >= (fieldPropCross ? fieldPropCross.capacity : getFieldCapacity(fieldName))) return 999999;
+                } else if (sharingTypeCheck === 'custom') {
+                    if (checkCrossDivisionTimeConflict(fieldName, blockDivName, blockStart, blockEnd, bunk)) return 999999;
+                }
+            }
+        }
+
         // ★★★ v12.0: Use pre-computed rotation score (for recency/streak/variety) ★★★
         var rotationPenalty = getPrecomputedRotationScore(bunk, act);
         if (rotationPenalty === Infinity) return 999999;
