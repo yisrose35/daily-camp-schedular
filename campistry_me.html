@@ -4,9 +4,10 @@
     <meta charset="UTF-8" />
     <title>Campistry Me | Camper Management</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="Campistry_clean.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     
     <style>
         :root {
@@ -39,7 +40,7 @@
         * { box-sizing: border-box; margin: 0; padding: 0; }
         
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
             background: var(--bg-primary);
             color: var(--text-primary);
             line-height: 1.6;
@@ -285,14 +286,13 @@
         }
         .btn svg { width: 16px; height: 16px; }
         .btn-primary {
-            background: linear-gradient(135deg, var(--amber-500), var(--amber-600));
+            background: var(--amber-500);
             color: white;
             box-shadow: 0 2px 4px rgba(245, 158, 11, 0.25);
         }
         .btn-primary:hover {
-            background: linear-gradient(135deg, var(--amber-600), var(--amber-700));
+            background: var(--amber-600);
             box-shadow: 0 4px 8px rgba(245, 158, 11, 0.3);
-            transform: translateY(-1px);
         }
         .btn-secondary {
             background: var(--bg-secondary);
@@ -525,7 +525,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            background: linear-gradient(135deg, var(--amber-500), var(--amber-600));
+            background: var(--amber-500);
             border: none;
             border-radius: var(--radius-sm);
             color: white;
@@ -534,8 +534,7 @@
             flex-shrink: 0;
         }
         .quick-add-btn:hover {
-            background: linear-gradient(135deg, var(--amber-600), var(--amber-700));
-            transform: translateY(-1px);
+            background: var(--amber-600);
         }
         
         .add-grade-inline {
