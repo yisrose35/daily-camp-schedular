@@ -304,7 +304,8 @@ RotationEngine.invalidateBunkTodayCache = function(bunkName) {
 
     // Expose globally
     window.clearRotationCache = RotationEngine.clearHistoryCache;
-
+window.clearRotationTodayCache = RotationEngine.clearTodayCache;
+window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
     // =========================================================================
     // ★★★ CACHE MANAGEMENT UTILITIES ★★★
     // =========================================================================
