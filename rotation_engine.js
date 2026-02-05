@@ -275,10 +275,29 @@ var _todayCacheGeneration = 0;
     /**
      * Clear history cache (call after schedule generation or changes)
      */
-    RotationEngine.clearHistoryCache = function() {
-        _historyCache.clear();
-        console.log('[RotationEngine] History cache cleared');
-    };
+   RotationEngine.clearHistoryCache = function() {
+    _historyCache.clear();
+    _todayActivityCache.clear();
+    _todayCacheGeneration++;
+    console.log('[RotationEngine] History + today cache cleared (gen ' + _todayCacheGeneration + ')');
+};
+
+RotationEngine.clearTodayCache = function() {
+    _todayActivityCache.clear();
+    _todayCacheGeneration++;
+};
+
+RotationEngine.invalidateBunkTodayCache = function(bunkName) {
+    var keysToDelete = [];
+    _todayActivityCache.forEach(function(value, key) {
+        if (key.indexOf(bunkName + '|') === 0) {
+            keysToDelete.push(key);
+        }
+    });
+    for (var i = 0; i < keysToDelete.length; i++) {
+        _todayActivityCache.delete(keysToDelete[i]);
+    }
+};
 
     // ★★★ EXPOSE buildBunkActivityHistory on RotationEngine object ★★★
     RotationEngine.buildBunkActivityHistory = buildBunkActivityHistory;
