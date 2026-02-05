@@ -1,11 +1,5 @@
 // ============================================================================
-// landing.js — Campistry Landing Page (FIXED v2)
-// 
-// FIXES:
-// - Better Supabase initialization checking
-// - Defensive checks for supabase.auth
-// - Retry logic for auth service
-// - Improved error messages
+// landing.js — Campistry Landing Page
 // ============================================================================
 
 // ========================================
@@ -29,7 +23,7 @@ function getSupabase() {
 }
 
 // ========================================
-// AUTH MODAL FUNCTIONS (Global - for onclick handlers)
+// AUTH MODAL FUNCTIONS
 // ========================================
 function openAuthModal(mode = 'login') {
     authMode = mode;
@@ -38,7 +32,6 @@ function openAuthModal(mode = 'login') {
         authModal.style.display = 'flex';
         updateModalUI();
         
-        // Clear any previous errors
         const authError = document.getElementById('authError');
         if (authError) authError.textContent = '';
         
@@ -49,8 +42,6 @@ function openAuthModal(mode = 'login') {
                 document.getElementById('authEmail')?.focus();
             }
         }, 100);
-    } else {
-        console.error('Auth modal not found!');
     }
 }
 
@@ -102,16 +93,16 @@ function closeResetModal() {
     if (resetModal) resetModal.style.display = 'none';
 }
 
-async function handleLogout() {
-    try {
-        const supabase = getSupabase();
-        if (supabase) {
-            await supabase.auth.signOut();
-        }
-        updateUIForLoggedOutState();
-        console.log('🔐 Logged out successfully');
-    } catch (e) {
-        console.error('Logout error:', e);
+function handleLogout() {
+    const supabase = getSupabase();
+    if (supabase) {
+        supabase.auth.signOut().then(() => {
+            window.location.reload();
+        }).catch(() => {
+            window.location.reload();
+        });
+    } else {
+        window.location.reload();
     }
 }
 
@@ -150,7 +141,6 @@ function updateModalUI() {
 function updateUIForLoggedInState(user) {
     const navActions = document.getElementById('navActions');
     const navActionsLoggedIn = document.getElementById('navActionsLoggedIn');
-    
     if (navActions) navActions.style.display = 'none';
     if (navActionsLoggedIn) navActionsLoggedIn.style.display = 'flex';
 }
@@ -158,7 +148,6 @@ function updateUIForLoggedInState(user) {
 function updateUIForLoggedOutState() {
     const navActions = document.getElementById('navActions');
     const navActionsLoggedIn = document.getElementById('navActionsLoggedIn');
-    
     if (navActions) navActions.style.display = 'flex';
     if (navActionsLoggedIn) navActionsLoggedIn.style.display = 'none';
 }
@@ -174,13 +163,8 @@ function resetFormButton() {
 function showAuthLoading(show, message = 'Connecting...') {
     const authLoading = document.getElementById('authLoading');
     const authLoadingText = document.getElementById('authLoadingText');
-    
-    if (authLoading) {
-        authLoading.style.display = show ? 'flex' : 'none';
-    }
-    if (authLoadingText) {
-        authLoadingText.textContent = message;
-    }
+    if (authLoading) authLoading.style.display = show ? 'flex' : 'none';
+    if (authLoadingText) authLoadingText.textContent = message;
 }
 
 function showAuthError(message) {
@@ -190,42 +174,113 @@ function showAuthError(message) {
         authError.style.display = message ? 'block' : 'none';
     }
 }
+
 // ========================================
-// LOGOUT (for logged-in nav state)
-// ========================================
-function handleLogout() {
-    const supabase = getSupabase();
-    if (supabase) {
-        supabase.auth.signOut().then(() => {
-            window.location.reload();
-        }).catch(() => {
-            window.location.reload();
-        });
-    } else {
-        window.location.reload();
-    }
-}
-// ========================================
-// MOBILE MENU TOGGLE
+// MOBILE MENU
 // ========================================
 function toggleMobileMenu() {
-    // TODO: Implement mobile menu toggle
-    console.log('Mobile menu toggle - implement as needed');
+    const toggle = document.getElementById('mobileToggle');
+    const drawer = document.getElementById('mobileDrawer');
+    const overlay = document.getElementById('mobileOverlay');
+    
+    const isOpen = drawer?.classList.contains('open');
+    
+    if (isOpen) {
+        toggle?.classList.remove('open');
+        drawer?.classList.remove('open');
+        overlay?.classList.remove('open');
+        document.body.style.overflow = '';
+    } else {
+        toggle?.classList.add('open');
+        drawer?.classList.add('open');
+        overlay?.classList.add('open');
+        document.body.style.overflow = 'hidden';
+    }
+}
+
+// ========================================
+// NAV SCROLL BEHAVIOR
+// ========================================
+function initNavScroll() {
+    const nav = document.querySelector('.nav');
+    if (!nav) return;
+    
+    let ticking = false;
+    window.addEventListener('scroll', () => {
+        if (!ticking) {
+            requestAnimationFrame(() => {
+                if (window.scrollY > 40) {
+                    nav.classList.add('nav-scrolled');
+                } else {
+                    nav.classList.remove('nav-scrolled');
+                }
+                ticking = false;
+            });
+            ticking = true;
+        }
+    }, { passive: true });
+}
+
+// ========================================
+// ACTIVE NAV SECTION INDICATOR
+// ========================================
+function initActiveNav() {
+    const sections = document.querySelectorAll('section[id]');
+    const navLinks = document.querySelectorAll('.nav-links a');
+    if (!sections.length || !navLinks.length) return;
+    
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const id = entry.target.getAttribute('id');
+                navLinks.forEach(link => {
+                    link.classList.toggle('active', link.getAttribute('href') === `#${id}`);
+                });
+            }
+        });
+    }, {
+        rootMargin: '-30% 0px -60% 0px',
+        threshold: 0
+    });
+    
+    sections.forEach(section => observer.observe(section));
+}
+
+// ========================================
+// SCROLL REVEAL
+// ========================================
+function initScrollReveal() {
+    const reveals = document.querySelectorAll('.reveal');
+    if (!reveals.length) return;
+    
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.classList.add('visible');
+                observer.unobserve(entry.target);
+            }
+        });
+    }, {
+        threshold: 0.1,
+        rootMargin: '0px 0px -40px 0px'
+    });
+    
+    reveals.forEach(el => observer.observe(el));
 }
 
 // ========================================
 // DOM READY
 // ========================================
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('🚀 Landing page initializing...');
+    // Init visual behaviors
+    initNavScroll();
+    initActiveNav();
+    initScrollReveal();
     
-    // Verify Supabase is available
+    // Verify Supabase
     const supabase = getSupabase();
     if (!supabase) {
-        console.error('⚠️ Supabase client not ready - window.supabase:', window.supabase);
-        console.error('⚠️ window.supabase.auth:', window.supabase?.auth);
-    } else {
-        console.log('✅ Supabase client available');
+        console.warn('Supabase client not ready');
     }
     
     // Modal Toggle Buttons
@@ -248,11 +303,9 @@ document.addEventListener('DOMContentLoaded', function() {
             const accessCode = document.getElementById('accessCode')?.value?.trim();
             const formSubmit = document.getElementById('formSubmit');
 
-            // Clear previous errors
             showAuthError('');
             showAuthLoading(false);
 
-            // Validate inputs
             if (!email || !password) {
                 showAuthError('Please fill in all fields.');
                 return;
@@ -269,7 +322,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
 
-            // Disable button and show loading
             if (formSubmit) {
                 formSubmit.disabled = true;
                 formSubmit.textContent = authMode === 'signup' ? 'Creating...' : 'Signing in...';
@@ -277,7 +329,6 @@ document.addEventListener('DOMContentLoaded', function() {
             showAuthLoading(true, 'Connecting to server...');
 
             try {
-                // Check if Supabase is available
                 const supabase = getSupabase();
                 if (!supabase) {
                     throw new Error('Authentication service is not available. Please refresh the page.');
@@ -299,9 +350,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const { data, error } = result;
 
                 if (error) {
-                    // Provide more helpful error messages
                     let errorMessage = error.message;
-                    
                     if (error.message.includes('Invalid login credentials')) {
                         errorMessage = 'Invalid email or password. Please try again.';
                     } else if (error.message.includes('Email not confirmed')) {
@@ -309,20 +358,18 @@ document.addEventListener('DOMContentLoaded', function() {
                     } else if (error.message.includes('User already registered')) {
                         errorMessage = 'An account with this email already exists. Try signing in instead.';
                     }
-                    
                     throw new Error(errorMessage);
                 }
 
                 const user = data?.user;
 
-                // Handle email confirmation for signups
                 if (authMode === 'signup' && user && !user.confirmed_at) {
                     showAuthLoading(false);
                     showAuthError('');
                     const authSuccess = document.createElement('div');
                     authSuccess.className = 'auth-success';
                     authSuccess.style.display = 'block';
-                    authSuccess.textContent = '✓ Account created! Please check your email to confirm.';
+                    authSuccess.textContent = 'Account created! Please check your email to confirm.';
                     document.getElementById('authError')?.parentNode?.insertBefore(
                         authSuccess, 
                         document.getElementById('authError')
@@ -335,17 +382,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     throw new Error('Authentication failed. Please try again.');
                 }
 
-                console.log('🔐 Success! Redirecting...');
                 showAuthLoading(true, 'Success! Redirecting...');
                 closeAuthModal();
                 
-                // Small delay for UX
                 setTimeout(() => {
                     window.location.href = 'dashboard.html';
                 }, 500);
 
             } catch (e) {
-                console.error('🔐 Auth Error:', e);
                 showAuthLoading(false);
                 showAuthError(e.message || 'An unexpected error occurred. Please try again.');
                 resetFormButton();
@@ -390,7 +434,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (error) throw error;
                 
                 if (resetSuccess) {
-                    resetSuccess.textContent = '✓ Reset link sent! Check your email inbox.';
+                    resetSuccess.textContent = 'Reset link sent! Check your email inbox.';
                     resetSuccess.style.display = 'block';
                 }
                 
@@ -401,7 +445,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 
             } catch (err) {
-                console.error('Password reset error:', err);
                 if (resetError) resetError.textContent = err.message || 'Failed to send reset link.';
                 if (submitBtn) {
                     submitBtn.disabled = false;
@@ -411,7 +454,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Password Update Form (after clicking reset link)
+    // Password Update Form
     const updatePasswordForm = document.getElementById('updatePasswordForm');
     if (updatePasswordForm) {
         updatePasswordForm.addEventListener('submit', async (e) => {
@@ -449,7 +492,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (error) throw error;
                 
                 if (updateSuccess) {
-                    updateSuccess.textContent = '✓ Password updated! Redirecting...';
+                    updateSuccess.textContent = 'Password updated! Redirecting...';
                     updateSuccess.style.display = 'block';
                 }
                 if (submitBtn) submitBtn.textContent = 'Password Updated';
@@ -460,7 +503,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 }, 2000);
                 
             } catch (err) {
-                console.error('Password update error:', err);
                 if (updateError) updateError.textContent = err.message || 'Failed to update password.';
                 if (submitBtn) {
                     submitBtn.disabled = false;
@@ -470,11 +512,10 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Check for Password Reset Token in URL
+    // Check for Password Reset Token
     function checkForPasswordResetToken() {
         const hash = window.location.hash;
         if (hash.includes('access_token') || hash.includes('type=recovery') || hash === '#reset-password') {
-            console.log('🔐 Password reset token detected');
             const resetModal = document.getElementById('resetPasswordModal');
             const resetRequestView = document.getElementById('resetRequestView');
             const updatePasswordView = document.getElementById('updatePasswordView');
@@ -492,7 +533,6 @@ document.addEventListener('DOMContentLoaded', function() {
     async function checkSession() {
         const supabase = getSupabase();
         if (!supabase) {
-            console.log('Supabase not available for session check');
             updateUIForLoggedOutState();
             return;
         }
@@ -500,36 +540,29 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             const { data: { session } } = await supabase.auth.getSession();
             if (session?.user) {
-                console.log('🔐 User logged in:', session.user.email);
                 updateUIForLoggedInState(session.user);
             } else {
                 updateUIForLoggedOutState();
             }
         } catch (e) {
-            console.error('Session check error:', e);
             updateUIForLoggedOutState();
         }
     }
 
-    // Auth State Listener - with defensive check
+    // Auth State Listener
     function setupAuthListener() {
         const supabase = getSupabase();
         if (!supabase) {
-            console.warn('⚠️ Cannot setup auth listener - Supabase not ready');
-            // Retry after a short delay
             setTimeout(setupAuthListener, 500);
             return;
         }
         
         supabase.auth.onAuthStateChange((event, session) => {
-            console.log('🔐 Auth state:', event);
-            
             if (event === 'SIGNED_IN' && session?.user) {
                 updateUIForLoggedInState(session.user);
             } else if (event === 'SIGNED_OUT') {
                 updateUIForLoggedOutState();
             } else if (event === 'PASSWORD_RECOVERY') {
-                console.log('🔐 Password recovery event');
                 const resetModal = document.getElementById('resetPasswordModal');
                 const resetRequestView = document.getElementById('resetRequestView');
                 const updatePasswordView = document.getElementById('updatePasswordView');
@@ -540,16 +573,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
         });
-        
-        console.log('✅ Auth listener setup complete');
     }
 
     // Initialize
     checkSession();
     checkForPasswordResetToken();
     setupAuthListener();
-    
-    console.log('✅ Landing page initialized');
 });
 
 // ========================================
