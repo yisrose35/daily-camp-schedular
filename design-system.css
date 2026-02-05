@@ -3,22 +3,22 @@
    Unified styles across all products
    ============================================ */
 :root {
-    /* Brand Colors */
-    --camp-green: #0D7C5C;
-    --camp-green-light: #10B981;
-    --camp-green-dark: #065F46;
-    --camp-forest: #064E3B;
+    /* Brand Colors — Teal palette */
+    --camp-green: #147D91;
+    --camp-green-light: #1AACCA;
+    --camp-green-dark: #0F5F6E;
+    --camp-forest: #0A4A56;
     
     --camp-gold: #F59E0B;
     --camp-gold-light: #FCD34D;
     
     /* Product Colors */
-    --flow-color: #0D7C5C;
-    --flow-light: #10B981;
-    --go-color: #F59E0B;
-    --go-light: #FCD34D;
-    --me-color: #8B5CF6;
-    --me-light: #A78BFA;
+    --flow-color: #147D91;
+    --flow-light: #1AACCA;
+    --go-color: #0EA5E9;
+    --go-light: #38BDF8;
+    --me-color: #F59E0B;
+    --me-light: #FCD34D;
     
     /* Neutrals */
     --slate-50: #F8FAFC;
@@ -34,13 +34,13 @@
     --slate-950: #020617;
     
     /* Background */
-    --bg-primary: #FAFCFB;
+    --bg-primary: #FAFBFC;
     --bg-secondary: #FFFFFF;
     --bg-tertiary: #F8FAFC;
     
     /* Typography */
-    --font-display: 'Playfair Display', Georgia, serif;
-    --font-body: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-display: 'Fraunces', Georgia, serif;
+    --font-body: 'DM Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     
     /* Border Radius System */
     --radius-xs: 6px;
@@ -58,11 +58,6 @@
     --shadow-lg: 0 8px 16px rgba(15, 23, 42, 0.1);
     --shadow-xl: 0 12px 24px rgba(15, 23, 42, 0.12);
     --shadow-2xl: 0 20px 40px rgba(15, 23, 42, 0.15);
-    
-    /* Glow Effects */
-    --glow-green: 0 0 20px rgba(13, 124, 92, 0.3);
-    --glow-gold: 0 0 20px rgba(245, 158, 11, 0.3);
-    --glow-purple: 0 0 20px rgba(139, 92, 246, 0.3);
     
     /* Spacing Scale */
     --space-xs: 4px;
@@ -113,12 +108,11 @@ body {
     border: 1px solid var(--slate-200);
     padding: var(--space-lg);
     box-shadow: var(--shadow-md);
-    transition: all var(--transition-base) var(--ease-out);
+    transition: box-shadow var(--transition-base) var(--ease-out), border-color var(--transition-base) var(--ease-out);
 }
 
 .card:hover {
     box-shadow: var(--shadow-lg);
-    transform: translateY(-2px);
 }
 
 .card-header {
@@ -173,16 +167,20 @@ body {
     cursor: not-allowed;
 }
 
+.btn:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
 /* Primary Button */
 .btn-primary {
     color: white;
-    background: linear-gradient(135deg, var(--camp-green) 0%, var(--camp-green-light) 100%);
-    box-shadow: 0 4px 12px rgba(13, 124, 92, 0.3);
+    background: var(--camp-green);
+    box-shadow: 0 1px 3px rgba(20, 125, 145, 0.2);
 }
 
 .btn-primary:hover:not(:disabled) {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 16px rgba(13, 124, 92, 0.4);
+    background: var(--camp-green-dark);
+    box-shadow: 0 2px 8px rgba(20, 125, 145, 0.3);
 }
 
 /* Secondary Button */
@@ -211,32 +209,33 @@ body {
 /* Product-specific buttons */
 .btn-flow {
     color: white;
-    background: linear-gradient(135deg, var(--flow-color) 0%, var(--flow-light) 100%);
-    box-shadow: 0 4px 12px rgba(13, 124, 92, 0.3);
+    background: var(--flow-color);
+    box-shadow: 0 1px 3px rgba(20, 125, 145, 0.2);
 }
 
 .btn-flow:hover:not(:disabled) {
-    box-shadow: 0 6px 16px rgba(13, 124, 92, 0.4), var(--glow-green);
+    background: var(--camp-green-dark);
+    box-shadow: 0 2px 8px rgba(20, 125, 145, 0.3);
 }
 
 .btn-go {
     color: white;
-    background: linear-gradient(135deg, var(--go-color) 0%, var(--go-light) 100%);
-    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+    background: var(--go-color);
+    box-shadow: 0 1px 3px rgba(14, 165, 233, 0.2);
 }
 
 .btn-go:hover:not(:disabled) {
-    box-shadow: 0 6px 16px rgba(245, 158, 11, 0.4), var(--glow-gold);
+    box-shadow: 0 2px 8px rgba(14, 165, 233, 0.3);
 }
 
 .btn-me {
     color: white;
-    background: linear-gradient(135deg, var(--me-color) 0%, var(--me-light) 100%);
-    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+    background: var(--me-color);
+    box-shadow: 0 1px 3px rgba(245, 158, 11, 0.2);
 }
 
 .btn-me:hover:not(:disabled) {
-    box-shadow: 0 6px 16px rgba(139, 92, 246, 0.4), var(--glow-purple);
+    box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
 }
 
 /* ============================================
@@ -259,7 +258,7 @@ textarea {
     background: white;
     border: 1px solid var(--slate-300);
     border-radius: var(--radius-md);
-    transition: all var(--transition-base) var(--ease-out);
+    transition: border-color var(--transition-base) var(--ease-out), box-shadow var(--transition-base) var(--ease-out);
 }
 
 .form-input:focus,
@@ -268,7 +267,7 @@ select:focus,
 textarea:focus {
     outline: none;
     border-color: var(--camp-green);
-    box-shadow: 0 0 0 3px rgba(13, 124, 92, 0.1);
+    box-shadow: 0 0 0 3px rgba(20, 125, 145, 0.1);
 }
 
 .form-label {
@@ -315,17 +314,17 @@ textarea:focus {
 
 /* Product badges */
 .badge-flow {
-    background: rgba(13, 124, 92, 0.1);
+    background: rgba(20, 125, 145, 0.1);
     color: var(--flow-color);
 }
 
 .badge-go {
-    background: rgba(245, 158, 11, 0.1);
+    background: rgba(14, 165, 233, 0.1);
     color: var(--go-color);
 }
 
 .badge-me {
-    background: rgba(139, 92, 246, 0.1);
+    background: rgba(245, 158, 11, 0.1);
     color: var(--me-color);
 }
 
@@ -357,11 +356,11 @@ textarea:focus {
     align-items: center;
     gap: 12px;
     text-decoration: none;
-    transition: transform var(--transition-base) var(--ease-out);
+    transition: opacity var(--transition-base) var(--ease-out);
 }
 
 .nav-logo:hover {
-    transform: translateY(-1px);
+    opacity: 0.8;
 }
 
 /* ============================================
@@ -378,7 +377,7 @@ textarea:focus {
     border-radius: var(--radius-xl);
     text-decoration: none;
     color: inherit;
-    transition: all var(--transition-slow) var(--ease-out);
+    transition: box-shadow var(--transition-slow) var(--ease-out), border-color var(--transition-slow) var(--ease-out);
     overflow: hidden;
 }
 
@@ -386,14 +385,14 @@ textarea:focus {
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(135deg, transparent 0%, rgba(13, 124, 92, 0.03) 100%);
+    background: linear-gradient(135deg, transparent 0%, rgba(20, 125, 145, 0.03) 100%);
     opacity: 0;
     transition: opacity var(--transition-base);
 }
 
 .product-tile:not(.disabled):hover {
-    transform: translateY(-4px);
-    box-shadow: var(--shadow-xl);
+    box-shadow: var(--shadow-lg);
+    border-color: var(--slate-300);
 }
 
 .product-tile:not(.disabled):hover::before {
@@ -412,7 +411,6 @@ textarea:focus {
 
 .product-tile-flow:not(.disabled):hover {
     border-color: var(--flow-color);
-    box-shadow: var(--shadow-xl), var(--glow-green);
 }
 
 .product-tile-go {
@@ -421,7 +419,6 @@ textarea:focus {
 
 .product-tile-go:not(.disabled):hover {
     border-color: var(--go-color);
-    box-shadow: var(--shadow-xl), var(--glow-gold);
 }
 
 .product-tile-me {
@@ -430,7 +427,6 @@ textarea:focus {
 
 .product-tile-me:not(.disabled):hover {
     border-color: var(--me-color);
-    box-shadow: var(--shadow-xl), var(--glow-purple);
 }
 
 /* ============================================
