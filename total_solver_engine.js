@@ -660,81 +660,117 @@
         };
     }
 
-    // ========================================================================
+   // ========================================================================
     // PENALTY ENGINE (uses pre-computed lookups)
     // ========================================================================
 
-   
-
-        function calculatePenaltyCost(block, pick) {
-        var penalty = 0;
+    function calculatePenaltyCost(block, pick) {
         var bunk = block.bunk;
         var act = pick._activity;
         var fieldName = pick.field;
+        var actNorm = normName(act);
+        var fieldNorm = normName(fieldName);
+        var blockDivName = block.divName || '';
+        var blockStart = block.startTime;
+        var blockEnd = block.endTime;
+        var slots = block.slots || [];
+        var penalty = 0;
 
-        // ★★★ v12.1 FIX: REAL-TIME same-day duplicate check ★★★
-        // Pre-computed rotation scores use beforeSlotIndex=0 so they miss
-        // same-day duplicates. Check LIVE schedule state here.
-        var actNormCheck = normName(act);
-        if (actNormCheck && actNormCheck !== 'free' && actNormCheck !== 'free play') {
-            var todayCheck = getActivitiesDoneToday(bunk, block.slots?.[0] ?? 999);
-            if (todayCheck.has(actNormCheck)) {
-                return 999999; // Same-day duplicate — BLOCKED
+        // =================================================================
+        // HARD CONSTRAINTS (return 999999 = impossible)
+        // =================================================================
+
+        // ── 1. Same-day activity duplicate ───────────────────────────────
+        // Pre-computed rotation scores used beforeSlotIndex=0 so they miss
+        // same-day duplicates. Check LIVE schedule state.
+        if (actNorm && actNorm !== 'free' && actNorm !== 'free play') {
+            var todayDone = getActivitiesDoneToday(bunk, slots[0] ?? 999);
+            if (todayDone.has(actNorm)) return 999999;
+        }
+
+        // ── 2. Field capacity & cross-division sharing ───────────────────
+        // Domains from Step 5 go stale as Steps 6-8 assign blocks.
+        // Check the LIVE field time index for every assignment attempt.
+        if (fieldName && fieldName !== 'Free' &&
+            blockDivName && blockStart !== undefined && blockEnd !== undefined) {
+
+            var fp = _fieldPropertyMap.get(fieldName);
+            var sType = fp ? fp.sharingType : getSharingType(fieldName);
+            var cap = fp ? fp.capacity : getFieldCapacity(fieldName);
+
+            if (sType === 'not_sharable') {
+                if (getFieldUsageFromTimeIndex(fieldNorm, blockStart, blockEnd, bunk) >= cap) return 999999;
+
+            } else if (sType === 'same_division' || sType === 'custom') {
+                // Cross-division conflict = instant block
+                if (checkCrossDivisionTimeConflict(fieldName, blockDivName, blockStart, blockEnd, bunk)) return 999999;
+                // Same-division capacity
+                if (countSameDivisionUsage(fieldName, blockDivName, blockStart, blockEnd, bunk) >= cap) return 999999;
+
+            } else {
+                // type 'all' or unrecognized — enforce total capacity
+                if (getFieldUsageFromTimeIndex(fieldNorm, blockStart, blockEnd, bunk) >= cap) return 999999;
             }
         }
 
-       // ★★★ v12.1 FIX: REAL-TIME cross-division conflict check ★★★
-        // Domains built at Step 5 go stale as Steps 6-8 assign blocks.
-        // Check the LIVE field time index so backjump/post-solve can't
-        // sneak a cross-division assignment past stale domain filters.
-        if (fieldName && fieldName !== 'Free') {
-            var blockDivName = block.divName || '';
-            var blockStart = block.startTime;
-            var blockEnd = block.endTime;
-            if (blockDivName && blockStart !== undefined && blockEnd !== undefined) {
-                var fieldPropCross = _fieldPropertyMap.get(fieldName);
-                var sharingTypeCheck = fieldPropCross ? fieldPropCross.sharingType : getSharingType(fieldName);
-
-                if (sharingTypeCheck === 'not_sharable') {
-                    var existingUse = getFieldUsageFromTimeIndex(normName(fieldName), blockStart, blockEnd, bunk);
-                    if (existingUse >= (fieldPropCross ? fieldPropCross.capacity : 1)) return 999999;
-                } else if (sharingTypeCheck === 'same_division') {
-                    if (checkCrossDivisionTimeConflict(fieldName, blockDivName, blockStart, blockEnd, bunk)) return 999999;
-                    var sameDivUse = countSameDivisionUsage(fieldName, blockDivName, blockStart, blockEnd, bunk);
-                    if (sameDivUse >= (fieldPropCross ? fieldPropCross.capacity : getFieldCapacity(fieldName))) return 999999;
-                } else if (sharingTypeCheck === 'custom') {
-                    if (checkCrossDivisionTimeConflict(fieldName, blockDivName, blockStart, blockEnd, bunk)) return 999999;
-                    var customDivUse = countSameDivisionUsage(fieldName, blockDivName, blockStart, blockEnd, bunk);
-                    if (customDivUse >= (fieldPropCross ? fieldPropCross.capacity : getFieldCapacity(fieldName))) return 999999;
-                } else {
-                    // type 'all' or any other — enforce total capacity from time index
-                    var totalUse = getFieldUsageFromTimeIndex(normName(fieldName), blockStart, blockEnd, bunk);
-                    var totalCap = fieldPropCross ? fieldPropCross.capacity : getFieldCapacity(fieldName);
-                    if (totalUse >= totalCap) return 999999;
-                }
-            }
+        // ── 3. Division preference exclusivity ───────────────────────────
+        var fieldProp = _fieldPropertyMap.get(fieldName);
+        if (fieldProp?.prefList) {
+            if (fieldProp.prefList.indexOf(blockDivName) === -1 && fieldProp.prefExclusive) return 999999;
+        } else {
+            var actPrefProps = activityProperties[act];
+            if (actPrefProps?.preferences?.enabled &&
+                (actPrefProps.preferences.list || []).indexOf(blockDivName) === -1 &&
+                actPrefProps.preferences.exclusive) return 999999;
         }
 
-        // ★★★ v12.0: Use pre-computed rotation score (for recency/streak/variety) ★★★
+        // ── 4. Rotation score (recency / streak / variety) ──────────────
         var rotationPenalty = getPrecomputedRotationScore(bunk, act);
         if (rotationPenalty === Infinity) return 999999;
+
+        // ── 5. Max lifetime usage ────────────────────────────────────────
+        var specialRule = activityProperties[act];
+        if (specialRule?.maxUsage > 0) {
+            var hist = getActivityCount(bunk, act);
+            var todayCount = getActivitiesDoneToday(bunk, slots[0] || 999).has(actNorm) ? 1 : 0;
+            if (hist + todayCount >= specialRule.maxUsage) return 999999;
+        }
+
+        // =================================================================
+        // SOFT PENALTIES (lower = better, scored additively)
+        // =================================================================
+
+        // ── Rotation score ───────────────────────────────────────────────
         penalty += rotationPenalty;
 
-        // Bunk capacity check
+        // ── Bunk size vs field capacity ──────────────────────────────────
         var bunkMeta = window.getBunkMetaData?.(bunk) || globalConfig?.bunkMetaData?.[bunk] || {};
         if (bunkMeta.size) {
-            var fieldPropsCached = _fieldPropertyMap.get(fieldName);
-            var cap = fieldPropsCached ? null : null;
-            // Check activityProperties directly for capacity limit
             var apCap = activityProperties[fieldName]?.capacity;
             if (apCap && bunkMeta.size > apCap) penalty += 5000;
         }
 
-        // Controlled randomness for tie-breaking
-        penalty += Math.random() * (ROTATION_CONFIG.TIE_BREAKER_RANDOMNESS || 300);
+        // ── Division preferences (soft bonus) ────────────────────────────
+        if (fieldProp?.prefList) {
+            var prefIdx = fieldProp.prefList.indexOf(blockDivName);
+            if (prefIdx !== -1) {
+                penalty -= (50 - prefIdx * 5);
+            } else {
+                penalty += 2000;
+            }
+        } else {
+            var actPrefProps2 = activityProperties[act];
+            if (actPrefProps2?.preferences?.enabled) {
+                var prefIdx2 = (actPrefProps2.preferences.list || []).indexOf(blockDivName);
+                if (prefIdx2 !== -1) {
+                    penalty -= (50 - prefIdx2 * 5);
+                } else {
+                    penalty += 2000;
+                }
+            }
+        }
 
-        // Adjacent bunk bonus
-        var slots = block.slots || [];
+        // ── Adjacent bunk bonus ──────────────────────────────────────────
         if (slots.length > 0 && window.fieldUsageBySlot) {
             var slotUsage = window.fieldUsageBySlot[slots[0]]?.[fieldName];
             if (slotUsage?.bunks) {
@@ -749,39 +785,8 @@
             }
         }
 
-        // Max usage check
-        var specialRule = activityProperties[act];
-        if (specialRule?.maxUsage > 0) {
-            var hist = getActivityCount(bunk, act);
-            var todayCount = getActivitiesDoneToday(bunk, block.slots?.[0] || 999).has(normName(act)) ? 1 : 0;
-            if (hist + todayCount >= specialRule.maxUsage) penalty += 20000;
-        }
-
-        // ★★★ v12.0: Use pre-computed preference data ★★★
-        var fieldProp = _fieldPropertyMap.get(fieldName);
-        if (fieldProp?.prefList) {
-            var idx = fieldProp.prefList.indexOf(block.divName);
-            if (idx !== -1) {
-                penalty -= (50 - idx * 5);
-            } else if (fieldProp.prefExclusive) {
-                return 999999;
-            } else {
-                penalty += 2000;
-            }
-        } else {
-            // Also check activity-level preferences
-            var actPrefProps = activityProperties[act];
-            if (actPrefProps?.preferences?.enabled) {
-                var idx2 = (actPrefProps.preferences.list || []).indexOf(block.divName);
-                if (idx2 !== -1) {
-                    penalty -= (50 - idx2 * 5);
-                } else if (actPrefProps.preferences.exclusive) {
-                    return 999999;
-                } else {
-                    penalty += 2000;
-                }
-            }
-        }
+        // ── Tie-breaking randomness ──────────────────────────────────────
+        penalty += Math.random() * (ROTATION_CONFIG.TIE_BREAKER_RANDOMNESS || 300);
 
         return penalty;
     }
