@@ -8,21 +8,21 @@
 (function() {
     'use strict';
 
-    console.log("👥 Team & Subdivisions UI v1.1 loading...");
+    console.log("[TeamUI] Team & Subdivisions UI v1.1 loading...");
 
     // =========================================================================
     // BEAUTIFUL COLOR PALETTE
     // =========================================================================
     
     const SUBDIVISION_COLORS = [
-        '#6366F1', // Indigo
+        '#147D91', // Teal (brand primary)
         '#8B5CF6', // Violet
         '#EC4899', // Pink
         '#F43F5E', // Rose
         '#F97316', // Orange
         '#EAB308', // Yellow
         '#22C55E', // Green
-        '#14B8A6', // Teal
+        '#14B8A6', // Teal light
         '#06B6D4', // Cyan
         '#3B82F6', // Blue
         '#A855F7', // Purple
@@ -49,7 +49,7 @@
         }
 
         if (!window.AccessControl) {
-            console.warn("👥 AccessControl not available");
+            console.warn("[TeamUI] AccessControl not available");
             return;
         }
 
@@ -57,7 +57,7 @@
         await refreshData();
         
         _initialized = true;
-        console.log("👥 Team & Subdivisions UI initialized");
+        console.log("[TeamUI] Team & Subdivisions UI initialized");
     }
 
     async function refreshData() {
@@ -107,7 +107,9 @@
             <div id="subdivisions-list">
                 ${subdivisions.length === 0 ? `
                     <div class="empty-state">
-                        <div style="font-size: 2rem; margin-bottom: 8px;">📂</div>
+                        <div style="margin-bottom: 8px; color: var(--slate-400);">
+                            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                        </div>
                         <p style="color: var(--slate-500); margin: 0;">No subdivisions yet</p>
                         <p style="color: var(--slate-400); font-size: 0.85rem; margin-top: 4px;">
                             Create subdivisions to organize divisions and assign schedulers
@@ -267,7 +269,7 @@
                             >
                         </div>
                         <p style="font-size: 0.8rem; color: var(--slate-400); margin-top: 6px;">
-                            💡 Tip: You can add division names now even if they don't exist yet in Flow
+                            Tip: You can add division names now even if they don't exist yet in Flow
                         </p>
                     </div>
                     
@@ -421,7 +423,9 @@
             <div id="team-members-list">
                 ${_teamMembers.length === 0 ? `
                     <div class="empty-state">
-                        <div style="font-size: 2rem; margin-bottom: 8px;">👤</div>
+                        <div style="margin-bottom: 8px; color: var(--slate-400);">
+                            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                        </div>
                         <p style="color: var(--slate-500); margin: 0;">Just you for now</p>
                         <p style="color: var(--slate-400); font-size: 0.85rem; margin-top: 4px;">
                             Invite team members to help manage schedules
@@ -526,7 +530,7 @@
             document.body.appendChild(toast);
         }
 
-        toast.style.background = type === 'success' ? '#10B981' : type === 'error' ? '#EF4444' : '#6366F1';
+        toast.style.background = type === 'success' ? '#10B981' : type === 'error' ? '#EF4444' : '#147D91';
         toast.textContent = message;
         
         // Animate in
@@ -627,7 +631,7 @@ Sent via Campistry (campistry.org)`
         
         if (result.success) {
             if (showFeedback) {
-                showToast(`✅ Invite sent to ${email}!`, 'success');
+                showToast(`Invite sent to ${email}!`, 'success');
             }
             return { success: true, method: 'resend' };
         }
@@ -832,14 +836,14 @@ Sent via Campistry (campistry.org)`
 
                 // Show success with action buttons
                 successEl.innerHTML = `
-                    <div style="margin-bottom: 12px;">✅ Invite created for <strong>${email}</strong></div>
+                    <div style="margin-bottom: 12px;">Invite created for <strong>${email}</strong></div>
                     <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                         <button type="button" class="btn-action" id="copy-invite-link" style="
                             display: inline-flex;
                             align-items: center;
                             gap: 6px;
                             padding: 8px 16px;
-                            background: #6366F1;
+                            background: #147D91;
                             color: white;
                             border: none;
                             border-radius: 6px;
@@ -1231,7 +1235,7 @@ Sent via Campistry (campistry.org)`
             }
             
             .divisions-tags-input:focus-within {
-                border-color: #6366F1;
+                border-color: #147D91;
             }
             
             .tags-container {
@@ -1245,8 +1249,8 @@ Sent via Campistry (campistry.org)`
                 align-items: center;
                 gap: 4px;
                 padding: 4px 10px;
-                background: #EEF2FF;
-                color: #4338CA;
+                background: rgba(20, 125, 145, 0.1);
+                color: #147D91;
                 border-radius: 999px;
                 font-size: 0.85rem;
                 font-weight: 500;
@@ -1255,7 +1259,7 @@ Sent via Campistry (campistry.org)`
             .tag-remove {
                 background: none;
                 border: none;
-                color: #4338CA;
+                color: #147D91;
                 cursor: pointer;
                 font-size: 1rem;
                 line-height: 1;
@@ -1329,7 +1333,7 @@ Sent via Campistry (campistry.org)`
             .form-group input:focus,
             .form-group select:focus {
                 outline: none;
-                border-color: #6366F1;
+                border-color: #147D91;
             }
             
             .form-actions {
@@ -1400,6 +1404,6 @@ Sent via Campistry (campistry.org)`
         injectStyles();
     }
 
-    console.log("👥 Team & Subdivisions UI loaded");
+    console.log("[TeamUI] Team & Subdivisions UI loaded");
 
 })();
