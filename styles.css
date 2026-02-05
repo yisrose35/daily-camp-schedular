@@ -660,7 +660,11 @@ label.override-checkbox span {
   flex: 1;
   min-width: 0;
 }
-
+#leagues-master-list .list-item-name,
+#sl-master-list .list-item-name {
+  cursor: pointer;
+  user-select: none;
+}
 /* ---------------------------------------------------------------
    DETAIL PANE HEADER
    --------------------------------------------------------------- */
