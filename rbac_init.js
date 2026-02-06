@@ -1,8 +1,10 @@
 // ============================================================================
-// rbac_init.js — Master RBAC Initialization v1.2 (SECURITY PATCH)
+// rbac_init.js — Master RBAC Initialization v1.3 (OVERLAY FIX)
 // ============================================================================
 // Initializes all RBAC modules in the correct order and handles dependencies
 // 
+// v1.3 FIX: Replaced visibility:hidden with a loading overlay during RBAC init
+//           to prevent blank white screen while permissions resolve.
 // v1.2 SECURITY PATCHES:
 //   - V-001 FIX: Hide app shell during init to prevent flash of unauthorized content
 //   - V-004 FIX: Logic-gate destructive actions at handler level (not just CSS)
@@ -30,13 +32,30 @@
     async function initializeRBAC() {
         console.log("🚀 Initializing RBAC system...");
 
-        // ★★★ V-001 FIX: Immediately hide app content until RBAC resolves ★★★
+        // ★★★ V-001 FIX: Show loading overlay until RBAC resolves ★★★
         // Prevents flash of unauthorized content (owner-level UI visible to viewers)
+        // Uses an overlay instead of visibility:hidden to avoid blank white screen
         const appContainer = document.getElementById('app-content') 
                           || document.querySelector('.main-content')
                           || document.body;
-        appContainer.style.visibility = 'hidden';
         appContainer.style.pointerEvents = 'none';
+
+        let rbacOverlay = document.getElementById('rbac-loading-overlay');
+        if (!rbacOverlay) {
+            rbacOverlay = document.createElement('div');
+            rbacOverlay.id = 'rbac-loading-overlay';
+            rbacOverlay.style.cssText = 
+                'position:fixed;top:0;left:0;width:100%;height:100%;' +
+                'background:rgba(255,255,255,0.92);z-index:99999;' +
+                'display:flex;align-items:center;justify-content:center;' +
+                'flex-direction:column;font-family:system-ui,sans-serif;';
+            rbacOverlay.innerHTML = 
+                '<div style="width:32px;height:32px;border:3px solid #e0e0e0;' +
+                'border-top-color:#147D91;border-radius:50%;animation:rbac-spin 0.8s linear infinite;"></div>' +
+                '<div style="margin-top:12px;color:#555;font-size:14px;">Loading permissions...</div>' +
+                '<style>@keyframes rbac-spin{to{transform:rotate(360deg)}}</style>';
+            document.body.appendChild(rbacOverlay);
+        }
 
         try {
             // Step 1: Wait for and initialize AccessControl
@@ -83,9 +102,14 @@
         } catch (error) {
             console.error("🚀 RBAC initialization error:", error);
         } finally {
-            // ★★★ V-001 FIX: Reveal content after RBAC resolves ★★★
+            // ★★★ V-001 FIX: Remove overlay after RBAC resolves ★★★
             // Even on error — fallback role is viewer, which is safe
-            appContainer.style.visibility = '';
+            const overlay = document.getElementById('rbac-loading-overlay');
+            if (overlay) {
+                overlay.style.transition = 'opacity 0.2s ease';
+                overlay.style.opacity = '0';
+                setTimeout(() => overlay.remove(), 200);
+            }
             appContainer.style.pointerEvents = '';
         }
     }
@@ -367,6 +391,6 @@
         }
     };
 
-    console.log("🚀 RBAC Init v1.2 loaded");
+    console.log("🚀 RBAC Init v1.3 loaded");
 
 })();
