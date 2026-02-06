@@ -1651,19 +1651,15 @@ function addDropListeners(gridEl) {
           return { valid: false, minutes: null, isNight: false };
         }
         
-        // ★ EARLY/LATE TILE GUARD — flag tiles before 8am or after 8pm
-        // Exception: if the division's own times cover that range, no flag needed
-        const EARLY_GUARD = 480;  // 8:00 AM
-        const LATE_GUARD = 1200;  // 8:00 PM
-        if (timeMin < EARLY_GUARD && !(divStartMin !== null && divStartMin < EARLY_GUARD)) {
+        // ★ EARLY/LATE TILE GUARD — flag tiles outside 8am-8pm
+        // Exception: skip if the division's own time range covers this time
+        const GUARD_START = 480;  // 8:00 AM
+        const GUARD_END = 1200;   // 8:00 PM
+        const outsideDefaultHours = (timeMin < GUARD_START || timeMin > GUARD_END);
+        const coveredByDivision = (divStartMin !== null && divEndMin !== null && timeMin >= divStartMin && timeMin <= divEndMin);
+        if (outsideDefaultHours && !coveredByDivision) {
           const ok = confirm(
-            `⚠️ Early Time Warning\n\n"${timeStr}" is before 8:00 AM.\n\nJust confirming — is this tile correct?\n\nClick OK to proceed, Cancel to re-enter.`
-          );
-          if (!ok) return { valid: false, minutes: null, isNight: false };
-        }
-        if (timeMin >= LATE_GUARD && !(divEndMin !== null && divEndMin >= LATE_GUARD)) {
-          const ok = confirm(
-            `⚠️ Late Time Warning\n\n"${timeStr}" is after 8:00 PM.\n\nJust confirming — is this tile correct?\n\nClick OK to proceed, Cancel to re-enter.`
+            `⚠️ Unusual Time Warning\n\n"${timeStr}" is outside normal camp hours (8:00 AM – 8:00 PM).\n\nJust confirming — is this tile correct?\n\nClick OK to proceed, Cancel to re-enter.`
           );
           if (!ok) return { valid: false, minutes: null, isNight: false };
         }
