@@ -1,10 +1,11 @@
 // ============================================================================
-// rbac_init.js — Master RBAC Initialization v1.3 (OVERLAY FIX)
+// rbac_init.js — Master RBAC Initialization v1.4 (SESSION CACHE)
 // ============================================================================
 // Initializes all RBAC modules in the correct order and handles dependencies
 // 
-// v1.3 FIX: Replaced visibility:hidden with a loading overlay during RBAC init
-//           to prevent blank white screen while permissions resolve.
+// v1.4: Removed loading screen manipulation — AccessControl now reads from
+//        sessionStorage cache (written by dashboard.js), making init near-instant.
+//        No more white screen gap between auth and RBAC.
 // v1.2 SECURITY PATCHES:
 //   - V-001 FIX: Hide app shell during init to prevent flash of unauthorized content
 //   - V-004 FIX: Logic-gate destructive actions at handler level (not just CSS)
@@ -23,7 +24,7 @@
 (function() {
     'use strict';
 
-    console.log("🚀 RBAC Init v1.2 (SECURITY PATCH) starting...");
+    console.log("🚀 RBAC Init v1.4 (SESSION CACHE) starting...");
 
     // =========================================================================
     // INITIALIZATION
@@ -32,23 +33,9 @@
     async function initializeRBAC() {
         console.log("🚀 Initializing RBAC system...");
 
-        // ★★★ V-001 FIX: Keep the existing loading spinner visible until RBAC resolves ★★★
-        // The auth-loading-screen is already on screen with a spinner — just keep it there.
-        // Hide the main app so there's no flash of unauthorized content behind it.
-        const authLoadingScreen = document.getElementById('auth-loading-screen');
-        const mainAppContainer = document.getElementById('main-app-container')
-                              || document.getElementById('main-content');
-        
-        if (authLoadingScreen) {
-            authLoadingScreen.style.display = 'flex';
-            const subtext = authLoadingScreen.querySelector('.auth-loading-subtext') 
-                         || authLoadingScreen.querySelector('.loading-text');
-            if (subtext) subtext.textContent = 'Loading permissions...';
-        }
-        if (mainAppContainer) mainAppContainer.style.display = 'none';
-
         try {
             // Step 1: Wait for and initialize AccessControl
+            // (reads sessionStorage cache — should be near-instant)
             await initializeAccessControl();
             
             // Step 2: Initialize SubdivisionScheduleManager
@@ -91,11 +78,6 @@
             
         } catch (error) {
             console.error("🚀 RBAC initialization error:", error);
-        } finally {
-            // ★★★ V-001 FIX: Dismiss spinner, show the app ★★★
-            // Even on error — fallback role is viewer, which is safe
-            if (authLoadingScreen) authLoadingScreen.style.display = 'none';
-            if (mainAppContainer) mainAppContainer.style.display = 'block';
         }
     }
 
@@ -376,6 +358,6 @@
         }
     };
 
-    console.log("🚀 RBAC Init v1.3 loaded");
+    console.log("🚀 RBAC Init v1.4 loaded");
 
 })();
