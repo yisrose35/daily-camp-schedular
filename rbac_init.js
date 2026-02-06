@@ -32,30 +32,20 @@
     async function initializeRBAC() {
         console.log("🚀 Initializing RBAC system...");
 
-        // ★★★ V-001 FIX: Show loading overlay until RBAC resolves ★★★
-        // Prevents flash of unauthorized content (owner-level UI visible to viewers)
-        // Uses an overlay instead of visibility:hidden to avoid blank white screen
-        const appContainer = document.getElementById('app-content') 
-                          || document.querySelector('.main-content')
-                          || document.body;
-        appContainer.style.pointerEvents = 'none';
-
-        let rbacOverlay = document.getElementById('rbac-loading-overlay');
-        if (!rbacOverlay) {
-            rbacOverlay = document.createElement('div');
-            rbacOverlay.id = 'rbac-loading-overlay';
-            rbacOverlay.style.cssText = 
-                'position:fixed;top:0;left:0;width:100%;height:100%;' +
-                'background:rgba(255,255,255,0.92);z-index:99999;' +
-                'display:flex;align-items:center;justify-content:center;' +
-                'flex-direction:column;font-family:system-ui,sans-serif;';
-            rbacOverlay.innerHTML = 
-                '<div style="width:32px;height:32px;border:3px solid #e0e0e0;' +
-                'border-top-color:#147D91;border-radius:50%;animation:rbac-spin 0.8s linear infinite;"></div>' +
-                '<div style="margin-top:12px;color:#555;font-size:14px;">Loading permissions...</div>' +
-                '<style>@keyframes rbac-spin{to{transform:rotate(360deg)}}</style>';
-            document.body.appendChild(rbacOverlay);
+        // ★★★ V-001 FIX: Keep the existing loading spinner visible until RBAC resolves ★★★
+        // The auth-loading-screen is already on screen with a spinner — just keep it there.
+        // Hide the main app so there's no flash of unauthorized content behind it.
+        const authLoadingScreen = document.getElementById('auth-loading-screen');
+        const mainAppContainer = document.getElementById('main-app-container')
+                              || document.getElementById('main-content');
+        
+        if (authLoadingScreen) {
+            authLoadingScreen.style.display = 'flex';
+            const subtext = authLoadingScreen.querySelector('.auth-loading-subtext') 
+                         || authLoadingScreen.querySelector('.loading-text');
+            if (subtext) subtext.textContent = 'Loading permissions...';
         }
+        if (mainAppContainer) mainAppContainer.style.display = 'none';
 
         try {
             // Step 1: Wait for and initialize AccessControl
@@ -102,15 +92,10 @@
         } catch (error) {
             console.error("🚀 RBAC initialization error:", error);
         } finally {
-            // ★★★ V-001 FIX: Remove overlay after RBAC resolves ★★★
+            // ★★★ V-001 FIX: Dismiss spinner, show the app ★★★
             // Even on error — fallback role is viewer, which is safe
-            const overlay = document.getElementById('rbac-loading-overlay');
-            if (overlay) {
-                overlay.style.transition = 'opacity 0.2s ease';
-                overlay.style.opacity = '0';
-                setTimeout(() => overlay.remove(), 200);
-            }
-            appContainer.style.pointerEvents = '';
+            if (authLoadingScreen) authLoadingScreen.style.display = 'none';
+            if (mainAppContainer) mainAppContainer.style.display = '';
         }
     }
 
