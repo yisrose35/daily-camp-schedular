@@ -1337,13 +1337,15 @@ if (!blockDivName && bunk) {
                     canFit = (existingUsage + currentGroupUsage < capacity);
                 }
 
-                if (canFit) {
+               if (canFit) {
                     // Direct assignment
                     results.push({
                         blockIdx: bo.bi, candIdx: opt.ci,
                         pick: clonePick(cand2), cost: opt.cost
                     });
                     fieldUsageInGroup.set(fieldNorm2, currentGroupUsage + 1);
+                    if (!fieldDivsInGroup.has(fieldNorm2)) fieldDivsInGroup.set(fieldNorm2, new Set());
+                    fieldDivsInGroup.get(fieldNorm2).add(block2.divName || '');
                     fieldAssignedTo.set(fieldNorm2 + ':' + bo.bi, { blockIdx: bo.bi, ci: opt.ci });
                     assigned = true;
                     break;
