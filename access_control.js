@@ -569,6 +569,31 @@
         return _currentRole === ROLES.OWNER;
     }
 
+    /**
+     * Check if user can edit/save print templates.
+     * Owner and Admin can edit templates; Scheduler and Viewer cannot.
+     */
+    function canEditPrintTemplates() {
+        if (!_initialized || !_currentRole) return false;
+        return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN;
+    }
+
+    /**
+     * Check if user can print schedules.
+     * All roles can print (per existing Print Center exception).
+     */
+    function canPrintSchedules() {
+        return true; // Print Center is accessible to all roles
+    }
+
+    /**
+     * Check if user can manage (delete) print templates.
+     * Only Owner can delete templates.
+     */
+    function canDeletePrintTemplates() {
+        if (!_initialized || !_currentRole) return false;
+        return _currentRole === ROLES.OWNER;
+    }
     function canEditSetup() {
         if (!_initialized) return false;
         return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER;
