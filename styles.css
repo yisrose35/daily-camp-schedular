@@ -1611,7 +1611,7 @@ label.override-checkbox span {
 .pc-container {
     display: flex;
     flex-direction: column;
-    height: calc(100vh - 110px);
+    height: calc(100vh - 60px);
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     color: #1E293B;
     background: #F1F5F9;
@@ -1628,7 +1628,7 @@ label.override-checkbox span {
     border-radius: 0;
 }
 
-/* ── TOP BAR ── */
+/* ── TOP BAR — single compact row ── */
 .pc-topbar {
     display: flex;
     align-items: center;
@@ -1637,24 +1637,53 @@ label.override-checkbox span {
     background: #FFF;
     border-bottom: 1px solid #E2E8F0;
     flex-shrink: 0;
+    z-index: 20;
+    position: relative;
 }
 .pc-topbar-left { display: flex; align-items: center; gap: 10px; }
+.pc-topbar-center { display: flex; align-items: center; gap: 8px; }
 .pc-topbar-right { display: flex; align-items: center; gap: 6px; }
+
+/* ── SETTINGS DROPDOWN ── */
+.pc-settings-dropdown { position: relative; }
+.pc-settings-toggle {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 13px; font-weight: 600; color: #334155; cursor: pointer;
+    padding: 5px 12px; border-radius: 6px;
+    background: #F1F5F9; border: 1px solid #E2E8F0;
+    transition: all 0.15s; list-style: none;
+    user-select: none;
+}
+.pc-settings-toggle::-webkit-details-marker { display: none; }
+.pc-settings-toggle::marker { display: none; content: ''; }
+.pc-settings-toggle:hover { background: #E2E8F0; border-color: #CBD5E1; }
+.pc-settings-dropdown[open] .pc-settings-toggle { background: #147D91; color: #FFF; border-color: #147D91; }
+.pc-settings-dropdown[open] .pc-settings-toggle svg { stroke: #FFF; }
+.pc-settings-panel {
+    position: absolute; top: calc(100% + 6px); left: 0;
+    background: #FFF; border-radius: 10px; border: 1px solid #E2E8F0;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.12), 0 4px 12px rgba(0,0,0,0.06);
+    min-width: 640px; max-width: 90vw;
+    z-index: 100; padding: 12px 0;
+    animation: pc-dropdown-in 0.15s ease-out;
+}
+@keyframes pc-dropdown-in {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
 .pc-title {
     font-size: 14px; font-weight: 700; margin: 0; color: #0F172A;
     display: flex; align-items: center; gap: 6px;
 }
 .pc-title svg { opacity: 0.7; flex-shrink: 0; }
 
-/* ── QUICK SETTINGS BAR ── */
+/* ── QUICK SETTINGS (inside dropdown) ── */
 .pc-quick {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 5px 16px;
-    background: #FFF;
-    border-bottom: 1px solid #E2E8F0;
-    flex-shrink: 0;
+    padding: 8px 16px;
+    border-bottom: 1px solid #F1F5F9;
     flex-wrap: wrap;
 }
 .pc-quick-group { display: flex; align-items: center; gap: 8px; }
@@ -1704,18 +1733,15 @@ label.override-checkbox span {
 .pc-opt input[type="checkbox"] { accent-color: #147D91; width: 13px; height: 13px; margin: 0; }
 .pc-opt input[type="checkbox"]:checked + svg { opacity: 0.9; }
 
-/* ── CONTROLS ROW ── */
-.pc-controls {
-    padding: 5px 16px 4px;
-    background: #FFF;
-    border-bottom: 1px solid #E2E8F0;
-    flex-shrink: 0;
+/* ── CONTROLS (inside dropdown) ── */
+.pc-controls-inner {
+    padding: 8px 16px 4px;
 }
 .pc-controls-top {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 4px;
+    margin-bottom: 6px;
 }
 .pc-view-tabs { display: flex; gap: 2px; }
 .pc-view-tab {
@@ -1747,8 +1773,7 @@ label.override-checkbox span {
 .pc-selector-row { display: flex; align-items: flex-start; gap: 8px; }
 .pc-selector-box {
     display: flex; flex-wrap: wrap; gap: 1px 6px;
-    max-height: 48px; overflow-y: auto; flex: 1;
-    padding: 2px 0;
+    flex: 1; padding: 2px 0;
 }
 .pc-selector-item {
     display: inline-flex; align-items: center; gap: 3px;
@@ -1804,8 +1829,8 @@ label.override-checkbox span {
     height: 100%;
     overflow: auto;
     -webkit-overflow-scrolling: touch;
-    background: #E5E7EB;
-    padding: 16px;
+    background: #F1F5F9;
+    padding: 20px;
     cursor: default;
     /* Contain scroll within this element */
     overscroll-behavior: contain;
