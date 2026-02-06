@@ -1426,6 +1426,28 @@ function addDropListeners(selector) {
         const newStartVal = parseTimeToMinutes(newEvent.startTime);
         const newEndVal = parseTimeToMinutes(newEvent.endTime);
 
+        // ★ EARLY/LATE TILE GUARD — flag tiles before 8am or after 8pm
+        // Exception: skip warning if the division's own start/end covers that range
+        const divisions = window.divisions || {};
+        const guardDiv = divisions[divName] || {};
+        const guardDivStart = parseTimeToMinutes(guardDiv.startTime);
+        const guardDivEnd = parseTimeToMinutes(guardDiv.endTime);
+        const EARLY_GUARD = 480;  // 8:00 AM
+        const LATE_GUARD = 1200;  // 8:00 PM
+        
+        let earlyFlag = false, lateFlag = false;
+        if (newStartVal !== null && newStartVal < EARLY_GUARD && !(guardDivStart !== null && guardDivStart <= newStartVal)) earlyFlag = true;
+        if (newEndVal !== null && newEndVal > LATE_GUARD && !(guardDivEnd !== null && guardDivEnd >= newEndVal)) lateFlag = true;
+        
+        if (earlyFlag || lateFlag) {
+          const timeIssue = earlyFlag && lateFlag ? 'before 8:00 AM and after 8:00 PM'
+            : earlyFlag ? 'before 8:00 AM' : 'after 8:00 PM';
+          const ok = await showConfirm(
+            `⚠️ This tile (${newEvent.startTime} - ${newEvent.endTime}) is ${timeIssue}.\n\nJust confirming — is this tile correct?`
+          );
+          if (!ok) return;
+        }
+
         // Remove overlapping events
         dailySkeleton = dailySkeleton.filter(existing => {
           if (existing.division !== divName) return true;
