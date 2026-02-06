@@ -10,11 +10,6 @@
 // ============================================================================
 
 // ========================================
-// CONSTANTS
-// ========================================
-const GLOBAL_ACCESS_CODE = 'jUsTCAmPit2026';
-
-// ========================================
 // GLOBAL STATE
 // ========================================
 let authMode = 'login';
@@ -338,10 +333,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     showAuthError('Please enter your camp name.');
                     return;
                 }
-                if (accessCode !== GLOBAL_ACCESS_CODE) {
-                    showAuthError('Invalid access code. Contact campistryoffice@gmail.com for access.');
-                    return;
-                }
             }
 
             if (formSubmit) {
@@ -360,10 +351,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (authMode === 'signup') {
                     showAuthLoading(true, 'Creating your account...');
                     result = await supabase.auth.signUp({
-    email,
-    password,
-    options: { data: { camp_name: campName, access_code: accessCode } }
-});
+                        email,
+                        password,
+                        options: { data: { camp_name: campName, access_code: accessCode } }
+                    });
                 } else {
                     showAuthLoading(true, 'Verifying credentials...');
                     result = await supabase.auth.signInWithPassword({ email, password });
@@ -450,6 +441,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
                             if (campError && campError.code !== '23505') {
                                 console.error('[Landing] Camp creation failed:', campError);
+                                // Server-side access code trigger returns this error
+                                if (campError.message?.includes('access code')) {
+                                    throw new Error('Invalid access code. Contact campistryoffice@gmail.com for access.');
+                                }
+                                throw new Error('Could not create camp. Please try again.');
                             }
                             localStorage.setItem('campistry_camp_id', user.id);
                             localStorage.setItem('campistry_user_id', user.id);
