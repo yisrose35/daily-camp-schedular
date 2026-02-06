@@ -1,5 +1,8 @@
 // ============================================================================
-// campistry_auth.js — FINAL SaaS AUTH ENGINE (FIXED v3.0)
+// campistry_auth.js — FINAL SaaS AUTH ENGINE (HARDENED v3.2)
+// v3.2: Security hardening — failed accept returns false, all localStorage
+//       keys set (campistry_camp_id + campistry_auth_user_id), 
+//       CampistryDB.refresh() before boot
 // v3.0: Fixed camp creation with error handling and proper ID setting
 // v2.0: Added pending invite check to prevent team members becoming owners
 // ============================================================================
@@ -49,6 +52,7 @@
 
     // =========================================================================
     // ⭐ Check for pending invite before creating camp
+    // v3.2: Returns false on failed accept (no stale localStorage caching)
     // =========================================================================
     async function checkAndAcceptPendingInvite(email, userId) {
         try {
@@ -78,14 +82,16 @@
                     })
                     .eq('id', pendingInvite.id);
                 
+                // ⭐ v3.2 FIX: If accept failed, don't cache stale data
                 if (acceptError) {
                     console.error("🔐 Failed to auto-accept invite:", acceptError);
-                    // Still return true - they have an invite, just couldn't accept it now
-                    // The login flow will retry
+                    return false;
                 }
                 
-                // Cache the role from invite
+                // ⭐ v3.2 FIX: Cache ALL keys including campistry_camp_id
+                localStorage.setItem('campistry_camp_id', pendingInvite.camp_id);
                 localStorage.setItem('campistry_user_id', pendingInvite.camp_id);
+                localStorage.setItem('campistry_auth_user_id', userId);
                 localStorage.setItem('campistry_role', pendingInvite.role);
                 localStorage.setItem('campistry_is_team_member', 'true');
                 
@@ -103,6 +109,7 @@
 
     // =========================================================================
     // ⭐ Create camp for new owner with proper error handling
+    // v3.2: Sets campistry_camp_id + campistry_auth_user_id
     // =========================================================================
     async function createCampForOwner(userId, campName) {
         console.log("🔐 Creating camp for new owner...");
@@ -133,8 +140,10 @@
             
             console.log("🔐 ✅ Camp created successfully:", campData);
             
-            // Cache owner role
+            // ⭐ v3.2 FIX: Cache ALL keys including campistry_camp_id
+            localStorage.setItem('campistry_camp_id', userId);
             localStorage.setItem('campistry_user_id', userId);
+            localStorage.setItem('campistry_auth_user_id', userId);
             localStorage.setItem('campistry_role', 'owner');
             localStorage.setItem('campistry_is_team_member', 'false');
             
@@ -221,12 +230,16 @@
                             
                             if (existingCamp) {
                                 console.log("🔐 User owns camp:", existingCamp.name);
+                                // ⭐ v3.2 FIX: Set ALL localStorage keys
+                                localStorage.setItem('campistry_camp_id', existingCamp.id);
                                 localStorage.setItem('campistry_user_id', existingCamp.id);
+                                localStorage.setItem('campistry_auth_user_id', user.id);
                                 localStorage.setItem('campistry_role', 'owner');
                                 localStorage.setItem('campistry_is_team_member', 'false');
                             } else {
                                 console.warn("🔐 ⚠️ User has no camp and no invite!");
                                 // Clear any stale cache
+                                localStorage.removeItem('campistry_camp_id');
                                 localStorage.removeItem('campistry_role');
                                 localStorage.removeItem('campistry_is_team_member');
                             }
@@ -250,6 +263,14 @@
                 
                 console.log("🔐 Auth successful for:", user.email);
                 showStatus("Success! Loading Campistry...");
+                
+                // ⭐ v3.2 FIX: Force supabase_client.js to re-detect from DB,
+                // prevents race where onAuthStateChange set stale _role='viewer'
+                if (window.CampistryDB?.refresh) {
+                    try { await window.CampistryDB.refresh(); } catch(e) {
+                        console.warn("🔐 CampistryDB.refresh() failed:", e);
+                    }
+                }
                 
                 // Hide welcome screen, show app
                 const welcomeScreen = document.getElementById("welcome-screen");
