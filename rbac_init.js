@@ -95,7 +95,7 @@
             // ★★★ V-001 FIX: Dismiss spinner, show the app ★★★
             // Even on error — fallback role is viewer, which is safe
             if (authLoadingScreen) authLoadingScreen.style.display = 'none';
-            if (mainAppContainer) mainAppContainer.style.display = '';
+            if (mainAppContainer) mainAppContainer.style.display = 'block';
         }
     }
 
