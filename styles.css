@@ -1603,7 +1603,8 @@ label.override-checkbox span {
 }
 
 /* =================================================================
-   Print Center v3.6 Styles — Maximized preview, professional UI
+   Print Center v3.7 Styles — Maximized preview, professional UI
+   v3.7: Fixed table overflow, scroll/cursor stuck, combined mode layout
    ================================================================= */
 
 /* ── CONTAINER ── */
@@ -1763,6 +1764,7 @@ label.override-checkbox span {
 /* ── WORKSPACE ── */
 .pc-workspace {
     flex: 1;
+    min-height: 0;
     position: relative;
     overflow: hidden;
     display: flex;
@@ -1785,6 +1787,8 @@ label.override-checkbox span {
     transition: background 0.15s;
     border-left: 1px solid #E2E8F0;
     border-right: 1px solid #E2E8F0;
+    /* Prevent arrows from capturing scroll events */
+    touch-action: none;
 }
 .pc-scroll-arrow:hover {
     background: #F1F5F9;
@@ -1799,11 +1803,17 @@ label.override-checkbox span {
     min-width: 0;
     height: 100%;
     overflow: auto;
+    -webkit-overflow-scrolling: touch;
     background: #E5E7EB;
     padding: 16px;
+    cursor: default;
+    /* Contain scroll within this element */
+    overscroll-behavior: contain;
 }
 .pc-preview-content {
     /* Zoom applied via JS transform */
+    width: fit-content;
+    min-width: 100%;
 }
 .pc-preview-empty {
     display: flex;
@@ -1819,7 +1829,11 @@ label.override-checkbox span {
     border-radius: 4px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.1), 0 0 0 1px rgba(0,0,0,0.04);
     margin-bottom: 20px;
-    overflow: visible;
+    overflow: hidden;
+}
+.pc-print-page table {
+    word-wrap: break-word;
+    overflow-wrap: break-word;
 }
 
 /* ── ADVANCED DRAWER ── */
@@ -1944,7 +1958,7 @@ label.override-checkbox span {
     .pc-workspace { overflow: visible !important; }
     .pc-preview-area { overflow: visible !important; background: #FFF !important; padding: 0 !important; }
     .pc-preview-content { transform: none !important; }
-    .pc-print-page { box-shadow: none !important; border-radius: 0 !important; margin-bottom: 0 !important; }
+    .pc-print-page { box-shadow: none !important; border-radius: 0 !important; margin-bottom: 0 !important; overflow: visible !important; }
     .pc-advanced-drawer { display: none !important; }
     .pc-scroll-arrow { display: none !important; }
     #printable-area { display: block !important; }
