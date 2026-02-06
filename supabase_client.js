@@ -304,6 +304,7 @@
     }
 
     function clearCache() {
+        // Auth keys (existing)
         Object.values(CONFIG.CACHE_KEYS).forEach(key => {
             localStorage.removeItem(key);
         });
@@ -311,6 +312,12 @@
         _role = null;
         _isTeamMember = false;
         delete window._campistryMembership;
+        
+        // ⭐ NEW: Clear camp data keys on sign-out
+        localStorage.removeItem('campGlobalSettings_v1');
+        localStorage.removeItem('campistryGlobalSettings');
+        localStorage.removeItem('CAMPISTRY_LOCAL_CACHE');
+        localStorage.removeItem('campDailyData_v1');
     }
 
     // =========================================================================
