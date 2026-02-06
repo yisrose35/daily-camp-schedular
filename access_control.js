@@ -1616,6 +1616,9 @@
         canRunGenerator,
         getEditableBunkIds,
         canPrint,
+        canEditPrintTemplates,
+        canDeletePrintTemplates,
+        canPrintSchedules,
         canUseCamperLocator,
         canViewDailySchedule,
         
