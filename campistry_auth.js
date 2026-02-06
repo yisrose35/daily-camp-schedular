@@ -1,17 +1,25 @@
 // ============================================================================
-// campistry_auth.js — FINAL SaaS AUTH ENGINE (HARDENED v3.2)
+// campistry_auth.js — FINAL SaaS AUTH ENGINE (HARDENED v3.3)
+// v3.3: Added access code gate for signup (matches landing.js)
 // v3.2: Security hardening — failed accept returns false, all localStorage
-//       keys set (campistry_camp_id + campistry_auth_user_id), 
-//       CampistryDB.refresh() before boot
+//       keys set, CampistryDB.refresh() before boot
 // v3.0: Fixed camp creation with error handling and proper ID setting
 // v2.0: Added pending invite check to prevent team members becoming owners
 // ============================================================================
 (function() {
     'use strict';
+
+    // =========================================================================
+    // ACCESS CODE — Must match landing.js
+    // =========================================================================
+    const GLOBAL_ACCESS_CODE = 'jUsTCAmPit2026';
+
     let authMode = "login";
     const emailEl = document.getElementById("auth-email");
     const passEl = document.getElementById("auth-password");
     const campEl = document.getElementById("camp-name-input");
+    const accessCodeEl = document.getElementById("access-code-input");
+    const accessCodeGroup = document.getElementById("access-code-group");
     const statusEl = document.getElementById("auth-status");
     const beginBtn = document.getElementById("begin-btn");
     const loginBtn = document.getElementById("mode-login");
@@ -32,6 +40,8 @@
         if (loginBtn) loginBtn.classList.toggle("active", mode === "login");
         if (signupBtn) signupBtn.classList.toggle("active", mode === "signup");
         if (campEl) campEl.style.display = mode === "signup" ? "block" : "none";
+        // ⭐ v3.3: Show/hide access code field with signup mode
+        if (accessCodeGroup) accessCodeGroup.style.display = mode === "signup" ? "block" : "none";
         if (beginBtn) beginBtn.innerText = mode === "signup" ? "Create Campistry Account" : "Sign In";
     }
     setMode("login");
@@ -162,6 +172,7 @@
             const email = emailEl.value.trim();
             const password = passEl.value.trim();
             const campName = campEl ? campEl.value.trim() : "";
+            const accessCode = accessCodeEl ? accessCodeEl.value.trim() : "";
             
             if (!email || !password) {
                 showStatus("Please enter email and password.", true);
@@ -169,6 +180,11 @@
             }
             if (authMode === "signup" && !campName) {
                 showStatus("Please enter your camp name.", true);
+                return;
+            }
+            // ⭐ v3.3: Access code validation for signup
+            if (authMode === "signup" && accessCode !== GLOBAL_ACCESS_CODE) {
+                showStatus("Invalid access code. Contact campistryoffice@gmail.com for access.", true);
                 return;
             }
             
@@ -264,8 +280,7 @@
                 console.log("🔐 Auth successful for:", user.email);
                 showStatus("Success! Loading Campistry...");
                 
-                // ⭐ v3.2 FIX: Force supabase_client.js to re-detect from DB,
-                // prevents race where onAuthStateChange set stale _role='viewer'
+                // ⭐ v3.2 FIX: Force supabase_client.js to re-detect from DB
                 if (window.CampistryDB?.refresh) {
                     try { await window.CampistryDB.refresh(); } catch(e) {
                         console.warn("🔐 CampistryDB.refresh() failed:", e);
