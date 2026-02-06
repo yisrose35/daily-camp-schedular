@@ -896,12 +896,18 @@
     
     window.logout = async function() {
         try {
-            // Clear local storage
+            // Clear auth keys
             localStorage.removeItem('campistry_user_id');
             localStorage.removeItem('campistry_auth_user_id');
             localStorage.removeItem('campistry_role');
             localStorage.removeItem('campistry_is_team_member');
             localStorage.removeItem('campistry_camp_id');
+            
+            // ⭐ NEW: Clear camp data keys to prevent data leak to next user
+            localStorage.removeItem('campGlobalSettings_v1');
+            localStorage.removeItem('campistryGlobalSettings');
+            localStorage.removeItem('CAMPISTRY_LOCAL_CACHE');
+            localStorage.removeItem('campDailyData_v1');
             
             await window.supabase.auth.signOut();
             window.location.href = 'index.html';
