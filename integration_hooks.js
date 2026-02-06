@@ -1,6 +1,12 @@
 // =============================================================================
-// integration_hooks.js v6.5 — CAMPISTRY SCHEDULER INTEGRATION
+// integration_hooks.js v6.6 — CAMPISTRY SCHEDULER INTEGRATION
 // =============================================================================
+//
+// v6.6 FIXES:
+// - ★★★ CRITICAL: Multi-date save fix — ALL dates now cloud-synced, not just one
+// - ★ localStorage persistence restored (was silently missing for daily_schedules)
+// - ★ Secondary dates saved via ScheduleDB with skipFilter + staggered timing
+// - ★ Filters out poisoned root keys like 'updated_at' from date iteration
 //
 // v6.5 FIXES:
 // - ★ RAINY DAY PERSISTENCE - Properly saves/loads isRainyDay and rainyDayStartTime
@@ -35,7 +41,7 @@
 (function() {
     'use strict';
 
-    console.log('🔗 Campistry Integration Hooks v6.5 loading...');
+    console.log('🔗 Campistry Integration Hooks v6.6 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -695,27 +701,108 @@
     // =========================================================================
 
     /**
-     * ★★★ SINGLE AUTHORITATIVE HANDLER ★★★
+     * ★★★ SINGLE AUTHORITATIVE HANDLER — v6.6 MULTI-DATE FIX ★★★
      * This replaces all other patches. Do NOT patch this function elsewhere.
+     *
+     * CRITICAL FIX (v6.6): When key === 'daily_schedules', callers pass the FULL
+     * campDailyData_v1 object containing ALL dates. Previous versions only saved
+     * ONE arbitrary date (Object.keys(data)[0]), silently dropping all others.
+     *
+     * Affected callers that were losing data:
+     *   - calendar.js saveCurrentDailyData() — only current date synced
+     *   - fields.js cleanupDeletedField/propagateFieldRename — multi-date cleanup lost
+     *   - special_activities.js cleanup/rename — multi-date cleanup lost
+     *   - scheduler_core_leagues.js updateFutureSchedules — future dates lost
+     *   - scheduler_core_specialty_leagues.js updateFutureSchedules — future dates lost
+     *
+     * Now we:
+     *   1. ALWAYS persist full object to localStorage (was missing entirely!)
+     *   2. Cloud-sync the CURRENT date via verifiedScheduleSave (with retry)
+     *   3. Cloud-sync ALL OTHER dates via lightweight ScheduleDB.saveSchedule
      */
     window.saveGlobalSettings = function(key, data) {
-        // For daily_schedules, use verified save with retry
+        // For daily_schedules, persist locally AND sync ALL dates to cloud
         if (key === 'daily_schedules') {
-    // ★★★ FIX: Save the CURRENT date, not Object.keys()[0] which is arbitrary ★★★
-    const currentDate = window.currentScheduleDate || 
-                        document.getElementById('schedule-date-input')?.value ||
-                        document.getElementById('datepicker')?.value;
-    const dateKey = currentDate && data[currentDate] ? currentDate : 
-                    Object.keys(data).find(k => k.match(/^\d{4}-\d{2}-\d{2}$/) && data[k]?.scheduleAssignments);
-    if (dateKey && data[dateKey]) {
-        verifiedScheduleSave(dateKey, data[dateKey])
+
+            // ═══════════════════════════════════════════════════════════════
+            // STEP 1: Always persist full object to localStorage
+            // (Previously missing! The handler returned true without saving.)
+            // ═══════════════════════════════════════════════════════════════
+            try {
+                localStorage.setItem('campDailyData_v1', JSON.stringify(data));
+            } catch (e) {
+                logError('[saveGlobalSettings] localStorage write failed:', e);
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // STEP 2: Collect ALL valid date keys (filter out 'updated_at'
+            // and any other non-date root keys that calendar.js may add)
+            // ═══════════════════════════════════════════════════════════════
+            const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+            const allDateKeys = Object.keys(data).filter(k =>
+                DATE_REGEX.test(k) && data[k] && typeof data[k] === 'object'
+            );
+
+            if (allDateKeys.length === 0) {
+                log('[saveGlobalSettings] daily_schedules: no valid date keys found');
+                return true;
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // STEP 3: Determine the primary (current) date
+            // ═══════════════════════════════════════════════════════════════
+            const currentDate = window.currentScheduleDate ||
+                                document.getElementById('schedule-date-input')?.value ||
+                                document.getElementById('datepicker')?.value;
+
+            const primaryDateKey = allDateKeys.includes(currentDate)
+                ? currentDate
+                : allDateKeys.find(k => data[k]?.scheduleAssignments) || allDateKeys[0];
+
+            // ═══════════════════════════════════════════════════════════════
+            // STEP 4: Save PRIMARY date with verified save (retry + verify)
+            // ═══════════════════════════════════════════════════════════════
+            if (primaryDateKey && data[primaryDateKey]) {
+                verifiedScheduleSave(primaryDateKey, data[primaryDateKey])
                     .then(result => {
                         if (!result?.success) {
-                            console.warn('🔗 Schedule save issue:', result?.error);
+                            console.warn('🔗 Primary schedule save issue:', result?.error);
                         }
                     })
-                    .catch(e => logError('Schedule save failed:', e));
+                    .catch(e => logError('Primary schedule save failed:', e));
             }
+
+            // ═══════════════════════════════════════════════════════════════
+            // STEP 5: Save OTHER dates via lightweight ScheduleDB.saveSchedule
+            // These are dates modified by propagation (field rename/delete,
+            // activity rename/delete, league future-date updates, etc.)
+            // Uses skipFilter:true since propagation changes affect all bunks.
+            // Staggered 500ms apart to avoid hammering the cloud.
+            // ═══════════════════════════════════════════════════════════════
+            const secondaryDateKeys = allDateKeys.filter(k =>
+                k !== primaryDateKey &&
+                data[k]?.scheduleAssignments &&
+                Object.keys(data[k].scheduleAssignments).length > 0
+            );
+
+            if (secondaryDateKeys.length > 0 && window.ScheduleDB?.saveSchedule) {
+                log(`[saveGlobalSettings] Syncing ${secondaryDateKeys.length} secondary date(s) to cloud...`);
+
+                secondaryDateKeys.forEach((dk, index) => {
+                    setTimeout(() => {
+                        window.ScheduleDB.saveSchedule(dk, data[dk], { skipFilter: true })
+                            .then(r => {
+                                if (r?.success) {
+                                    log(`  ✅ Secondary save: ${dk}`);
+                                } else {
+                                    console.warn(`  ⚠️ Secondary save failed: ${dk}`, r?.error);
+                                }
+                            })
+                            .catch(e => console.warn(`  ⚠️ Secondary save error: ${dk}`, e.message));
+                    }, (index + 1) * 500); // 500ms stagger
+                });
+            }
+
             return true;
         }
         
@@ -1403,7 +1490,7 @@
         const client = window.CampistryDB?.getClient?.();
 
         console.log('═══════════════════════════════════════════════════════');
-        console.log('SCHEDULE SYNC DIAGNOSTIC v6.5');
+        console.log('SCHEDULE SYNC DIAGNOSTIC v6.6');
         console.log('═══════════════════════════════════════════════════════');
         console.log('Date:', dateKey);
         console.log('Online:', navigator.onLine);
@@ -1476,8 +1563,8 @@
         setTimeout(waitForSystems, 300);
     }
 
-    console.log('🔗 Campistry Integration Hooks v6.5 loaded');
+    console.log('🔗 Campistry Integration Hooks v6.6 loaded');
     console.log('   Commands: diagnoseScheduleSync(), verifiedScheduleSave(), forceLoadScheduleFromCloud()');
-    console.log('   v6.5: Rainy day persistence fix - isRainyDay and rainyDayStartTime now properly saved/loaded');
+    console.log('   v6.6: Multi-date save fix — ALL dates now properly cloud-synced');
 
 })();
