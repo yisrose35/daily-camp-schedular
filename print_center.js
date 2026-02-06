@@ -142,8 +142,8 @@ function findFirstSlotForTime(startMin, divName = null) {
 }
 
 function getEntry(bunk, slotIndex) {
-    const dailyData = window.loadCurrentDailyData?.() || {};
-    const assignments = dailyData.scheduleAssignments || window.scheduleAssignments || {};
+    // ★ Prefer live runtime data (set by scheduler/post-edit), then fall back to daily blob
+    const assignments = window.scheduleAssignments || window.loadCurrentDailyData?.()?.scheduleAssignments || {};
     if (bunk && assignments[bunk] && assignments[bunk][slotIndex]) {
         return assignments[bunk][slotIndex];
     }
@@ -726,9 +726,10 @@ function populateSelectors() {
     const container = document.getElementById('pc-selector-container');
     if (!container) return;
 
-    const app1 = window.loadGlobalSettings?.().app1 || {};
-    const divisions = app1.divisions || {};
-    const availableDivisions = app1.availableDivisions || [];
+    // ★ Prefer live runtime globals, then cloud settings
+    const app1 = window.loadGlobalSettings?.()?.app1 || {};
+    const divisions = window.divisions || app1.divisions || {};
+    const availableDivisions = window.availableDivisions || app1.availableDivisions || Object.keys(divisions);
     const fields = app1.fields || [];
     const specials = app1.specialActivities || [];
 
@@ -966,9 +967,42 @@ function headerCellStyle() {
 function generateStyledDivisionHTML(divName) {
     const t = _currentTemplate;
     const daily = window.loadCurrentDailyData?.() || {};
-    const manualSkeleton = daily.manualSkeleton || [];
-    const divisions = window.loadGlobalSettings?.().app1?.divisions || {};
+
+    // ★ Full skeleton fallback chain (mirrors unified_schedule_system getSkeleton):
+    // 1. daily data manualSkeleton  2. daily data skeleton  3. window globals  4. per-date localStorage  5. cloud
+    let manualSkeleton = daily.manualSkeleton || daily.skeleton || 
+                         window.dailyOverrideSkeleton || window.manualSkeleton || window.skeleton || [];
+
+    // If still empty, try per-date localStorage key (daily_adjustments.js saves here)
+    if (manualSkeleton.length === 0) {
+        try {
+            const dateKey = window.currentScheduleDate;
+            const stored = dateKey ? localStorage.getItem(`campManualSkeleton_${dateKey}`) : null;
+            if (stored) manualSkeleton = JSON.parse(stored) || [];
+        } catch (e) { /* ignore */ }
+    }
+
+    // If still empty, try cloud dailySkeletons
+    if (manualSkeleton.length === 0) {
+        try {
+            const dateKey = window.currentScheduleDate;
+            const ms = window.loadGlobalSettings?.();
+            const cloud = ms?.app1?.dailySkeletons?.[dateKey];
+            if (cloud && cloud.length > 0) manualSkeleton = cloud;
+        } catch (e) { /* ignore */ }
+    }
+
+    // ★ Divisions: prefer live window.divisions, fallback to cloud
+    const divisions = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
     const bunks = (divisions[divName]?.bunks || []).sort(naturalSort);
+
+    console.log(`🖨️ [PrintCenter] Division "${divName}": skeleton=${manualSkeleton.length} blocks, bunks=${bunks.length}, source=${
+        daily.manualSkeleton?.length ? 'daily.manualSkeleton' :
+        daily.skeleton?.length ? 'daily.skeleton' :
+        window.dailyOverrideSkeleton?.length ? 'window.dailyOverrideSkeleton' :
+        window.manualSkeleton?.length ? 'window.manualSkeleton' :
+        window.skeleton?.length ? 'window.skeleton' : 'localStorage/cloud/empty'
+    }`);
 
     if (bunks.length === 0) return "";
 
@@ -1082,10 +1116,13 @@ function generateStyledDivisionHTML(divName) {
 function generateStyledBunkHTML(bunk) {
     const t = _currentTemplate;
     const daily = window.loadCurrentDailyData?.() || {};
-    const schedule = daily.scheduleAssignments?.[bunk] || [];
+    // ★ Live window.scheduleAssignments is the authoritative source after generation
+    const allAssignments = window.scheduleAssignments || daily.scheduleAssignments || {};
+    const schedule = allAssignments[bunk] || [];
 
     let divName = null;
-    const divisions = window.loadGlobalSettings?.().app1?.divisions || {};
+    // ★ Prefer live window.divisions
+    const divisions = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
     for (const [dName, dData] of Object.entries(divisions)) {
         if (dData.bunks && dData.bunks.includes(bunk)) { divName = dName; break; }
     }
@@ -1155,7 +1192,8 @@ function generateStyledLocationHTML(loc) {
     const t = _currentTemplate;
     const daily = window.loadCurrentDailyData?.() || {};
     const times = window.unifiedTimes || [];
-    const assignments = daily.scheduleAssignments || {};
+    // ★ Live window.scheduleAssignments is authoritative after generation
+    const assignments = window.scheduleAssignments || daily.scheduleAssignments || {};
 
     let html = `<div class="pc-print-page" style="position:relative; page-break-after: ${t.showPageBreaks ? 'always' : 'auto'}; margin-bottom: 24px;">`;
     html += buildWatermark();
