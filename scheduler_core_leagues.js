@@ -222,10 +222,19 @@
                             if (currentNum !== correctNum) {
                                 console.log(`[RegularLeagues] 📝 Updating ${leagueName} on ${futureDate} slot ${slotIdx}: Game ${currentNum} → Game ${correctNum}`);
                                 
-                                // Update in ALL divisions that have this slot
+                               // ★★★ FIX: Update ALL divisions that have this league at the SAME TIME ★★★
                                 for (const d of divNames) {
-                                    if (leagueAssignments[d]?.[slotIdx]?.leagueName === leagueName) {
-                                        leagueAssignments[d][slotIdx].gameLabel = `Game ${correctNum}`;
+                                    const dData = leagueAssignments[d] || {};
+                                    for (const dSlot of Object.keys(dData)) {
+                                        if (dData[dSlot]?.leagueName !== leagueName) continue;
+                                        // Check if this slot is at the same time
+                                        const dTimes = window.divisionTimes?.[d] || [];
+                                        const dTimeObj = dTimes[parseInt(dSlot)];
+                                        const dTimeKey = dTimeObj?.startTime || dTimeObj?.start || `fallback_${dSlot}`;
+                                        const dNormalized = Utils?.parseTimeToMinutes?.(dTimeKey) ?? dTimeKey;
+                                        if (`time_${dNormalized}` === slotKey) {
+                                            dData[dSlot].gameLabel = `Game ${correctNum}`;
+                                        }
                                     }
                                 }
                                 dayUpdated = true;
