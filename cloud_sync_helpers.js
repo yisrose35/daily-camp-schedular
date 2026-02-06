@@ -398,5 +398,63 @@
     window.normalizeFieldForSave = normalizeField;
 
     console.log('☁️ Cloud Sync Helpers v1.1 ready');
+// =========================================================================
+    // HELPER: SYNC PRINT TEMPLATES
+    // =========================================================================
 
+    /**
+     * Save print templates to both local and cloud
+     */
+    window.saveGlobalPrintTemplates = function(templates) {
+        if (!Array.isArray(templates)) {
+            console.warn("☁️ saveGlobalPrintTemplates: Invalid input, expected array");
+            return;
+        }
+        
+        // Validate templates before saving (strip oversized logos to keep payload manageable)
+        const validatedTemplates = templates.map(tpl => {
+            const copy = { ...tpl };
+            // If logo is too large (>500KB base64), warn but still save
+            if (copy.campLogo && copy.campLogo.length > 500000) {
+                console.warn("☁️ Print template logo is large:", (copy.campLogo.length / 1024).toFixed(0) + "KB");
+            }
+            return copy;
+        });
+        
+        const settings = window.loadGlobalSettings?.() || {};
+        settings.printTemplates = validatedTemplates;
+        
+        // Save via saveGlobalSettings (handles batching + cloud sync)
+        window.saveGlobalSettings?.("printTemplates", validatedTemplates);
+        
+        // Also persist to localStorage for offline access
+        try {
+            localStorage.setItem('campistry_print_templates', JSON.stringify(validatedTemplates));
+        } catch (e) {
+            console.warn("☁️ localStorage write failed for print templates:", e);
+        }
+        
+        console.log("☁️ Print templates queued for sync:", validatedTemplates.length);
+    };
+
+    /**
+     * Get print templates
+     */
+    window.getGlobalPrintTemplates = function() {
+        const settings = window.loadGlobalSettings?.() || {};
+        const cloudTemplates = settings.printTemplates || [];
+        
+        // If cloud has templates, use those (they're authoritative)
+        if (cloudTemplates.length > 0) return cloudTemplates;
+        
+        // Fallback to localStorage
+        try {
+            const raw = localStorage.getItem('campistry_print_templates');
+            if (raw) return JSON.parse(raw);
+        } catch (e) {
+            console.warn("☁️ Failed to read local print templates:", e);
+        }
+        
+        return [];
+    };
 })();
