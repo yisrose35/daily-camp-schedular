@@ -675,7 +675,7 @@ for (const futureDate of Object.keys(allDailyData)) {
             });
 
         // Sort time slots to ensure consistent ordering
-        const sortedTimeKeys = Object.keys(blocksByTime).sort();
+       const sortedTimeKeys = Object.keys(blocksByTime).sort((a, b) => Number(a) - Number(b));
 
         // Process each time slot
         for (const timeKey of sortedTimeKeys) {
