@@ -360,10 +360,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (authMode === 'signup') {
                     showAuthLoading(true, 'Creating your account...');
                     result = await supabase.auth.signUp({
-                        email,
-                        password,
-                        options: { data: { camp_name: campName } }
-                    });
+    email,
+    password,
+    options: { data: { camp_name: campName, access_code: accessCode } }
+});
                 } else {
                     showAuthLoading(true, 'Verifying credentials...');
                     result = await supabase.auth.signInWithPassword({ email, password });
