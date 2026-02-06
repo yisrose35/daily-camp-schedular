@@ -1295,11 +1295,42 @@ if (!blockDivName && bunk) {
                 var canFit = false;
                 if (sharingType === 'not_sharable') {
                     canFit = (existingUsage + currentGroupUsage < capacity);
-                } else if (sharingType === 'same_division') {
+                } else if (sharingType === 'same_division' || sharingType === 'custom') {
                     var crossConflict = checkCrossDivisionTimeConflict(fieldName, block2.divName, block2.startTime, block2.endTime, block2.bunk);
+                    // ★★★ v12.1 FIX: Also check within-group results for cross-division conflicts ★★★
+                    // The time index may not contain assignments made within this group's current solve pass
+                    if (!crossConflict && block2.divName) {
+                        for (var gri = 0; gri < results.length; gri++) {
+                            var gr = results[gri];
+                            if (gr.candIdx === -1) continue;
+                            if (normName(gr.pick.field) !== fieldNorm2) continue;
+                            var grBlock = activityBlocks[gr.blockIdx];
+                            if (grBlock.divName && grBlock.divName !== block2.divName) {
+                                if (grBlock.startTime < block2.endTime && grBlock.endTime > block2.startTime) {
+                                    crossConflict = { conflictingDiv: grBlock.divName, conflictingBunk: grBlock.bunk, source: 'in-group' };
+                                    break;
+                                }
+                            }
+                        }
+                    }
                     if (!crossConflict) {
+                        // ★★★ v12.1 FIX: Count only same-division usage from within-group results ★★★
+                        var sameDivGroupUsage = 0;
+                        if (block2.divName) {
+                            for (var gri2 = 0; gri2 < results.length; gri2++) {
+                                var gr2 = results[gri2];
+                                if (gr2.candIdx === -1) continue;
+                                if (normName(gr2.pick.field) !== fieldNorm2) continue;
+                                var grBlock2 = activityBlocks[gr2.blockIdx];
+                                if (grBlock2.divName === block2.divName) {
+                                    if (grBlock2.startTime < block2.endTime && grBlock2.endTime > block2.startTime) {
+                                        sameDivGroupUsage++;
+                                    }
+                                }
+                            }
+                        }
                         var sameDivExisting = countSameDivisionUsage(fieldName, block2.divName, block2.startTime, block2.endTime, block2.bunk);
-                        canFit = (sameDivExisting + currentGroupUsage < capacity);
+                        canFit = (sameDivExisting + sameDivGroupUsage < capacity);
                     }
                 } else {
                     canFit = (existingUsage + currentGroupUsage < capacity);
