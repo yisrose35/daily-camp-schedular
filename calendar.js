@@ -173,8 +173,8 @@
             if (!all[date]) all[date] = {};
             all[date][key] = value;
             
-            // Add updated_at to the daily data blob itself for consistency
-            all.updated_at = new Date().toISOString();
+            // Add updated_at INSIDE the date entry, NOT at root level (root-level pollutes Object.keys)
+all[date].updated_at = new Date().toISOString();
             
             // Update UI reference immediately
             window.currentDailyData = all[date];
