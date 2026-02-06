@@ -1,21 +1,20 @@
 // =================================================================
-// print_center.js v3.6 — Visual Schedule Designer
+// print_center.js v3.7 — Visual Schedule Designer
 // =================================================================
-// v3.6 CHANGES:
-// - League games: merged cell spanning all bunks with matchups
-// - Hide matchups: shows "League Game N" (still shows the row)
-// - Combined mode: each division has own time grid, equal heights
-// - Horizontal scroll with arrow buttons
-// - Fullscreen toggle
-// - Professional SVG icons (no emojis in UI)
-// - Fixed advanced drawer close button centering
-// - System-matching header font/style
+// v3.7 CHANGES (patch):
+// - FIX 1: League matchups now show when Hide Matchups is off
+//          (better slot detection, SOURCE 4/6 fallbacks)
+// - FIX 2: Tables no longer overflow borders (table-layout:fixed)
+// - FIX 3: Transpose+Combined header spans full width
+// - FIX 4: Combined mode no longer clips bunk columns
+// - FIX 5: Phantom extra columns after Dismissal removed
+// - FIX 6: Scroll/cursor no longer gets stuck (CSS changes)
 // =================================================================
 
 (function() {
 'use strict';
 
-var VERSION = '3.6.0';
+var VERSION = '3.7.0';
 console.log('[PrintCenter] v' + VERSION + ' loading');
 
 // --- SVG ICONS (inline, 16x16) ---
@@ -107,14 +106,12 @@ function findFirstSlotForTime(startMin, divName) {
         times = window.unifiedTimes || [];
     }
     if (startMin === null || !times.length) return -1;
-    // Pass 1: exact match (within 2 minutes)
     for (var i = 0; i < times.length; i++) {
         var slot = times[i];
         var slotStart = slot.startMin !== undefined ? slot.startMin : (typeof slot.start === 'string' ? parseTimeToMinutes(slot.start) : null);
         if (slotStart === null && slot.start) { try { var d = new Date(slot.start); slotStart = d.getHours() * 60 + d.getMinutes(); } catch(e){} }
         if (slotStart !== null && Math.abs(slotStart - startMin) <= 2) return i;
     }
-    // Pass 2: within INCREMENT range
     for (var j = 0; j < times.length; j++) {
         var slot2 = times[j];
         var slotStart2 = slot2.startMin !== undefined ? slot2.startMin : (typeof slot2.start === 'string' ? parseTimeToMinutes(slot2.start) : null);
@@ -157,7 +154,7 @@ function formatDisplayDate(dateStr) {
 }
 
 // =========================================================================
-// DATA HELPERS — full fallback chains
+// DATA HELPERS
 // =========================================================================
 
 function getSkeleton() {
@@ -182,11 +179,7 @@ function saveTemplates() {
     if (!canEditTemplates()) return false;
     try { localStorage.setItem('campistry_print_templates', JSON.stringify(_savedTemplates)); if (window.saveGlobalSettings) window.saveGlobalSettings("printTemplates", _savedTemplates); clearTimeout(_cloudSyncTimeout); _cloudSyncTimeout = setTimeout(function(){ if (window.forceSyncToCloud) window.forceSyncToCloud(); }, CLOUD_SYNC_DEBOUNCE); return true; } catch(e){ return false; }
 }
-function saveCurrentAsTemplate(name) {
-    if (!canEditTemplates()) return false;
-    var tpl = JSON.parse(JSON.stringify(_currentTemplate)); tpl.id = 'tpl_' + Date.now() + '_' + Math.random().toString(36).slice(2,8); tpl.name = name || 'Untitled'; tpl.isDefault = false; tpl.createdAt = new Date().toISOString(); tpl.updatedAt = new Date().toISOString();
-    _savedTemplates.push(tpl); saveTemplates(); return tpl;
-}
+function saveCurrentAsTemplate(name) { if (!canEditTemplates()) return false; var tpl = JSON.parse(JSON.stringify(_currentTemplate)); tpl.id = 'tpl_' + Date.now() + '_' + Math.random().toString(36).slice(2,8); tpl.name = name || 'Untitled'; tpl.isDefault = false; tpl.createdAt = new Date().toISOString(); tpl.updatedAt = new Date().toISOString(); _savedTemplates.push(tpl); saveTemplates(); return tpl; }
 function updateTemplate(tid) { if (!canEditTemplates()) return false; var idx = -1; for (var i=0;i<_savedTemplates.length;i++) { if (_savedTemplates[i].id===tid){idx=i;break;} } if (idx===-1) return false; var t2 = JSON.parse(JSON.stringify(_currentTemplate)); t2.id = tid; t2.name = _savedTemplates[idx].name; t2.isDefault = false; t2.createdAt = _savedTemplates[idx].createdAt; t2.updatedAt = new Date().toISOString(); _savedTemplates[idx] = t2; saveTemplates(); return true; }
 function deleteTemplate(tid) { if (!canEditTemplates()) return false; _savedTemplates = _savedTemplates.filter(function(t){return t.id!==tid;}); saveTemplates(); return true; }
 function loadTemplate(tid) { if (tid==='default') _currentTemplate = Object.assign({}, DEFAULT_TEMPLATE); else { for (var i=0;i<_savedTemplates.length;i++) { if (_savedTemplates[i].id===tid) { _currentTemplate = Object.assign({}, DEFAULT_TEMPLATE, JSON.parse(JSON.stringify(_savedTemplates[i]))); break; } } } liveRefresh(); renderTemplateDropdown(); }
@@ -212,7 +205,7 @@ function initPrintCenter() {
 }
 
 // =========================================================================
-// MAIN UI
+// MAIN UI — identical structure, no changes needed
 // =========================================================================
 
 function buildMainUI() {
@@ -271,10 +264,6 @@ function buildMainUI() {
     '</div>';
 }
 
-// =========================================================================
-// QUICK SETTINGS
-// =========================================================================
-
 function buildQuickSettings() {
     var t = _currentTemplate;
     return '<div class="pc-quick no-print">' +
@@ -300,10 +289,6 @@ function buildQuickSettings() {
         '</div>' +
     '</div>';
 }
-
-// =========================================================================
-// ADVANCED SECTIONS
-// =========================================================================
 
 function buildAdvancedSections() {
     var t = _currentTemplate;
@@ -391,10 +376,6 @@ function populateSelectors() {
 
 function getSelectedItems() { return Array.from(document.querySelectorAll('.pc-item-cb:checked')).map(function(cb){return cb.value;}); }
 
-// =========================================================================
-// READ DESIGN VALUES
-// =========================================================================
-
 function readDesignValues() {
     var t = _currentTemplate;
     var el = function(id){ return document.getElementById(id); };
@@ -406,18 +387,7 @@ function readDesignValues() {
     t.tableOrientation = (el('pc-transpose') && el('pc-transpose').checked) ? 'time-top' : 'bunks-top';
     t.hideLeagueMatchups = !!(el('pc-hide-matchups') && el('pc-hide-matchups').checked);
     t.layoutMode = (el('pc-combined') && el('pc-combined').checked) ? 'all-bunks' : 'per-division';
-    // Advanced fields — only read if they exist in DOM
-    var map = {
-        'pc-header-bg':'headerBgColor','pc-header-text':'headerTextColor','pc-header-font':'headerFont',
-        'pc-grid-font':'gridFont','pc-grid-header-bg':'gridHeaderBgColor','pc-grid-header-text':'gridHeaderTextColor',
-        'pc-grid-border-color':'gridBorderColor','pc-grid-row-color':'gridRowColor','pc-grid-row-alt':'gridRowAltColor',
-        'pc-general-bg':'generalBgColor','pc-general-text':'generalTextColor',
-        'pc-pinned-bg':'pinnedBgColor','pc-pinned-text':'pinnedTextColor',
-        'pc-league-bg':'leagueBgColor','pc-league-text':'leagueTextColor',
-        'pc-free-bg':'freeBgColor','pc-free-text':'freeTextColor',
-        'pc-time-bg':'timeColBgColor','pc-time-text':'timeColTextColor',
-        'pc-watermark-color':'watermarkColor','pc-orientation':'orientation','pc-paper-size':'paperSize'
-    };
+    var map = { 'pc-header-bg':'headerBgColor','pc-header-text':'headerTextColor','pc-header-font':'headerFont','pc-grid-font':'gridFont','pc-grid-header-bg':'gridHeaderBgColor','pc-grid-header-text':'gridHeaderTextColor','pc-grid-border-color':'gridBorderColor','pc-grid-row-color':'gridRowColor','pc-grid-row-alt':'gridRowAltColor','pc-general-bg':'generalBgColor','pc-general-text':'generalTextColor','pc-pinned-bg':'pinnedBgColor','pc-pinned-text':'pinnedTextColor','pc-league-bg':'leagueBgColor','pc-league-text':'leagueTextColor','pc-free-bg':'freeBgColor','pc-free-text':'freeTextColor','pc-time-bg':'timeColBgColor','pc-time-text':'timeColTextColor','pc-watermark-color':'watermarkColor','pc-orientation':'orientation','pc-paper-size':'paperSize' };
     for (var eid in map) { var e = el(eid); if (e) t[map[eid]] = e.value; }
     var intMap = {'pc-header-font-size':'headerFontSize','pc-grid-font-size':'gridFontSize','pc-grid-border-width':'gridBorderWidth','pc-cell-padding':'cellPadding','pc-time-width':'timeColWidth'};
     for (var eid2 in intMap) { var e2 = el(eid2); if (e2) t[intMap[eid2]] = parseInt(e2.value) || t[intMap[eid2]]; }
@@ -460,16 +430,17 @@ function buildStyledHeader(titleText) {
 function buildStyledFooter() { var t = _currentTemplate; if (!t.footerEnabled || !t.footerText) return ''; return '<div style="font-family:\'' + t.footerFont + '\',sans-serif; font-size:' + t.footerFontSize + 'px; color:#94A3B8; text-align:center; padding:6px 16px; border-top:1px solid ' + t.gridBorderColor + ';">' + escHtml(t.footerText) + '</div>'; }
 function buildWatermark() { var t = _currentTemplate; if (!t.watermarkEnabled || !t.watermarkText) return ''; return '<div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%) rotate(-35deg); font-size:72px; font-weight:900; color:' + t.watermarkColor + '; opacity:' + t.watermarkOpacity + '; pointer-events:none; white-space:nowrap; z-index:1;">' + escHtml(t.watermarkText) + '</div>'; }
 
+// ★ FIX 2: word-wrap + overflow-wrap on all cells
 function cellStyle(type, isAlt) {
     var t = _currentTemplate, bg, cl;
     switch(type) { case 'pinned': bg=t.pinnedBgColor; cl=t.pinnedTextColor; break; case 'league': bg=t.leagueBgColor; cl=t.leagueTextColor; break; case 'free': bg=t.freeBgColor; cl=t.freeTextColor; break; default: bg=isAlt?t.gridRowAltColor:t.gridRowColor; cl=t.generalTextColor; }
-    return 'background:'+bg+';color:'+cl+';padding:'+t.cellPadding+'px;font-family:\''+t.gridFont+'\',sans-serif;font-size:'+t.gridFontSize+'px;border:'+t.gridBorderWidth+'px solid '+t.gridBorderColor+';';
+    return 'background:'+bg+';color:'+cl+';padding:'+t.cellPadding+'px;font-family:\''+t.gridFont+'\',sans-serif;font-size:'+t.gridFontSize+'px;border:'+t.gridBorderWidth+'px solid '+t.gridBorderColor+';word-wrap:break-word;overflow-wrap:break-word;';
 }
 function timeStyle() { var t=_currentTemplate; return 'background:'+t.timeColBgColor+';color:'+t.timeColTextColor+';font-family:\''+(t.timeColFont||t.gridFont)+'\',sans-serif;font-size:'+(t.timeColFontSize||t.gridFontSize)+'px;font-weight:'+(t.timeColBold?'700':'400')+';padding:'+t.cellPadding+'px;border:'+t.gridBorderWidth+'px solid '+t.gridBorderColor+';width:'+t.timeColWidth+'px;white-space:nowrap;'; }
 function headerCellStyle() { var t=_currentTemplate; return 'background:'+t.gridHeaderBgColor+';color:'+t.gridHeaderTextColor+';font-family:\''+t.gridFont+'\',sans-serif;font-size:'+t.gridFontSize+'px;font-weight:600;padding:'+t.cellPadding+'px;border:'+t.gridBorderWidth+'px solid '+t.gridBorderColor+';'; }
 
 // =========================================================================
-// BUILD DIVISION BLOCKS
+// ★ FIX 5: BUILD DIVISION BLOCKS — dedup by startMin, trim after Dismissal
 // =========================================================================
 
 function buildDivisionBlocks(divName) {
@@ -482,7 +453,6 @@ function buildDivisionBlocks(divName) {
     });
     sorted.sort(function(a,b){ return a.startMin - b.startMin; });
 
-    // Get division bunks for _h2h checking
     var divs = getDivisions();
     var divBunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).sort(naturalSort);
 
@@ -492,19 +462,9 @@ function buildDivisionBlocks(divName) {
         var itemType = (bl.item.type || '').toLowerCase();
         var evLower = ev.toLowerCase();
 
-        // ── Detect league from skeleton event name, type field, OR assignment data ──
         var isLeagueBlock = false;
-
-        // Check event name
-        if (ev === "League Game" || ev === "Specialty League" || evLower.indexOf('league') >= 0) {
-            isLeagueBlock = true;
-        }
-        // Check type field (various formats)
-        if (!isLeagueBlock && (itemType === 'league' || itemType === 'specialty_league' || 
-            itemType === 'specialtyleague' || itemType === 'h2h' || itemType === 'head2head')) {
-            isLeagueBlock = true;
-        }
-        // Fallback: check actual assignment entries for _h2h flag
+        if (ev === "League Game" || ev === "Specialty League" || evLower.indexOf('league') >= 0) isLeagueBlock = true;
+        if (!isLeagueBlock && (itemType === 'league' || itemType === 'specialty_league' || itemType === 'specialtyleague' || itemType === 'h2h' || itemType === 'head2head')) isLeagueBlock = true;
         if (!isLeagueBlock && divBunks.length > 0) {
             var si = findFirstSlotForTime(bl.startMin, divName);
             if (si >= 0) {
@@ -515,10 +475,8 @@ function buildDivisionBlocks(divName) {
             }
         }
 
-        // ── Number the league game ──
         var isSpecialty = ev === "Specialty League" || evLower.indexOf('specialty') >= 0 || itemType === 'specialty_league' || itemType === 'specialtyleague';
         if (isLeagueBlock) {
-            console.log('[PrintCenter] League block detected:', divName, bl.startMin + '-' + bl.endMin, 'event="' + ev + '" type="' + itemType + '" isSpecialty=' + isSpecialty);
             if (isSpecialty) { sc2++; ev = "Specialty League " + sc2; }
             else { lc++; ev = "League Game " + lc; }
         }
@@ -526,7 +484,22 @@ function buildDivisionBlocks(divName) {
         blocks.push({ label: minutesToTimeLabel(bl.startMin) + ' \u2013 ' + minutesToTimeLabel(bl.endMin), startMin: bl.startMin, endMin: bl.endMin, event: ev, type: bl.item.type, isLeague: isLeagueBlock });
     });
 
-    var unique = blocks.filter(function(b,i,s){ return i === s.findIndex(function(t2){return t2.label===b.label;}); });
+    // ★ FIX 5: Dedup by startMin (not label string — avoids AM/PM formatting mismatches)
+    var unique = blocks.filter(function(b, i, s) {
+        return i === s.findIndex(function(t2) { return t2.startMin === b.startMin && t2.endMin === b.endMin; });
+    });
+
+    // ★ FIX 5: Trim any phantom blocks appearing AFTER the last Dismissal
+    var lastDismissalIdx = -1;
+    for (var di = unique.length - 1; di >= 0; di--) {
+        var evCheck = (unique[di].event || '').toLowerCase();
+        if (evCheck.indexOf('dismissal') >= 0) { lastDismissalIdx = di; break; }
+    }
+    if (lastDismissalIdx >= 0 && lastDismissalIdx < unique.length - 1) {
+        console.log('[PrintCenter] Trimming', (unique.length - lastDismissalIdx - 1), 'phantom blocks after Dismissal for', divName);
+        unique = unique.slice(0, lastDismissalIdx + 1);
+    }
+
     var flat = [];
     unique.forEach(function(bl) {
         if (bl.type === "split" && bl.startMin !== null && bl.endMin !== null) {
@@ -539,94 +512,69 @@ function buildDivisionBlocks(divName) {
 }
 
 // =========================================================================
-// BUILD LEAGUE CELL (merged across all bunks)
+// ★ FIX 1: BUILD LEAGUE CELL — better slot scan, SOURCE 4+6 fallbacks
 // =========================================================================
 
 function buildLeagueCellHtml(eventBlock, bunks, divName) {
     var t = _currentTemplate;
     var slotIndex = findFirstSlotForTime(eventBlock.startMin, divName);
 
-    // ── Hide matchups mode: just show the event name ──
     if (t.hideLeagueMatchups) {
         return '<strong>' + escHtml(eventBlock.event) + '</strong>';
     }
 
-    // ── Collect matchups from multiple sources ──
-    var matchups = []; // array of display strings
+    var matchups = [];
+    var actualSlotIdx = slotIndex;
 
-    // ── First, find the ACTUAL slot index in scheduleAssignments for this time ──
-    // findFirstSlotForTime uses divisionTimes which may use different indices than scheduleAssignments
-    var actualSlotIdx = slotIndex; // Start with divisionTimes-based index
-    // Also search scheduleAssignments directly for an _h2h entry near this time
+    // ★ FIX 1: Scan multiple bunks and detect broader league indicators
     if (bunks.length > 0) {
         var aa = window.scheduleAssignments || (window.loadCurrentDailyData ? window.loadCurrentDailyData() : {}).scheduleAssignments || {};
-        var bunkSched = aa[bunks[0]];
-        if (bunkSched && Array.isArray(bunkSched)) {
-            // Scan all slots for _h2h entries
+        var scanLimit = Math.min(bunks.length, 6);
+        for (var bi = 0; bi < scanLimit && actualSlotIdx === slotIndex; bi++) {
+            var bunkSched = aa[bunks[bi]];
+            if (!bunkSched || !Array.isArray(bunkSched)) continue;
             for (var si = 0; si < bunkSched.length; si++) {
                 var e = bunkSched[si];
-                if (e && e._h2h) {
-                    // This is a league entry — check if it's close to our slotIndex
-                    if (actualSlotIdx < 0 || Math.abs(si - actualSlotIdx) <= 3) {
-                        actualSlotIdx = si;
-                        break;
-                    }
+                if (!e) continue;
+                var isLeagueEntry = e._h2h || e._isSpecialtyLeague;
+                if (!isLeagueEntry) {
+                    var eSport = (e.sport || '').toLowerCase();
+                    var eField = (typeof e.field === 'string' ? e.field : (e.field && e.field.name ? e.field.name : '')).toLowerCase();
+                    var eActivity = (e._activity || '').toLowerCase();
+                    if (eSport.indexOf('league') >= 0 || eField.indexOf('league') >= 0 || eActivity.indexOf('league') >= 0) isLeagueEntry = true;
+                }
+                if (isLeagueEntry && (slotIndex < 0 || Math.abs(si - slotIndex) <= 5)) {
+                    actualSlotIdx = si;
+                    break;
                 }
             }
         }
     }
     console.log('[PrintCenter] League lookup:', eventBlock.event, '@', divName, 'divTimesSlot=' + slotIndex, 'actualSlot=' + actualSlotIdx);
 
-    // ── SOURCE 1: window.leagueAssignments ──
+    // SOURCE 1: window.leagueAssignments
     var la = window.leagueAssignments;
     if (la && !matchups.length) {
-        // Find the right division key (handle case differences)
         var divKey = null;
-        if (la[divName]) { divKey = divName; }
-        else {
-            for (var dk in la) {
-                if (dk.toLowerCase() === divName.toLowerCase()) { divKey = dk; break; }
-            }
-        }
+        if (la[divName]) divKey = divName;
+        else { for (var dk in la) { if (dk.toLowerCase() === divName.toLowerCase()) { divKey = dk; break; } } }
         if (divKey && la[divKey]) {
             var bestSlotData = null;
-            // Try using actualSlotIdx first, then slotIndex, then nearby offsets
             var tryIndices = [actualSlotIdx, slotIndex];
-            for (var off = 1; off <= 8; off++) {
-                tryIndices.push(actualSlotIdx + off, actualSlotIdx - off);
-                if (slotIndex !== actualSlotIdx) tryIndices.push(slotIndex + off, slotIndex - off);
-            }
+            for (var off = 1; off <= 8; off++) { tryIndices.push(actualSlotIdx + off, actualSlotIdx - off); if (slotIndex !== actualSlotIdx) tryIndices.push(slotIndex + off, slotIndex - off); }
             for (var ti = 0; ti < tryIndices.length; ti++) {
-                if (tryIndices[ti] >= 0 && la[divKey][tryIndices[ti]]) {
-                    bestSlotData = la[divKey][tryIndices[ti]];
-                    console.log('[PrintCenter] SOURCE 1: found at slot key', tryIndices[ti]);
-                    break;
-                }
+                if (tryIndices[ti] >= 0 && la[divKey][tryIndices[ti]]) { bestSlotData = la[divKey][tryIndices[ti]]; break; }
             }
-            // Ultimate fallback: try ALL keys
             if (!bestSlotData) {
                 var allKeys = Object.keys(la[divKey]);
-                console.log('[PrintCenter] SOURCE 1: scanning all', allKeys.length, 'keys:', allKeys);
-                for (var ki = 0; ki < allKeys.length; ki++) {
-                    var sd = la[divKey][allKeys[ki]];
-                    if (sd && sd.matchups && sd.matchups.length > 0) {
-                        bestSlotData = sd;
-                        console.log('[PrintCenter] SOURCE 1: using first available slot key', allKeys[ki]);
-                        break;
-                    }
-                }
+                for (var ki = 0; ki < allKeys.length; ki++) { var sd = la[divKey][allKeys[ki]]; if (sd && sd.matchups && sd.matchups.length > 0) { bestSlotData = sd; break; } }
             }
             if (bestSlotData && bestSlotData.matchups && bestSlotData.matchups.length > 0) {
                 bestSlotData.matchups.forEach(function(m) {
-                    var desc = '';
-                    var tA = m.teamA || m.team1 || '';
-                    var tB = m.teamB || m.team2 || '';
-                    if (m.display) { desc = m.display; }
-                    else if (tA && tB) {
-                        desc = tA + ' vs ' + tB;
-                        if (m.sport) desc += ' \u2013 ' + m.sport;
-                        if (m.field) desc += ' @ ' + m.field;
-                    } else if (m.matchup) { desc = m.matchup; }
+                    var desc = '', tA = m.teamA || m.team1 || '', tB = m.teamB || m.team2 || '';
+                    if (m.display) desc = m.display;
+                    else if (tA && tB) { desc = tA + ' vs ' + tB; if (m.sport) desc += ' \u2013 ' + m.sport; if (m.field) desc += ' @ ' + m.field; }
+                    else if (m.matchup) desc = m.matchup;
                     if (desc) matchups.push(desc);
                 });
                 console.log('[PrintCenter] SOURCE 1 (leagueAssignments) found', matchups.length, 'matchups for', divName);
@@ -634,22 +582,18 @@ function buildLeagueCellHtml(eventBlock, bunks, divName) {
         }
     }
 
-    // ── SOURCE 2: _allMatchups on bunk entries (specialty leagues fill these) ──
+    // SOURCE 2: _allMatchups on bunk entries
     if (!matchups.length) {
         var trySlots2 = [actualSlotIdx, slotIndex].filter(function(s) { return s >= 0; });
         for (var ts2 = 0; ts2 < trySlots2.length && !matchups.length; ts2++) {
             for (var i = 0; i < bunks.length; i++) {
                 var ent = getEntry(bunks[i], trySlots2[ts2]);
-                if (ent && ent._allMatchups && ent._allMatchups.length) {
-                    matchups = ent._allMatchups.slice();
-                    console.log('[PrintCenter] SOURCE 2 (_allMatchups) found', matchups.length, 'matchups from', bunks[i], 'at slot', trySlots2[ts2]);
-                    break;
-                }
+                if (ent && ent._allMatchups && ent._allMatchups.length) { matchups = ent._allMatchups.slice(); break; }
             }
         }
     }
 
-    // ── SOURCE 3: _assignments array on entries (specialty leagues) ──
+    // SOURCE 3: _assignments array
     if (!matchups.length) {
         var trySlots3 = [actualSlotIdx, slotIndex].filter(function(s) { return s >= 0; });
         for (var ts3 = 0; ts3 < trySlots3.length && !matchups.length; ts3++) {
@@ -657,41 +601,34 @@ function buildLeagueCellHtml(eventBlock, bunks, divName) {
                 var ea = getEntry(bunks[a2], trySlots3[ts3]);
                 if (ea && ea._assignments && ea._assignments.length) {
                     ea._assignments.forEach(function(asg) {
-                        var tA2 = asg.teamA || asg.team1 || '';
-                        var tB2 = asg.teamB || asg.team2 || '';
-                        if (tA2 && tB2) {
-                            var d2 = tA2 + ' vs ' + tB2;
-                            if (asg.field) d2 += ' @ ' + asg.field;
-                            matchups.push(d2);
-                        }
+                        var tA2 = asg.teamA || asg.team1 || '', tB2 = asg.teamB || asg.team2 || '';
+                        if (tA2 && tB2) { var d2 = tA2 + ' vs ' + tB2; if (asg.field) d2 += ' @ ' + asg.field; matchups.push(d2); }
                     });
-                    if (matchups.length) console.log('[PrintCenter] SOURCE 3 (_assignments) found', matchups.length, 'matchups at slot', trySlots3[ts3]);
                     break;
                 }
             }
         }
     }
 
-    // ── SOURCE 4: Reconstruct by pairing bunks sharing the same field at this slot ──
-    if (!matchups.length && slotIndex >= 0) {
+    // ★ FIX 1: SOURCE 4 — use bestSlotForPairing, try both slots
+    var bestSlotForPairing = actualSlotIdx >= 0 ? actualSlotIdx : slotIndex;
+    if (!matchups.length && bestSlotForPairing >= 0) {
         var fieldGroups = {};
         for (var j = 0; j < bunks.length; j++) {
-            var entry = getEntry(bunks[j], slotIndex);
+            var entry = getEntry(bunks[j], bestSlotForPairing);
+            if (!entry && bestSlotForPairing !== slotIndex && slotIndex >= 0) entry = getEntry(bunks[j], slotIndex);
             if (!entry) continue;
-            // Accept any entry at a league slot (not just _h2h)
             var fieldName = '';
             if (typeof entry.field === 'string') fieldName = entry.field;
             else if (entry.field && entry.field.name) fieldName = entry.field.name;
-            // Skip generic "League:" prefix fields for grouping — use sport instead
             var sport = entry.sport || '';
             var groupKey = fieldName + '||' + sport;
             if (!fieldGroups[groupKey]) fieldGroups[groupKey] = { field: fieldName, sport: sport, bunks: [] };
             fieldGroups[groupKey].bunks.push(bunks[j]);
         }
         for (var gk in fieldGroups) {
-            var grp = fieldGroups[gk];
-            var gb = grp.bunks;
-            if (gb.length < 2) continue; // Need at least a pair
+            var grp = fieldGroups[gk], gb = grp.bunks;
+            if (gb.length < 2) continue;
             for (var p = 0; p < gb.length; p += 2) {
                 if (p + 1 >= gb.length) break;
                 var desc2 = gb[p] + ' vs ' + gb[p + 1];
@@ -703,35 +640,32 @@ function buildLeagueCellHtml(eventBlock, bunks, divName) {
         if (matchups.length) console.log('[PrintCenter] SOURCE 4 (field pairing) found', matchups.length, 'matchups');
     }
 
-    // ── SOURCE 5: window.lastLeagueMatchups fallback ──
+    // SOURCE 5: window.lastLeagueMatchups
     if (!matchups.length) {
         var llm = window.lastLeagueMatchups;
-        if (llm && llm[divName]) {
-            var lld = llm[divName];
-            if (lld.matchups) {
-                lld.matchups.forEach(function(m5) {
-                    var d5 = m5.display || (m5.teamA + ' vs ' + m5.teamB) || '';
-                    if (d5) matchups.push(d5);
-                });
-                if (matchups.length) console.log('[PrintCenter] SOURCE 5 (lastLeagueMatchups) found', matchups.length, 'matchups');
-            }
+        if (llm && llm[divName] && llm[divName].matchups) {
+            llm[divName].matchups.forEach(function(m5) {
+                var d5 = m5.display || (m5.teamA + ' vs ' + m5.teamB) || '';
+                if (d5) matchups.push(d5);
+            });
         }
     }
 
-    // ── Debug logging if still nothing found ──
-    if (!matchups.length) {
-        console.log('[PrintCenter] ⚠️ No matchups found for', eventBlock.event, '@', divName, 'slot=' + slotIndex);
-        if (slotIndex >= 0 && bunks.length > 0) {
-            var sampleEntry = getEntry(bunks[0], slotIndex);
-            console.log('[PrintCenter]   Sample entry for', bunks[0], ':', sampleEntry ? JSON.stringify({
-                _h2h: sampleEntry._h2h, sport: sampleEntry.sport, field: sampleEntry.field,
-                _matchup: sampleEntry._matchup, _allMatchups: sampleEntry._allMatchups,
-                _assignments: sampleEntry._assignments ? 'array[' + sampleEntry._assignments.length + ']' : undefined,
-                _gameLabel: sampleEntry._gameLabel, _leagueName: sampleEntry._leagueName
-            }) : 'null');
+    // ★ FIX 1: SOURCE 6 — individual _matchup / _gameLabel from bunk entries
+    if (!matchups.length && bestSlotForPairing >= 0) {
+        var seenMu = {};
+        for (var m6 = 0; m6 < bunks.length; m6++) {
+            var e6 = getEntry(bunks[m6], bestSlotForPairing);
+            if (!e6 && bestSlotForPairing !== slotIndex && slotIndex >= 0) e6 = getEntry(bunks[m6], slotIndex);
+            if (!e6) continue;
+            var mu6 = e6._matchup || e6._gameLabel || '';
+            if (mu6 && !seenMu[mu6]) { seenMu[mu6] = true; matchups.push(mu6); }
         }
-        console.log('[PrintCenter]   leagueAssignments keys:', la ? Object.keys(la) : 'none');
-        if (la && la[divName]) console.log('[PrintCenter]   leagueAssignments[' + divName + '] slots:', Object.keys(la[divName]));
+        if (matchups.length) console.log('[PrintCenter] SOURCE 6 (_matchup/_gameLabel) found', matchups.length, 'matchups');
+    }
+
+    if (!matchups.length) {
+        console.log('[PrintCenter] \u26A0\uFE0F No matchups found for', eventBlock.event, '@', divName, 'slot=' + slotIndex, 'actualSlot=' + actualSlotIdx);
     }
 
     var html = '<strong>' + escHtml(eventBlock.event) + '</strong>';
@@ -746,7 +680,7 @@ function buildLeagueCellHtml(eventBlock, bunks, divName) {
 }
 
 // =========================================================================
-// DIVISION HTML — BUNKS ON TOP (default)
+// ★ FIX 2: DIVISION HTML — BUNKS ON TOP — table-layout:fixed
 // =========================================================================
 
 function generateDivisionHTML_bunksTop(divName) {
@@ -756,7 +690,7 @@ function generateDivisionHTML_bunksTop(divName) {
     var blocks = buildDivisionBlocks(divName);
     var html = '<div class="pc-print-page" style="position:relative; page-break-after:' + (t.showPageBreaks?'always':'auto') + '; margin-bottom:20px;">';
     html += buildWatermark() + buildStyledHeader(divName);
-    html += '<table style="width:100%; border-collapse:collapse; font-family:\'' + t.gridFont + '\',sans-serif; font-size:' + t.gridFontSize + 'px;">';
+    html += '<table style="width:100%; table-layout:fixed; border-collapse:collapse; font-family:\'' + t.gridFont + '\',sans-serif; font-size:' + t.gridFontSize + 'px;">';
     html += '<thead><tr><th style="' + headerCellStyle() + 'width:' + t.timeColWidth + 'px;">Time</th>';
     bunks.forEach(function(b){ html += '<th style="' + headerCellStyle() + '">' + escHtml(b) + '</th>'; });
     html += '</tr></thead><tbody>';
@@ -766,7 +700,6 @@ function generateDivisionHTML_bunksTop(divName) {
         var isAlt = ri % 2 === 1;
         html += '<tr><td style="' + timeStyle() + '">' + eb.label + '</td>';
         if (eb.isLeague) {
-            // ★ MERGED CELL — spans all bunk columns
             html += '<td colspan="' + bunks.length + '" style="' + cellStyle('league', isAlt) + 'text-align:center;">' + buildLeagueCellHtml(eb, bunks, divName) + '</td>';
         } else {
             bunks.forEach(function(b) {
@@ -787,7 +720,7 @@ function generateDivisionHTML_bunksTop(divName) {
 }
 
 // =========================================================================
-// DIVISION HTML — TIME ON TOP (transposed)
+// ★ FIX 2: DIVISION HTML — TIME ON TOP — table-layout:fixed
 // =========================================================================
 
 function generateDivisionHTML_timeTop(divName) {
@@ -797,29 +730,18 @@ function generateDivisionHTML_timeTop(divName) {
     var blocks = buildDivisionBlocks(divName);
     var html = '<div class="pc-print-page" style="position:relative; page-break-after:' + (t.showPageBreaks?'always':'auto') + '; margin-bottom:20px;">';
     html += buildWatermark() + buildStyledHeader(divName);
-    html += '<table style="width:100%; border-collapse:collapse; font-family:\'' + t.gridFont + '\',sans-serif; font-size:' + t.gridFontSize + 'px;">';
+    html += '<table style="width:100%; table-layout:fixed; border-collapse:collapse; font-family:\'' + t.gridFont + '\',sans-serif; font-size:' + t.gridFontSize + 'px;">';
 
-    // Find which columns are league games
-    var leagueCols = {};
-    blocks.forEach(function(eb, idx) { if (eb.isLeague) leagueCols[idx] = eb; });
-
-    html += '<thead><tr><th style="' + headerCellStyle() + '">Bunk</th>';
+    html += '<thead><tr><th style="' + headerCellStyle() + 'width:' + t.timeColWidth + 'px;">Bunk</th>';
     blocks.forEach(function(bl) { html += '<th style="' + headerCellStyle() + 'white-space:nowrap;font-size:' + Math.max(8,t.gridFontSize-1) + 'px;">' + bl.label + '</th>'; });
     html += '</tr></thead><tbody>';
-
-    // For league columns: show merged info only in first bunk row, rowspan the rest
-    var leagueRendered = {};
 
     bunks.forEach(function(b, bi) {
         var isAlt = bi % 2 === 1;
         html += '<tr><td style="' + timeStyle() + '">' + escHtml(b) + '</td>';
         blocks.forEach(function(eb, ci) {
             if (eb.isLeague) {
-                if (bi === 0) {
-                    // First bunk: render merged cell with rowspan
-                    html += '<td rowspan="' + bunks.length + '" style="' + cellStyle('league', false) + 'text-align:center;vertical-align:middle;">' + buildLeagueCellHtml(eb, bunks, divName) + '</td>';
-                }
-                // else: skip (covered by rowspan)
+                if (bi === 0) html += '<td rowspan="' + bunks.length + '" style="' + cellStyle('league', false) + 'text-align:center;vertical-align:middle;">' + buildLeagueCellHtml(eb, bunks, divName) + '</td>';
             } else {
                 var si = findFirstSlotForTime(eb.startMin, divName);
                 var entry = si >= 0 ? getEntry(b, si) : null;
@@ -838,14 +760,12 @@ function generateDivisionHTML_timeTop(divName) {
 }
 
 // =========================================================================
-// COMBINED VIEW — each division side by side with own time grid
+// ★ FIX 3+4: COMBINED VIEW — header spans full, no column clipping
 // =========================================================================
 
 function generateCombinedHTML(selectedDivisions) {
     var t = _currentTemplate, divs = getDivisions();
-    // Compute max blocks across all divisions for equal height
-    var divData = [];
-    var maxBlocks = 0;
+    var divData = [], maxBlocks = 0;
     selectedDivisions.forEach(function(dn) {
         var bunks = (divs[dn] && divs[dn].bunks ? divs[dn].bunks : []).sort(naturalSort);
         var blocks = buildDivisionBlocks(dn);
@@ -854,44 +774,32 @@ function generateCombinedHTML(selectedDivisions) {
     });
     if (!divData.length) return "";
 
-    // ── Calculate total width so header spans everything ──
-    var COL_W = 110; // px per bunk column
-    var TIME_W = t.timeColWidth + 20;
-    var totalW = 0;
-    divData.forEach(function(dd, di) {
-        totalW += TIME_W + (dd.bunks.length * COL_W);
-        if (di > 0) totalW += 3; // border width between divisions
-    });
-
-    var html = '<div class="pc-print-page" style="position:relative; page-break-after:' + (t.showPageBreaks?'always':'auto') + '; margin-bottom:20px; overflow:visible; min-width:' + totalW + 'px;">';
+    // ★ FIX 3+4: width:max-content + min-width:100% ensures header stretches
+    // to match the combined table content, and nothing gets clipped
+    var html = '<div class="pc-print-page" style="position:relative; page-break-after:' + (t.showPageBreaks?'always':'auto') + '; margin-bottom:20px; width:max-content; min-width:100%;">';
     html += buildWatermark();
+    html += buildStyledHeader('All Divisions');
 
-    // ── Header — wrapped to span full width ──
-    html += '<div style="min-width:' + totalW + 'px;">' + buildStyledHeader('All Divisions') + '</div>';
-
-    // ── Division tables side by side ──
-    html += '<div style="display:flex; align-items:stretch; gap:0; min-width:' + totalW + 'px;">';
+    // ★ FIX 4: No fixed pixel widths — each div table sizes naturally
+    html += '<div style="display:flex; align-items:stretch; gap:0;">';
 
     divData.forEach(function(dd, di) {
         var bunks = dd.bunks, blocks = dd.blocks;
         var borderLeft = di > 0 ? 'border-left:3px solid ' + t.gridBorderColor + ';' : '';
-        var divW = TIME_W + (bunks.length * COL_W);
 
-        html += '<div style="width:' + divW + 'px; flex-shrink:0;' + borderLeft + '">';
+        html += '<div style="flex:0 0 auto;' + borderLeft + '">';
 
         if (t.tableOrientation === 'time-top') {
-            // Transposed: bunk names down left, time across top
-            html += '<table style="width:100%; border-collapse:collapse; font-family:\'' + t.gridFont + '\',sans-serif; font-size:' + t.gridFontSize + 'px; height:100%;">';
-            // Division name header row
+            html += '<table style="width:100%; table-layout:fixed; border-collapse:collapse; font-family:\'' + t.gridFont + '\',sans-serif; font-size:' + t.gridFontSize + 'px; height:100%;">';
             html += '<thead><tr><th colspan="' + (blocks.length + 1) + '" style="' + headerCellStyle() + 'text-align:center;font-weight:700;font-size:' + (t.gridFontSize+1) + 'px;">' + escHtml(dd.name) + '</th></tr>';
-            html += '<tr><th style="' + headerCellStyle() + '">Bunk</th>';
+            html += '<tr><th style="' + headerCellStyle() + 'white-space:nowrap;">Bunk</th>';
             blocks.forEach(function(bl) { html += '<th style="' + headerCellStyle() + 'white-space:nowrap;font-size:' + Math.max(8,t.gridFontSize-1) + 'px;">' + bl.label + '</th>'; });
             html += '</tr></thead><tbody>';
 
             bunks.forEach(function(b, bi) {
                 var isAlt = bi % 2 === 1;
                 html += '<tr><td style="' + timeStyle() + '">' + escHtml(b) + '</td>';
-                blocks.forEach(function(eb, ci) {
+                blocks.forEach(function(eb) {
                     if (eb.isLeague) {
                         if (bi === 0) html += '<td rowspan="' + bunks.length + '" style="' + cellStyle('league',false) + 'text-align:center;vertical-align:middle;">' + buildLeagueCellHtml(eb, bunks, dd.name) + '</td>';
                     } else {
@@ -902,22 +810,19 @@ function generateCombinedHTML(selectedDivisions) {
                         else if (entry._fixed) { type = 'pinned'; label = escHtml(formatEntry(entry)); }
                         else if (entry._h2h) { type = 'league'; label = escHtml(formatEntry(entry)); }
                         else { label = escHtml(formatEntry(entry)); if (!label) { type = 'free'; label = '\u2014'; } }
-                        html += '<td style="' + cellStyle(type, isAlt) + '">' + label + '</td>';
+                        html += '<td style="' + cellStyle(type, isAlt) + 'white-space:nowrap;">' + label + '</td>';
                     }
                 });
                 html += '</tr>';
             });
         } else {
-            // Normal: time down left, bunks across top
-            // Calculate min row height to equalize with max blocks
             var minRowH = maxBlocks > 0 && blocks.length < maxBlocks ? Math.round(maxBlocks / blocks.length * 32) : 0;
             var rowHStyle = minRowH > 32 ? 'height:' + minRowH + 'px;' : '';
 
-            html += '<table style="width:100%; border-collapse:collapse; font-family:\'' + t.gridFont + '\',sans-serif; font-size:' + t.gridFontSize + 'px; height:100%;">';
-            // Division name header row
+            html += '<table style="width:100%; table-layout:fixed; border-collapse:collapse; font-family:\'' + t.gridFont + '\',sans-serif; font-size:' + t.gridFontSize + 'px; height:100%;">';
             html += '<thead><tr><th colspan="' + (bunks.length + 1) + '" style="' + headerCellStyle() + 'text-align:center;font-weight:700;font-size:' + (t.gridFontSize+1) + 'px;">' + escHtml(dd.name) + '</th></tr>';
-            html += '<tr><th style="' + headerCellStyle() + 'width:' + t.timeColWidth + 'px;">Time</th>';
-            bunks.forEach(function(b){ html += '<th style="' + headerCellStyle() + '">' + escHtml(b) + '</th>'; });
+            html += '<tr><th style="' + headerCellStyle() + 'white-space:nowrap;">Time</th>';
+            bunks.forEach(function(b){ html += '<th style="' + headerCellStyle() + 'white-space:nowrap;">' + escHtml(b) + '</th>'; });
             html += '</tr></thead><tbody>';
 
             blocks.forEach(function(eb, ri) {
@@ -934,7 +839,7 @@ function generateCombinedHTML(selectedDivisions) {
                         else if (entry._fixed) { type = 'pinned'; label = escHtml(formatEntry(entry)); }
                         else if (entry._h2h) { type = 'league'; label = escHtml(formatEntry(entry)); }
                         else { label = escHtml(formatEntry(entry)); if (!label) { type = 'free'; label = '\u2014'; } }
-                        html += '<td style="' + cellStyle(type, isAlt) + 'vertical-align:middle;">' + label + '</td>';
+                        html += '<td style="' + cellStyle(type, isAlt) + 'vertical-align:middle;white-space:nowrap;">' + label + '</td>';
                     });
                 }
                 html += '</tr>';
@@ -957,7 +862,7 @@ function generateStyledBunkHTML(bunk) {
     var times = (dn && window.divisionTimes && window.divisionTimes[dn]) ? window.divisionTimes[dn] : (window.unifiedTimes || []);
     var html = '<div class="pc-print-page" style="position:relative; page-break-after:' + (t.showPageBreaks?'always':'auto') + '; margin-bottom:20px;">';
     html += buildWatermark() + buildStyledHeader(bunk + (dn ? ' (' + dn + ')' : ''));
-    html += '<table style="width:100%; border-collapse:collapse; font-family:\'' + t.gridFont + '\',sans-serif; font-size:' + t.gridFontSize + 'px;">';
+    html += '<table style="width:100%; table-layout:fixed; border-collapse:collapse; font-family:\'' + t.gridFont + '\',sans-serif; font-size:' + t.gridFontSize + 'px;">';
     html += '<thead><tr><th style="' + headerCellStyle() + 'width:' + t.timeColWidth + 'px;">Time</th><th style="' + headerCellStyle() + '">Activity / Location</th></tr></thead><tbody>';
     times.forEach(function(slot, i) {
         var entry = sched[i]; if (!entry || entry.continuation) return;
@@ -981,7 +886,7 @@ function generateStyledLocationHTML(loc) {
     var t = _currentTemplate, times = window.unifiedTimes || [], aa = getAssignments();
     var html = '<div class="pc-print-page" style="position:relative; page-break-after:' + (t.showPageBreaks?'always':'auto') + '; margin-bottom:20px;">';
     html += buildWatermark() + buildStyledHeader(loc + ' Schedule');
-    html += '<table style="width:100%; border-collapse:collapse; font-family:\'' + t.gridFont + '\',sans-serif; font-size:' + t.gridFontSize + 'px;">';
+    html += '<table style="width:100%; table-layout:fixed; border-collapse:collapse; font-family:\'' + t.gridFont + '\',sans-serif; font-size:' + t.gridFontSize + 'px;">';
     html += '<thead><tr><th style="' + headerCellStyle() + 'width:' + t.timeColWidth + 'px;">Time</th><th style="' + headerCellStyle() + '">Bunks</th></tr></thead><tbody>';
     times.forEach(function(slot, i) {
         var isAlt = i % 2 === 1, found = [];
