@@ -47,16 +47,16 @@ var DEFAULT_TEMPLATE = {
     headerBgColor: '#147D91', headerTextColor: '#FFFFFF',
     headerFont: 'Inter', headerFontSize: 22,
     showDate: true, showDivisionName: true, customSubtitle: '',
-    gridFont: 'Inter', gridFontSize: 11,
+    gridFont: 'Inter', gridFontSize: 13,
     gridHeaderBgColor: '#F1F5F9', gridHeaderTextColor: '#0F172A',
     gridBorderColor: '#CBD5E1', gridBorderWidth: 1,
-    gridRowAltColor: '#F8FAFC', gridRowColor: '#FFFFFF', cellPadding: 8,
+    gridRowAltColor: '#F8FAFC', gridRowColor: '#FFFFFF', cellPadding: 10,
     pinnedBgColor: '#FFF8E1', pinnedTextColor: '#92400E',
     leagueBgColor: '#EBF5FF', leagueTextColor: '#1E40AF',
     generalBgColor: '#FFFFFF', generalTextColor: '#1E293B',
     freeBgColor: '#F9FAFB', freeTextColor: '#9CA3AF',
-    timeColWidth: 120, timeColBgColor: '#F8FAFC', timeColTextColor: '#475569',
-    timeColFont: 'Inter', timeColFontSize: 11, timeColBold: true,
+    timeColWidth: 130, timeColBgColor: '#F8FAFC', timeColTextColor: '#475569',
+    timeColFont: 'Inter', timeColFontSize: 13, timeColBold: true,
     orientation: 'landscape', paperSize: 'letter', padding: 20, showPageBreaks: true,
     tableOrientation: 'bunks-top', hideLeagueMatchups: false, layoutMode: 'per-division',
     watermarkEnabled: false, watermarkText: '', watermarkOpacity: 0.08, watermarkColor: '#000000',
@@ -69,7 +69,7 @@ var _savedTemplates = [];
 var _activeView = 'division';
 var _previewHtml = '';
 var _advancedOpen = false;
-var _zoomLevel = 85;
+var _zoomLevel = 100;
 var _isFullscreen = false;
 var _cloudSyncTimeout = null;
 var CLOUD_SYNC_DEBOUNCE = 800;
@@ -213,39 +213,47 @@ function buildMainUI() {
     var t = _currentTemplate;
     return '<div class="pc-container' + (_isFullscreen ? ' pc-fullscreen' : '') + '" id="pc-root">' +
     '<div class="pc-topbar no-print">' +
-        '<div class="pc-topbar-left"><h1 class="pc-title">' + ICO.print + ' Print Center</h1></div>' +
+        '<div class="pc-topbar-left">' +
+            '<details class="pc-settings-dropdown" id="pc-settings-dropdown">' +
+                '<summary class="pc-settings-toggle">' + ICO.gear + ' Settings</summary>' +
+                '<div class="pc-settings-panel">' +
+                    (isEditor ? buildQuickSettings() : '') +
+                    '<div class="pc-controls-inner">' +
+                        '<div class="pc-controls-top">' +
+                            '<div class="pc-view-tabs">' +
+                                '<button class="pc-view-tab active" data-view="division">' + ICO.calendar + ' Divisions</button>' +
+                                '<button class="pc-view-tab" data-view="bunk">' + ICO.user + ' Bunks</button>' +
+                                '<button class="pc-view-tab" data-view="location">' + ICO.mapPin + ' Locations</button>' +
+                            '</div>' +
+                            '<div class="pc-view-options">' +
+                                '<label class="pc-opt" title="Swap rows and columns"><input type="checkbox" id="pc-transpose"' + (t.tableOrientation === 'time-top' ? ' checked' : '') + '> ' + ICO.transpose + ' Transpose</label>' +
+                                '<label class="pc-opt" title="Hide league matchup details"><input type="checkbox" id="pc-hide-matchups"' + (t.hideLeagueMatchups ? ' checked' : '') + '> ' + ICO.eyeOff + ' Hide Matchups</label>' +
+                                '<label class="pc-opt" title="All divisions side by side" id="pc-combined-wrap"><input type="checkbox" id="pc-combined"' + (t.layoutMode === 'all-bunks' ? ' checked' : '') + '> ' + ICO.grid + ' Combined</label>' +
+                            '</div>' +
+                        '</div>' +
+                        '<div class="pc-selector-row">' +
+                            '<div class="pc-selector-box" id="pc-selector-container"></div>' +
+                            '<div class="pc-selector-actions">' +
+                                '<button class="pc-btn pc-btn-xs" onclick="window._pcSelectAll()">All</button>' +
+                                '<button class="pc-btn pc-btn-xs pc-btn-ghost" onclick="window._pcDeselectAll()">Clear</button>' +
+                            '</div>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>' +
+            '</details>' +
+        '</div>' +
+        '<div class="pc-topbar-center">' +
+            '<div class="pc-zoom-controls">' +
+                '<button class="pc-zoom-btn" onclick="window._pcZoom(-10)" title="Zoom out">\u2212</button>' +
+                '<span class="pc-zoom-label" id="pc-zoom-label">' + _zoomLevel + '%</span>' +
+                '<button class="pc-zoom-btn" onclick="window._pcZoom(10)" title="Zoom in">+</button>' +
+            '</div>' +
+        '</div>' +
         '<div class="pc-topbar-right">' +
             '<button class="pc-btn pc-btn-ghost pc-btn-sm" onclick="window._pcFullscreen()" title="Toggle fullscreen" id="pc-fs-btn">' + ICO.expand + '</button>' +
             (isEditor ? '<button class="pc-btn pc-btn-ghost pc-btn-sm" onclick="window._pcToggleAdvanced()" title="Advanced design settings">' + ICO.gear + ' Advanced</button>' : '') +
             '<button class="pc-btn pc-btn-secondary pc-btn-sm" onclick="window._pcExportExcel()">' + ICO.excel + ' Excel</button>' +
             '<button class="pc-btn pc-btn-primary pc-btn-sm" onclick="window._pcPrint()">' + ICO.print + ' Print</button>' +
-        '</div>' +
-    '</div>' +
-    (isEditor ? buildQuickSettings() : '') +
-    '<div class="pc-controls no-print">' +
-        '<div class="pc-controls-top">' +
-            '<div class="pc-view-tabs">' +
-                '<button class="pc-view-tab active" data-view="division">' + ICO.calendar + ' Divisions</button>' +
-                '<button class="pc-view-tab" data-view="bunk">' + ICO.user + ' Bunks</button>' +
-                '<button class="pc-view-tab" data-view="location">' + ICO.mapPin + ' Locations</button>' +
-            '</div>' +
-            '<div class="pc-view-options">' +
-                '<label class="pc-opt" title="Swap rows and columns"><input type="checkbox" id="pc-transpose"' + (t.tableOrientation === 'time-top' ? ' checked' : '') + '> ' + ICO.transpose + ' Transpose</label>' +
-                '<label class="pc-opt" title="Hide league matchup details"><input type="checkbox" id="pc-hide-matchups"' + (t.hideLeagueMatchups ? ' checked' : '') + '> ' + ICO.eyeOff + ' Hide Matchups</label>' +
-                '<label class="pc-opt" title="All divisions side by side" id="pc-combined-wrap"><input type="checkbox" id="pc-combined"' + (t.layoutMode === 'all-bunks' ? ' checked' : '') + '> ' + ICO.grid + ' Combined</label>' +
-                '<div class="pc-zoom-controls">' +
-                    '<button class="pc-zoom-btn" onclick="window._pcZoom(-10)" title="Zoom out">\u2212</button>' +
-                    '<span class="pc-zoom-label" id="pc-zoom-label">' + _zoomLevel + '%</span>' +
-                    '<button class="pc-zoom-btn" onclick="window._pcZoom(10)" title="Zoom in">+</button>' +
-                '</div>' +
-            '</div>' +
-        '</div>' +
-        '<div class="pc-selector-row">' +
-            '<div class="pc-selector-box" id="pc-selector-container"></div>' +
-            '<div class="pc-selector-actions">' +
-                '<button class="pc-btn pc-btn-xs" onclick="window._pcSelectAll()">All</button>' +
-                '<button class="pc-btn pc-btn-xs pc-btn-ghost" onclick="window._pcDeselectAll()">Clear</button>' +
-            '</div>' +
         '</div>' +
     '</div>' +
     '<div class="pc-workspace">' +
@@ -356,6 +364,12 @@ function bindAll() {
     var dw = document.getElementById('pc-advanced-drawer');
     if (dw) { var da = debounce(function(){ readDesignValues(); liveRefresh(); }, 200); dw.addEventListener('input', function(e){ if (e.target.matches('input,select')) da(); }); dw.addEventListener('change', function(e){ if (e.target.matches('input,select')){ readDesignValues(); liveRefresh(); }}); }
     renderTemplateDropdown();
+
+    // Close settings dropdown when clicking outside
+    document.addEventListener('click', function(e) {
+        var dd = document.getElementById('pc-settings-dropdown');
+        if (dd && dd.open && !dd.contains(e.target)) dd.removeAttribute('open');
+    });
 }
 
 function populateSelectors() {
@@ -477,8 +491,24 @@ function buildDivisionBlocks(divName) {
 
         var isSpecialty = ev === "Specialty League" || evLower.indexOf('specialty') >= 0 || itemType === 'specialty_league' || itemType === 'specialtyleague';
         if (isLeagueBlock) {
-            if (isSpecialty) { sc2++; ev = "Specialty League " + sc2; }
-            else { lc++; ev = "League Game " + lc; }
+            // Pull actual game label from leagueAssignments instead of using counter
+            var si_la = findFirstSlotForTime(bl.startMin, divName);
+            var la = window.leagueAssignments || {};
+            var divLA = la[divName] || {};
+            var foundLabel = '';
+            // Try exact slot first, then nearby slots (±2)
+            var trySlots = [si_la];
+            for (var off = 1; off <= 2; off++) { trySlots.push(si_la + off, si_la - off); }
+            for (var ts = 0; ts < trySlots.length && !foundLabel; ts++) {
+                var sd = divLA[trySlots[ts]];
+                if (sd && sd.gameLabel) foundLabel = sd.gameLabel;
+            }
+            if (foundLabel) {
+                ev = foundLabel;
+            } else {
+                if (isSpecialty) { sc2++; ev = "Specialty League " + sc2; }
+                else { lc++; ev = "League Game " + lc; }
+            }
         }
 
         blocks.push({ label: minutesToTimeLabel(bl.startMin) + ' \u2013 ' + minutesToTimeLabel(bl.endMin), startMin: bl.startMin, endMin: bl.endMin, event: ev, type: bl.item.type, isLeague: isLeagueBlock });
