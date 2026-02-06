@@ -918,7 +918,11 @@
             var block = activityBlocks[bi];
             var domain = new Set();
             var bunk = block.bunk;
-            var blockDivName = block.divName || block.division || '';
+           var blockDivName = block.divName || block.division || '';
+if (!blockDivName && bunk) {
+    blockDivName = getBunkDivision(bunk) || '';
+    if (blockDivName) block.divName = blockDivName;
+}
             var slots = block.slots || [];
 
             // Resolve time ranges
