@@ -1,8 +1,13 @@
 // =============================================================================
-// supabase_client.js v5.2 — CAMPISTRY UNIFIED SUPABASE CLIENT
+// supabase_client.js v5.3 — CAMPISTRY UNIFIED SUPABASE CLIENT
 // =============================================================================
 //
 // THE SINGLE SOURCE OF TRUTH for Supabase connection in Campistry.
+//
+// v5.3: SECURITY PATCH - V-002 fix
+//       - getRole() now fails closed to 'viewer' when not yet initialized
+//       - Stale localStorage cache treated as UI hints only, never for
+//         permission decisions before DB verification completes
 //
 // v5.2: CRITICAL FIX - Invitees no longer get owner permissions
 //       - Changed STEP 4 fallback from 'owner' to 'viewer'
@@ -24,7 +29,7 @@
 (function() {
     'use strict';
 
-    console.log('🔌 Campistry Supabase Client v5.2 loading...');
+    console.log('🔌 Campistry Supabase Client v5.3 loading...');
 
     // =========================================================================
     // CONFIGURATION - SINGLE SOURCE OF TRUTH
@@ -58,6 +63,7 @@
     let _role = null;
     let _isTeamMember = false;
     let _isInitialized = false;
+    let _roleVerifiedFromDB = false;  // ★★★ V-002: Track whether role is DB-verified ★★★
     let _readyResolve = null;
     let _readyPromise = new Promise(resolve => { _readyResolve = resolve; });
     let _authChangeCallbacks = [];
@@ -151,10 +157,13 @@
                 _userId = session?.user?.id || null;
 
                 if (event === 'SIGNED_IN') {
+                    // ★★★ V-002 FIX: Mark role as unverified during re-detection ★★★
+                    _roleVerifiedFromDB = false;
                     detectCampAndRole().then(() => {
                         notifyAuthChange(event, session);
                     });
                 } else if (event === 'SIGNED_OUT') {
+                    _roleVerifiedFromDB = false;
                     clearCache();
                     notifyAuthChange(event, session);
                 } else {
@@ -179,7 +188,7 @@
             return;
         }
 
-        // Try cached values first (for speed)
+        // Try cached values first (for speed) — UI hints only, not for permission decisions
         const cachedCampId = localStorage.getItem(CONFIG.CACHE_KEYS.CAMP_ID);
         const cachedRole = localStorage.getItem(CONFIG.CACHE_KEYS.ROLE);
         const cachedIsTeam = localStorage.getItem(CONFIG.CACHE_KEYS.IS_TEAM_MEMBER);
@@ -188,7 +197,8 @@
             _campId = cachedCampId;
             _role = cachedRole;
             _isTeamMember = cachedIsTeam === 'true';
-            log('Using cached camp info:', { campId: _campId, role: _role, isTeamMember: _isTeamMember });
+            // ★★★ V-002: DO NOT mark as verified — this is just the cache ★★★
+            log('Using cached camp info (unverified hint):', { campId: _campId, role: _role, isTeamMember: _isTeamMember });
         }
 
         // Always verify from database (cached values might be stale)
@@ -208,12 +218,13 @@
                 _campId = membership.camp_id;
                 _role = membership.role || 'viewer';
                 _isTeamMember = true;
+                _roleVerifiedFromDB = true;  // ★★★ V-002: Now DB-verified ★★★
                 cacheValues();
                 
                 // Store membership details for permissions module
                 window._campistryMembership = membership;
                 
-                log('✅ User IS a team member:', { campId: _campId, role: _role });
+                log('✅ User IS a team member (DB-verified):', { campId: _campId, role: _role });
                 return; // ⭐ IMPORTANT: Exit here - don't check camp ownership
             }
 
@@ -245,6 +256,7 @@
                         _campId = pendingInvite.camp_id;
                         _role = pendingInvite.role || 'viewer';
                         _isTeamMember = true;
+                        _roleVerifiedFromDB = true;  // ★★★ V-002: DB-verified ★★★
                         cacheValues();
                         
                         // Store membership for permissions
@@ -271,6 +283,7 @@
                 _campId = ownedCamp.id;
                 _role = 'owner';
                 _isTeamMember = false;
+                _roleVerifiedFromDB = true;  // ★★★ V-002: DB-verified ★★★
                 cacheValues();
                 log('User is camp owner:', _campId);
                 return;
@@ -286,11 +299,14 @@
             _campId = _userId;
             _role = 'viewer';  // ★★★ SAFE DEFAULT - NOT OWNER! ★★★
             _isTeamMember = false;
+            _roleVerifiedFromDB = true;  // ★★★ V-002: Still verified (verified as "no association") ★★★
             // Don't cache uncertain state - let next page load verify
             // cacheValues();
 
         } catch (e) {
             logError('Camp/role detection failed:', e);
+            // ★★★ V-002: On error, do NOT mark as verified — use safe default ★★★
+            _roleVerifiedFromDB = false;
             // Use cached values if database query failed
         }
     }
@@ -311,6 +327,7 @@
         _campId = null;
         _role = null;
         _isTeamMember = false;
+        _roleVerifiedFromDB = false;
         delete window._campistryMembership;
         
         // ⭐ NEW: Clear camp data keys on sign-out
@@ -376,8 +393,23 @@
         return _session;
     }
 
+    // ★★★ V-002 FIX: getRole() fails closed when not DB-verified ★★★
+    // Stale localStorage cache should never drive permission decisions
     function getRole() {
+        if (_roleVerifiedFromDB && _role) {
+            return _role;
+        }
+        // If not yet DB-verified, fail closed to viewer
+        // The cached value is only a UI hint for loading screens
+        if (!_isInitialized) {
+            return 'viewer';  // Fail-closed before init completes
+        }
         return _role || localStorage.getItem(CONFIG.CACHE_KEYS.ROLE) || 'viewer';
+    }
+
+    // ★★★ V-002: Expose whether role has been verified from database ★★★
+    function isRoleVerified() {
+        return _roleVerifiedFromDB;
     }
 
     function isOwner() {
@@ -469,11 +501,11 @@
         await initAuth();
 
         _isInitialized = true;
-        log('Initialization complete', { campId: _campId, role: _role, isTeamMember: _isTeamMember });
+        log('Initialization complete', { campId: _campId, role: _role, isTeamMember: _isTeamMember, roleVerified: _roleVerifiedFromDB });
 
         // Dispatch ready event
         window.dispatchEvent(new CustomEvent('campistry-db-ready', {
-            detail: { campId: _campId, role: _role, isTeamMember: _isTeamMember }
+            detail: { campId: _campId, role: _role, isTeamMember: _isTeamMember, roleVerified: _roleVerifiedFromDB }
         }));
 
         _readyResolve(true);
@@ -486,8 +518,9 @@
 
     async function refresh() {
         log('Refreshing camp/role detection...');
+        _roleVerifiedFromDB = false;  // ★★★ V-002: Mark as unverified during refresh ★★★
         await detectCampAndRole();
-        return { campId: _campId, role: _role, isTeamMember: _isTeamMember };
+        return { campId: _campId, role: _role, isTeamMember: _isTeamMember, roleVerified: _roleVerifiedFromDB };
     }
 
     // =========================================================================
@@ -509,6 +542,7 @@
         getSession,
         getAccessToken,
         getRole,
+        isRoleVerified,  // ★★★ V-002: New export ★★★
         
         // Role checks
         isOwner,
