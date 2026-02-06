@@ -1,60 +1,46 @@
 // ============================================================================
-// total_solver_engine.js (ULTIMATE v12.0 - HYPER-OPTIMIZED CONSTRAINT SOLVER)
+// total_solver_engine.js (ULTIMATE v12.1 - HYPER-OPTIMIZED CONSTRAINT SOLVER)
 // ============================================================================
-// ★★★ v12.0: PERFORMANCE PARADIGM — ELIMINATE REDUNDANCY, BATCH EVERYTHING ★★★
+// ★★★ v12.1: PERFORMANCE + QUALITY — SAME-FIELD ACTIVITY ENFORCEMENT ★★★
 //
-// WHAT'S NEW IN v12.0 (over v11.0):
+// WHAT'S NEW IN v12.1 (over v12.0):
 // ──────────────────────────────────
+// QUALITY:
+//  Q1. SAME-FIELD ACTIVITY CONSISTENCY:
+//      - Enforces that if multiple bunks share a field (e.g. sharing type 'all'
+//        or 'same_division'), they MUST be doing the same activity/sport.
+//      - Adds 'activityName' to the high-performance Time Index.
+//      - Adds live checks during candidate filtering and augmenting path matching.
+//      - Adds a final backstop safety sweep to catch and fix any activity mismatches.
+//
 // PERFORMANCE:
 //  P1. FUSED DOMAIN INITIALIZATION — compat matrix + domain init merged into
 //      ONE pass. Eliminates the entire buildCompatibilityMatrix step and its
 //      O(N×C) redundant iteration. Domains built directly with ALL checks.
 //  P2. PRE-COMPUTED FIELD PROPERTY MAP — capacity, sharing type, and division
 //      preferences cached in a Map ONCE. Eliminates repeated property chain
-//      lookups in every hot path (was called 5-8× per candidate per block).
+//      lookups in every hot path.
 //  P3. BATCHED ROTATION SCORING — rotation scores pre-computed per bunk×activity
-//      ONCE before domain init. Same bunk+activity = same rotation score
-//      regardless of slot. Eliminates redundant RotationEngine calls.
+//      ONCE before domain init.
 //  P4. SORTED TIME INDEX — field time entries sorted by startMin for binary
-//      search on overlap queries. Reduces O(E) linear scans to O(log E).
-//  P5. REUSABLE SCRATCH OBJECTS — pick objects reused during cost evaluation
-//      instead of allocating new objects per candidate. Only winners get fresh
-//      objects. Reduces GC pressure significantly.
-//
-// QUALITY:
-//  Q1. AUGMENTING PATH MATCHING — slot-group matching now tries 1-level
-//      reassignment when a field is taken. If Block A wants Field 1 but
-//      Block B already has it, try to move B to its next-best option.
-//      Reduces "Free" assignments by finding swaps greedy matching misses.
-//  Q2. SMARTER BACKJUMP — tracks conflict sources for targeted backjumping
-//      instead of linear scan of remaining unassigned blocks.
-//  Q3. IMPROVED POST-SOLVE — swap chain depth limit prevents exponential
-//      search. Early termination when no more improvements possible.
+//      search on overlap queries.
+//  P5. REUSABLE SCRATCH OBJECTS — pick objects reused during cost evaluation.
 //
 // DIAGNOSTICS:
 //  D1. ALL LOGGING GATED — debug, rotation, cross-div, and v12 logging
 //      controlled by flags. Zero console overhead in production.
-//  D2. PERFORMANCE COUNTERS — track cache hits/misses, domain sizes,
-//      propagation effectiveness for tuning.
 //
-// RETAINED FROM v11.0:
-//   - AC-3 constraint propagation with singleton cascading
-//   - Slot-group batch solving architecture
-//   - v3.0 SHARING MODEL (same_division / not_sharable / all)
-//   - Cross-division conflict detection with time-overlap
-//   - RotationEngine delegation for all scoring
-//   - League game handling + all debug utilities
-//
-// SOLVING PIPELINE (v12.0):
-//   1. buildAllCandidateOptions()       — master activity list (once)
-//   2. buildFieldTimeIndex()            — sorted time-indexed field usage
-//   3. precomputeFieldProperties()      — capacity + sharing type map (NEW)
-//   4. precomputeRotationScores()       — bunk×activity score map (NEW)
-//   5. buildDomainsAndSlotGroups()      — FUSED domain + group build (NEW)
-//   6. propagateAC3()                   — arc consistency
-//   7. solveSlotGroups()                — augmenting path matching (IMPROVED)
-//   8. backjumpSolver()                 — resolve remaining
-//   9. postSolveLocalSearch()           — polish + swap chains
+// SOLVING PIPELINE (v12.1):
+//   1. buildAllCandidateOptions()        — master activity list (once)
+//   2. buildFieldTimeIndex()             — sorted time-indexed field usage (w/ Activity Name)
+//   3. precomputeFieldProperties()       — capacity + sharing type map
+//   4. precomputeRotationScores()        — bunk×activity score map
+//   5. buildDomainsAndSlotGroups()       — FUSED domain + group build
+//   6. propagateAC3()                    — arc consistency
+//   7. solveSlotGroups()                 — augmenting path matching (w/ Activity Checks)
+//   8. backjumpSolver()                  — resolve remaining
+//   9. postSolveLocalSearch()            — polish + swap chains
+//   10. Cross-Division & Activity Sweep  — final safety check
 // ============================================================================
 
 (function () {
@@ -306,10 +292,11 @@
                     var fieldLabel = normName(
                         window.SchedulerCoreUtils?.fieldLabel?.(entry.field) || ''
                     );
-
+                    
+                    var entryActivityNorm = normName(entry._activity || entry.sport || entry.field);
                     var names = new Set([fieldNorm, actNorm, fieldLabel].filter(function(n) { return n; }));
                     for (var name of names) {
-                        addToFieldTimeIndex(name, slot.startMin, slot.endMin, bunk, divName);
+                        addToFieldTimeIndex(name, slot.startMin, slot.endMin, bunk, divName, entryActivityNorm);
                     }
                 }
             }
@@ -323,11 +310,11 @@
         v12Log('Field time index built: ' + _fieldTimeIndex.size + ' entries (sorted)');
     }
 
-    function addToFieldTimeIndex(fieldNorm, startMin, endMin, bunk, divName) {
+    function addToFieldTimeIndex(fieldNorm, startMin, endMin, bunk, divName, activityName) {
         if (!_fieldTimeIndex.has(fieldNorm)) _fieldTimeIndex.set(fieldNorm, []);
         // Insert maintaining sort order (most inserts are at the end or near it)
         var entries = _fieldTimeIndex.get(fieldNorm);
-        entries.push({ startMin: startMin, endMin: endMin, bunk: bunk, divName: divName });
+        entries.push({ startMin: startMin, endMin: endMin, bunk: bunk, divName: divName, activityName: activityName || '' });
         // Re-sort only if needed (entries pushed out of order)
         if (entries.length > 1 && entries[entries.length - 1].startMin < entries[entries.length - 2].startMin) {
             entries.sort(function(a, b) { return a.startMin - b.startMin; });
@@ -356,9 +343,6 @@
                 lo = mid + 1;
             }
         }
-        // lo is the first entry that starts at or after queryEnd (can't overlap)
-        // We need to scan backwards from 0 to lo-1, but also need entries where endMin > queryStart
-        // The scan is bounded by entries starting before queryEnd
         return lo;  // Upper bound — scan from 0 to lo-1
     }
 
@@ -413,6 +397,28 @@
             if (e.endMin > startMin) count++;
         }
         return count;
+    }
+
+    // ★★★ v12.1: Same-field activity mismatch check ★★★
+    // When bunks share a field, they MUST be doing the same sport/activity.
+    // Returns the conflicting activity name if mismatch found, null if OK.
+    function checkSameFieldActivityMismatch(fieldName, startMin, endMin, activityName, excludeBunk) {
+        if (!activityName || activityName === 'Free' || activityName === 'free') return null;
+        var fieldNorm = normName(fieldName);
+        var actNorm = normName(activityName);
+        var entries = _fieldTimeIndex.get(fieldNorm);
+        if (!entries) return null;
+        var upperBound = findFirstOverlapIndex(entries, startMin, endMin);
+        for (var i = 0; i < upperBound; i++) {
+            var e = entries[i];
+            if (e.bunk === excludeBunk) continue;
+            if (e.endMin <= startMin) continue;
+            // Entry overlaps in time — check activity
+            if (e.activityName && e.activityName !== actNorm) {
+                return e.activityName;
+            }
+        }
+        return null;
     }
 
     // ========================================================================
@@ -606,20 +612,6 @@
         return cand && (cand.type === 'special' || cand._type === 'special');
     }
 
-    function getLiveTypeBalance(bunk, beforeSlot) {
-        var todayDone = getActivitiesDoneToday(bunk, beforeSlot);
-        var sports = 0;
-        var specials = 0;
-        todayDone.forEach(function(act) {
-            if (window.RotationEngine?.isSpecialActivity?.(act)) {
-                specials++;
-            } else if (act !== 'free' && act !== 'free play' && act !== 'lunch' && act !== 'snacks' && act !== 'swim' && act !== 'dismissal') {
-                sports++;
-            }
-        });
-        return { sports: sports, specials: specials };
-    }
-
     function buildAllCandidateOptions(config) {
         var options = [];
         var seenKeys = new Set();
@@ -738,11 +730,18 @@
             } else if (sType === 'same_division' || sType === 'custom') {
                 // Cross-division conflict = instant block
                 if (checkCrossDivisionTimeConflict(fieldName, blockDivName, blockStart, blockEnd, bunk)) return 999999;
+                // ★★★ v12.1: Same-field bunks must play same sport ★★★
+                if (checkSameFieldActivityMismatch(fieldName, blockStart, blockEnd, act, bunk)) return 999999;
                 // Same-division capacity
                 if (countSameDivisionUsage(fieldName, blockDivName, blockStart, blockEnd, bunk) >= cap) return 999999;
 
+            } else if (sType === 'all') {
+                // type 'all' — enforce total capacity + same activity
+                if (checkSameFieldActivityMismatch(fieldName, blockStart, blockEnd, act, bunk)) return 999999;
+                if (getFieldUsageFromTimeIndex(fieldNorm, blockStart, blockEnd, bunk) >= cap) return 999999;
+
             } else {
-                // type 'all' or unrecognized — enforce total capacity
+                // Unrecognized — enforce total capacity
                 if (getFieldUsageFromTimeIndex(fieldNorm, blockStart, blockEnd, bunk) >= cap) return 999999;
             }
         }
@@ -1083,10 +1082,10 @@ if (!blockDivName && bunk) {
 
                 var fieldNorm = normName(pick.field);
                 if (block.startTime !== undefined && block.endTime !== undefined) {
-                    addToFieldTimeIndex(fieldNorm, block.startTime, block.endTime, block.bunk, block.divName);
-                    var actNorm = normName(pick._activity);
-                    if (actNorm && actNorm !== fieldNorm) {
-                        addToFieldTimeIndex(actNorm, block.startTime, block.endTime, block.bunk, block.divName);
+                    var pickActNorm = normName(pick._activity);
+                    addToFieldTimeIndex(fieldNorm, block.startTime, block.endTime, block.bunk, block.divName, pickActNorm);
+                    if (pickActNorm && pickActNorm !== fieldNorm) {
+                        addToFieldTimeIndex(pickActNorm, block.startTime, block.endTime, block.bunk, block.divName, pickActNorm);
                     }
                 }
                 invalidateRotationCacheForBunk(block.bunk);
@@ -1214,10 +1213,10 @@ if (!blockDivName && bunk) {
 
                 var fieldNorm = normName(ga.pick.field);
                 if (block.startTime !== undefined && block.endTime !== undefined) {
-                    addToFieldTimeIndex(fieldNorm, block.startTime, block.endTime, block.bunk, block.divName);
-                    var actNorm = normName(ga.pick._activity);
-                    if (actNorm && actNorm !== fieldNorm) {
-                        addToFieldTimeIndex(actNorm, block.startTime, block.endTime, block.bunk, block.divName);
+                    var gaActNorm = normName(ga.pick._activity);
+                    addToFieldTimeIndex(fieldNorm, block.startTime, block.endTime, block.bunk, block.divName, gaActNorm);
+                    if (gaActNorm && gaActNorm !== fieldNorm) {
+                        addToFieldTimeIndex(gaActNorm, block.startTime, block.endTime, block.bunk, block.divName, gaActNorm);
                     }
                 }
                 invalidateRotationCacheForBunk(block.bunk);
@@ -1315,23 +1314,43 @@ if (!blockDivName && bunk) {
                         }
                     }
                     if (!crossConflict) {
-                        // ★★★ v12.1 FIX: Count only same-division usage from within-group results ★★★
-                        var sameDivGroupUsage = 0;
-                        if (block2.divName) {
-                            for (var gri2 = 0; gri2 < results.length; gri2++) {
-                                var gr2 = results[gri2];
-                                if (gr2.candIdx === -1) continue;
-                                if (normName(gr2.pick.field) !== fieldNorm2) continue;
-                                var grBlock2 = activityBlocks[gr2.blockIdx];
-                                if (grBlock2.divName === block2.divName) {
-                                    if (grBlock2.startTime < block2.endTime && grBlock2.endTime > block2.startTime) {
-                                        sameDivGroupUsage++;
+                        // ★★★ v12.1: Same-field bunks must play same sport ★★★
+                        var actMismatch = checkSameFieldActivityMismatch(fieldName, block2.startTime, block2.endTime, cand2.activityName, block2.bunk);
+                        if (!actMismatch) {
+                            var candActNorm2 = normName(cand2.activityName);
+                            for (var gria = 0; gria < results.length; gria++) {
+                                var gra = results[gria];
+                                if (gra.candIdx === -1) continue;
+                                if (normName(gra.pick.field) !== fieldNorm2) continue;
+                                var graBlock = activityBlocks[gra.blockIdx];
+                                if (graBlock.startTime < block2.endTime && graBlock.endTime > block2.startTime) {
+                                    var graActNorm = normName(gra.pick._activity);
+                                    if (graActNorm && candActNorm2 && graActNorm !== candActNorm2) {
+                                        actMismatch = graActNorm; break;
                                     }
                                 }
                             }
                         }
-                        var sameDivExisting = countSameDivisionUsage(fieldName, block2.divName, block2.startTime, block2.endTime, block2.bunk);
-                        canFit = (sameDivExisting + sameDivGroupUsage < capacity);
+                        if (actMismatch) { /* activity mismatch — can't share */ }
+                        else {
+                            // ★★★ v12.1 FIX: Count only same-division usage from within-group results ★★★
+                            var sameDivGroupUsage = 0;
+                            if (block2.divName) {
+                                for (var gri2 = 0; gri2 < results.length; gri2++) {
+                                    var gr2 = results[gri2];
+                                    if (gr2.candIdx === -1) continue;
+                                    if (normName(gr2.pick.field) !== fieldNorm2) continue;
+                                    var grBlock2 = activityBlocks[gr2.blockIdx];
+                                    if (grBlock2.divName === block2.divName) {
+                                        if (grBlock2.startTime < block2.endTime && grBlock2.endTime > block2.startTime) {
+                                            sameDivGroupUsage++;
+                                        }
+                                    }
+                                }
+                            }
+                            var sameDivExisting = countSameDivisionUsage(fieldName, block2.divName, block2.startTime, block2.endTime, block2.bunk);
+                            canFit = (sameDivExisting + sameDivGroupUsage < capacity);
+                        }
                     }
                 } else {
                     canFit = (existingUsage + currentGroupUsage < capacity);
@@ -1539,10 +1558,10 @@ if (!blockDivName && bunk) {
 
                 var fieldNorm = normName(bestPick.field);
                 if (block.startTime !== undefined && block.endTime !== undefined) {
-                    addToFieldTimeIndex(fieldNorm, block.startTime, block.endTime, block.bunk, block.divName);
-                    var actNorm = normName(bestPick._activity);
-                    if (actNorm && actNorm !== fieldNorm) {
-                        addToFieldTimeIndex(actNorm, block.startTime, block.endTime, block.bunk, block.divName);
+                    var bjActNorm = normName(bestPick._activity);
+                    addToFieldTimeIndex(fieldNorm, block.startTime, block.endTime, block.bunk, block.divName, bjActNorm);
+                    if (bjActNorm && bjActNorm !== fieldNorm) {
+                        addToFieldTimeIndex(bjActNorm, block.startTime, block.endTime, block.bunk, block.divName, bjActNorm);
                     }
                 }
                 invalidateRotationCacheForBunk(block.bunk);
@@ -1640,7 +1659,11 @@ if (!blockDivName && bunk) {
 
                 var fieldNorm = normName(bestPick.field);
                 if (block.startTime !== undefined && block.endTime !== undefined) {
-                    addToFieldTimeIndex(fieldNorm, block.startTime, block.endTime, block.bunk, block.divName);
+                    var psActNorm = normName(bestPick._activity);
+                    addToFieldTimeIndex(fieldNorm, block.startTime, block.endTime, block.bunk, block.divName, psActNorm);
+                    if (psActNorm && psActNorm !== fieldNorm) {
+                        addToFieldTimeIndex(psActNorm, block.startTime, block.endTime, block.bunk, block.divName, psActNorm);
+                    }
                 }
                 invalidateRotationCacheForBunk(block.bunk);
                 improvements++;
@@ -1821,7 +1844,7 @@ if (!blockDivName && bunk) {
             window.RotationEngine.clearHistoryCache();
         }
 
-        console.log('\n[SOLVER] ★★★ HYPER-OPTIMIZED v12.0 — FUSED CONSTRAINT SOLVER ★★★');
+        console.log('\n[SOLVER] ★★★ HYPER-OPTIMIZED v12.1 — FUSED CONSTRAINT SOLVER ★★★');
         console.log('[SOLVER] Pipeline: FieldProps → RotScores → FusedDomains → AC-3 → AugMatch → Backjump → Polish');
         console.log('[SOLVER] ' + activityBlocks.length + ' activity blocks to solve');
 
@@ -1889,7 +1912,7 @@ if (!blockDivName && bunk) {
         }
 
         console.log('\n[SOLVER] ══════════════════════════════════════════');
-        console.log('[SOLVER] ✅ v12.0 SOLVE COMPLETE: ' + solveTime.toFixed(0) + 'ms');
+        console.log('[SOLVER] ✅ v12.1 SOLVE COMPLETE: ' + solveTime.toFixed(0) + 'ms');
         console.log('[SOLVER]    ' + activityBlocks.length + ' blocks, ' + freeCount + ' Free');
         console.log('[SOLVER]    AC-3: ' + ac3Result.autoAssigned + ' | AugMatch: ' + matchedCount + ' | Backjump: ' + (activityBlocks.length - ac3Result.autoAssigned - matchedCount));
         if (_perfCounters.augmentingPathAttempts > 0) {
@@ -1913,10 +1936,41 @@ if (!blockDivName && bunk) {
             if (sStart === undefined || sEnd === undefined) continue;
             var sKey = sFieldNorm + ':' + sStart + '-' + sEnd;
             if (!fieldTimeUsage.has(sKey)) fieldTimeUsage.set(sKey, []);
-            fieldTimeUsage.get(sKey).push({ bi: sbi, div: sBlock.divName, bunk: sBlock.bunk });
+            var sActName = normName(sAssign.pick._activity || sAssign.pick.sport || sAssign.pick.field);
+            fieldTimeUsage.get(sKey).push({ bi: sbi, div: sBlock.divName, bunk: sBlock.bunk, act: sActName });
         }
         for (var [ftKey, ftUsers] of fieldTimeUsage) {
             if (ftUsers.length < 2) continue;
+            // ★★★ v12.1: Check same-activity constraint (bunks sharing must play same sport) ★★★
+            var ftActivities = new Set();
+            for (var ftai = 0; ftai < ftUsers.length; ftai++) {
+                var ftAssign = _assignments.get(ftUsers[ftai].bi);
+                if (ftAssign) {
+                    var ftAct = normName(ftAssign.pick._activity || ftAssign.pick.sport || ftAssign.pick.field);
+                    if (ftAct && ftAct !== 'free') ftActivities.add(ftAct);
+                }
+            }
+            if (ftActivities.size > 1) {
+                // Multiple different activities on same field at same time — remove extras
+                var keepAct = ftActivities.values().next().value;
+                for (var ftmi = 0; ftmi < ftUsers.length; ftmi++) {
+                    var ftmAssign = _assignments.get(ftUsers[ftmi].bi);
+                    if (!ftmAssign) continue;
+                    var ftmAct = normName(ftmAssign.pick._activity || ftmAssign.pick.sport || ftmAssign.pick.field);
+                    if (ftmAct && ftmAct !== 'free' && ftmAct !== keepAct) {
+                        var mBlock = activityBlocks[ftUsers[ftmi].bi];
+                        undoPickFromSchedule(mBlock, _assignments.get(ftUsers[ftmi].bi).pick);
+                        _assignments.set(ftUsers[ftmi].bi, {
+                            candIdx: -1,
+                            pick: { field: "Free", sport: null, _activity: "Free" },
+                            cost: 100000
+                        });
+                        applyPickToSchedule(mBlock, _assignments.get(ftUsers[ftmi].bi).pick);
+                        console.warn('[SOLVER] ⚠️ ACTIVITY-MISMATCH FIX: Removed ' + ftmAct + ' from ' + ftUsers[ftmi].bunk + ' on ' + ftKey.split(':')[0] + ' — conflicts with ' + keepAct);
+                        crossDivFixes++;
+                    }
+                }
+            }
             var ftDivs = new Set(ftUsers.map(function(u) { return u.div; }));
             if (ftDivs.size <= 1) continue;
             var ftFieldName = ftKey.split(':')[0];
@@ -2052,10 +2106,10 @@ if (!blockDivName && bunk) {
         applyPickToSchedule(block, pick);
         var fieldNorm = normName(pick.field);
         if (block.startTime !== undefined && block.endTime !== undefined) {
-            addToFieldTimeIndex(fieldNorm, block.startTime, block.endTime, block.bunk, block.divName);
-            var actNorm = normName(pick._activity);
-            if (actNorm && actNorm !== fieldNorm) {
-                addToFieldTimeIndex(actNorm, block.startTime, block.endTime, block.bunk, block.divName);
+            var tpActNorm = normName(pick._activity);
+            addToFieldTimeIndex(fieldNorm, block.startTime, block.endTime, block.bunk, block.divName, tpActNorm);
+            if (tpActNorm && tpActNorm !== fieldNorm) {
+                addToFieldTimeIndex(tpActNorm, block.startTime, block.endTime, block.bunk, block.divName, tpActNorm);
             }
         }
         invalidateRotationCacheForBunk(block.bunk);
@@ -2130,45 +2184,45 @@ if (!blockDivName && bunk) {
         if (!slot) { console.log('Slot not found'); return; }
 
         console.log('\n🔍 Cross-Division Check: "' + fieldName + '" at Div ' + divName + ' Slot ' + slotIdx);
-        console.log('   Time: ' + slot.startMin + '-' + slot.endMin);
+        console.log('    Time: ' + slot.startMin + '-' + slot.endMin);
 
         var fieldNorm = normName(fieldName);
         var entries = _fieldTimeIndex.get(fieldNorm) || [];
-        console.log('   Time index entries: ' + entries.length);
+        console.log('    Time index entries: ' + entries.length);
         entries.forEach(function(e) {
             if (e.startMin < slot.endMin && e.endMin > slot.startMin) {
-                console.log('   ⚠️ OVERLAP: Div ' + e.divName + ' Bunk ' + e.bunk + ' (' + e.startMin + '-' + e.endMin + ')');
+                console.log('    ⚠️ OVERLAP: Div ' + e.divName + ' Bunk ' + e.bunk + ' (' + e.startMin + '-' + e.endMin + ')');
             }
         });
     };
 
     Solver.debugSolverStats = function() {
-        console.log('\n=== SOLVER v12.0 STATS ===');
-        console.log('Normalized names:     ' + _normalizedNames.size);
-        console.log('Rotation score map:   ' + _rotationScoreMap.size);
+        console.log('\n=== SOLVER v12.1 STATS ===');
+        console.log('Normalized names:      ' + _normalizedNames.size);
+        console.log('Rotation score map:    ' + _rotationScoreMap.size);
         console.log('Rotation score cache: ' + _rotationScoreCache.size);
-        console.log('Field property map:   ' + _fieldPropertyMap.size);
+        console.log('Field property map:    ' + _fieldPropertyMap.size);
         console.log('Today activity cache: ' + _todayCache.size);
-        console.log('Field time index:     ' + _fieldTimeIndex.size + ' fields');
+        console.log('Field time index:      ' + _fieldTimeIndex.size + ' fields');
         var totalEntries = 0;
         for (var entries of _fieldTimeIndex.values()) totalEntries += entries.length;
         console.log('  Total time entries: ' + totalEntries);
-        console.log('Assigned blocks:      ' + _assignedBlocks.size);
-        console.log('Active assignments:   ' + _assignments.size);
+        console.log('Assigned blocks:       ' + _assignedBlocks.size);
+        console.log('Active assignments:    ' + _assignments.size);
         if (_slotGroups) console.log('Slot groups:          ' + _slotGroups.size);
         if (_domains) {
             var avg = _domains.size > 0
                 ? (Array.from(_domains.values()).reduce(function(s, d) { return s + d.size; }, 0) / _domains.size).toFixed(1)
                 : '0';
-            console.log('Avg domain size:      ' + avg);
+            console.log('Avg domain size:       ' + avg);
         }
         console.log('\nPerf Counters:');
         console.log('  Rotation cache hits:  ' + _perfCounters.rotationCacheHits);
         console.log('  Rotation cache misses:' + _perfCounters.rotationCacheMisses);
-        console.log('  Time index queries:   ' + _perfCounters.timeIndexQueries);
-        console.log('  Domain pruned:        ' + _perfCounters.domainPruned);
-        console.log('  Aug path attempts:    ' + _perfCounters.augmentingPathAttempts);
-        console.log('  Aug path successes:   ' + _perfCounters.augmentingPathSuccesses);
+        console.log('  Time index queries:    ' + _perfCounters.timeIndexQueries);
+        console.log('  Domain pruned:         ' + _perfCounters.domainPruned);
+        console.log('  Aug path attempts:     ' + _perfCounters.augmentingPathAttempts);
+        console.log('  Aug path successes:    ' + _perfCounters.augmentingPathSuccesses);
     };
 
     Solver.debugDomains = function(blockIdx) {
