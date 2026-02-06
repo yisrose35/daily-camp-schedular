@@ -551,69 +551,187 @@ function buildLeagueCellHtml(eventBlock, bunks, divName) {
         return '<strong>' + escHtml(eventBlock.event) + '</strong>';
     }
 
-    // ── Collect matchups ──
-    var matchups = [];
+    // ── Collect matchups from multiple sources ──
+    var matchups = []; // array of display strings
 
-    if (slotIndex >= 0) {
-        // 1) Check for pre-built _allMatchups on any entry
-        for (var i = 0; i < bunks.length; i++) {
-            var ent = getEntry(bunks[i], slotIndex);
-            if (ent && ent._allMatchups && ent._allMatchups.length) {
-                matchups = ent._allMatchups.slice();
-                break;
-            }
-        }
-
-        // 2) Check for _matchup strings
-        if (!matchups.length) {
-            var seenMatchup = {};
-            for (var m = 0; m < bunks.length; m++) {
-                var em = getEntry(bunks[m], slotIndex);
-                if (em && em._matchup && !seenMatchup[em._matchup]) {
-                    seenMatchup[em._matchup] = true;
-                    matchups.push(em._matchup);
+    // ── First, find the ACTUAL slot index in scheduleAssignments for this time ──
+    // findFirstSlotForTime uses divisionTimes which may use different indices than scheduleAssignments
+    var actualSlotIdx = slotIndex; // Start with divisionTimes-based index
+    // Also search scheduleAssignments directly for an _h2h entry near this time
+    if (bunks.length > 0) {
+        var aa = window.scheduleAssignments || (window.loadCurrentDailyData ? window.loadCurrentDailyData() : {}).scheduleAssignments || {};
+        var bunkSched = aa[bunks[0]];
+        if (bunkSched && Array.isArray(bunkSched)) {
+            // Scan all slots for _h2h entries
+            for (var si = 0; si < bunkSched.length; si++) {
+                var e = bunkSched[si];
+                if (e && e._h2h) {
+                    // This is a league entry — check if it's close to our slotIndex
+                    if (actualSlotIdx < 0 || Math.abs(si - actualSlotIdx) <= 3) {
+                        actualSlotIdx = si;
+                        break;
+                    }
                 }
             }
         }
+    }
+    console.log('[PrintCenter] League lookup:', eventBlock.event, '@', divName, 'divTimesSlot=' + slotIndex, 'actualSlot=' + actualSlotIdx);
 
-        // 3) Reconstruct: group bunks by field, pair within each field
-        if (!matchups.length) {
-            var fieldGroups = {}; // key: "field|sport" → [bunk1, bunk2, ...]
-            for (var j = 0; j < bunks.length; j++) {
-                var entry = getEntry(bunks[j], slotIndex);
-                if (!entry) continue;
-                if (!entry._h2h) continue;
-                var fieldName = '';
-                if (typeof entry.field === 'string') fieldName = entry.field;
-                else if (entry.field && entry.field.name) fieldName = entry.field.name;
-                var sport = entry.sport || '';
-                var key = fieldName + '||' + sport;
-                if (!fieldGroups[key]) fieldGroups[key] = { field: fieldName, sport: sport, bunks: [] };
-                fieldGroups[key].bunks.push(bunks[j]);
+    // ── SOURCE 1: window.leagueAssignments ──
+    var la = window.leagueAssignments;
+    if (la && !matchups.length) {
+        // Find the right division key (handle case differences)
+        var divKey = null;
+        if (la[divName]) { divKey = divName; }
+        else {
+            for (var dk in la) {
+                if (dk.toLowerCase() === divName.toLowerCase()) { divKey = dk; break; }
             }
+        }
+        if (divKey && la[divKey]) {
+            var bestSlotData = null;
+            // Try using actualSlotIdx first, then slotIndex, then nearby offsets
+            var tryIndices = [actualSlotIdx, slotIndex];
+            for (var off = 1; off <= 8; off++) {
+                tryIndices.push(actualSlotIdx + off, actualSlotIdx - off);
+                if (slotIndex !== actualSlotIdx) tryIndices.push(slotIndex + off, slotIndex - off);
+            }
+            for (var ti = 0; ti < tryIndices.length; ti++) {
+                if (tryIndices[ti] >= 0 && la[divKey][tryIndices[ti]]) {
+                    bestSlotData = la[divKey][tryIndices[ti]];
+                    console.log('[PrintCenter] SOURCE 1: found at slot key', tryIndices[ti]);
+                    break;
+                }
+            }
+            // Ultimate fallback: try ALL keys
+            if (!bestSlotData) {
+                var allKeys = Object.keys(la[divKey]);
+                console.log('[PrintCenter] SOURCE 1: scanning all', allKeys.length, 'keys:', allKeys);
+                for (var ki = 0; ki < allKeys.length; ki++) {
+                    var sd = la[divKey][allKeys[ki]];
+                    if (sd && sd.matchups && sd.matchups.length > 0) {
+                        bestSlotData = sd;
+                        console.log('[PrintCenter] SOURCE 1: using first available slot key', allKeys[ki]);
+                        break;
+                    }
+                }
+            }
+            if (bestSlotData && bestSlotData.matchups && bestSlotData.matchups.length > 0) {
+                bestSlotData.matchups.forEach(function(m) {
+                    var desc = '';
+                    var tA = m.teamA || m.team1 || '';
+                    var tB = m.teamB || m.team2 || '';
+                    if (m.display) { desc = m.display; }
+                    else if (tA && tB) {
+                        desc = tA + ' vs ' + tB;
+                        if (m.sport) desc += ' \u2013 ' + m.sport;
+                        if (m.field) desc += ' @ ' + m.field;
+                    } else if (m.matchup) { desc = m.matchup; }
+                    if (desc) matchups.push(desc);
+                });
+                console.log('[PrintCenter] SOURCE 1 (leagueAssignments) found', matchups.length, 'matchups for', divName);
+            }
+        }
+    }
 
-            for (var gk in fieldGroups) {
-                var grp = fieldGroups[gk];
-                var gb = grp.bunks;
-                // Pair bunks: 0 vs 1, 2 vs 3, etc.
-                for (var p = 0; p < gb.length; p += 2) {
-                    var t1 = gb[p];
-                    var t2 = (p + 1 < gb.length) ? gb[p + 1] : null;
-                    var desc = t1 + (t2 ? ' vs ' + t2 : '');
-                    if (grp.sport) desc += ' \u2013 ' + grp.sport;
-                    if (grp.field) desc += ' @ ' + grp.field;
-                    matchups.push(desc);
+    // ── SOURCE 2: _allMatchups on bunk entries (specialty leagues fill these) ──
+    if (!matchups.length) {
+        var trySlots2 = [actualSlotIdx, slotIndex].filter(function(s) { return s >= 0; });
+        for (var ts2 = 0; ts2 < trySlots2.length && !matchups.length; ts2++) {
+            for (var i = 0; i < bunks.length; i++) {
+                var ent = getEntry(bunks[i], trySlots2[ts2]);
+                if (ent && ent._allMatchups && ent._allMatchups.length) {
+                    matchups = ent._allMatchups.slice();
+                    console.log('[PrintCenter] SOURCE 2 (_allMatchups) found', matchups.length, 'matchups from', bunks[i], 'at slot', trySlots2[ts2]);
+                    break;
                 }
             }
         }
     }
 
-    console.log('[PrintCenter] League matchups for', eventBlock.event, 'slot=' + slotIndex, 'bunks=' + bunks.length, 'matchups=' + matchups.length, matchups);
+    // ── SOURCE 3: _assignments array on entries (specialty leagues) ──
+    if (!matchups.length) {
+        var trySlots3 = [actualSlotIdx, slotIndex].filter(function(s) { return s >= 0; });
+        for (var ts3 = 0; ts3 < trySlots3.length && !matchups.length; ts3++) {
+            for (var a2 = 0; a2 < bunks.length; a2++) {
+                var ea = getEntry(bunks[a2], trySlots3[ts3]);
+                if (ea && ea._assignments && ea._assignments.length) {
+                    ea._assignments.forEach(function(asg) {
+                        var tA2 = asg.teamA || asg.team1 || '';
+                        var tB2 = asg.teamB || asg.team2 || '';
+                        if (tA2 && tB2) {
+                            var d2 = tA2 + ' vs ' + tB2;
+                            if (asg.field) d2 += ' @ ' + asg.field;
+                            matchups.push(d2);
+                        }
+                    });
+                    if (matchups.length) console.log('[PrintCenter] SOURCE 3 (_assignments) found', matchups.length, 'matchups at slot', trySlots3[ts3]);
+                    break;
+                }
+            }
+        }
+    }
 
-    // Also log first few entries for debugging
-    if (slotIndex >= 0 && matchups.length === 0) {
-        var sample = getEntry(bunks[0], slotIndex);
-        console.log('[PrintCenter]   First bunk entry:', bunks[0], sample ? JSON.stringify({_h2h:sample._h2h, sport:sample.sport, field:sample.field, _matchup:sample._matchup, _allMatchups:sample._allMatchups}) : 'null');
+    // ── SOURCE 4: Reconstruct by pairing bunks sharing the same field at this slot ──
+    if (!matchups.length && slotIndex >= 0) {
+        var fieldGroups = {};
+        for (var j = 0; j < bunks.length; j++) {
+            var entry = getEntry(bunks[j], slotIndex);
+            if (!entry) continue;
+            // Accept any entry at a league slot (not just _h2h)
+            var fieldName = '';
+            if (typeof entry.field === 'string') fieldName = entry.field;
+            else if (entry.field && entry.field.name) fieldName = entry.field.name;
+            // Skip generic "League:" prefix fields for grouping — use sport instead
+            var sport = entry.sport || '';
+            var groupKey = fieldName + '||' + sport;
+            if (!fieldGroups[groupKey]) fieldGroups[groupKey] = { field: fieldName, sport: sport, bunks: [] };
+            fieldGroups[groupKey].bunks.push(bunks[j]);
+        }
+        for (var gk in fieldGroups) {
+            var grp = fieldGroups[gk];
+            var gb = grp.bunks;
+            if (gb.length < 2) continue; // Need at least a pair
+            for (var p = 0; p < gb.length; p += 2) {
+                if (p + 1 >= gb.length) break;
+                var desc2 = gb[p] + ' vs ' + gb[p + 1];
+                if (grp.sport && grp.sport.indexOf('Game') < 0) desc2 += ' \u2013 ' + grp.sport;
+                if (grp.field && grp.field.indexOf('League') < 0) desc2 += ' @ ' + grp.field;
+                matchups.push(desc2);
+            }
+        }
+        if (matchups.length) console.log('[PrintCenter] SOURCE 4 (field pairing) found', matchups.length, 'matchups');
+    }
+
+    // ── SOURCE 5: window.lastLeagueMatchups fallback ──
+    if (!matchups.length) {
+        var llm = window.lastLeagueMatchups;
+        if (llm && llm[divName]) {
+            var lld = llm[divName];
+            if (lld.matchups) {
+                lld.matchups.forEach(function(m5) {
+                    var d5 = m5.display || (m5.teamA + ' vs ' + m5.teamB) || '';
+                    if (d5) matchups.push(d5);
+                });
+                if (matchups.length) console.log('[PrintCenter] SOURCE 5 (lastLeagueMatchups) found', matchups.length, 'matchups');
+            }
+        }
+    }
+
+    // ── Debug logging if still nothing found ──
+    if (!matchups.length) {
+        console.log('[PrintCenter] ⚠️ No matchups found for', eventBlock.event, '@', divName, 'slot=' + slotIndex);
+        if (slotIndex >= 0 && bunks.length > 0) {
+            var sampleEntry = getEntry(bunks[0], slotIndex);
+            console.log('[PrintCenter]   Sample entry for', bunks[0], ':', sampleEntry ? JSON.stringify({
+                _h2h: sampleEntry._h2h, sport: sampleEntry.sport, field: sampleEntry.field,
+                _matchup: sampleEntry._matchup, _allMatchups: sampleEntry._allMatchups,
+                _assignments: sampleEntry._assignments ? 'array[' + sampleEntry._assignments.length + ']' : undefined,
+                _gameLabel: sampleEntry._gameLabel, _leagueName: sampleEntry._leagueName
+            }) : 'null');
+        }
+        console.log('[PrintCenter]   leagueAssignments keys:', la ? Object.keys(la) : 'none');
+        if (la && la[divName]) console.log('[PrintCenter]   leagueAssignments[' + divName + '] slots:', Object.keys(la[divName]));
     }
 
     var html = '<strong>' + escHtml(eventBlock.event) + '</strong>';
@@ -736,23 +854,30 @@ function generateCombinedHTML(selectedDivisions) {
     });
     if (!divData.length) return "";
 
-    var html = '<div class="pc-print-page" style="position:relative; page-break-after:' + (t.showPageBreaks?'always':'auto') + '; margin-bottom:20px; overflow:visible;">';
-    html += buildWatermark() + buildStyledHeader('All Divisions');
+    // ── Calculate total width so header spans everything ──
+    var COL_W = 110; // px per bunk column
+    var TIME_W = t.timeColWidth + 20;
+    var totalW = 0;
+    divData.forEach(function(dd, di) {
+        totalW += TIME_W + (dd.bunks.length * COL_W);
+        if (di > 0) totalW += 3; // border width between divisions
+    });
 
-    // Each division is a separate table, side by side. Let them take natural width.
-    // Outer container is inline-flex so it doesn't collapse, preview area scrolls.
-    var COL_W = 100; // estimated px per bunk column
-    var TIME_W = t.timeColWidth + 20; // time col + padding
+    var html = '<div class="pc-print-page" style="position:relative; page-break-after:' + (t.showPageBreaks?'always':'auto') + '; margin-bottom:20px; overflow:visible; min-width:' + totalW + 'px;">';
+    html += buildWatermark();
 
-    html += '<div style="display:inline-flex; align-items:stretch; gap:0;">';
+    // ── Header — wrapped to span full width ──
+    html += '<div style="min-width:' + totalW + 'px;">' + buildStyledHeader('All Divisions') + '</div>';
+
+    // ── Division tables side by side ──
+    html += '<div style="display:flex; align-items:stretch; gap:0; min-width:' + totalW + 'px;">';
 
     divData.forEach(function(dd, di) {
         var bunks = dd.bunks, blocks = dd.blocks;
         var borderLeft = di > 0 ? 'border-left:3px solid ' + t.gridBorderColor + ';' : '';
-        // Width: time column + bunk columns
-        var tableW = TIME_W + (bunks.length * COL_W);
+        var divW = TIME_W + (bunks.length * COL_W);
 
-        html += '<div style="width:' + tableW + 'px; flex-shrink:0;' + borderLeft + '">';
+        html += '<div style="width:' + divW + 'px; flex-shrink:0;' + borderLeft + '">';
 
         if (t.tableOrientation === 'time-top') {
             // Transposed: bunk names down left, time across top
