@@ -1651,6 +1651,23 @@ function addDropListeners(gridEl) {
           return { valid: false, minutes: null, isNight: false };
         }
         
+        // ★ EARLY/LATE TILE GUARD — flag tiles before 8am or after 8pm
+        // Exception: if the division's own times cover that range, no flag needed
+        const EARLY_GUARD = 480;  // 8:00 AM
+        const LATE_GUARD = 1200;  // 8:00 PM
+        if (timeMin < EARLY_GUARD && !(divStartMin !== null && divStartMin < EARLY_GUARD)) {
+          const ok = confirm(
+            `⚠️ Early Time Warning\n\n"${timeStr}" is before 8:00 AM.\n\nJust confirming — is this tile correct?\n\nClick OK to proceed, Cancel to re-enter.`
+          );
+          if (!ok) return { valid: false, minutes: null, isNight: false };
+        }
+        if (timeMin >= LATE_GUARD && !(divEndMin !== null && divEndMin >= LATE_GUARD)) {
+          const ok = confirm(
+            `⚠️ Late Time Warning\n\n"${timeStr}" is after 8:00 PM.\n\nJust confirming — is this tile correct?\n\nClick OK to proceed, Cancel to re-enter.`
+          );
+          if (!ok) return { valid: false, minutes: null, isNight: false };
+        }
+        
         if (divStartMin !== null && timeMin < divStartMin) {
           alert("Error: " + timeStr + " is before this division's start time of " + div.startTime + ".");
           return { valid: false, minutes: null, isNight: false };
