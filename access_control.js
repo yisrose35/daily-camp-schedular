@@ -631,7 +631,23 @@
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         return _editableDivisions.length > 0;
     }
+// =========================================================================
+    // PRINT TEMPLATE PERMISSIONS (v3.0 Print Center)
+    // =========================================================================
 
+    function canEditPrintTemplates() {
+        if (!_initialized) return false;
+        return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN;
+    }
+
+    function canDeletePrintTemplates() {
+        if (!_initialized) return false;
+        return _currentRole === ROLES.OWNER;
+    }
+
+    function canPrintSchedules() {
+        return true;
+    }
     // =========================================================================
     // EXCEPTION AREAS - Accessible to ALL including viewers
     // =========================================================================
