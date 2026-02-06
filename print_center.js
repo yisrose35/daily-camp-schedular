@@ -586,8 +586,12 @@ function buildLeagueCellHtml(eventBlock, bunks, divName) {
         if (bestEntry && bestEntry.matchups) {
             bestEntry.matchups.forEach(function(m) {
                 var desc = '';
-                if (m.display) desc = m.display;
-                else {
+                // Regular leagues store matchups as plain strings
+                if (typeof m === 'string') {
+                    desc = m;
+                } else if (m.display) {
+                    desc = m.display;
+                } else {
                     var tA = m.teamA || m.team1 || '', tB = m.teamB || m.team2 || '';
                     if (tA && tB) {
                         desc = tA + ' vs ' + tB;
@@ -608,7 +612,9 @@ function buildLeagueCellHtml(eventBlock, bunks, divName) {
         var llm = window.lastLeagueMatchups;
         if (llm && llm[divName] && llm[divName].matchups) {
             llm[divName].matchups.forEach(function(m5) {
-                var d5 = m5.display || ((m5.teamA || '') + ' vs ' + (m5.teamB || ''));
+                var d5 = '';
+                if (typeof m5 === 'string') d5 = m5;
+                else d5 = m5.display || ((m5.teamA || '') + ' vs ' + (m5.teamB || ''));
                 if (d5) matchups.push(d5);
             });
             if (matchups.length) console.log('[PrintCenter] lastLeagueMatchups found', matchups.length, 'matchups for', divName);
