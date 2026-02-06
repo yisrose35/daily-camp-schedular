@@ -1,5 +1,5 @@
 // ============================================================================
-// rbac_visual_restrictions.js — Visual Editing Restrictions v2.0
+// rbac_visual_restrictions.js — Visual Editing Restrictions v2.1
 // ============================================================================
 // Adds visual indicators and blocks editing for divisions user can't access
 // 
@@ -11,14 +11,19 @@
 //
 // EXCEPTIONS (always accessible):
 // - Daily Schedule View (view for all)
-// - Print Center (full for all)
+// - Print Center (full for all — but design panel Owner/Admin only)
 // - Camper Locator (full for all)
+//
+// v2.1 CHANGES:
+// - ★ NEW: applyPrintCenterRestrictions() — hides design panel + save
+//          buttons for Scheduler/Viewer roles
+// - ★ NEW: Print tab triggers restrictions on tab switch via observer
 // ============================================================================
 
 (function() {
     'use strict';
 
-    console.log("🚫 Visual Restrictions v2.0 loading...");
+    console.log("🚫 Visual Restrictions v2.1 loading...");
 
     // =========================================================================
     // STATE
@@ -74,7 +79,7 @@
         // Set up mutation observer to handle dynamic content
         setupObserver();
 
-        console.log("🚫 Visual Restrictions initialized:", {
+        console.log("🚫 Visual Restrictions v2.1 initialized:", {
             role: _currentRole,
             editableDivisions: _editableDivisions
         });
@@ -102,6 +107,9 @@
         applyToDailyAdjustments();
         applyToMasterScheduler();
         
+        // ★ v2.1: Apply print center restrictions if that tab is visible
+        applyPrintCenterRestrictions();
+        
         // Show access banner
         window.AccessControl?.renderAccessBanner();
     }
@@ -123,6 +131,96 @@
 
     function isSchedulerWithLimitedAccess() {
         return _currentRole === 'scheduler' && _editableDivisions.length > 0;
+    }
+
+    // ★ v2.1: Check if user can edit print templates
+    function canEditPrintTemplates() {
+        return _currentRole === 'owner' || _currentRole === 'admin';
+    }
+
+    // =========================================================================
+    // ★ v2.1: APPLY TO PRINT CENTER
+    // =========================================================================
+    // Controls who sees the design panel, template save/update/delete buttons.
+    // ALL roles can still preview, print, and export — but only Owner/Admin
+    // can modify the visual design and save templates.
+    // =========================================================================
+
+    function applyPrintCenterRestrictions() {
+        const printTab = document.getElementById('print');
+        if (!printTab) return;
+
+        // Only apply if print tab has content (Print Center has been initialized)
+        const pcContainer = printTab.querySelector('.pc-container');
+        if (!pcContainer) return;
+
+        const canDesign = canEditPrintTemplates();
+
+        console.log(`🚫 Print Center restrictions: role=${_currentRole}, canDesign=${canDesign}`);
+
+        // 1. Design panel toggle button in topbar
+        const designToggleBtn = pcContainer.querySelector('[onclick*="_pcToggleDesignPanel"]');
+        if (designToggleBtn) {
+            designToggleBtn.style.display = canDesign ? '' : 'none';
+        }
+
+        // 2. Design panel itself — hide entirely for non-editors
+        const designPanel = document.getElementById('pc-design-panel');
+        if (designPanel) {
+            if (!canDesign) {
+                designPanel.classList.remove('open');
+                designPanel.style.display = 'none';
+            } else {
+                designPanel.style.display = '';
+                // Don't force open — respect user's toggle preference
+            }
+        }
+
+        // 3. Template save/update/delete buttons (inside design panel)
+        const saveAsBtn = pcContainer.querySelector('[onclick*="_pcSaveAsTemplate"]');
+        const updateBtn = document.getElementById('pc-btn-update-tpl');
+        const deleteBtn = document.getElementById('pc-btn-delete-tpl');
+        const resetBtn = pcContainer.querySelector('[onclick*="_pcResetToDefault"]');
+
+        if (saveAsBtn) saveAsBtn.style.display = canDesign ? '' : 'none';
+        if (updateBtn) updateBtn.style.display = canDesign ? updateBtn.style.display : 'none';
+        if (deleteBtn) deleteBtn.style.display = canDesign ? deleteBtn.style.display : 'none';
+        if (resetBtn) resetBtn.style.display = canDesign ? '' : 'none';
+
+        // 4. For non-editors, add a subtle info banner if not already present
+        if (!canDesign && !pcContainer.querySelector('.pc-rbac-info-banner')) {
+            const banner = document.createElement('div');
+            banner.className = 'pc-rbac-info-banner';
+            banner.style.cssText = `
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                padding: 10px 16px;
+                background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+                border: 1px solid #3B82F6;
+                border-radius: 8px;
+                margin-bottom: 12px;
+                font-size: 0.85rem;
+                color: #1E40AF;
+            `;
+            banner.innerHTML = `
+                <span style="font-size: 1.1rem;">🎨</span>
+                <div>
+                    <strong>Template design is managed by your camp owner.</strong>
+                    <span style="opacity: 0.85;"> You can preview, print, and export using existing templates.</span>
+                </div>
+            `;
+            // Insert after topbar, before controls
+            const topbar = pcContainer.querySelector('.pc-topbar');
+            if (topbar && topbar.nextSibling) {
+                topbar.parentNode.insertBefore(banner, topbar.nextSibling);
+            }
+        }
+
+        // 5. If user IS an editor, remove the info banner if it exists
+        if (canDesign) {
+            pcContainer.querySelector('.pc-rbac-info-banner')?.remove();
+        }
     }
 
     // =========================================================================
@@ -227,7 +325,6 @@
     function applyToActionButtons() {
         // Viewer restrictions (most buttons disabled)
         if (_currentRole === 'viewer') {
-            // Disable generate button
             const generateBtns = document.querySelectorAll('#generate-btn, [data-action="generate"], .generate-button');
             generateBtns.forEach(btn => {
                 btn.disabled = true;
@@ -235,7 +332,6 @@
                 btn.title = 'Viewers cannot generate schedules';
             });
             
-            // Disable clear button
             const clearBtns = document.querySelectorAll('#clear-btn, [data-action="clear"]');
             clearBtns.forEach(btn => {
                 btn.disabled = true;
@@ -243,7 +339,6 @@
                 btn.title = 'Viewers cannot clear schedules';
             });
             
-            // Disable erase buttons
             const eraseBtns = document.querySelectorAll('#eraseTodayBtn, #eraseAllSchedulesBtn, #eraseHistoryBtn, #eraseAllBtn');
             eraseBtns.forEach(btn => {
                 btn.disabled = true;
@@ -251,7 +346,6 @@
                 btn.title = 'Viewers cannot erase data';
             });
             
-            // Disable add buttons
             const addBtns = document.querySelectorAll('#addDivisionBtn, #addBunkBtn, .add-btn');
             addBtns.forEach(btn => {
                 btn.disabled = true;
@@ -261,9 +355,8 @@
             return;
         }
         
-        // Admin restrictions (only team management disabled)
+        // Admin restrictions
         if (_currentRole === 'admin') {
-            // Erase all camp data - owner only
             const eraseAllBtn = document.getElementById('eraseAllBtn');
             if (eraseAllBtn) {
                 eraseAllBtn.disabled = true;
@@ -273,9 +366,8 @@
             return;
         }
         
-        // Scheduler restrictions (only their divisions)
+        // Scheduler restrictions
         if (_currentRole === 'scheduler') {
-            // If scheduler has no divisions assigned
             if (_editableDivisions.length === 0) {
                 const generateBtns = document.querySelectorAll('#generate-btn, [data-action="generate"]');
                 generateBtns.forEach(btn => {
@@ -285,7 +377,6 @@
                 });
             }
             
-            // Disable camp-wide data erasure
             const eraseAllBtns = document.querySelectorAll('#eraseAllSchedulesBtn, #eraseHistoryBtn, #eraseAllBtn');
             eraseAllBtns.forEach(btn => {
                 btn.disabled = true;
@@ -303,7 +394,6 @@
         const setupPanel = document.getElementById('setup');
         if (!setupPanel) return;
 
-        // For viewers - disable all setup
         if (_currentRole === 'viewer') {
             setupPanel.querySelectorAll('input, button, select').forEach(el => {
                 if (!el.closest('.rbac-always-enabled')) {
@@ -314,13 +404,10 @@
             return;
         }
 
-        // For schedulers - only enable their divisions
         if (_currentRole === 'scheduler') {
-            // Division input - can add to their own (but admin approval needed)
             const divisionInput = document.getElementById('divisionInput');
             const addDivisionBtn = document.getElementById('addDivisionBtn');
             
-            // Schedulers can't add new divisions
             if (divisionInput) {
                 divisionInput.disabled = true;
                 divisionInput.placeholder = 'Contact owner to add divisions';
@@ -340,14 +427,12 @@
         const fieldsTab = document.getElementById('fields');
         if (!fieldsTab) return;
 
-        // Viewers can't edit fields
         if (_currentRole === 'viewer') {
             fieldsTab.querySelectorAll('input, button, select').forEach(el => {
                 el.disabled = true;
                 el.classList.add('rbac-input-disabled');
             });
             
-            // Add view-only banner
             if (!fieldsTab.querySelector('.rbac-tab-banner')) {
                 const banner = createTabBanner('View Only', 'You can view field settings but cannot make changes.');
                 fieldsTab.insertBefore(banner, fieldsTab.firstChild);
@@ -355,11 +440,7 @@
             return;
         }
 
-        // Schedulers - limited field editing
         if (_currentRole === 'scheduler') {
-            // Can add/remove their divisions from field availability
-            // But can't create/delete fields or change global settings
-            
             const addFieldBtns = fieldsTab.querySelectorAll('[data-action="add-field"], .add-field-btn');
             addFieldBtns.forEach(btn => {
                 btn.disabled = true;
@@ -372,7 +453,6 @@
                 btn.title = 'Only owner/admin can delete fields';
             });
             
-            // Add info banner
             if (!fieldsTab.querySelector('.rbac-tab-banner')) {
                 const banner = createTabBanner(
                     'Limited Access', 
@@ -393,7 +473,6 @@
         const dailyTab = document.getElementById('daily-adjustments');
         if (!dailyTab) return;
 
-        // Viewers can't edit
         if (_currentRole === 'viewer') {
             dailyTab.querySelectorAll('input, button, select, .editable').forEach(el => {
                 el.disabled = true;
@@ -407,9 +486,7 @@
             return;
         }
 
-        // Schedulers - only their divisions
         if (_currentRole === 'scheduler') {
-            // Mark non-editable division rows
             dailyTab.querySelectorAll('[data-division], .division-row, .division-section').forEach(row => {
                 const divName = row.dataset.division || row.querySelector('.division-name')?.textContent?.trim();
                 if (divName && !canEditDivision(divName)) {
@@ -430,7 +507,6 @@
         const masterTab = document.getElementById('master-scheduler');
         if (!masterTab) return;
 
-        // Viewers can't edit
         if (_currentRole === 'viewer') {
             masterTab.querySelectorAll('input, button, select').forEach(el => {
                 if (!el.closest('.rbac-always-enabled')) {
@@ -441,7 +517,6 @@
             return;
         }
 
-        // Schedulers - division-specific restrictions
         if (_currentRole === 'scheduler') {
             masterTab.querySelectorAll('[data-division], .division-column, .division-section').forEach(section => {
                 const divName = section.dataset.division || section.querySelector('.division-header')?.textContent?.trim();
@@ -535,11 +610,13 @@
 
         _observer = new MutationObserver((mutations) => {
             let shouldReapply = false;
+            let printTabChanged = false;
             
             for (const mutation of mutations) {
                 if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
                     for (const node of mutation.addedNodes) {
                         if (node.nodeType === 1) {
+                            // Standard division/schedule content
                             if (node.matches?.('[data-division], .division-card, .schedule-cell, .activity-block, .bunk-row')) {
                                 shouldReapply = true;
                                 break;
@@ -548,23 +625,45 @@
                                 shouldReapply = true;
                                 break;
                             }
+                            // ★ v2.1: Detect print center content being added
+                            if (node.matches?.('.pc-container') || node.querySelector?.('.pc-container')) {
+                                printTabChanged = true;
+                                shouldReapply = true;
+                                break;
+                            }
                         }
                     }
                 }
+                
+                // ★ v2.1: Also watch for class changes (tab switching adds .active)
+                if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+                    const target = mutation.target;
+                    if (target.id === 'print' && target.classList.contains('active')) {
+                        printTabChanged = true;
+                        shouldReapply = true;
+                    }
+                }
+                
                 if (shouldReapply) break;
             }
             
             if (shouldReapply) {
                 clearTimeout(_observer._debounceTimer);
                 _observer._debounceTimer = setTimeout(() => {
-                    applyRestrictions();
+                    if (printTabChanged) {
+                        applyPrintCenterRestrictions();
+                    } else {
+                        applyRestrictions();
+                    }
                 }, 100);
             }
         });
 
         _observer.observe(document.body, {
             childList: true,
-            subtree: true
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['class']
         });
     }
 
@@ -816,6 +915,8 @@
         refresh,
         applyRestrictions,
         canEditDivision,
+        canEditPrintTemplates,           // ★ v2.1
+        applyPrintCenterRestrictions,    // ★ v2.1
         isElementEditable,
         guardedAction,
         showAccessDeniedToast,
@@ -837,6 +938,6 @@
         setupEditInterceptors();
     }
 
-    console.log("🚫 Visual Restrictions v2.0 loaded");
+    console.log("🚫 Visual Restrictions v2.1 loaded");
 
 })();
