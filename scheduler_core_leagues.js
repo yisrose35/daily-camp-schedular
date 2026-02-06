@@ -640,8 +640,13 @@ for (const futureDate of Object.keys(allDailyData)) {
         schedulableSlotBlocks
             .filter(b => b.type === 'league' || /league/i.test(b.event))
             .filter(b => !b.processed) // Skip already processed blocks
-            .forEach(block => {
-                const key = block.startTime;
+           .forEach(block => {
+                // ★★★ FIX: Normalize time key to minutes for consistent cross-division grouping ★★★
+                // Different divisions may store startTime as string vs number or with formatting differences
+                const Utils = window.SchedulerCoreUtils;
+                const rawTime = block.startTime;
+                const key = (typeof rawTime === 'number') ? rawTime :
+                    (Utils?.parseTimeToMinutes?.(rawTime) ?? String(rawTime).trim());
                 if (!blocksByTime[key]) {
                     blocksByTime[key] = { byDivision: {}, allBlocks: [] };
                 }
