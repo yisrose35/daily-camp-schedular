@@ -1899,6 +1899,52 @@ if (!blockDivName && bunk) {
         console.log('[SOLVER]    Time index queries: ' + _perfCounters.timeIndexQueries + ', domain pruned: ' + _perfCounters.domainPruned);
         console.log('[SOLVER] ══════════════════════════════════════════\n');
 
+       // ═══ STEP 10: Cross-Division Safety Sweep ★★★ v12.1 BACKSTOP ★★★ ═══
+        var crossDivFixes = 0;
+        var fieldTimeUsage = new Map();
+        for (var sbi = 0; sbi < activityBlocks.length; sbi++) {
+            var sBlock = activityBlocks[sbi];
+            var sAssign = _assignments.get(sbi);
+            if (!sAssign || !sBlock.divName) continue;
+            var sFieldNorm = normName(sAssign.pick.field);
+            if (sFieldNorm === 'free') continue;
+            var sStart = sBlock.startTime;
+            var sEnd = sBlock.endTime;
+            if (sStart === undefined || sEnd === undefined) continue;
+            var sKey = sFieldNorm + ':' + sStart + '-' + sEnd;
+            if (!fieldTimeUsage.has(sKey)) fieldTimeUsage.set(sKey, []);
+            fieldTimeUsage.get(sKey).push({ bi: sbi, div: sBlock.divName, bunk: sBlock.bunk });
+        }
+        for (var [ftKey, ftUsers] of fieldTimeUsage) {
+            if (ftUsers.length < 2) continue;
+            var ftDivs = new Set(ftUsers.map(function(u) { return u.div; }));
+            if (ftDivs.size <= 1) continue;
+            var ftFieldName = ftKey.split(':')[0];
+            var ftSharingType = getSharingType(ftFieldName);
+            if (ftSharingType === 'all') continue;
+            if (ftSharingType === 'same_division' || ftSharingType === 'not_sharable' || ftSharingType === 'custom') {
+                var keepDiv = ftUsers[0].div;
+                for (var fti = 1; fti < ftUsers.length; fti++) {
+                    if (ftUsers[fti].div !== keepDiv) {
+                        var violator = ftUsers[fti];
+                        var vBlock = activityBlocks[violator.bi];
+                        undoPickFromSchedule(vBlock, _assignments.get(violator.bi).pick);
+                        _assignments.set(violator.bi, {
+                            candIdx: -1,
+                            pick: { field: "Free", sport: null, _activity: "Free" },
+                            cost: 100000
+                        });
+                        applyPickToSchedule(vBlock, _assignments.get(violator.bi).pick);
+                        console.warn('[SOLVER] ⚠️ CROSS-DIV FIX: Removed ' + ftFieldName + ' from ' + violator.bunk + ' (Div ' + violator.div + ') — conflicts with Div ' + keepDiv);
+                        crossDivFixes++;
+                    }
+                }
+            }
+        }
+        if (crossDivFixes > 0) {
+            console.warn('[SOLVER] ★★★ Fixed ' + crossDivFixes + ' cross-division violations ★★★');
+        }
+
         // ═══ FORMAT OUTPUT ═══
         var results = [];
         for (var idx = 0; idx < activityBlocks.length; idx++) {
