@@ -199,8 +199,14 @@
                         if (!leagueData) continue;
                         if (leagueData.leagueName !== leagueName) continue;
                         
-                        // Only process each slot once (same game appears in multiple divisions)
-                        const slotKey = `${slotIdx}`;
+                       // ★★★ FIX: Deduplicate by actual time, not slot index ★★★
+                        // Different divisions can have different slot indices for the same time
+                        const divTimes = window.divisionTimes?.[divName] || [];
+                        const slotTimeObj = divTimes[parseInt(slotIdx)];
+                        const timeKey = slotTimeObj?.startTime || slotTimeObj?.start || `fallback_${slotIdx}`;
+                        const Utils = window.SchedulerCoreUtils;
+                        const normalizedTimeKey = Utils?.parseTimeToMinutes?.(timeKey) ?? timeKey;
+                        const slotKey = `time_${normalizedTimeKey}`;
                         if (processedSlots.has(slotKey)) continue;
                         processedSlots.add(slotKey);
                         
