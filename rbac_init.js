@@ -1,8 +1,12 @@
 // ============================================================================
-// rbac_init.js — Master RBAC Initialization v1.1 (EVENT FIX)
+// rbac_init.js — Master RBAC Initialization v1.2 (SECURITY PATCH)
 // ============================================================================
 // Initializes all RBAC modules in the correct order and handles dependencies
 // 
+// v1.2 SECURITY PATCHES:
+//   - V-001 FIX: Hide app shell during init to prevent flash of unauthorized content
+//   - V-004 FIX: Logic-gate destructive actions at handler level (not just CSS)
+//
 // v1.1 FIX: Added 'campistry-rbac-ready' event dispatch for cloud_storage_bridge
 //           Previously only dispatched 'rbac-system-ready' which cloud bridge
 //           doesn't listen for, causing schedule merge to never complete.
@@ -17,7 +21,7 @@
 (function() {
     'use strict';
 
-    console.log("🚀 RBAC Init v1.1 (EVENT FIX) starting...");
+    console.log("🚀 RBAC Init v1.2 (SECURITY PATCH) starting...");
 
     // =========================================================================
     // INITIALIZATION
@@ -25,6 +29,14 @@
 
     async function initializeRBAC() {
         console.log("🚀 Initializing RBAC system...");
+
+        // ★★★ V-001 FIX: Immediately hide app content until RBAC resolves ★★★
+        // Prevents flash of unauthorized content (owner-level UI visible to viewers)
+        const appContainer = document.getElementById('app-content') 
+                          || document.querySelector('.main-content')
+                          || document.body;
+        appContainer.style.visibility = 'hidden';
+        appContainer.style.pointerEvents = 'none';
 
         try {
             // Step 1: Wait for and initialize AccessControl
@@ -39,38 +51,42 @@
             // Step 4: Apply initial restrictions
             applyInitialRestrictions();
             
+            // Step 5: Logic-gate destructive action handlers
+            installDestructiveActionGuards();
+            
             console.log("🚀 RBAC system fully initialized");
+            
+            // Build event detail once
+            const eventDetail = {
+                role: window.AccessControl?.getCurrentRole(),
+                editableDivisions: window.AccessControl?.getEditableDivisions(),
+                isOwner: window.AccessControl?.isOwner(),
+                isAdmin: window.AccessControl?.isAdmin(),
+                isScheduler: window.AccessControl?.isScheduler?.(),
+                isViewer: window.AccessControl?.isViewer()
+            };
             
             // Dispatch ready event (original)
             window.dispatchEvent(new CustomEvent('rbac-system-ready', {
-                detail: {
-                    role: window.AccessControl?.getCurrentRole(),
-                    editableDivisions: window.AccessControl?.getEditableDivisions(),
-                    isOwner: window.AccessControl?.isOwner(),
-                    isAdmin: window.AccessControl?.isAdmin(),
-                    isScheduler: window.AccessControl?.isScheduler?.(),
-                    isViewer: window.AccessControl?.isViewer()
-                }
+                detail: eventDetail
             }));
             
             // ★★★ v1.1 FIX: Also dispatch campistry-rbac-ready ★★★
             // cloud_storage_bridge.js listens for this event to re-merge
             // with correct permissions after conservative initial merge
             window.dispatchEvent(new CustomEvent('campistry-rbac-ready', {
-                detail: {
-                    role: window.AccessControl?.getCurrentRole(),
-                    editableDivisions: window.AccessControl?.getEditableDivisions(),
-                    isOwner: window.AccessControl?.isOwner(),
-                    isAdmin: window.AccessControl?.isAdmin(),
-                    isScheduler: window.AccessControl?.isScheduler?.(),
-                    isViewer: window.AccessControl?.isViewer()
-                }
+                detail: eventDetail
             }));
             
             console.log("🚀 Dispatched both rbac-system-ready and campistry-rbac-ready events");
             
         } catch (error) {
             console.error("🚀 RBAC initialization error:", error);
+        } finally {
+            // ★★★ V-001 FIX: Reveal content after RBAC resolves ★★★
+            // Even on error — fallback role is viewer, which is safe
+            appContainer.style.visibility = '';
+            appContainer.style.pointerEvents = '';
         }
     }
 
@@ -213,6 +229,70 @@
     }
 
     // =========================================================================
+    // ★★★ V-004 FIX: LOGIC-GATE DESTRUCTIVE ACTIONS ★★★
+    // Buttons hidden via CSS can be re-enabled in DevTools.
+    // These capture-phase listeners re-verify permissions at execution time.
+    // =========================================================================
+
+    function installDestructiveActionGuards() {
+        console.log("🚀 Installing destructive action guards...");
+
+        // Guard: Erase All Camp Data (owner-only)
+        const eraseAllBtn = document.getElementById('eraseAllBtn');
+        if (eraseAllBtn) {
+            eraseAllBtn.addEventListener('click', (e) => {
+                if (!window.AccessControl?.canEraseAllCampData()) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    window.AccessControl?.showPermissionDenied('erase all camp data');
+                    console.warn('🛡️ Blocked: eraseAllBtn clicked without owner permission');
+                }
+            }, true); // capture phase — fires before existing handlers
+        }
+
+        // Guard: Erase Schedule Data (owner/admin)
+        const eraseDataBtn = document.getElementById('eraseDataBtn') || document.getElementById('clearScheduleBtn');
+        if (eraseDataBtn) {
+            eraseDataBtn.addEventListener('click', (e) => {
+                if (!window.AccessControl?.canEraseData()) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    window.AccessControl?.showPermissionDenied('erase schedule data');
+                    console.warn('🛡️ Blocked: eraseDataBtn clicked without permission');
+                }
+            }, true);
+        }
+
+        // Guard: Invite Users (owner-only)
+        const inviteBtn = document.getElementById('inviteUserBtn') || document.getElementById('inviteBtn');
+        if (inviteBtn) {
+            inviteBtn.addEventListener('click', (e) => {
+                if (!window.AccessControl?.canInviteUsers()) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    window.AccessControl?.showPermissionDenied('invite users');
+                    console.warn('🛡️ Blocked: inviteBtn clicked without owner permission');
+                }
+            }, true);
+        }
+
+        // Guard: Delete Camp Data (owner-only)
+        const deleteCampBtn = document.getElementById('deleteCampBtn') || document.getElementById('deleteCampDataBtn');
+        if (deleteCampBtn) {
+            deleteCampBtn.addEventListener('click', (e) => {
+                if (!window.AccessControl?.canDeleteCampData()) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    window.AccessControl?.showPermissionDenied('delete camp data');
+                    console.warn('🛡️ Blocked: deleteCampBtn clicked without owner permission');
+                }
+            }, true);
+        }
+
+        console.log("🚀 Destructive action guards installed");
+    }
+
+    // =========================================================================
     // TAB CHANGE HANDLER
     // =========================================================================
 
@@ -231,6 +311,8 @@
                     } else if (window.EditRestrictions?.refresh) {
                         window.EditRestrictions.refresh();
                     }
+                    // Re-install guards for newly rendered buttons
+                    installDestructiveActionGuards();
                 }, 100);
                 
                 return result;
@@ -277,12 +359,14 @@
     window.RBACInit = {
         initialize: initializeRBAC,
         applyRestrictions: applyInitialRestrictions,
+        installDestructiveActionGuards,
         refresh: () => {
             applyInitialRestrictions();
+            installDestructiveActionGuards();
             window.VisualRestrictions?.refresh?.();
         }
     };
 
-    console.log("🚀 RBAC Init v1.1 loaded");
+    console.log("🚀 RBAC Init v1.2 loaded");
 
 })();
