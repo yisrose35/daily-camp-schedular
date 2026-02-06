@@ -1387,14 +1387,36 @@ if (!blockDivName && bunk) {
                                     altExisting = getFieldUsageFromTimeIndex(altFieldNorm, holderBlock.startTime, holderBlock.endTime, holderBlock.bunk);
                                 }
 
-                                if (altExisting + altGroupUsage < altCapacity) {
+                               if (altExisting + altGroupUsage < altCapacity) {
+                                    // ★★★ v12.1: Cross-div check on augmenting path alt field ★★★
+                                    var altSharingType = getSharingType(altCand.field);
+                                    if (altSharingType === 'same_division' || altSharingType === 'not_sharable' || altSharingType === 'custom') {
+                                        var altCrossConflict = checkCrossDivisionTimeConflict(altCand.field, holderBlock.divName, holderBlock.startTime, holderBlock.endTime, holderBlock.bunk);
+                                        if (altCrossConflict) continue;
+                                        // Also check in-group for cross-div
+                                        var altGrpDivs = fieldDivsInGroup.get(altFieldNorm);
+                                        if (altGrpDivs && holderBlock.divName) {
+                                            var altCrossBad = false;
+                                            for (var agd of altGrpDivs) {
+                                                if (agd && agd !== holderBlock.divName) { altCrossBad = true; break; }
+                                            }
+                                            if (altCrossBad) continue;
+                                        }
+                                    }
                                     // Reassign holder to alternative
                                     fieldUsageInGroup.set(fieldNorm2, (fieldUsageInGroup.get(fieldNorm2) || 1) - 1);
+                                    var holderDiv = holderBlock.divName || '';
+                                    if ((fieldUsageInGroup.get(fieldNorm2) || 0) === 0) {
+                                        var oldSet = fieldDivsInGroup.get(fieldNorm2);
+                                        if (oldSet) oldSet.delete(holderDiv);
+                                    }
                                     results[currentHolder] = {
                                         blockIdx: holderBi, candIdx: altOpt.ci,
                                         pick: clonePick(altCand), cost: altOpt.cost
                                     };
                                     fieldUsageInGroup.set(altFieldNorm, altGroupUsage + 1);
+                                    if (!fieldDivsInGroup.has(altFieldNorm)) fieldDivsInGroup.set(altFieldNorm, new Set());
+                                    fieldDivsInGroup.get(altFieldNorm).add(holderDiv);
 
                                     // Now assign current block to freed field
                                     results.push({
@@ -1402,6 +1424,8 @@ if (!blockDivName && bunk) {
                                         pick: clonePick(cand2), cost: opt.cost
                                     });
                                     fieldUsageInGroup.set(fieldNorm2, (fieldUsageInGroup.get(fieldNorm2) || 0) + 1);
+                                    if (!fieldDivsInGroup.has(fieldNorm2)) fieldDivsInGroup.set(fieldNorm2, new Set());
+                                    fieldDivsInGroup.get(fieldNorm2).add(block2.divName || '');
                                     assigned = true;
                                     _perfCounters.augmentingPathSuccesses++;
                                     break;
