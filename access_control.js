@@ -922,10 +922,12 @@
             permissions.push({ icon: '✏️', text: `Edit ${_editableDivisions.length} division(s)` });
             permissions.push({ icon: '👁️', text: 'View all schedules' });
             permissions.push({ icon: '🖨️', text: 'Print and export' });
+            permissions.push({ icon: '🎨', text: 'View print templates (cannot save)' });
         } else if (_currentRole === ROLES.VIEWER) {
             permissions.push({ icon: '👁️', text: 'View all schedules' });
             permissions.push({ icon: '🖨️', text: 'Print Center access' });
             permissions.push({ icon: '🔍', text: 'Camper Locator access' });
+            permissions.push({ icon: '🖨️', text: 'Print schedules with saved templates' });
         }
         
         return permissions;
