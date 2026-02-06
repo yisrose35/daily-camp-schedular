@@ -107,10 +107,19 @@ function findFirstSlotForTime(startMin, divName) {
         times = window.unifiedTimes || [];
     }
     if (startMin === null || !times.length) return -1;
+    // Pass 1: exact match (within 2 minutes)
     for (var i = 0; i < times.length; i++) {
         var slot = times[i];
-        var slotStart = slot.startMin !== undefined ? slot.startMin : (new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes());
-        if (slotStart >= startMin && slotStart < startMin + INCREMENT_MINS) return i;
+        var slotStart = slot.startMin !== undefined ? slot.startMin : (typeof slot.start === 'string' ? parseTimeToMinutes(slot.start) : null);
+        if (slotStart === null && slot.start) { try { var d = new Date(slot.start); slotStart = d.getHours() * 60 + d.getMinutes(); } catch(e){} }
+        if (slotStart !== null && Math.abs(slotStart - startMin) <= 2) return i;
+    }
+    // Pass 2: within INCREMENT range
+    for (var j = 0; j < times.length; j++) {
+        var slot2 = times[j];
+        var slotStart2 = slot2.startMin !== undefined ? slot2.startMin : (typeof slot2.start === 'string' ? parseTimeToMinutes(slot2.start) : null);
+        if (slotStart2 === null && slot2.start) { try { var d2 = new Date(slot2.start); slotStart2 = d2.getHours() * 60 + d2.getMinutes(); } catch(e2){} }
+        if (slotStart2 !== null && slotStart2 >= startMin && slotStart2 < startMin + INCREMENT_MINS) return j;
     }
     return -1;
 }
@@ -472,13 +481,51 @@ function buildDivisionBlocks(divName) {
         }
     });
     sorted.sort(function(a,b){ return a.startMin - b.startMin; });
+
+    // Get division bunks for _h2h checking
+    var divs = getDivisions();
+    var divBunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).sort(naturalSort);
+
     var blocks = [], lc = 0, sc2 = 0;
     sorted.forEach(function(bl) {
-        var ev = bl.item.event;
-        if (ev === "League Game") { lc++; ev = "League Game " + lc; }
-        else if (ev === "Specialty League") { sc2++; ev = "Specialty League " + sc2; }
-        blocks.push({ label: minutesToTimeLabel(bl.startMin) + ' \u2013 ' + minutesToTimeLabel(bl.endMin), startMin: bl.startMin, endMin: bl.endMin, event: ev, type: bl.item.type, isLeague: bl.item.event === "League Game" || bl.item.event === "Specialty League" });
+        var ev = bl.item.event || '';
+        var itemType = (bl.item.type || '').toLowerCase();
+        var evLower = ev.toLowerCase();
+
+        // ── Detect league from skeleton event name, type field, OR assignment data ──
+        var isLeagueBlock = false;
+
+        // Check event name
+        if (ev === "League Game" || ev === "Specialty League" || evLower.indexOf('league') >= 0) {
+            isLeagueBlock = true;
+        }
+        // Check type field (various formats)
+        if (!isLeagueBlock && (itemType === 'league' || itemType === 'specialty_league' || 
+            itemType === 'specialtyleague' || itemType === 'h2h' || itemType === 'head2head')) {
+            isLeagueBlock = true;
+        }
+        // Fallback: check actual assignment entries for _h2h flag
+        if (!isLeagueBlock && divBunks.length > 0) {
+            var si = findFirstSlotForTime(bl.startMin, divName);
+            if (si >= 0) {
+                for (var bi = 0; bi < Math.min(divBunks.length, 4); bi++) {
+                    var ent = getEntry(divBunks[bi], si);
+                    if (ent && ent._h2h) { isLeagueBlock = true; break; }
+                }
+            }
+        }
+
+        // ── Number the league game ──
+        var isSpecialty = ev === "Specialty League" || evLower.indexOf('specialty') >= 0 || itemType === 'specialty_league' || itemType === 'specialtyleague';
+        if (isLeagueBlock) {
+            console.log('[PrintCenter] League block detected:', divName, bl.startMin + '-' + bl.endMin, 'event="' + ev + '" type="' + itemType + '" isSpecialty=' + isSpecialty);
+            if (isSpecialty) { sc2++; ev = "Specialty League " + sc2; }
+            else { lc++; ev = "League Game " + lc; }
+        }
+
+        blocks.push({ label: minutesToTimeLabel(bl.startMin) + ' \u2013 ' + minutesToTimeLabel(bl.endMin), startMin: bl.startMin, endMin: bl.endMin, event: ev, type: bl.item.type, isLeague: isLeagueBlock });
     });
+
     var unique = blocks.filter(function(b,i,s){ return i === s.findIndex(function(t2){return t2.label===b.label;}); });
     var flat = [];
     unique.forEach(function(bl) {
@@ -497,24 +544,84 @@ function buildDivisionBlocks(divName) {
 
 function buildLeagueCellHtml(eventBlock, bunks, divName) {
     var t = _currentTemplate;
-    // Get matchups from first bunk's entry
     var slotIndex = findFirstSlotForTime(eventBlock.startMin, divName);
-    var matchups = [];
-    if (slotIndex >= 0) {
-        for (var i = 0; i < bunks.length; i++) {
-            var entry = getEntry(bunks[i], slotIndex);
-            if (entry && entry._allMatchups && entry._allMatchups.length) { matchups = entry._allMatchups; break; }
-            // Also check individual matchup format
-            if (entry && entry._h2h && entry._matchup) { matchups.push(entry._matchup); }
-        }
-    }
+
+    // ── Hide matchups mode: just show the event name ──
     if (t.hideLeagueMatchups) {
         return '<strong>' + escHtml(eventBlock.event) + '</strong>';
     }
+
+    // ── Collect matchups ──
+    var matchups = [];
+
+    if (slotIndex >= 0) {
+        // 1) Check for pre-built _allMatchups on any entry
+        for (var i = 0; i < bunks.length; i++) {
+            var ent = getEntry(bunks[i], slotIndex);
+            if (ent && ent._allMatchups && ent._allMatchups.length) {
+                matchups = ent._allMatchups.slice();
+                break;
+            }
+        }
+
+        // 2) Check for _matchup strings
+        if (!matchups.length) {
+            var seenMatchup = {};
+            for (var m = 0; m < bunks.length; m++) {
+                var em = getEntry(bunks[m], slotIndex);
+                if (em && em._matchup && !seenMatchup[em._matchup]) {
+                    seenMatchup[em._matchup] = true;
+                    matchups.push(em._matchup);
+                }
+            }
+        }
+
+        // 3) Reconstruct: group bunks by field, pair within each field
+        if (!matchups.length) {
+            var fieldGroups = {}; // key: "field|sport" → [bunk1, bunk2, ...]
+            for (var j = 0; j < bunks.length; j++) {
+                var entry = getEntry(bunks[j], slotIndex);
+                if (!entry) continue;
+                if (!entry._h2h) continue;
+                var fieldName = '';
+                if (typeof entry.field === 'string') fieldName = entry.field;
+                else if (entry.field && entry.field.name) fieldName = entry.field.name;
+                var sport = entry.sport || '';
+                var key = fieldName + '||' + sport;
+                if (!fieldGroups[key]) fieldGroups[key] = { field: fieldName, sport: sport, bunks: [] };
+                fieldGroups[key].bunks.push(bunks[j]);
+            }
+
+            for (var gk in fieldGroups) {
+                var grp = fieldGroups[gk];
+                var gb = grp.bunks;
+                // Pair bunks: 0 vs 1, 2 vs 3, etc.
+                for (var p = 0; p < gb.length; p += 2) {
+                    var t1 = gb[p];
+                    var t2 = (p + 1 < gb.length) ? gb[p + 1] : null;
+                    var desc = t1 + (t2 ? ' vs ' + t2 : '');
+                    if (grp.sport) desc += ' \u2013 ' + grp.sport;
+                    if (grp.field) desc += ' @ ' + grp.field;
+                    matchups.push(desc);
+                }
+            }
+        }
+    }
+
+    console.log('[PrintCenter] League matchups for', eventBlock.event, 'slot=' + slotIndex, 'bunks=' + bunks.length, 'matchups=' + matchups.length, matchups);
+
+    // Also log first few entries for debugging
+    if (slotIndex >= 0 && matchups.length === 0) {
+        var sample = getEntry(bunks[0], slotIndex);
+        console.log('[PrintCenter]   First bunk entry:', bunks[0], sample ? JSON.stringify({_h2h:sample._h2h, sport:sample.sport, field:sample.field, _matchup:sample._matchup, _allMatchups:sample._allMatchups}) : 'null');
+    }
+
     var html = '<strong>' + escHtml(eventBlock.event) + '</strong>';
     if (matchups.length > 0) {
-        html += '<div style="margin-top:4px; font-size:0.9em;">';
-        matchups.forEach(function(m) { html += '<span style="display:inline-block; margin:1px 8px 1px 0; padding:1px 6px; background:rgba(0,0,0,0.04); border-radius:3px;">' + escHtml(m) + '</span>'; });
+        html += '<div style="margin-top:4px; font-size:0.88em; line-height:1.6;">';
+        matchups.forEach(function(mu) {
+            html += '<span style="display:inline-block; margin:2px 6px 2px 0; padding:2px 8px; background:rgba(30,64,175,0.06); border:1px solid rgba(30,64,175,0.1); border-radius:3px; white-space:nowrap;">' + escHtml(mu) + '</span>';
+        });
         html += '</div>';
     }
     return html;
@@ -550,6 +657,7 @@ function generateDivisionHTML_bunksTop(divName) {
                 var type = 'general', label = '';
                 if (!entry) { type = 'free'; label = ''; }
                 else if (entry._fixed) { type = 'pinned'; label = escHtml(formatEntry(entry)); }
+                else if (entry._h2h) { type = 'league'; label = escHtml(formatEntry(entry)); }
                 else { label = escHtml(formatEntry(entry)); if (!label) { type = 'free'; label = '\u2014'; } }
                 html += '<td style="' + cellStyle(type, isAlt) + '">' + label + '</td>';
             });
@@ -600,6 +708,7 @@ function generateDivisionHTML_timeTop(divName) {
                 var type = 'general', label = '';
                 if (!entry) { type = 'free'; label = ''; }
                 else if (entry._fixed) { type = 'pinned'; label = escHtml(formatEntry(entry)); }
+                else if (entry._h2h) { type = 'league'; label = escHtml(formatEntry(entry)); }
                 else { label = escHtml(formatEntry(entry)); if (!label) { type = 'free'; label = '\u2014'; } }
                 html += '<td style="' + cellStyle(type, isAlt) + '">' + label + '</td>';
             }
@@ -627,17 +736,23 @@ function generateCombinedHTML(selectedDivisions) {
     });
     if (!divData.length) return "";
 
-    var html = '<div class="pc-print-page" style="position:relative; page-break-after:' + (t.showPageBreaks?'always':'auto') + '; margin-bottom:20px;">';
+    var html = '<div class="pc-print-page" style="position:relative; page-break-after:' + (t.showPageBreaks?'always':'auto') + '; margin-bottom:20px; overflow:visible;">';
     html += buildWatermark() + buildStyledHeader('All Divisions');
 
-    // Flex container — divisions side by side
-    html += '<div style="display:flex; align-items:stretch; gap:0; overflow-x:auto;">';
+    // Each division is a separate table, side by side. Let them take natural width.
+    // Outer container is inline-flex so it doesn't collapse, preview area scrolls.
+    var COL_W = 100; // estimated px per bunk column
+    var TIME_W = t.timeColWidth + 20; // time col + padding
+
+    html += '<div style="display:inline-flex; align-items:stretch; gap:0;">';
 
     divData.forEach(function(dd, di) {
         var bunks = dd.bunks, blocks = dd.blocks;
-        var borderLeft = di > 0 ? 'border-left:2px solid ' + t.gridBorderColor + ';' : '';
+        var borderLeft = di > 0 ? 'border-left:3px solid ' + t.gridBorderColor + ';' : '';
+        // Width: time column + bunk columns
+        var tableW = TIME_W + (bunks.length * COL_W);
 
-        html += '<div style="flex:1; min-width:0;' + borderLeft + '">';
+        html += '<div style="width:' + tableW + 'px; flex-shrink:0;' + borderLeft + '">';
 
         if (t.tableOrientation === 'time-top') {
             // Transposed: bunk names down left, time across top
@@ -660,6 +775,7 @@ function generateCombinedHTML(selectedDivisions) {
                         var type = 'general', label = '';
                         if (!entry) { type = 'free'; label = ''; }
                         else if (entry._fixed) { type = 'pinned'; label = escHtml(formatEntry(entry)); }
+                        else if (entry._h2h) { type = 'league'; label = escHtml(formatEntry(entry)); }
                         else { label = escHtml(formatEntry(entry)); if (!label) { type = 'free'; label = '\u2014'; } }
                         html += '<td style="' + cellStyle(type, isAlt) + '">' + label + '</td>';
                     }
@@ -691,6 +807,7 @@ function generateCombinedHTML(selectedDivisions) {
                         var type = 'general', label = '';
                         if (!entry) { type = 'free'; label = ''; }
                         else if (entry._fixed) { type = 'pinned'; label = escHtml(formatEntry(entry)); }
+                        else if (entry._h2h) { type = 'league'; label = escHtml(formatEntry(entry)); }
                         else { label = escHtml(formatEntry(entry)); if (!label) { type = 'free'; label = '\u2014'; } }
                         html += '<td style="' + cellStyle(type, isAlt) + 'vertical-align:middle;">' + label + '</td>';
                     });
