@@ -701,10 +701,14 @@
     window.saveGlobalSettings = function(key, data) {
         // For daily_schedules, use verified save with retry
         if (key === 'daily_schedules') {
-            const dateKey = Object.keys(data)[0];
-            if (dateKey && data[dateKey]) {
-                // Use verified save (async, but return sync for compatibility)
-                verifiedScheduleSave(dateKey, data[dateKey])
+    // ★★★ FIX: Save the CURRENT date, not Object.keys()[0] which is arbitrary ★★★
+    const currentDate = window.currentScheduleDate || 
+                        document.getElementById('schedule-date-input')?.value ||
+                        document.getElementById('datepicker')?.value;
+    const dateKey = currentDate && data[currentDate] ? currentDate : 
+                    Object.keys(data).find(k => k.match(/^\d{4}-\d{2}-\d{2}$/) && data[k]?.scheduleAssignments);
+    if (dateKey && data[dateKey]) {
+        verifiedScheduleSave(dateKey, data[dateKey])
                     .then(result => {
                         if (!result?.success) {
                             console.warn('🔗 Schedule save issue:', result?.error);
