@@ -1829,7 +1829,6 @@ label.override-checkbox span {
     border-radius: 4px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.1), 0 0 0 1px rgba(0,0,0,0.04);
     margin-bottom: 20px;
-    overflow: hidden;
 }
 .pc-print-page table {
     word-wrap: break-word;
