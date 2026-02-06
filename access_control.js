@@ -1,7 +1,13 @@
 // ============================================================================
-// access_control.js — Campistry Role-Based Access Control (Multi-Tenant) v3.6
+// access_control.js — Campistry Role-Based Access Control (Multi-Tenant) v3.7
 // ============================================================================
 // 
+// v3.7 SECURITY PATCHES:
+// - V-002 FIX: All permission checks now fail-closed when !_initialized
+// - Removed duplicate canEditPrintTemplates/canDeletePrintTemplates/canPrintSchedules
+// - Added real-time Supabase subscription for remote membership changes
+// - XSS-safe: showNoAccessWarning uses textContent instead of innerHTML
+//
 // v3.6 CHANGES:
 // - CRITICAL FIX: Invitees no longer get owner permissions (STEP 4 fallback)
 // - canEraseData() now allows Admin (not just Owner)
@@ -28,7 +34,7 @@
 (function() {
     'use strict';
 
-    console.log("🔐 Access Control v3.6 loading...");
+    console.log("🔐 Access Control v3.7 loading...");
 
     // =========================================================================
     // STATE
@@ -48,6 +54,7 @@
     let _isTeamMember = false;
     let _membership = null;
     let _lastDivisionsHash = null;
+    let _membershipSubscription = null;  // ★★★ v3.7: Real-time subscription ★★★
 
     const ROLES = {
         OWNER: 'owner',
@@ -123,6 +130,7 @@
         _initialized = true;
         
         setupDivisionChangeObserver();
+        setupMembershipSubscription();  // ★★★ v3.7: Real-time membership updates ★★★
         
         if (_currentRole === ROLES.SCHEDULER && _editableDivisions.length === 0) {
             showNoAccessWarning();
@@ -176,6 +184,35 @@
             
             _lastDivisionsHash = currentHash;
         }, 1000);
+    }
+
+    // =========================================================================
+    // ★★★ v3.7: REAL-TIME MEMBERSHIP SUBSCRIPTION ★★★
+    // If an admin changes this user's role/subdivisions remotely,
+    // refresh permissions without requiring a page reload.
+    // =========================================================================
+
+    function setupMembershipSubscription() {
+        if (!_isTeamMember || !_currentUser || !window.supabase) return;
+
+        try {
+            _membershipSubscription = window.supabase
+                .channel('my-membership-' + _currentUser.id)
+                .on('postgres_changes', {
+                    event: 'UPDATE',
+                    schema: 'public',
+                    table: 'camp_users',
+                    filter: `user_id=eq.${_currentUser.id}`
+                }, (payload) => {
+                    console.log('🔐 Membership updated remotely, refreshing permissions...');
+                    refresh();
+                })
+                .subscribe();
+            
+            debugLog("Real-time membership subscription active");
+        } catch (e) {
+            console.warn("🔐 Could not set up real-time membership subscription:", e);
+        }
     }
 
     // =========================================================================
@@ -449,6 +486,7 @@
         }
     }
 
+    // ★★★ v3.7: XSS-safe — uses textContent instead of innerHTML ★★★
     function showNoAccessWarning() {
         const banner = document.createElement('div');
         banner.id = 'no-access-warning';
@@ -465,27 +503,33 @@
             max-width: 500px;
             box-shadow: 0 10px 40px rgba(0,0,0,0.2);
             font-family: system-ui, sans-serif;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
         `;
-        banner.innerHTML = `
-            <div style="display: flex; align-items: flex-start; gap: 12px;">
-                <span style="font-size: 1.5rem;">⚠️</span>
-                <div>
-                    <strong style="color: #DC2626; font-size: 1.1rem;">No Divisions Assigned</strong>
-                    <p style="margin: 8px 0 0 0; color: #991B1B; font-size: 0.9rem;">
-                        You are logged in as a Scheduler but haven't been assigned any divisions yet.
-                        Please contact your camp owner to be assigned to subdivisions.
-                    </p>
-                </div>
-                <button onclick="this.parentElement.parentElement.remove()" style="
-                    background: none;
-                    border: none;
-                    font-size: 1.2rem;
-                    cursor: pointer;
-                    padding: 0;
-                    color: #DC2626;
-                ">×</button>
-            </div>
-        `;
+
+        const icon = document.createElement('span');
+        icon.style.fontSize = '1.5rem';
+        icon.textContent = '⚠️';
+
+        const content = document.createElement('div');
+        const title = document.createElement('strong');
+        title.style.cssText = 'color: #DC2626; font-size: 1.1rem;';
+        title.textContent = 'No Divisions Assigned';
+        const message = document.createElement('p');
+        message.style.cssText = 'margin: 8px 0 0 0; color: #991B1B; font-size: 0.9rem;';
+        message.textContent = 'You are logged in as a Scheduler but haven\'t been assigned any divisions yet. Please contact your camp owner to be assigned to subdivisions.';
+        content.appendChild(title);
+        content.appendChild(message);
+
+        const closeBtn = document.createElement('button');
+        closeBtn.style.cssText = 'background: none; border: none; font-size: 1.2rem; cursor: pointer; padding: 0; color: #DC2626;';
+        closeBtn.textContent = '×';
+        closeBtn.addEventListener('click', () => banner.remove());
+
+        banner.appendChild(icon);
+        banner.appendChild(content);
+        banner.appendChild(closeBtn);
         
         setTimeout(() => {
             if (document.body) {
@@ -496,11 +540,17 @@
 
     async function refresh() {
         _initialized = false;
+        // Clean up old subscription before reinitializing
+        if (_membershipSubscription) {
+            try { window.supabase?.removeChannel?.(_membershipSubscription); } catch(e) {}
+            _membershipSubscription = null;
+        }
         await initialize();
     }
 
     // =========================================================================
     // PERMISSION CHECKS - Division Level
+    // ★★★ V-002: All checks fail-closed when !_initialized ★★★
     // =========================================================================
 
     function canEditDivision(divisionName) {
@@ -538,21 +588,26 @@
 
     // =========================================================================
     // PERMISSION CHECKS - Feature Level
+    // ★★★ V-002: All checks fail-closed when !_initialized ★★★
     // =========================================================================
 
     function canInviteUsers() {
+        if (!_initialized) return false;
         return _currentRole === ROLES.OWNER;
     }
 
     function canManageSubdivisions() {
+        if (!_initialized) return false;
         return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN;
     }
 
     function canManageTeam() {
+        if (!_initialized) return false;
         return _currentRole === ROLES.OWNER;
     }
 
     function canDeleteCampData() {
+        if (!_initialized) return false;
         return _currentRole === ROLES.OWNER;
     }
 
@@ -583,6 +638,7 @@
      * All roles can print (per existing Print Center exception).
      */
     function canPrintSchedules() {
+        if (!_initialized) return false;
         return true; // Print Center is accessible to all roles
     }
 
@@ -594,6 +650,7 @@
         if (!_initialized || !_currentRole) return false;
         return _currentRole === ROLES.OWNER;
     }
+
     function canEditSetup() {
         if (!_initialized) return false;
         return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER;
@@ -631,23 +688,7 @@
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         return _editableDivisions.length > 0;
     }
-// =========================================================================
-    // PRINT TEMPLATE PERMISSIONS (v3.0 Print Center)
-    // =========================================================================
 
-    function canEditPrintTemplates() {
-        if (!_initialized) return false;
-        return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN;
-    }
-
-    function canDeletePrintTemplates() {
-        if (!_initialized) return false;
-        return _currentRole === ROLES.OWNER;
-    }
-
-    function canPrintSchedules() {
-        return true;
-    }
     // =========================================================================
     // EXCEPTION AREAS - Accessible to ALL including viewers
     // =========================================================================
@@ -683,6 +724,7 @@
     }
 
     function hasRoleAtLeast(requiredRole) {
+        if (!_initialized) return false;
         const currentLevel = ROLE_HIERARCHY[_currentRole] || 0;
         const requiredLevel = ROLE_HIERARCHY[requiredRole] || 0;
         return currentLevel >= requiredLevel;
@@ -968,6 +1010,7 @@
     }
 
     function showPermissionDenied(action = 'perform this action') {
+        // ★★★ v3.7: XSS-safe — uses textContent instead of innerHTML ★★★
         if (typeof window.showToast === 'function') {
             window.showToast(`You don't have permission to ${action}`, 'error');
         } else {
@@ -1026,28 +1069,26 @@
             font-size: 0.9rem;
         `;
         
+        // ★★★ v3.7: XSS-safe — build DOM elements instead of innerHTML ★★★
+        const icon = document.createElement('span');
+        icon.style.fontSize = '1.2rem';
+        const textContainer = document.createElement('div');
+        const titleEl = document.createElement('strong');
+        const descEl = document.createElement('div');
+        descEl.style.fontSize = '0.85rem';
+
         if (_currentRole === ROLES.VIEWER) {
-            banner.innerHTML = `
-                <span style="font-size: 1.2rem;">👁️</span>
-                <div>
-                    <strong>View Only Mode</strong>
-                    <div style="font-size: 0.85rem; color: #92400E;">
-                        You can view all schedules, use Print Center, and Camper Locator.
-                    </div>
-                </div>
-            `;
+            icon.textContent = '👁️';
+            titleEl.textContent = 'View Only Mode';
+            descEl.style.color = '#92400E';
+            descEl.textContent = 'You can view all schedules, use Print Center, and Camper Locator.';
         } else if (_currentRole === ROLES.ADMIN) {
             banner.style.background = 'linear-gradient(135deg, #DBEAFE, #BFDBFE)';
             banner.style.borderColor = '#3B82F6';
-            banner.innerHTML = `
-                <span style="font-size: 1.2rem;">🔧</span>
-                <div>
-                    <strong>Administrator Mode</strong>
-                    <div style="font-size: 0.85rem; color: #1E40AF;">
-                        Full editing access. Team management requires Owner role.
-                    </div>
-                </div>
-            `;
+            icon.textContent = '🔧';
+            titleEl.textContent = 'Administrator Mode';
+            descEl.style.color = '#1E40AF';
+            descEl.textContent = 'Full editing access. Team management requires Owner role.';
         } else if (_currentRole === ROLES.SCHEDULER) {
             const permText = getPermissionsText();
             const editableDivsList = _editableDivisions.length > 0 
@@ -1056,16 +1097,16 @@
             
             banner.style.background = 'linear-gradient(135deg, #D1FAE5, #A7F3D0)';
             banner.style.borderColor = '#10B981';
-            banner.innerHTML = `
-                <span style="font-size: 1.2rem;">📅</span>
-                <div>
-                    <strong>${permText}</strong>
-                    <div style="font-size: 0.85rem; color: #065F46;">
-                        Editable: ${editableDivsList}
-                    </div>
-                </div>
-            `;
+            icon.textContent = '📅';
+            titleEl.textContent = permText;
+            descEl.style.color = '#065F46';
+            descEl.textContent = `Editable: ${editableDivsList}`;
         }
+
+        textContainer.appendChild(titleEl);
+        textContainer.appendChild(descEl);
+        banner.appendChild(icon);
+        banner.appendChild(textContainer);
         
         const container = document.querySelector('.main-content, #schedule-container, main');
         if (container) {
@@ -1587,6 +1628,7 @@
         console.log("All Subdivisions:", _subdivisions);
         console.log("Editable Divisions:", _editableDivisions);
         console.log("window.divisions keys:", Object.keys(window.divisions || {}));
+        console.log("Membership subscription active:", !!_membershipSubscription);
         console.log("🔐 ==================================");
     }
 
@@ -1704,6 +1746,11 @@
             if (event === 'SIGNED_IN' && session) {
                 setTimeout(() => initialize(), 500);
             } else if (event === 'SIGNED_OUT') {
+                // Clean up subscription
+                if (_membershipSubscription) {
+                    try { window.supabase?.removeChannel?.(_membershipSubscription); } catch(e) {}
+                    _membershipSubscription = null;
+                }
                 _initialized = false;
                 _currentUser = null;
                 _currentRole = null;
@@ -1721,6 +1768,6 @@
         });
     }
 
-    console.log("🔐 Access Control v3.6 loaded");
+    console.log("🔐 Access Control v3.7 loaded");
 
 })();
