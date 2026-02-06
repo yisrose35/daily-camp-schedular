@@ -1269,8 +1269,9 @@ if (!blockDivName && bunk) {
         blockOptions.sort(function(a, b) { return a.domainSize - b.domainSize; });
 
         // Phase 3: Assign with augmenting paths
-        var fieldUsageInGroup = new Map();
-        var fieldAssignedTo = new Map();  // fieldNorm → { blockIdx, optionIdx } for augmenting
+       var fieldUsageInGroup = new Map();
+        var fieldDivsInGroup = new Map();
+        var fieldAssignedTo = new Map();
 
         for (var bo of blockOptions) {
             if (_assignedBlocks.has(bo.bi)) continue;
