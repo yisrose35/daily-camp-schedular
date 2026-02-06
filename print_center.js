@@ -517,157 +517,110 @@ function buildDivisionBlocks(divName) {
 
 function buildLeagueCellHtml(eventBlock, bunks, divName) {
     var t = _currentTemplate;
-    var slotIndex = findFirstSlotForTime(eventBlock.startMin, divName);
 
+    // ── Hide matchups mode: just show the event name ──
     if (t.hideLeagueMatchups) {
         return '<strong>' + escHtml(eventBlock.event) + '</strong>';
     }
 
-    var matchups = [];
-    var actualSlotIdx = slotIndex;
+    var matchups = []; // array of display strings
 
-    // ★ FIX 1: Scan multiple bunks and detect broader league indicators
-    if (bunks.length > 0) {
-        var aa = window.scheduleAssignments || (window.loadCurrentDailyData ? window.loadCurrentDailyData() : {}).scheduleAssignments || {};
-        var scanLimit = Math.min(bunks.length, 6);
-        for (var bi = 0; bi < scanLimit && actualSlotIdx === slotIndex; bi++) {
-            var bunkSched = aa[bunks[bi]];
-            if (!bunkSched || !Array.isArray(bunkSched)) continue;
-            for (var si = 0; si < bunkSched.length; si++) {
-                var e = bunkSched[si];
-                if (!e) continue;
-                var isLeagueEntry = e._h2h || e._isSpecialtyLeague;
-                if (!isLeagueEntry) {
-                    var eSport = (e.sport || '').toLowerCase();
-                    var eField = (typeof e.field === 'string' ? e.field : (e.field && e.field.name ? e.field.name : '')).toLowerCase();
-                    var eActivity = (e._activity || '').toLowerCase();
-                    if (eSport.indexOf('league') >= 0 || eField.indexOf('league') >= 0 || eActivity.indexOf('league') >= 0) isLeagueEntry = true;
+    // ══════════════════════════════════════════════════════════════
+    // PRIMARY SOURCE: window.leagueAssignments[divName]
+    // This is the canonical store — filled by scheduler_core_main,
+    // leagues.js, specialty_leagues.js, and fillBlock.
+    // Structure: { slotIdx: { matchups: [{teamA,teamB,display}], gameLabel, sport, leagueName } }
+    // ══════════════════════════════════════════════════════════════
+    var la = window.leagueAssignments || {};
+    var divKey = la[divName] ? divName : null;
+    if (!divKey) { for (var dk in la) { if (dk.toLowerCase() === divName.toLowerCase()) { divKey = dk; break; } } }
+
+    if (divKey && la[divKey]) {
+        // Collect ALL league slot entries for this division, sorted by slot index
+        var allSlotEntries = [];
+        for (var sk in la[divKey]) {
+            var sd = la[divKey][sk];
+            if (sd && sd.matchups && sd.matchups.length > 0) {
+                allSlotEntries.push({ slotIdx: parseInt(sk, 10), data: sd });
+            }
+        }
+        allSlotEntries.sort(function(a, b) { return a.slotIdx - b.slotIdx; });
+
+        // Strategy 1: Match by gameLabel (e.g. "League Game 1" matches gameLabel containing "1")
+        var eventNum = parseInt((eventBlock.event.match(/\d+/) || ['0'])[0], 10);
+        var isSpecialty = eventBlock.event.toLowerCase().indexOf('specialty') >= 0;
+
+        var bestEntry = null;
+
+        // Try exact gameLabel match first
+        for (var g1 = 0; g1 < allSlotEntries.length; g1++) {
+            var gl = allSlotEntries[g1].data.gameLabel || '';
+            var glNum = parseInt((gl.match(/\d+/) || ['0'])[0], 10);
+            var glIsSpecialty = !!(allSlotEntries[g1].data.isSpecialtyLeague);
+            if (glNum === eventNum && glIsSpecialty === isSpecialty) {
+                bestEntry = allSlotEntries[g1].data;
+                break;
+            }
+        }
+
+        // Strategy 2: Match by position — separate regular and specialty, take Nth
+        if (!bestEntry) {
+            var filtered = allSlotEntries.filter(function(e) {
+                return !!(e.data.isSpecialtyLeague) === isSpecialty;
+            });
+            if (eventNum > 0 && eventNum <= filtered.length) {
+                bestEntry = filtered[eventNum - 1].data;
+            }
+        }
+
+        // Strategy 3: Just take any available entry (for single-league divisions)
+        if (!bestEntry && allSlotEntries.length > 0) {
+            // For specialty, prefer specialty entries; for regular, prefer regular
+            var preferred = allSlotEntries.filter(function(e) {
+                return !!(e.data.isSpecialtyLeague) === isSpecialty;
+            });
+            if (preferred.length) bestEntry = preferred[0].data;
+            else bestEntry = allSlotEntries[0].data;
+        }
+
+        if (bestEntry && bestEntry.matchups) {
+            bestEntry.matchups.forEach(function(m) {
+                var desc = '';
+                if (m.display) desc = m.display;
+                else {
+                    var tA = m.teamA || m.team1 || '', tB = m.teamB || m.team2 || '';
+                    if (tA && tB) {
+                        desc = tA + ' vs ' + tB;
+                        if (m.sport) desc += ' \u2013 ' + m.sport;
+                        if (m.field) desc += ' @ ' + m.field;
+                    } else if (m.matchup) desc = m.matchup;
                 }
-                if (isLeagueEntry && (slotIndex < 0 || Math.abs(si - slotIndex) <= 5)) {
-                    actualSlotIdx = si;
-                    break;
-                }
-            }
-        }
-    }
-    console.log('[PrintCenter] League lookup:', eventBlock.event, '@', divName, 'divTimesSlot=' + slotIndex, 'actualSlot=' + actualSlotIdx);
-
-    // SOURCE 1: window.leagueAssignments
-    var la = window.leagueAssignments;
-    if (la && !matchups.length) {
-        var divKey = null;
-        if (la[divName]) divKey = divName;
-        else { for (var dk in la) { if (dk.toLowerCase() === divName.toLowerCase()) { divKey = dk; break; } } }
-        if (divKey && la[divKey]) {
-            var bestSlotData = null;
-            var tryIndices = [actualSlotIdx, slotIndex];
-            for (var off = 1; off <= 8; off++) { tryIndices.push(actualSlotIdx + off, actualSlotIdx - off); if (slotIndex !== actualSlotIdx) tryIndices.push(slotIndex + off, slotIndex - off); }
-            for (var ti = 0; ti < tryIndices.length; ti++) {
-                if (tryIndices[ti] >= 0 && la[divKey][tryIndices[ti]]) { bestSlotData = la[divKey][tryIndices[ti]]; break; }
-            }
-            if (!bestSlotData) {
-                var allKeys = Object.keys(la[divKey]);
-                for (var ki = 0; ki < allKeys.length; ki++) { var sd = la[divKey][allKeys[ki]]; if (sd && sd.matchups && sd.matchups.length > 0) { bestSlotData = sd; break; } }
-            }
-            if (bestSlotData && bestSlotData.matchups && bestSlotData.matchups.length > 0) {
-                bestSlotData.matchups.forEach(function(m) {
-                    var desc = '', tA = m.teamA || m.team1 || '', tB = m.teamB || m.team2 || '';
-                    if (m.display) desc = m.display;
-                    else if (tA && tB) { desc = tA + ' vs ' + tB; if (m.sport) desc += ' \u2013 ' + m.sport; if (m.field) desc += ' @ ' + m.field; }
-                    else if (m.matchup) desc = m.matchup;
-                    if (desc) matchups.push(desc);
-                });
-                console.log('[PrintCenter] SOURCE 1 (leagueAssignments) found', matchups.length, 'matchups for', divName);
-            }
+                if (desc) matchups.push(desc);
+            });
+            if (matchups.length) console.log('[PrintCenter] leagueAssignments found', matchups.length, 'matchups for', divName, eventBlock.event);
         }
     }
 
-    // SOURCE 2: _allMatchups on bunk entries
-    if (!matchups.length) {
-        var trySlots2 = [actualSlotIdx, slotIndex].filter(function(s) { return s >= 0; });
-        for (var ts2 = 0; ts2 < trySlots2.length && !matchups.length; ts2++) {
-            for (var i = 0; i < bunks.length; i++) {
-                var ent = getEntry(bunks[i], trySlots2[ts2]);
-                if (ent && ent._allMatchups && ent._allMatchups.length) { matchups = ent._allMatchups.slice(); break; }
-            }
-        }
-    }
-
-    // SOURCE 3: _assignments array
-    if (!matchups.length) {
-        var trySlots3 = [actualSlotIdx, slotIndex].filter(function(s) { return s >= 0; });
-        for (var ts3 = 0; ts3 < trySlots3.length && !matchups.length; ts3++) {
-            for (var a2 = 0; a2 < bunks.length; a2++) {
-                var ea = getEntry(bunks[a2], trySlots3[ts3]);
-                if (ea && ea._assignments && ea._assignments.length) {
-                    ea._assignments.forEach(function(asg) {
-                        var tA2 = asg.teamA || asg.team1 || '', tB2 = asg.teamB || asg.team2 || '';
-                        if (tA2 && tB2) { var d2 = tA2 + ' vs ' + tB2; if (asg.field) d2 += ' @ ' + asg.field; matchups.push(d2); }
-                    });
-                    break;
-                }
-            }
-        }
-    }
-
-    // ★ FIX 1: SOURCE 4 — use bestSlotForPairing, try both slots
-    var bestSlotForPairing = actualSlotIdx >= 0 ? actualSlotIdx : slotIndex;
-    if (!matchups.length && bestSlotForPairing >= 0) {
-        var fieldGroups = {};
-        for (var j = 0; j < bunks.length; j++) {
-            var entry = getEntry(bunks[j], bestSlotForPairing);
-            if (!entry && bestSlotForPairing !== slotIndex && slotIndex >= 0) entry = getEntry(bunks[j], slotIndex);
-            if (!entry) continue;
-            var fieldName = '';
-            if (typeof entry.field === 'string') fieldName = entry.field;
-            else if (entry.field && entry.field.name) fieldName = entry.field.name;
-            var sport = entry.sport || '';
-            var groupKey = fieldName + '||' + sport;
-            if (!fieldGroups[groupKey]) fieldGroups[groupKey] = { field: fieldName, sport: sport, bunks: [] };
-            fieldGroups[groupKey].bunks.push(bunks[j]);
-        }
-        for (var gk in fieldGroups) {
-            var grp = fieldGroups[gk], gb = grp.bunks;
-            if (gb.length < 2) continue;
-            for (var p = 0; p < gb.length; p += 2) {
-                if (p + 1 >= gb.length) break;
-                var desc2 = gb[p] + ' vs ' + gb[p + 1];
-                if (grp.sport && grp.sport.indexOf('Game') < 0) desc2 += ' \u2013 ' + grp.sport;
-                if (grp.field && grp.field.indexOf('League') < 0) desc2 += ' @ ' + grp.field;
-                matchups.push(desc2);
-            }
-        }
-        if (matchups.length) console.log('[PrintCenter] SOURCE 4 (field pairing) found', matchups.length, 'matchups');
-    }
-
-    // SOURCE 5: window.lastLeagueMatchups
+    // ══════════════════════════════════════════════════════════════
+    // FALLBACK: window.lastLeagueMatchups
+    // ══════════════════════════════════════════════════════════════
     if (!matchups.length) {
         var llm = window.lastLeagueMatchups;
         if (llm && llm[divName] && llm[divName].matchups) {
             llm[divName].matchups.forEach(function(m5) {
-                var d5 = m5.display || (m5.teamA + ' vs ' + m5.teamB) || '';
+                var d5 = m5.display || ((m5.teamA || '') + ' vs ' + (m5.teamB || ''));
                 if (d5) matchups.push(d5);
             });
+            if (matchups.length) console.log('[PrintCenter] lastLeagueMatchups found', matchups.length, 'matchups for', divName);
         }
-    }
-
-    // ★ FIX 1: SOURCE 6 — individual _matchup / _gameLabel from bunk entries
-    if (!matchups.length && bestSlotForPairing >= 0) {
-        var seenMu = {};
-        for (var m6 = 0; m6 < bunks.length; m6++) {
-            var e6 = getEntry(bunks[m6], bestSlotForPairing);
-            if (!e6 && bestSlotForPairing !== slotIndex && slotIndex >= 0) e6 = getEntry(bunks[m6], slotIndex);
-            if (!e6) continue;
-            var mu6 = e6._matchup || e6._gameLabel || '';
-            if (mu6 && !seenMu[mu6]) { seenMu[mu6] = true; matchups.push(mu6); }
-        }
-        if (matchups.length) console.log('[PrintCenter] SOURCE 6 (_matchup/_gameLabel) found', matchups.length, 'matchups');
     }
 
     if (!matchups.length) {
-        console.log('[PrintCenter] \u26A0\uFE0F No matchups found for', eventBlock.event, '@', divName, 'slot=' + slotIndex, 'actualSlot=' + actualSlotIdx);
+        console.log('[PrintCenter] \u26A0\uFE0F No matchups for', eventBlock.event, '@', divName,
+            '| leagueAssignments keys:', divKey ? Object.keys(la[divKey]) : 'none');
     }
 
+    // ── Render ──
     var html = '<strong>' + escHtml(eventBlock.event) + '</strong>';
     if (matchups.length > 0) {
         html += '<div style="margin-top:4px; font-size:0.88em; line-height:1.6;">';
@@ -790,7 +743,7 @@ function generateCombinedHTML(selectedDivisions) {
         html += '<div style="flex:0 0 auto;' + borderLeft + '">';
 
         if (t.tableOrientation === 'time-top') {
-            html += '<table style="width:100%; table-layout:fixed; border-collapse:collapse; font-family:\'' + t.gridFont + '\',sans-serif; font-size:' + t.gridFontSize + 'px; height:100%;">';
+            html += '<table style="border-collapse:collapse; font-family:\'' + t.gridFont + '\',sans-serif; font-size:' + t.gridFontSize + 'px; height:100%;">';
             html += '<thead><tr><th colspan="' + (blocks.length + 1) + '" style="' + headerCellStyle() + 'text-align:center;font-weight:700;font-size:' + (t.gridFontSize+1) + 'px;">' + escHtml(dd.name) + '</th></tr>';
             html += '<tr><th style="' + headerCellStyle() + 'white-space:nowrap;">Bunk</th>';
             blocks.forEach(function(bl) { html += '<th style="' + headerCellStyle() + 'white-space:nowrap;font-size:' + Math.max(8,t.gridFontSize-1) + 'px;">' + bl.label + '</th>'; });
@@ -819,7 +772,7 @@ function generateCombinedHTML(selectedDivisions) {
             var minRowH = maxBlocks > 0 && blocks.length < maxBlocks ? Math.round(maxBlocks / blocks.length * 32) : 0;
             var rowHStyle = minRowH > 32 ? 'height:' + minRowH + 'px;' : '';
 
-            html += '<table style="width:100%; table-layout:fixed; border-collapse:collapse; font-family:\'' + t.gridFont + '\',sans-serif; font-size:' + t.gridFontSize + 'px; height:100%;">';
+            html += '<table style="border-collapse:collapse; font-family:\'' + t.gridFont + '\',sans-serif; font-size:' + t.gridFontSize + 'px; height:100%;">';
             html += '<thead><tr><th colspan="' + (bunks.length + 1) + '" style="' + headerCellStyle() + 'text-align:center;font-weight:700;font-size:' + (t.gridFontSize+1) + 'px;">' + escHtml(dd.name) + '</th></tr>';
             html += '<tr><th style="' + headerCellStyle() + 'white-space:nowrap;">Time</th>';
             bunks.forEach(function(b){ html += '<th style="' + headerCellStyle() + 'white-space:nowrap;">' + escHtml(b) + '</th>'; });
