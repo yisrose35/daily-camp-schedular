@@ -603,6 +603,8 @@
 
     async function refresh() {
         _initialized = false;
+        // ★★★ v3.8: Clear session cache so fresh Supabase data is used ★★★
+        try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
         // Clean up old subscription before reinitializing
         if (_membershipSubscription) {
             try { window.supabase?.removeChannel?.(_membershipSubscription); } catch(e) {}
