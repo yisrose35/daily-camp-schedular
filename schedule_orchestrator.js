@@ -886,8 +886,17 @@
      * For schedulers: Removes their bunks from ALL records
      * For owners/admins: Deletes all records for the date
      */
-    async function deleteSchedule(dateKey, options = {}) {
+   async function deleteSchedule(dateKey, options = {}) {
         if (!dateKey) dateKey = getCurrentDateKey();
+
+        // ★★★ v1.7 SECURITY: Verify role from DB before delete ★★★
+        if (window.AccessControl?.verifyBeforeWrite) {
+            const writeAllowed = await window.AccessControl.verifyBeforeWrite('delete schedule');
+            if (!writeAllowed) {
+                log('DELETE BLOCKED — verifyBeforeWrite returned false');
+                return { success: false, error: 'Write permission denied' };
+            }
+        }
 
         const isFullAccess = window.PermissionsDB?.hasFullAccess?.() || 
                              window.AccessControl?.getCurrentRole?.() === 'owner' ||
