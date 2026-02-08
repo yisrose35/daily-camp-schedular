@@ -1,6 +1,10 @@
 // ============================================================================
-// dashboard.js — Campistry Dashboard Logic (Multi-Tenant) v2.3
+// dashboard.js — Campistry Dashboard Logic (Multi-Tenant) v2.4
 // 
+// v2.4: SESSION CACHE - Caches RBAC context to sessionStorage so
+//       Flow/Me pages can read role instantly (no Supabase re-query).
+//       Eliminates 3-second white screen on page transitions.
+//
 // v2.3: CRITICAL FIX - Invitees no longer get owner permissions
 //       - Changed STEP 4 fallback from 'owner' to 'viewer'
 //
@@ -99,6 +103,9 @@
             
             // Determine user's role and camp membership
             await determineUserRole();
+            
+            // ★★★ v2.4: Cache RBAC context so Flow/Me pages load instantly ★★★
+            cacheRBACContext();
             
             // Load dashboard data
             await loadDashboardData();
@@ -234,6 +241,34 @@
         campName = null;
         // Don't cache uncertain state
         // localStorage.setItem('campistry_user_id', currentUser.id);
+    }
+
+    // ========================================
+    // ★★★ v2.4: CACHE RBAC CONTEXT FOR OTHER PAGES ★★★
+    // Writes role context to sessionStorage so Flow/Me can read it
+    // instantly without re-querying Supabase (eliminates white screen).
+    // ========================================
+    
+    function cacheRBACContext() {
+        try {
+            const rbacCache = {
+                userId: currentUser?.id,
+                role: userRole,
+                campId: membership?.camp_id || currentUser?.id,
+                campName: campName,
+                userName: userName,
+                isTeamMember: isTeamMember,
+                subdivisionIds: membership?.subdivision_ids || [],
+                assignedDivisions: membership?.assigned_divisions || [],
+                membershipId: membership?.id || null,
+                membershipName: membership?.name || null,
+                cachedAt: Date.now()
+            };
+            sessionStorage.setItem('campistry_rbac_cache', JSON.stringify(rbacCache));
+            console.log('📊 ⚡ RBAC context cached to sessionStorage:', rbacCache.role);
+        } catch (e) {
+            console.warn('📊 Failed to cache RBAC context:', e);
+        }
     }
 
     // ========================================
@@ -908,6 +943,9 @@
             localStorage.removeItem('campistryGlobalSettings');
             localStorage.removeItem('CAMPISTRY_LOCAL_CACHE');
             localStorage.removeItem('campDailyData_v1');
+            
+            // ★★★ v2.4: Clear RBAC session cache ★★★
+            sessionStorage.removeItem('campistry_rbac_cache');
             
             await window.supabase.auth.signOut();
             window.location.href = 'index.html';
