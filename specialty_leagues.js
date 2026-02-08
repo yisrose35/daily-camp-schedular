@@ -70,7 +70,7 @@
 (function() {
     'use strict';
 
-    console.log("[SPECIALTY_LEAGUES] Module v2.2.6 loading...");
+   console.log("[SPECIALTY_LEAGUES] Module v2.2.7 loading...");
 
     // =============================================================
     // STATE & GLOBALS
@@ -2227,12 +2227,23 @@
                 gamesProcessed++;
                 (g.matches || []).forEach(m => {
                     matchesProcessed++;
-                    if (m.winner === 'tie') {
+                    // ★ v2.2.7 FIX: Derive winner from scores as fallback when m.winner is missing
+                    let winner = m.winner;
+                    if (!winner && m.scoreA != null && m.scoreB != null) {
+                        const sA = parseInt(m.scoreA, 10);
+                        const sB = parseInt(m.scoreB, 10);
+                        if (!isNaN(sA) && !isNaN(sB)) {
+                            if (sA > sB) winner = m.teamA;
+                            else if (sB > sA) winner = m.teamB;
+                            else winner = 'tie';
+                        }
+                    }
+                    if (winner === 'tie') {
                         if (league.standings[m.teamA]) league.standings[m.teamA].t++;
                         if (league.standings[m.teamB]) league.standings[m.teamB].t++;
-                    } else if (m.winner) {
-                        if (league.standings[m.winner]) league.standings[m.winner].w++;
-                        const loser = m.winner === m.teamA ? m.teamB : m.teamA;
+                    } else if (winner) {
+                        if (league.standings[winner]) league.standings[winner].w++;
+                        const loser = winner === m.teamA ? m.teamB : m.teamA;
                         if (league.standings[loser]) league.standings[loser].l++;
                     }
                 });
@@ -2353,6 +2364,6 @@
     // ★ v2.1: Export diagnostics
     window.diagnoseSpecialtyLeagues = diagnoseSpecialtyLeagues;
 
-    console.log("[SPECIALTY_LEAGUES] Module v2.2.6 loaded");
+    console.log("[SPECIALTY_LEAGUES] Module v2.2.7 loaded");
 
 })();
