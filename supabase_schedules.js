@@ -692,7 +692,15 @@
     /**
      * Delete ALL schedule data for a date (owners only).
      */
-    async function deleteSchedule(dateKey) {
+   async function deleteSchedule(dateKey) {
+        // ★★★ v5.5 SECURITY: Verify write permission before cloud delete ★★★
+        if (window.AccessControl?.verifyBeforeWrite) {
+            const allowed = await window.AccessControl.verifyBeforeWrite('delete schedule from cloud');
+            if (!allowed) {
+                log('DELETE BLOCKED by verifyBeforeWrite');
+                return { data: null, error: { message: 'Write permission denied' } };
+            }
+        }
         const client = getClient();
         const campId = getCampId();
         // Check permissions
