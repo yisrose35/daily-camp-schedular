@@ -27,6 +27,7 @@
 
     // ★ Cloud sync state
     let _cloudSaveTimeout = null;
+    let _cloudVersion = null; // ★ v6.2: Track server version for optimistic locking
     const CLOUD_SAVE_DEBOUNCE_MS = 800;
 
     const COLOR_PRESETS = ['#00C896','#6366F1','#F59E0B','#EF4444','#8B5CF6','#3B82F6','#10B981','#EC4899','#F97316','#14B8A6','#84CC16','#A855F7','#06B6D4','#F43F5E','#22C55E','#FBBF24'];
@@ -56,7 +57,7 @@
         try {
             const { data, error } = await client
                 .from('camp_state')
-                .select('state')
+                .select('state, version')
                 .eq('camp_id', campId)
                 .single();
             if (error) {
@@ -68,9 +69,11 @@
                 return null;
             }
             if (data?.state) {
+                _cloudVersion = data.version || null;
                 console.log('[Me] ☁️ Cloud data loaded:', {
                     divisions: Object.keys(data.state.divisions || data.state.campStructure || {}).length,
                     campers: Object.keys(data.state.app1?.camperRoster || {}).length,
+                    version: _cloudVersion,
                     updated_at: data.state.updated_at
                 });
                 return data.state;
@@ -94,7 +97,53 @@
             return false;
         }
         try {
-            // Fetch current cloud state to merge into (don't overwrite scheduler data!)
+            // ★ v6.2: Use atomic server-side merge to prevent race conditions
+            const { data, error } = await client.rpc('merge_camp_state', {
+                p_camp_id: campId,
+                p_partial_state: mergeData,
+                p_expected_version: _cloudVersion
+            });
+
+            if (error) {
+                console.error('[Me] Cloud save RPC error:', error.message);
+                // Fallback to legacy upsert if RPC doesn't exist yet
+                if (error.message.includes('merge_camp_state')) {
+                    return await saveToCloudLegacy(mergeData);
+                }
+                return false;
+            }
+
+            if (data && data.ok === false && data.error === 'version_conflict') {
+                console.warn('[Me] ☁️ Version conflict (server:', data.server_version, 'ours:', data.your_version, ') — reloading...');
+                // Another tab wrote first — reload cloud data and retry
+                const fresh = await loadFromCloud();
+                if (fresh) {
+                    // Re-apply our changes on top of the fresh data
+                    return await saveToCloud(mergeData);
+                }
+                return false;
+            }
+
+            if (data?.version) {
+                _cloudVersion = data.version;
+            }
+
+            console.log('[Me] ☁️ Cloud save complete (v' + (_cloudVersion || '?') + '):', {
+                campStructure: Object.keys(mergeData.campStructure || {}).length + ' divisions',
+                campers: Object.keys(mergeData.app1?.camperRoster || {}).length
+            });
+            return true;
+        } catch (e) {
+            console.error('[Me] Cloud save exception:', e);
+            return false;
+        }
+    }
+
+    // ★ v6.2: Legacy fallback if merge_camp_state RPC not deployed yet
+    async function saveToCloudLegacy(mergeData) {
+        const client = getSupabaseClient();
+        const campId = getCampId();
+        try {
             const { data: current, error: fetchError } = await client
                 .from('camp_state')
                 .select('state')
@@ -106,12 +155,9 @@
             }
 
             const currentState = current?.state || {};
-            
-            // Merge: keep all existing cloud data, overlay our changes
             const newState = {
                 ...currentState,
                 ...mergeData,
-                // Deep-merge app1 to preserve other app1 fields (like skeletons, sports, etc.)
                 app1: {
                     ...(currentState.app1 || {}),
                     ...(mergeData.app1 || {})
@@ -125,22 +171,16 @@
                     camp_id: campId,
                     state: newState,
                     updated_at: new Date().toISOString()
-                }, {
-                    onConflict: 'camp_id'
-                });
+                }, { onConflict: 'camp_id' });
 
             if (upsertError) {
-                console.error('[Me] Cloud save error:', upsertError.message);
+                console.error('[Me] Legacy cloud save error:', upsertError.message);
                 return false;
             }
-
-            console.log('[Me] ☁️ Cloud save complete:', {
-                campStructure: Object.keys(mergeData.campStructure || {}).length + ' divisions',
-                campers: Object.keys(mergeData.app1?.camperRoster || {}).length
-            });
+            console.log('[Me] ☁️ Legacy cloud save complete');
             return true;
         } catch (e) {
-            console.error('[Me] Cloud save exception:', e);
+            console.error('[Me] Legacy cloud save exception:', e);
             return false;
         }
     }
