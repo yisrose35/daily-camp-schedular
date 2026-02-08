@@ -435,45 +435,51 @@
             await loadInvite(inviteToken);
         }
         
+        // =====================================================================
+        // ★★★ SECURITY FIX: Use lookup_invite RPC instead of direct table query
+        // The old code used: supabaseClient.from('camp_users').select('*').eq('invite_token', token)
+        // That required the dangerous "Anon can view invites by token" RLS policy
+        // which exposed ALL pending invites (emails, tokens, roles) to anyone.
+        // The new RPC returns only the fields the invite page needs, and nothing sensitive.
+        // =====================================================================
         async function loadInvite(token) {
             try {
-                console.log('[Invite] Loading invite...');
+                console.log('[Invite] Loading invite via secure RPC...');
                 
-                const { data, error } = await supabaseClient
-                    .from('camp_users')
-                    .select('*')
-                    .eq('invite_token', token)
-                    .maybeSingle();
+                const { data: rpcResult, error: rpcError } = await supabaseClient
+                    .rpc('lookup_invite', { token_value: token });
                 
-                console.log('[Invite] Invite query result:', { data, error });
+                console.log('[Invite] Invite lookup result:', { data: rpcResult, error: rpcError });
                 
-                if (error) {
-                    console.error('[Invite] Query error:', error);
+                if (rpcError) {
+                    console.error('[Invite] Lookup error:', rpcError);
                     showError('Unable to load invite. Please try again or contact the camp administrator.');
                     return;
                 }
                 
-                if (!data) {
+                if (!rpcResult) {
                     showError('This invite link is invalid.');
                     return;
                 }
                 
-                inviteData = data;
-                console.log('[Invite] Invite loaded:', { email: data.email, role: data.role, camp_id: data.camp_id, accepted: !!data.accepted_at });
+                // RPC returns JSON object directly — add invite_token back for reference
+                inviteData = { ...rpcResult, invite_token: token };
+                console.log('[Invite] Invite loaded:', { email: inviteData.email, role: inviteData.role, camp_id: inviteData.camp_id, accepted: !!inviteData.accepted_at });
                 
-                // Fetch camp name
-                await fetchCampName(data.camp_id);
+                // Camp name comes from the RPC result (joined from camps table)
+                if (inviteData.camp_name) {
+                    campName = inviteData.camp_name;
+                }
                 
                 // Fetch subdivision names if assigned
-                if (data.subdivision_ids && data.subdivision_ids.length > 0) {
-                    await fetchSubdivisionNames(data.subdivision_ids);
+                if (inviteData.subdivision_ids && inviteData.subdivision_ids.length > 0) {
+                    await fetchSubdivisionNames(inviteData.subdivision_ids);
                 }
                 
                 // =====================================================================
-                // KEY CHANGE: Handle already-accepted invites gracefully
-                // Instead of showing error, show a friendly "already member" state
+                // Handle already-accepted invites gracefully
                 // =====================================================================
-                if (data.accepted_at) {
+                if (inviteData.accepted_at) {
                     console.log('[Invite] Invite already accepted, showing member state');
                     showAlreadyMemberState();
                     return;
@@ -492,6 +498,7 @@
             }
         }
         
+        // Kept as fallback — but primary camp name now comes from lookup_invite RPC
         async function fetchCampName(campOwnerId) {
             try {
                 console.log('[Invite] Fetching camp name for owner:', campOwnerId);
@@ -547,7 +554,7 @@
         }
         
         // =====================================================================
-        // NEW: Show friendly state for already-accepted invites
+        // Show friendly state for already-accepted invites
         // =====================================================================
         function showAlreadyMemberState() {
             hideAll();
@@ -804,7 +811,9 @@
         }
         
         // =====================================================================
-        // ACCEPT INVITE - KEY CHANGE: Keep invite_token active!
+        // ★★★ SECURITY FIX: Match by email + camp_id instead of row id
+        // The lookup_invite RPC doesn't return the row id for security.
+        // Keep invite_token active (not cleared) for re-use/sharing.
         // =====================================================================
         async function acceptInviteAndRedirect(userName = null) {
             try {
@@ -816,12 +825,8 @@
                     throw new Error(`Email mismatch. Please sign in with ${inviteData.email}`);
                 }
                 
-                console.log('[Invite] Updating invite record:', inviteData.id);
+                console.log('[Invite] Updating invite record for:', inviteData.email);
                 
-                // =====================================================================
-                // KEY CHANGE: Do NOT set invite_token to null!
-                // This keeps the link always active for re-use/sharing
-                // =====================================================================
                 const updateData = {
                     user_id: currentUser.id,
                     accepted_at: new Date().toISOString()
@@ -833,10 +838,12 @@
                     updateData.name = userName;
                 }
                 
+                // ★★★ SECURITY: Match by email + camp_id instead of exposed row id ★★★
                 const { data, error } = await supabaseClient
                     .from('camp_users')
                     .update(updateData)
-                    .eq('id', inviteData.id)
+                    .eq('camp_id', inviteData.camp_id)
+                    .eq('email', inviteData.email.toLowerCase())
                     .select();
                 
                 console.log('[Invite] Update result:', { data, error });
