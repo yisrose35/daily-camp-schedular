@@ -315,7 +315,38 @@
     function loadRoundState() {
         try {
             const global = window.loadGlobalSettings?.() || {};
-            leagueRoundState = global.leagueRoundState || {};
+            const raw = global.leagueRoundState || {};
+            
+            // ★ v2.6: Validate and migrate round state structure
+            const validated = {};
+            Object.keys(raw).forEach(leagueName => {
+                const entry = raw[leagueName];
+                if (!entry || typeof entry !== 'object') return;
+                
+                validated[leagueName] = {
+                    currentRound: typeof entry.currentRound === 'number' ? entry.currentRound : 0,
+                    gamesPerDate: (entry.gamesPerDate && typeof entry.gamesPerDate === 'object') ? entry.gamesPerDate : {},
+                    lastScheduledDate: entry.lastScheduledDate || null,
+                    sportRotationIndex: typeof entry.sportRotationIndex === 'number' ? entry.sportRotationIndex : 0,
+                    // Preserve any additional properties for forward compatibility
+                    ...Object.fromEntries(
+                        Object.entries(entry).filter(([k]) => 
+                            !['currentRound', 'gamesPerDate', 'lastScheduledDate', 'sportRotationIndex'].includes(k)
+                        )
+                    )
+                };
+            });
+            
+            // Remove round state for leagues that no longer exist
+            const existingLeagues = new Set(Object.keys(leaguesByName));
+            Object.keys(validated).forEach(name => {
+                if (existingLeagues.size > 0 && !existingLeagues.has(name)) {
+                    console.log(`[LEAGUES] Removing orphaned round state for deleted league: "${name}"`);
+                    delete validated[name];
+                }
+            });
+            
+            leagueRoundState = validated;
             window.leagueRoundState = leagueRoundState;
         } catch (e) {
             console.error("[LEAGUES] Failed to load league round state:", e);
