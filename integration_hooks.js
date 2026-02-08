@@ -257,7 +257,13 @@
             console.log('═══════════════════════════════════════════════════════');
         }
     };
-
+// ★★★ SECURITY: Freeze to prevent monkey-patching ★★★
+    Object.freeze(window.CloudPermissions);
+    Object.defineProperty(window, 'CloudPermissions', {
+        value: window.CloudPermissions,
+        writable: false,
+        configurable: false
+    });
     // =========================================================================
     // USER NOTIFICATIONS
     // =========================================================================
