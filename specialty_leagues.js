@@ -899,9 +899,11 @@
             });
             delBtn.onmouseenter = () => { delBtn.style.background = '#FEE2E2'; };
             delBtn.onmouseleave = () => { delBtn.style.background = '#FFFFFF'; };
-            delBtn.onclick = () => {
+           delBtn.onclick = () => {
                 if (!window.AccessControl?.checkSetupAccess('delete specialty leagues')) return;
-                if (confirm(`Delete "${escapeHtml(league.name)}"?`)) {
+                // ★ v2.2.7 FIX: confirm() renders plain text; escapeHtml produces HTML entities
+                // that show as literal "&amp;" etc. Use raw name since confirm() is XSS-safe.
+                if (confirm(`Delete "${league.name}"?`)) {
                     delete specialtyLeagues[league.id];
                     activeLeagueId = null;
                     saveData();
