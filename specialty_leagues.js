@@ -636,13 +636,13 @@
                 }, 100);
             }
 
-            // ★ Clear protection flag after delay
+            } catch (e) {
+            console.error("[SPECIALTY_LEAGUES] Save failed:", e);
+        } finally {
+            // ★ v2.2.7 FIX: Always schedule _saveInProgress reset, even if save throws
             setTimeout(() => {
                 _saveInProgress = false;
             }, 500);
-        } catch (e) {
-            console.error("[SPECIALTY_LEAGUES] Save failed:", e);
-            _saveInProgress = false;
         }
     }
 
