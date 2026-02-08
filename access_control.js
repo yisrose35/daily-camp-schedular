@@ -61,6 +61,7 @@
     let _membership = null;
     let _lastDivisionsHash = null;
     let _membershipSubscription = null;  // ★★★ v3.7: Real-time subscription ★★★
+    let _userId = null;  // ★★★ v3.9: Track userId for membership watcher ★★★
 
     const ROLES = {
         OWNER: 'owner',
@@ -173,6 +174,7 @@
         }
 
         _currentUser = user;
+        _userId = user.id;  // ★★★ v3.9: Store for membership watcher ★★★
         
         // ★★★ v3.8: TRY SESSION CACHE FIRST ★★★
         if (tryRestoreFromCache(user.id)) {
@@ -250,29 +252,111 @@
     }
 
     // =========================================================================
-    // ★★★ v3.7: REAL-TIME MEMBERSHIP SUBSCRIPTION ★★★
-    // If an admin changes this user's role/subdivisions remotely,
-    // refresh permissions without requiring a page reload.
+    // ★★★ v3.9 SECURITY: ENHANCED REAL-TIME MEMBERSHIP WATCHER ★★★
+    // Handles DELETE (revocation), UPDATE (role/division changes) in real-time.
+    // If an admin revokes or changes this user's membership remotely,
+    // the UI responds immediately without requiring a page reload.
     // =========================================================================
 
     function setupMembershipSubscription() {
-        if (!_isTeamMember || !_currentUser || !window.supabase) return;
+        if (!_currentUser || !window.supabase) return;
+        // Owners watching their own camp don't need membership watch
+        if (!_isTeamMember && _currentRole === ROLES.OWNER) return;
 
         try {
+            // Clean up existing subscription before creating new one
+            if (_membershipSubscription) {
+                try { window.supabase.removeChannel(_membershipSubscription); } catch(e) {}
+            }
+
             _membershipSubscription = window.supabase
-                .channel('my-membership-' + _currentUser.id)
+                .channel('membership-watch-' + _currentUser.id)
                 .on('postgres_changes', {
-                    event: 'UPDATE',
+                    event: '*',  // ★ SECURITY: Listen for INSERT, UPDATE, AND DELETE
                     schema: 'public',
                     table: 'camp_users',
                     filter: `user_id=eq.${_currentUser.id}`
-                }, (payload) => {
-                    console.log('🔐 Membership updated remotely, refreshing permissions...');
-                    refresh();
+                }, async (payload) => {
+                    console.log('🔐 [REALTIME] Membership change detected:', payload.eventType);
+
+                    if (payload.eventType === 'DELETE') {
+                        // ═══════════════════════════════════════════════
+                        // MEMBERSHIP REVOKED — force redirect to login
+                        // ═══════════════════════════════════════════════
+                        console.warn('🔐 🚨 Membership DELETED — access revoked');
+                        _initialized = false;
+                        _currentRole = null;
+
+                        if (typeof window.showToast === 'function') {
+                            window.showToast('Your access has been revoked. Redirecting...', 'error');
+                        } else {
+                            alert('Your camp access has been revoked by an administrator.');
+                        }
+
+                        try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
+
+                        // Dispatch event so other modules can clean up
+                        window.dispatchEvent(new CustomEvent('campistry-permission-revoked', {
+                            detail: { reason: 'membership_deleted' }
+                        }));
+
+                        setTimeout(() => {
+                            window.location.href = 'index.html';
+                        }, 2000);
+
+                    } else if (payload.eventType === 'UPDATE') {
+                        // ═══════════════════════════════════════════════
+                        // ROLE OR DIVISION CHANGE — refresh permissions
+                        // ═══════════════════════════════════════════════
+                        const newRecord = payload.new;
+                        const oldRole = _currentRole;
+                        const newRole = newRecord.role;
+
+                        // Check if role changed
+                        if (newRole && newRole !== oldRole) {
+                            console.warn(`🔐 Role changed remotely: ${oldRole} → ${newRole}`);
+                            try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
+
+                            // Re-init with fresh data
+                            _initialized = false;
+                            await initialize();
+
+                            if (typeof window.showToast === 'function') {
+                                window.showToast(`Your role has been updated to ${newRole}. Permissions refreshed.`, 'info');
+                            }
+
+                            window.dispatchEvent(new CustomEvent('campistry-role-changed', {
+                                detail: { oldRole, newRole, membership: newRecord }
+                            }));
+                            return;
+                        }
+
+                        // Check if division assignments changed
+                        const newDivisions = newRecord.subdivision_ids || newRecord.assigned_divisions || [];
+                        const oldDivisions = _userSubdivisionIds || [];
+
+                        if (JSON.stringify(newDivisions.sort()) !== JSON.stringify([...oldDivisions].sort())) {
+                            console.warn('🔐 Division assignments changed remotely');
+                            try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
+
+                            _initialized = false;
+                            await initialize();
+
+                            window.dispatchEvent(new CustomEvent('campistry-divisions-changed', {
+                                detail: { oldDivisions, newDivisions }
+                            }));
+                        } else {
+                            // Some other field changed — still refresh to be safe
+                            console.log('🔐 Membership updated (non-critical field), refreshing...');
+                            refresh();
+                        }
+                    }
                 })
-                .subscribe();
-            
-            debugLog("Real-time membership subscription active");
+                .subscribe((status) => {
+                    console.log('🔐 Membership watcher status:', status);
+                });
+
+            debugLog("Real-time membership subscription active (enhanced v3.9 — DELETE + UPDATE)");
         } catch (e) {
             console.warn("🔐 Could not set up real-time membership subscription:", e);
         }
@@ -408,9 +492,6 @@
         _userName = _currentUser.email.split('@')[0];
         _userSubdivisionIds = [];
         _directDivisionAssignments = [];
-        // Don't cache uncertain state
-        // localStorage.setItem('campistry_user_id', _campId);
-        // localStorage.setItem('campistry_auth_user_id', _currentUser.id);
     }
 
     function getCampId() {
@@ -679,7 +760,6 @@
     // ★★★ FIXED v3.6: Admin can now erase schedules/history ★★★
     function canEraseData() {
         if (!_initialized) return false;
-        // Owner and Admin can erase schedules and history
         return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN;
     }
 
@@ -689,28 +769,16 @@
         return _currentRole === ROLES.OWNER;
     }
 
-    /**
-     * Check if user can edit/save print templates.
-     * Owner and Admin can edit templates; Scheduler and Viewer cannot.
-     */
     function canEditPrintTemplates() {
         if (!_initialized || !_currentRole) return false;
         return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN;
     }
 
-    /**
-     * Check if user can print schedules.
-     * All roles can print (per existing Print Center exception).
-     */
     function canPrintSchedules() {
         if (!_initialized) return false;
-        return true; // Print Center is accessible to all roles
+        return true;
     }
 
-    /**
-     * Check if user can manage (delete) print templates.
-     * Only Owner can delete templates.
-     */
     function canDeletePrintTemplates() {
         if (!_initialized || !_currentRole) return false;
         return _currentRole === ROLES.OWNER;
@@ -758,17 +826,9 @@
     // EXCEPTION AREAS - Accessible to ALL including viewers
     // =========================================================================
 
-    function canPrint() {
-        return _initialized;
-    }
-
-    function canUseCamperLocator() {
-        return _initialized;
-    }
-
-    function canViewDailySchedule() {
-        return _initialized;
-    }
+    function canPrint() { return _initialized; }
+    function canUseCamperLocator() { return _initialized; }
+    function canViewDailySchedule() { return _initialized; }
 
     // =========================================================================
     // FIELD AVAILABILITY PERMISSIONS
@@ -799,52 +859,20 @@
     // GETTERS & HELPERS
     // =========================================================================
 
-    function getEditableDivisions() {
-        return [..._editableDivisions];
-    }
-
+    function getEditableDivisions() { return [..._editableDivisions]; }
     function getUserManagedDivisions() {
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
-            return null;
-        }
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return null;
         return getEditableDivisions();
     }
-
-    function getGeneratableDivisions() {
-        return getEditableDivisions();
-    }
-
-    function getCurrentRole() {
-        return _currentRole;
-    }
-    
-    function isTeamMember() {
-        return _isTeamMember;
-    }
-
-    function isOwner() {
-        return _currentRole === ROLES.OWNER;
-    }
-
-    function isAdmin() {
-        return _currentRole === ROLES.ADMIN || _currentRole === ROLES.OWNER;
-    }
-
-    function isViewer() {
-        return _currentRole === ROLES.VIEWER;
-    }
-
-    function isScheduler() {
-        return _currentRole === ROLES.SCHEDULER;
-    }
-
-    function getSubdivisions() {
-        return [..._subdivisions];
-    }
-
-    function getAllSubdivisions() {
-        return [..._subdivisions];
-    }
+    function getGeneratableDivisions() { return getEditableDivisions(); }
+    function getCurrentRole() { return _currentRole; }
+    function isTeamMember() { return _isTeamMember; }
+    function isOwner() { return _currentRole === ROLES.OWNER; }
+    function isAdmin() { return _currentRole === ROLES.ADMIN || _currentRole === ROLES.OWNER; }
+    function isViewer() { return _currentRole === ROLES.VIEWER; }
+    function isScheduler() { return _currentRole === ROLES.SCHEDULER; }
+    function getSubdivisions() { return [..._subdivisions]; }
+    function getAllSubdivisions() { return [..._subdivisions]; }
 
     function getCurrentUserInfo() {
         if (!_currentUser) return null;
@@ -855,66 +883,40 @@
         };
     }
 
-    function getUserSubdivisionIds() {
-        return [..._userSubdivisionIds];
-    }
-
-    function getUserSubdivisionDetails() {
-        return [..._userSubdivisionDetails];
-    }
+    function getUserSubdivisionIds() { return [..._userSubdivisionIds]; }
+    function getUserSubdivisionDetails() { return [..._userSubdivisionDetails]; }
 
     function getUserSubdivisions() {
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
-            return [..._subdivisions];
-        }
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return [..._subdivisions];
         return _subdivisions.filter(s => _userSubdivisionIds.includes(s.id));
     }
 
     function getSubdivisionForDivision(divisionName) {
         for (const sub of _subdivisions) {
-            if (sub.divisions && sub.divisions.includes(divisionName)) {
-                return sub;
-            }
+            if (sub.divisions && sub.divisions.includes(divisionName)) return sub;
         }
         return null;
     }
 
     function isDivisionInUserSubdivisions(divisionName) {
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
-            return true;
-        }
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         const userSubs = getUserSubdivisions();
         return userSubs.some(sub => sub.divisions && sub.divisions.includes(divisionName));
     }
     
-    function getDirectDivisionAssignments() {
-        return [..._directDivisionAssignments];
-    }
-
-    function getUserName() {
-        return _userName;
-    }
-
-    function getCampName() {
-        return _campName;
-    }
-
-    function getRole() {
-        return _currentRole;
-    }
+    function getDirectDivisionAssignments() { return [..._directDivisionAssignments]; }
+    function getUserName() { return _userName; }
+    function getCampName() { return _campName; }
+    function getRole() { return _currentRole; }
 
     function getEditableBunkIds() {
         const myDivisions = getEditableDivisions();
         const divisions = window.divisions || {};
         const bunks = [];
-
         for (const divName of myDivisions) {
             const divInfo = divisions[divName];
-            if (divInfo?.bunks) {
-                bunks.push(...divInfo.bunks);
-            }
+            if (divInfo?.bunks) bunks.push(...divInfo.bunks);
         }
-
         return bunks;
     }
 
@@ -925,98 +927,54 @@
     function getWelcomeMessage() {
         const name = _userName || 'there';
         const camp = _campName || 'Your Camp';
-        
-        return {
-            title: `Welcome, ${name}!`,
-            subtitle: camp,
-            role: _currentRole,
-            isOwner: !_isTeamMember
-        };
+        return { title: `Welcome, ${name}!`, subtitle: camp, role: _currentRole, isOwner: !_isTeamMember };
     }
 
     function getPermissionsText() {
-        if (_currentRole === ROLES.OWNER) {
-            return 'Full access to all features';
-        }
-        
-        if (_currentRole === ROLES.ADMIN) {
-            return 'Full editing access (except team management)';
-        }
-        
-        if (_currentRole === ROLES.VIEWER) {
-            return 'View-only access (can print and lookup campers)';
-        }
+        if (_currentRole === ROLES.OWNER) return 'Full access to all features';
+        if (_currentRole === ROLES.ADMIN) return 'Full editing access (except team management)';
+        if (_currentRole === ROLES.VIEWER) return 'View-only access (can print and lookup campers)';
         
         if (_currentRole === ROLES.SCHEDULER) {
-            if (_editableDivisions.length === 0) {
-                return 'Scheduler (no divisions assigned - contact owner)';
-            }
+            if (_editableDivisions.length === 0) return 'Scheduler (no divisions assigned - contact owner)';
             
             let names = [];
-            
             if (_userSubdivisionDetails && _userSubdivisionDetails.length > 0) {
                 names = _userSubdivisionDetails.map(s => s.name);
             } else if (_directDivisionAssignments && _directDivisionAssignments.length > 0) {
-                if (_directDivisionAssignments.length <= 3) {
-                    return `Scheduler for ${_directDivisionAssignments.join(', ')}`;
-                } else {
-                    return `Scheduler for ${_directDivisionAssignments.length} divisions`;
-                }
+                if (_directDivisionAssignments.length <= 3) return `Scheduler for ${_directDivisionAssignments.join(', ')}`;
+                else return `Scheduler for ${_directDivisionAssignments.length} divisions`;
             } else if (_userSubdivisionIds && _userSubdivisionIds.length > 0) {
                 const subs = _subdivisions.filter(s => _userSubdivisionIds.includes(s.id));
                 names = subs.map(s => s.name);
             }
             
-            if (names.length === 0) {
-                return 'Scheduler (no divisions assigned)';
-            } else if (names.length === 1) {
-                return `Scheduler for ${names[0]}`;
-            } else if (names.length === 2) {
-                return `Scheduler for ${names[0]} and ${names[1]}`;
-            } else {
-                const last = names.pop();
-                return `Scheduler for ${names.join(', ')}, and ${last}`;
-            }
+            if (names.length === 0) return 'Scheduler (no divisions assigned)';
+            else if (names.length === 1) return `Scheduler for ${names[0]}`;
+            else if (names.length === 2) return `Scheduler for ${names[0]} and ${names[1]}`;
+            else { const last = names.pop(); return `Scheduler for ${names.join(', ')}, and ${last}`; }
         }
-        
         return '';
     }
 
     function getRoleDisplay() {
-        const roleNames = {
-            owner: 'Owner',
-            admin: 'Administrator',
-            scheduler: 'Scheduler',
-            viewer: 'Viewer'
-        };
-        
-        const roleColors = {
-            owner: '#7C3AED',
-            admin: '#2563EB',
-            scheduler: '#059669',
-            viewer: '#6B7280'
-        };
-        
+        const roleNames = { owner: 'Owner', admin: 'Administrator', scheduler: 'Scheduler', viewer: 'Viewer' };
+        const roleColors = { owner: '#7C3AED', admin: '#2563EB', scheduler: '#059669', viewer: '#6B7280' };
         const roleDescriptions = {
             owner: 'Full access to all features and team management',
             admin: 'Full editing access to all divisions (no team management)',
             scheduler: 'Edit access to assigned divisions only',
             viewer: 'View-only access (can print and lookup campers)'
         };
-        
         return {
-            role: _currentRole,
-            name: roleNames[_currentRole] || _currentRole,
-            color: roleColors[_currentRole] || '#6B7280',
-            description: roleDescriptions[_currentRole] || '',
-            subdivisionDetails: _userSubdivisionDetails || [],
-            directDivisionAssignments: _directDivisionAssignments || []
+            role: _currentRole, name: roleNames[_currentRole] || _currentRole,
+            color: roleColors[_currentRole] || '#6B7280', description: roleDescriptions[_currentRole] || '',
+            subdivisionDetails: _userSubdivisionDetails || [], directDivisionAssignments: _directDivisionAssignments || []
         };
     }
 
     function getPermissionsSummary() {
         const permissions = [];
-        
         if (_currentRole === ROLES.OWNER) {
             permissions.push({ icon: '👑', text: 'Full access to all features' });
             permissions.push({ icon: '👥', text: 'Manage team members' });
@@ -1036,17 +994,12 @@
             permissions.push({ icon: '🔍', text: 'Camper Locator access' });
             permissions.push({ icon: '🖨️', text: 'Print schedules with saved templates' });
         }
-        
         return permissions;
     }
 
     function getNextSubdivisionColor() {
         const usedColors = _subdivisions.map(s => s.color);
-        for (const color of SUBDIVISION_COLORS) {
-            if (!usedColors.includes(color)) {
-                return color;
-            }
-        }
+        for (const color of SUBDIVISION_COLORS) { if (!usedColors.includes(color)) return color; }
         return SUBDIVISION_COLORS[_subdivisions.length % SUBDIVISION_COLORS.length];
     }
 
@@ -1055,27 +1008,16 @@
     // =========================================================================
 
     function getRoleDisplayName(role) {
-        const names = {
-            owner: 'Owner',
-            admin: 'Admin',
-            scheduler: 'Scheduler',
-            viewer: 'Viewer'
-        };
+        const names = { owner: 'Owner', admin: 'Admin', scheduler: 'Scheduler', viewer: 'Viewer' };
         return names[role] || role;
     }
 
     function getRoleColor(role) {
-        const colors = {
-            owner: '#7C3AED',
-            admin: '#2563EB',
-            scheduler: '#059669',
-            viewer: '#6B7280'
-        };
+        const colors = { owner: '#7C3AED', admin: '#2563EB', scheduler: '#059669', viewer: '#6B7280' };
         return colors[role] || '#6B7280';
     }
 
     function showPermissionDenied(action = 'perform this action') {
-        // ★★★ v3.7: XSS-safe — uses textContent instead of innerHTML ★★★
         if (typeof window.showToast === 'function') {
             window.showToast(`You don't have permission to ${action}`, 'error');
         } else {
@@ -1083,31 +1025,15 @@
             if (!toast) {
                 toast = document.createElement('div');
                 toast.id = 'rbac-toast';
-                toast.style.cssText = `
-                    position: fixed;
-                    bottom: 24px;
-                    left: 50%;
-                    transform: translateX(-50%) translateY(100px);
-                    padding: 12px 24px;
-                    background: #EF4444;
-                    color: white;
-                    border-radius: 10px;
-                    font-weight: 500;
-                    font-size: 0.9rem;
-                    z-index: 10001;
-                    transition: all 0.3s ease;
-                    box-shadow: 0 8px 24px rgba(0,0,0,0.2);
-                `;
+                toast.style.cssText = `position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(100px);
+                    padding: 12px 24px; background: #EF4444; color: white; border-radius: 10px; font-weight: 500;
+                    font-size: 0.9rem; z-index: 10001; transition: all 0.3s ease; box-shadow: 0 8px 24px rgba(0,0,0,0.2);`;
                 document.body.appendChild(toast);
             }
-            
             toast.textContent = `🔒 You don't have permission to ${action}`;
             toast.style.transform = 'translateX(-50%) translateY(0)';
-            
             clearTimeout(toast._timer);
-            toast._timer = setTimeout(() => {
-                toast.style.transform = 'translateX(-50%) translateY(100px)';
-            }, 3000);
+            toast._timer = setTimeout(() => { toast.style.transform = 'translateX(-50%) translateY(100px)'; }, 3000);
         }
         console.warn(`🔐 Permission denied: ${action}`);
     }
@@ -1115,26 +1041,14 @@
     function renderAccessBanner() {
         const existing = document.getElementById('access-control-banner');
         if (existing) existing.remove();
-        
         if (!_initialized) return;
-        
         if (_currentRole === ROLES.OWNER) return;
         
         const banner = document.createElement('div');
         banner.id = 'access-control-banner';
-        banner.style.cssText = `
-            background: linear-gradient(135deg, #FEF3C7, #FDE68A);
-            border: 1px solid #F59E0B;
-            border-radius: 8px;
-            padding: 12px 16px;
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            font-size: 0.9rem;
-        `;
+        banner.style.cssText = `background: linear-gradient(135deg, #FEF3C7, #FDE68A); border: 1px solid #F59E0B;
+            border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; font-size: 0.9rem;`;
         
-        // ★★★ v3.7: XSS-safe — build DOM elements instead of innerHTML ★★★
         const icon = document.createElement('span');
         icon.style.fontSize = '1.2rem';
         const textContainer = document.createElement('div');
@@ -1143,81 +1057,35 @@
         descEl.style.fontSize = '0.85rem';
 
         if (_currentRole === ROLES.VIEWER) {
-            icon.textContent = '👁️';
-            titleEl.textContent = 'View Only Mode';
-            descEl.style.color = '#92400E';
-            descEl.textContent = 'You can view all schedules, use Print Center, and Camper Locator.';
+            icon.textContent = '👁️'; titleEl.textContent = 'View Only Mode';
+            descEl.style.color = '#92400E'; descEl.textContent = 'You can view all schedules, use Print Center, and Camper Locator.';
         } else if (_currentRole === ROLES.ADMIN) {
-            banner.style.background = 'linear-gradient(135deg, #DBEAFE, #BFDBFE)';
-            banner.style.borderColor = '#3B82F6';
-            icon.textContent = '🔧';
-            titleEl.textContent = 'Administrator Mode';
-            descEl.style.color = '#1E40AF';
-            descEl.textContent = 'Full editing access. Team management requires Owner role.';
+            banner.style.background = 'linear-gradient(135deg, #DBEAFE, #BFDBFE)'; banner.style.borderColor = '#3B82F6';
+            icon.textContent = '🔧'; titleEl.textContent = 'Administrator Mode';
+            descEl.style.color = '#1E40AF'; descEl.textContent = 'Full editing access. Team management requires Owner role.';
         } else if (_currentRole === ROLES.SCHEDULER) {
             const permText = getPermissionsText();
-            const editableDivsList = _editableDivisions.length > 0 
-                ? _editableDivisions.join(', ')
-                : 'None assigned';
-            
-            banner.style.background = 'linear-gradient(135deg, #D1FAE5, #A7F3D0)';
-            banner.style.borderColor = '#10B981';
-            icon.textContent = '📅';
-            titleEl.textContent = permText;
-            descEl.style.color = '#065F46';
-            descEl.textContent = `Editable: ${editableDivsList}`;
+            const editableDivsList = _editableDivisions.length > 0 ? _editableDivisions.join(', ') : 'None assigned';
+            banner.style.background = 'linear-gradient(135deg, #D1FAE5, #A7F3D0)'; banner.style.borderColor = '#10B981';
+            icon.textContent = '📅'; titleEl.textContent = permText;
+            descEl.style.color = '#065F46'; descEl.textContent = `Editable: ${editableDivsList}`;
         }
-
-        textContainer.appendChild(titleEl);
-        textContainer.appendChild(descEl);
-        banner.appendChild(icon);
-        banner.appendChild(textContainer);
+        textContainer.appendChild(titleEl); textContainer.appendChild(descEl);
+        banner.appendChild(icon); banner.appendChild(textContainer);
         
         const container = document.querySelector('.main-content, #schedule-container, main');
-        if (container) {
-            container.insertBefore(banner, container.firstChild);
-        }
+        if (container) container.insertBefore(banner, container.firstChild);
     }
 
     // =========================================================================
     // ACCESS CHECK HELPERS
     // =========================================================================
 
-    function canEdit() {
-        return canEditAnything();
-    }
-
-    function checkEditAccess() {
-        if (!canEdit()) {
-            showPermissionDenied('edit schedules');
-            return false;
-        }
-        return true;
-    }
-
-    function checkSetupAccess() {
-        if (!canEditSetup()) {
-            showPermissionDenied('modify setup');
-            return false;
-        }
-        return true;
-    }
-
-    function checkDivisionAccess(divisionName, action) {
-        if (!canEditDivision(divisionName)) {
-            showPermissionDenied(action || `edit ${divisionName}`);
-            return false;
-        }
-        return true;
-    }
-
-    function checkBunkAccess(bunkName, action) {
-        if (!canEditBunk(bunkName)) {
-            showPermissionDenied(action || `edit ${bunkName}`);
-            return false;
-        }
-        return true;
-    }
+    function canEdit() { return canEditAnything(); }
+    function checkEditAccess() { if (!canEdit()) { showPermissionDenied('edit schedules'); return false; } return true; }
+    function checkSetupAccess() { if (!canEditSetup()) { showPermissionDenied('modify setup'); return false; } return true; }
+    function checkDivisionAccess(divisionName, action) { if (!canEditDivision(divisionName)) { showPermissionDenied(action || `edit ${divisionName}`); return false; } return true; }
+    function checkBunkAccess(bunkName, action) { if (!canEditBunk(bunkName)) { showPermissionDenied(action || `edit ${bunkName}`); return false; } return true; }
 
     function filterEditableBunks(bunks) {
         if (!Array.isArray(bunks)) return [];
@@ -1240,96 +1108,49 @@
     // =========================================================================
 
     function filterDivisionsForGeneration(requestedDivisions) {
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
-            return requestedDivisions || Object.keys(window.divisions || {});
-        }
-        
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return requestedDivisions || Object.keys(window.divisions || {});
         const myDivisions = getEditableDivisions();
-        
-        if (!requestedDivisions || requestedDivisions.length === 0) {
-            return myDivisions;
-        }
-        
+        if (!requestedDivisions || requestedDivisions.length === 0) return myDivisions;
         return requestedDivisions.filter(d => myDivisions.includes(d));
     }
 
     async function deleteMyDivisionsOnly(dateKey) {
         console.log('🗑️ [AccessControl] deleteMyDivisionsOnly called for:', dateKey);
-        
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
             console.log('🗑️ [AccessControl] Owner/Admin - use full delete instead');
             return null;
         }
-        
         const myDivisions = getEditableDivisions();
-        if (myDivisions.length === 0) {
-            return { error: "No divisions assigned" };
-        }
-        
+        if (myDivisions.length === 0) return { error: "No divisions assigned" };
         console.log('🗑️ [AccessControl] Deleting divisions:', myDivisions);
         
         try {
             if (window.ScheduleDB?.deleteMyScheduleOnly) {
-                console.log('🗑️ [AccessControl] Calling ScheduleDB.deleteMyScheduleOnly...');
                 const cloudResult = await window.ScheduleDB.deleteMyScheduleOnly(dateKey);
-                console.log('🗑️ [AccessControl] Cloud delete result:', cloudResult);
-                
-                if (!cloudResult?.success) {
-                    console.error('🗑️ [AccessControl] Cloud delete failed:', cloudResult?.error);
-                }
+                if (!cloudResult?.success) console.error('🗑️ [AccessControl] Cloud delete failed:', cloudResult?.error);
             } else {
                 console.warn('🗑️ [AccessControl] ScheduleDB.deleteMyScheduleOnly not available!');
                 const client = window.CampistryDB?.getClient?.() || window.supabase;
                 const campId = window.CampistryDB?.getCampId?.() || getCampId();
                 const userId = window.CampistryDB?.getUserId?.();
-                
                 if (client && campId && userId) {
-                    console.log('🗑️ [AccessControl] Fallback: direct Supabase delete...');
-                    const { error } = await client
-                        .from('daily_schedules')
-                        .delete()
-                        .eq('camp_id', campId)
-                        .eq('date_key', dateKey)
-                        .eq('scheduler_id', userId);
-                        
-                    if (error) {
-                        console.error('🗑️ [AccessControl] Fallback delete error:', error);
-                    } else {
-                        console.log('🗑️ [AccessControl] Fallback delete successful');
-                    }
+                    const { error } = await client.from('daily_schedules').delete()
+                        .eq('camp_id', campId).eq('date_key', dateKey).eq('scheduler_id', userId);
+                    if (error) console.error('🗑️ [AccessControl] Fallback delete error:', error);
                 }
             }
             
             const divisions = window.divisions || {};
             const bunksToRemove = new Set();
-            
             for (const divName of myDivisions) {
                 const divInfo = divisions[divName];
-                if (divInfo?.bunks) {
-                    divInfo.bunks.forEach(b => bunksToRemove.add(b));
-                }
+                if (divInfo?.bunks) divInfo.bunks.forEach(b => bunksToRemove.add(b));
             }
-            
-            if (window.scheduleAssignments) {
-                bunksToRemove.forEach(bunk => {
-                    delete window.scheduleAssignments[bunk];
-                });
-                console.log('🗑️ [AccessControl] Cleared', bunksToRemove.size, 'bunks from window.scheduleAssignments');
-            }
-            
-            if (window.leagueAssignments) {
-                bunksToRemove.forEach(bunk => {
-                    delete window.leagueAssignments[bunk];
-                });
-            }
-            
-            if (window.ScheduleDB?.loadSchedule) {
-                console.log('🗑️ [AccessControl] Reloading remaining data...');
-                await window.ScheduleDB.loadSchedule(dateKey);
-            }
+            if (window.scheduleAssignments) { bunksToRemove.forEach(bunk => { delete window.scheduleAssignments[bunk]; }); }
+            if (window.leagueAssignments) { bunksToRemove.forEach(bunk => { delete window.leagueAssignments[bunk]; }); }
+            if (window.ScheduleDB?.loadSchedule) await window.ScheduleDB.loadSchedule(dateKey);
             
             return { success: true, deletedDivisions: myDivisions };
-            
         } catch (e) {
             console.error('🗑️ [AccessControl] deleteMyDivisionsOnly error:', e);
             return { error: e.message };
@@ -1341,270 +1162,109 @@
     // =========================================================================
 
     async function createSubdivision(name, divisions = [], color = null) {
-        if (!canManageSubdivisions()) {
-            return { error: "Not authorized" };
-        }
-
+        if (!canManageSubdivisions()) return { error: "Not authorized" };
         const subdivisionColor = color || getNextSubdivisionColor();
         const campId = getCampId();
-
         try {
-            const { data, error } = await window.supabase
-                .from('subdivisions')
-                .insert([{
-                    camp_id: campId,
-                    name: name,
-                    divisions: divisions,
-                    color: subdivisionColor
-                }])
-                .select()
-                .single();
-
+            const { data, error } = await window.supabase.from('subdivisions')
+                .insert([{ camp_id: campId, name, divisions, color: subdivisionColor }]).select().single();
             if (error) throw error;
-
-            await loadSubdivisions();
-            calculateEditableDivisions();
-
+            await loadSubdivisions(); calculateEditableDivisions();
             return { data };
-
-        } catch (e) {
-            console.error("🔐 Error creating subdivision:", e);
-            return { error: e.message };
-        }
+        } catch (e) { console.error("🔐 Error creating subdivision:", e); return { error: e.message }; }
     }
 
     async function updateSubdivision(id, updates) {
-        if (!canManageSubdivisions()) {
-            return { error: "Not authorized" };
-        }
-
+        if (!canManageSubdivisions()) return { error: "Not authorized" };
         try {
-            const { data, error } = await window.supabase
-                .from('subdivisions')
-                .update(updates)
-                .eq('id', id)
-                .select()
-                .single();
-
+            const { data, error } = await window.supabase.from('subdivisions').update(updates).eq('id', id).select().single();
             if (error) throw error;
-
-            await loadSubdivisions();
-            calculateEditableDivisions();
-
+            await loadSubdivisions(); calculateEditableDivisions();
             return { data };
-
-        } catch (e) {
-            console.error("🔐 Error updating subdivision:", e);
-            return { error: e.message };
-        }
+        } catch (e) { console.error("🔐 Error updating subdivision:", e); return { error: e.message }; }
     }
 
     async function deleteSubdivision(id) {
-        if (_currentRole !== ROLES.OWNER) {
-            return { error: "Only owner can delete subdivisions" };
-        }
-
+        if (_currentRole !== ROLES.OWNER) return { error: "Only owner can delete subdivisions" };
         try {
-            const { error } = await window.supabase
-                .from('subdivisions')
-                .delete()
-                .eq('id', id);
-
+            const { error } = await window.supabase.from('subdivisions').delete().eq('id', id);
             if (error) throw error;
-
-            await loadSubdivisions();
-            calculateEditableDivisions();
-
+            await loadSubdivisions(); calculateEditableDivisions();
             return { success: true };
-
-        } catch (e) {
-            console.error("🔐 Error deleting subdivision:", e);
-            return { error: e.message };
-        }
+        } catch (e) { console.error("🔐 Error deleting subdivision:", e); return { error: e.message }; }
     }
 
     async function getTeamMembers() {
         const campId = getCampId();
-        
         try {
-            const { data, error } = await window.supabase
-                .from('camp_users')
-                .select('*')
-                .eq('camp_id', campId)
-                .order('role');
-
+            const { data, error } = await window.supabase.from('camp_users').select('*').eq('camp_id', campId).order('role');
             if (error) throw error;
-
             return { data: data || [] };
-
-        } catch (e) {
-            console.error("🔐 Error loading team:", e);
-            return { data: [], error: e.message };
-        }
+        } catch (e) { console.error("🔐 Error loading team:", e); return { data: [], error: e.message }; }
     }
 
     async function inviteTeamMember(email, role, subdivisionIds = [], name = '') {
-        if (!canInviteUsers()) {
-            return { error: "Not authorized to invite users" };
-        }
-
-        if (!Object.values(ROLES).includes(role)) {
-            return { error: "Invalid role" };
-        }
-
+        if (!canInviteUsers()) return { error: "Not authorized to invite users" };
+        if (!Object.values(ROLES).includes(role)) return { error: "Invalid role" };
         const inviteToken = crypto.randomUUID();
         const campId = getCampId();
-
         try {
-            const { data, error } = await window.supabase
-                .from('camp_users')
-                .insert([{
-                    camp_id: campId,
-                    email: email.toLowerCase().trim(),
-                    name: name || null,
-                    role: role,
-                    subdivision_ids: subdivisionIds,
-                    invited_by: _currentUser.id,
-                    invite_token: inviteToken
-                }])
-                .select()
-                .single();
-
+            const { data, error } = await window.supabase.from('camp_users')
+                .insert([{ camp_id: campId, email: email.toLowerCase().trim(), name: name || null,
+                    role, subdivision_ids: subdivisionIds, invited_by: _currentUser.id, invite_token: inviteToken }])
+                .select().single();
             if (error) throw error;
-
             const inviteUrl = `${window.location.origin}/invite.html?token=${inviteToken}`;
-
-            return { 
-                data,
-                inviteUrl,
-                message: `Invite created. Share this link with ${email}: ${inviteUrl}`
-            };
-
-        } catch (e) {
-            console.error("🔐 Error inviting team member:", e);
-            return { error: e.message };
-        }
+            return { data, inviteUrl, message: `Invite created. Share this link with ${email}: ${inviteUrl}` };
+        } catch (e) { console.error("🔐 Error inviting team member:", e); return { error: e.message }; }
     }
 
     async function updateTeamMember(id, updates) {
-        if (!canManageTeam()) {
-            return { error: "Not authorized" };
-        }
-
+        if (!canManageTeam()) return { error: "Not authorized" };
         try {
-            const { data, error } = await window.supabase
-                .from('camp_users')
-                .update(updates)
-                .eq('id', id)
-                .select()
-                .single();
-
+            const { data, error } = await window.supabase.from('camp_users').update(updates).eq('id', id).select().single();
             if (error) throw error;
-
             return { data };
-
-        } catch (e) {
-            console.error("🔐 Error updating team member:", e);
-            return { error: e.message };
-        }
+        } catch (e) { console.error("🔐 Error updating team member:", e); return { error: e.message }; }
     }
 
     async function removeTeamMember(id) {
-        if (!canManageTeam()) {
-            return { error: "Not authorized" };
-        }
-
+        if (!canManageTeam()) return { error: "Not authorized" };
         try {
-            const { error } = await window.supabase
-                .from('camp_users')
-                .delete()
-                .eq('id', id);
-
+            const { error } = await window.supabase.from('camp_users').delete().eq('id', id);
             if (error) throw error;
-
             return { success: true };
-
-        } catch (e) {
-            console.error("🔐 Error removing team member:", e);
-            return { error: e.message };
-        }
+        } catch (e) { console.error("🔐 Error removing team member:", e); return { error: e.message }; }
     }
 
     async function acceptInvite(inviteToken) {
-        if (!_currentUser) {
-            return { error: "Must be logged in to accept invite" };
-        }
-
+        if (!_currentUser) return { error: "Must be logged in to accept invite" };
         try {
-            const { data: invite, error: findError } = await window.supabase
-                .from('camp_users')
-                .select('*')
-                .eq('invite_token', inviteToken)
-                .single();
-
-            if (findError || !invite) {
-                return { error: "Invalid or expired invite" };
-            }
-
-            if (invite.email.toLowerCase() !== _currentUser.email.toLowerCase()) {
-                return { error: "This invite was sent to a different email address" };
-            }
-
-            const { data, error } = await window.supabase
-                .from('camp_users')
-                .update({
-                    user_id: _currentUser.id,
-                    accepted_at: new Date().toISOString(),
-                    invite_token: null
-                })
-                .eq('id', invite.id)
-                .select()
-                .single();
-
+            const { data: invite, error: findError } = await window.supabase.from('camp_users')
+                .select('*').eq('invite_token', inviteToken).single();
+            if (findError || !invite) return { error: "Invalid or expired invite" };
+            if (invite.email.toLowerCase() !== _currentUser.email.toLowerCase()) return { error: "This invite was sent to a different email address" };
+            const { data, error } = await window.supabase.from('camp_users')
+                .update({ user_id: _currentUser.id, accepted_at: new Date().toISOString(), invite_token: null })
+                .eq('id', invite.id).select().single();
             if (error) throw error;
-
-            _campId = invite.camp_id;
-            _currentRole = invite.role;
-            _isTeamMember = true;
-            _userSubdivisionIds = invite.subdivision_ids || [];
-            _directDivisionAssignments = invite.assigned_divisions || [];
+            _campId = invite.camp_id; _currentRole = invite.role; _isTeamMember = true;
+            _userSubdivisionIds = invite.subdivision_ids || []; _directDivisionAssignments = invite.assigned_divisions || [];
             _userName = invite.name || _currentUser.email.split('@')[0];
-            
-            localStorage.setItem('campistry_user_id', _campId);
-            localStorage.setItem('campistry_auth_user_id', _currentUser.id);
-            
-            await loadSubdivisions();
-            await loadUserSubdivisionDetails();
-            calculateEditableDivisions();
-
+            localStorage.setItem('campistry_user_id', _campId); localStorage.setItem('campistry_auth_user_id', _currentUser.id);
+            await loadSubdivisions(); await loadUserSubdivisionDetails(); calculateEditableDivisions();
             return { data, campId: invite.camp_id };
-
-        } catch (e) {
-            console.error("🔐 Error accepting invite:", e);
-            return { error: e.message };
-        }
+        } catch (e) { console.error("🔐 Error accepting invite:", e); return { error: e.message }; }
     }
 
     async function assignDivisionsToMember(memberId, divisionNames) {
-        if (!canManageTeam()) {
-            return { error: "Not authorized" };
-        }
-        
+        if (!canManageTeam()) return { error: "Not authorized" };
         try {
-            const { data, error } = await window.supabase
-                .from('camp_users')
-                .update({ assigned_divisions: divisionNames })
-                .eq('id', memberId)
-                .select()
-                .single();
-            
+            const { data, error } = await window.supabase.from('camp_users')
+                .update({ assigned_divisions: divisionNames }).eq('id', memberId).select().single();
             if (error) throw error;
-            
             return { data };
-        } catch (e) {
-            console.error("🔐 Error assigning divisions:", e);
-            return { error: e.message };
-        }
+        } catch (e) { console.error("🔐 Error assigning divisions:", e); return { error: e.message }; }
     }
 
     // =========================================================================
@@ -1613,65 +1273,32 @@
 
     async function saveFieldLocks(date, locks) {
         const campId = getCampId();
-        
         try {
-            const { data, error } = await window.supabase
-                .from('field_locks')
-                .upsert({
-                    camp_id: campId,
-                    schedule_date: date,
-                    locks: locks
-                }, { onConflict: 'camp_id,schedule_date' });
-
+            const { data, error } = await window.supabase.from('field_locks')
+                .upsert({ camp_id: campId, schedule_date: date, locks }, { onConflict: 'camp_id,schedule_date' });
             if (error) throw error;
-
             return { success: true };
-
-        } catch (e) {
-            console.error("🔐 Error saving field locks:", e);
-            return { error: e.message };
-        }
+        } catch (e) { console.error("🔐 Error saving field locks:", e); return { error: e.message }; }
     }
 
     async function loadFieldLocks(date) {
         const campId = getCampId();
-        
         try {
-            const { data, error } = await window.supabase
-                .from('field_locks')
-                .select('locks')
-                .eq('camp_id', campId)
-                .eq('schedule_date', date)
-                .maybeSingle();
-
+            const { data, error } = await window.supabase.from('field_locks')
+                .select('locks').eq('camp_id', campId).eq('schedule_date', date).maybeSingle();
             if (error) throw error;
-
             return { locks: data?.locks || {} };
-
-        } catch (e) {
-            console.error("🔐 Error loading field locks:", e);
-            return { locks: {} };
-        }
+        } catch (e) { console.error("🔐 Error loading field locks:", e); return { locks: {} }; }
     }
 
     async function clearFieldLocks(date) {
         const campId = getCampId();
-        
         try {
-            const { error } = await window.supabase
-                .from('field_locks')
-                .delete()
-                .eq('camp_id', campId)
-                .eq('schedule_date', date);
-
+            const { error } = await window.supabase.from('field_locks').delete()
+                .eq('camp_id', campId).eq('schedule_date', date);
             if (error) throw error;
-
             return { success: true };
-
-        } catch (e) {
-            console.error("🔐 Error clearing field locks:", e);
-            return { error: e.message };
-        }
+        } catch (e) { console.error("🔐 Error clearing field locks:", e); return { error: e.message }; }
     }
 
     // =========================================================================
@@ -1702,106 +1329,32 @@
     // =========================================================================
 
     const AccessControl = {
-        initialize,
-        refresh,
+        initialize, refresh,
         get isInitialized() { return _initialized; },
-        
-        canEditDivision,
-        canEditBunk,
-        canGenerateDivision,
-        getDivisionForBunk,
-        
-        canInviteUsers,
-        canManageSubdivisions,
-        canManageTeam,
-        canDeleteCampData,
-        canEraseData,
-        canEraseAllCampData,  // ★ NEW v3.6
-        canEditSetup,
-        canEditFields,
-        canEditGlobalFields,
-        canEditAnything,
-        canSave,
-        canRunGenerator,
-        getEditableBunkIds,
-        canPrint,
-        canEditPrintTemplates,
-        canDeletePrintTemplates,
-        canPrintSchedules,
-        canUseCamperLocator,
-        canViewDailySchedule,
-        
-        canAddFieldAvailability,
-        canRemoveFieldAvailability,
-        hasRoleAtLeast,
-        
-        canEdit,
-        getRole,
-        checkEditAccess,
-        checkSetupAccess,
-        checkDivisionAccess,
-        checkBunkAccess,
-        filterEditableBunks,
-        filterEditableDivisions,
-        
-        isOwner,
-        isAdmin,
-        isViewer,
-        isScheduler,
-        isTeamMember,
-        
-        getEditableDivisions,
-        getUserManagedDivisions,
-        getGeneratableDivisions,
-        getCurrentRole,
-        getCurrentUserInfo,
-        getSubdivisions,
-        getAllSubdivisions,
-        getUserSubdivisions,
-        getUserSubdivisionDetails,
-        getUserSubdivisionIds,
-        getSubdivisionForDivision,
-        isDivisionInUserSubdivisions,
-        getDirectDivisionAssignments,
-        getCampId,
-        getUserName,
-        getCampName,
-        
-        getWelcomeMessage,
-        getPermissionsText,
-        getRoleDisplay,
-        getPermissionsSummary,
-        
-        getNextSubdivisionColor,
-        SUBDIVISION_COLORS,
-        
-        createSubdivision,
-        updateSubdivision,
-        deleteSubdivision,
-        
-        getTeamMembers,
-        inviteTeamMember,
-        updateTeamMember,
-        removeTeamMember,
-        acceptInvite,
-        assignDivisionsToMember,
-        
-        saveFieldLocks,
-        loadFieldLocks,
-        clearFieldLocks,
-        
-        getRoleDisplayName,
-        getRoleColor,
-        renderAccessBanner,
-        showPermissionDenied,
-        
-        debugPrintState,
-        
-        deleteMyDivisionsOnly,
-        filterDivisionsForGeneration,
-        
-        ROLES,
-        ROLE_HIERARCHY
+        canEditDivision, canEditBunk, canGenerateDivision, getDivisionForBunk,
+        canInviteUsers, canManageSubdivisions, canManageTeam, canDeleteCampData,
+        canEraseData, canEraseAllCampData, canEditSetup, canEditFields, canEditGlobalFields,
+        canEditAnything, canSave, canRunGenerator, getEditableBunkIds,
+        canPrint, canEditPrintTemplates, canDeletePrintTemplates, canPrintSchedules,
+        canUseCamperLocator, canViewDailySchedule,
+        canAddFieldAvailability, canRemoveFieldAvailability, hasRoleAtLeast,
+        canEdit, getRole, checkEditAccess, checkSetupAccess, checkDivisionAccess, checkBunkAccess,
+        filterEditableBunks, filterEditableDivisions,
+        isOwner, isAdmin, isViewer, isScheduler, isTeamMember,
+        getEditableDivisions, getUserManagedDivisions, getGeneratableDivisions,
+        getCurrentRole, getCurrentUserInfo, getSubdivisions, getAllSubdivisions,
+        getUserSubdivisions, getUserSubdivisionDetails, getUserSubdivisionIds,
+        getSubdivisionForDivision, isDivisionInUserSubdivisions, getDirectDivisionAssignments,
+        getCampId, getUserName, getCampName,
+        getWelcomeMessage, getPermissionsText, getRoleDisplay, getPermissionsSummary,
+        getNextSubdivisionColor, SUBDIVISION_COLORS,
+        createSubdivision, updateSubdivision, deleteSubdivision,
+        getTeamMembers, inviteTeamMember, updateTeamMember, removeTeamMember,
+        acceptInvite, assignDivisionsToMember,
+        saveFieldLocks, loadFieldLocks, clearFieldLocks,
+        getRoleDisplayName, getRoleColor, renderAccessBanner, showPermissionDenied,
+        debugPrintState, deleteMyDivisionsOnly, filterDivisionsForGeneration,
+        ROLES, ROLE_HIERARCHY
     };
 
     window.AccessControl = AccessControl;
@@ -1811,30 +1364,19 @@
             if (event === 'SIGNED_IN' && session) {
                 setTimeout(() => initialize(), 500);
             } else if (event === 'SIGNED_OUT') {
-                // Clean up subscription
                 if (_membershipSubscription) {
                     try { window.supabase?.removeChannel?.(_membershipSubscription); } catch(e) {}
                     _membershipSubscription = null;
                 }
-                // ★★★ v3.8: Clear session cache on logout ★★★
                 try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
-                _initialized = false;
-                _currentUser = null;
-                _currentRole = null;
-                _campId = null;
-                _campName = null;
-                _userName = null;
-                _subdivisions = [];
-                _userSubdivisionIds = [];
-                _userSubdivisionDetails = [];
-                _directDivisionAssignments = [];
-                _editableDivisions = [];
-                _isTeamMember = false;
-                _membership = null;
+                _initialized = false; _currentUser = null; _currentRole = null; _campId = null;
+                _campName = null; _userName = null; _subdivisions = []; _userSubdivisionIds = [];
+                _userSubdivisionDetails = []; _directDivisionAssignments = []; _editableDivisions = [];
+                _isTeamMember = false; _membership = null; _userId = null;
             }
         });
     }
 
-    console.log("🔐 Access Control v3.8 loaded");
+    console.log("🔐 Access Control v3.9 loaded (enhanced membership watcher)");
 
 })();
