@@ -27,7 +27,7 @@
 (function() {
     'use strict';
 
-    const VERSION = '1.2.0';
+    const VERSION = '1.3.0';
     const DEBUG = true;
 
     function log(...args) {
@@ -228,9 +228,37 @@
             // Sort by start time
             parsed.sort((a, b) => a.startMin - b.startMin);
 
+            // ★★★ v1.3 FIX: Validate/clip blocks to division boundaries ★★★
+            const divConfig = (divisions || {})[divName];
+            const divStartMin = divConfig?.startTime ? parseTimeToMinutes(divConfig.startTime) : null;
+            const divEndMin = divConfig?.endTime ? parseTimeToMinutes(divConfig.endTime) : null;
+
+            const validated = (divStartMin !== null && divEndMin !== null)
+                ? parsed.reduce((acc, block) => {
+                    // Entirely outside division hours → drop with warning
+                    if (block.endMin <= divStartMin || block.startMin >= divEndMin) {
+                        log(`  ⚠️ DROPPED block "${block.event}" (${minutesToTimeLabel(block.startMin)}-${minutesToTimeLabel(block.endMin)}) — outside ${divName} hours (${minutesToTimeLabel(divStartMin)}-${minutesToTimeLabel(divEndMin)})`);
+                        return acc;
+                    }
+                    // Partially outside → clip to boundaries
+                    if (block.startMin < divStartMin || block.endMin > divEndMin) {
+                        const clippedStart = Math.max(block.startMin, divStartMin);
+                        const clippedEnd = Math.min(block.endMin, divEndMin);
+                        if (clippedEnd - clippedStart < 5) {
+                            log(`  ⚠️ DROPPED block "${block.event}" — clipped duration < 5 min`);
+                            return acc;
+                        }
+                        log(`  ⚠️ CLIPPED block "${block.event}" from ${minutesToTimeLabel(block.startMin)}-${minutesToTimeLabel(block.endMin)} to ${minutesToTimeLabel(clippedStart)}-${minutesToTimeLabel(clippedEnd)}`);
+                        acc.push({ ...block, startMin: clippedStart, endMin: clippedEnd });
+                        return acc;
+                    }
+                    acc.push(block);
+                    return acc;
+                }, [])
+                : parsed; // No division boundaries configured → pass through
+
             // ★★★ v1.2 FIX: Expand split tiles BEFORE consolidation ★★★
-            const withExpandedSplits = expandSplitTiles(parsed);
-            
+            const withExpandedSplits = expandSplitTiles(validated);
             // Re-sort after expansion (split halves should be in order)
             withExpandedSplits.sort((a, b) => a.startMin - b.startMin);
 
@@ -924,7 +952,7 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
     console.log('═══════════════════════════════════════════════════════════════════════');
     console.log('⏰ DIVISION TIMES SYSTEM v' + VERSION + ' LOADED');
     console.log('');
-    console.log('   ★★★ v1.2 FIX: Split tiles now create TWO separate slots! ★★★');
+    console.log('   ★★★ v1.3 FIX: Skeleton events clipped to division boundaries ★★★');
     console.log('   UPDATED: Logic delegated to SchedulerCoreUtils');
     console.log('   Commands:');
     console.log('   - DivisionTimesSystem.diagnose()        → Full diagnostic');
