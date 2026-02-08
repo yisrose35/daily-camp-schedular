@@ -2169,7 +2169,8 @@
                 let winner = null;
                 if (scoreA > scoreB) winner = teamA;
                 else if (scoreB > scoreA) winner = teamB;
-                else if (scoreA === scoreB && scoreA > 0) winner = 'tie';
+                // ★ v2.2.7 FIX: 0-0 draws are valid ties (was requiring scoreA > 0)
+                else if (scoreA === scoreB) winner = 'tie';
                 
                 matches.push({ teamA, teamB, scoreA, scoreB, winner, timeLabel });
             });
