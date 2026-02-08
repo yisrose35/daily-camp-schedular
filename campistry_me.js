@@ -24,6 +24,7 @@
     let structure = {};
     let camperRoster = {};
     let leagueTeams = [];
+    let _leagueData = []; // ★ v7.0: Stores { teams:[], divisions:[] } per league for grade filtering
     let expandedDivisions = new Set();
     let expandedGrades = new Set();
     let currentEditDivision = null;
@@ -386,11 +387,17 @@
         camperRoster = global?.app1?.camperRoster || {};
         structure = global?.campStructure || migrateOldStructure(global?.app1?.divisions || {});
         
-        // Collect league teams
-        const teams = new Set();
-        Object.values(global?.leaguesByName || {}).forEach(l => (l.teams || []).forEach(t => teams.add(t)));
-        Object.values(global?.specialtyLeagues || {}).forEach(l => (l.teams || []).forEach(t => teams.add(t)));
-        leagueTeams = Array.from(teams).sort();
+        // Collect league data with division associations for grade-filtered dropdowns
+        _leagueData = [];
+        const allTeams = new Set();
+        const addLeague = l => {
+            if (!l || !Array.isArray(l.teams) || l.teams.length === 0) return;
+            _leagueData.push({ teams: l.teams, divisions: Array.isArray(l.divisions) ? l.divisions : [] });
+            l.teams.forEach(t => allTeams.add(t));
+        };
+        Object.values(global?.leaguesByName || {}).forEach(addLeague);
+        Object.values(global?.specialtyLeagues || {}).forEach(addLeague);
+        leagueTeams = Array.from(allTeams).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
         
         // Expand all divisions by default
         Object.keys(structure).forEach(d => expandedDivisions.add(d));
@@ -459,6 +466,61 @@
             oldFormat[divName] = { color: sanitizeColor(divData.color), bunks: allBunks };
         });
         return oldFormat;
+    }
+
+    // =========================================================================
+    // ★ v7.0: GRADE-FILTERED LEAGUE TEAMS
+    // Matches league.divisions[] against camper's division + grade using
+    // smart matching (handles "1st grade", "Grade 1", "1", "1st", etc.)
+    // =========================================================================
+
+    function _extractGradeNumber(str) {
+        if (!str) return null;
+        const s = String(str).toLowerCase().trim();
+        // "1st grade", "2nd", "3rd", "4th", "11th"
+        const ordinal = s.match(/^(\d+)(st|nd|rd|th)?\s*(grade)?$/);
+        if (ordinal) return parseInt(ordinal[1], 10);
+        // "grade 1", "grade 11"
+        const gradeN = s.match(/^grade\s*(\d+)$/);
+        if (gradeN) return parseInt(gradeN[1], 10);
+        // bare number "1", "11"
+        const bare = s.match(/^(\d+)$/);
+        if (bare) return parseInt(bare[1], 10);
+        return null;
+    }
+
+    function _divisionMatches(leagueDiv, campValue) {
+        if (!leagueDiv || !campValue) return false;
+        const a = String(leagueDiv).toLowerCase().trim();
+        const b = String(campValue).toLowerCase().trim();
+        // Exact match
+        if (a === b) return true;
+        // Numeric grade match (prevents "1" matching "11")
+        const numA = _extractGradeNumber(leagueDiv);
+        const numB = _extractGradeNumber(campValue);
+        if (numA !== null && numB !== null) return numA === numB;
+        // Substring with word boundaries (for non-numeric like "Junior Boys")
+        if (numA === null && numB === null) return a.includes(b) || b.includes(a);
+        return false;
+    }
+
+    /** Get teams from leagues whose divisions match the given division OR grade */
+    function getTeamsForContext(divName, gradeName) {
+        if (!divName && !gradeName) return leagueTeams; // No context → show all
+        const matched = new Set();
+        _leagueData.forEach(ld => {
+            if (ld.divisions.length === 0) {
+                // League has no division filter → include its teams for everyone
+                ld.teams.forEach(t => matched.add(t));
+                return;
+            }
+            const divMatch = divName && ld.divisions.some(d => _divisionMatches(d, divName));
+            const gradeMatch = gradeName && ld.divisions.some(d => _divisionMatches(d, gradeName));
+            if (divMatch || gradeMatch) ld.teams.forEach(t => matched.add(t));
+        });
+        // If no leagues matched, fall back to all teams (don't leave dropdown empty)
+        if (matched.size === 0) return leagueTeams;
+        return Array.from(matched).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     }
 
     // =========================================================================
@@ -844,7 +906,9 @@
         if (countEl) countEl.textContent = filter ? campers.length + ' of ' + total : total + ' camper' + (total !== 1 ? 's' : '');
 
         const divOptions = '<option value="">—</option>' + Object.keys(structure).sort().map(d => '<option value="' + esc(d) + '"' + (d === savedQA.div ? ' selected' : '') + '>' + esc(d) + '</option>').join('');
-        const teamOptions = '<option value="">—</option>' + leagueTeams.map(t => '<option value="' + esc(t) + '"' + (t === savedQA.team ? ' selected' : '') + '>' + esc(t) + '</option>').join('');
+        // ★ v7.0: Filter teams by selected division+grade, sort numerically
+        const qaFilteredTeams = getTeamsForContext(savedQA.div, savedQA.grade);
+        const teamOptions = '<option value="">—</option>' + qaFilteredTeams.map(t => '<option value="' + esc(t) + '"' + (t === savedQA.team ? ' selected' : '') + '>' + esc(t) + '</option>').join('');
 
         let html = '<tr class="add-row"><td><input type="text" id="qaName" placeholder="Camper name" maxlength="' + MAX_NAME_LENGTH + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.quickAddCamper();event.preventDefault();}"></td><td><select id="qaDivision" onchange="CampistryMe.updateQAGrades()">' + divOptions + '</select></td><td><select id="qaGrade" onchange="CampistryMe.updateQABunks()"><option value="">—</option></select></td><td><select id="qaBunk"><option value="">—</option></select></td><td><select id="qaTeam">' + teamOptions + '</select></td><td><button class="btn btn-primary btn-sm" onclick="CampistryMe.quickAddCamper()">Add</button></td></tr>';
 
@@ -894,6 +958,8 @@
         if (divName && structure[divName]) {
             Object.keys(structure[divName].grades || {}).sort().forEach(g => { gradeSelect.innerHTML += '<option value="' + esc(g) + '">' + esc(g) + '</option>'; });
         }
+        // ★ v7.0: Division change also filters available teams
+        updateQATeams();
     }
 
     function updateQABunks() {
@@ -905,6 +971,21 @@
         if (divName && gradeName && structure[divName]?.grades?.[gradeName]) {
             (structure[divName].grades[gradeName].bunks || []).forEach(b => { bunkSelect.innerHTML += '<option value="' + esc(b) + '">' + esc(b) + '</option>'; });
         }
+        // ★ v7.0: Also refresh teams when grade changes (teams are grade-filtered)
+        updateQATeams();
+    }
+
+    function updateQATeams() {
+        const divName = document.getElementById('qaDivision')?.value || '';
+        const gradeName = document.getElementById('qaGrade')?.value || '';
+        const teamSelect = document.getElementById('qaTeam');
+        if (!teamSelect) return;
+        const currentTeam = teamSelect.value;
+        const filtered = getTeamsForContext(divName, gradeName);
+        teamSelect.innerHTML = '<option value="">—</option>';
+        filtered.forEach(t => {
+            teamSelect.innerHTML += '<option value="' + esc(t) + '"' + (t === currentTeam ? ' selected' : '') + '>' + esc(t) + '</option>';
+        });
     }
 
     function quickAddCamper() {
@@ -936,7 +1017,9 @@
         updateEditGrades(c.division, c.grade);
         updateEditBunks(c.division, c.grade, c.bunk);
         const teamSelect = document.getElementById('editCamperTeam');
-        teamSelect.innerHTML = '<option value="">—</option>' + leagueTeams.map(t => '<option value="' + esc(t) + '"' + (t === c.team ? ' selected' : '') + '>' + esc(t) + '</option>').join('');
+        // ★ v7.0: Filter teams by camper's division+grade
+        const editFilteredTeams = getTeamsForContext(c.division, c.grade);
+        teamSelect.innerHTML = '<option value="">—</option>' + editFilteredTeams.map(t => '<option value="' + esc(t) + '"' + (t === c.team ? ' selected' : '') + '>' + esc(t) + '</option>').join('');
         openModal('camperModal');
     }
 
@@ -956,6 +1039,17 @@
         if (divName && gradeName && structure[divName]?.grades?.[gradeName]) {
             (structure[divName].grades[gradeName].bunks || []).forEach(b => { bunkSelect.innerHTML += '<option value="' + esc(b) + '"' + (b === selectedBunk ? ' selected' : '') + '>' + esc(b) + '</option>'; });
         }
+    }
+
+    // ★ v7.0: Refresh edit modal team dropdown when division/grade changes
+    function updateEditTeams(divName, gradeName, selectedTeam) {
+        const teamSelect = document.getElementById('editCamperTeam');
+        if (!teamSelect) return;
+        const filtered = getTeamsForContext(divName, gradeName);
+        teamSelect.innerHTML = '<option value="">—</option>';
+        filtered.forEach(t => {
+            teamSelect.innerHTML += '<option value="' + esc(t) + '"' + (t === selectedTeam ? ' selected' : '') + '>' + esc(t) + '</option>';
+        });
     }
 
     // ★ saveCamper now supports renaming campers
@@ -1222,8 +1316,8 @@
         on('csvImportBtn', 'onclick', importCsv);
         on('clearAllBtn', 'onclick', clearAllCampers);
         on('saveEditCamperBtn', 'onclick', saveCamper);
-        on('editCamperDivision', 'onchange', e => { updateEditGrades(e.target.value, ''); updateEditBunks(e.target.value, '', ''); });
-        on('editCamperGrade', 'onchange', e => { updateEditBunks(document.getElementById('editCamperDivision')?.value, e.target.value, ''); });
+        on('editCamperDivision', 'onchange', e => { updateEditGrades(e.target.value, ''); updateEditBunks(e.target.value, '', ''); updateEditTeams(e.target.value, '', document.getElementById('editCamperTeam')?.value || ''); });
+        on('editCamperGrade', 'onchange', e => { const div = document.getElementById('editCamperDivision')?.value || ''; updateEditBunks(div, e.target.value, ''); updateEditTeams(div, e.target.value, document.getElementById('editCamperTeam')?.value || ''); });
 
         // ★ Enter key in camper edit modal triggers save
         on('editCamperName', 'onkeypress', e => { if (e.key === 'Enter') saveCamper(); });
