@@ -857,6 +857,20 @@ for (const futureDate of Object.keys(allDailyData)) {
 
         saveLeagueHistory(history);
 
+        // ★ v7.1 FIX: Sync leagueRoundState with gamesPerDate and persist to cloud
+        if (window.leagueRoundState) {
+            Object.keys(leagueGameCounters).forEach(leagueName => {
+                if (!window.leagueRoundState[leagueName]) return;
+                window.leagueRoundState[leagueName].gamesPerDate = 
+                    history.gamesPerDate?.[leagueName] || {};
+            });
+            
+            if (typeof window.saveGlobalSettings === 'function') {
+                window.saveGlobalSettings('leagueRoundState', window.leagueRoundState);
+                console.log("[RegularLeagues] ✅ leagueRoundState synced to cloud");
+            }
+        }
+
         // ★★★ UPDATE FUTURE SCHEDULES TO MAINTAIN CHRONOLOGICAL ORDER ★★★
         updateFutureSchedules(dayId, history);
 
