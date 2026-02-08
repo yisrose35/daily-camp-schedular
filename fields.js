@@ -1736,6 +1736,10 @@ window.refreshActivityPropertiesFromFields = function() {
 // ★★★ EXPORT: Field cleanup utility ★★★
 window.cleanupDeletedField = cleanupDeletedField;
 
+// ★ v3.2: Alias for checklist compatibility (Utils.diagnoseFieldData)
+if (!window.Utils) window.Utils = {};
+window.Utils.diagnoseFieldData = window.diagnoseFields;
+
 // ★★★ EXPORT: Field rename propagation utility ★★★  
 window.propagateFieldRename = propagateFieldRename;
 
