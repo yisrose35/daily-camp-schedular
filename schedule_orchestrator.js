@@ -672,16 +672,24 @@
      * 4. VERIFY the save reached cloud
      * 5. Retry if verification fails
      */
-    async function saveSchedule(dateKey, data, options = {}) {
+   async function saveSchedule(dateKey, data, options = {}) {
         if (!dateKey) dateKey = getCurrentDateKey();
         if (!data) data = getWindowGlobals();
 
         const bunkCount = Object.keys(data.scheduleAssignments || {}).length;
         log('SAVE SCHEDULE:', dateKey, bunkCount, 'bunks');
 
+        // ★★★ v1.7 SECURITY: Verify role from DB before any write ★★★
+        if (window.AccessControl?.verifyBeforeWrite && !options.skipVerify) {
+            const writeAllowed = await window.AccessControl.verifyBeforeWrite('save schedule');
+            if (!writeAllowed) {
+                log('SAVE BLOCKED — verifyBeforeWrite returned false');
+                return { success: false, error: 'Write permission denied', target: 'permission-error' };
+            }
+        }
+
         // ★ v1.6 SECURITY: Block saves if permissions were revoked this session
-        if (_permissionRevoked) {
-            logWarn('Save blocked — permissions were revoked this session. Refresh required.');
+        if (_permissionRevoked) {            logWarn('Save blocked — permissions were revoked this session. Refresh required.');
             showNotification('Permissions changed — please refresh the page', 'error');
             return { success: false, error: 'Permission revoked', target: 'permission-error' };
         }
