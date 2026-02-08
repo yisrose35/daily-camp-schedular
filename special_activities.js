@@ -876,7 +876,7 @@ function renderDetailPane() {
     // ★ v2.3: Added Weather & Availability section (only for regular specials, not rainy-day-only)
     const sections = [
         { title: "Field / Location", summary: summaryLocation(item), render: () => renderLocationSettings(item) },
-        { title: "Sharing Rules", summary: summarySharing(item), render: () => renderSharing(item) },
+        { title: "Concurrent Use", summary: summarySharing(item), render: () => renderSharing(item) },
         { title: "Division Access", summary: summaryAccess(item), render: () => renderAccess(item) },
         { title: "Time Availability", summary: summaryTime(item), render: () => renderTimeRules(item) }
     ];
@@ -1010,7 +1010,7 @@ function renderSharing(item) {
             // Capacity
             const capRow = document.createElement("div");
             capRow.style.marginBottom = "12px";
-            capRow.innerHTML = `<label style="font-size:0.85rem;font-weight:500;">Max Groups at Once</label>`;
+            capRow.innerHTML = `<label style="font-size:0.85rem;font-weight:500;">Max Bunks Sharing at Once (Capacity)</label>`;
             const capIn = document.createElement("input");
             capIn.type = "number";
             capIn.min = "2";
