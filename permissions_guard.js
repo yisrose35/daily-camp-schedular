@@ -396,6 +396,16 @@
         window.addEventListener('load', () => setTimeout(initialize, 500));
     }
 
-    console.log("🛡️ Permissions Guard v1.0 loaded");
+    // ★★★ v1.1 SECURITY: Freeze to prevent monkey-patching ★★★
+    Object.freeze(window.PermissionsGuard);
+    try {
+        Object.defineProperty(window, 'PermissionsGuard', {
+            value: window.PermissionsGuard,
+            writable: false,
+            configurable: false
+        });
+    } catch (e) { /* already frozen */ }
+
+    console.log("🛡️ Permissions Guard v1.1 loaded (frozen)");
 
 })();
