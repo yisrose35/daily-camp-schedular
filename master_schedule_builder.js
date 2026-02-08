@@ -1366,7 +1366,7 @@ function addDropListeners(selector) {
           const globalSettings = window.loadGlobalSettings?.() || {};
           const fields = globalSettings.app1?.fields || [];
           const swimField = fields.find(f => 
-            f.name.toLowerCase().includes('swim') || f.name.toLowerCase().includes('pool')
+            /\bswim\b/i.test(f.name) || /\bpool\b/i.test(f.name)
           );
           if (swimField) {
             reservedFields = [swimField.name];
