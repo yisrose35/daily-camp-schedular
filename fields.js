@@ -446,12 +446,21 @@ function saveData(){
             },
             
             // ★ Access restrictions - ensure complete structure (v3.0: usePriority)
-            limitUsage: {
-                enabled: f.limitUsage?.enabled === true,
-                divisions: typeof f.limitUsage?.divisions === 'object' ? f.limitUsage.divisions : {},
-                priorityList: Array.isArray(f.limitUsage?.priorityList) ? f.limitUsage.priorityList : [],
-                usePriority: f.limitUsage?.usePriority === true
-            },
+            // ★ v3.2 FIX: Auto-disable if enabled but no divisions selected (prevents silent blocking)
+            limitUsage: (() => {
+                const enabled = f.limitUsage?.enabled === true;
+                const divisions = typeof f.limitUsage?.divisions === 'object' ? f.limitUsage.divisions : {};
+                const hasDivisions = Object.keys(divisions).length > 0;
+                if (enabled && !hasDivisions) {
+                    console.warn(`[Fields] "${f.name}": limitUsage enabled with no divisions — auto-disabling to prevent silent blocking`);
+                }
+                return {
+                    enabled: enabled && hasDivisions,
+                    divisions,
+                    priorityList: Array.isArray(f.limitUsage?.priorityList) ? f.limitUsage.priorityList : [],
+                    usePriority: f.limitUsage?.usePriority === true
+                };
+            })(),
             
             // ★ Time rules - ensure array with parsed times (v3.1: preserve divisions)
             timeRules: Array.isArray(f.timeRules) ? f.timeRules.map(r => ({
@@ -465,6 +474,9 @@ function saveData(){
             
             // ★ Indoor/Outdoor for rainy day
             rainyDayAvailable: f.rainyDayAvailable === true,
+            
+            // ★ v3.2: Field type category (derived from rainyDayAvailable if not set)
+            type: f.type || (f.rainyDayAvailable ? 'indoor' : 'outdoor'),
             
             // Preserve any additional properties
             ...(f.transition ? { transition: f.transition } : {}),
@@ -1731,7 +1743,7 @@ window.propagateFieldRename = propagateFieldRename;
 window.validateFieldDivisions = validateFieldDivisions;
 
 // ★★★ COMPREHENSIVE FIELD DIAGNOSTICS ★★★
-window.diagnoseFields = function() {
+window.diagnoseFields = window.diagnoseFieldData = function() {
     console.log('\n' + '═'.repeat(60));
     console.log('🔍 FIELD DIAGNOSTICS');
     console.log('═'.repeat(60));
