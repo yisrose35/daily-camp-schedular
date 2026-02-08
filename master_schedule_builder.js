@@ -403,11 +403,13 @@ function getGroupedLocationOptions() {
 // =================================================================
 // Swim/Pool Alias Handling
 // =================================================================
-const SWIM_POOL_PATTERNS = ['swim', 'pool', 'swimming', 'aqua'];
+const SWIM_POOL_PATTERNS = ['swim', 'pool', 'swimming', 'aquatics'];
 
 function isSwimPoolAlias(name) {
   const lower = (name || '').toLowerCase().trim();
-  return SWIM_POOL_PATTERNS.some(p => lower.includes(p));
+  // ★ v2.6 FIX: Use word-boundary regex instead of substring to avoid
+  // false positives like "Carpool", "Aquamarine", "Poolside BBQ"
+  return SWIM_POOL_PATTERNS.some(p => new RegExp(`\\b${p}\\b`).test(lower));
 }
 
 function findPoolField(allLocations) {
