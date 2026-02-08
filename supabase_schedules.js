@@ -1,5 +1,5 @@
 // =============================================================================
-// supabase_schedules.js v5.3 — CAMPISTRY SCHEDULE DATABASE OPERATIONS
+// supabase_schedules.js v5.4 — CAMPISTRY SCHEDULE DATABASE OPERATIONS
 // =============================================================================
 //
 // Pure data operations for schedules.
@@ -16,6 +16,13 @@
 //
 // REQUIRES: supabase_client.js, supabase_permissions.js
 //
+// v5.4 SECURITY:
+// - ★ CRITICAL: Permission-aware error handling in saveSchedule()
+// - ★ Detects RLS violations (Postgres 42501, PostgREST 401/403)
+// - ★ Separates permission errors (requires reauth) from network errors (retry-safe)
+// - ★ Dispatches 'campistry-permission-revoked' event for other modules
+// - ★ Forces RBAC re-initialization on permission errors
+//
 // v5.3 FIXES:
 // - ★ CRITICAL: unifiedTimes now properly included in mergeSchedules return
 // - ★ Added mergedUnifiedTimes tracking (uses longest array)
@@ -31,7 +38,7 @@
 // =============================================================================
 (function() {
     'use strict';
-    console.log('📅 Campistry Schedule DB v5.3 loading...');
+    console.log('📅 Campistry Schedule DB v5.4 loading...');
     // =========================================================================
     // CONFIGURATION
     // =========================================================================
@@ -56,6 +63,9 @@
     }
     function logError(...args) {
         console.error('📅 [ScheduleDB] ERROR:', ...args);
+    }
+    function logWarn(...args) {
+        console.warn('📅 [ScheduleDB] WARN:', ...args);
     }
     // =========================================================================
     // INITIALIZATION
@@ -162,6 +172,50 @@
         const data = getLocalData();
         delete data[dateKey];
         setLocalData(data);
+    }
+
+    // =========================================================================
+    // ★★★ v5.4 SECURITY: PERMISSION ERROR DETECTION ★★★
+    // =========================================================================
+
+    /**
+     * Detect whether a Supabase error is a permission/RLS violation.
+     * These errors mean the user's role was revoked and retrying is futile.
+     */
+    function isPermissionError(error) {
+        if (!error) return false;
+        return (
+            error.code === '42501' ||                          // Postgres RLS violation
+            error.code === 'PGRST301' ||                      // PostgREST unauthorized
+            error.message?.includes('permission denied') ||
+            error.message?.includes('row-level security') ||
+            error.message?.includes('new row violates') ||
+            (error.status && (error.status === 403 || error.status === 401))
+        );
+    }
+
+    /**
+     * Handle a confirmed permission error: notify user, refresh RBAC, dispatch event.
+     */
+    async function handlePermissionError(operation, error) {
+        logError('🚨 PERMISSION ERROR during', operation, '— user may have been revoked');
+
+        // Notify user
+        if (typeof window.showToast === 'function') {
+            window.showToast('Your permissions have changed. Please refresh or sign in again.', 'error');
+        }
+
+        // Force RBAC re-initialization (will pick up new role or detect removal)
+        if (window.AccessControl?.refresh) {
+            try { await window.AccessControl.refresh(); } catch(e) {
+                logWarn('RBAC refresh after permission error failed:', e);
+            }
+        }
+
+        // Dispatch event so orchestrator + other modules can react
+        window.dispatchEvent(new CustomEvent('campistry-permission-revoked', {
+            detail: { operation, error: error?.message || 'Permission denied' }
+        }));
     }
 
     // =========================================================================
@@ -465,13 +519,14 @@
         };
     }
     // =========================================================================
-    // SAVE OPERATIONS (FIXED - Uses AccessControl for filtering)
+    // SAVE OPERATIONS — ★★★ v5.4: PERMISSION-AWARE ERROR HANDLING ★★★
     // =========================================================================
     /**
      * Save schedule for a date.
      * Automatically filters to user's divisions and UPSERTs.
      * FIXED in v5.1: Uses AccessControl instead of PermissionsDB for filtering
      * FIXED in v5.3: Improved verification with exponential backoff
+     * FIXED in v5.4: Permission-aware error handling (RLS violations vs network errors)
      */
     async function saveSchedule(dateKey, data, options = {}) {
         const client = getClient();
@@ -534,10 +589,28 @@
                 })
                 .select();
 
+            // ═══════════════════════════════════════════════════════════════
+            // ★★★ v5.4 SECURITY: Permission-aware error handling ★★★
+            // Separate RLS/permission errors (requires reauth) from
+            // transient network errors (safe to retry / fallback to local)
+            // ═══════════════════════════════════════════════════════════════
             if (error) {
                 logError('Save failed:', error);
                 logError('Error details:', JSON.stringify(error));
-                // Fallback to local
+
+                if (isPermissionError(error)) {
+                    // ─── PERMISSION ERROR: user's role was likely revoked ───
+                    await handlePermissionError('saveSchedule', error);
+
+                    return { 
+                        success: false, 
+                        error: 'Permission denied', 
+                        target: 'permission-error',
+                        requiresReauth: true 
+                    };
+                }
+
+                // ─── TRANSIENT ERROR: safe to fall back to local storage ───
                 setLocalSchedule(dateKey, data);
                 return { success: false, error: error.message, target: 'local-fallback' };
             }
@@ -856,7 +929,7 @@
         const userId = getUserId();
 
         console.log('═══════════════════════════════════════════════════════');
-        console.log('📅 SCHEDULE DB DIAGNOSTIC v5.3');
+        console.log('📅 SCHEDULE DB DIAGNOSTIC v5.4');
         console.log('═══════════════════════════════════════════════════════');
         console.log('Date Key:', dateKey);
         console.log('');
@@ -981,7 +1054,7 @@
         });
     }
 
-    console.log('📅 [ScheduleDB] v5.3 loaded with unifiedTimes merge fix');
+    console.log('📅 [ScheduleDB] v5.4 loaded — permission-aware error handling');
     console.log('   Run: ScheduleDB.diagnose() to check sync status');
 
 })();
