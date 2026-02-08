@@ -1,8 +1,13 @@
 // =============================================================================
-// schedule_orchestrator.js v1.5 — CAMPISTRY SCHEDULE ORCHESTRATOR
+// schedule_orchestrator.js v1.6 — CAMPISTRY SCHEDULE ORCHESTRATOR
 // =============================================================================
 //
 // ★★★ THE SINGLE SOURCE OF TRUTH FOR ALL SCHEDULE OPERATIONS ★★★
+//
+// v1.6 SECURITY:
+// - ★ PERMISSION-AWARE RETRIES — immediately aborts retry loop on RLS/permission errors
+// - ★ Listens for 'campistry-permission-revoked' event from ScheduleDB + AccessControl
+// - ★ Prevents retry storms against Supabase when user's role has been revoked
 //
 // v1.5 FIXES:
 // - ★ RAINY DAY PERSISTENCE - Properly saves/loads isRainyDay and rainyDayStartTime
@@ -44,14 +49,14 @@
 (function() {
     'use strict';
 
-    console.log('🎯 Campistry Schedule Orchestrator v1.5 loading...');
+    console.log('🎯 Campistry Schedule Orchestrator v1.6 loading...');
 
     // =========================================================================
     // CONFIGURATION
     // =========================================================================
 
     const CONFIG = {
-        VERSION: '1.5.0',
+        VERSION: '1.6.0',
         DEBUG: true,
         LOCAL_STORAGE_KEY: 'campDailyData_v1',
         
@@ -89,6 +94,7 @@
     let _lastLoadResult = null;
     let _lastSaveTime = 0;
     let _loadAbortController = null;  // ★ NEW: For cancellable loads
+    let _permissionRevoked = false;   // ★ v1.6: Stop all saves if permissions revoked
 
     // =========================================================================
     // LOGGING
@@ -421,6 +427,9 @@
         setCurrentDateKey(dateKey);
         dispatch(CONFIG.EVENTS.LOADING, { dateKey });
 
+        // ★ v1.6: Reset permission flag on new load (user may have refreshed)
+        _permissionRevoked = false;
+
         let result = {
             success: false,
             source: 'none',
@@ -670,6 +679,13 @@
         const bunkCount = Object.keys(data.scheduleAssignments || {}).length;
         log('SAVE SCHEDULE:', dateKey, bunkCount, 'bunks');
 
+        // ★ v1.6 SECURITY: Block saves if permissions were revoked this session
+        if (_permissionRevoked) {
+            logWarn('Save blocked — permissions were revoked this session. Refresh required.');
+            showNotification('Permissions changed — please refresh the page', 'error');
+            return { success: false, error: 'Permission revoked', target: 'permission-error' };
+        }
+
         // Always save to localStorage immediately
         setLocalData(dateKey, data);
 
@@ -711,11 +727,18 @@
 
     /**
      * Save to cloud with verification and retry logic.
+     * ★★★ v1.6: Short-circuits immediately on permission errors ★★★
      */
     async function doCloudSaveWithVerification(dateKey, data, options = {}, attempt = 1) {
         if (_isSaving && !options.force) {
             log('Save already in progress');
             return { success: false, error: 'Save in progress' };
+        }
+
+        // ★ v1.6: Check permission flag before attempting
+        if (_permissionRevoked) {
+            logWarn('Save aborted — permissions revoked');
+            return { success: false, error: 'Permission revoked', target: 'permission-error' };
         }
 
         _isSaving = true;
@@ -744,7 +767,25 @@
             
             const result = await window.ScheduleDB.saveSchedule(dateKey, data, options);
             
+            // ═════════════════════════════════════════════════════════════
+            // ★★★ v1.6 SECURITY: Short-circuit on permission errors ★★★
+            // Don't retry — the user's role was revoked. Retrying would
+            // just hammer the RLS wall 3+ times for no reason.
+            // ═════════════════════════════════════════════════════════════
             if (!result?.success) {
+                if (result?.target === 'permission-error' || result?.requiresReauth) {
+                    logWarn('🚨 Permission error — aborting all retries');
+                    _isSaving = false;
+                    _permissionRevoked = true;  // Block future saves this session
+                    showNotification('Your permissions have changed — please refresh the page', 'error');
+                    dispatch(CONFIG.EVENTS.ERROR, { 
+                        operation: 'save', 
+                        error: 'Permission denied',
+                        dateKey,
+                        requiresReauth: true 
+                    });
+                    return { success: false, error: 'Permission denied', target: 'permission-error' };
+                }
                 throw new Error(result?.error || 'Save failed');
             }
 
@@ -1174,8 +1215,10 @@
                 }
 
                 // Attempt async cloud save (may not complete)
-                window.ScheduleDB?.saveSchedule?.(dateKey, getWindowGlobals())
-                    .catch(() => {});
+                if (!_permissionRevoked) {  // ★ v1.6: Don't attempt cloud save if revoked
+                    window.ScheduleDB?.saveSchedule?.(dateKey, getWindowGlobals())
+                        .catch(() => {});
+                }
             }
         });
 
@@ -1276,6 +1319,29 @@
             saveSchedule(dateKey, getWindowGlobals(), { immediate: true });
         });
 
+        // ★★★ v1.6 SECURITY: Listen for permission revocation from ScheduleDB or AccessControl ★★★
+        window.addEventListener('campistry-permission-revoked', (e) => {
+            logWarn('🚨 Permission revocation event received:', e.detail);
+            _permissionRevoked = true;
+            _isSaving = false;
+
+            // Clear save queue to prevent queued saves from firing
+            if (_saveTimeout) {
+                clearTimeout(_saveTimeout);
+                _saveTimeout = null;
+            }
+            _saveQueue = [];
+
+            showNotification('Your permissions have changed — please refresh the page', 'error');
+        });
+
+        // ★★★ v1.6: Listen for role changes (may upgrade or downgrade permissions) ★★★
+        window.addEventListener('campistry-role-changed', (e) => {
+            log('Role changed event received:', e.detail);
+            // Reset permission flag — new role may have different access
+            _permissionRevoked = false;
+        });
+
         log('Event listeners set up');
     }
 
@@ -1287,12 +1353,13 @@
         const dateKey = getCurrentDateKey();
         
         console.log('═══════════════════════════════════════════════════════');
-        console.log('🎯 ORCHESTRATOR DIAGNOSIS v1.5');
+        console.log('🎯 ORCHESTRATOR DIAGNOSIS v1.6');
         console.log('═══════════════════════════════════════════════════════');
         console.log('Version:', CONFIG.VERSION);
         console.log('Initialized:', _isInitialized);
         console.log('Is Loading:', _isLoading);
         console.log('Is Saving:', _isSaving);
+        console.log('Permission Revoked:', _permissionRevoked);  // ★ v1.6
         console.log('Online:', navigator.onLine);
         console.log('Current Date Key:', dateKey);
         console.log('Last Save Time:', _lastSaveTime ? new Date(_lastSaveTime).toISOString() : 'Never');
@@ -1421,7 +1488,7 @@
         // Diagnostics
         diagnose,
         
-        // ★ EXPOSED FOR VERIFICATION - Fix 7
+        // ★ EXPOSED FOR VERIFICATION
         CONFIG,
         get _loadAbortController() { return _loadAbortController; },
         
@@ -1429,6 +1496,7 @@
         get isInitialized() { return _isInitialized; },
         get isLoading() { return _isLoading; },
         get isSaving() { return _isSaving; },
+        get permissionRevoked() { return _permissionRevoked; },  // ★ v1.6
         get version() { return CONFIG.VERSION; }
     };
 
@@ -1444,6 +1512,6 @@
         setTimeout(initialize, 200);
     }
 
-    console.log('🎯 Campistry Schedule Orchestrator v1.5 loaded');
+    console.log('🎯 Campistry Schedule Orchestrator v1.6 loaded — permission-aware retries');
 
 })();
