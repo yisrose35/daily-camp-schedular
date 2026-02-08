@@ -147,6 +147,18 @@
     // =========================================================================
 
     async function handleGeneration(selection, originalOnClick, originalHandler) {
+        // ★★★ SECURITY: Re-verify role from DB before generation ★★★
+        if (window.AccessControl?.verifyBeforeWrite) {
+            const allowed = await window.AccessControl.verifyBeforeWrite('generate schedule');
+            if (!allowed) {
+                console.warn("🔗 Generation BLOCKED by verifyBeforeWrite");
+                if (typeof window.showToast === 'function') {
+                    window.showToast('You don\'t have permission to generate schedules', 'error');
+                }
+                return;
+            }
+        }
+
         const { divisions, clearExisting, existingLocks, previouslyGenerated } = selection;
 
         console.log("🔗 Starting generation for:", divisions);
