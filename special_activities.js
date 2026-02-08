@@ -313,9 +313,11 @@ function validateSpecialActivity(activity, activityName) {
         sharableWith: sharableWith,
         limitUsage: limitUsage,
         timeRules: timeRules,
-        maxUsage: (activity.maxUsage !== undefined && activity.maxUsage !== "" && activity.maxUsage !== null) 
-            ? parseInt(activity.maxUsage, 10) || null 
-            : null,
+        maxUsage: (() => {
+            if (activity.maxUsage == null || activity.maxUsage === "") return null;
+            const parsed = parseInt(activity.maxUsage, 10);
+            return (!isNaN(parsed) && parsed > 0) ? parsed : null;
+        })(),
         frequencyWeeks: parseInt(activity.frequencyWeeks, 10) || 0,
         rainyDayExclusive: activity.rainyDayExclusive === true,
        rainyDayOnly: activity.rainyDayOnly === true, // Legacy support
