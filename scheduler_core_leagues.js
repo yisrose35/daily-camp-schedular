@@ -834,10 +834,17 @@ for (const futureDate of Object.keys(allDailyData)) {
                     });
                 });
 
-                console.log(`   📈 Game #${gameNumber} complete for "${league.name}"`);
+               console.log(`   📈 Game #${gameNumber} complete for "${league.name}"`);
 
+                // ★ v7.1 FIX: Merge into existing round state instead of overwriting
                 if (!window.leagueRoundState) window.leagueRoundState = {};
-                window.leagueRoundState[league.name] = { currentRound: gameNumber };
+                const existingState = window.leagueRoundState[league.name] || {};
+                window.leagueRoundState[league.name] = {
+                    ...existingState,
+                    currentRound: gameNumber,
+                    lastScheduledDate: dayId,
+                    sportRotationIndex: (existingState.sportRotationIndex || 0) + 1
+                };
             }
         }
 
