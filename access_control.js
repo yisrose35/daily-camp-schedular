@@ -47,7 +47,7 @@
 (function() {
     'use strict';
 
-    console.log("🔐 Access Control v3.9 loading...");
+    console.log("🔐 Access Control v3.10 loading...");
 
     // =========================================================================
     // STATE
@@ -1327,9 +1327,27 @@
         return true;
     }
 
-    function checkSetupAccess() {
+   // ★★★ v3.10: Granular per-section setup permissions ★★★
+    // Admin-only sections: fields, divisions, locations, special activities
+    // Scheduler+: schedule templates, leagues, skeleton assignments
+    function checkSetupAccess(action) {
+        const actionLower = (action || '').toLowerCase();
+
+        // These setup sections are camp-wide config — admin+ only
+        const adminOnlyKeywords = ['field', 'division', 'location', 'special activit', 'grade', 'bunk'];
+        const needsAdmin = adminOnlyKeywords.some(kw => actionLower.includes(kw));
+
+        if (needsAdmin) {
+            if (!canEditFields()) {
+                showPermissionDenied(action || 'modify camp setup');
+                return false;
+            }
+            return true;
+        }
+
+        // Everything else (templates, leagues, assignments) — scheduler+ 
         if (!canEditSetup()) {
-            showPermissionDenied('modify setup');
+            showPermissionDenied(action || 'modify setup');
             return false;
         }
         return true;
@@ -1998,6 +2016,6 @@
         });
     }
 
-    console.log("🔐 Access Control v3.9 loaded");
+    console.log("🔐 Access Control v3.10 loaded");
 
 })();
