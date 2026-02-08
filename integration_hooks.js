@@ -1151,6 +1151,15 @@
             const originalGenerate = window.generateSchedule;
 
             window.generateSchedule = async function(dateKey, ...args) {
+                // ★★★ v6.7 SECURITY: Verify write permission even on direct console call ★★★
+                if (window.AccessControl?.verifyBeforeWrite) {
+                    const allowed = await window.AccessControl.verifyBeforeWrite('generate schedule');
+                    if (!allowed) {
+                        console.warn('🔗 [Hooks] Generation BLOCKED — write permission denied');
+                        return null;
+                    }
+                }
+
                 const result = await originalGenerate.call(this, dateKey, ...args);
 
                 window.dispatchEvent(new CustomEvent('campistry-generation-complete', {
