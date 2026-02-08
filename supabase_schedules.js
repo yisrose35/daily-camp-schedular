@@ -528,7 +528,15 @@
      * FIXED in v5.3: Improved verification with exponential backoff
      * FIXED in v5.4: Permission-aware error handling (RLS violations vs network errors)
      */
-    async function saveSchedule(dateKey, data, options = {}) {
+   async function saveSchedule(dateKey, data, options = {}) {
+        // ★★★ v5.5 SECURITY: Verify write permission before cloud write ★★★
+        if (window.AccessControl?.verifyBeforeWrite && !options.skipVerify) {
+            const allowed = await window.AccessControl.verifyBeforeWrite('save schedule to cloud');
+            if (!allowed) {
+                log('SAVE BLOCKED by verifyBeforeWrite');
+                return { data: null, error: { message: 'Write permission denied' } };
+            }
+        }
         const client = getClient();
         const campId = getCampId();
         const userId = getUserId();
