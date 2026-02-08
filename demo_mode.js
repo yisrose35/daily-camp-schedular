@@ -85,6 +85,9 @@
     localStorage.setItem('campistry_role',         'owner');
     localStorage.setItem('campistry_is_team_member', 'false');
 
+    // ★★★ Clear RBAC session cache so real-mode context doesn't bleed into demo ★★★
+    try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
+
     // =========================================================================
     // 4. MOCK USER & SESSION
     // =========================================================================
@@ -482,7 +485,144 @@
     }
 
     // =========================================================================
-    // 12. VISUAL DEMO MODE INDICATOR
+    // 12. FULLSCREEN KIOSK MODE — hide browser chrome for expo presentations
+    // =========================================================================
+
+    function enterFullscreen() {
+        const el = document.documentElement;
+        const rfs = el.requestFullscreen
+                 || el.webkitRequestFullscreen
+                 || el.mozRequestFullScreen
+                 || el.msRequestFullscreen;
+        if (rfs) {
+            rfs.call(el).catch(() => {
+                // Fullscreen requires user gesture — we'll retry on first click
+                console.log('🎭 [Demo] Fullscreen needs user gesture, will retry on click');
+            });
+        }
+    }
+
+    function setupFullscreenKiosk() {
+        // Try immediately (works if already had a gesture)
+        enterFullscreen();
+
+        // Also retry on first user interaction (browsers require a gesture)
+        const onFirstInteraction = () => {
+            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+                enterFullscreen();
+            }
+            document.removeEventListener('click', onFirstInteraction);
+            document.removeEventListener('touchstart', onFirstInteraction);
+            document.removeEventListener('keydown', onFirstInteraction);
+        };
+        document.addEventListener('click', onFirstInteraction);
+        document.addEventListener('touchstart', onFirstInteraction);
+        document.addEventListener('keydown', onFirstInteraction);
+
+        // Re-enter fullscreen if user accidentally exits (e.g. Escape key)
+        document.addEventListener('fullscreenchange', () => {
+            if (!document.fullscreenElement && DEMO_ACTIVE) {
+                // Small delay then re-enter — prevents rapid toggle
+                setTimeout(() => {
+                    if (!document.fullscreenElement && DEMO_ACTIVE) {
+                        enterFullscreen();
+                    }
+                }, 500);
+            }
+        });
+        document.addEventListener('webkitfullscreenchange', () => {
+            if (!document.webkitFullscreenElement && DEMO_ACTIVE) {
+                setTimeout(() => {
+                    if (!document.webkitFullscreenElement && DEMO_ACTIVE) {
+                        enterFullscreen();
+                    }
+                }, 500);
+            }
+        });
+    }
+
+    // =========================================================================
+    // 13. PASSWORD-PROTECTED EXIT
+    // =========================================================================
+
+    const DEMO_EXIT_PASSWORD = 'JewishCamPExpo2026';
+
+    function promptDemoExit() {
+        // Build a custom modal instead of using prompt() (which is blocked in fullscreen)
+        const overlay = document.createElement('div');
+        overlay.id = 'demo-exit-overlay';
+        overlay.style.cssText = `
+            position:fixed; inset:0; z-index:999999;
+            background:rgba(0,0,0,0.6); backdrop-filter:blur(4px);
+            display:flex; align-items:center; justify-content:center;
+            font-family:Inter,system-ui,sans-serif;
+        `;
+
+        const modal = document.createElement('div');
+        modal.style.cssText = `
+            background:white; border-radius:16px; padding:32px; width:360px;
+            box-shadow:0 20px 60px rgba(0,0,0,0.3); text-align:center;
+        `;
+        modal.innerHTML = `
+            <div style="font-size:2rem;margin-bottom:12px">🔒</div>
+            <h3 style="margin:0 0 8px;color:#1E293B;font-size:1.1rem">Exit Demo Mode</h3>
+            <p style="margin:0 0 20px;color:#64748B;font-size:0.9rem">Enter the password to exit demo mode.</p>
+            <input id="demo-exit-pw" type="password" placeholder="Password" autocomplete="off" style="
+                width:100%; padding:10px 14px; border:2px solid #E2E8F0; border-radius:10px;
+                font-size:1rem; outline:none; box-sizing:border-box; transition:border-color 0.2s;
+            " />
+            <p id="demo-exit-error" style="color:#EF4444;font-size:0.85rem;margin:8px 0 0;min-height:1.2em"></p>
+            <div style="display:flex;gap:10px;margin-top:16px">
+                <button id="demo-exit-cancel" style="
+                    flex:1; padding:10px; border:1px solid #E2E8F0; background:#F8FAFC;
+                    border-radius:10px; cursor:pointer; font-size:0.9rem; color:#64748B;
+                ">Cancel</button>
+                <button id="demo-exit-confirm" style="
+                    flex:1; padding:10px; border:none; background:#EF4444;
+                    border-radius:10px; cursor:pointer; font-size:0.9rem; color:white; font-weight:600;
+                ">Exit Demo</button>
+            </div>
+        `;
+
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        const pwInput = document.getElementById('demo-exit-pw');
+        const errorEl = document.getElementById('demo-exit-error');
+
+        pwInput.focus();
+
+        // Focus styling
+        pwInput.addEventListener('focus', () => { pwInput.style.borderColor = '#3B82F6'; });
+        pwInput.addEventListener('blur', () => { pwInput.style.borderColor = '#E2E8F0'; });
+
+        function tryExit() {
+            if (pwInput.value === DEMO_EXIT_PASSWORD) {
+                overlay.remove();
+                localStorage.removeItem('campistry_demo_mode');
+                try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
+                // Exit fullscreen before reload
+                if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+                else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+                console.log('🎭 Demo mode disabled. Reloading...');
+                window.location.reload();
+            } else {
+                errorEl.textContent = 'Incorrect password';
+                pwInput.value = '';
+                pwInput.style.borderColor = '#EF4444';
+                pwInput.focus();
+                setTimeout(() => { errorEl.textContent = ''; pwInput.style.borderColor = '#E2E8F0'; }, 2000);
+            }
+        }
+
+        document.getElementById('demo-exit-confirm').addEventListener('click', tryExit);
+        pwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryExit(); });
+        document.getElementById('demo-exit-cancel').addEventListener('click', () => overlay.remove());
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    }
+
+    // =========================================================================
+    // 14. VISUAL DEMO MODE INDICATOR
     // =========================================================================
 
     function addDemoBanner() {
@@ -509,11 +649,13 @@
         // Push page content down so nothing hides behind the banner
         document.body.style.paddingTop = (banner.offsetHeight) + 'px';
 
+        // ★★★ Password-protected exit ★★★
         document.getElementById('demo-exit-btn')?.addEventListener('click', () => {
-            if (confirm('Exit demo mode? The app will require internet again.')) {
-                window.disableDemoMode();
-            }
+            promptDemoExit();
         });
+
+        // ★★★ Enter fullscreen kiosk mode ★★★
+        setupFullscreenKiosk();
     }
 
     if (document.readyState === 'loading') {
@@ -523,7 +665,7 @@
     }
 
     // =========================================================================
-    // 13. PATCH SYNC STATUS — always show "synced" in demo mode
+    // 15. PATCH SYNC STATUS — always show "synced" in demo mode
     // =========================================================================
 
     // After the sync engine initializes, override the status indicator
@@ -557,7 +699,7 @@
     });
 
     // =========================================================================
-    // 14. PATCH navigator.onLine — pretend we're online so no "offline" warnings
+    // 16. PATCH navigator.onLine — pretend we're online so no "offline" warnings
     // =========================================================================
 
     Object.defineProperty(navigator, 'onLine', {
@@ -566,19 +708,19 @@
     });
 
     // =========================================================================
-    // 15. GLOBAL UTILITY FUNCTIONS
+    // 17. GLOBAL UTILITY FUNCTIONS
     // =========================================================================
 
+    // ★★★ Password-protected — no more simple toggle ★★★
     window.enableDemoMode = function () {
         localStorage.setItem('campistry_demo_mode', 'true');
+        try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
         console.log('🎭 Demo mode enabled. Reloading...');
         window.location.reload();
     };
 
     window.disableDemoMode = function () {
-        localStorage.removeItem('campistry_demo_mode');
-        console.log('🎭 Demo mode disabled. Reloading...');
-        window.location.reload();
+        promptDemoExit();
     };
 
     /**
@@ -634,6 +776,7 @@
         console.log('🎭 CAMPISTRY DEMO MODE STATUS');
         console.log('═══════════════════════════════════════════');
         console.log('Active:       ', DEMO_ACTIVE);
+        console.log('Fullscreen:   ', !!document.fullscreenElement || !!document.webkitFullscreenElement);
         console.log('User ID:      ', DEMO_USER_ID);
         console.log('Camp ID:      ', DEMO_CAMP_ID);
         console.log('Camp Name:    ', DEMO_CAMP_NAME);
