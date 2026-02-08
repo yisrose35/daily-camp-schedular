@@ -162,6 +162,8 @@
         }
         .form-group input:focus { outline: none; border-color: var(--primary); }
         .form-group input:disabled { background: var(--slate-100); color: var(--slate-600); }
+        /* ★ SECURITY: Ensure readonly email fields look locked even if 'disabled' is removed via DevTools */
+        .form-group input[readonly] { background: var(--slate-100); color: var(--slate-600); cursor: not-allowed; pointer-events: none; }
         
         .form-hint { font-size: 0.8rem; color: var(--slate-500); margin-top: 4px; }
         
@@ -297,8 +299,8 @@
                 </div>
                 <div class="form-group">
                     <label for="signup-email">Email</label>
-                    <input type="email" id="signup-email" disabled>
-                    <div class="form-hint">This is the email you were invited with</div>
+                    <input type="email" id="signup-email" disabled readonly tabindex="-1">
+                    <div class="form-hint">This is the email you were invited with — it cannot be changed</div>
                 </div>
                 <div class="form-group">
                     <label for="signup-password">Password</label>
@@ -324,7 +326,7 @@
                 </div>
                 <div class="form-group">
                     <label for="email">Email</label>
-                    <input type="email" id="email" disabled>
+                    <input type="email" id="email" disabled readonly tabindex="-1">
                     <div class="form-hint">You must sign in with this email</div>
                 </div>
                 <div class="form-group">
@@ -583,9 +585,22 @@
                 container.classList.remove('hidden');
             }
             
-            // Pre-fill email (readonly)
-            document.getElementById('signup-email').value = inviteData.email;
-            document.getElementById('email').value = inviteData.email;
+            // Pre-fill email (readonly) — ★ SECURITY: Also block DOM manipulation
+            const signupEmailField = document.getElementById('signup-email');
+            const signinEmailField = document.getElementById('email');
+            
+            signupEmailField.value = inviteData.email;
+            signinEmailField.value = inviteData.email;
+            
+            // Block paste/keydown/input events on email fields to prevent DevTools bypass
+            [signupEmailField, signinEmailField].forEach(field => {
+                field.setAttribute('readonly', 'readonly');
+                field.setAttribute('tabindex', '-1');
+                field.addEventListener('keydown', (e) => e.preventDefault());
+                field.addEventListener('paste', (e) => e.preventDefault());
+                field.addEventListener('drop', (e) => e.preventDefault());
+                field.addEventListener('input', () => { field.value = inviteData.email; });
+            });
             
             document.getElementById('invite-state').classList.remove('hidden');
         }
@@ -626,6 +641,18 @@
             setTimeout(() => {
                 window.location.href = '/dashboard.html';
             }, 2000);
+        }
+        
+        // =====================================================================
+        // ★ SECURITY: Single source of truth for invite email
+        // NEVER trust the DOM input — always use inviteData.email directly.
+        // This prevents email spoofing via DevTools element editing.
+        // =====================================================================
+        function getInviteEmail() {
+            if (!inviteData || !inviteData.email) {
+                throw new Error('Invite data not loaded. Please refresh the page.');
+            }
+            return inviteData.email.toLowerCase().trim();
         }
         
         // =====================================================================
@@ -679,9 +706,13 @@
             btn.disabled = true;
             btn.textContent = 'Creating account...';
             
+            // ★ SECURITY: Always use inviteData.email — NEVER trust the DOM input
+            const safeEmail = getInviteEmail();
+            console.log('[Invite] Signing up with invite email (not DOM):', safeEmail);
+            
             try {
                 const { data, error } = await supabaseClient.auth.signUp({
-                    email: inviteData.email,
+                    email: safeEmail,
                     password: password,
                     options: {
                         data: { name: name }
@@ -701,6 +732,15 @@
                 
                 currentUser = data.user;
                 console.log('[Invite] User logged in:', currentUser.email);
+                
+                // ★ SECURITY: Verify the created account email matches the invite
+                if (currentUser.email.toLowerCase() !== safeEmail) {
+                    console.error('[Invite] CRITICAL: Created account email does not match invite!');
+                    showAuthError('Account email mismatch. Please contact support.');
+                    btn.disabled = false;
+                    btn.textContent = 'Create Account & Join';
+                    return;
+                }
                 
                 // Now accept the invite
                 await acceptInviteAndRedirect(name);
@@ -727,9 +767,13 @@
             btn.disabled = true;
             btn.textContent = 'Signing in...';
             
+            // ★ SECURITY: Always use inviteData.email — NEVER trust the DOM input
+            const safeEmail = getInviteEmail();
+            console.log('[Invite] Signing in with invite email (not DOM):', safeEmail);
+            
             try {
                 const { data, error } = await supabaseClient.auth.signInWithPassword({
-                    email: inviteData.email,
+                    email: safeEmail,
                     password: password
                 });
                 
