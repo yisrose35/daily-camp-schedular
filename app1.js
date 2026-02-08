@@ -539,8 +539,50 @@
         const applyAllBtn = pane.querySelector("#apply-times-all-btn");
         
         const saveTimes = () => {
-            divObj.startTime = startInput?.value || "";
-            divObj.endTime = endInput?.value || "";
+            const rawStart = (startInput?.value || "").trim();
+            const rawEnd = (endInput?.value || "").trim();
+            
+            // Allow clearing both times
+            if (!rawStart && !rawEnd) {
+                divObj.startTime = "";
+                divObj.endTime = "";
+                syncSpine();
+                saveData();
+                setupDivisionButtons();
+                renderDivisionDetailPane();
+                return;
+            }
+            
+            // Both must be provided
+            if (!rawStart || !rawEnd) {
+                alert("Please enter both a start and end time, or leave both empty.");
+                return;
+            }
+            
+            // Validate format
+            const startMin = parseTimeToMinutes(rawStart);
+            const endMin = parseTimeToMinutes(rawEnd);
+            
+            if (startMin === null) {
+                alert("Invalid start time format. Use format like 9:00am or 2:30pm");
+                startInput?.focus();
+                return;
+            }
+            if (endMin === null) {
+                alert("Invalid end time format. Use format like 9:00am or 2:30pm");
+                endInput?.focus();
+                return;
+            }
+            
+            // End must be after start
+            if (endMin <= startMin) {
+                alert("End time must be after start time.");
+                endInput?.focus();
+                return;
+            }
+            
+            divObj.startTime = rawStart;
+            divObj.endTime = rawEnd;
             syncSpine();
             saveData();
             setupDivisionButtons();
