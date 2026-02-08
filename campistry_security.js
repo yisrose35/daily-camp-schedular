@@ -557,11 +557,23 @@
                 const value = localStorage.getItem(key);
                 if (value !== null && _storageChecksums[key]) {
                     const currentChecksum = computeChecksum(value);
-                    if (currentChecksum !== _storageChecksums[key]) {
-                        logSecurityEvent('STORAGE_TAMPER', { key });
+                   if (currentChecksum !== _storageChecksums[key]) {
+                        logSecurityEvent('STORAGE_TAMPER', { key, tamperedValue: value });
                         tampered = true;
-                        // Update checksum to avoid repeated alerts for legitimate changes
-                        _storageChecksums[key] = currentChecksum;
+                        
+                        // ★★★ SECURITY FIX: Revert role to safe default on tamper ★★★
+                        if (key === 'campistry_role') {
+                            _originalSetItem(key, 'viewer');
+                            _storageChecksums[key] = computeChecksum('viewer');
+                            console.warn('🛡️ [SECURITY] Role tampered! Reset to viewer. RBAC will re-verify.');
+                            try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
+                            if (window.AccessControl?.refresh) {
+                                window.AccessControl.refresh().catch(() => {});
+                            }
+                        } else {
+                            // For non-role keys, accept the change (may be legitimate app code)
+                            _storageChecksums[key] = currentChecksum;
+                        }
                     }
                 }
             } catch (e) {}
