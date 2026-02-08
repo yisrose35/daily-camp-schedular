@@ -89,6 +89,27 @@
     try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
 
     // =========================================================================
+    // DEMO MODE GUARD — prevent casual console disabling
+    // Re-writes the flag if someone removes it via localStorage directly.
+    // Only the password modal can truly exit (it sets a bypass flag first).
+    // =========================================================================
+
+    let _demoExitAuthorized = false;
+
+    window.addEventListener('storage', (e) => {
+        if (e.key === 'campistry_demo_mode' && e.newValue !== 'true' && !_demoExitAuthorized) {
+            localStorage.setItem('campistry_demo_mode', 'true');
+        }
+    });
+
+    // Polling fallback (same-tab storage changes don't fire the event)
+    setInterval(() => {
+        if (!_demoExitAuthorized && localStorage.getItem('campistry_demo_mode') !== 'true') {
+            localStorage.setItem('campistry_demo_mode', 'true');
+        }
+    }, 1000);
+
+    // =========================================================================
     // 4. MOCK USER & SESSION
     // =========================================================================
 
@@ -599,6 +620,7 @@
         function tryExit() {
             if (pwInput.value === DEMO_EXIT_PASSWORD) {
                 overlay.remove();
+                _demoExitAuthorized = true;  // ★★★ Bypass the guard ★★★
                 localStorage.removeItem('campistry_demo_mode');
                 try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
                 // Exit fullscreen before reload
