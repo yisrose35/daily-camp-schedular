@@ -41,7 +41,7 @@
 (function() {
     'use strict';
 
-    console.log('🔗 Campistry Integration Hooks v6.6 loading...');
+    console.log('🔗 Campistry Integration Hooks v6.7 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -1320,7 +1320,16 @@
         if (typeof window.eraseAllSchedules === 'function') {
             const original = window.eraseAllSchedules;
             
-            window.eraseAllSchedules = async function(dateKey) {
+           window.eraseAllSchedules = async function(dateKey) {
+                // ★★★ v6.7 SECURITY: Verify write permission before erase ★★★
+                if (window.AccessControl?.verifyBeforeWrite) {
+                    const allowed = await window.AccessControl.verifyBeforeWrite('erase schedules');
+                    if (!allowed) {
+                        console.warn('🔗 [Hooks] Erase BLOCKED — write permission denied');
+                        return;
+                    }
+                }
+
                 // Use CloudPermissions for consistent permission checking
                 const hasFullAccess = window.CloudPermissions?.hasFullAccess?.() || false;
                 
@@ -1505,7 +1514,7 @@
         const client = window.CampistryDB?.getClient?.();
 
         console.log('═══════════════════════════════════════════════════════');
-        console.log('SCHEDULE SYNC DIAGNOSTIC v6.6');
+        console.log('SCHEDULE SYNC DIAGNOSTIC v6.7');
         console.log('═══════════════════════════════════════════════════════');
         console.log('Date:', dateKey);
         console.log('Online:', navigator.onLine);
@@ -1578,7 +1587,7 @@
         setTimeout(waitForSystems, 300);
     }
 
-    console.log('🔗 Campistry Integration Hooks v6.6 loaded');
+    console.log('🔗 Campistry Integration Hooks v6.7 loaded');
     console.log('   Commands: diagnoseScheduleSync(), verifiedScheduleSave(), forceLoadScheduleFromCloud()');
     console.log('   v6.6: Multi-date save fix — ALL dates now properly cloud-synced');
 
