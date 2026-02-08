@@ -937,7 +937,16 @@
         injectStyles();
         setupEditInterceptors();
     }
-
+// ★★★ v2.2 SECURITY: Freeze to prevent monkey-patching ★★★
+    Object.freeze(VisualRestrictions);
+    try {
+        Object.defineProperty(window, 'VisualRestrictions', {
+            value: VisualRestrictions, writable: false, configurable: false
+        });
+        Object.defineProperty(window, 'EditRestrictions', {
+            value: VisualRestrictions, writable: false, configurable: false
+        });
+    } catch (e) { /* already defined */ }
     console.log("🚫 Visual Restrictions v2.1 loaded");
 
 })();
