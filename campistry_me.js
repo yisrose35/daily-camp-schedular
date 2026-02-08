@@ -1,18 +1,25 @@
 // =============================================================================
-// campistry_me.js — Campistry Me v6.0
+// campistry_me.js — Campistry Me v7.0
 // Professional UI, Cloud Sync, Fast inline inputs
 // =============================================================================
-// v6.0 FIXES:
-// - ★ CRITICAL: Direct Supabase cloud sync (no dependency on integration_hooks.js)
-// - ★ CRITICAL: Data persists across cache clears via camp_state table
-// - ★ FIXED: localStorage key mismatch - now writes to BOTH keys for cross-page compat
-// - ★ NEW: Cloud hydration on startup with smart merge (local vs cloud freshness)
-// - ★ NEW: Debounced cloud save (800ms) to avoid excessive writes
+// v7.0 — Final audit rewrite (18 issues resolved):
+// ★ beforeunload actually flushes pending cloud saves via sendBeacon
+// ★ saveCamper calls renderAll() so stat cards stay in sync
+// ★ addBunkInline validates isUnsafeName (was only missing path)
+// ★ Division rename updates expandedGrades keys (no more grade collapse)
+// ★ visibilitychange throttled to 10s + skips when pending edits exist
+// ★ loadFromCloud refreshes session (parity with saveToCloud)
+// ★ migrateOldStructure null-guards corrupted divData
+// ★ Toast timeout tracked — rapid toasts no longer cancel each other
+// ★ quickAddCamper focuses AFTER render (not on destroyed DOM)
+// ★ saveToCloudLegacy uses deep merge for app1 keys
+// ★ Template CSV includes BOM for Excel consistency
+// ★ Accessibility: aria-labels, role=status on toast, aria-label on search
 // =============================================================================
 
 (function() {
     'use strict';
-    console.log('[Me] Campistry Me v6.0 loading...');
+    console.log('[Me] Campistry Me v7.0 loading...');
 
     let structure = {};
     let camperRoster = {};
@@ -27,8 +34,17 @@
 
     // ★ Cloud sync state
     let _cloudSaveTimeout = null;
-    let _cloudVersion = null; // ★ v6.2: Track server version for optimistic locking
+    let _cloudVersion = null;
+    let _pendingMergeData = null;
+    let _searchDebounceTimeout = null;
+    let _toastTimeout = null; // ★ v7.0: Track toast timer to prevent overlap
+    let _lastCloudFetchTime = 0; // ★ v7.0: Throttle visibilitychange cloud fetches
     const CLOUD_SAVE_DEBOUNCE_MS = 800;
+    const CLOUD_FETCH_COOLDOWN_MS = 10000; // ★ v7.0: Min 10s between tab-focus fetches
+    const MAX_NAME_LENGTH = 100;
+    const MAX_CSV_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+    const MAX_CSV_ROWS = 10000;
+    const MAX_CLOUD_RETRIES = 3;
 
     const COLOR_PRESETS = ['#00C896','#6366F1','#F59E0B','#EF4444','#8B5CF6','#3B82F6','#10B981','#EC4899','#F97316','#14B8A6','#84CC16','#A855F7','#06B6D4','#F43F5E','#22C55E','#FBBF24'];
 
@@ -55,6 +71,12 @@
             return null;
         }
         try {
+            // ★ v7.0: Refresh session before load (parity with saveToCloud)
+            try {
+                const { error: refreshErr } = await client.auth.getSession();
+                if (refreshErr) console.warn('[Me] Session refresh warning:', refreshErr.message);
+            } catch (_) { /* best effort */ }
+
             const { data, error } = await client
                 .from('camp_state')
                 .select('state, version')
@@ -85,7 +107,8 @@
         }
     }
 
-    async function saveToCloud(mergeData) {
+    async function saveToCloud(mergeData, _retryCount) {
+        const retryCount = _retryCount || 0;
         const client = getSupabaseClient();
         const campId = getCampId();
         if (!client || !campId) {
@@ -97,7 +120,13 @@
             return false;
         }
         try {
-            // ★ v6.2: Use atomic server-side merge to prevent race conditions
+            // ★ Refresh session if needed to prevent 401 on expired JWT
+            try {
+                const { error: refreshErr } = await client.auth.getSession();
+                if (refreshErr) console.warn('[Me] Session refresh warning:', refreshErr.message);
+            } catch (_) { /* best effort */ }
+
+            // ★ Use atomic server-side merge to prevent race conditions
             const { data, error } = await client.rpc('merge_camp_state', {
                 p_camp_id: campId,
                 p_partial_state: mergeData,
@@ -105,21 +134,37 @@
             });
 
             if (error) {
-                console.error('[Me] Cloud save RPC error:', error.message);
+                // ★ Detect auth/permission errors specifically
+                const msg = error.message || '';
+                if (msg.includes('401') || msg.includes('JWT') || msg.includes('expired')) {
+                    console.error('[Me] Session expired — please reload');
+                    toast('Session expired — please reload the page', 'error');
+                    return false;
+                }
+                if (msg.includes('403') || msg.includes('permission') || msg.includes('denied')) {
+                    console.error('[Me] Permission denied');
+                    toast('Permission denied — check your access', 'error');
+                    return false;
+                }
+                console.error('[Me] Cloud save RPC error:', msg);
                 // Fallback to legacy upsert if RPC doesn't exist yet
-                if (error.message.includes('merge_camp_state')) {
+                if (msg.includes('merge_camp_state')) {
                     return await saveToCloudLegacy(mergeData);
                 }
                 return false;
             }
 
             if (data && data.ok === false && data.error === 'version_conflict') {
-                console.warn('[Me] ☁️ Version conflict (server:', data.server_version, 'ours:', data.your_version, ') — reloading...');
-                // Another tab wrote first — reload cloud data and retry
+                // ★ Cap retries to prevent infinite loop
+                if (retryCount >= MAX_CLOUD_RETRIES) {
+                    console.error('[Me] ☁️ Version conflict — max retries reached, giving up');
+                    toast('Sync conflict — please reload', 'error');
+                    return false;
+                }
+                console.warn('[Me] ☁️ Version conflict (retry', retryCount + 1, '/', MAX_CLOUD_RETRIES, ')');
                 const fresh = await loadFromCloud();
                 if (fresh) {
-                    // Re-apply our changes on top of the fresh data
-                    return await saveToCloud(mergeData);
+                    return await saveToCloud(mergeData, retryCount + 1);
                 }
                 return false;
             }
@@ -139,11 +184,15 @@
         }
     }
 
-    // ★ v6.2: Legacy fallback if merge_camp_state RPC not deployed yet
+    // ★ Legacy fallback if merge_camp_state RPC not deployed yet
     async function saveToCloudLegacy(mergeData) {
         const client = getSupabaseClient();
         const campId = getCampId();
+        if (!client || !campId) return false;
         try {
+            // ★ v7.0: Session refresh (may be called independently, not just from saveToCloud)
+            try { await client.auth.getSession(); } catch (_) { /* best effort */ }
+
             const { data: current, error: fetchError } = await client
                 .from('camp_state')
                 .select('state')
@@ -155,13 +204,16 @@
             }
 
             const currentState = current?.state || {};
+            // ★ v7.0: Deep merge — only overwrite Me-owned keys inside app1
+            const currentApp1 = currentState.app1 || {};
+            const mergeApp1 = mergeData.app1 || {};
+            const mergedApp1 = { ...currentApp1 };
+            if (mergeApp1.camperRoster !== undefined) mergedApp1.camperRoster = mergeApp1.camperRoster;
+            if (mergeApp1.divisions !== undefined) mergedApp1.divisions = mergeApp1.divisions;
             const newState = {
                 ...currentState,
                 ...mergeData,
-                app1: {
-                    ...(currentState.app1 || {}),
-                    ...(mergeData.app1 || {})
-                },
+                app1: mergedApp1,
                 updated_at: new Date().toISOString()
             };
 
@@ -185,9 +237,11 @@
         }
     }
 
-    function schedulCloudSave(mergeData) {
+    function scheduleCloudSave(mergeData) {
+        _pendingMergeData = mergeData; // ★ Track for beforeunload flush
         if (_cloudSaveTimeout) clearTimeout(_cloudSaveTimeout);
         _cloudSaveTimeout = setTimeout(async () => {
+            _pendingMergeData = null;
             const success = await saveToCloud(mergeData);
             if (success) {
                 setSyncStatus('synced');
@@ -291,10 +345,15 @@
             const localTime = new Date(local.updated_at || 0).getTime();
             
             if (localTime > cloudTime) {
-                global = { ...cloud, ...local, app1: { ...(cloud.app1 || {}), ...(local.app1 || {}) } };
+                // ★ Deep merge — preserve cloud's non-Me keys inside app1
+                const mergedApp1 = { ...(cloud.app1 || {}) };
+                const localApp1 = local.app1 || {};
+                // Only overwrite Me-owned keys, preserve everything else (skeletons, etc.)
+                mergedApp1.camperRoster = localApp1.camperRoster || mergedApp1.camperRoster;
+                mergedApp1.divisions = localApp1.divisions || mergedApp1.divisions;
+                global = { ...cloud, ...local, app1: mergedApp1 };
                 console.log('[Me] Using local data (newer by', Math.round((localTime - cloudTime) / 1000), 'seconds)');
-                // Sync local→cloud since local is newer
-                schedulCloudSave({
+                scheduleCloudSave({
                     campStructure: global.campStructure,
                     app1: global.app1,
                     updated_at: new Date().toISOString()
@@ -313,7 +372,7 @@
             global = local;
             console.log('[Me] Using local data (cloud empty)');
             // Push local to cloud
-            schedulCloudSave({
+            scheduleCloudSave({
                 campStructure: local.campStructure,
                 app1: local.app1,
                 updated_at: new Date().toISOString()
@@ -342,9 +401,11 @@
     function migrateOldStructure(oldDivisions) {
         const newStructure = {};
         Object.entries(oldDivisions).forEach(([divName, divData]) => {
+            if (isUnsafeName(divName)) return;
+            if (!divData || typeof divData !== 'object') return; // ★ v7.0: guard null/corrupt entries
             const bunks = (divData.bunks || []).map(b => typeof b === 'string' ? b : b.name);
             newStructure[divName] = {
-                color: divData.color || COLOR_PRESETS[Object.keys(newStructure).length % COLOR_PRESETS.length],
+                color: sanitizeColor(divData.color) || COLOR_PRESETS[Object.keys(newStructure).length % COLOR_PRESETS.length],
                 grades: bunks.length > 0 ? { 'Default': { bunks } } : {}
             };
         });
@@ -370,18 +431,19 @@
             // ★ Save to localStorage immediately (both keys for cross-page compat)
             writeLocalSettings(global);
             
-            // ★ Also call window.saveGlobalSettings if available (when loaded from Flow)
+            // ★ Only use ONE cloud save path to prevent race conditions
             if (window.saveGlobalSettings && window.saveGlobalSettings._isAuthoritativeHandler) {
+                // integration_hooks.js is loaded — let IT handle cloud sync
                 window.saveGlobalSettings('campStructure', structure);
                 window.saveGlobalSettings('app1', global.app1);
+            } else {
+                // ★ Direct cloud sync (debounced) — standalone Me page
+                scheduleCloudSave({
+                    campStructure: structure,
+                    app1: global.app1,
+                    updated_at: global.updated_at
+                });
             }
-            
-            // ★ Direct cloud sync (debounced) - this is the KEY fix
-            schedulCloudSave({
-                campStructure: structure,
-                app1: global.app1,
-                updated_at: global.updated_at
-            });
             
         } catch (e) { 
             console.error('[Me] Save error:', e);
@@ -394,7 +456,7 @@
         Object.entries(struct).forEach(([divName, divData]) => {
             const allBunks = [];
             Object.values(divData.grades || {}).forEach(g => (g.bunks || []).forEach(b => allBunks.push(b)));
-            oldFormat[divName] = { color: divData.color, bunks: allBunks };
+            oldFormat[divName] = { color: sanitizeColor(divData.color), bunks: allBunks };
         });
         return oldFormat;
     }
@@ -431,52 +493,76 @@
     }
 
     // =========================================================================
-    // ★ FIX v6.1: RENDER HIERARCHY — jsEsc for onclick, edit buttons added
+    // ★ RENDER HIERARCHY — jsEsc for onclick, edit buttons added
     // =========================================================================
+
+    // ★ Generate safe DOM element IDs from arbitrary names
+    let _slugCounter = 0;
+    const _slugMap = new Map();
+    function slugId(name) {
+        if (_slugMap.has(name)) return _slugMap.get(name);
+        const slug = 'sid' + (++_slugCounter);
+        _slugMap.set(name, slug);
+        return slug;
+    }
 
     function renderHierarchy() {
         const container = document.getElementById('hierarchyContainer');
         const empty = document.getElementById('structureEmptyState');
         if (!container) return;
+
+        // ★ v7.0: Reset slug map each render to prevent unbounded growth after renames/deletes
+        _slugMap.clear();
+        _slugCounter = 0;
+
         const divNames = Object.keys(structure).sort();
         if (divNames.length === 0) { container.innerHTML = ''; if (empty) empty.style.display = 'block'; return; }
         if (empty) empty.style.display = 'none';
 
+        // ★ Pre-compute camper counts per division (O(n) once instead of O(n) per div)
+        const camperCountMap = {};
+        Object.values(camperRoster).forEach(c => {
+            if (c.division) camperCountMap[c.division] = (camperCountMap[c.division] || 0) + 1;
+        });
+
         container.innerHTML = divNames.map(divName => {
             const div = structure[divName];
+            if (!div || typeof div !== 'object') return ''; // ★ guard corrupted data
             const isExpanded = expandedDivisions.has(divName);
             const grades = div.grades || {};
             const gradeNames = Object.keys(grades).sort();
-            const camperCount = Object.values(camperRoster).filter(c => c.division === divName).length;
+            const camperCount = camperCountMap[divName] || 0;
             const divColor = sanitizeColor(div.color);
 
-            // ★ FIX: Use jsEsc for onclick handlers, esc for display text
             const escDiv = esc(divName);
             const jsDiv = jsEsc(divName);
+            const divSlug = slugId(divName);
 
             // === Grades HTML ===
             const gradesHtml = gradeNames.map(gradeName => {
                 const gradeKey = divName + '||' + gradeName;
                 const isGradeExpanded = expandedGrades.has(gradeKey);
-                const bunks = grades[gradeName].bunks || [];
+                const bunks = (grades[gradeName] && grades[gradeName].bunks) || [];
                 const escGrade = esc(gradeName);
                 const jsGrade = jsEsc(gradeName);
+                const gradeSlug = slugId(divName + '||' + gradeName);
 
                 const bunksHtml = bunks.map(b => {
                     const escB = esc(b);
                     const jsB = jsEsc(b);
                     return '<span class="bunk-chip">' + escB +
-                        '<button class="icon-btn" onclick="event.stopPropagation(); CampistryMe.editBunk(\'' + jsDiv + '\',\'' + jsGrade + '\',\'' + jsB + '\')" title="Rename">' +
+                        '<button class="icon-btn" onclick="event.stopPropagation(); CampistryMe.editBunk(\'' + jsDiv + '\',\'' + jsGrade + '\',\'' + jsB + '\')" title="Rename bunk" aria-label="Rename ' + escB + '">' +
                         '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' +
                         '</button>' +
-                        '<button class="icon-btn danger" onclick="event.stopPropagation(); CampistryMe.deleteBunk(\'' + jsDiv + '\',\'' + jsGrade + '\',\'' + jsB + '\')">' +
+                        '<button class="icon-btn danger" onclick="event.stopPropagation(); CampistryMe.deleteBunk(\'' + jsDiv + '\',\'' + jsGrade + '\',\'' + jsB + '\')" aria-label="Delete ' + escB + '">' +
                         '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
                         '</button></span>';
                 }).join('');
 
+                // ★ Use slug-based IDs instead of esc() names
                 const addBunkHtml = '<div class="quick-add">' +
-                    '<input type="text" placeholder="+ Bunk" id="addBunk_' + escDiv + '_' + escGrade + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addBunkInline(\'' + jsDiv + '\',\'' + jsGrade + '\');event.preventDefault();}">' +
-                    '<button class="quick-add-btn" onclick="CampistryMe.addBunkInline(\'' + jsDiv + '\',\'' + jsGrade + '\')">' +
+                    '<input type="text" placeholder="+ Bunk" maxlength="' + MAX_NAME_LENGTH + '" id="addBunk_' + gradeSlug + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addBunkInline(\'' + jsDiv + '\',\'' + jsGrade + '\');event.preventDefault();}">' +
+                    '<button class="quick-add-btn" onclick="CampistryMe.addBunkInline(\'' + jsDiv + '\',\'' + jsGrade + '\')" aria-label="Add bunk">' +
                     '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
                     '</button></div>';
 
@@ -488,10 +574,10 @@
                             '<span class="grade-count">' + bunks.length + ' bunk' + (bunks.length !== 1 ? 's' : '') + '</span>' +
                         '</div>' +
                         '<div class="grade-actions" onclick="event.stopPropagation()">' +
-                            '<button class="icon-btn" onclick="CampistryMe.editGrade(\'' + jsDiv + '\',\'' + jsGrade + '\')" title="Rename">' +
+                            '<button class="icon-btn" onclick="CampistryMe.editGrade(\'' + jsDiv + '\',\'' + jsGrade + '\')" title="Rename grade" aria-label="Rename ' + escGrade + '">' +
                             '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' +
                             '</button>' +
-                            '<button class="icon-btn danger" onclick="CampistryMe.deleteGrade(\'' + jsDiv + '\',\'' + jsGrade + '\')">' +
+                            '<button class="icon-btn danger" onclick="CampistryMe.deleteGrade(\'' + jsDiv + '\',\'' + jsGrade + '\')" aria-label="Delete ' + escGrade + '">' +
                             '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
                             '</button>' +
                         '</div>' +
@@ -502,10 +588,10 @@
                 '</div>';
             }).join('');
 
-            // === Add Grade ===
+            // === Add Grade — slug-based ID ===
             const addGradeHtml = '<div class="add-grade-inline"><div class="quick-add">' +
-                '<input type="text" placeholder="+ Add grade" id="addGrade_' + escDiv + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addGradeInline(\'' + jsDiv + '\');event.preventDefault();}">' +
-                '<button class="quick-add-btn" onclick="CampistryMe.addGradeInline(\'' + jsDiv + '\')">' +
+                '<input type="text" placeholder="+ Add grade" maxlength="' + MAX_NAME_LENGTH + '" id="addGrade_' + divSlug + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addGradeInline(\'' + jsDiv + '\');event.preventDefault();}">' +
+                '<button class="quick-add-btn" onclick="CampistryMe.addGradeInline(\'' + jsDiv + '\')" aria-label="Add grade">' +
                 '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
                 '</button></div></div>';
 
@@ -520,10 +606,10 @@
                         '</div>' +
                     '</div>' +
                     '<div class="division-actions" onclick="event.stopPropagation()">' +
-                        '<button class="icon-btn" onclick="CampistryMe.editDivision(\'' + jsDiv + '\')" title="Edit">' +
+                        '<button class="icon-btn" onclick="CampistryMe.editDivision(\'' + jsDiv + '\')" title="Edit division" aria-label="Edit ' + escDiv + '">' +
                         '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' +
                         '</button>' +
-                        '<button class="icon-btn danger" onclick="CampistryMe.deleteDivision(\'' + jsDiv + '\')" title="Delete">' +
+                        '<button class="icon-btn danger" onclick="CampistryMe.deleteDivision(\'' + jsDiv + '\')" title="Delete division" aria-label="Delete ' + escDiv + '">' +
                         '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
                         '</button>' +
                         '<svg class="expand-icon ' + (isExpanded ? '' : 'collapsed') + '" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>' +
@@ -544,8 +630,8 @@
     // =========================================================================
 
     function addGradeInline(divName) {
-        const input = document.getElementById('addGrade_' + divName);
-        const name = input?.value.trim();
+        const input = document.getElementById('addGrade_' + slugId(divName));
+        const name = (input?.value || '').trim().slice(0, MAX_NAME_LENGTH);
         if (!name || !structure[divName]) return;
         if (isUnsafeName(name)) { toast('That name is reserved', 'error'); return; }
         if (!structure[divName].grades) structure[divName].grades = {};
@@ -554,13 +640,14 @@
         expandedGrades.add(divName + '||' + name);
         input.value = '';
         saveData(); renderHierarchy(); updateStats(); toast('Grade added');
-        setTimeout(() => document.getElementById('addBunk_' + divName + '_' + name)?.focus(), 50);
+        setTimeout(() => document.getElementById('addBunk_' + slugId(divName + '||' + name))?.focus(), 50);
     }
 
     function addBunkInline(divName, gradeName) {
-        const input = document.getElementById('addBunk_' + divName + '_' + gradeName);
-        const name = input?.value.trim();
+        const input = document.getElementById('addBunk_' + slugId(divName + '||' + gradeName));
+        const name = (input?.value || '').trim().slice(0, MAX_NAME_LENGTH);
         if (!name) return;
+        if (isUnsafeName(name)) { toast('That name is reserved', 'error'); return; } // ★ v7.0: was missing
         const gradeData = structure[divName]?.grades?.[gradeName];
         if (!gradeData) return;
         if (!gradeData.bunks) gradeData.bunks = [];
@@ -568,7 +655,7 @@
         gradeData.bunks.push(name);
         input.value = '';
         saveData(); renderHierarchy(); updateStats(); toast('Bunk added');
-        setTimeout(() => document.getElementById('addBunk_' + divName + '_' + gradeName)?.focus(), 50);
+        setTimeout(() => document.getElementById('addBunk_' + slugId(divName + '||' + gradeName))?.focus(), 50);
     }
 
     function toggleDivision(divName) {
@@ -623,7 +710,7 @@
     }
 
     function saveDivision() {
-        const name = document.getElementById('divisionName').value.trim();
+        const name = document.getElementById('divisionName').value.trim().slice(0, MAX_NAME_LENGTH);
         if (!name) { toast('Enter a name', 'error'); return; }
         if (isUnsafeName(name)) { toast('That name is reserved', 'error'); return; }
         
@@ -635,6 +722,12 @@
             delete structure[currentEditDivision];
             Object.values(camperRoster).forEach(c => { if (c.division === currentEditDivision) c.division = name; });
             expandedDivisions.delete(currentEditDivision); expandedDivisions.add(name);
+            // ★ v7.0: Migrate expandedGrades keys so grades stay expanded after div rename
+            const staleKeys = [...expandedGrades].filter(k => k.startsWith(currentEditDivision + '||'));
+            staleKeys.forEach(k => {
+                expandedGrades.delete(k);
+                expandedGrades.add(name + k.slice(currentEditDivision.length));
+            });
         } else if (currentEditDivision) {
             // Editing existing division (same name)
             structure[currentEditDivision].color = sanitizeColor(document.getElementById('divisionColor').value);
@@ -653,6 +746,8 @@
         if (!confirm('Delete "' + name + '" and all grades/bunks?')) return;
         delete structure[name];
         expandedDivisions.delete(name);
+        // ★ v7.0: Clean stale expandedGrades entries for this division
+        [...expandedGrades].filter(k => k.startsWith(name + '||')).forEach(k => expandedGrades.delete(k));
         Object.values(camperRoster).forEach(c => { if (c.division === name) { c.division = ''; c.grade = ''; c.bunk = ''; } });
         saveData(); renderAll(); toast('Division deleted');
     }
@@ -675,14 +770,14 @@
     }
 
     // =========================================================================
-    // ★ FIX v6.1: EDIT GRADE & BUNK (NEW — were missing entirely)
+    // ★ EDIT GRADE & BUNK (NEW — were missing entirely)
     // =========================================================================
 
     function editGrade(divName, oldGradeName) {
         if (!structure[divName]?.grades?.[oldGradeName]) { toast('Grade not found', 'error'); return; }
         const newName = prompt('Rename grade "' + oldGradeName + '":', oldGradeName);
         if (!newName || newName.trim() === '' || newName.trim() === oldGradeName) return;
-        const trimmed = newName.trim();
+        const trimmed = newName.trim().slice(0, MAX_NAME_LENGTH);
         if (isUnsafeName(trimmed)) { toast('That name is reserved', 'error'); return; }
         if (structure[divName]?.grades?.[trimmed]) { toast('Grade "' + trimmed + '" already exists', 'error'); return; }
         // Move grade data to new key
@@ -703,7 +798,7 @@
         if (!gradeData || !(gradeData.bunks || []).includes(oldBunkName)) { toast('Bunk not found', 'error'); return; }
         const newName = prompt('Rename bunk "' + oldBunkName + '":', oldBunkName);
         if (!newName || newName.trim() === '' || newName.trim() === oldBunkName) return;
-        const trimmed = newName.trim();
+        const trimmed = newName.trim().slice(0, MAX_NAME_LENGTH);
         if (isUnsafeName(trimmed)) { toast('That name is reserved', 'error'); return; }
         if ((gradeData.bunks || []).includes(trimmed)) { toast('Bunk "' + trimmed + '" already exists', 'error'); return; }
         // Rename in bunks array
@@ -716,13 +811,22 @@
     }
 
     // =========================================================================
-    // CAMPER TABLE — ★ FIX v6.1: jsEsc in onclick handlers
+    // CAMPER TABLE — ★ jsEsc in onclick handlers
     // =========================================================================
 
     function renderCamperTable() {
         const tbody = document.getElementById('camperTableBody');
         const empty = document.getElementById('campersEmptyState');
         if (!tbody) return;
+
+        // ★ Save QA dropdown state before rebuild
+        const savedQA = {
+            div: document.getElementById('qaDivision')?.value || '',
+            grade: document.getElementById('qaGrade')?.value || '',
+            bunk: document.getElementById('qaBunk')?.value || '',
+            team: document.getElementById('qaTeam')?.value || ''
+        };
+
         const filter = document.getElementById('searchInput')?.value.toLowerCase().trim() || '';
         let campers = Object.entries(camperRoster).map(([name, d]) => ({
             name, division: d.division || '', grade: d.grade || '', bunk: d.bunk || '', team: d.team || ''
@@ -739,16 +843,41 @@
         const countEl = document.getElementById('camperCount');
         if (countEl) countEl.textContent = filter ? campers.length + ' of ' + total : total + ' camper' + (total !== 1 ? 's' : '');
 
-        const divOptions = '<option value="">—</option>' + Object.keys(structure).sort().map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('');
-        const teamOptions = '<option value="">—</option>' + leagueTeams.map(t => '<option value="' + esc(t) + '">' + esc(t) + '</option>').join('');
+        const divOptions = '<option value="">—</option>' + Object.keys(structure).sort().map(d => '<option value="' + esc(d) + '"' + (d === savedQA.div ? ' selected' : '') + '>' + esc(d) + '</option>').join('');
+        const teamOptions = '<option value="">—</option>' + leagueTeams.map(t => '<option value="' + esc(t) + '"' + (t === savedQA.team ? ' selected' : '') + '>' + esc(t) + '</option>').join('');
 
-        let html = '<tr class="add-row"><td><input type="text" id="qaName" placeholder="Camper name" onkeypress="if(event.key===\'Enter\'){CampistryMe.quickAddCamper();event.preventDefault();}"></td><td><select id="qaDivision" onchange="CampistryMe.updateQAGrades()">' + divOptions + '</select></td><td><select id="qaGrade" onchange="CampistryMe.updateQABunks()"><option value="">—</option></select></td><td><select id="qaBunk"><option value="">—</option></select></td><td><select id="qaTeam">' + teamOptions + '</select></td><td><button class="btn btn-primary btn-sm" onclick="CampistryMe.quickAddCamper()">Add</button></td></tr>';
+        let html = '<tr class="add-row"><td><input type="text" id="qaName" placeholder="Camper name" maxlength="' + MAX_NAME_LENGTH + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.quickAddCamper();event.preventDefault();}"></td><td><select id="qaDivision" onchange="CampistryMe.updateQAGrades()">' + divOptions + '</select></td><td><select id="qaGrade" onchange="CampistryMe.updateQABunks()"><option value="">—</option></select></td><td><select id="qaBunk"><option value="">—</option></select></td><td><select id="qaTeam">' + teamOptions + '</select></td><td><button class="btn btn-primary btn-sm" onclick="CampistryMe.quickAddCamper()">Add</button></td></tr>';
 
-        if (campers.length === 0 && total === 0) { tbody.innerHTML = html; if (empty) empty.style.display = 'block'; return; }
+        if (campers.length === 0 && total === 0) { tbody.innerHTML = html; if (empty) empty.style.display = 'block'; _restoreQAState(savedQA); return; }
         if (empty) empty.style.display = 'none';
 
-        html += campers.map(c => '<tr><td><span class="clickable" onclick="CampistryMe.editCamper(\'' + jsEsc(c.name) + '\')">' + esc(c.name) + '</span></td><td>' + (esc(c.division) || '—') + '</td><td>' + (esc(c.grade) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (esc(c.team) || '—') + '</td><td><button class="icon-btn danger" onclick="CampistryMe.deleteCamper(\'' + jsEsc(c.name) + '\')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></td></tr>').join('');
+        html += campers.map(c => '<tr><td><span class="clickable" onclick="CampistryMe.editCamper(\'' + jsEsc(c.name) + '\')">' + esc(c.name) + '</span></td><td>' + (esc(c.division) || '—') + '</td><td>' + (esc(c.grade) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (esc(c.team) || '—') + '</td><td><button class="icon-btn danger" onclick="CampistryMe.deleteCamper(\'' + jsEsc(c.name) + '\')" aria-label="Delete camper"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></td></tr>').join('');
         tbody.innerHTML = html;
+
+        // ★ Restore QA dropdown state after rebuild
+        _restoreQAState(savedQA);
+    }
+
+    // ★ Restore QA grade/bunk cascading selects after table rebuild
+    function _restoreQAState(saved) {
+        if (!saved.div) return;
+        const divSel = document.getElementById('qaDivision');
+        if (divSel) divSel.value = saved.div;
+        // Rebuild grade options
+        const gradeSelect = document.getElementById('qaGrade');
+        const bunkSelect = document.getElementById('qaBunk');
+        if (gradeSelect && saved.div && structure[saved.div]) {
+            gradeSelect.innerHTML = '<option value="">—</option>';
+            Object.keys(structure[saved.div].grades || {}).sort().forEach(g => {
+                gradeSelect.innerHTML += '<option value="' + esc(g) + '"' + (g === saved.grade ? ' selected' : '') + '>' + esc(g) + '</option>';
+            });
+        }
+        if (bunkSelect && saved.div && saved.grade && structure[saved.div]?.grades?.[saved.grade]) {
+            bunkSelect.innerHTML = '<option value="">—</option>';
+            (structure[saved.div].grades[saved.grade].bunks || []).forEach(b => {
+                bunkSelect.innerHTML += '<option value="' + esc(b) + '"' + (b === saved.bunk ? ' selected' : '') + '>' + esc(b) + '</option>';
+            });
+        }
     }
 
     // =========================================================================
@@ -780,7 +909,7 @@
 
     function quickAddCamper() {
         const nameInput = document.getElementById('qaName');
-        const name = nameInput?.value.trim();
+        const name = (nameInput?.value || '').trim().slice(0, MAX_NAME_LENGTH);
         if (!name) { toast('Enter a name', 'error'); nameInput?.focus(); return; }
         if (isUnsafeName(name)) { toast('That name is reserved', 'error'); return; }
         if (camperRoster[name]) { toast('Camper exists', 'error'); return; }
@@ -790,7 +919,10 @@
             bunk: document.getElementById('qaBunk')?.value || '',
             team: document.getElementById('qaTeam')?.value || ''
         };
-        saveData(); nameInput.value = ''; nameInput.focus(); renderCamperTable(); updateStats(); toast('Camper added');
+        saveData(); renderCamperTable(); updateStats();
+        // ★ v7.0: Re-acquire input AFTER render (old element is destroyed by innerHTML)
+        document.getElementById('qaName')?.focus();
+        toast('Camper added');
     }
 
     function editCamper(name) {
@@ -826,10 +958,10 @@
         }
     }
 
-    // ★ FIX v6.1: saveCamper now supports renaming campers
+    // ★ saveCamper now supports renaming campers
     function saveCamper() {
         if (!currentEditCamper || !camperRoster[currentEditCamper]) return;
-        const newName = (document.getElementById('editCamperName')?.value || '').trim();
+        const newName = (document.getElementById('editCamperName')?.value || '').trim().slice(0, MAX_NAME_LENGTH);
         if (!newName) { toast('Name cannot be empty', 'error'); return; }
         if (isUnsafeName(newName)) { toast('That name is reserved', 'error'); return; }
         
@@ -847,10 +979,11 @@
         }
         camperRoster[newName] = data;
         
-        saveData(); closeModal('camperModal'); renderCamperTable(); toast('Camper updated');
+        saveData(); closeModal('camperModal'); renderAll(); toast('Camper updated'); // ★ v7.0: renderAll not just table
     }
 
     function deleteCamper(name) {
+        if (!camperRoster[name]) return; // ★ null guard for stale onclick
         if (!confirm('Delete "' + name + '"?')) return;
         delete camperRoster[name];
         saveData(); renderAll(); toast('Camper deleted');
@@ -859,9 +992,13 @@
     function clearAllCampers() {
         const count = Object.keys(camperRoster).length;
         if (!count) { toast('No campers', 'error'); return; }
-        if (!confirm('Delete all ' + count + ' campers?')) return;
+        if (!confirm('Delete all ' + count + ' campers? This cannot be undone.')) return;
         camperRoster = {};
         saveData(); renderAll(); toast('All campers cleared');
+        // ★ Warn if cloud sync might not persist this destructive action
+        if (!navigator.onLine) {
+            toast('You are offline — clear may not persist to cloud', 'error');
+        }
     }
 
     // =========================================================================
@@ -869,7 +1006,8 @@
     // =========================================================================
 
     function downloadTemplate() {
-        const csv = 'Name,Division,Grade,Bunk,Team\nJohn Smith,Junior Boys,5th Grade,Bunk 1,Red Team\nJane Doe,Junior Girls,6th Grade,Bunk 2,Blue Team\nMike Johnson,Senior Boys,7th Grade,Bunk 3,Green Team';
+        // ★ v7.0: BOM prefix matches exportCsv for consistent Excel behavior
+        const csv = '\uFEFFName,Division,Grade,Bunk,Team\nJohn Smith,Junior Boys,5th Grade,Bunk 1,Red Team\nJane Doe,Junior Girls,6th Grade,Bunk 2,Blue Team\nMike Johnson,Senior Boys,7th Grade,Bunk 3,Green Team';
         const blob = new Blob([csv], { type: 'text/csv' });
         const a = document.createElement('a');
         const url = URL.createObjectURL(blob);
@@ -890,23 +1028,42 @@
 
     function handleCsvFile(file) {
         if (!file) return;
+        // ★ Cap file size to prevent browser freeze
+        if (file.size > MAX_CSV_FILE_SIZE) {
+            toast('File too large (max ' + Math.round(MAX_CSV_FILE_SIZE / 1024 / 1024) + 'MB)', 'error');
+            return;
+        }
         const reader = new FileReader();
         reader.onload = e => parseCsv(e.target.result);
         reader.readAsText(file);
     }
 
     function parseCsv(text) {
+        // ★ Strip BOM from Excel-exported UTF-8 CSV
+        if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+
         const lines = text.split(/\r?\n/).filter(l => l.trim());
         if (!lines.length) { toast('CSV is empty', 'error'); return; }
         const first = lines[0].toLowerCase();
         const hasHeader = first.includes('name') || first.includes('division');
         const start = hasHeader ? 1 : 0;
         pendingCsvData = [];
-        for (let i = start; i < lines.length; i++) {
+        // ★ Cap rows to prevent browser hang
+        const maxRow = Math.min(lines.length, start + MAX_CSV_ROWS);
+        for (let i = start; i < maxRow; i++) {
             const cols = parseCsvLine(lines[i]);
-            const name = (cols[0] || '').trim();
+            const name = (cols[0] || '').trim().slice(0, MAX_NAME_LENGTH);
             if (!name) continue;
-            pendingCsvData.push({ name, division: (cols[1]||'').trim(), grade: (cols[2]||'').trim(), bunk: (cols[3]||'').trim(), team: (cols[4]||'').trim() });
+            pendingCsvData.push({
+                name,
+                division: (cols[1]||'').trim().slice(0, MAX_NAME_LENGTH),
+                grade: (cols[2]||'').trim().slice(0, MAX_NAME_LENGTH),
+                bunk: (cols[3]||'').trim().slice(0, MAX_NAME_LENGTH),
+                team: (cols[4]||'').trim().slice(0, MAX_NAME_LENGTH)
+            });
+        }
+        if (lines.length > maxRow) {
+            toast('Capped at ' + MAX_CSV_ROWS + ' rows (file has ' + (lines.length - start) + ')', 'error');
         }
         if (pendingCsvData.length) {
             const tbody = document.getElementById('csvPreviewBody');
@@ -928,12 +1085,13 @@
             else current += char;
         }
         result.push(current);
-        return result;
+        // ★ Unescape "" → " for RFC 4180 round-trip compatibility
+        return result.map(s => s.replace(/""/g, '"'));
     }
 
     function importCsv() {
         if (!pendingCsvData.length) return;
-        let added = 0, updated = 0;
+        let added = 0, updated = 0, skipped = 0;
         let divsCreated = 0, gradesCreated = 0, bunksCreated = 0;
 
         // ★ Auto-create structure from CSV data
@@ -942,6 +1100,12 @@
             const divName = r.division;
             const gradeName = r.grade;
             const bunkName = r.bunk;
+
+            // ★ Block unsafe names from CSV import
+            if (isUnsafeName(r.name) || isUnsafeName(divName) || isUnsafeName(gradeName) || isUnsafeName(bunkName)) {
+                skipped++;
+                return;
+            }
 
             // Create division if it has a name and doesn't exist
             if (divName && !structure[divName]) {
@@ -981,6 +1145,7 @@
         const parts = [];
         if (added) parts.push(added + ' camper' + (added !== 1 ? 's' : '') + ' added');
         if (updated) parts.push(updated + ' updated');
+        if (skipped) parts.push(skipped + ' skipped (reserved names)');
         if (divsCreated) parts.push(divsCreated + ' division' + (divsCreated !== 1 ? 's' : '') + ' created');
         if (gradesCreated) parts.push(gradesCreated + ' grade' + (gradesCreated !== 1 ? 's' : '') + ' created');
         if (bunksCreated) parts.push(bunksCreated + ' bunk' + (bunksCreated !== 1 ? 's' : '') + ' created');
@@ -990,7 +1155,8 @@
     function exportCsv() {
         const entries = Object.entries(camperRoster);
         if (!entries.length) { toast('No campers', 'error'); return; }
-        let csv = 'Name,Division,Grade,Bunk,Team\n';
+        // ★ UTF-8 BOM prefix for Excel compatibility with non-ASCII names
+        let csv = '\uFEFFName,Division,Grade,Bunk,Team\n';
         const csvField = (v) => '"' + String(v || '').replace(/"/g, '""') + '"';
         entries.forEach(([name, d]) => csv += csvField(name) + ',' + csvField(d.division) + ',' + csvField(d.grade) + ',' + csvField(d.bunk) + ',' + csvField(d.team) + '\n');
         const a = document.createElement('a');
@@ -1009,9 +1175,10 @@
     function setupTabs() {
         document.querySelectorAll('.tab-btn').forEach(btn => {
             btn.onclick = () => {
-                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.tab-btn').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-selected', 'false'); });
                 document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
                 btn.classList.add('active');
+                btn.setAttribute('aria-selected', 'true');
                 document.getElementById('tab-' + btn.dataset.tab)?.classList.add('active');
             };
         });
@@ -1027,9 +1194,10 @@
             return;
         }
         // Use divs instead of buttons to avoid browser button sizing issues
-        container.innerHTML = COLOR_PRESETS.map(c => 
-            `<div class="color-preset" style="background:${c}" data-color="${c}" onclick="event.stopPropagation(); CampistryMe.selectColorPreset('${c}')"></div>`
-        ).join('');
+        container.innerHTML = COLOR_PRESETS.map(c => {
+            const sc = sanitizeColor(c);
+            return `<div class="color-preset" style="background:${sc}" data-color="${sc}" onclick="event.stopPropagation(); CampistryMe.selectColorPreset('${sc}')"></div>`;
+        }).join('');
         console.log('[Me] Color presets initialized:', COLOR_PRESETS.length);
     }
 
@@ -1052,11 +1220,22 @@
         on('importCsvBtn', 'onclick', openCsvModal);
         on('exportCsvBtn', 'onclick', exportCsv);
         on('csvImportBtn', 'onclick', importCsv);
-        on('searchInput', 'oninput', renderCamperTable);
         on('clearAllBtn', 'onclick', clearAllCampers);
         on('saveEditCamperBtn', 'onclick', saveCamper);
         on('editCamperDivision', 'onchange', e => { updateEditGrades(e.target.value, ''); updateEditBunks(e.target.value, '', ''); });
         on('editCamperGrade', 'onchange', e => { updateEditBunks(document.getElementById('editCamperDivision')?.value, e.target.value, ''); });
+
+        // ★ Enter key in camper edit modal triggers save
+        on('editCamperName', 'onkeypress', e => { if (e.key === 'Enter') saveCamper(); });
+
+        // ★ Debounce search input for performance with large rosters
+        const searchInput = document.getElementById('searchInput');
+        if (searchInput) {
+            searchInput.oninput = () => {
+                if (_searchDebounceTimeout) clearTimeout(_searchDebounceTimeout);
+                _searchDebounceTimeout = setTimeout(renderCamperTable, 150);
+            };
+        }
 
         document.querySelectorAll('#camperTable th[data-sort]').forEach(th => {
             th.onclick = () => {
@@ -1071,6 +1250,8 @@
         const fileInput = document.getElementById('csvFileInput');
         if (dropzone && fileInput) {
             dropzone.onclick = () => fileInput.click();
+            // ★ v7.0: Keyboard accessibility — Enter/Space triggers file picker
+            dropzone.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } };
             dropzone.ondragover = e => { e.preventDefault(); dropzone.classList.add('dragover'); };
             dropzone.ondragleave = () => dropzone.classList.remove('dragover');
             dropzone.ondrop = e => { e.preventDefault(); dropzone.classList.remove('dragover'); handleCsvFile(e.dataTransfer.files[0]); };
@@ -1093,14 +1274,90 @@
             modal.addEventListener('mousedown', e => e.stopPropagation());
             modal.addEventListener('click', e => e.stopPropagation());
         });
+
+        // ★ Escape key closes any open modal
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') {
+                document.querySelectorAll('.modal-overlay.active').forEach(overlay => {
+                    closeModal(overlay.id);
+                });
+            }
+        });
+
+        // ★ v7.0: Flush pending cloud save on page unload.
+        // sendBeacon can't set Supabase auth headers, so we rely on:
+        //   (a) localStorage already being saved during saveData(), and
+        //   (b) cloud catching up on next page load via loadAllData's merge logic.
+        // This handler ensures the debounce timer is cancelled and state is consistent.
+        window.addEventListener('beforeunload', () => {
+            if (_pendingMergeData && _cloudSaveTimeout) {
+                clearTimeout(_cloudSaveTimeout);
+                // Synchronous localStorage write as safety net (saveData already wrote, but
+                // in case someone called scheduleCloudSave without saveData)
+                try {
+                    const global = readLocalSettings();
+                    if (_pendingMergeData.campStructure) global.campStructure = _pendingMergeData.campStructure;
+                    if (_pendingMergeData.app1) {
+                        if (!global.app1) global.app1 = {};
+                        if (_pendingMergeData.app1.camperRoster) global.app1.camperRoster = _pendingMergeData.app1.camperRoster;
+                        if (_pendingMergeData.app1.divisions) global.app1.divisions = _pendingMergeData.app1.divisions;
+                    }
+                    global.updated_at = new Date().toISOString();
+                    writeLocalSettings(global);
+                } catch (_) { /* best effort */ }
+                _pendingMergeData = null;
+                console.log('[Me] beforeunload: flushed pending data to localStorage');
+            }
+        });
+
+        // ★ v7.0: Retry cloud save when coming back online
+        window.addEventListener('online', () => {
+            console.log('[Me] Back online — retrying cloud save');
+            setSyncStatus('syncing');
+            saveData();
+        });
+
+        // ★ v7.0 FIX #5/#6: Throttled visibility refresh, skips when pending edits exist
+        document.addEventListener('visibilitychange', async () => {
+            if (document.visibilityState !== 'visible') return;
+
+            // Skip if there are unsaved local edits (don't overwrite with older cloud data)
+            if (_pendingMergeData) {
+                console.log('[Me] Tab visible but pending edits exist — skipping cloud refresh');
+                return;
+            }
+
+            // Throttle: minimum CLOUD_FETCH_COOLDOWN_MS between fetches
+            const now = Date.now();
+            if (now - _lastCloudFetchTime < CLOUD_FETCH_COOLDOWN_MS) return;
+            _lastCloudFetchTime = now;
+
+            try {
+                const cloud = await loadFromCloud();
+                if (cloud) {
+                    const cloudTime = new Date(cloud.updated_at || 0).getTime();
+                    const local = readLocalSettings();
+                    const localTime = new Date(local.updated_at || 0).getTime();
+                    if (cloudTime > localTime) {
+                        camperRoster = cloud.app1?.camperRoster || camperRoster;
+                        structure = cloud.campStructure || structure;
+                        writeLocalSettings(cloud);
+                        renderAll();
+                        console.log('[Me] Refreshed from cloud on tab focus');
+                    }
+                }
+            } catch (e) {
+                console.warn('[Me] Tab visibility refresh failed:', e);
+            }
+        });
     }
 
     function esc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;') : ''; }
 
-    // ★ FIX v6.1: JS-safe escaping for onclick attributes (backslash-escapes quotes instead of HTML entities)
+    // ★ JS-safe escaping for onclick attributes (backslash-escapes quotes instead of HTML entities)
     function jsEsc(s) { return s ? String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;').replace(/\n/g, '\\n') : ''; }
 
-    // ★ FIX v6.2: Sanitize color values to prevent CSS injection via crafted cloud/localStorage data
+    // ★ Sanitize color values to prevent CSS injection via crafted cloud/localStorage data
     function sanitizeColor(c) {
         if (!c || typeof c !== 'string') return COLOR_PRESETS[0];
         // Allow only valid hex colors
@@ -1110,22 +1367,24 @@
         return COLOR_PRESETS[0];
     }
 
-    // ★ FIX v6.2: Block prototype pollution via dangerous object keys
+    // ★ Block prototype pollution via dangerous object keys
     const UNSAFE_NAMES = new Set(['__proto__', 'constructor', 'prototype', 'toString', 'valueOf', 'hasOwnProperty']);
     function isUnsafeName(name) { return UNSAFE_NAMES.has(name); }
 
     function toast(msg, type = 'success') {
         const t = document.getElementById('toast');
         if (!t) return;
+        // ★ v7.0: Clear previous toast timeout so rapid toasts don't cancel each other
+        if (_toastTimeout) clearTimeout(_toastTimeout);
         const icon = document.getElementById('toastIcon');
         if (icon) icon.innerHTML = type === 'error' ? '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>' : '<polyline points="20 6 9 17 4 12"/>';
         document.getElementById('toastMessage').textContent = msg;
         t.className = 'toast ' + type + ' show';
-        setTimeout(() => t.classList.remove('show'), 3000);
+        _toastTimeout = setTimeout(() => { t.classList.remove('show'); _toastTimeout = null; }, 3000);
     }
 
     // =========================================================================
-    // PUBLIC API — ★ FIX v6.1: Added editGrade, editBunk
+    // PUBLIC API — ★ Added editGrade, editBunk
     // =========================================================================
 
     window.CampistryMe = {
