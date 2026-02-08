@@ -1,7 +1,13 @@
 // ============================================================================
-// access_control.js — Campistry Role-Based Access Control (Multi-Tenant) v3.7
+// access_control.js — Campistry Role-Based Access Control (Multi-Tenant) v3.8
 // ============================================================================
 // 
+// v3.8 SESSION CACHE:
+// - Reads RBAC context from sessionStorage (written by dashboard.js v2.4)
+// - Skips all Supabase queries on cache hit → near-instant initialization
+// - Cache validated by userId match + 30-minute TTL
+// - Eliminates white screen gap between auth and RBAC on Flow/Me pages
+//
 // v3.7 SECURITY PATCHES:
 // - V-002 FIX: All permission checks now fail-closed when !_initialized
 // - Removed duplicate canEditPrintTemplates/canDeletePrintTemplates/canPrintSchedules
@@ -34,7 +40,7 @@
 (function() {
     'use strict';
 
-    console.log("🔐 Access Control v3.7 loading...");
+    console.log("🔐 Access Control v3.8 loading...");
 
     // =========================================================================
     // STATE
@@ -88,6 +94,56 @@
     }
 
     // =========================================================================
+    // ★★★ v3.8: SESSION CACHE — Skip Supabase queries on cache hit ★★★
+    // Dashboard writes RBAC context to sessionStorage after role resolution.
+    // On Flow/Me pages, we read it here for near-instant initialization.
+    // =========================================================================
+
+    function tryRestoreFromCache(currentUserId) {
+        try {
+            const raw = sessionStorage.getItem('campistry_rbac_cache');
+            if (!raw) return false;
+            
+            const cache = JSON.parse(raw);
+            
+            // Validate: same user, not stale (max 30 minutes)
+            if (cache.userId !== currentUserId) {
+                console.log("🔐 Cache userId mismatch, ignoring");
+                sessionStorage.removeItem('campistry_rbac_cache');
+                return false;
+            }
+            
+            const ageMinutes = (Date.now() - cache.cachedAt) / 60000;
+            if (ageMinutes > 30) {
+                console.log("🔐 Cache expired (" + Math.round(ageMinutes) + "m), ignoring");
+                sessionStorage.removeItem('campistry_rbac_cache');
+                return false;
+            }
+            
+            // Restore state from cache
+            _currentRole = cache.role || ROLES.VIEWER;
+            _campId = cache.campId;
+            _campName = cache.campName || 'Your Camp';
+            _userName = cache.userName || _currentUser.email?.split('@')[0];
+            _isTeamMember = cache.isTeamMember || false;
+            _userSubdivisionIds = cache.subdivisionIds || [];
+            _directDivisionAssignments = cache.assignedDivisions || [];
+            
+            // Also update localStorage for other modules that read it
+            localStorage.setItem('campistry_user_id', _campId);
+            localStorage.setItem('campistry_auth_user_id', currentUserId);
+            localStorage.setItem('campistry_role', _currentRole);
+            localStorage.setItem('campistry_is_team_member', String(_isTeamMember));
+            
+            return true;
+            
+        } catch (e) {
+            console.warn("🔐 Cache restore error:", e);
+            return false;
+        }
+    }
+
+    // =========================================================================
     // INITIALIZATION
     // =========================================================================
 
@@ -118,7 +174,14 @@
 
         _currentUser = user;
         
-        await determineUserContext();
+        // ★★★ v3.8: TRY SESSION CACHE FIRST ★★★
+        if (tryRestoreFromCache(user.id)) {
+            console.log("🔐 ⚡ Restored from session cache — skipping Supabase queries");
+        } else {
+            // Full Supabase resolution (first load / cache miss / cache expired)
+            await determineUserContext();
+        }
+        
         await loadSubdivisions();
         
         if (_currentRole === ROLES.SCHEDULER && _userSubdivisionIds.length > 0) {
@@ -1751,6 +1814,8 @@
                     try { window.supabase?.removeChannel?.(_membershipSubscription); } catch(e) {}
                     _membershipSubscription = null;
                 }
+                // ★★★ v3.8: Clear session cache on logout ★★★
+                try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
                 _initialized = false;
                 _currentUser = null;
                 _currentRole = null;
@@ -1768,6 +1833,6 @@
         });
     }
 
-    console.log("🔐 Access Control v3.7 loaded");
+    console.log("🔐 Access Control v3.8 loaded");
 
 })();
