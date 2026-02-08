@@ -386,6 +386,10 @@
         if(el('statCampers')) el('statCampers').textContent = Object.keys(camperRoster).length;
     }
 
+    // =========================================================================
+    // ★ FIX v6.1: RENDER HIERARCHY — jsEsc for onclick, edit buttons added
+    // =========================================================================
+
     function renderHierarchy() {
         const container = document.getElementById('hierarchyContainer');
         const empty = document.getElementById('structureEmptyState');
@@ -402,37 +406,48 @@
             const camperCount = Object.values(camperRoster).filter(c => c.division === divName).length;
             const divColor = div.color || COLOR_PRESETS[0];
 
+            // ★ FIX: Use jsEsc for onclick handlers, esc for display text
+            const escDiv = esc(divName);
+            const jsDiv = jsEsc(divName);
+
             // === Grades HTML ===
             const gradesHtml = gradeNames.map(gradeName => {
                 const gradeKey = divName + '||' + gradeName;
                 const isGradeExpanded = expandedGrades.has(gradeKey);
                 const bunks = grades[gradeName].bunks || [];
-                const escDiv = esc(divName);
                 const escGrade = esc(gradeName);
+                const jsGrade = jsEsc(gradeName);
 
                 const bunksHtml = bunks.map(b => {
                     const escB = esc(b);
+                    const jsB = jsEsc(b);
                     return '<span class="bunk-chip">' + escB +
-                        '<button class="icon-btn danger" onclick="event.stopPropagation(); CampistryMe.deleteBunk(\'' + escDiv + '\',\'' + escGrade + '\',\'' + escB + '\')">' +
+                        '<button class="icon-btn" onclick="event.stopPropagation(); CampistryMe.editBunk(\'' + jsDiv + '\',\'' + jsGrade + '\',\'' + jsB + '\')" title="Rename">' +
+                        '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' +
+                        '</button>' +
+                        '<button class="icon-btn danger" onclick="event.stopPropagation(); CampistryMe.deleteBunk(\'' + jsDiv + '\',\'' + jsGrade + '\',\'' + jsB + '\')">' +
                         '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
                         '</button></span>';
                 }).join('');
 
                 const addBunkHtml = '<div class="quick-add">' +
-                    '<input type="text" placeholder="+ Bunk" id="addBunk_' + escDiv + '_' + escGrade + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addBunkInline(\'' + escDiv + '\',\'' + escGrade + '\');event.preventDefault();}">' +
-                    '<button class="quick-add-btn" onclick="CampistryMe.addBunkInline(\'' + escDiv + '\',\'' + escGrade + '\')">' +
+                    '<input type="text" placeholder="+ Bunk" id="addBunk_' + escDiv + '_' + escGrade + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addBunkInline(\'' + jsDiv + '\',\'' + jsGrade + '\');event.preventDefault();}">' +
+                    '<button class="quick-add-btn" onclick="CampistryMe.addBunkInline(\'' + jsDiv + '\',\'' + jsGrade + '\')">' +
                     '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
                     '</button></div>';
 
                 return '<div class="grade-block">' +
-                    '<div class="grade-header" onclick="CampistryMe.toggleGrade(\'' + escDiv + '\',\'' + escGrade + '\')">' +
+                    '<div class="grade-header" onclick="CampistryMe.toggleGrade(\'' + jsDiv + '\',\'' + jsGrade + '\')">' +
                         '<div class="grade-left">' +
                             '<svg class="expand-icon ' + (isGradeExpanded ? '' : 'collapsed') + '" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>' +
                             '<span class="grade-info">' + escGrade + '</span>' +
                             '<span class="grade-count">' + bunks.length + ' bunk' + (bunks.length !== 1 ? 's' : '') + '</span>' +
                         '</div>' +
                         '<div class="grade-actions" onclick="event.stopPropagation()">' +
-                            '<button class="icon-btn danger" onclick="CampistryMe.deleteGrade(\'' + escDiv + '\',\'' + escGrade + '\')">' +
+                            '<button class="icon-btn" onclick="CampistryMe.editGrade(\'' + jsDiv + '\',\'' + jsGrade + '\')" title="Rename">' +
+                            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' +
+                            '</button>' +
+                            '<button class="icon-btn danger" onclick="CampistryMe.deleteGrade(\'' + jsDiv + '\',\'' + jsGrade + '\')">' +
                             '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
                             '</button>' +
                         '</div>' +
@@ -444,16 +459,15 @@
             }).join('');
 
             // === Add Grade ===
-            const escDiv = esc(divName);
             const addGradeHtml = '<div class="add-grade-inline"><div class="quick-add">' +
-                '<input type="text" placeholder="+ Add grade" id="addGrade_' + escDiv + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addGradeInline(\'' + escDiv + '\');event.preventDefault();}">' +
-                '<button class="quick-add-btn" onclick="CampistryMe.addGradeInline(\'' + escDiv + '\')">' +
+                '<input type="text" placeholder="+ Add grade" id="addGrade_' + escDiv + '" onkeypress="if(event.key===\'Enter\'){CampistryMe.addGradeInline(\'' + jsDiv + '\');event.preventDefault();}">' +
+                '<button class="quick-add-btn" onclick="CampistryMe.addGradeInline(\'' + jsDiv + '\')">' +
                 '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
                 '</button></div></div>';
 
             // === Division block ===
             return '<div class="division-block">' +
-                '<div class="division-header ' + (isExpanded ? '' : 'collapsed') + '" onclick="CampistryMe.toggleDivision(\'' + escDiv + '\')">' +
+                '<div class="division-header ' + (isExpanded ? '' : 'collapsed') + '" onclick="CampistryMe.toggleDivision(\'' + jsDiv + '\')">' +
                     '<div class="division-left">' +
                         '<div class="division-color" style="background:' + divColor + '"></div>' +
                         '<div class="division-info">' +
@@ -462,10 +476,10 @@
                         '</div>' +
                     '</div>' +
                     '<div class="division-actions" onclick="event.stopPropagation()">' +
-                        '<button class="icon-btn" onclick="CampistryMe.editDivision(\'' + escDiv + '\')" title="Edit">' +
+                        '<button class="icon-btn" onclick="CampistryMe.editDivision(\'' + jsDiv + '\')" title="Edit">' +
                         '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' +
                         '</button>' +
-                        '<button class="icon-btn danger" onclick="CampistryMe.deleteDivision(\'' + escDiv + '\')" title="Delete">' +
+                        '<button class="icon-btn danger" onclick="CampistryMe.deleteDivision(\'' + jsDiv + '\')" title="Delete">' +
                         '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
                         '</button>' +
                         '<svg class="expand-icon ' + (isExpanded ? '' : 'collapsed') + '" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>' +
@@ -612,7 +626,45 @@
     }
 
     // =========================================================================
-    // CAMPER TABLE
+    // ★ FIX v6.1: EDIT GRADE & BUNK (NEW — were missing entirely)
+    // =========================================================================
+
+    function editGrade(divName, oldGradeName) {
+        const newName = prompt('Rename grade "' + oldGradeName + '":', oldGradeName);
+        if (!newName || newName.trim() === '' || newName.trim() === oldGradeName) return;
+        const trimmed = newName.trim();
+        if (structure[divName]?.grades?.[trimmed]) { toast('Grade "' + trimmed + '" already exists', 'error'); return; }
+        // Move grade data to new key
+        const gradeData = structure[divName].grades[oldGradeName];
+        structure[divName].grades[trimmed] = gradeData;
+        delete structure[divName].grades[oldGradeName];
+        // Update expand state
+        const oldKey = divName + '||' + oldGradeName;
+        const newKey = divName + '||' + trimmed;
+        if (expandedGrades.has(oldKey)) { expandedGrades.delete(oldKey); expandedGrades.add(newKey); }
+        // Update camper references
+        Object.values(camperRoster).forEach(c => { if (c.division === divName && c.grade === oldGradeName) c.grade = trimmed; });
+        saveData(); renderAll(); toast('Grade renamed');
+    }
+
+    function editBunk(divName, gradeName, oldBunkName) {
+        const newName = prompt('Rename bunk "' + oldBunkName + '":', oldBunkName);
+        if (!newName || newName.trim() === '' || newName.trim() === oldBunkName) return;
+        const trimmed = newName.trim();
+        const gradeData = structure[divName]?.grades?.[gradeName];
+        if (!gradeData) return;
+        if ((gradeData.bunks || []).includes(trimmed)) { toast('Bunk "' + trimmed + '" already exists', 'error'); return; }
+        // Rename in bunks array
+        const idx = (gradeData.bunks || []).indexOf(oldBunkName);
+        if (idx === -1) return;
+        gradeData.bunks[idx] = trimmed;
+        // Update camper references
+        Object.values(camperRoster).forEach(c => { if (c.division === divName && c.grade === gradeName && c.bunk === oldBunkName) c.bunk = trimmed; });
+        saveData(); renderHierarchy(); updateStats(); toast('Bunk renamed');
+    }
+
+    // =========================================================================
+    // CAMPER TABLE — ★ FIX v6.1: jsEsc in onclick handlers
     // =========================================================================
 
     function renderCamperTable() {
@@ -643,7 +695,7 @@
         if (campers.length === 0 && total === 0) { tbody.innerHTML = html; if (empty) empty.style.display = 'block'; return; }
         if (empty) empty.style.display = 'none';
 
-        html += campers.map(c => '<tr><td><span class="clickable" onclick="CampistryMe.editCamper(\'' + esc(c.name) + '\')">' + esc(c.name) + '</span></td><td>' + (esc(c.division) || '—') + '</td><td>' + (esc(c.grade) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (esc(c.team) || '—') + '</td><td><button class="icon-btn danger" onclick="CampistryMe.deleteCamper(\'' + esc(c.name) + '\')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></td></tr>').join('');
+        html += campers.map(c => '<tr><td><span class="clickable" onclick="CampistryMe.editCamper(\'' + jsEsc(c.name) + '\')">' + esc(c.name) + '</span></td><td>' + (esc(c.division) || '—') + '</td><td>' + (esc(c.grade) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (esc(c.team) || '—') + '</td><td><button class="icon-btn danger" onclick="CampistryMe.deleteCamper(\'' + jsEsc(c.name) + '\')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></td></tr>').join('');
         tbody.innerHTML = html;
     }
 
@@ -721,14 +773,26 @@
         }
     }
 
+    // ★ FIX v6.1: saveCamper now supports renaming campers
     function saveCamper() {
         if (!currentEditCamper || !camperRoster[currentEditCamper]) return;
-        camperRoster[currentEditCamper] = {
+        const newName = (document.getElementById('editCamperName')?.value || '').trim();
+        if (!newName) { toast('Name cannot be empty', 'error'); return; }
+        
+        const data = {
             division: document.getElementById('editCamperDivision')?.value || '',
             grade: document.getElementById('editCamperGrade')?.value || '',
             bunk: document.getElementById('editCamperBunk')?.value || '',
             team: document.getElementById('editCamperTeam')?.value || ''
         };
+        
+        // Handle rename: if name changed, delete old key and create new
+        if (newName !== currentEditCamper) {
+            if (camperRoster[newName]) { toast('Camper "' + newName + '" already exists', 'error'); return; }
+            delete camperRoster[currentEditCamper];
+        }
+        camperRoster[newName] = data;
+        
         saveData(); closeModal('camperModal'); renderCamperTable(); toast('Camper updated');
     }
 
@@ -974,6 +1038,9 @@
 
     function esc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;') : ''; }
 
+    // ★ FIX v6.1: JS-safe escaping for onclick attributes (backslash-escapes quotes instead of HTML entities)
+    function jsEsc(s) { return s ? String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n') : ''; }
+
     function toast(msg, type = 'success') {
         const t = document.getElementById('toast');
         if (!t) return;
@@ -985,12 +1052,12 @@
     }
 
     // =========================================================================
-    // PUBLIC API
+    // PUBLIC API — ★ FIX v6.1: Added editGrade, editBunk
     // =========================================================================
 
     window.CampistryMe = {
         toggleDivision, toggleGrade, editDivision: openDivisionModal, deleteDivision,
-        addGradeInline, deleteGrade, addBunkInline, deleteBunk,
+        addGradeInline, editGrade, deleteGrade, addBunkInline, editBunk, deleteBunk,
         editCamper, deleteCamper, quickAddCamper,
         updateQAGrades, updateQABunks,
         selectColorPreset, closeModal
