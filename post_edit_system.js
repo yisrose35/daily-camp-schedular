@@ -1040,8 +1040,20 @@
     // ENHANCED EDIT CELL (Main entry point)
     // =========================================================================
 
-    function enhancedEditCell(bunk, startMin, endMin, current) {
-        debugLog(`enhancedEditCell called: ${bunk}, ${startMin}-${endMin}, "${current}"`);
+   function enhancedEditCell(bunk, startMin, endMin, current) {
+        // ★★★ v3.3 SECURITY: Check division permission even on direct console call ★★★
+        const _divNameCheck = window.AccessControl?.getDivisionForBunk?.(bunk);
+        if (_divNameCheck && window.AccessControl?.canEditDivision) {
+            if (!window.AccessControl.canEditDivision(_divNameCheck)) {
+                debugLog('BLOCKED: Cannot edit bunk', bunk, 'in division', _divNameCheck);
+                if (typeof window.showToast === 'function') {
+                    window.showToast('You don\'t have permission to edit ' + _divNameCheck, 'error');
+                }
+                return;
+            }
+        }
+
+        debugLog('enhancedEditCell called:', bunk, startMin, endMin, current);
         
         // RBAC check - now with proper initialization handling
         if (!canEditBunk(bunk)) {
