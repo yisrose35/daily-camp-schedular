@@ -594,10 +594,31 @@
         endInput?.addEventListener("keydown", (e) => e.key === "Enter" && saveTimes());
         
         // "Apply to All in Division" — sets same times for all sibling grades
-        applyAllBtn?.addEventListener("click", () => {
-            const newStart = startInput?.value || "";
-            const newEnd = endInput?.value || "";
-            if (!newStart && !newEnd) return;
+       
+            
+           applyAllBtn?.addEventListener("click", () => {
+            const newStart = (startInput?.value || "").trim();
+            const newEnd = (endInput?.value || "").trim();
+            if (!newStart || !newEnd) {
+                alert("Please enter both a start and end time before applying to all.");
+                return;
+            }
+            
+            const startMin = parseTimeToMinutes(newStart);
+            const endMin = parseTimeToMinutes(newEnd);
+            
+            if (startMin === null) {
+                alert("Invalid start time format. Use format like 9:00am or 2:30pm");
+                return;
+            }
+            if (endMin === null) {
+                alert("Invalid end time format. Use format like 9:00am or 2:30pm");
+                return;
+            }
+            if (endMin <= startMin) {
+                alert("End time must be after start time.");
+                return;
+            }
             
             const group = state.divisionGroups[parentDiv];
             if (!group) return;
