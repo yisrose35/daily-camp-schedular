@@ -423,6 +423,17 @@
     // APPLY TO FIELDS TAB
     // =========================================================================
 
+    // ★ v2.2: Check if a field is relevant to the scheduler's assigned divisions
+    function isFieldRelevantToScheduler(field) {
+        if (!field) return false;
+        // If field has no access restrictions, it's open to all — scheduler can view but not edit
+        if (!field.limitUsage?.enabled) return false;
+        // If restricted, check overlap with scheduler's editable divisions
+        const fieldDivisions = Object.keys(field.limitUsage.divisions || {});
+        if (fieldDivisions.length === 0) return false;
+        return fieldDivisions.some(d => _editableDivisions.includes(d));
+    }
+
     function applyToFieldsTab() {
         const fieldsTab = document.getElementById('fields');
         if (!fieldsTab) return;
@@ -441,22 +452,91 @@
         }
 
         if (_currentRole === 'scheduler') {
-            const addFieldBtns = fieldsTab.querySelectorAll('[data-action="add-field"], .add-field-btn');
-            addFieldBtns.forEach(btn => {
-                btn.disabled = true;
-                btn.title = 'Only owner/admin can add fields';
-            });
+            // ★ v2.2: Disable add field input + button by ID
+            const addInput = document.getElementById('new-field-input');
+            const addBtn = document.getElementById('add-field-btn');
+            if (addInput) { addInput.disabled = true; addInput.placeholder = 'Only owner/admin can add fields'; addInput.classList.add('rbac-input-disabled'); }
+            if (addBtn) { addBtn.disabled = true; addBtn.title = 'Only owner/admin can add fields'; addBtn.classList.add('rbac-btn-disabled'); }
+
+            // ★ v2.2: Restrict availability toggles in master list for non-relevant fields
+            const allFields = window.getFields?.() || [];
+            const masterList = document.getElementById('fields-master-list');
+            if (masterList) {
+                masterList.querySelectorAll('.list-item').forEach(item => {
+                    const nameEl = item.querySelector('.list-item-name');
+                    const fieldName = nameEl?.textContent?.trim();
+                    if (!fieldName) return;
+                    
+                    const fieldData = allFields.find(f => f.name === fieldName);
+                    const isRelevant = isFieldRelevantToScheduler(fieldData);
+                    
+                    if (!isRelevant) {
+                        // Disable toggle switch for non-relevant fields
+                        const toggle = item.querySelector('.switch input[type="checkbox"]');
+                        if (toggle) {
+                            toggle.disabled = true;
+                            toggle.closest('.switch')?.classList.add('rbac-input-disabled');
+                            toggle.closest('.switch').title = 'This field is not assigned to your divisions';
+                        }
+                        item.style.opacity = '0.65';
+                    }
+                });
+            }
             
-            const deleteFieldBtns = fieldsTab.querySelectorAll('[data-action="delete-field"], .delete-field-btn');
-            deleteFieldBtns.forEach(btn => {
-                btn.disabled = true;
-                btn.title = 'Only owner/admin can delete fields';
-            });
+            // ★ v2.2: Restrict detail pane for non-relevant fields
+            const detailPane = document.getElementById('fields-detail-pane');
+            if (detailPane && detailPane.children.length > 0) {
+                // Find which field is selected by reading the title/header
+                const headerEl = detailPane.querySelector('h2');
+                const selectedFieldName = headerEl?.textContent?.trim();
+                
+                if (selectedFieldName) {
+                    const fieldData = allFields.find(f => f.name === selectedFieldName);
+                    const isRelevant = isFieldRelevantToScheduler(fieldData);
+                    
+                    if (!isRelevant) {
+                        // Disable ALL interactive elements in detail pane
+                        detailPane.querySelectorAll('input, button, select, label.switch').forEach(el => {
+                            el.disabled = true;
+                            el.classList.add('rbac-input-disabled');
+                            if (el.tagName === 'BUTTON') el.classList.add('rbac-btn-disabled');
+                        });
+                        
+                        // Add restriction notice if not present
+                        if (!detailPane.querySelector('.rbac-field-notice')) {
+                            const notice = document.createElement('div');
+                            notice.className = 'rbac-field-notice';
+                            notice.style.cssText = 'display:flex; align-items:center; gap:8px; padding:10px 14px; background:#FEF3C7; border:1px solid #FCD34D; border-radius:8px; margin-bottom:12px; font-size:0.85rem; color:#92400E;';
+                            notice.innerHTML = '<span>🔒</span><span>This field is not assigned to your divisions. View only.</span>';
+                            detailPane.insertBefore(notice, detailPane.firstChild);
+                        }
+                    } else {
+                        // Field IS relevant — still block delete and rename, but allow other edits
+                        detailPane.querySelector('.rbac-field-notice')?.remove();
+                        
+                        // Block delete button
+                        detailPane.querySelectorAll('button').forEach(btn => {
+                            if (btn.textContent?.includes('Delete')) {
+                                btn.disabled = true;
+                                btn.classList.add('rbac-btn-disabled');
+                                btn.title = 'Only owner/admin can delete fields';
+                            }
+                        });
+                        
+                        // Block rename (disable double-click on title)
+                        if (headerEl) {
+                            headerEl.ondblclick = null;
+                            headerEl.title = 'Only owner/admin can rename fields';
+                            headerEl.style.cursor = 'default';
+                        }
+                    }
+                }
+            }
             
             if (!fieldsTab.querySelector('.rbac-tab-banner')) {
                 const banner = createTabBanner(
                     'Limited Access', 
-                    `You can edit field availability for your divisions (${_editableDivisions.join(', ')}). Field creation/deletion requires owner/admin.`
+                    `You can edit settings for fields assigned to your divisions (${_editableDivisions.join(', ')}). Field creation, deletion, and renaming requires owner/admin.`
                 );
                 banner.style.background = 'linear-gradient(135deg, #DBEAFE, #BFDBFE)';
                 banner.style.borderColor = '#3B82F6';
