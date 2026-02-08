@@ -905,13 +905,13 @@
             </div>
         </div>
 
-        <div class="tabs">
-            <button class="tab-btn active" data-tab="structure">Camp Structure</button>
-            <button class="tab-btn" data-tab="campers">Campers</button>
+        <div class="tabs" role="tablist">
+            <button class="tab-btn active" data-tab="structure" role="tab" aria-selected="true" aria-controls="tab-structure">Camp Structure</button>
+            <button class="tab-btn" data-tab="campers" role="tab" aria-selected="false" aria-controls="tab-campers">Campers</button>
         </div>
 
         <!-- ===================== STRUCTURE TAB ===================== -->
-        <div id="tab-structure" class="tab-content active">
+        <div id="tab-structure" class="tab-content active" role="tabpanel">
             <div class="action-bar">
                 <button class="btn btn-primary" id="addDivisionBtn">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -932,7 +932,7 @@
         </div>
 
         <!-- ===================== CAMPERS TAB ===================== -->
-        <div id="tab-campers" class="tab-content">
+        <div id="tab-campers" class="tab-content" role="tabpanel">
             <div class="action-bar">
                 <button class="btn btn-secondary" id="downloadTemplateBtn">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg>
@@ -946,7 +946,7 @@
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                     Export CSV
                 </button>
-                <input type="text" class="search-input" id="searchInput" placeholder="Search campers...">
+                <input type="text" class="search-input" id="searchInput" placeholder="Search campers..." aria-label="Search campers">
                 <div class="action-spacer"></div>
                 <button class="btn btn-danger btn-sm" id="clearAllBtn">Clear All</button>
             </div>
@@ -981,16 +981,16 @@
 <!-- ===================== MODALS ===================== -->
 
 <!-- Division Modal -->
-<div class="modal-overlay" id="divisionModal">
+<div class="modal-overlay" id="divisionModal" role="dialog" aria-modal="true">
     <div class="modal">
         <div class="modal-header">
             <h3 id="divisionModalTitle">Add Division</h3>
-            <button class="modal-close" onclick="CampistryMe.closeModal('divisionModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            <button class="modal-close" onclick="CampistryMe.closeModal('divisionModal')" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div class="modal-body">
             <div class="form-group">
                 <label for="divisionName">Division Name</label>
-                <input type="text" id="divisionName" placeholder="e.g., Junior Boys, Senior Girls">
+                <input type="text" id="divisionName" placeholder="e.g., Junior Boys, Senior Girls" maxlength="100">
             </div>
             <div class="form-group" id="colorPickerGroup">
                 <label>Division Color</label>
@@ -1008,17 +1008,16 @@
 </div>
 
 <!-- Camper Edit Modal -->
-<div class="modal-overlay" id="camperModal">
+<div class="modal-overlay" id="camperModal" role="dialog" aria-modal="true">
     <div class="modal">
         <div class="modal-header">
             <h3 id="camperModalTitle">Edit Camper</h3>
-            <button class="modal-close" onclick="CampistryMe.closeModal('camperModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            <button class="modal-close" onclick="CampistryMe.closeModal('camperModal')" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div class="modal-body">
             <div class="form-group">
                 <label for="editCamperName">Name</label>
-                <!-- ★ FIX v6.1: removed disabled attribute to allow camper rename -->
-                <input type="text" id="editCamperName">
+                <input type="text" id="editCamperName" maxlength="100">
             </div>
             <div class="form-group">
                 <label for="editCamperDivision">Division</label>
@@ -1045,14 +1044,14 @@
 </div>
 
 <!-- CSV Modal -->
-<div class="modal-overlay" id="csvModal">
+<div class="modal-overlay" id="csvModal" role="dialog" aria-modal="true">
     <div class="modal" style="max-width: 520px;">
         <div class="modal-header">
             <h3>Import from CSV</h3>
-            <button class="modal-close" onclick="CampistryMe.closeModal('csvModal')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            <button class="modal-close" onclick="CampistryMe.closeModal('csvModal')" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div class="modal-body">
-            <div class="csv-dropzone" id="csvDropzone">
+            <div class="csv-dropzone" id="csvDropzone" tabindex="0" role="button" aria-label="Drop CSV file here or click to browse">
                 <div class="csv-dropzone-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></div>
                 <p>Drop CSV here or click to browse</p>
                 <small>Format: Name, Division, Grade, Bunk, Team</small>
@@ -1070,11 +1069,12 @@
     </div>
 </div>
 
-<div class="toast" id="toast"><svg id="toastIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg><span id="toastMessage">Success!</span></div>
-<script src="demo_mode.js"></script>
+<div class="toast" id="toast" role="status" aria-live="polite"><svg id="toastIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg><span id="toastMessage">Success!</span></div>
+<!-- Script load order: Supabase → client → security → demo → Me -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="supabase_client.js"></script>
-    <script src="campistry_security.js"></script>
+<script src="campistry_security.js"></script>
+<script src="demo_mode.js"></script>
 <script src="campistry_me.js"></script>
 </body>
 </html>
