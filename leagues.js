@@ -274,15 +274,41 @@
         });
 
         // Clean up standings for teams that no longer exist
+        // Clean up standings for teams that no longer exist
         Object.keys(validated.standings).forEach(team => {
             if (!validated.teams.includes(team)) {
                 delete validated.standings[team];
             }
         });
 
+        // ★ v2.6: Validate teams against actual bunks in assigned divisions
+        if (validDivisions && validDivisions.size > 0 && validated.divisions.length > 0) {
+            try {
+                const settings = window.loadGlobalSettings?.() || {};
+                const allDivisions = settings.divisions || settings.app1?.divisions || {};
+                const validBunks = new Set();
+                
+                validated.divisions.forEach(divName => {
+                    const div = allDivisions[divName];
+                    if (div?.bunks && Array.isArray(div.bunks)) {
+                        div.bunks.forEach(b => validBunks.add(b));
+                    }
+                });
+                
+                if (validBunks.size > 0) {
+                    const orphanedTeams = validated.teams.filter(t => !validBunks.has(t));
+                    if (orphanedTeams.length > 0) {
+                        console.warn(`[LEAGUES] "${leagueName}" has ${orphanedTeams.length} team(s) not in any assigned division: ${orphanedTeams.join(', ')}`);
+                        // Don't auto-remove — just warn. Teams may be custom names, not bunk names.
+                    }
+                }
+            } catch (e) {
+                // Non-critical validation, don't block load
+            }
+        }
+
         return validated;
     }
-
     // =========================================================================
     // LOAD + SAVE - ★ CLOUD SYNC AWARE
     // =========================================================================
