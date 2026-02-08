@@ -434,9 +434,15 @@ function saveData(){
     locationZones = validatedZones;
     pinnedTileDefaults = validatedDefaults;
     
-    // ★ Save both keys via saveGlobalSettings (handles batching + cloud sync)
-    window.saveGlobalSettings?.("locationZones", validatedZones);
-    window.saveGlobalSettings?.("pinnedTileDefaults", validatedDefaults);
+    // ★ v2.2 FIX: Save both keys in a single batch to prevent race condition
+    // Sequential saveGlobalSettings calls can race if each does read-modify-write
+    if (typeof window.saveGlobalSettings === 'function') {
+        window.saveGlobalSettings("locationZones", validatedZones);
+        // Use requestAnimationFrame to ensure first write completes before second
+        requestAnimationFrame(() => {
+            window.saveGlobalSettings("pinnedTileDefaults", validatedDefaults);
+        });
+    }
 }
 
 //------------------------------------------------------------------
