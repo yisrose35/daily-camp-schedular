@@ -183,10 +183,14 @@
     function writeLocalSettings(data) {
         const json = JSON.stringify(data);
         // Write to BOTH keys so Flow and Me stay in sync
-        localStorage.setItem('campistryGlobalSettings', json);
-        localStorage.setItem('campGlobalSettings_v1', json);
-        // Also update the CAMPISTRY_LOCAL_CACHE key that integration_hooks reads
-        localStorage.setItem('CAMPISTRY_LOCAL_CACHE', json);
+        try {
+            localStorage.setItem('campistryGlobalSettings', json);
+            localStorage.setItem('campGlobalSettings_v1', json);
+            localStorage.setItem('CAMPISTRY_LOCAL_CACHE', json);
+        } catch (e) {
+            console.error('[Me] localStorage write failed (quota exceeded?):', e.message);
+            toast('Local storage full — data saved to cloud only', 'error');
+        }
     }
 
     // =========================================================================
@@ -404,7 +408,7 @@
             const grades = div.grades || {};
             const gradeNames = Object.keys(grades).sort();
             const camperCount = Object.values(camperRoster).filter(c => c.division === divName).length;
-            const divColor = div.color || COLOR_PRESETS[0];
+            const divColor = sanitizeColor(div.color);
 
             // ★ FIX: Use jsEsc for onclick handlers, esc for display text
             const escDiv = esc(divName);
@@ -503,6 +507,7 @@
         const input = document.getElementById('addGrade_' + divName);
         const name = input?.value.trim();
         if (!name || !structure[divName]) return;
+        if (isUnsafeName(name)) { toast('That name is reserved', 'error'); return; }
         if (!structure[divName].grades) structure[divName].grades = {};
         if (structure[divName].grades[name]) { toast('Grade exists', 'error'); return; }
         structure[divName].grades[name] = { bunks: [] };
@@ -580,17 +585,19 @@
     function saveDivision() {
         const name = document.getElementById('divisionName').value.trim();
         if (!name) { toast('Enter a name', 'error'); return; }
+        if (isUnsafeName(name)) { toast('That name is reserved', 'error'); return; }
         
         if (currentEditDivision && currentEditDivision !== name) {
-            // Renaming existing division
-            const color = document.getElementById('divisionColor').value;
+            // Renaming existing division — block if target name already exists
+            if (structure[name]) { toast('Division "' + name + '" already exists', 'error'); return; }
+            const color = sanitizeColor(document.getElementById('divisionColor').value);
             structure[name] = { ...structure[currentEditDivision], color };
             delete structure[currentEditDivision];
             Object.values(camperRoster).forEach(c => { if (c.division === currentEditDivision) c.division = name; });
             expandedDivisions.delete(currentEditDivision); expandedDivisions.add(name);
         } else if (currentEditDivision) {
             // Editing existing division (same name)
-            structure[currentEditDivision].color = document.getElementById('divisionColor').value;
+            structure[currentEditDivision].color = sanitizeColor(document.getElementById('divisionColor').value);
         } else {
             // Adding new division - auto-assign color
             if (structure[name]) { toast('Division exists', 'error'); return; }
@@ -602,6 +609,7 @@
     }
 
     function deleteDivision(name) {
+        if (!structure[name]) return;
         if (!confirm('Delete "' + name + '" and all grades/bunks?')) return;
         delete structure[name];
         expandedDivisions.delete(name);
@@ -610,6 +618,7 @@
     }
 
     function deleteGrade(divName, gradeName) {
+        if (!structure[divName]?.grades?.[gradeName]) return;
         if (!confirm('Delete grade "' + gradeName + '"?')) return;
         delete structure[divName].grades[gradeName];
         expandedGrades.delete(divName + '||' + gradeName);
@@ -630,9 +639,11 @@
     // =========================================================================
 
     function editGrade(divName, oldGradeName) {
+        if (!structure[divName]?.grades?.[oldGradeName]) { toast('Grade not found', 'error'); return; }
         const newName = prompt('Rename grade "' + oldGradeName + '":', oldGradeName);
         if (!newName || newName.trim() === '' || newName.trim() === oldGradeName) return;
         const trimmed = newName.trim();
+        if (isUnsafeName(trimmed)) { toast('That name is reserved', 'error'); return; }
         if (structure[divName]?.grades?.[trimmed]) { toast('Grade "' + trimmed + '" already exists', 'error'); return; }
         // Move grade data to new key
         const gradeData = structure[divName].grades[oldGradeName];
@@ -648,11 +659,12 @@
     }
 
     function editBunk(divName, gradeName, oldBunkName) {
+        const gradeData = structure[divName]?.grades?.[gradeName];
+        if (!gradeData || !(gradeData.bunks || []).includes(oldBunkName)) { toast('Bunk not found', 'error'); return; }
         const newName = prompt('Rename bunk "' + oldBunkName + '":', oldBunkName);
         if (!newName || newName.trim() === '' || newName.trim() === oldBunkName) return;
         const trimmed = newName.trim();
-        const gradeData = structure[divName]?.grades?.[gradeName];
-        if (!gradeData) return;
+        if (isUnsafeName(trimmed)) { toast('That name is reserved', 'error'); return; }
         if ((gradeData.bunks || []).includes(trimmed)) { toast('Bunk "' + trimmed + '" already exists', 'error'); return; }
         // Rename in bunks array
         const idx = (gradeData.bunks || []).indexOf(oldBunkName);
@@ -730,6 +742,7 @@
         const nameInput = document.getElementById('qaName');
         const name = nameInput?.value.trim();
         if (!name) { toast('Enter a name', 'error'); nameInput?.focus(); return; }
+        if (isUnsafeName(name)) { toast('That name is reserved', 'error'); return; }
         if (camperRoster[name]) { toast('Camper exists', 'error'); return; }
         camperRoster[name] = {
             division: document.getElementById('qaDivision')?.value || '',
@@ -778,6 +791,7 @@
         if (!currentEditCamper || !camperRoster[currentEditCamper]) return;
         const newName = (document.getElementById('editCamperName')?.value || '').trim();
         if (!newName) { toast('Name cannot be empty', 'error'); return; }
+        if (isUnsafeName(newName)) { toast('That name is reserved', 'error'); return; }
         
         const data = {
             division: document.getElementById('editCamperDivision')?.value || '',
@@ -818,9 +832,11 @@
         const csv = 'Name,Division,Grade,Bunk,Team\nJohn Smith,Junior Boys,5th Grade,Bunk 1,Red Team\nJane Doe,Junior Girls,6th Grade,Bunk 2,Blue Team\nMike Johnson,Senior Boys,7th Grade,Bunk 3,Green Team';
         const blob = new Blob([csv], { type: 'text/csv' });
         const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(blob);
+        a.href = url;
         a.download = 'camper_import_template.csv';
         a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
         toast('Template downloaded');
     }
 
@@ -935,11 +951,14 @@
         const entries = Object.entries(camperRoster);
         if (!entries.length) { toast('No campers', 'error'); return; }
         let csv = 'Name,Division,Grade,Bunk,Team\n';
-        entries.forEach(([name, d]) => csv += '"' + name + '","' + (d.division||'') + '","' + (d.grade||'') + '","' + (d.bunk||'') + '","' + (d.team||'') + '"\n');
+        const csvField = (v) => '"' + String(v || '').replace(/"/g, '""') + '"';
+        entries.forEach(([name, d]) => csv += csvField(name) + ',' + csvField(d.division) + ',' + csvField(d.grade) + ',' + csvField(d.bunk) + ',' + csvField(d.team) + '\n');
         const a = document.createElement('a');
-        a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+        const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+        a.href = url;
         a.download = 'campers_' + new Date().toISOString().split('T')[0] + '.csv';
         a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
         toast('Exported ' + entries.length + ' campers');
     }
 
@@ -1039,7 +1058,21 @@
     function esc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;') : ''; }
 
     // ★ FIX v6.1: JS-safe escaping for onclick attributes (backslash-escapes quotes instead of HTML entities)
-    function jsEsc(s) { return s ? String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n') : ''; }
+    function jsEsc(s) { return s ? String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;').replace(/\n/g, '\\n') : ''; }
+
+    // ★ FIX v6.2: Sanitize color values to prevent CSS injection via crafted cloud/localStorage data
+    function sanitizeColor(c) {
+        if (!c || typeof c !== 'string') return COLOR_PRESETS[0];
+        // Allow only valid hex colors
+        if (/^#[0-9a-fA-F]{3,8}$/.test(c.trim())) return c.trim();
+        // Allow only simple named colors (no semicolons, no quotes, no url())
+        if (/^[a-zA-Z]{3,20}$/.test(c.trim())) return c.trim();
+        return COLOR_PRESETS[0];
+    }
+
+    // ★ FIX v6.2: Block prototype pollution via dangerous object keys
+    const UNSAFE_NAMES = new Set(['__proto__', 'constructor', 'prototype', 'toString', 'valueOf', 'hasOwnProperty']);
+    function isUnsafeName(name) { return UNSAFE_NAMES.has(name); }
 
     function toast(msg, type = 'success') {
         const t = document.getElementById('toast');
