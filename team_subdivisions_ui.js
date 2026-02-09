@@ -102,13 +102,13 @@
             
             <div id="subdivisions-list">
                 ${subdivisions.length === 0 ? `
-                    <div class="empty-state">
+                   <div class="empty-state">
                         <div style="margin-bottom: 8px; color: var(--slate-400);">
                             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
                         </div>
-                        <p style="color: var(--slate-500); margin: 0;">No subdivisions yet</p>
+                        <p style="color: var(--slate-500); margin: 0;">No divisions yet</p>
                         <p style="color: var(--slate-400); font-size: 0.85rem; margin-top: 4px;">
-                            Create subdivisions to organize divisions and assign schedulers
+                            Add divisions in <a href="campistry_me.html" style="color: var(--camp-green); font-weight: 600;">Campistry Me</a> and they'll appear here automatically
                         </p>
                     </div>
                 ` : subdivisions.map(sub => renderSubdivisionItem(sub)).join('')}
