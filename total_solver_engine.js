@@ -1612,10 +1612,14 @@ if (!blockDivName && bunk) {
     // ========================================================================
 
     function postSolveLocalSearch(activityBlocks) {
+        // ★★★ v12.2 FIX: Clear stale today-activities cache before polish phase ★★★
+        // Without this, getActivitiesDoneToday returns cached results from the main
+        // solve pass that don't reflect pre-solver placements (split tiles, leagues, etc.)
+        _todayCache.clear();
+        
         var improvements = 0;
         var swapChains = 0;
         var MAX_SWAP_ATTEMPTS = 200;  // ★★★ v12.0: Prevent exponential search ★★★
-
         // Pass 1: Direct improvement of Free blocks
         var freeBlocks = [];
         for (var i = 0; i < activityBlocks.length; i++) {
