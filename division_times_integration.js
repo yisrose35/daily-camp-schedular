@@ -129,27 +129,38 @@
             window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(manualSkeleton, divisions);
             
             // ★★★ INITIALIZE SCHEDULE ASSIGNMENTS PER DIVISION ★★★
+            // ★★★ FIX v1.4: Only blank divisions being generated ★★★
             window.scheduleAssignments = window.scheduleAssignments || {};
+            
+            // Determine which divisions are being generated
+            const generatingDivisions = new Set(
+                (allowedDivisions || Object.keys(divisions)).map(String)
+            );
             
             Object.entries(divisions).forEach(([divName, divData]) => {
                 const divSlots = window.DivisionTimesSystem.getSlotsForDivision(divName);
                 const slotCount = divSlots.length;
+                const isBeingGenerated = generatingDivisions.has(String(divName));
                 
                 (divData.bunks || []).forEach(bunk => {
-                    if (!window.scheduleAssignments[bunk]) {
+                    if (isBeingGenerated) {
+                        // Being generated — fresh array
                         window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
-                    } else if (window.scheduleAssignments[bunk].length !== slotCount) {
-                        // Resize array to match division's slot count
+                    } else if (!window.scheduleAssignments[bunk]) {
+                        // Not being generated but doesn't exist — create empty
+                        window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
+                    } else if (window.scheduleAssignments[bunk].length !== slotCount && slotCount > 0) {
+                        // Not being generated, wrong size — resize but PRESERVE data
                         const old = window.scheduleAssignments[bunk];
-                        window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
-                        // Try to migrate data by time matching (not index)
-                        if (old && existingUnifiedTimes) {
-                            migrateAssignmentsByTime(bunk, old, existingUnifiedTimes, divSlots);
+                        const resized = new Array(slotCount).fill(null);
+                        for (let i = 0; i < Math.min(old.length, slotCount); i++) {
+                            resized[i] = old[i];
                         }
+                        window.scheduleAssignments[bunk] = resized;
                     }
+                    // else: correct size, not being generated — leave untouched
                 });
             });
-
             // ★★★ RESET FIELD USAGE TRACKER ★★★
             if (window.fieldUsageTracker) {
                 window.fieldUsageTracker.clear();
