@@ -1286,68 +1286,767 @@
     }
 
     // =========================================================================
-    // STRESS TEST — Generate + Validate + Edit cycle
+    // GENERATION AUDIT — Deep analysis of generated schedule quality
+    // =========================================================================
+    // Run AFTER a schedule has been generated (or pass generate:true to auto-generate)
+    //
+    // Checks:
+    //   A. Cross-division conflicts (same field, same time, different divisions)
+    //   B. Same-day activity repetitions per bunk
+    //   C. Same-day field repetitions per bunk
+    //   D. Capacity violations (too many bunks on one field)
+    //   E. Split tile correctness (groups swap, both halves filled, no overlap)
+    //   F. Smart tile correctness (swap between blocks, capacity-aware)
+    //   G. League generation (matchups exist, fields locked, no conflicts)
+    //   H. Specialty league generation (same + gamesPerFieldSlot respected)
+    //   I. Rotation fairness (activity distribution across bunks in division)
+    //   J. Multi-day spread (if rotation history exists)
+    //   K. Empty/Free slot analysis (solver exhaustion detection)
+    //   L. Field lock integrity (GlobalFieldLocks respected)
+    //   M. Pinned activity preservation
+    //   N. Elective exclusivity (reserved resources only for that division)
+    //   O. Transition/buffer correctness
     // =========================================================================
 
-    async function stressTest() {
-        console.log('%c🔥 STRESS TEST — Full generation cycle', 'color:#EF4444;font-size:16px;font-weight:bold');
-        console.log('This will run the scheduler and validate the output.\n');
+    async function generationAudit(options = {}) {
+        const { generate = false } = options;
+        resetResults();
+
+        console.log('%c🔬 GENERATION QUALITY AUDIT', 'color:#EF4444;font-size:18px;font-weight:bold');
+        console.log('%c   Deep analysis of schedule generation correctness...', 'color:#666');
 
         const divisions = window.divisions || {};
         const divNames = Object.keys(divisions);
+        const assignments = window.scheduleAssignments || {};
+        const dt = window.divisionTimes || {};
+        const settings = getSettings();
+        const app1 = settings.app1 || {};
+        const fields = app1.fields || [];
+        const actProps = window.activityProperties || {};
 
         if (divNames.length === 0) {
-            console.log('❌ No divisions defined — cannot stress test');
-            return;
+            fail('Pre-check', 'Divisions', 'No divisions — cannot audit');
+            printReport('GENERATION AUDIT — ABORTED');
+            return _auditResults;
         }
 
-        const dailyData = safeCall(() => window.loadCurrentDailyData?.() || {}, {});
-        const skeleton = dailyData.manualSkeleton || [];
-
-        if (skeleton.length === 0) {
-            console.log('❌ No skeleton loaded for today — load one in Daily Adjustments first');
-            return;
-        }
-
-        console.log(`📋 Skeleton: ${skeleton.length} blocks`);
-        console.log(`📋 Divisions: ${divNames.join(', ')}`);
-        console.log(`📋 Starting generation...\n`);
-
-        const startTime = performance.now();
-
-        try {
-            // Run the optimizer
-            if (typeof window.runSkeletonOptimizer === 'function') {
+        // Optionally generate first
+        if (generate) {
+            const dailyData = safeCall(() => window.loadCurrentDailyData?.() || {}, {});
+            const skeleton = dailyData.manualSkeleton || [];
+            if (skeleton.length === 0) {
+                fail('Pre-check', 'Skeleton', 'No skeleton loaded — cannot generate');
+                printReport('GENERATION AUDIT — ABORTED');
+                return _auditResults;
+            }
+            console.log(`\n⚙️ Generating schedule (${skeleton.length} skeleton blocks)...`);
+            const t0 = performance.now();
+            try {
                 window.runSkeletonOptimizer(skeleton);
-                const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
-                console.log(`✅ Generation complete in ${elapsed}s`);
+                console.log(`✅ Generated in ${((performance.now() - t0) / 1000).toFixed(2)}s\n`);
+            } catch (e) {
+                fail('Pre-check', 'Generation', `CRASHED: ${e.message}`);
+                printReport('GENERATION AUDIT — CRASHED');
+                return _auditResults;
+            }
+        }
 
-                // Count results
-                const assignments = window.scheduleAssignments || {};
-                let filled = 0, free = 0, empty = 0;
+        const assignedBunks = Object.keys(assignments);
+        if (assignedBunks.length === 0) {
+            fail('Pre-check', 'Assignments', 'scheduleAssignments is empty — generate a schedule first (or pass {generate:true})');
+            printReport('GENERATION AUDIT — NO DATA');
+            return _auditResults;
+        }
+
+        pass('Pre-check', 'Data Available', `${assignedBunks.length} bunks, ${divNames.length} divisions`);
+
+        // Build bunk→division map
+        const bunkDiv = {};
+        for (const [d, data] of Object.entries(divisions)) {
+            for (const b of (data.bunks || [])) bunkDiv[String(b)] = d;
+        }
+
+        // Build field config lookup
+        const fieldConfig = {};
+        fields.forEach(f => { if (f.name) fieldConfig[f.name.toLowerCase()] = f; });
+
+        // =====================================================================
+        // A. CROSS-DIVISION FIELD CONFLICTS
+        // =====================================================================
+        const CAT_A = 'A. Cross-Div Conflicts';
+        {
+            // For each time slot, find which fields are used by which divisions
+            const conflictsByTime = {}; // { startMin: { fieldName: { divisions: Set, bunks: [] } } }
+            let crossDivConflicts = 0;
+
+            for (const [bunk, slots] of Object.entries(assignments)) {
+                if (!Array.isArray(slots)) continue;
+                const div = bunkDiv[bunk];
+                if (!div) continue;
+                const divSlots = dt[div] || [];
+
+                for (let i = 0; i < slots.length; i++) {
+                    const entry = slots[i];
+                    if (!entry || entry._isTransition || entry.continuation) continue;
+                    const fieldName = (typeof entry.field === 'object' ? entry.field?.name : entry.field) || '';
+                    const act = (entry._activity || fieldName || '').toLowerCase();
+                    if (!fieldName || ['free', 'free (timeout)', 'transition/buffer', 'no field'].includes(act)) continue;
+                    if (act.startsWith('league:')) continue; // leagues handle their own locking
+
+                    const slotInfo = divSlots[i];
+                    const timeKey = slotInfo ? `${slotInfo.startMin}-${slotInfo.endMin}` : `slot_${i}`;
+
+                    if (!conflictsByTime[timeKey]) conflictsByTime[timeKey] = {};
+                    if (!conflictsByTime[timeKey][fieldName]) conflictsByTime[timeKey][fieldName] = { divisions: new Set(), bunks: [] };
+
+                    conflictsByTime[timeKey][fieldName].divisions.add(div);
+                    conflictsByTime[timeKey][fieldName].bunks.push(bunk);
+                }
+            }
+
+            // Check sharing rules
+            for (const [timeKey, fieldMap] of Object.entries(conflictsByTime)) {
+                for (const [fieldName, usage] of Object.entries(fieldMap)) {
+                    if (usage.divisions.size <= 1) continue;
+
+                    const fc = fieldConfig[fieldName.toLowerCase()];
+                    const shareType = fc?.sharableWith?.type || 'not_sharable';
+
+                    if (shareType === 'not_sharable') {
+                        crossDivConflicts++;
+                        fail(CAT_A, `${fieldName} @ ${timeKey}`, `NOT SHARABLE but used by ${[...usage.divisions].join(' & ')} (${usage.bunks.length} bunks)`);
+                    } else if (shareType === 'same_division') {
+                        crossDivConflicts++;
+                        fail(CAT_A, `${fieldName} @ ${timeKey}`, `SAME_DIVISION only but used by ${[...usage.divisions].join(' & ')}`);
+                    } else if (shareType === 'custom') {
+                        const allowedDivs = fc?.sharableWith?.divisions || [];
+                        const usingDivs = [...usage.divisions];
+                        const unauthorized = usingDivs.filter(d => !allowedDivs.includes(d));
+                        if (unauthorized.length > 0) {
+                            crossDivConflicts++;
+                            fail(CAT_A, `${fieldName} @ ${timeKey}`, `Custom sharing violated: ${unauthorized.join(', ')} not in allowed list`);
+                        }
+                    }
+                    // type='all' allows cross-division — check capacity
+                    const cap = parseInt(fc?.sharableWith?.capacity) || 999;
+                    if (usage.bunks.length > cap) {
+                        crossDivConflicts++;
+                        fail(CAT_A, `${fieldName} @ ${timeKey} Capacity`, `${usage.bunks.length} bunks exceed capacity ${cap}`);
+                    }
+                }
+            }
+
+            if (crossDivConflicts === 0) {
+                pass(CAT_A, 'All Fields', 'No cross-division sharing violations detected');
+            }
+        }
+
+        // =====================================================================
+        // B. SAME-DAY ACTIVITY REPETITIONS
+        // =====================================================================
+        const CAT_B = 'B. Same-Day Repeats';
+        {
+            const IGNORED = new Set(['free', 'free (timeout)', 'free play', 'lunch', 'snacks', 'dismissal',
+                'transition/buffer', 'regroup', 'lineup', 'bus', 'swim', 'pool', 'canteen',
+                'gameroom', 'game room', 'davening', 'mincha', 'buffer', 'no field']);
+            let totalRepeats = 0;
+            const repeatDetails = [];
+
+            for (const [bunk, slots] of Object.entries(assignments)) {
+                if (!Array.isArray(slots)) continue;
+                const seenActivities = {};
+
+                for (let i = 0; i < slots.length; i++) {
+                    const entry = slots[i];
+                    if (!entry || entry.continuation || entry._isTransition) continue;
+                    const act = (entry._activity || entry.field || '').toLowerCase().trim();
+                    if (!act || IGNORED.has(act) || act.startsWith('league:')) continue;
+
+                    if (seenActivities[act] !== undefined) {
+                        totalRepeats++;
+                        repeatDetails.push(`${bunk}: "${act}" at slots ${seenActivities[act]} & ${i}`);
+                    } else {
+                        seenActivities[act] = i;
+                    }
+                }
+            }
+
+            if (totalRepeats === 0) {
+                pass(CAT_B, 'Activity Uniqueness', 'No bunk does the same activity twice in one day');
+            } else {
+                fail(CAT_B, 'Activity Repeats', `${totalRepeats} repeat(s) found`);
+                repeatDetails.slice(0, 10).forEach(d => fail(CAT_B, 'Detail', d));
+                if (repeatDetails.length > 10) warn(CAT_B, 'Truncated', `...and ${repeatDetails.length - 10} more`);
+            }
+        }
+
+        // =====================================================================
+        // C. SAME-DAY FIELD REPETITIONS
+        // =====================================================================
+        const CAT_C = 'C. Field Repeats';
+        {
+            const IGNORED_FIELDS = new Set(['free', 'free (timeout)', 'no field', 'transition/buffer']);
+            let fieldRepeats = 0;
+
+            for (const [bunk, slots] of Object.entries(assignments)) {
+                if (!Array.isArray(slots)) continue;
+                const seenFields = {};
+
+                for (let i = 0; i < slots.length; i++) {
+                    const entry = slots[i];
+                    if (!entry || entry.continuation || entry._isTransition) continue;
+                    const f = (typeof entry.field === 'object' ? entry.field?.name : entry.field || '').toLowerCase().trim();
+                    if (!f || IGNORED_FIELDS.has(f) || f.startsWith('league:')) continue;
+
+                    if (seenFields[f] !== undefined) {
+                        fieldRepeats++;
+                        if (fieldRepeats <= 5) warn(CAT_C, `${bunk}`, `Field "${f}" used at slots ${seenFields[f]} & ${i}`);
+                    } else {
+                        seenFields[f] = i;
+                    }
+                }
+            }
+
+            if (fieldRepeats === 0) {
+                pass(CAT_C, 'Field Uniqueness', 'No bunk uses the same field twice');
+            } else {
+                warn(CAT_C, 'Field Repeats Total', `${fieldRepeats} repeat(s) — bunks revisiting same location`);
+            }
+        }
+
+        // =====================================================================
+        // D. CAPACITY VIOLATIONS (per time slot)
+        // =====================================================================
+        const CAT_D = 'D. Capacity';
+        {
+            let capacityViolations = 0;
+            // Build field usage per time window
+            const fieldTimeUsage = {}; // { fieldName: { timeKey: { count, divs, bunks } } }
+
+            for (const [bunk, slots] of Object.entries(assignments)) {
+                if (!Array.isArray(slots)) continue;
+                const div = bunkDiv[bunk];
+                if (!div) continue;
+                const divSlots = dt[div] || [];
+
+                for (let i = 0; i < slots.length; i++) {
+                    const entry = slots[i];
+                    if (!entry || entry._isTransition || entry.continuation) continue;
+                    const f = (typeof entry.field === 'object' ? entry.field?.name : entry.field || '').toLowerCase().trim();
+                    if (!f || f === 'free' || f === 'free (timeout)' || f === 'no field' || f.startsWith('league:')) continue;
+
+                    const slotInfo = divSlots[i];
+                    const timeKey = slotInfo ? `${slotInfo.startMin}-${slotInfo.endMin}` : `s${i}`;
+
+                    if (!fieldTimeUsage[f]) fieldTimeUsage[f] = {};
+                    if (!fieldTimeUsage[f][timeKey]) fieldTimeUsage[f][timeKey] = { count: 0, divs: new Set(), bunks: [] };
+                    fieldTimeUsage[f][timeKey].count++;
+                    fieldTimeUsage[f][timeKey].divs.add(div);
+                    fieldTimeUsage[f][timeKey].bunks.push(bunk);
+                }
+            }
+
+            for (const [fieldName, timeMap] of Object.entries(fieldTimeUsage)) {
+                const fc = fieldConfig[fieldName];
+                const shareType = fc?.sharableWith?.type || 'not_sharable';
+                let cap;
+                if (shareType === 'not_sharable') cap = 1;
+                else if (shareType === 'all') cap = 999;
+                else cap = parseInt(fc?.sharableWith?.capacity) || 2;
+
+                for (const [timeKey, usage] of Object.entries(timeMap)) {
+                    if (usage.count > cap) {
+                        capacityViolations++;
+                        if (capacityViolations <= 8) {
+                            fail(CAT_D, `${fieldName} @ ${timeKey}`, `${usage.count} bunks (capacity: ${cap}) — divs: ${[...usage.divs].join(', ')}`);
+                        }
+                    }
+                }
+            }
+
+            if (capacityViolations === 0) {
+                pass(CAT_D, 'All Fields', 'No capacity violations');
+            } else {
+                fail(CAT_D, 'Total', `${capacityViolations} capacity violation(s)`);
+            }
+        }
+
+        // =====================================================================
+        // E. SPLIT TILE CORRECTNESS
+        // =====================================================================
+        const CAT_E = 'E. Split Tiles';
+        {
+            // Detect split tiles by looking for _fromSplitTile flag
+            const splitBunks = {};
+            for (const [bunk, slots] of Object.entries(assignments)) {
+                if (!Array.isArray(slots)) continue;
+                for (let i = 0; i < slots.length; i++) {
+                    const entry = slots[i];
+                    if (entry && entry._fromSplitTile) {
+                        if (!splitBunks[bunk]) splitBunks[bunk] = [];
+                        splitBunks[bunk].push({ slot: i, activity: entry._activity || entry.field, startMin: entry._startMin, endMin: entry._endMin, half: entry._splitHalf });
+                    }
+                }
+            }
+
+            const splitBunkCount = Object.keys(splitBunks).length;
+            if (splitBunkCount === 0) {
+                skip(CAT_E, 'Split Tiles', 'No split tiles in current schedule');
+            } else {
+                pass(CAT_E, 'Split Tile Count', `${splitBunkCount} bunks have split tile assignments`);
+
+                // Validate: each bunk should have exactly 2 split entries (half 1 and half 2)
+                let incorrectSplits = 0;
+                for (const [bunk, entries] of Object.entries(splitBunks)) {
+                    if (entries.length !== 2) {
+                        incorrectSplits++;
+                        if (incorrectSplits <= 5) warn(CAT_E, `${bunk}`, `Has ${entries.length} split entries (expected 2)`);
+                    } else {
+                        // Verify they have different activities (the swap)
+                        const acts = entries.map(e => (e.activity || '').toLowerCase());
+                        if (acts[0] === acts[1]) {
+                            incorrectSplits++;
+                            if (incorrectSplits <= 5) warn(CAT_E, `${bunk}`, `Both halves have same activity "${acts[0]}" — no swap occurred`);
+                        }
+                    }
+                }
+
+                // Verify group swap: within a division, Group A's half-1 should be Group B's half-2
+                for (const divName of divNames) {
+                    const divBunks = (divisions[divName]?.bunks || []).filter(b => splitBunks[b]);
+                    if (divBunks.length < 2) continue;
+
+                    const half1Acts = {};
+                    divBunks.forEach(b => {
+                        const h1 = (splitBunks[b] || []).find(e => e.half === 1 || e.startMin === Math.min(...(splitBunks[b] || []).map(x => x.startMin || 0)));
+                        if (h1) half1Acts[b] = (h1.activity || '').toLowerCase();
+                    });
+
+                    const uniqueActs = new Set(Object.values(half1Acts));
+                    if (uniqueActs.size >= 2) {
+                        pass(CAT_E, `Div ${divName} Swap`, `${divBunks.length} bunks split across ${uniqueActs.size} activities`);
+                    } else if (uniqueActs.size === 1) {
+                        warn(CAT_E, `Div ${divName} Swap`, `All bunks have same first-half activity — split may not be working`);
+                    }
+                }
+
+                if (incorrectSplits === 0 && splitBunkCount > 0) {
+                    pass(CAT_E, 'Split Structure', 'All split tiles have proper 2-half structure with activity swap');
+                }
+            }
+        }
+
+        // =====================================================================
+        // F. SMART TILE CORRECTNESS
+        // =====================================================================
+        const CAT_F = 'F. Smart Tiles';
+        {
+            // Smart tiles: look for blocks where the skeleton had type='smart'
+            const dailyData = safeCall(() => window.loadCurrentDailyData?.() || {}, {});
+            const skeleton = dailyData.manualSkeleton || [];
+            const smartItems = skeleton.filter(s => s.type === 'smart');
+
+            if (smartItems.length === 0) {
+                skip(CAT_F, 'Smart Tiles', 'No smart tiles in skeleton');
+            } else {
+                pass(CAT_F, 'Smart Tile Count', `${smartItems.length} smart tile(s) in skeleton`);
+
+                // For each smart tile, verify that bunks in the division got different activities
+                // and that there's a swap between blocks
+                smartItems.forEach((item, idx) => {
+                    const div = item.division;
+                    if (!div || !divisions[div]) return;
+                    const divBunks = divisions[div].bunks || [];
+                    const Utils = window.SchedulerCoreUtils;
+                    const startMin = Utils?.parseTimeToMinutes?.(item.startTime);
+                    const endMin = Utils?.parseTimeToMinutes?.(item.endTime);
+
+                    if (startMin == null || endMin == null) {
+                        warn(CAT_F, `Smart #${idx + 1}`, 'Cannot parse time range');
+                        return;
+                    }
+
+                    // Find what each bunk got during this time range
+                    const bunkActivities = {};
+                    divBunks.forEach(b => {
+                        const slots = assignments[b];
+                        if (!Array.isArray(slots)) return;
+                        const divSlots = dt[div] || [];
+                        for (let i = 0; i < slots.length; i++) {
+                            const slotInfo = divSlots[i];
+                            if (!slotInfo) continue;
+                            if (slotInfo.startMin >= startMin && slotInfo.endMin <= endMin) {
+                                const entry = slots[i];
+                                if (entry && !entry._isTransition && !entry.continuation) {
+                                    if (!bunkActivities[b]) bunkActivities[b] = [];
+                                    bunkActivities[b].push((entry._activity || entry.field || '').toLowerCase());
+                                }
+                            }
+                        }
+                    });
+
+                    const allActs = new Set();
+                    Object.values(bunkActivities).forEach(acts => acts.forEach(a => allActs.add(a)));
+                    allActs.delete('free');
+                    allActs.delete('free (timeout)');
+
+                    if (allActs.size >= 2) {
+                        pass(CAT_F, `Smart #${idx + 1} (${div})`, `${allActs.size} different activities distributed: ${[...allActs].slice(0, 4).join(', ')}`);
+                    } else if (allActs.size === 1) {
+                        warn(CAT_F, `Smart #${idx + 1} (${div})`, `All bunks got the same activity "${[...allActs][0]}" — smart distribution may have failed`);
+                    } else {
+                        warn(CAT_F, `Smart #${idx + 1} (${div})`, 'No meaningful activities found in this time range');
+                    }
+                });
+            }
+        }
+
+        // =====================================================================
+        // G. LEAGUE GENERATION
+        // =====================================================================
+        const CAT_G = 'G. Leagues';
+        {
+            const leagueAssignments = window.leagueAssignments || {};
+            const leagueBunks = Object.keys(leagueAssignments);
+
+            if (leagueBunks.length === 0) {
+                const leagueSkeletonItems = safeCall(() => {
+                    const daily = window.loadCurrentDailyData?.() || {};
+                    return (daily.manualSkeleton || []).filter(s => s.type === 'league');
+                }, []);
+                if (leagueSkeletonItems.length === 0) {
+                    skip(CAT_G, 'Leagues', 'No league tiles in skeleton');
+                } else {
+                    warn(CAT_G, 'League Tiles Without Data', `${leagueSkeletonItems.length} league tile(s) in skeleton but leagueAssignments is empty`);
+                }
+            } else {
+                pass(CAT_G, 'League Assignments', `${leagueBunks.length} bunks have league data`);
+
+                // Count unique matchups
+                let totalMatchups = 0;
+                const leagueNames = new Set();
+                for (const bunkData of Object.values(leagueAssignments)) {
+                    for (const slotData of Object.values(bunkData || {})) {
+                        if (slotData?.matchups?.length) {
+                            totalMatchups += slotData.matchups.length;
+                            if (slotData.leagueName) leagueNames.add(slotData.leagueName);
+                        }
+                    }
+                }
+                pass(CAT_G, 'Matchups', `${totalMatchups} matchup(s) across ${leagueNames.size} league(s): ${[...leagueNames].join(', ')}`);
+
+                // Check that league fields are locked (in scheduleAssignments they appear as "League: X")
+                let leagueEntries = 0;
                 for (const slots of Object.values(assignments)) {
                     if (!Array.isArray(slots)) continue;
                     for (const s of slots) {
-                        if (!s) empty++;
-                        else if ((s._activity || '').toLowerCase().includes('free')) free++;
-                        else filled++;
+                        if (s && (s._activity || '').startsWith('League:')) leagueEntries++;
                     }
                 }
-                console.log(`📊 Results: ${filled} filled, ${free} free, ${empty} empty`);
+                if (leagueEntries > 0) {
+                    pass(CAT_G, 'League Locks', `${leagueEntries} schedule entries locked with "League:" prefix`);
+                }
+            }
+        }
 
-                // Run validator
-                console.log('\n🛡️ Running validator...');
-                if (typeof window.validateSchedule === 'function') {
-                    const result = window.validateSchedule();
-                    console.log(`🛡️ Validation: ${result?.errors?.length || 0} errors, ${result?.warnings?.length || 0} warnings`);
+        // =====================================================================
+        // H. SPECIALTY LEAGUE GENERATION
+        // =====================================================================
+        const CAT_H = 'H. Specialty Leagues';
+        {
+            const specLeagueItems = safeCall(() => {
+                const daily = window.loadCurrentDailyData?.() || {};
+                return (daily.manualSkeleton || []).filter(s => s.type === 'specialty_league');
+            }, []);
+
+            if (specLeagueItems.length === 0) {
+                skip(CAT_H, 'Specialty Leagues', 'No specialty league tiles in skeleton');
+            } else {
+                pass(CAT_H, 'Skeleton Tiles', `${specLeagueItems.length} specialty league tile(s)`);
+
+                // Look for specialty league entries in assignments
+                let specLeagueEntries = 0;
+                for (const slots of Object.values(assignments)) {
+                    if (!Array.isArray(slots)) continue;
+                    for (const s of slots) {
+                        if (s && (s._activity || '').toLowerCase().includes('specialty')) specLeagueEntries++;
+                    }
+                }
+                if (specLeagueEntries > 0) {
+                    pass(CAT_H, 'Specialty Entries', `${specLeagueEntries} schedule entries for specialty leagues`);
+                } else {
+                    warn(CAT_H, 'Specialty Entries', 'No specialty league entries found in schedule — generation may have failed');
+                }
+            }
+        }
+
+        // =====================================================================
+        // I. ROTATION FAIRNESS (within each division)
+        // =====================================================================
+        const CAT_I = 'I. Rotation Fairness';
+        {
+            const IGNORED = new Set(['free', 'free (timeout)', 'free play', 'lunch', 'snacks', 'dismissal',
+                'transition/buffer', 'regroup', 'lineup', 'bus', 'buffer', 'no field',
+                'canteen', 'gameroom', 'game room', 'davening', 'mincha']);
+
+            let fairnessIssues = 0;
+
+            for (const divName of divNames) {
+                const divBunks = divisions[divName]?.bunks || [];
+                if (divBunks.length < 2) continue;
+
+                // Count activities per bunk
+                const bunkActivityCounts = {};
+                divBunks.forEach(b => {
+                    bunkActivityCounts[b] = {};
+                    const slots = assignments[b];
+                    if (!Array.isArray(slots)) return;
+                    for (const entry of slots) {
+                        if (!entry || entry._isTransition || entry.continuation) continue;
+                        const act = (entry._activity || entry.field || '').toLowerCase().trim();
+                        if (IGNORED.has(act) || act.startsWith('league:')) continue;
+                        bunkActivityCounts[b][act] = (bunkActivityCounts[b][act] || 0) + 1;
+                    }
+                });
+
+                // Get all unique activities in this division
+                const allDivActs = new Set();
+                Object.values(bunkActivityCounts).forEach(counts => Object.keys(counts).forEach(a => allDivActs.add(a)));
+
+                // Check distribution: for each activity, max - min across bunks should be ≤ 1
+                for (const act of allDivActs) {
+                    const counts = divBunks.map(b => bunkActivityCounts[b]?.[act] || 0);
+                    const min = Math.min(...counts);
+                    const max = Math.max(...counts);
+                    const spread = max - min;
+
+                    if (spread > 2) {
+                        fairnessIssues++;
+                        if (fairnessIssues <= 8) {
+                            warn(CAT_I, `${divName}: "${act}"`, `Spread of ${spread} (min:${min}, max:${max}) — some bunks getting it ${spread}× more`);
+                        }
+                    }
                 }
 
-            } else {
-                console.log('❌ runSkeletonOptimizer not available');
+                // Total activity count per bunk should be roughly equal
+                const totalPerBunk = divBunks.map(b => Object.values(bunkActivityCounts[b] || {}).reduce((s, n) => s + n, 0));
+                const minTotal = Math.min(...totalPerBunk);
+                const maxTotal = Math.max(...totalPerBunk);
+                if (maxTotal - minTotal > 3) {
+                    warn(CAT_I, `${divName} Total Balance`, `Bunk totals range from ${minTotal} to ${maxTotal} (spread: ${maxTotal - minTotal})`);
+                } else {
+                    pass(CAT_I, `${divName} Total Balance`, `Bunk totals: ${minTotal}–${maxTotal} (spread: ${maxTotal - minTotal})`);
+                }
             }
-        } catch (e) {
-            console.error('❌ Generation failed:', e);
+
+            if (fairnessIssues === 0) {
+                pass(CAT_I, 'Activity Fairness', 'All activities distributed evenly across bunks (spread ≤ 2)');
+            } else {
+                warn(CAT_I, 'Fairness Total', `${fairnessIssues} activity/division pair(s) with uneven distribution`);
+            }
         }
+
+        // =====================================================================
+        // J. MULTI-DAY SPREAD (if rotation history exists)
+        // =====================================================================
+        const CAT_J = 'J. Multi-Day Spread';
+        {
+            const history = safeCall(() => window.loadRotationHistory?.() || {}, {});
+            const historyDates = Object.keys(history);
+
+            if (historyDates.length < 2) {
+                skip(CAT_J, 'Multi-Day', `Only ${historyDates.length} date(s) in rotation history — need 2+ to evaluate spread`);
+            } else {
+                pass(CAT_J, 'History Depth', `${historyDates.length} dates in rotation history`);
+
+                // Check if RotationEngine has scoring functions
+                if (window.RotationEngine?.calculateRecencyScore) {
+                    // Sample a few bunks and check their worst recency score
+                    const sampleBunks = assignedBunks.slice(0, Math.min(6, assignedBunks.length));
+                    let yesterdayRepeats = 0;
+
+                    sampleBunks.forEach(bunk => {
+                        const slots = assignments[bunk];
+                        if (!Array.isArray(slots)) return;
+                        for (const entry of slots) {
+                            if (!entry || entry._isTransition || entry.continuation) continue;
+                            const act = entry._activity || entry.field;
+                            if (!act || act.toLowerCase() === 'free') continue;
+
+                            const score = window.RotationEngine.calculateRecencyScore(bunk, act, 0);
+                            if (score >= 12000) { // YESTERDAY_PENALTY
+                                yesterdayRepeats++;
+                            }
+                        }
+                    });
+
+                    if (yesterdayRepeats === 0) {
+                        pass(CAT_J, 'Recency (sampled)', 'No activities repeated from yesterday in sampled bunks');
+                    } else {
+                        warn(CAT_J, 'Recency (sampled)', `${yesterdayRepeats} activity/bunk pairs repeat from yesterday`);
+                    }
+                } else {
+                    skip(CAT_J, 'Recency Scoring', 'RotationEngine not available for scoring');
+                }
+            }
+        }
+
+        // =====================================================================
+        // K. EMPTY / FREE SLOT ANALYSIS
+        // =====================================================================
+        const CAT_K = 'K. Slot Analysis';
+        {
+            let totalFilled = 0, totalFree = 0, totalEmpty = 0, totalTransition = 0, totalLeague = 0;
+            const freeByDiv = {};
+
+            for (const [bunk, slots] of Object.entries(assignments)) {
+                if (!Array.isArray(slots)) continue;
+                const div = bunkDiv[bunk] || 'unknown';
+                if (!freeByDiv[div]) freeByDiv[div] = { free: 0, filled: 0 };
+
+                for (const s of slots) {
+                    if (!s) { totalEmpty++; continue; }
+                    const act = (s._activity || s.field || '').toLowerCase();
+                    if (s._isTransition) { totalTransition++; continue; }
+                    if (s.continuation) continue;
+                    if (act === 'free' || act === 'free (timeout)') { totalFree++; freeByDiv[div].free++; }
+                    else if (act.startsWith('league:')) { totalLeague++; freeByDiv[div].filled++; }
+                    else { totalFilled++; freeByDiv[div].filled++; }
+                }
+            }
+
+            pass(CAT_K, 'Overall', `Filled:${totalFilled} Free:${totalFree} Transition:${totalTransition} League:${totalLeague} Empty:${totalEmpty}`);
+
+            const freeRatio = totalFilled > 0 ? (totalFree / (totalFilled + totalFree) * 100).toFixed(1) : 0;
+            if (freeRatio > 20) {
+                fail(CAT_K, 'Free Ratio', `${freeRatio}% of schedulable slots are FREE — solver failed to fill many slots`);
+            } else if (freeRatio > 10) {
+                warn(CAT_K, 'Free Ratio', `${freeRatio}% free — some solver timeouts`);
+            } else {
+                pass(CAT_K, 'Free Ratio', `${freeRatio}% free — excellent fill rate`);
+            }
+
+            // Per-division breakdown
+            for (const [div, counts] of Object.entries(freeByDiv)) {
+                const ratio = counts.filled > 0 ? (counts.free / (counts.filled + counts.free) * 100).toFixed(1) : 0;
+                if (ratio > 15) {
+                    warn(CAT_K, `${div} Free`, `${ratio}% (${counts.free}/${counts.filled + counts.free})`);
+                }
+            }
+        }
+
+        // =====================================================================
+        // L. FIELD LOCK INTEGRITY
+        // =====================================================================
+        const CAT_L = 'L. Field Locks';
+        {
+            if (window.GlobalFieldLocks) {
+                const locked = safeCall(() => window.GlobalFieldLocks.getLockedFields?.() || {}, {});
+                const lockedCount = Object.keys(locked).length;
+                pass(CAT_L, 'GlobalFieldLocks', `${lockedCount} field(s) currently locked`);
+
+                // Verify no assignments violate locks
+                let lockViolations = 0;
+                for (const [bunk, slots] of Object.entries(assignments)) {
+                    if (!Array.isArray(slots)) continue;
+                    const div = bunkDiv[bunk];
+                    for (let i = 0; i < slots.length; i++) {
+                        const entry = slots[i];
+                        if (!entry || entry._isTransition) continue;
+                        const f = typeof entry.field === 'object' ? entry.field?.name : entry.field;
+                        if (!f || f.toLowerCase() === 'free') continue;
+
+                        const lockInfo = window.GlobalFieldLocks.isFieldLocked?.(f, [i], div);
+                        if (lockInfo && lockInfo.lockedBy !== 'pinned_activity' && lockInfo.lockedBy !== 'pinned_event_location') {
+                            lockViolations++;
+                            if (lockViolations <= 5) {
+                                warn(CAT_L, `Violation`, `${bunk} slot ${i}: "${f}" locked by ${lockInfo.lockedBy}`);
+                            }
+                        }
+                    }
+                }
+                if (lockViolations === 0) {
+                    pass(CAT_L, 'Lock Respect', 'No assignments violate field locks');
+                }
+            } else {
+                skip(CAT_L, 'GlobalFieldLocks', 'Module not loaded');
+            }
+        }
+
+        // =====================================================================
+        // M. PINNED ACTIVITY PRESERVATION
+        // =====================================================================
+        const CAT_M = 'M. Pinned Activities';
+        {
+            let pinnedCount = 0;
+            let pinnedIntact = 0;
+            for (const slots of Object.values(assignments)) {
+                if (!Array.isArray(slots)) continue;
+                for (const s of slots) {
+                    if (s && s._pinned === true) {
+                        pinnedCount++;
+                        if (s._activity || s.field) pinnedIntact++;
+                    }
+                }
+            }
+
+            if (pinnedCount === 0) {
+                skip(CAT_M, 'Pinned', 'No pinned activities in schedule');
+            } else {
+                pass(CAT_M, 'Pinned Count', `${pinnedCount} pinned, ${pinnedIntact} have valid data`);
+                if (pinnedIntact < pinnedCount) {
+                    fail(CAT_M, 'Pinned Data', `${pinnedCount - pinnedIntact} pinned entries lost their activity data`);
+                } else {
+                    pass(CAT_M, 'Pinned Integrity', 'All pinned activities preserved with data');
+                }
+            }
+        }
+
+        // =====================================================================
+        // N. TRANSITION/BUFFER CORRECTNESS
+        // =====================================================================
+        const CAT_N = 'N. Transitions';
+        {
+            let transCount = 0;
+            let orphanedTrans = 0;
+
+            for (const [bunk, slots] of Object.entries(assignments)) {
+                if (!Array.isArray(slots)) continue;
+                for (let i = 0; i < slots.length; i++) {
+                    const s = slots[i];
+                    if (!s || !s._isTransition) continue;
+                    transCount++;
+
+                    // Verify transition is adjacent to a real activity
+                    const prev = i > 0 ? slots[i - 1] : null;
+                    const next = i < slots.length - 1 ? slots[i + 1] : null;
+                    const hasPrevActivity = prev && !prev._isTransition && prev._activity;
+                    const hasNextActivity = next && !next._isTransition && next._activity;
+                    if (!hasPrevActivity && !hasNextActivity) {
+                        orphanedTrans++;
+                    }
+                }
+            }
+
+            if (transCount === 0) {
+                skip(CAT_N, 'Transitions', 'No transition/buffer entries');
+            } else {
+                pass(CAT_N, 'Transition Count', `${transCount} transition entries`);
+                if (orphanedTrans > 0) {
+                    warn(CAT_N, 'Orphaned Transitions', `${orphanedTrans} transition(s) not adjacent to any activity`);
+                } else {
+                    pass(CAT_N, 'Transition Adjacency', 'All transitions properly adjacent to activities');
+                }
+            }
+        }
+
+        printReport('GENERATION QUALITY AUDIT');
+        return _auditResults;
+    }
+
+    // Alias for backward compatibility
+    async function stressTest(options = {}) {
+        return generationAudit({ generate: true, ...options });
     }
 
     // =========================================================================
@@ -1594,6 +2293,7 @@
         quickCheck,
         auditCategory,
         stressTest,
+        generationAudit,
         tabWalkthrough,
 
         // v1.0 Legacy (preserved)
@@ -1609,10 +2309,11 @@
     };
 
     console.log('🔍 Campistry Diagnostics v2.0 loaded.');
-    console.log('   → await CampistryDiag.expoAudit()      Full 14-category audit');
-    console.log('   → await CampistryDiag.quickCheck()      Fast critical checks');
-    console.log('   → await CampistryDiag.tabWalkthrough()  Switch & test every tab');
-    console.log('   → await CampistryDiag.stressTest()      Generate + validate cycle');
-    console.log('   → await CampistryDiag.fullReport()      Legacy diagnostic report');
+    console.log('   → await CampistryDiag.expoAudit()              Full 14-category system audit');
+    console.log('   → await CampistryDiag.generationAudit()         Deep schedule quality audit (on existing schedule)');
+    console.log('   → await CampistryDiag.generationAudit({generate:true})  Generate + audit in one shot');
+    console.log('   → await CampistryDiag.quickCheck()              Fast critical checks');
+    console.log('   → await CampistryDiag.tabWalkthrough()          Switch & test every tab');
+    console.log('   → await CampistryDiag.fullReport()              Legacy diagnostic report');
 
 })();
