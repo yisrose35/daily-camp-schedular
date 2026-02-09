@@ -83,7 +83,58 @@
     // =========================================================================
     // SUBDIVISIONS CARD
     // =========================================================================
+// =========================================================================
+    // AUTO-SYNC DIVISIONS FROM CAMPISTRY ME
+    // =========================================================================
 
+    async function autoSyncDivisionsFromMe() {
+        try {
+            // Load campStructure from cloud (same source as dashboard stats)
+            const campId = localStorage.getItem('campistry_camp_id') || 
+                           localStorage.getItem('campistry_user_id');
+            if (!campId || !window.supabase) return;
+
+            const { data, error } = await window.supabase
+                .from('camp_state')
+                .select('state')
+                .eq('camp_id', campId)
+                .maybeSingle();
+
+            if (error || !data?.state) return;
+
+            const campStructure = data.state.campStructure || {};
+            const meDivisionNames = Object.keys(campStructure);
+            if (meDivisionNames.length === 0) return;
+
+            // Get current subdivisions (which we now call "divisions")
+            const existing = window.AccessControl?.getSubdivisions() || [];
+            const existingNames = new Set(existing.map(s => s.name));
+
+            // Auto-create any missing divisions
+            let created = 0;
+            for (const divName of meDivisionNames) {
+                if (!existingNames.has(divName)) {
+                    const color = campStructure[divName]?.color || getNextColor();
+                    // Collect grade names as the "divisions" (scheduling units) inside this subdivision
+                    const gradeNames = Object.keys(campStructure[divName]?.grades || {});
+                    
+                    await window.AccessControl?.createSubdivision({
+                        name: divName,
+                        color: color,
+                        divisions: gradeNames
+                    });
+                    created++;
+                }
+            }
+
+            if (created > 0) {
+                console.log(`[TeamUI] Auto-synced ${created} divisions from Campistry Me`);
+                await refreshData();
+            }
+        } catch (e) {
+            console.warn('[TeamUI] Error auto-syncing divisions from Me:', e);
+        }
+    }
     function renderSubdivisionsCard(container) {
         if (!container) return;
 
