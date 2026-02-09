@@ -191,9 +191,22 @@
     // Built ONCE per solve. Eliminates repeated property chain lookups.
     // ========================================================================
 
-    function precomputeFieldProperties() {
+   function precomputeFieldProperties() {
         _fieldPropertyMap.clear();
         var props = activityProperties || {};
+
+        // ★★★ v12.2 FIX: Load field sharing rules from campGlobalSettings_v1.fields[] ★★★
+        // The UI stores field properties in a fields[] array, not in activityProperties.
+        // Build a lookup so the solver sees the correct sharing/capacity rules.
+        var _storedFieldProps = {};
+        try {
+            var gs = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
+            var storedFields = gs.fields || gs.app1?.fields || [];
+            for (var fi = 0; fi < storedFields.length; fi++) {
+                var sf = storedFields[fi];
+                if (sf && sf.name) _storedFieldProps[sf.name] = sf;
+            }
+        } catch(e) { /* ignore parse errors */ }
 
         // Process all known fields from candidates
         for (var i = 0; i < allCandidateOptions.length; i++) {
@@ -201,7 +214,12 @@
             var fieldName = cand.field;
             if (_fieldPropertyMap.has(fieldName)) continue;
 
-            var fieldProps = props[fieldName] || {};
+            // Merge: activityProperties takes precedence, then stored fields
+            var fieldProps = props[fieldName] || _storedFieldProps[fieldName] || {};
+            // If activityProperties entry exists but has no sharableWith, check stored fields
+            if (!fieldProps.sharableWith && !fieldProps.sharable && _storedFieldProps[fieldName]) {
+                fieldProps = _storedFieldProps[fieldName];
+            }
             var capacity = 1;
             var sharingType = 'not_sharable';
             var prefList = null;
