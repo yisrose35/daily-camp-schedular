@@ -1,7 +1,7 @@
 // ============================================================================
-// total_solver_engine.js (ULTIMATE v12.1 - HYPER-OPTIMIZED CONSTRAINT SOLVER)
+// total_solver_engine.js (ULTIMATE v12.2 - HYPER-OPTIMIZED CONSTRAINT SOLVER)
 // ============================================================================
-// ★★★ v12.1: PERFORMANCE + QUALITY — SAME-FIELD ACTIVITY ENFORCEMENT ★★★
+// ★★★ v12.2: SAFETY SWEEPS + IN-GROUP DUPLICATE PREVENTION ★★★
 //
 // WHAT'S NEW IN v12.1 (over v12.0):
 // ──────────────────────────────────
@@ -30,7 +30,7 @@
 //  D1. ALL LOGGING GATED — debug, rotation, cross-div, and v12 logging
 //      controlled by flags. Zero console overhead in production.
 //
-// SOLVING PIPELINE (v12.1):
+// SOLVING PIPELINE (v12.2):
 //   1. buildAllCandidateOptions()        — master activity list (once)
 //   2. buildFieldTimeIndex()             — sorted time-indexed field usage (w/ Activity Name)
 //   3. precomputeFieldProperties()       — capacity + sharing type map
@@ -40,7 +40,7 @@
 //   7. solveSlotGroups()                 — augmenting path matching (w/ Activity Checks)
 //   8. backjumpSolver()                  — resolve remaining
 //   9. postSolveLocalSearch()            — polish + swap chains
-//   10. Cross-Division & Activity Sweep  — final safety check
+//   10. postSolveSafetySweep()           — final safety check (v12.2)
 // ============================================================================
 
 (function () {
@@ -707,11 +707,20 @@
         // =================================================================
 
         // ── 1. Same-day activity duplicate ───────────────────────────────
-        // Pre-computed rotation scores used beforeSlotIndex=0 so they miss
-        // same-day duplicates. Check LIVE schedule state.
+        // ★★★ v12.2: HARDENED — scan ALL slots, not just cache ★★★
         if (actNorm && actNorm !== 'free' && actNorm !== 'free play') {
+            // Fast path: cached check
             var todayDone = getActivitiesDoneToday(bunk, slots[0] ?? 999);
             if (todayDone.has(actNorm)) return 999999;
+            // ★ SAFETY: Direct full scan of live schedule to catch cross-group assignments
+            var _liveAssign = window.scheduleAssignments?.[bunk] || [];
+            for (var _lsi = 0; _lsi < _liveAssign.length; _lsi++) {
+                if (slots.indexOf(_lsi) !== -1) continue; // Skip our own target slots
+                var _le = _liveAssign[_lsi];
+                if (!_le || _le.continuation) continue;
+                var _la = normName(_le._activity || _le.sport || _le.field);
+                if (_la === actNorm) return 999999;
+            }
         }
 
         // ── 2. Field capacity & cross-division sharing ───────────────────
@@ -1197,6 +1206,9 @@ if (!blockDivName && bunk) {
         });
 
         for (var [, blockIndices] of sortedGroups) {
+            // ★★★ v12.2: Clear stale caches before each group ★★★
+            _todayCache.clear();
+            
             var unassigned = blockIndices.filter(function(bi) { return !_assignedBlocks.has(bi); });
             if (unassigned.length === 0) continue;
 
@@ -1224,6 +1236,8 @@ if (!blockDivName && bunk) {
 
                 blocksAssigned++;
             }
+            // ★★★ v12.2: Invalidate all caches after applying group picks ★★★
+            _todayCache.clear();
             groupsSolved++;
         }
 
@@ -1268,9 +1282,11 @@ if (!blockDivName && bunk) {
         blockOptions.sort(function(a, b) { return a.domainSize - b.domainSize; });
 
         // Phase 3: Assign with augmenting paths
-       var fieldUsageInGroup = new Map();
+        var fieldUsageInGroup = new Map();
         var fieldDivsInGroup = new Map();
         var fieldAssignedTo = new Map();
+        // ★★★ v12.2: Track activities assigned per bunk within group ★★★
+        var bunkActivitiesInGroup = new Map();  // bunk → Set<actNorm>
 
         for (var bo of blockOptions) {
             if (_assignedBlocks.has(bo.bi)) continue;
@@ -1280,6 +1296,24 @@ if (!blockDivName && bunk) {
             for (var oi = 0; oi < bo.options.length; oi++) {
                 var opt = bo.options[oi];
                 var cand2 = allCandidateOptions[opt.ci];
+                
+                // ★★★ v12.2: Block same-day activity duplicates within group ★★★
+                var candActNorm2 = cand2._actNorm || normName(cand2.activityName);
+                if (candActNorm2 && candActNorm2 !== 'free' && candActNorm2 !== 'free play') {
+                    var bunkGrpActs = bunkActivitiesInGroup.get(block2.bunk);
+                    if (bunkGrpActs && bunkGrpActs.has(candActNorm2)) continue;
+                    // Also check LIVE schedule for assignments from prior groups
+                    var _bunkSched = window.scheduleAssignments?.[block2.bunk] || [];
+                    var _dupFound = false;
+                    for (var _dsi = 0; _dsi < _bunkSched.length; _dsi++) {
+                        var _de = _bunkSched[_dsi];
+                        if (!_de || _de.continuation) continue;
+                        var _da = normName(_de._activity || _de.sport || _de.field);
+                        if (_da === candActNorm2) { _dupFound = true; break; }
+                    }
+                    if (_dupFound) continue;
+                }
+                
                 var fieldNorm2 = cand2._fieldNorm;
                 var fieldName = cand2.field;
                 var fieldProp = _fieldPropertyMap.get(fieldName);
@@ -1366,6 +1400,13 @@ if (!blockDivName && bunk) {
                     if (!fieldDivsInGroup.has(fieldNorm2)) fieldDivsInGroup.set(fieldNorm2, new Set());
                     fieldDivsInGroup.get(fieldNorm2).add(block2.divName || '');
                     fieldAssignedTo.set(fieldNorm2 + ':' + bo.bi, { blockIdx: bo.bi, ci: opt.ci });
+                    
+                    // ★★★ v12.2: Track activity for this bunk ★★★
+                    if (candActNorm2 && candActNorm2 !== 'free') {
+                        if (!bunkActivitiesInGroup.has(block2.bunk)) bunkActivitiesInGroup.set(block2.bunk, new Set());
+                        bunkActivitiesInGroup.get(block2.bunk).add(candActNorm2);
+                    }
+
                     assigned = true;
                     break;
                 }
@@ -1820,6 +1861,115 @@ if (!blockDivName && bunk) {
     }
 
     // ========================================================================
+    // ★★★ v12.2: POST-SOLVE SAFETY SWEEP — Last line of defense ★★★
+    // Scans final schedule and fixes any remaining violations.
+    // ========================================================================
+    function postSolveSafetySweep(activityBlocks) {
+        var violations = 0, fixes = 0;
+        var allDivTimes = window.divisionTimes || {};
+        var divs = window.divisions || {};
+        
+        console.log('[SOLVER] ★ Running post-solve safety sweep...');
+        
+        // ── Build fresh field time map from final assignments ──
+        var ftMap = new Map();
+        for (var dv in divs) {
+            var dSlots = allDivTimes[dv] || [];
+            var dBunks = divs[dv]?.bunks || [];
+            for (var b of dBunks) {
+                var sched = window.scheduleAssignments?.[b] || [];
+                for (var s = 0; s < dSlots.length; s++) {
+                    var e = sched[s];
+                    if (!e || e.continuation) continue;
+                    var sl = dSlots[s];
+                    if (!sl) continue;
+                    var fn = normName(e.field);
+                    if (!fn || fn === 'free' || fn === 'free play') continue;
+                    if (!ftMap.has(fn)) ftMap.set(fn, []);
+                    ftMap.get(fn).push({ start: sl.startMin, end: sl.endMin, bunk: b, div: dv, si: s });
+                }
+            }
+        }
+        
+        // ── Check capacity ──
+        for (var [fn2, usages] of ftMap) {
+            var rfn = null;
+            for (var [k] of _fieldPropertyMap) { if (normName(k) === fn2) { rfn = k; break; } }
+            var cap = rfn ? getFieldCapacity(rfn) : 1;
+            var shr = rfn ? getSharingType(rfn) : 'not_sharable';
+            
+            for (var i = 0; i < usages.length; i++) {
+                var ov = [];
+                for (var j = 0; j < usages.length; j++) {
+                    if (usages[j].start < usages[i].end && usages[j].end > usages[i].start) ov.push(usages[j]);
+                }
+                
+                if (shr === 'same_division' || shr === 'custom' || shr === 'not_sharable') {
+                    // Cross-div check
+                    var byDiv = {};
+                    for (var o of ov) { if (!byDiv[o.div]) byDiv[o.div] = []; byDiv[o.div].push(o); }
+                    var dKeys = Object.keys(byDiv);
+                    if ((shr === 'same_division' || shr === 'not_sharable') && dKeys.length > 1) {
+                        dKeys.sort(function(a, b) { return byDiv[b].length - byDiv[a].length; });
+                        for (var di = 1; di < dKeys.length; di++) {
+                            for (var vu of byDiv[dKeys[di]]) {
+                                violations++; fixes++;
+                                console.warn('[SOLVER] SAFETY: Cross-div violation "' + fn2 + '" — evicting ' + vu.bunk + ' slot ' + vu.si);
+                                window.scheduleAssignments[vu.bunk][vu.si] = { field: 'Free', sport: null, _activity: 'Free', _safetyFix: true };
+                            }
+                        }
+                    }
+                    // Same-div capacity
+                    for (var dvg of Object.values(byDiv)) {
+                        if (dvg.length > cap) {
+                            for (var vi = cap; vi < dvg.length; vi++) {
+                                violations++; fixes++;
+                                console.warn('[SOLVER] SAFETY: Capacity violation "' + fn2 + '" — evicting ' + dvg[vi].bunk + ' slot ' + dvg[vi].si);
+                                window.scheduleAssignments[dvg[vi].bunk][dvg[vi].si] = { field: 'Free', sport: null, _activity: 'Free', _safetyFix: true };
+                            }
+                        }
+                    }
+                } else {
+                    // type='all' — total capacity
+                    if (ov.length > cap) {
+                        for (var vi2 = cap; vi2 < ov.length; vi2++) {
+                            violations++; fixes++;
+                            console.warn('[SOLVER] SAFETY: Total capacity violation "' + fn2 + '" — evicting ' + ov[vi2].bunk);
+                            window.scheduleAssignments[ov[vi2].bunk][ov[vi2].si] = { field: 'Free', sport: null, _activity: 'Free', _safetyFix: true };
+                        }
+                    }
+                }
+            }
+        }
+        
+        // ── Check same-day duplicates ──
+        for (var dv2 in divs) {
+            for (var b2 of (divs[dv2]?.bunks || [])) {
+                var s2 = window.scheduleAssignments?.[b2] || [];
+                var seen = {};
+                for (var si2 = 0; si2 < s2.length; si2++) {
+                    var e2 = s2[si2];
+                    if (!e2 || e2.continuation) continue;
+                    if (e2._isLeague || e2.isLeague || e2.leagueName) continue;
+                    var a2 = normName(e2._activity || e2.sport || e2.field);
+                    if (!a2 || a2 === 'free' || a2 === 'free play') continue;
+                    if (['lunch','snacks','dismissal','regroup','mincha','davening','lineup','bus','transition','buffer','canteen','gameroom','game room','swim','pool'].indexOf(a2) !== -1) continue;
+                    if (seen[a2] !== undefined) {
+                        violations++; fixes++;
+                        console.warn('[SOLVER] SAFETY: Duplicate "' + a2 + '" for ' + b2 + ' at slots ' + seen[a2] + '&' + si2);
+                        window.scheduleAssignments[b2][si2] = { field: 'Free', sport: null, _activity: 'Free', _safetyFix: true };
+                    } else {
+                        seen[a2] = si2;
+                    }
+                }
+            }
+        }
+        
+        console.log('[SOLVER] ★ Safety sweep: ' + violations + ' violations, ' + fixes + ' fixed');
+        return { violations: violations, fixes: fixes };
+    }
+
+    // ========================================================================
     // ★★★ v12.0: MAIN SOLVER PIPELINE ★★★
     // ========================================================================
 
@@ -1902,6 +2052,11 @@ if (!blockDivName && bunk) {
         var t9 = performance.now();
         postSolveLocalSearch(activityBlocks);
         console.log('[SOLVER] Step 9: Polish (' + (performance.now() - t9).toFixed(1) + 'ms)');
+
+        // ═══ STEP 10: Safety Sweep ★v12.2★ ═══
+        var t10 = performance.now();
+        var safetyResult = postSolveSafetySweep(activityBlocks);
+        console.log('[SOLVER] Step 10: Safety — ' + safetyResult.violations + ' violations, ' + safetyResult.fixes + ' fixed (' + (performance.now() - t10).toFixed(1) + 'ms)');
 
         // ═══ REPORT ═══
         var solveTime = performance.now() - solveStartTime;
@@ -2198,23 +2353,23 @@ if (!blockDivName && bunk) {
 
     Solver.debugSolverStats = function() {
         console.log('\n=== SOLVER v12.1 STATS ===');
-        console.log('Normalized names:      ' + _normalizedNames.size);
-        console.log('Rotation score map:    ' + _rotationScoreMap.size);
+        console.log('Normalized names:       ' + _normalizedNames.size);
+        console.log('Rotation score map:     ' + _rotationScoreMap.size);
         console.log('Rotation score cache: ' + _rotationScoreCache.size);
-        console.log('Field property map:    ' + _fieldPropertyMap.size);
+        console.log('Field property map:     ' + _fieldPropertyMap.size);
         console.log('Today activity cache: ' + _todayCache.size);
-        console.log('Field time index:      ' + _fieldTimeIndex.size + ' fields');
+        console.log('Field time index:       ' + _fieldTimeIndex.size + ' fields');
         var totalEntries = 0;
         for (var entries of _fieldTimeIndex.values()) totalEntries += entries.length;
         console.log('  Total time entries: ' + totalEntries);
-        console.log('Assigned blocks:       ' + _assignedBlocks.size);
-        console.log('Active assignments:    ' + _assignments.size);
+        console.log('Assigned blocks:        ' + _assignedBlocks.size);
+        console.log('Active assignments:     ' + _assignments.size);
         if (_slotGroups) console.log('Slot groups:          ' + _slotGroups.size);
         if (_domains) {
             var avg = _domains.size > 0
                 ? (Array.from(_domains.values()).reduce(function(s, d) { return s + d.size; }, 0) / _domains.size).toFixed(1)
                 : '0';
-            console.log('Avg domain size:       ' + avg);
+            console.log('Avg domain size:        ' + avg);
         }
         console.log('\nPerf Counters:');
         console.log('  Rotation cache hits:  ' + _perfCounters.rotationCacheHits);
