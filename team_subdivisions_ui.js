@@ -1,14 +1,14 @@
 // ============================================================================
-// team_subdivisions_ui.js — Team & Subdivisions Management UI
+// team_subdivisions_ui.js — Team & Divisions Management UI
 // ============================================================================
-// Provides UI components for managing subdivisions and team members
-// Allows creating subdivisions with division names before divisions exist
+// Provides UI components for managing divisions (synced from Campistry Me)
+// and team members with invite/role management
 // ============================================================================
 
 (function() {
     'use strict';
 
-    console.log("[TeamUI] Team & Subdivisions UI v1.1 loading...");
+    console.log("[TeamUI] Team & Divisions UI v2.0 loading...");
 
     // =========================================================================
     // BEAUTIFUL COLOR PALETTE
@@ -57,7 +57,7 @@
         await refreshData();
         
         _initialized = true;
-        console.log("[TeamUI] Team & Subdivisions UI initialized");
+        console.log("[TeamUI] Team & Divisions UI initialized");
     }
 
     async function refreshData() {
@@ -81,145 +81,74 @@
     }
 
     // =========================================================================
-    // SUBDIVISIONS CARD
-    // =========================================================================
-// =========================================================================
-    // AUTO-SYNC DIVISIONS FROM CAMPISTRY ME
+    // DIVISIONS CARD (reads directly from Campistry Me campStructure)
     // =========================================================================
 
-    async function autoSyncDivisionsFromMe() {
-        try {
-            // Load campStructure from cloud (same source as dashboard stats)
-            const campId = localStorage.getItem('campistry_camp_id') || 
-                           localStorage.getItem('campistry_user_id');
-            if (!campId || !window.supabase) return;
-
-            const { data, error } = await window.supabase
-                .from('camp_state')
-                .select('state')
-                .eq('camp_id', campId)
-                .maybeSingle();
-
-            if (error || !data?.state) return;
-
-            const campStructure = data.state.campStructure || {};
-            const meDivisionNames = Object.keys(campStructure);
-            if (meDivisionNames.length === 0) return;
-
-            // Get current subdivisions (which we now call "divisions")
-            const existing = window.AccessControl?.getSubdivisions() || [];
-            const existingNames = new Set(existing.map(s => s.name));
-
-            // Auto-create any missing divisions
-            let created = 0;
-            for (const divName of meDivisionNames) {
-                if (!existingNames.has(divName)) {
-                    const color = campStructure[divName]?.color || getNextColor();
-                    // Collect grade names as the "divisions" (scheduling units) inside this subdivision
-                    const gradeNames = Object.keys(campStructure[divName]?.grades || {});
-                    
-                    await window.AccessControl?.createSubdivision({
-                        name: divName,
-                        color: color,
-                        divisions: gradeNames
-                    });
-                    created++;
-                }
-            }
-
-            if (created > 0) {
-                console.log(`[TeamUI] Auto-synced ${created} divisions from Campistry Me`);
-                await refreshData();
-            }
-        } catch (e) {
-            console.warn('[TeamUI] Error auto-syncing divisions from Me:', e);
-        }
-    }
-    function renderSubdivisionsCard(container) {
+    async function renderSubdivisionsCard(container) {
         if (!container) return;
 
-        const subdivisions = window.AccessControl?.getSubdivisions() || [];
+        // Load divisions directly from Campistry Me (campStructure in camp_state)
+        let meDivisions = {};
+        try {
+            const campId = localStorage.getItem('campistry_camp_id') || 
+                           localStorage.getItem('campistry_user_id');
+            if (campId && window.supabase) {
+                const { data } = await window.supabase
+                    .from('camp_state')
+                    .select('state')
+                    .eq('camp_id', campId)
+                    .maybeSingle();
+                if (data?.state) {
+                    meDivisions = data.state.campStructure || {};
+                }
+            }
+        } catch (e) {
+            console.warn('[TeamUI] Could not load campStructure:', e);
+        }
 
-        // Auto-create divisions from Campistry Me campStructure
-        await autoSyncDivisionsFromMe();
-        
+        const divisionNames = Object.keys(meDivisions);
+
         container.innerHTML = `
             <div class="card-header">
                 <h2>Divisions</h2>
             </div>
             <p style="color: var(--slate-500); font-size: 0.9rem; margin-bottom: 1rem;">
-                Divisions are automatically synced from Campistry Me. Assign schedulers to manage them.
+                Divisions are synced from Campistry Me.
             </p>
             
             <div id="subdivisions-list">
-                ${subdivisions.length === 0 ? `
-                   <div class="empty-state">
+                ${divisionNames.length === 0 ? `
+                    <div class="empty-state">
                         <div style="margin-bottom: 8px; color: var(--slate-400);">
                             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
                         </div>
-                        <p style="color: var(--slate-500); margin: 0;">No divisions yet</p>
-                        <p style="color: var(--slate-400); font-size: 0.85rem; margin-top: 4px;">
-                            Add divisions in <a href="campistry_me.html" style="color: var(--camp-green); font-weight: 600;">Campistry Me</a> and they'll appear here automatically
+                        <p style="color: var(--slate-600); margin: 0; font-weight: 500;">No divisions yet</p>
+                        <p style="color: var(--slate-400); font-size: 0.85rem; margin-top: 6px;">
+                            <a href="campistry_me.html" style="color: var(--camp-green, #147D91); font-weight: 600; text-decoration: none;">Create divisions in Campistry Me</a> to get started
                         </p>
                     </div>
-                ` : subdivisions.map(sub => renderSubdivisionItem(sub)).join('')}
-            </div>
-        `;
-
-       // Add button removed — divisions are auto-synced from Campistry Me
-
-        // Bind edit/delete buttons
-        container.querySelectorAll('.subdivision-edit-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const id = btn.dataset.id;
-                const sub = subdivisions.find(s => s.id === id);
-                if (sub) showSubdivisionModal(sub);
-            });
-        });
-
-        container.querySelectorAll('.subdivision-delete-btn').forEach(btn => {
-            btn.addEventListener('click', async () => {
-                const id = btn.dataset.id;
-                if (confirm('Delete this subdivision? Team members assigned to it will lose their division access.')) {
-                    await window.AccessControl.deleteSubdivision(id);
-                    await refreshData();
-                    renderSubdivisionsCard(container);
-                }
-            });
-        });
-    }
-
-    function renderSubdivisionItem(sub) {
-        const divisionsList = sub.divisions?.length > 0 
-            ? sub.divisions.join(', ')
-            : '<em style="color: var(--slate-400);">No grades assigned</em>';
-
-        return `
-            <div class="subdivision-item" style="border-left: 4px solid ${sub.color || '#6B7280'};">
-                <div class="subdivision-info">
-                    <div class="subdivision-name">${sub.name}</div>
-                    <div class="subdivision-divisions">${divisionsList}</div>
-                </div>
-                <div class="subdivision-actions">
-                    <button class="btn-icon subdivision-edit-btn" data-id="${sub.id}" title="Edit">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                        </svg>
-                    </button>
-                    <button class="btn-icon subdivision-delete-btn" data-id="${sub.id}" title="Delete">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="3 6 5 6 21 6"></polyline>
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                        </svg>
-                    </button>
-                </div>
+                ` : divisionNames.map(name => {
+                    const div = meDivisions[name];
+                    const gradeNames = Object.keys(div.grades || {});
+                    const gradeText = gradeNames.length > 0 
+                        ? gradeNames.join(', ') 
+                        : '<em style="color: var(--slate-400);">No grades yet</em>';
+                    const color = div.color || '#6B7280';
+                    return `
+                        <div class="subdivision-item" style="border-left: 4px solid ${color};">
+                            <div class="subdivision-info">
+                                <div class="subdivision-name">${name}</div>
+                                <div class="subdivision-divisions">${gradeText}</div>
+                            </div>
+                        </div>
+                    `;
+                }).join('')}
             </div>
         `;
     }
 
     // =========================================================================
-    // SUBDIVISION MODAL
+    // SUBDIVISION MODAL (kept for editing subdivisions used in RBAC assignment)
     // =========================================================================
 
     function showSubdivisionModal(existingSubdivision = null) {
@@ -235,13 +164,13 @@
         modal.innerHTML = `
             <div class="modal-content">
                 <div class="modal-header">
-                    <h3>${isEdit ? 'Edit Subdivision' : 'Create Subdivision'}</h3>
+                    <h3>${isEdit ? 'Edit Division' : 'Create Division'}</h3>
                     <button class="modal-close" id="modal-close">&times;</button>
                 </div>
                 
                 <form id="subdivision-form">
                     <div class="form-group">
-                        <label for="sub-name">Subdivision Name *</label>
+                        <label for="sub-name">Division Name *</label>
                         <input 
                             type="text" 
                             id="sub-name" 
@@ -274,9 +203,9 @@
                     </div>
                     
                     <div class="form-group">
-                        <label>Divisions</label>
+                        <label>Grades</label>
                         <p style="font-size: 0.85rem; color: var(--slate-500); margin-bottom: 8px;">
-                            Select existing divisions or type new ones. New division names will be recognized when you create them in Flow.
+                            Select existing divisions or type new ones.
                         </p>
                         
                         ${existingDivisions.length > 0 ? `
@@ -308,13 +237,10 @@
                             <input 
                                 type="text" 
                                 id="division-input" 
-                                placeholder="Type division name and press Enter..."
+                                placeholder="Type grade name and press Enter..."
                                 style="flex: 1; min-width: 200px;"
                             >
                         </div>
-                        <p style="font-size: 0.8rem; color: var(--slate-400); margin-top: 6px;">
-                            Tip: You can add division names now even if they don't exist yet in Flow
-                        </p>
                     </div>
                     
                     <div id="subdivision-error" class="form-error"></div>
@@ -322,7 +248,7 @@
                     <div class="form-actions">
                         <button type="button" class="btn-secondary" id="cancel-subdivision">Cancel</button>
                         <button type="submit" class="btn-primary">
-                            ${isEdit ? 'Save Changes' : 'Create Subdivision'}
+                            ${isEdit ? 'Save Changes' : 'Create Division'}
                         </button>
                     </div>
                 </form>
@@ -401,7 +327,7 @@
             const errorEl = document.getElementById('subdivision-error');
             
             if (!name) {
-                errorEl.textContent = 'Please enter a subdivision name';
+                errorEl.textContent = 'Please enter a division name';
                 return;
             }
 
@@ -430,7 +356,7 @@
                 closeModal();
                 await refreshData();
                 
-                // Re-render the subdivisions card
+                // Re-render the divisions card
                 const container = document.getElementById('subdivisions-card');
                 if (container) renderSubdivisionsCard(container);
 
@@ -470,9 +396,9 @@
                         <div style="margin-bottom: 8px; color: var(--slate-400);">
                             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                         </div>
-                        <p style="color: var(--slate-500); margin: 0;">Just you for now</p>
-                        <p style="color: var(--slate-400); font-size: 0.85rem; margin-top: 4px;">
-                            Invite team members to help manage schedules
+                        <p style="color: var(--slate-600); margin: 0; font-weight: 500;">No team members yet</p>
+                        <p style="color: var(--slate-400); font-size: 0.85rem; margin-top: 6px;">
+                            Invite members to join your camp team
                         </p>
                     </div>
                 ` : _teamMembers.map(member => renderTeamMemberItem(member)).join('')}
@@ -791,15 +717,15 @@ Sent via Campistry (campistry.org)`
                         <select id="invite-role" required>
                             <option value="">Select a role...</option>
                             <option value="admin">Admin - Full access to all divisions</option>
-                            <option value="scheduler">Scheduler - Access to assigned subdivisions</option>
+                            <option value="scheduler">Scheduler - Access to assigned divisions</option>
                             <option value="viewer">Viewer - View only, no editing</option>
                         </select>
                     </div>
                     
                     <div class="form-group" id="subdivisions-group" style="display: none;">
-                        <label>Assign to Subdivisions</label>
+                        <label>Assign to Divisions</label>
                         <p style="font-size: 0.85rem; color: var(--slate-500); margin-bottom: 8px;">
-                            Select which subdivisions this person can manage
+                            Select which divisions this person can manage
                         </p>
                         ${subdivisions.length > 0 ? `
                             <div class="subdivision-checkboxes">
@@ -808,14 +734,14 @@ Sent via Campistry (campistry.org)`
                                         <input type="checkbox" name="subdivision" value="${sub.id}">
                                         <span>${sub.name}</span>
                                         <small style="color: var(--slate-400); margin-left: 8px;">
-                                            ${sub.divisions?.join(', ') || 'No divisions'}
+                                            ${sub.divisions?.join(', ') || 'No grades'}
                                         </small>
                                     </label>
                                 `).join('')}
                             </div>
                         ` : `
                             <p style="color: var(--slate-500); font-style: italic;">
-                                No subdivisions created yet. Create subdivisions first to assign schedulers to specific divisions.
+                                No divisions created yet. Create divisions in Campistry Me first to assign schedulers to specific divisions.
                             </p>
                         `}
                     </div>
@@ -997,7 +923,7 @@ Sent via Campistry (campistry.org)`
                     </div>
                     
                     <div class="form-group" id="edit-subdivisions-group" style="display: ${member.role === 'scheduler' ? 'block' : 'none'};">
-                        <label>Subdivisions</label>
+                        <label>Divisions</label>
                         ${subdivisions.length > 0 ? `
                             <div class="subdivision-checkboxes">
                                 ${subdivisions.map(sub => `
@@ -1012,7 +938,7 @@ Sent via Campistry (campistry.org)`
                                     </label>
                                 `).join('')}
                             </div>
-                        ` : '<p style="color: var(--slate-500);">No subdivisions available</p>'}
+                        ` : '<p style="color: var(--slate-500);">No divisions available</p>'}
                     </div>
                     
                     <div id="edit-member-error" class="form-error"></div>
@@ -1448,6 +1374,6 @@ Sent via Campistry (campistry.org)`
         injectStyles();
     }
 
-    console.log("[TeamUI] Team & Subdivisions UI loaded");
+    console.log("[TeamUI] Team & Divisions UI v2.0 loaded");
 
 })();
