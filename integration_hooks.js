@@ -418,7 +418,22 @@
         const changesToSync = { ..._pendingChanges };
         _pendingChanges = {};
 
-        try {
+       try {
+            // ★★★ FIX v6.8: Skip ALL camp_state operations for non-admin roles ★★★
+            // Schedulers/viewers don't have RLS permission on camp_state.
+            // Without this guard, both the SELECT and UPSERT fail with 403,
+            // the error propagates up through forceSyncToCloud → saveDailySkeleton
+            // → runOptimizer, and kills schedule generation entirely.
+            const _syncRole = window.CloudPermissions?.getRole?.() || 
+                              window.AccessControl?.getCurrentRole?.() || 'viewer';
+            
+            if (_syncRole !== 'owner' && _syncRole !== 'admin') {
+                log('Skipping camp_state sync — role "' + _syncRole + '" cannot access camp_state table');
+                _lastSyncTime = Date.now();
+                // Changes are already saved locally, just clear the queue
+                return;
+            }
+
             log('Executing batch sync:', Object.keys(changesToSync));
 
             const { data: current, error: fetchError } = await client
@@ -438,6 +453,21 @@
                 ...changesToSync,
                 updated_at: new Date().toISOString()
             };
+
+            const { error: upsertError } = await client
+                .from('camp_state')
+                .upsert({
+                    camp_id: campId,
+                    state: newState,
+                    updated_at: new Date().toISOString()
+                }, {
+                    onConflict: 'camp_id'
+                });
+
+            if (upsertError) {
+                logError('Failed to sync to cloud:', upsertError);
+                throw upsertError;
+            }
 
             // ★★★ FIX v6.8: Only owner/admin can write to camp_state ★★★
             // Schedulers don't have RLS permission on camp_state table.
