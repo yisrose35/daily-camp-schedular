@@ -1677,32 +1677,42 @@
         }
 
         try {
-            // ★ Use .select() to verify the row was actually deleted (RLS may silently block)
+            const campId = getCampId();
+            
+            // ★★★ v4.0: Full cleanup — deletes camp_users + auth.users + auth.identities
+            // Uses SECURITY DEFINER RPC so client doesn't need service role access
             const { data, error } = await window.supabase
-                .from('camp_users')
-                .delete()
-                .eq('id', id)
-                .select();
+                .rpc('delete_team_member_full', {
+                    member_row_id: id,
+                    requesting_camp_id: campId
+                });
 
-            if (error) throw error;
-
-            if (!data || data.length === 0) {
-                console.warn("🔐 Delete returned no rows — RLS may have blocked it. Trying with camp_id filter...");
-                // Fallback: also filter by camp_id to match RLS policy
-                const campId = getCampId();
-                const { data: retryData, error: retryError } = await window.supabase
+            if (error) {
+                console.error("🔐 RPC delete_team_member_full error:", error);
+                
+                // Fallback to camp_users-only delete if RPC doesn't exist yet
+                console.warn("🔐 Falling back to camp_users-only delete...");
+                const { data: fallbackData, error: fallbackError } = await window.supabase
                     .from('camp_users')
                     .delete()
                     .eq('id', id)
                     .eq('camp_id', campId)
                     .select();
 
-                if (retryError) throw retryError;
-                if (!retryData || retryData.length === 0) {
+                if (fallbackError) throw fallbackError;
+                if (!fallbackData || fallbackData.length === 0) {
                     return { error: "Could not delete team member. You may need to update your database permissions." };
                 }
+                
+                console.warn("🔐 ⚠️ Only deleted from camp_users — auth account may still exist. Run the delete_team_member_full SQL function in Supabase to enable full cleanup.");
+                return { success: true, partial: true };
             }
 
+            if (data && !data.success) {
+                return { error: data.error || "Failed to delete team member" };
+            }
+
+            console.log("🔐 ✅ Team member fully removed (camp_users + auth)", data);
             return { success: true };
 
         } catch (e) {
