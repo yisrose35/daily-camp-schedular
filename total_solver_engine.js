@@ -1747,6 +1747,11 @@ if (!blockDivName && bunk) {
                         var wantedCost = calculatePenaltyCost(freeBlock, wantedPick);
                         _assignments.set(freeIdx, { candIdx: ci2, pick: wantedPick, cost: wantedCost });
                         applyPickToSchedule(freeBlock, wantedPick);
+                        // ★★★ v12.2 FIX: Invalidate caches after swap ★★★
+                        invalidateRotationCacheForBunk(blockerBlock.bunk);
+                        invalidateRotationCacheForBunk(freeBlock.bunk);
+                        _todayCache.clear();
+
                         swapChains++;
                         swapped = true;
                     }
