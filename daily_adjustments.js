@@ -1,5 +1,5 @@
 // =================================================================
-// daily_adjustments.js  (v6.0 - Full Bug Fix Pass)
+// daily_adjustments.js  (v6.1 - Bug Fixes with Original Structure Restored)
 // =================================================================
 // v6.0 FIXES APPLIED:
 // - #2:  confirm() → async showConfirm() for tile deletion
@@ -2293,7 +2293,6 @@ function addRemoveListeners(gridEl) {
       }
       gridEl.querySelectorAll('.da-event').forEach(t => t.classList.remove('selected'));
       if (selectedTileId) tile.classList.add('selected');
-      renderDetailPane();
     };
     
     // Fix #2 — async showConfirm instead of blocking confirm()
@@ -2316,7 +2315,6 @@ function addRemoveListeners(gridEl) {
     if (e.target.classList.contains('da-grid-cell') || e.target.classList.contains('da-grid-disabled')) {
       selectedTileId = null;
       gridEl.querySelectorAll('.da-event').forEach(t => t.classList.remove('selected'));
-      renderDetailPane();
     }
   };
 }
@@ -2351,31 +2349,32 @@ function loadDailySkeleton() {
   const dateKey = window.currentScheduleDate;
   if (!dateKey) { dailyOverrideSkeleton = []; return; }
   
-  // Priority 1: Daily data (cloud-synced)
+  // Priority 1: localStorage (fastest, offline-capable)
+  try {
+    const stored = localStorage.getItem(`campManualSkeleton_${dateKey}`);
+    if (stored) {
+      dailyOverrideSkeleton = JSON.parse(stored);
+      window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+      return;
+    }
+  } catch (e) { /* corrupt cache */ }
+  
+  // Priority 2: Cloud (masterSettings)
+  const cloudSkeleton = masterSettings?.app1?.dailySkeletons?.[dateKey];
+  if (cloudSkeleton && cloudSkeleton.length > 0) {
+    dailyOverrideSkeleton = JSON.parse(JSON.stringify(cloudSkeleton));
+    window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+    localStorage.setItem(`campManualSkeleton_${dateKey}`, JSON.stringify(dailyOverrideSkeleton));
+    return;
+  }
+  
+  // Priority 3: Daily data (legacy)
   const dailyData = window.loadCurrentDailyData?.() || {};
   if (dailyData.manualSkeleton && dailyData.manualSkeleton.length > 0) {
     dailyOverrideSkeleton = JSON.parse(JSON.stringify(dailyData.manualSkeleton));
     window.dailyOverrideSkeleton = dailyOverrideSkeleton;
     return;
   }
-  
-  // Priority 2: masterSettings
-  const fromMaster = masterSettings.app1?.dailySkeletons?.[dateKey];
-  if (fromMaster && fromMaster.length > 0) {
-    dailyOverrideSkeleton = JSON.parse(JSON.stringify(fromMaster));
-    window.dailyOverrideSkeleton = dailyOverrideSkeleton;
-    return;
-  }
-  
-  // Priority 3: localStorage cache
-  try {
-    const cached = localStorage.getItem(`campManualSkeleton_${dateKey}`);
-    if (cached) {
-      dailyOverrideSkeleton = JSON.parse(cached);
-      window.dailyOverrideSkeleton = dailyOverrideSkeleton;
-      return;
-    }
-  } catch (e) { /* corrupt cache */ }
   
   dailyOverrideSkeleton = [];
   window.dailyOverrideSkeleton = dailyOverrideSkeleton;
@@ -2484,64 +2483,28 @@ async function runOptimizer() {
 // =================================================================
 // RENDER SUBTABS
 // =================================================================
-function renderSubtabs() {
-  const tabBar = document.getElementById('da-subtab-bar');
-  if (!tabBar) return;
-  
-  const tabs = [
-    { id: 'skeleton', label: '🧩 Skeleton Builder', icon: '🧩' },
-    { id: 'trips', label: '🚌 Trips & Events', icon: '🚌' },
-    { id: 'overrides', label: '🔧 Bunk Overrides', icon: '🔧' },
-    { id: 'resources', label: '⚙️ Resource Overrides', icon: '⚙️' }
-  ];
-  
-  tabBar.innerHTML = tabs.map(tab => `
-    <button class="da-subtab ${activeSubTab === tab.id ? 'active' : ''}" data-tab="${tab.id}">
-      ${tab.label}
-    </button>
-  `).join('');
-  
-  tabBar.querySelectorAll('.da-subtab').forEach(btn => {
-    btn.onclick = () => {
-      activeSubTab = btn.dataset.tab;
-      renderSubtabs();
-      renderSubtabContent();
+function setupSubTabs() {
+  const tabs = container.querySelectorAll('.da-subtab');
+  tabs.forEach(tab => {
+    tab.onclick = () => {
+      tabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      
+      container.querySelectorAll('.da-pane').forEach(p => p.classList.remove('active'));
+      const tabId = tab.dataset.tab;
+      const pane = container.querySelector(`#da-pane-${tabId}`);
+      if (pane) pane.classList.add('active');
+      
+      activeSubTab = tabId;
     };
   });
-}
-
-function renderSubtabContent() {
-  const content = document.getElementById('da-subtab-content');
-  if (!content) return;
-  
-  // Hide all sections
-  ['da-skeleton-section','da-trips-section','da-overrides-section','da-resources-section'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.style.display = 'none';
-  });
-  
-  // Show active section
-  const sectionMap = {
-    skeleton: 'da-skeleton-section',
-    trips: 'da-trips-section',
-    overrides: 'da-overrides-section',
-    resources: 'da-resources-section'
-  };
-  
-  const activeEl = document.getElementById(sectionMap[activeSubTab]);
-  if (activeEl) activeEl.style.display = 'block';
-  
-  if (activeSubTab === 'skeleton') { renderPalette(); renderGrid(); renderToolbar(); }
-  else if (activeSubTab === 'trips') { renderTripsUI(); }
-  else if (activeSubTab === 'overrides') { renderBunkOverridesUI(); }
-  else if (activeSubTab === 'resources') { renderResourceOverridesUI(); }
 }
 
 // =================================================================
 // RENDER TOOLBAR (Fix #3 — async save/load/clear, Fix #20 — clear displaced)
 // =================================================================
 function renderToolbar() {
-  const toolbar = document.getElementById('da-toolbar');
+  const toolbar = document.getElementById('da-skeleton-toolbar');
   if (!toolbar) return;
   
   const g = window.loadGlobalSettings?.() || {};
@@ -2607,10 +2570,10 @@ function renderToolbar() {
 }
 
 // =================================================================
-// RENDER TRIPS UI (Fix #3 — async, Fix #37 — no stale loadDailySkeleton)
+// RENDER TRIPS FORM (Fix #3 — async, Fix #37 — no stale loadDailySkeleton)
 // =================================================================
-function renderTripsUI() {
-  const section = document.getElementById('da-trips-section');
+function renderTripsForm() {
+  const section = document.getElementById('da-trips-container');
   if (!section) return;
   
   const divisions = window.availableDivisions || [];
@@ -2675,7 +2638,7 @@ function renderTripsUI() {
 // RENDER BUNK OVERRIDES UI (Fix #34 — field type)
 // =================================================================
 function renderBunkOverridesUI() {
-  const section = document.getElementById('da-overrides-section');
+  const section = document.getElementById('da-bunk-overrides-container');
   if (!section) return;
   
   const divisions = window.availableDivisions || [];
@@ -2837,7 +2800,7 @@ function renderBunkOverridesUI() {
 // RENDER RESOURCE OVERRIDES UI
 // =================================================================
 function renderResourceOverridesUI() {
-  const section = document.getElementById('da-resources-section');
+  const section = document.getElementById('da-resources-container');
   if (!section) return;
   
   const allFields = (masterSettings.app1?.fields || []);
@@ -2976,156 +2939,12 @@ function renderResourceOverridesUI() {
   });
 }
 
-// =================================================================
-// RENDER DETAIL PANE (Selected tile info + time rules)
-// =================================================================
-function renderDetailPane() {
-  const pane = document.getElementById('da-detail-pane');
-  if (!pane) return;
-  
-  if (!selectedTileId) {
-    pane.innerHTML = '<div class="da-detail-empty">Click a tile to see details</div>';
-    return;
-  }
-  
-  const event = dailyOverrideSkeleton.find(ev => ev.id === selectedTileId);
-  if (!event) {
-    pane.innerHTML = '<div class="da-detail-empty">Tile not found</div>';
-    return;
-  }
-  
-  const startMin = parseTimeToMinutes(event.startTime);
-  const endMin = parseTimeToMinutes(event.endTime);
-  const duration = (startMin !== null && endMin !== null) ? (endMin - startMin) : 0;
-  const durationStr = duration < 60 ? `${duration}m` : `${Math.floor(duration/60)}h${duration%60 > 0 ? duration%60+'m' : ''}`;
-  
-  let detailHtml = `
-    <div class="da-detail-card">
-      <h4>${escapeHtml(event.event)}</h4>
-      <div class="da-detail-row"><span>Division:</span> <strong>${escapeHtml(event.division)}</strong></div>
-      <div class="da-detail-row"><span>Time:</span> <strong>${escapeHtml(event.startTime)} – ${escapeHtml(event.endTime)}</strong></div>
-      <div class="da-detail-row"><span>Duration:</span> <strong>${durationStr}</strong></div>
-      <div class="da-detail-row"><span>Type:</span> <strong>${escapeHtml(event.type)}</strong></div>
-      ${event.isNightActivity ? '<div class="da-detail-row"><span>🌙 Night Activity</span></div>' : ''}
-      ${event.reservedFields?.length > 0 ? `<div class="da-detail-row"><span>Fields:</span> <strong>${escapeHtml(event.reservedFields.join(', '))}</strong></div>` : ''}
-  `;
-  
-  if (event.type === 'smart' && event.smartData) {
-    detailHtml += `
-      <div class="da-detail-section">
-        <div class="da-detail-row"><span>Main 1:</span> <strong>${escapeHtml(event.smartData.main1)}</strong></div>
-        <div class="da-detail-row"><span>Main 2:</span> <strong>${escapeHtml(event.smartData.main2)}</strong></div>
-        <div class="da-detail-row"><span>Fallback for:</span> <strong>${escapeHtml(event.smartData.fallbackFor)}</strong></div>
-        <div class="da-detail-row"><span>Fallback:</span> <strong>${escapeHtml(event.smartData.fallbackActivity)}</strong></div>
-      </div>
-    `;
-  }
-  
-  if (event.type === 'split' && event.splitData) {
-    detailHtml += `
-      <div class="da-detail-section">
-        <div class="da-detail-row"><span>Activity 1:</span> <strong>${escapeHtml(event.splitData.activity1)}</strong></div>
-        <div class="da-detail-row"><span>Activity 2:</span> <strong>${escapeHtml(event.splitData.activity2)}</strong></div>
-        <div class="da-detail-row"><span>Switch at:</span> <strong>${escapeHtml(event.splitData.midTime)}</strong></div>
-      </div>
-    `;
-  }
-  
-  if (event.type === 'elective' && event.electiveActivities) {
-    detailHtml += `
-      <div class="da-detail-section">
-        <div class="da-detail-row"><span>Reserved:</span> <strong>${escapeHtml(event.electiveActivities.join(', '))}</strong></div>
-      </div>
-    `;
-  }
-  
-  detailHtml += `
-      <div class="da-detail-actions">
-        <button id="da-detail-delete-btn" class="da-btn da-btn-ghost da-btn-sm">🗑️ Delete</button>
-      </div>
-    </div>
-  `;
-  
-  // Time rules section
-  detailHtml += `
-    <div class="da-detail-card" style="margin-top:12px;">
-      <h4>⏰ Time Rules</h4>
-      <p style="font-size:12px;color:#64748b;margin-bottom:8px;">Add constraints for this tile.</p>
-      <div class="da-form-grid" style="grid-template-columns:1fr 1fr 1fr;">
-        <select id="da-rule-type" class="da-select">
-          <option value="no-earlier-than">No Earlier Than</option>
-          <option value="no-later-than">No Later Than</option>
-          <option value="must-start-at">Must Start At</option>
-        </select>
-        <input type="text" id="da-rule-start" class="da-input" placeholder="Start (e.g., 9:00am)">
-        <input type="text" id="da-rule-end" class="da-input" placeholder="End (e.g., 10:00am)">
-      </div>
-      <button id="da-add-rule-btn" class="da-btn da-btn-secondary da-btn-sm" style="margin-top:8px;">Add Rule</button>
-      ${event.timeRules?.length > 0 ? `
-        <div class="da-rules-list">
-          ${event.timeRules.map((rule, i) => `
-            <div class="da-rule-item">
-              <span>${escapeHtml(rule.type)}: ${escapeHtml(rule.start)} – ${escapeHtml(rule.end)}</span>
-              <button class="da-btn da-btn-ghost da-btn-sm da-remove-rule" data-idx="${i}">✕</button>
-            </div>
-          `).join('')}
-        </div>
-      ` : ''}
-    </div>
-  `;
-  
-  pane.innerHTML = detailHtml;
-  
-  // Delete button
-  document.getElementById('da-detail-delete-btn').onclick = async () => {
-    if (await showConfirm('Delete this block?')) {
-      dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => x.id !== selectedTileId);
-      selectedTileId = null;
-      saveDailySkeleton();
-      renderGrid();
-      renderDetailPane();
-    }
-  };
-  
-  // Add rule (Fix #3 — async)
-  document.getElementById('da-add-rule-btn').onclick = async () => {
-    const ruleType = document.getElementById('da-rule-type').value;
-    const start = document.getElementById('da-rule-start').value.trim();
-    const end = document.getElementById('da-rule-end').value.trim();
-    
-    if (!start || !end) { await showAlert('Please enter start and end times.'); return; }
-    const startMin = parseTimeToMinutes(start);
-    const endMin = parseTimeToMinutes(end);
-    if (startMin === null || endMin === null) { await showAlert('Invalid time format. Use format like 9:00am or 2:30pm'); return; }
-    if (startMin >= endMin) { await showAlert('End time must be after start time.'); return; }
-    
-    if (!event.timeRules) event.timeRules = [];
-    event.timeRules.push({ type: ruleType, start, end, startMin, endMin });
-    saveDailySkeleton();
-    renderDetailPane();
-  };
-  
-  // Remove rule buttons
-  pane.querySelectorAll('.da-remove-rule').forEach(btn => {
-    btn.onclick = () => {
-      const idx = parseInt(btn.dataset.idx, 10);
-      if (event.timeRules) {
-        event.timeRules.splice(idx, 1);
-        saveDailySkeleton();
-        renderDetailPane();
-      }
-    };
-  });
-}
 
 // =================================================================
-// ADD STYLES (Modal + Component CSS)
+// CSS STYLES
 // =================================================================
-function addStyles() {
-  if (document.getElementById('da-styles-v6')) return;
-  const style = document.createElement('style');
-  style.id = 'da-styles-v6';
-  style.textContent = `
+function getStyles() {
+  return `<style>
     /* ============ Modal System ============ */
     .da-modal-overlay {
       position:fixed;top:0;left:0;right:0;bottom:0;
@@ -3279,7 +3098,14 @@ function addStyles() {
     .da-subtab:hover { color:#1e293b;background:#f8fafc; }
     .da-subtab.active { color:#3b82f6;border-bottom-color:#3b82f6; }
     
+    /* ============ Panes ============ */
+    .da-pane { display:none; flex:1; overflow:auto; padding:16px; }
+    .da-pane.active { display:block; }
+    
     /* ============ Toolbar ============ */
+    .da-toolbar { display:flex; align-items:center; gap:12px; padding:12px 16px; background:#f8fafc; border-bottom:1px solid #e2e8f0; flex-wrap:wrap; }
+    .da-toolbar-group { display:flex; align-items:center; gap:8px; }
+    .da-toolbar-label { font-size:12px; color:#475569; font-weight:500; }
     .da-toolbar-row {
       display:flex;align-items:center;gap:8px;flex-wrap:wrap;
       padding:12px 0;
@@ -3458,68 +3284,58 @@ function addStyles() {
     /* ============ Sport field groups ============ */
     .da-sport-field-group { margin-bottom:12px; }
     .da-sport-checks { display:flex;flex-wrap:wrap;gap:8px;margin-top:4px; }
-  `;
-  document.head.appendChild(style);
+  </style>`;
 }
 
 // =================================================================
-// INIT (Fix #5 — keyboard listener leak prevention)
+// MAIN HTML TEMPLATE
 // =================================================================
-function initDailyAdjustments(containerEl) {
-  container = containerEl || document.getElementById('daily-adjustments-container');
-  if (!container) {
-    console.error("[DA] Container not found");
-    return;
-  }
-  
-  // Load settings
-  masterSettings.global = window.loadGlobalSettings?.() || {};
-  masterSettings.app1 = masterSettings.global.app1 || {};
-  masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
-  masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
-  
-  addStyles();
-  
-  // Build DOM structure
-  container.innerHTML = `
-    <div id="da-rainy-panel"></div>
-    <div id="da-subtab-bar" style="display:flex;gap:0;border-bottom:1px solid #e2e8f0;margin-bottom:16px;"></div>
-    <div id="da-subtab-content">
-      <div id="da-skeleton-section">
-        <div id="da-toolbar"></div>
-        <div style="display:flex;gap:16px;">
-          <div style="flex:0 0 180px;">
-            <div id="da-palette"></div>
-          </div>
-          <div style="flex:1;overflow-x:auto;" class="da-grid-wrapper">
+function getMainHTML() {
+  return `
+    <div class="da-container">
+      <div class="da-sidebar">
+        <div class="da-sidebar-header"><h3>Tile Types</h3></div>
+        <div id="da-palette" class="da-palette"></div>
+      </div>
+      
+      <div class="da-main">
+        <div class="da-subtabs">
+          <button class="da-subtab active" data-tab="skeleton">Schedule</button>
+          <button class="da-subtab" data-tab="trips">Trips</button>
+          <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
+          <button class="da-subtab" data-tab="resources">Resources</button>
+        </div>
+        
+        <div id="da-pane-skeleton" class="da-pane active">
+          <div id="da-rainy-panel"></div>
+          <div id="da-displaced-tiles-panel" style="display:none;"></div>
+          <div id="da-skeleton-toolbar" class="da-toolbar"></div>
+          <div class="da-grid-wrapper">
             <div id="da-skeleton-grid"></div>
           </div>
-          <div style="flex:0 0 260px;">
-            <div id="da-detail-pane"></div>
-          </div>
         </div>
-        <div id="da-displaced-tiles-panel"></div>
+        
+        <div id="da-pane-trips" class="da-pane">
+          <div id="da-trips-container"></div>
+        </div>
+        
+        <div id="da-pane-bunk-overrides" class="da-pane">
+          <div id="da-bunk-overrides-container"></div>
+        </div>
+        
+        <div id="da-pane-resources" class="da-pane">
+          <div id="da-resources-container"></div>
+        </div>
       </div>
-      <div id="da-trips-section" style="display:none;"></div>
-      <div id="da-overrides-section" style="display:none;"></div>
-      <div id="da-resources-section" style="display:none;"></div>
     </div>
   `;
-  
-  loadDailySkeleton();
-  loadCurrentOverrides();
-  registerExistingSchedules();
-  smartTileHistory = loadSmartTileHistory();
-  
-  renderRainyDayPanel();
-  renderSubtabs();
-  renderSubtabContent();
-  renderDetailPane();
-  
-  // Fix #5 — remove previous keyboard handler before adding new one
-  if (_keyHandler) {
-    document.removeEventListener('keydown', _keyHandler);
-  }
+}
+
+// =================================================================
+// KEYBOARD HANDLER (Fix #2 — async showConfirm, Fix #5 — leak prevention)
+// =================================================================
+function setupKeyboardHandler() {
+  if (_keyHandler) document.removeEventListener('keydown', _keyHandler);
   
   // Fix #2 — async keyboard delete handler
   _keyHandler = async (e) => {
@@ -3532,38 +3348,82 @@ function initDailyAdjustments(containerEl) {
         selectedTileId = null;
         saveDailySkeleton();
         renderGrid();
-        renderDetailPane();
       }
     }
     
-    // Escape to deselect
     if (e.key === 'Escape' && selectedTileId) {
       selectedTileId = null;
       const gridEl = document.getElementById('da-skeleton-grid');
       if (gridEl) gridEl.querySelectorAll('.da-event').forEach(t => t.classList.remove('selected'));
-      renderDetailPane();
     }
   };
   document.addEventListener('keydown', _keyHandler);
-  
-  // Visibility change handler — refresh on tab return
-  if (_visHandler) {
-    document.removeEventListener('visibilitychange', _visHandler);
-  }
+}
+
+// =================================================================
+// VISIBILITY HANDLER
+// =================================================================
+function setupVisibilityHandler() {
+  if (_visHandler) document.removeEventListener('visibilitychange', _visHandler);
   _visHandler = () => {
     if (document.visibilityState === 'visible') {
       refreshFromCloud();
     }
   };
   document.addEventListener('visibilitychange', _visHandler);
+}
+
+// =================================================================
+// INIT (Fix #5 — keyboard listener leak prevention)
+// =================================================================
+function init() {
+  container = document.getElementById('daily-adjustments-content');
+  if (!container) {
+    console.error("[DA] Container not found");
+    return;
+  }
   
-  console.log("[DA] v6.0 initialized with all bug fixes");
+  // Load settings
+  masterSettings.global = window.loadGlobalSettings?.() || {};
+  masterSettings.app1 = masterSettings.global.app1 || {};
+  masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
+  masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
+  smartTileHistory = loadSmartTileHistory();
+  
+  loadCurrentOverrides();
+  
+  // Initialize window.isRainyDay from loaded daily data
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  if (window.isRainyDay === undefined) {
+    window.isRainyDay = dailyData.isRainyDay === true || dailyData.rainyDayMode === true;
+  }
+  console.log("[DailyAdj] Initialized window.isRainyDay =", window.isRainyDay);
+  
+  container.innerHTML = getStyles() + getMainHTML();
+  
+  setupSubTabs();
+  setupKeyboardHandler();
+  setupVisibilityHandler();
+  
+  loadDailySkeleton();
+  registerExistingSchedules();
+  
+  renderPalette();
+  renderRainyDayPanel();
+  renderDisplacedTilesPanel();
+  renderToolbar();
+  renderGrid();
+  renderTripsForm();
+  renderBunkOverridesUI();
+  renderResourceOverridesUI();
+  
+  console.log("[DA] v6.1 initialized with all bug fixes");
 }
 
 // =================================================================
 // CLEANUP
 // =================================================================
-function destroyDailyAdjustments() {
+function cleanup() {
   if (_keyHandler) {
     document.removeEventListener('keydown', _keyHandler);
     _keyHandler = null;
@@ -3572,30 +3432,19 @@ function destroyDailyAdjustments() {
     document.removeEventListener('visibilitychange', _visHandler);
     _visHandler = null;
   }
-  
-  // Remove ghost elements
-  const ghost = document.getElementById('da-drag-ghost');
-  if (ghost) ghost.remove();
-  const tooltip = document.getElementById('da-resize-tooltip');
-  if (tooltip) tooltip.remove();
-  
-  if (container) {
-    container.innerHTML = '';
-  }
-  
-  selectedTileId = null;
-  dailyOverrideSkeleton = [];
-  displacedTiles = [];
-  
-  console.log("[DA] Destroyed and cleaned up");
 }
 
 // =================================================================
-// WINDOW EXPORTS
+// PUBLIC API
 // =================================================================
-window.initDailyAdjustments = initDailyAdjustments;
-window.destroyDailyAdjustments = destroyDailyAdjustments;
-window.refreshDailyAdjustments = refreshFromCloud;
+window.initDailyAdjustments = init;
+window.cleanupDailyAdjustments = cleanup;
+window.refreshDailyAdjustmentsFromCloud = refreshFromCloud;
+window.parseTimeToMinutes = parseTimeToMinutes;
+window.minutesToTime = minutesToTime;
+window.isRainyDayActive = isRainyDayActive;
+window.isMidDayModeActive = isMidDayModeActive;
+window.getMidDayStartTime = getMidDayStartTime;
 window.refreshSkeletonConflicts = function() { renderGrid(); };
 window.renderGrid = renderGrid;
 window.saveDailySkeleton = saveDailySkeleton;
