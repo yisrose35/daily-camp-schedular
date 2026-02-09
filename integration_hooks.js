@@ -439,19 +439,31 @@
                 updated_at: new Date().toISOString()
             };
 
-            const { error: upsertError } = await client
-                .from('camp_state')
-                .upsert({
-                    camp_id: campId,
-                    state: newState,
-                    updated_at: new Date().toISOString()
-                }, {
-                    onConflict: 'camp_id'
-                });
+            // ★★★ FIX v6.8: Only owner/admin can write to camp_state ★★★
+            // Schedulers don't have RLS permission on camp_state table.
+            // Their settings changes are local-only (they shouldn't be changing
+            // global camp config anyway). Without this guard the RLS 403 error
+            // propagates up and blocks generation for schedulers.
+            const _syncRole = window.CloudPermissions?.getRole?.() || 
+                              window.AccessControl?.getCurrentRole?.() || 'viewer';
+            
+            if (_syncRole === 'owner' || _syncRole === 'admin') {
+                const { error: upsertError } = await client
+                    .from('camp_state')
+                    .upsert({
+                        camp_id: campId,
+                        state: newState,
+                        updated_at: new Date().toISOString()
+                    }, {
+                        onConflict: 'camp_id'
+                    });
 
-            if (upsertError) {
-                logError('Failed to sync to cloud:', upsertError);
-                throw upsertError;
+                if (upsertError) {
+                    logError('Failed to sync to cloud:', upsertError);
+                    throw upsertError;
+                }
+            } else {
+                log('Skipping camp_state cloud sync — scheduler/viewer role cannot write global state');
             }
 
             _lastSyncTime = Date.now();
