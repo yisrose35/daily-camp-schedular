@@ -984,11 +984,39 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
             }
         }
-
-        // ★★★ INITIALIZE WITH DIVISION-SPECIFIC SLOT COUNTS ★★★
+// ★★★ INITIALIZE WITH DIVISION-SPECIFIC SLOT COUNTS ★★★
+        // ★★★ FIX v17.11: ONLY reset bunks for divisions being generated ★★★
+        // Previously this blanked ALL divisions, destroying Scheduler 1's data
         Object.keys(divisions).forEach(divName => {
             const divSlots = window.divisionTimes?.[divName] || [];
-            const slotCount = divSlots.length > 0 ? divSlots.length : (window.unifiedTimes?.length || 20);
+            const slotCount = divSlots.length > 0 ? divSlots.length : (window.unifiedTimes || []).length;
+            
+            // ★★★ KEY FIX: Skip initialization for divisions NOT being generated ★★★
+            const isBeingGenerated = !allowedDivisionsSet || allowedDivisionsSet.has(String(divName));
+            
+            (divisions[divName].bunks || []).forEach(bunk => {
+                if (isBeingGenerated) {
+                    // This division IS being generated — create fresh empty array
+                    window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
+                } else {
+                    // This division is NOT being generated — PRESERVE existing data
+                    if (!window.scheduleAssignments[bunk]) {
+                        // Only create if doesn't exist (shouldn't blank existing)
+                        window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
+                    } else if (window.scheduleAssignments[bunk].length !== slotCount && slotCount > 0) {
+                        // Resize if needed but KEEP the data
+                        const existing = window.scheduleAssignments[bunk];
+                        const resized = new Array(slotCount).fill(null);
+                        for (let i = 0; i < Math.min(existing.length, slotCount); i++) {
+                            resized[i] = existing[i];
+                        }
+                        window.scheduleAssignments[bunk] = resized;
+                    }
+                    // else: existing array is correct size — leave it completely alone
+                }
+            });
+        });
+         divSlots.length : (window.unifiedTimes?.length || 20);
 
             (divisions[divName]?.bunks || []).forEach(b => {
                 window.scheduleAssignments[b] = new Array(slotCount).fill(null);
