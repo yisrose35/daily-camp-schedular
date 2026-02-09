@@ -1677,12 +1677,31 @@
         }
 
         try {
-            const { error } = await window.supabase
+            // ★ Use .select() to verify the row was actually deleted (RLS may silently block)
+            const { data, error } = await window.supabase
                 .from('camp_users')
                 .delete()
-                .eq('id', id);
+                .eq('id', id)
+                .select();
 
             if (error) throw error;
+
+            if (!data || data.length === 0) {
+                console.warn("🔐 Delete returned no rows — RLS may have blocked it. Trying with camp_id filter...");
+                // Fallback: also filter by camp_id to match RLS policy
+                const campId = getCampId();
+                const { data: retryData, error: retryError } = await window.supabase
+                    .from('camp_users')
+                    .delete()
+                    .eq('id', id)
+                    .eq('camp_id', campId)
+                    .select();
+
+                if (retryError) throw retryError;
+                if (!retryData || retryData.length === 0) {
+                    return { error: "Could not delete team member. You may need to update your database permissions." };
+                }
+            }
 
             return { success: true };
 
@@ -1691,7 +1710,6 @@
             return { error: e.message };
         }
     }
-
     async function acceptInvite(inviteToken) {
         if (!_currentUser) {
             return { error: "Must be logged in to accept invite" };
