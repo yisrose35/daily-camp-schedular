@@ -33,6 +33,7 @@
     let _initialized = false;
     let _subdivisions = [];
     let _teamMembers = [];
+    let _cachedMeDivisions = null; // cached campStructure divisions
 
     // =========================================================================
     // INITIALIZATION
@@ -81,13 +82,12 @@
     }
 
     // =========================================================================
-    // DIVISIONS CARD (reads directly from Campistry Me campStructure)
+    // LOAD DIVISIONS FROM CAMPISTRY ME (campStructure)
     // =========================================================================
 
-    async function renderSubdivisionsCard(container) {
-        if (!container) return;
+    async function loadMeDivisions(forceRefresh = false) {
+        if (_cachedMeDivisions && !forceRefresh) return _cachedMeDivisions;
 
-        // Load divisions directly from Campistry Me (campStructure in camp_state)
         let meDivisions = {};
         try {
             const campId = localStorage.getItem('campistry_camp_id') || 
@@ -106,6 +106,19 @@
             console.warn('[TeamUI] Could not load campStructure:', e);
         }
 
+        _cachedMeDivisions = meDivisions;
+        return meDivisions;
+    }
+
+    // =========================================================================
+    // DIVISIONS CARD (reads directly from Campistry Me campStructure)
+    // =========================================================================
+
+    async function renderSubdivisionsCard(container) {
+        if (!container) return;
+
+        // Load divisions directly from Campistry Me
+        const meDivisions = await loadMeDivisions(true); // force refresh on card render
         const divisionNames = Object.keys(meDivisions);
 
         container.innerHTML = `
@@ -688,8 +701,10 @@ Sent via Campistry (campistry.org)`
     // INVITE MODAL
     // =========================================================================
 
-    function showInviteModal() {
-        const subdivisions = window.AccessControl?.getSubdivisions() || [];
+    async function showInviteModal() {
+        // Load divisions from Campistry Me campStructure
+        const meDivisions = await loadMeDivisions();
+        const divisionNames = Object.keys(meDivisions);
 
         const modal = document.createElement('div');
         modal.className = 'modal-overlay';
@@ -727,21 +742,23 @@ Sent via Campistry (campistry.org)`
                         <p style="font-size: 0.85rem; color: var(--slate-500); margin-bottom: 8px;">
                             Select which divisions this person can manage
                         </p>
-                        ${subdivisions.length > 0 ? `
+                        ${divisionNames.length > 0 ? `
                             <div class="subdivision-checkboxes">
-                                ${subdivisions.map(sub => `
-                                    <label class="checkbox-item" style="border-left: 3px solid ${sub.color}; padding-left: 10px;">
-                                        <input type="checkbox" name="subdivision" value="${sub.id}">
-                                        <span>${sub.name}</span>
-                                        <small style="color: var(--slate-400); margin-left: 8px;">
-                                            ${sub.divisions?.join(', ') || 'No grades'}
-                                        </small>
+                                ${divisionNames.map(name => {
+                                    const div = meDivisions[name];
+                                    const color = div.color || '#6B7280';
+                                    const gradeNames = Object.keys(div.grades || {});
+                                    return `
+                                    <label class="checkbox-item" style="border-left: 3px solid ${color}; padding-left: 10px;">
+                                        <input type="checkbox" name="division" value="${name}">
+                                        <span>${name}</span>
+                                        ${gradeNames.length > 0 ? `<small style="color: var(--slate-400); margin-left: 8px;">${gradeNames.join(', ')}</small>` : ''}
                                     </label>
-                                `).join('')}
+                                `}).join('')}
                             </div>
                         ` : `
                             <p style="color: var(--slate-500); font-style: italic;">
-                                No divisions created yet. Create divisions in Campistry Me first to assign schedulers to specific divisions.
+                                No divisions yet. <a href="campistry_me.html" style="color: var(--camp-green, #147D91); font-weight: 600;">Create divisions in Campistry Me</a> first.
                             </p>
                         `}
                     </div>
@@ -792,12 +809,12 @@ Sent via Campistry (campistry.org)`
                 return;
             }
 
-            // Get selected subdivisions
-            const subdivisionIds = [...modal.querySelectorAll('input[name="subdivision"]:checked')]
+            // Get selected divisions (by name from campStructure)
+            const selectedDivisions = [...modal.querySelectorAll('input[name="division"]:checked')]
                 .map(cb => cb.value);
 
             try {
-                const result = await window.AccessControl.inviteTeamMember(email, role, subdivisionIds);
+                const result = await window.AccessControl.inviteTeamMember(email, role, selectedDivisions);
 
                 if (result.error) {
                     errorEl.textContent = result.error;
@@ -897,8 +914,10 @@ Sent via Campistry (campistry.org)`
     // EDIT MEMBER MODAL
     // =========================================================================
 
-    function showEditMemberModal(member) {
-        const subdivisions = window.AccessControl?.getSubdivisions() || [];
+    async function showEditMemberModal(member) {
+        // Load divisions from Campistry Me campStructure
+        const meDivisions = await loadMeDivisions();
+        const divisionNames = Object.keys(meDivisions);
 
         const modal = document.createElement('div');
         modal.className = 'modal-overlay';
@@ -924,21 +943,27 @@ Sent via Campistry (campistry.org)`
                     
                     <div class="form-group" id="edit-subdivisions-group" style="display: ${member.role === 'scheduler' ? 'block' : 'none'};">
                         <label>Divisions</label>
-                        ${subdivisions.length > 0 ? `
+                        ${divisionNames.length > 0 ? `
                             <div class="subdivision-checkboxes">
-                                ${subdivisions.map(sub => `
-                                    <label class="checkbox-item" style="border-left: 3px solid ${sub.color}; padding-left: 10px;">
+                                ${divisionNames.map(name => {
+                                    const div = meDivisions[name];
+                                    const color = div.color || '#6B7280';
+                                    // Check if this member has this division assigned
+                                    const isAssigned = member.subdivision_ids?.includes(name) || 
+                                                       member.division_names?.includes(name);
+                                    return `
+                                    <label class="checkbox-item" style="border-left: 3px solid ${color}; padding-left: 10px;">
                                         <input 
                                             type="checkbox" 
-                                            name="subdivision" 
-                                            value="${sub.id}"
-                                            ${member.subdivision_ids?.includes(sub.id) ? 'checked' : ''}
+                                            name="division" 
+                                            value="${name}"
+                                            ${isAssigned ? 'checked' : ''}
                                         >
-                                        <span>${sub.name}</span>
+                                        <span>${name}</span>
                                     </label>
-                                `).join('')}
+                                `}).join('')}
                             </div>
-                        ` : '<p style="color: var(--slate-500);">No divisions available</p>'}
+                        ` : '<p style="color: var(--slate-500);">No divisions available. <a href="campistry_me.html" style="color: var(--camp-green, #147D91); font-weight: 600;">Create divisions in Campistry Me</a></p>'}
                     </div>
                     
                     <div id="edit-member-error" class="form-error"></div>
@@ -976,13 +1001,13 @@ Sent via Campistry (campistry.org)`
             const role = document.getElementById('edit-role').value;
             const errorEl = document.getElementById('edit-member-error');
             
-            const subdivisionIds = [...modal.querySelectorAll('input[name="subdivision"]:checked')]
+            const selectedDivisions = [...modal.querySelectorAll('input[name="division"]:checked')]
                 .map(cb => cb.value);
 
             try {
                 const result = await window.AccessControl.updateTeamMember(member.id, {
                     role,
-                    subdivision_ids: subdivisionIds
+                    subdivision_ids: selectedDivisions
                 });
 
                 if (result.error) {
