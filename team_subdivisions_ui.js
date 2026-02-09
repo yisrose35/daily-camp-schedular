@@ -82,6 +82,47 @@
     }
 
     // =========================================================================
+    // ENSURE SUBDIVISION RECORDS EXIST (bridge campStructure names → UUID IDs)
+    // The RBAC system requires UUID subdivision_ids in camp_users.
+    // This helper auto-creates a subdivision record for each division name
+    // if one doesn't already exist, then returns the UUID array.
+    // =========================================================================
+
+    async function ensureSubdivisionRecords(divisionNames) {
+        if (!divisionNames || divisionNames.length === 0) return [];
+
+        // Refresh subdivision data
+        const existingSubs = window.AccessControl?.getSubdivisions() || [];
+        const uuids = [];
+
+        for (const divName of divisionNames) {
+            // Check if a subdivision already exists with this name
+            let sub = existingSubs.find(s => s.name === divName);
+            
+            if (sub) {
+                uuids.push(sub.id);
+            } else {
+                // Auto-create a subdivision record for this division
+                const meDivisions = await loadMeDivisions();
+                const color = meDivisions[divName]?.color || getNextColor();
+                const gradeNames = Object.keys(meDivisions[divName]?.grades || {});
+
+                try {
+                    const result = await window.AccessControl.createSubdivision(divName, gradeNames, color);
+                    if (result?.data?.id) {
+                        uuids.push(result.data.id);
+                        console.log(`[TeamUI] Auto-created subdivision record for "${divName}" → ${result.data.id}`);
+                    }
+                } catch (e) {
+                    console.warn(`[TeamUI] Failed to create subdivision for "${divName}":`, e);
+                }
+            }
+        }
+
+        return uuids;
+    }
+
+    // =========================================================================
     // LOAD DIVISIONS FROM CAMPISTRY ME (campStructure)
     // =========================================================================
 
@@ -641,7 +682,7 @@ Sent via Campistry (campistry.org)`
         const roleName = window.AccessControl?.getRoleDisplayName(member.role) || member.role;
         const isPending = !member.accepted_at;
 
-        // Get subdivision names
+        // Get subdivision/division names for display
         const subdivisions = window.AccessControl?.getSubdivisions() || [];
         const memberSubs = member.subdivision_ids?.map(id => {
             const sub = subdivisions.find(s => s.id === id);
@@ -810,11 +851,14 @@ Sent via Campistry (campistry.org)`
             }
 
             // Get selected divisions (by name from campStructure)
-            const selectedDivisions = [...modal.querySelectorAll('input[name="division"]:checked')]
+            const selectedDivisionNames = [...modal.querySelectorAll('input[name="division"]:checked')]
                 .map(cb => cb.value);
 
             try {
-                const result = await window.AccessControl.inviteTeamMember(email, role, selectedDivisions);
+                // Convert division names to subdivision UUIDs (RBAC requires UUIDs)
+                const subdivisionIds = await ensureSubdivisionRecords(selectedDivisionNames);
+                
+                const result = await window.AccessControl.inviteTeamMember(email, role, subdivisionIds);
 
                 if (result.error) {
                     errorEl.textContent = result.error;
@@ -919,6 +963,14 @@ Sent via Campistry (campistry.org)`
         const meDivisions = await loadMeDivisions();
         const divisionNames = Object.keys(meDivisions);
 
+        // Build a set of division names this member is assigned to (via subdivision UUIDs)
+        const existingSubs = window.AccessControl?.getSubdivisions() || [];
+        const memberDivNames = new Set();
+        (member.subdivision_ids || []).forEach(subId => {
+            const sub = existingSubs.find(s => s.id === subId);
+            if (sub?.name) memberDivNames.add(sub.name);
+        });
+
         const modal = document.createElement('div');
         modal.className = 'modal-overlay';
         modal.id = 'edit-member-modal';
@@ -948,9 +1000,7 @@ Sent via Campistry (campistry.org)`
                                 ${divisionNames.map(name => {
                                     const div = meDivisions[name];
                                     const color = div.color || '#6B7280';
-                                    // Check if this member has this division assigned
-                                    const isAssigned = member.subdivision_ids?.includes(name) || 
-                                                       member.division_names?.includes(name);
+                                    const isAssigned = memberDivNames.has(name);
                                     return `
                                     <label class="checkbox-item" style="border-left: 3px solid ${color}; padding-left: 10px;">
                                         <input 
@@ -1001,13 +1051,16 @@ Sent via Campistry (campistry.org)`
             const role = document.getElementById('edit-role').value;
             const errorEl = document.getElementById('edit-member-error');
             
-            const selectedDivisions = [...modal.querySelectorAll('input[name="division"]:checked')]
+            const selectedDivisionNames = [...modal.querySelectorAll('input[name="division"]:checked')]
                 .map(cb => cb.value);
 
             try {
+                // Convert division names to subdivision UUIDs (RBAC requires UUIDs)
+                const subdivisionIds = await ensureSubdivisionRecords(selectedDivisionNames);
+
                 const result = await window.AccessControl.updateTeamMember(member.id, {
                     role,
-                    subdivision_ids: selectedDivisions
+                    subdivision_ids: subdivisionIds
                 });
 
                 if (result.error) {
