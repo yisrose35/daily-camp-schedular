@@ -115,10 +115,7 @@
             </div>
         `;
 
-        // Bind add button
-        document.getElementById('add-subdivision-btn')?.addEventListener('click', () => {
-            showSubdivisionModal();
-        });
+       // Add button removed — divisions are auto-synced from Campistry Me
 
         // Bind edit/delete buttons
         container.querySelectorAll('.subdivision-edit-btn').forEach(btn => {
