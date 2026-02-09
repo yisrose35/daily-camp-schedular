@@ -1606,6 +1606,18 @@
         const campId = getCampId();
 
         try {
+            // ★ Check for existing member with this email (prevents duplicates)
+            const { data: existing } = await window.supabase
+                .from('camp_users')
+                .select('id, email, accepted_at')
+                .eq('camp_id', campId)
+                .eq('email', email.toLowerCase().trim())
+                .maybeSingle();
+
+            if (existing) {
+                return { error: `${email} has already been invited to this camp.` };
+            }
+
             const { data, error } = await window.supabase
                 .from('camp_users')
                 .insert([{
