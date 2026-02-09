@@ -192,7 +192,7 @@
     function renderSubdivisionItem(sub) {
         const divisionsList = sub.divisions?.length > 0 
             ? sub.divisions.join(', ')
-            : '<em style="color: var(--slate-400);">No divisions assigned</em>';
+            : '<em style="color: var(--slate-400);">No grades assigned</em>';
 
         return `
             <div class="subdivision-item" style="border-left: 4px solid ${sub.color || '#6B7280'};">
