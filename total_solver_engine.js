@@ -1726,6 +1726,15 @@ if (!blockDivName && bunk) {
                         var altBest = altScored[0];
                         var altBestCand = allCandidateOptions[altBest.ci];
 
+                        // ★★★ v12.2 FIX: Check for same-day duplicate BEFORE swapping ★★★
+                        _todayCache.clear(); // Ensure fresh check
+                        var wantedActNorm = normName(wantedCand.activityName);
+                        if (wantedActNorm && wantedActNorm !== 'free' && wantedActNorm !== 'free play') {
+                            var freeSlot = freeBlock.slots ? freeBlock.slots[0] : 999;
+                            var todayForFree = getActivitiesDoneToday(freeBlock.bunk, freeSlot);
+                            if (todayForFree.has(wantedActNorm)) continue; // Skip — would create duplicate
+                        }
+
                         // Execute swap
                         undoPickFromSchedule(blockerBlock, _assignments.get(blockerIdx).pick);
                         var altPick = clonePick(altBestCand);
@@ -1734,10 +1743,10 @@ if (!blockDivName && bunk) {
 
                         undoPickFromSchedule(freeBlock, _assignments.get(freeIdx).pick);
                         var wantedPick = clonePick(wantedCand);
+                        _todayCache.clear(); // ★★★ v12.2: Fresh check after blocker moved ★★★
                         var wantedCost = calculatePenaltyCost(freeBlock, wantedPick);
                         _assignments.set(freeIdx, { candIdx: ci2, pick: wantedPick, cost: wantedCost });
                         applyPickToSchedule(freeBlock, wantedPick);
-
                         swapChains++;
                         swapped = true;
                     }
