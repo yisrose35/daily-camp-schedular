@@ -1217,6 +1217,26 @@
     // =========================================================================
 
     function setupBeforeUnloadHandler() {
+        // ★★★ v1.7 FIX: Also save on visibilitychange (more reliable than beforeunload) ★★★
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') {
+                const dateKey = getCurrentDateKey();
+                const bunkCount = Object.keys(window.scheduleAssignments || {}).length;
+                if (dateKey && bunkCount > 0) {
+                    log('Page hidden, saving to localStorage...');
+                    try {
+                        setLocalData(dateKey, getWindowGlobals());
+                    } catch (err) {
+                        logError('Visibility save failed:', err);
+                    }
+                    // Use sendBeacon for reliable cloud save
+                    if (!_permissionRevoked && window._sendBeaconSave) {
+                        window._sendBeaconSave(dateKey);
+                    }
+                }
+            }
+        });
+
         window.addEventListener('beforeunload', (e) => {
             const dateKey = getCurrentDateKey();
             const bunkCount = Object.keys(window.scheduleAssignments || {}).length;
@@ -1232,14 +1252,14 @@
                 }
 
                 // Attempt async cloud save (may not complete)
-                if (!_permissionRevoked) {  // ★ v1.6: Don't attempt cloud save if revoked
-                    window.ScheduleDB?.saveSchedule?.(dateKey, getWindowGlobals())
+                if (!_permissionRevoked) {
+                    window.ScheduleDB?.saveSchedule?.(dateKey, getWindowGlobals(), { immediate: true })
                         .catch(() => {});
                 }
             }
         });
 
-        log('beforeunload handler installed');
+        log('beforeunload + visibilitychange handlers installed');
     }
 
     // =========================================================================
