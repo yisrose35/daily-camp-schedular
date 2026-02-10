@@ -2728,13 +2728,21 @@ if (bypassStatus.highlight) {
                         if (slot.startMin >= claimEndMin || slot.endMin <= claimStartMin) continue;
                         
                         // Check if any matchup in this league slot uses our field
-                        const matchups = slotData.matchups || [];
-                        const usesField = matchups.some(m => 
-                            (m.field || '').toLowerCase() === fieldLower
-                        );
+                       const matchups = slotData.matchups || [];
+                        const usesField = matchups.some(m => {
+                            if (typeof m === 'string') {
+                                return m.toLowerCase().includes('@ ' + fieldLower) || 
+                                       m.toLowerCase().includes('@' + fieldLower);
+                            } else if (m && typeof m === 'object') {
+                                return (m.field || '').toLowerCase() === fieldLower ||
+                                       (m.display || '').toLowerCase().includes('@ ' + fieldLower);
+                            }
+                            return false;
+                        });
                         
                         if (usesField) {
                             leagueConflictDesc = slotData.gameLabel || slotData.leagueName || 'League game';
+                            if (dName) leagueConflictDesc += ` (${dName})`;
                             console.log(`[CascadeClaim] Found league conflict: "${leagueConflictDesc}" in ${dName} slot ${slotIdx} uses ${fieldName}`);
                         }
                     }
