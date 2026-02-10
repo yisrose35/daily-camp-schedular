@@ -664,8 +664,9 @@
                     
                     // Try the other main first, then fallback
                     const alternatives = [];
-                    if (!isSame(activityLabel, job.main1)) alternatives.push(job.main1);
-                    if (!isSame(activityLabel, job.main2)) alternatives.push(job.main2);
+                    
+                    if (activityLabel.toLowerCase().trim() !== (job.main1 || '').toLowerCase().trim()) alternatives.push(job.main1);
+                    if (activityLabel.toLowerCase().trim() !== (job.main2 || '').toLowerCase().trim()) alternatives.push(job.main2);
                     if (job.fallbackActivity) alternatives.push(job.fallbackActivity);
                     
                     let placed = false;
