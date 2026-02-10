@@ -631,7 +631,8 @@
                 const lower = activityLabel.toLowerCase().trim();
                 const genericSlots = [
                     "sports slot", "general activity slot", "general activity",
-                    "activity slot", "activity"
+                    "activity slot", "activity",
+                    "special", "special activity", "special activity slot"
                 ];
 
                 if (genericSlots.includes(lower)) return true;
