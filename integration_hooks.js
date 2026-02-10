@@ -1,6 +1,13 @@
 // =============================================================================
-// integration_hooks.js v6.6 — CAMPISTRY SCHEDULER INTEGRATION
+// integration_hooks.js v6.8 — CAMPISTRY SCHEDULER INTEGRATION
 // =============================================================================
+//
+// v6.8 FIXES:
+// - ★★★ CRITICAL: Scheduler role guard for camp_state — moved to TOP of
+//   executeBatchSync so neither SELECT nor UPSERT is attempted for non-admin
+// - ★★★ CRITICAL: hydrateFromCloud gracefully handles RLS denial for schedulers
+// - Fixes "no grades created" error when loading as scheduler
+// - Fixes generation being blocked by 403 on camp_state write
 //
 // v6.6 FIXES:
 // - ★★★ CRITICAL: Multi-date save fix — ALL dates now cloud-synced, not just one
@@ -41,7 +48,7 @@
 (function() {
     'use strict';
 
-    console.log('🔗 Campistry Integration Hooks v6.7 loading...');
+    console.log('🔗 Campistry Integration Hooks v6.8 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -90,6 +97,18 @@
 
     function logError(...args) {
         console.error('🔗 [Hooks] ERROR:', ...args);
+    }
+
+    // =========================================================================
+    // ★★★ v6.8: ROLE HELPER (available before CloudPermissions freeze) ★★★
+    // =========================================================================
+    
+    function _canWriteCampState() {
+        const role = window.AccessControl?.getCurrentRole?.() ||
+                     window.CampistryDB?.getRole?.() ||
+                     localStorage.getItem('campistry_role') || 
+                     'viewer';
+        return role === 'owner' || role === 'admin';
     }
 
     // =========================================================================
@@ -414,26 +433,23 @@
             return;
         }
 
+        // ★★★ FIX v6.8: EARLY EXIT for non-admin roles ★★★
+        // camp_state table has RLS that only allows owner/admin to read/write.
+        // Schedulers/viewers must NOT attempt ANY Supabase calls to camp_state
+        // or the 403 error propagates up through forceSyncToCloud → 
+        // saveDailySkeleton → runOptimizer and kills schedule generation.
+        if (!_canWriteCampState()) {
+            log('Skipping camp_state sync — role cannot access camp_state table (changes saved locally)');
+            _pendingChanges = {};
+            _lastSyncTime = Date.now();
+            return;
+        }
+
         _isSyncing = true;
         const changesToSync = { ..._pendingChanges };
         _pendingChanges = {};
 
-       try {
-            // ★★★ FIX v6.8: Skip ALL camp_state operations for non-admin roles ★★★
-            // Schedulers/viewers don't have RLS permission on camp_state.
-            // Without this guard, both the SELECT and UPSERT fail with 403,
-            // the error propagates up through forceSyncToCloud → saveDailySkeleton
-            // → runOptimizer, and kills schedule generation entirely.
-            const _syncRole = window.CloudPermissions?.getRole?.() || 
-                              window.AccessControl?.getCurrentRole?.() || 'viewer';
-            
-            if (_syncRole !== 'owner' && _syncRole !== 'admin') {
-                log('Skipping camp_state sync — role "' + _syncRole + '" cannot access camp_state table');
-                _lastSyncTime = Date.now();
-                // Changes are already saved locally, just clear the queue
-                return;
-            }
-
+        try {
             log('Executing batch sync:', Object.keys(changesToSync));
 
             const { data: current, error: fetchError } = await client
@@ -469,33 +485,6 @@
                 throw upsertError;
             }
 
-            // ★★★ FIX v6.8: Only owner/admin can write to camp_state ★★★
-            // Schedulers don't have RLS permission on camp_state table.
-            // Their settings changes are local-only (they shouldn't be changing
-            // global camp config anyway). Without this guard the RLS 403 error
-            // propagates up and blocks generation for schedulers.
-            const _syncRole = window.CloudPermissions?.getRole?.() || 
-                              window.AccessControl?.getCurrentRole?.() || 'viewer';
-            
-            if (_syncRole === 'owner' || _syncRole === 'admin') {
-                const { error: upsertError } = await client
-                    .from('camp_state')
-                    .upsert({
-                        camp_id: campId,
-                        state: newState,
-                        updated_at: new Date().toISOString()
-                    }, {
-                        onConflict: 'camp_id'
-                    });
-
-                if (upsertError) {
-                    logError('Failed to sync to cloud:', upsertError);
-                    throw upsertError;
-                }
-            } else {
-                log('Skipping camp_state cloud sync — scheduler/viewer role cannot write global state');
-            }
-
             _lastSyncTime = Date.now();
             
             console.log('☁️ Cloud sync complete:', {
@@ -526,6 +515,13 @@
         if (_syncTimeout) {
             clearTimeout(_syncTimeout);
             _syncTimeout = null;
+        }
+
+        // ★★★ FIX v6.8: Don't even queue if scheduler ★★★
+        if (!_canWriteCampState()) {
+            log('Force sync skipped — role cannot write camp_state');
+            _pendingChanges = {};
+            return true;
         }
 
         const localSettings = getLocalSettings();
@@ -966,9 +962,31 @@
             if (error) {
                 if (error.code === 'PGRST116') {
                     log('No cloud state found, using local');
+                } else if (error.code === '42501') {
+                    // ★★★ FIX v6.8: RLS denial — scheduler can't read camp_state ★★★
+                    // Fall back to localStorage which was populated when owner set things up.
+                    // This is expected for scheduler/viewer roles.
+                    log('RLS denied camp_state read (expected for scheduler role) — using local settings');
                 } else {
                     logError('Hydration failed:', error);
                 }
+                
+                // ★★★ FIX v6.8: Even on error, still hydrate from localStorage ★★★
+                // and fire the hydrated event so the rest of the system initializes
+                const localState = getLocalSettings();
+                if (localState && Object.keys(localState).length > 0) {
+                    window.divisions = localState.divisions || window.divisions || {};
+                    window.globalBunks = localState.bunks || window.globalBunks || [];
+                    window.availableDivisions = Object.keys(window.divisions);
+                    
+                    log('Hydrated from localStorage fallback:', {
+                        divisions: Object.keys(window.divisions).length,
+                        bunks: (window.globalBunks || []).length
+                    });
+                }
+                
+                // ★★★ CRITICAL: Always fire the event so downstream systems initialize ★★★
+                window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
                 return;
             }
 
@@ -1003,6 +1021,16 @@
             }
         } catch (e) {
             logError('Hydration exception:', e);
+            
+            // ★★★ FIX v6.8: Even on exception, hydrate from local and fire event ★★★
+            const localState = getLocalSettings();
+            if (localState && Object.keys(localState).length > 0) {
+                window.divisions = localState.divisions || window.divisions || {};
+                window.globalBunks = localState.bunks || window.globalBunks || [];
+                window.availableDivisions = Object.keys(window.divisions);
+                log('Hydrated from localStorage after exception');
+            }
+            window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
         }
     }
 
@@ -1556,12 +1584,13 @@
         const client = window.CampistryDB?.getClient?.();
 
         console.log('═══════════════════════════════════════════════════════');
-        console.log('SCHEDULE SYNC DIAGNOSTIC v6.7');
+        console.log('SCHEDULE SYNC DIAGNOSTIC v6.8');
         console.log('═══════════════════════════════════════════════════════');
         console.log('Date:', dateKey);
         console.log('Online:', navigator.onLine);
         console.log('Camp ID:', campId || 'MISSING');
         console.log('User ID:', userId?.substring(0, 8) + '...' || 'MISSING');
+        console.log('Can write camp_state:', _canWriteCampState());
         console.log('');
         console.log('Window globals:');
         console.log('  scheduleAssignments:', Object.keys(window.scheduleAssignments || {}).length, 'bunks');
@@ -1629,8 +1658,8 @@
         setTimeout(waitForSystems, 300);
     }
 
-    console.log('🔗 Campistry Integration Hooks v6.7 loaded');
+    console.log('🔗 Campistry Integration Hooks v6.8 loaded');
     console.log('   Commands: diagnoseScheduleSync(), verifiedScheduleSave(), forceLoadScheduleFromCloud()');
-    console.log('   v6.6: Multi-date save fix — ALL dates now properly cloud-synced');
+    console.log('   v6.8: Scheduler role guard for camp_state + localStorage fallback hydration');
 
 })();
