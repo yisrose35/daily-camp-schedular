@@ -2666,7 +2666,7 @@ if (bypassStatus.highlight) {
         return conflicts;
     }
 
-    function buildCascadeResolutionPlan(fieldName, slots, claimingDivision, claimingActivity) {
+    function buildCascadeResolutionPlan(fieldName, slots, claimingDivision, claimingActivity, claimingBunks = []) {
         console.log('[CascadeClaim] ★★★ BUILDING RESOLUTION PLAN ★★★');
         console.log(`[CascadeClaim] Claiming ${fieldName} for ${claimingDivision} (${claimingActivity})`);
         console.log(`[CascadeClaim] Slots: ${slots.join(', ')}`);
@@ -2686,7 +2686,7 @@ if (bypassStatus.highlight) {
             };
         }
 
-        let conflictQueue = findAllConflictsForClaim(fieldName, slots, []);
+        let conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
         let iteration = 0;
         const MAX_ITERATIONS = 50;
 
@@ -3146,7 +3146,7 @@ if (bypassStatus.highlight) {
         if (!location) { alert('Please select a location'); return; }
         if (!activity) { alert('Please enter an activity name'); return; }
 
-        const result = buildCascadeResolutionPlan(location, slots, divName, activity);
+        const result = buildCascadeResolutionPlan(location, slots, divName, activity, bunks);
         _multiBunkPreviewResult = { ...result, location, slots, divName, activity, bunks };
 
         const previewArea = document.getElementById('multi-conflict-preview');
