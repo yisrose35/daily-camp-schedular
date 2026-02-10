@@ -1253,10 +1253,16 @@
             return;
         }
 
-        window.ScheduleSync.onRemoteChange((change) => {
+       window.ScheduleSync.onRemoteChange((change) => {
             // Skip during post-edit/bypass operations
             if (window._postEditInProgress) {
                 console.log('🔗 Skipping remote merge - post-edit in progress');
+                return;
+            }
+            
+            // ★★★ v6.9 FIX: Skip during active generation ★★★
+            if (window._generationInProgress) {
+                console.log('🔗 Skipping remote merge - generation in progress');
                 return;
             }
             
@@ -1264,14 +1270,70 @@
 
             if (window.ScheduleDB?.loadSchedule && change.dateKey) {
                 window.ScheduleDB.loadSchedule(change.dateKey).then(result => {
-                    if (window._postEditInProgress) {
-                        console.log('🔗 Skipping merge - post-edit started during load');
+                    if (window._postEditInProgress || window._generationInProgress) {
+                        console.log('🔗 Skipping merge - operation in progress');
                         return;
                     }
                     
                     if (result?.success && result.data) {
-                        // Use CloudPermissions for filtering
-                        const myBunks = new Set(window.CloudPermissions?.getEditableBunks?.() || []);
+                        // ★★★ v6.9 CRITICAL FIX: Properly merge — keep MY data, add THEIR data ★★★
+                        const myBunks = new Set(
+                            window.AccessControl?.getEditableBunks?.() ||
+                            window.CloudPermissions?.getEditableBunks?.() || []
+                        );
+                        
+                        const cloudAssignments = result.data.scheduleAssignments || {};
+                        const currentAssignments = window.scheduleAssignments || {};
+                        
+                        // Start with cloud data (has ALL schedulers merged)
+                        const merged = { ...cloudAssignments };
+                        
+                        // Overlay MY current bunks (preserve my in-progress work)
+                        for (const [bunk, slots] of Object.entries(currentAssignments)) {
+                            if (myBunks.has(bunk) || myBunks.has(String(bunk))) {
+                                merged[bunk] = slots;
+                            }
+                        }
+                        
+                        window.scheduleAssignments = merged;
+                        
+                        // Also merge league assignments
+                        if (result.data.leagueAssignments) {
+                            const cloudLeagues = result.data.leagueAssignments || {};
+                            const currentLeagues = window.leagueAssignments || {};
+                            const mergedLeagues = { ...cloudLeagues };
+                            for (const [bunk, data] of Object.entries(currentLeagues)) {
+                                if (myBunks.has(bunk) || myBunks.has(String(bunk))) {
+                                    mergedLeagues[bunk] = data;
+                                }
+                            }
+                            window.leagueAssignments = mergedLeagues;
+                        }
+                        
+                        // Hydrate times
+                        if (result.data.unifiedTimes?.length > 0) {
+                            window.unifiedTimes = result.data.unifiedTimes;
+                        }
+                        if (result.data.divisionTimes) {
+                            window.divisionTimes = result.data.divisionTimes;
+                        }
+                        
+                        // Update localStorage with merged data
+                        const dateKey = change.dateKey;
+                        try {
+                            const DAILY_KEY = 'campDailyData_v1';
+                            const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                            allData[dateKey] = {
+                                scheduleAssignments: merged,
+                                leagueAssignments: window.leagueAssignments || {},
+                                unifiedTimes: window.unifiedTimes || [],
+                                divisionTimes: window.divisionTimes || {}
+                            };
+                            localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+                        } catch (e) { /* ignore localStorage errors */ }
+                        
+                        const totalBunks = Object.keys(merged).length;
+                        console.log(`🔗 ✅ Merged remote update: ${totalBunks} total bunks (${myBunks.size} mine preserved)`);
                         const myAssignments = {};
                         
                         // Keep my current assignments
