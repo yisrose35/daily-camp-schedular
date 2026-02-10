@@ -732,7 +732,7 @@
     window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
         console.log("\n" + "=".repeat(70));
         console.log("★★★ OPTIMIZER STARTED (v17.10 - CAPACITY LOGIC FIX) ★★★");
-
+window._coreRunSkeletonOptimizer = window.runSkeletonOptimizer;
         // ★★★ SCHEDULER RESTRICTION ★★★
         if (window.AccessControl?.filterDivisionsForGeneration) {
             allowedDivisions = window.AccessControl.filterDivisionsForGeneration(allowedDivisions);
