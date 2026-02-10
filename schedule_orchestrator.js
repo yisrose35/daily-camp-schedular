@@ -1329,11 +1329,26 @@
             loadSchedule(getCurrentDateKey(), { force: true });
         });
 
-        // Listen for generation complete
-        window.addEventListener('campistry-generation-complete', (e) => {
+        // Listen for generation complete - MUST be immediate + verified
+        window.addEventListener('campistry-generation-complete', async (e) => {
             const dateKey = e.detail?.dateKey || getCurrentDateKey();
-            log('Generation complete, saving...');
-            saveSchedule(dateKey, getWindowGlobals(), { immediate: true });
+            const bunkCount = Object.keys(window.scheduleAssignments || {}).length;
+            log('Generation complete, saving immediately...', bunkCount, 'bunks');
+            
+            // Step 1: Save to localStorage FIRST (synchronous, guaranteed)
+            setLocalData(dateKey, getWindowGlobals());
+            
+            // Step 2: Immediate cloud save with verification
+            const result = await saveSchedule(dateKey, getWindowGlobals(), { immediate: true });
+            if (result?.success) {
+                log('✅ Post-generation save confirmed:', result.target);
+            } else {
+                logWarn('⚠️ Post-generation cloud save issue:', result?.error);
+                // Retry once more after a short delay
+                setTimeout(async () => {
+                    await saveSchedule(dateKey, getWindowGlobals(), { immediate: true });
+                }, 2000);
+            }
         });
 
         // ★★★ v1.6 SECURITY: Listen for permission revocation from ScheduleDB or AccessControl ★★★
