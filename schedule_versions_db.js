@@ -91,15 +91,12 @@
             const userId = user?.id || 'anon';
 
             const payload = {
-                camp_id: campId,
-                date: dateKey,
-                name: name,
-                based_on: basedOnId,
-                schedule_data: deepClone(scheduleData),
-                is_active: false,
-                created_by: userId,
-                created_at: new Date().toISOString()
-            };
+    camp_id: campId,
+    date_key: dateKey,
+    name: name,
+    schedule_data: deepClone(scheduleData),
+    created_by: userId
+};
 
             const { data, error } = await supabase
                 .from(VERSIONS_TABLE)
