@@ -1202,12 +1202,31 @@
             const dateKey = e.detail?.dateKey || window.currentScheduleDate;
             if (!dateKey) return;
 
-            console.log('🔗 Generation complete for', dateKey);
+            const bunkCount = Object.keys(window.scheduleAssignments || {}).length;
+            console.log('🔗 Generation complete for', dateKey, '-', bunkCount, 'bunks');
 
-            // Wait for data to settle
-            await new Promise(r => setTimeout(r, 1000));
+            // ★★★ v6.9 FIX: Save to localStorage IMMEDIATELY — no delay! ★★★
+            // The old 1000ms "wait for data to settle" caused data loss on quick reload.
+            // Data is already in window.scheduleAssignments when this event fires.
+            try {
+                const DAILY_KEY = 'campDailyData_v1';
+                const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                allData[dateKey] = {
+                    scheduleAssignments: window.scheduleAssignments || {},
+                    leagueAssignments: window.leagueAssignments || {},
+                    unifiedTimes: window.unifiedTimes || [],
+                    divisionTimes: window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes || {},
+                    isRainyDay: window.isRainyDay || false,
+                    rainyDayStartTime: window.rainyDayStartTime ?? null,
+                    _savedAt: Date.now()
+                };
+                localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+                console.log('🔗 ✅ Immediate localStorage save:', bunkCount, 'bunks');
+            } catch (lsErr) {
+                console.error('🔗 localStorage save failed:', lsErr);
+            }
 
-            // Use verified save
+            // Then do verified cloud save (no artificial delay)
             await verifiedScheduleSave(dateKey);
             
             // Rebuild counts if available
@@ -1215,7 +1234,6 @@
                 window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
             }
         }, { once: false });
-
         // Intercept generateSchedule if it exists
         if (window.generateSchedule) {
             const originalGenerate = window.generateSchedule;
