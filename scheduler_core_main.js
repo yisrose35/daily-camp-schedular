@@ -1015,15 +1015,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
             });
         });
-         divSlots.length : (window.unifiedTimes?.length || 20);
-
-            (divisions[divName]?.bunks || []).forEach(b => {
-                window.scheduleAssignments[b] = new Array(slotCount).fill(null);
-            });
-
-            console.log(`[STEP 1] Initialized ${divName} bunks with ${slotCount} slots`);
-        });
-
+        
         // ★★★ v17.10 FIX: Rebuild unifiedTimes from divisionTimes for legacy compatibility ★★★
         if (window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes) {
             window.unifiedTimes = window.DivisionTimesSystem.buildUnifiedTimesFromDivisionTimes(window.divisionTimes);
