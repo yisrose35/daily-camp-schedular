@@ -2816,11 +2816,16 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
             });
         }
 
-        (app1.specialActivities || []).forEach(special => {
+       (app1.specialActivities || []).forEach(special => {
             if (!special.name) return;
             if (excludeSet.has(special.name)) return;
             if (disabledFields.includes(special.name)) return;
             if (window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) return;
+
+            // ★ Rainy day filtering for special activities
+            const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
+            if (!isRainyMode && (special.rainyDayOnly === true || special.rainyDayExclusive === true)) return;
+            if (isRainyMode && (special.rainyDayAvailable === false || special.availableOnRainyDay === false || special.isIndoor === false)) return;
 
             let available = true;
             const props = activityProps[special.name] || {};
