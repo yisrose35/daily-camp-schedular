@@ -2687,22 +2687,77 @@ if (bypassStatus.highlight) {
         }
 
        // ★ Check GlobalFieldLocks for league games / specialty events on this field
-const globalLock = window.GlobalFieldLocks?.isFieldLocked?.(fieldName, slots, claimingDivision);
-if (globalLock) {
-    const lockDesc = globalLock.leagueName 
-        ? `League game: ${globalLock.leagueName}` 
-        : (globalLock.activity || globalLock.lockedBy || 'Another event');
-    console.log(`[CascadeClaim] ❌ BLOCKED by global lock: ${lockDesc}`);
-    return { 
-        success: false, 
-        plan: [], 
-        blocked: [{ 
-            reason: `${lockDesc} is using ${fieldName} during this time. Please reschedule the league game first or choose a different field.`,
-            globalLock: true,
-            lockInfo: globalLock
-        }] 
-    };
-}
+        const globalLock = window.GlobalFieldLocks?.isFieldLocked?.(fieldName, slots, claimingDivision);
+        if (globalLock) {
+            const lockDesc = globalLock.leagueName 
+                ? `League game: ${globalLock.leagueName}` 
+                : (globalLock.activity || globalLock.lockedBy || 'Another event');
+            console.log(`[CascadeClaim] ❌ BLOCKED by global lock: ${lockDesc}`);
+            return { 
+                success: false, 
+                plan: [], 
+                blocked: [{ 
+                    reason: `${lockDesc} is using ${fieldName} during this time. Please reschedule the league game first or choose a different field.`,
+                    globalLock: true,
+                    lockInfo: globalLock
+                }] 
+            };
+        }
+
+        // ★ Check for league games using this field (works even when GlobalFieldLocks is empty post-generation)
+        const claimDivSlots = window.divisionTimes?.[claimingDivision] || [];
+        let leagueConflictDesc = null;
+        if (claimDivSlots.length > 0 && slots.length > 0) {
+            const claimStartMin = claimDivSlots[slots[0]]?.startMin;
+            const claimEndMin = claimDivSlots[slots[slots.length - 1]]?.endMin;
+            if (claimStartMin != null && claimEndMin != null) {
+                const divisions = window.divisions || {};
+                for (const [dName, dData] of Object.entries(divisions)) {
+                    if (leagueConflictDesc) break;
+                    const dSlots = window.divisionTimes?.[dName] || [];
+                    for (const bunk of (dData.bunks || [])) {
+                        if (leagueConflictDesc) break;
+                        const bunkAssign = window.scheduleAssignments?.[bunk] || [];
+                        for (let idx = 0; idx < dSlots.length; idx++) {
+                            const entry = bunkAssign[idx];
+                            if (!entry) continue;
+                            // Detect league entries by their markers
+                            if (!entry._h2h && !entry._isSpecialtyLeague && !(entry._activity || '').startsWith('League:')) continue;
+                            const slot = dSlots[idx];
+                            if (!slot || slot.startMin >= claimEndMin || slot.endMin <= claimStartMin) continue;
+                            // This league entry overlaps in time — check if it uses our field
+                            const leagueField = fieldLabel(entry.field);
+                            const matchups = entry._allMatchups || [];
+                            const usesField = matchups.some(m => (typeof m === 'string' ? m : '').toLowerCase().includes(fieldName.toLowerCase()))
+                                || leagueField.toLowerCase().includes(fieldName.toLowerCase());
+                            // Also check leagueAssignments for field info
+                            const leagueSlotData = window.leagueAssignments?.[dName]?.[idx];
+                            const leagueMatchups = leagueSlotData?.matchups || [];
+                            const leagueUsesField = leagueMatchups.some(m => {
+                                const mStr = m.display || m.field || (typeof m === 'string' ? m : '');
+                                return mStr.toLowerCase().includes(fieldName.toLowerCase());
+                            });
+                            if (usesField || leagueUsesField) {
+                                leagueConflictDesc = entry._gameLabel || entry._activity || leagueSlotData?.gameLabel || 'League game';
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (leagueConflictDesc) {
+            console.log(`[CascadeClaim] ❌ BLOCKED by league game: ${leagueConflictDesc}`);
+            return {
+                success: false,
+                plan: [],
+                blocked: [{
+                    reason: `${leagueConflictDesc} is using ${fieldName} during this time. Please reschedule the league game first or choose a different field.`,
+                    globalLock: true,
+                    lockInfo: { leagueName: leagueConflictDesc, lockedBy: 'league_game' }
+                }]
+            };
+        }
 
 let conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
         let iteration = 0;
