@@ -1093,21 +1093,37 @@ if (!blockDivName && bunk) {
                 var block = activityBlocks[bi3];
                 var cand3 = allCandidateOptions[ci3];
                 var pick = clonePick(cand3);
-                var cost = calculatePenaltyCost(block, pick);
-
-                _assignedBlocks.add(bi3);
-                _assignments.set(bi3, { candIdx: ci3, pick: pick, cost: cost });
-                applyPickToSchedule(block, pick);
-
-                var fieldNorm = normName(pick.field);
-                if (block.startTime !== undefined && block.endTime !== undefined) {
-                    var pickActNorm = normName(pick._activity);
-                    addToFieldTimeIndex(fieldNorm, block.startTime, block.endTime, block.bunk, block.divName, pickActNorm);
-                    if (pickActNorm && pickActNorm !== fieldNorm) {
-                        addToFieldTimeIndex(pickActNorm, block.startTime, block.endTime, block.bunk, block.divName, pickActNorm);
+                
+                // ★★★ v12.3: Cross-grade check even for singletons ★★★
+                var singletonBlocked = false;
+                if (block.startTime !== undefined && block.endTime !== undefined && block.divName) {
+                    if (checkCrossDivisionTimeConflict(cand3.field, block.divName, block.startTime, block.endTime, block.bunk)) {
+                        singletonBlocked = true;
                     }
                 }
-                invalidateRotationCacheForBunk(block.bunk);
+
+                if (singletonBlocked) {
+                    // Cross-grade conflict — assign Free instead
+                    pick = { field: "Free", sport: null, _activity: "Free" };
+                    _assignedBlocks.add(bi3);
+                    _assignments.set(bi3, { candIdx: -1, pick: pick, cost: 100000 });
+                    applyPickToSchedule(block, pick);
+                } else {
+                    var cost = calculatePenaltyCost(block, pick);
+                    _assignedBlocks.add(bi3);
+                    _assignments.set(bi3, { candIdx: ci3, pick: pick, cost: cost });
+                    applyPickToSchedule(block, pick);
+
+                    var fieldNorm = normName(pick.field);
+                    if (block.startTime !== undefined && block.endTime !== undefined) {
+                        var pickActNorm = normName(pick._activity);
+                        addToFieldTimeIndex(fieldNorm, block.startTime, block.endTime, block.bunk, block.divName, pickActNorm);
+                        if (pickActNorm && pickActNorm !== fieldNorm) {
+                            addToFieldTimeIndex(pickActNorm, block.startTime, block.endTime, block.bunk, block.divName, pickActNorm);
+                        }
+                    }
+                    invalidateRotationCacheForBunk(block.bunk);
+                }
                 autoAssigned++;
 
                 // Propagate to neighbors
@@ -1760,6 +1776,12 @@ if (!blockDivName && bunk) {
                             var freeSlot = freeBlock.slots ? freeBlock.slots[0] : 999;
                             var todayForFree = getActivitiesDoneToday(freeBlock.bunk, freeSlot);
                             if (todayForFree.has(wantedActNorm)) continue; // Skip — would create duplicate
+                        }
+
+                        // ★★★ v12.3: Check blocker's new field for cross-grade conflict ★★★
+                        if (blockerBlock.startTime !== undefined && blockerBlock.divName &&
+                            checkCrossDivisionTimeConflict(altBestCand.field, blockerBlock.divName, blockerBlock.startTime, blockerBlock.endTime, blockerBlock.bunk)) {
+                            continue; // Skip this swap — blocker's alt field has cross-grade conflict
                         }
 
                         // Execute swap
