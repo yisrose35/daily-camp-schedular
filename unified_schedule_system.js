@@ -3912,8 +3912,10 @@ if (bypassStatus.highlight) {
     window.initScheduleSystem = initScheduleSystem;
     window.editCell = editCell;
     window.enhancedEditCell = enhancedEditCell;
-    window.proceedWithScope = proceedWithScope;
-    window.closeIntegratedEditModal = closeIntegratedEditModal;
+   window.proceedWithScope = proceedWithScope;
+window.closeIntegratedEditModal = closeIntegratedEditModal;
+window.previewMultiBunkEdit = previewMultiBunkEdit;
+window.submitMultiBunkEdit = submitMultiBunkEdit;
 
     // Save/Load functions
     window.saveSchedule = saveSchedule;
