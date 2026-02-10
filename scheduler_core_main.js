@@ -660,7 +660,25 @@
                 }
 
                 if (window.GlobalFieldLocks?.isFieldLocked(activityLabel, slots, divName)) {
-                    console.log(`[SmartTile] ${bunk} - ${activityLabel} is LOCKED for ${divName}, skipping`);
+                    console.log(`[SmartTile] ${bunk} - ${activityLabel} is LOCKED for ${divName}, falling back to solver`);
+                    
+                    // Don't silently drop — queue for solver as a general activity slot
+                    let fallbackSlotType = "General Activity Slot";
+                    const lowerAct = activityLabel.toLowerCase().trim();
+                    if (lowerAct.includes("sport")) fallbackSlotType = "Sports Slot";
+                    else if (lowerAct.includes("special") || knownSpecialNames.has(lowerAct)) fallbackSlotType = "Special Activity";
+                    
+                    schedulableSlotBlocks.push({
+                        divName,
+                        bunk,
+                        event: fallbackSlotType,
+                        startTime: startMin,
+                        endTime: endMin,
+                        slots,
+                        fromSmartTile: true,
+                        _lockedFallback: true
+                    });
+                    console.log(`[SmartTile] ${bunk} -> QUEUED as "${fallbackSlotType}" (locked fallback)`);
                     return;
                 }
 
