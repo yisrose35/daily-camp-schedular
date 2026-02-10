@@ -1315,14 +1315,18 @@
                         
                         window.scheduleAssignments = merged;
                         
-                        // Also merge league assignments
+                        // Also merge league assignments (keyed by DIVISION NAME, not bunk)
                         if (result.data.leagueAssignments) {
                             const cloudLeagues = result.data.leagueAssignments || {};
                             const currentLeagues = window.leagueAssignments || {};
+                            const myDivisions = new Set(
+                                window.AccessControl?.getEditableDivisions?.() || []
+                            );
                             const mergedLeagues = { ...cloudLeagues };
-                            for (const [bunk, data] of Object.entries(currentLeagues)) {
-                                if (myBunks.has(bunk) || myBunks.has(String(bunk))) {
-                                    mergedLeagues[bunk] = data;
+                            // Overlay MY divisions' league data
+                            for (const [divName, divData] of Object.entries(currentLeagues)) {
+                                if (myDivisions.has(divName)) {
+                                    mergedLeagues[divName] = divData;
                                 }
                             }
                             window.leagueAssignments = mergedLeagues;
