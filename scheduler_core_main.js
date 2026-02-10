@@ -766,21 +766,75 @@
             }
         }
 
-        // ★★★ 2. AUTO-SNAPSHOT FOR PRESERVATION ★★★
+        // ★★★ 2. FORCE CLOUD LOAD + AUTO-SNAPSHOT FOR PRESERVATION ★★★
         if (allowedDivisions && (!existingScheduleSnapshot || Object.keys(existingScheduleSnapshot).length === 0)) {
-            console.log("[OPTIMIZER] Partial generation detected without snapshot. Attempting to preserve existing data...");
+            console.log("[OPTIMIZER] Partial generation detected without snapshot. Loading latest from cloud first...");
             
-            let snapshotSource = window.scheduleAssignments;
+            // ★★★ v17.12 CRITICAL FIX: Force-load from cloud to get ALL schedulers' data ★★★
+            // Without this, Scheduler 2 won't see Scheduler 1's data and will overwrite it
+            let snapshotSource = null;
+            
+            try {
+                if (window.ScheduleDB?.loadSchedule && navigator.onLine) {
+                    const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                    console.log("[OPTIMIZER] ☁️ Force-loading from cloud for date:", dateKey);
+                    const cloudResult = await window.ScheduleDB.loadSchedule(dateKey);
+                    
+                    if (cloudResult?.success && cloudResult.data?.scheduleAssignments) {
+                        const cloudBunks = Object.keys(cloudResult.data.scheduleAssignments).length;
+                        console.log(`[OPTIMIZER] ☁️ Cloud returned ${cloudBunks} bunks from ${cloudResult.recordCount || '?'} scheduler records`);
+                        
+                        // Merge cloud data INTO window.scheduleAssignments (preserving any local-only changes)
+                        const cloudAssignments = cloudResult.data.scheduleAssignments;
+                        const localAssignments = window.scheduleAssignments || {};
+                        
+                        // Cloud data for OTHER schedulers' bunks takes priority
+                        // Local data for MY bunks takes priority (in case I just made edits)
+                        const myBunks = new Set(
+                            window.AccessControl?.getEditableBunks?.() ||
+                            window.CloudPermissions?.getEditableBunks?.() || []
+                        );
+                        
+                        const merged = {};
+                        // First, add all cloud bunks (other schedulers' data)
+                        for (const [bunk, slots] of Object.entries(cloudAssignments)) {
+                            merged[bunk] = slots;
+                        }
+                        // Then overlay MY bunks from local (in case I have unsaved edits)
+                        for (const [bunk, slots] of Object.entries(localAssignments)) {
+                            if (myBunks.has(bunk) || myBunks.has(String(bunk))) {
+                                merged[bunk] = slots;
+                            }
+                        }
+                        
+                        window.scheduleAssignments = merged;
+                        snapshotSource = merged;
+                        
+                        // Also hydrate divisionTimes if available
+                        if (cloudResult.data.divisionTimes) {
+                            window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(cloudResult.data.divisionTimes) || cloudResult.data.divisionTimes;
+                        }
+                        
+                        console.log(`[OPTIMIZER] ☁️ Merged snapshot: ${Object.keys(merged).length} total bunks (${myBunks.size} mine)`);
+                    }
+                }
+            } catch (e) {
+                console.warn("[OPTIMIZER] ☁️ Cloud load failed, falling back to local data:", e.message);
+            }
+            
+            // Fallback: use whatever is in window.scheduleAssignments or localStorage
+            if (!snapshotSource || Object.keys(snapshotSource).length === 0) {
+                snapshotSource = window.scheduleAssignments;
+            }
             
             if (!snapshotSource || Object.keys(snapshotSource).length === 0) {
-                 const currentData = window.loadCurrentDailyData?.() || {};
-                 snapshotSource = currentData.scheduleAssignments;
+                const currentData = window.loadCurrentDailyData?.() || {};
+                snapshotSource = currentData.scheduleAssignments;
             }
 
             if (snapshotSource && Object.keys(snapshotSource).length > 0) {
                 existingScheduleSnapshot = JSON.parse(JSON.stringify(snapshotSource));
                 if (!existingUnifiedTimes) {
-                    // ★★★ v17.5 FIX: Build proper unifiedTimes for Step 1.5 ★★★
                     existingUnifiedTimes = window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes?.(window.divisionTimes) || window.unifiedTimes;
                 }
                 console.log(`[OPTIMIZER] ✅ Preserved snapshot of ${Object.keys(existingScheduleSnapshot).length} bunks for background restoration.`);
