@@ -731,8 +731,7 @@
 
     window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
         console.log("\n" + "=".repeat(70));
-        console.log("★★★ OPTIMIZER STARTED (v17.10 - CAPACITY LOGIC FIX) ★★★");
-window._coreRunSkeletonOptimizer = window.runSkeletonOptimizer;
+        console.log("★★★ OPTIMIZER STARTED (v17.11 - RBAC + CAPACITY FIX) ★★★");
         // ★★★ SCHEDULER RESTRICTION ★★★
         if (window.AccessControl?.filterDivisionsForGeneration) {
             allowedDivisions = window.AccessControl.filterDivisionsForGeneration(allowedDivisions);
@@ -2285,6 +2284,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
     window.registerSingleSlotUsage = registerSingleSlotUsage;
 
-    console.log('⚙️ Scheduler Core Main v17.10 loaded (CAPACITY LOGIC FIX - type=all → 999)');
+    // ★★★ FIX v17.11: Expose core optimizer for division_times_integration.js ★★★
+    window._coreRunSkeletonOptimizer = window.runSkeletonOptimizer;
+
+    console.log('⚙️ Scheduler Core Main v17.11 loaded (RBAC + CAPACITY FIX)');
 
 })();
