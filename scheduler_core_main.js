@@ -812,6 +812,24 @@
                         window.scheduleAssignments = merged;
                         snapshotSource = merged;
                         
+                        // ★★★ v17.12: Also merge leagueAssignments from cloud ★★★
+                        if (cloudResult.data.leagueAssignments) {
+                            const cloudLeagues = cloudResult.data.leagueAssignments || {};
+                            const localLeagues = window.leagueAssignments || {};
+                            const myDivisions = new Set(
+                                window.AccessControl?.getEditableDivisions?.() || []
+                            );
+                            const mergedLeagues = { ...cloudLeagues };
+                            for (const [divName, divData] of Object.entries(localLeagues)) {
+                                if (myDivisions.has(divName)) {
+                                    mergedLeagues[divName] = divData;
+                                }
+                            }
+                            window.leagueAssignments = mergedLeagues;
+                        }
+                        
+                        if (cloudResult.data.divisionTimes) {
+                        
                         // Also hydrate divisionTimes if available
                         if (cloudResult.data.divisionTimes) {
                             window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(cloudResult.data.divisionTimes) || cloudResult.data.divisionTimes;
