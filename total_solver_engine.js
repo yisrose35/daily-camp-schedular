@@ -1,6 +1,7 @@
 // ============================================================================
-// total_solver_engine.js (ULTIMATE v12.3 - HYPER-OPTIMIZED CONSTRAINT SOLVER)
+// total_solver_engine.js (ULTIMATE v12.4 - SMART RESOURCE PLANNING)
 // ============================================================================
+// ★★★ v12.4: SCARCITY-AWARE SORTING + DEEP FREE RESOLUTION ★★★
 // ★★★ v12.3: STRICT CROSS-GRADE EXCLUSIVITY — ALL FIELD TYPES ★★★
 //
 // WHAT'S NEW IN v12.3 (over v12.1):
@@ -878,25 +879,50 @@
             if (!b.divName && !b.division) b.divName = getBunkDivision(b.bunk);
         });
 
+        // ★★★ v12.4: SCARCITY-AWARE SORTING ★★★
+        // Count general activity blocks per bunk per division.
+        // Divisions with fewer blocks/bunk are MORE constrained → solve first.
+        var divBlockCounts = {};
+        for (var i = 0; i < blocks.length; i++) {
+            if (blocks[i]._isLeague) continue;
+            var dn = blocks[i].divName || blocks[i].division || '';
+            if (!divBlockCounts[dn]) divBlockCounts[dn] = 0;
+            divBlockCounts[dn]++;
+        }
+
+        var divScarcity = {};
+        var divisions = window.divisions || {};
+        for (var dk in divisions) {
+            var bc = (divisions[dk].bunks || []).length;
+            divScarcity[dk] = (bc > 0 && divBlockCounts[dk]) ? (divBlockCounts[dk] / bc) : 999;
+        }
+
+        v12Log('Scarcity (blocks/bunk): ' + JSON.stringify(divScarcity));
+
         return blocks.sort(function(a, b) {
+            // Leagues always first
             if (a._isLeague && !b._isLeague) return -1;
             if (!a._isLeague && b._isLeague) return 1;
 
+            // ★★★ SCARCITY: fewer blocks/bunk = solve first ★★★
             var divA = a.divName || a.division || '';
             var divB = b.divName || b.division || '';
+            var sA = divScarcity[divA] || 999;
+            var sB = divScarcity[divB] || 999;
+            if (Math.abs(sA - sB) > 1) return sA - sB;
+
+            // Then by division number (original behavior as tiebreaker)
             if (divA !== divB) return (parseInt(divA) || 999) - (parseInt(divB) || 999);
 
+            // Then by bunk number
             var numA = getBunkNumber(a.bunk) || Infinity;
             var numB = getBunkNumber(b.bunk) || Infinity;
             if (numA !== numB) return numA - numB;
 
+            // Then by time
             var timeA = a.startTime ?? (a.slots?.[0] * 30 + 660) ?? 0;
             var timeB = b.startTime ?? (b.slots?.[0] * 30 + 660) ?? 0;
-            if (timeA !== timeB) return timeA - timeB;
-
-            var sa = meta[a.bunk]?.size || 0;
-            var sb = meta[b.bunk]?.size || 0;
-            return sb - sa;
+            return timeA - timeB;
         });
     };
 
@@ -1569,13 +1595,37 @@ if (!blockDivName && bunk) {
             var domain = _domains.get(bi);
 
             if (!domain || domain.size === 0) {
+                // ★★★ v12.4: Last-chance fresh scan — domain may have been over-pruned ★★★
+                var lastChancePick = null;
+                if (block.startTime !== undefined && block.endTime !== undefined) {
+                    var lcScored = [];
+                    for (var lci = 0; lci < allCandidateOptions.length; lci++) {
+                        var lcCand = allCandidateOptions[lci];
+                        if (!isPickStillValid(block, lcCand)) continue;
+                        setScratchPick(lcCand);
+                        var lcCost = calculatePenaltyCost(block, _scratchPick);
+                        if (lcCost < 500000) lcScored.push({ ci: lci, cost: lcCost });
+                    }
+                    if (lcScored.length > 0) {
+                        lcScored.sort(function(x, y) { return x.cost - y.cost; });
+                        lastChancePick = clonePick(allCandidateOptions[lcScored[0].ci]);
+                        v12Log('Last-chance rescue: ' + block.bunk + ' → ' + lastChancePick.field + ' (' + lastChancePick._activity + ')');
+                    }
+                }
                 _assignedBlocks.add(bi);
-                _assignments.set(bi, {
-                    candIdx: -1,
-                    pick: { field: "Free", sport: null, _activity: "Free" },
-                    cost: 100000
-                });
-                applyPickToSchedule(block, _assignments.get(bi).pick);
+                if (lastChancePick) {
+                    _assignments.set(bi, { candIdx: -1, pick: lastChancePick, cost: 100000 });
+                    applyPickToSchedule(block, lastChancePick);
+                    invalidateRotationCacheForBunk(block.bunk);
+                    _todayCache.clear();
+                } else {
+                    _assignments.set(bi, {
+                        candIdx: -1,
+                        pick: { field: "Free", sport: null, _activity: "Free" },
+                        cost: 100000
+                    });
+                    applyPickToSchedule(block, _assignments.get(bi).pick);
+                }
                 continue;
             }
 
@@ -1662,7 +1712,7 @@ if (!blockDivName && bunk) {
         
         var improvements = 0;
         var swapChains = 0;
-        var MAX_SWAP_ATTEMPTS = 200;  // ★★★ v12.0: Prevent exponential search ★★★
+        var MAX_SWAP_ATTEMPTS = 500;  // ★★★ v12.4: Increased for better fill rates ★★★
         // Pass 1: Direct improvement of Free blocks
         var freeBlocks = [];
         for (var i = 0; i < activityBlocks.length; i++) {
@@ -1887,6 +1937,211 @@ if (!blockDivName && bunk) {
     }
 
     // ========================================================================
+    // ★★★ v12.4: DEEP FREE RESOLUTION — "Human-Like" Resource Planning ★★★
+    // ========================================================================
+    // After the main solver + polish, any remaining Free blocks get one more
+    // shot. This mimics a human scheduler looking at the board and saying:
+    //   "Wait, there are open fields — why is this bunk sitting Free?"
+    //    
+    // Phase 1: Fresh direct assignment (re-scan ALL candidates, current state)
+    // Phase 2: Displacement — move a same-div bunk to its alternative to
+    //          free up a field for the Free bunk
+    // ========================================================================
+    function deepFreeResolution(activityBlocks) {
+        _todayCache.clear();
+        // Find all Free blocks
+        var freeIndices = [];
+        for (var i = 0; i < activityBlocks.length; i++) {
+            var asgn = _assignments.get(i);
+            if (!asgn) continue;
+            var an = normName(asgn.pick._activity || asgn.pick.field);
+            if (an === 'free' || an === 'free (timeout)') freeIndices.push(i);
+        }
+        if (freeIndices.length === 0) return 0;
+        console.log('[SOLVER-v12.4] 🧠 Deep Free Resolution: ' + freeIndices.length + ' Free blocks');
+        // Sort: divisions with MORE free blocks first (they need the most help)
+        var divFree = {};
+        for (var fi of freeIndices) {
+            var dn = activityBlocks[fi].divName || '';
+            divFree[dn] = (divFree[dn] || 0) + 1;
+        }
+        freeIndices.sort(function(a, b) {
+            var cA = divFree[activityBlocks[a].divName || ''] || 0;
+            var cB = divFree[activityBlocks[b].divName || ''] || 0;
+            return cB - cA;
+        });
+        var resolved = 0;
+        var disabledSet = window.currentDisabledFields || globalConfig?.disabledFields || [];
+        for (var idx = 0; idx < freeIndices.length; idx++) {
+            var bi = freeIndices[idx];
+            var block = activityBlocks[bi];
+            var bunk = block.bunk;
+            var blockDiv = block.divName || '';
+            var startMin = block.startTime;
+            var endMin = block.endTime;
+            var slots = block.slots || [];
+            if (startMin === undefined || endMin === undefined) continue;
+            // ═══ PHASE 1: Fresh candidate scan ═══
+            _todayCache.clear();
+            var fresh = [];
+            for (var ci = 0; ci < allCandidateOptions.length; ci++) {
+                var cand = allCandidateOptions[ci];
+                if (disabledSet.indexOf(cand.field) !== -1) continue;
+                if (window.GlobalFieldLocks?.isFieldLocked(cand.field, slots)) continue;
+                // Cross-division: no sharing across grades
+                if (checkCrossDivisionTimeConflict(cand.field, blockDiv, startMin, endMin, bunk)) continue;
+                // Capacity check
+                var fp = _fieldPropertyMap.get(cand.field);
+                var cap = fp ? fp.capacity : getFieldCapacity(cand.field);
+                var sType = fp ? fp.sharingType : getSharingType(cand.field);
+                if (sType === 'not_sharable') {
+                    if (getFieldUsageFromTimeIndex(cand._fieldNorm, startMin, endMin, bunk) >= cap) continue;
+                } else {
+                    if (countSameDivisionUsage(cand.field, blockDiv, startMin, endMin, bunk) >= cap) continue;
+                }
+                // Same-day duplicate
+                var today = getActivitiesDoneToday(bunk, slots[0] ?? 999);
+                var candAct = normName(cand.activityName);
+                if (candAct && candAct !== 'free' && candAct !== 'free play' && today.has(candAct)) continue;
+                // Activity props exist
+                if (!activityProperties[cand.field] && !activityProperties[cand.activityName] && cand.type !== 'special') continue;
+                // canBlockFit
+                if (window.SchedulerCoreUtils?.canBlockFit) {
+                    if (!window.SchedulerCoreUtils.canBlockFit(block, cand.field, activityProperties, null, cand.activityName, false)) continue;
+                }
+                setScratchPick(cand);
+                var cost = calculatePenaltyCost(block, _scratchPick);
+                if (cost < 500000) fresh.push({ ci: ci, cost: cost });
+            }
+            if (fresh.length > 0) {
+                fresh.sort(function(a, b) { return a.cost - b.cost; });
+                var pick = clonePick(allCandidateOptions[fresh[0].ci]);
+                undoPickFromSchedule(block, _assignments.get(bi).pick);
+                _assignments.set(bi, { candIdx: fresh[0].ci, pick: pick, cost: fresh[0].cost });
+                applyPickToSchedule(block, pick);
+                // Update time index
+                var pfn = normName(pick.field);
+                addToFieldTimeIndex(pfn, startMin, endMin, bunk, blockDiv, normName(pick._activity));
+                var pan = normName(pick._activity);
+                if (pan && pan !== pfn) addToFieldTimeIndex(pan, startMin, endMin, bunk, blockDiv, pan);
+                invalidateRotationCacheForBunk(bunk);
+                _todayCache.clear();
+                resolved++;
+                console.log('[SOLVER-v12.4]   ✅ ' + bunk + ' → ' + pick.field + ' (' + pick._activity + ')');
+                continue;
+            }
+            // ═══ PHASE 2: Displacement chain ═══
+            // Find a same-division bunk that is using a field. If THEY can move
+            // to an alternative, WE might be able to use what they free up.
+            var displaced = false;
+            for (var otherBi = 0; otherBi < activityBlocks.length; otherBi++) {
+                if (displaced) break;
+                if (otherBi === bi) continue;
+                var otherBlock = activityBlocks[otherBi];
+                if (otherBlock.divName !== blockDiv) continue;
+                if (otherBlock.bunk === bunk) continue;
+                if (otherBlock.startTime === undefined || otherBlock.endTime === undefined) continue;
+                if (otherBlock.startTime >= endMin || otherBlock.endTime <= startMin) continue;
+                var otherAsgn = _assignments.get(otherBi);
+                if (!otherAsgn) continue;
+                if (normName(otherAsgn.pick._activity) === 'free') continue;
+                // Would their activity create a same-day dup for us?
+                _todayCache.clear();
+                var ourToday = getActivitiesDoneToday(bunk, slots[0] ?? 999);
+                if (ourToday.has(normName(otherAsgn.pick._activity))) continue;
+                // Can THEY move to something else?
+                var otherDom = _domains.get(otherBi);
+                if (!otherDom || otherDom.size === 0) continue;
+                var curFieldNorm = normName(otherAsgn.pick.field);
+                var alts = [];
+                for (var altCi of otherDom) {
+                    var altC = allCandidateOptions[altCi];
+                    if (normName(altC.field) === curFieldNorm) continue;
+                    if (!isPickStillValid(otherBlock, altC)) continue;
+                    // Cross-div check on alt
+                    if (checkCrossDivisionTimeConflict(altC.field, otherBlock.divName, otherBlock.startTime, otherBlock.endTime, otherBlock.bunk)) continue;
+                    // Same-day dup check for them
+                    _todayCache.clear();
+                    var theirToday = getActivitiesDoneToday(otherBlock.bunk, otherBlock.slots?.[0] ?? 999);
+                    var altAct = normName(altC.activityName);
+                    if (altAct && altAct !== 'free' && theirToday.has(altAct)) continue;
+                    setScratchPick(altC);
+                    var altCost = calculatePenaltyCost(otherBlock, _scratchPick);
+                    if (altCost < 500000) alts.push({ ci: altCi, cost: altCost, cand: altC });
+                }
+                if (alts.length === 0) continue;
+                alts.sort(function(a, b) { return a.cost - b.cost; });
+                // Save state in case we need to undo
+                var saved = { candIdx: otherAsgn.candIdx, pick: otherAsgn.pick, cost: otherAsgn.cost };
+                // Move them
+                undoPickFromSchedule(otherBlock, otherAsgn.pick);
+                var altPick = clonePick(alts[0].cand);
+                _assignments.set(otherBi, { candIdx: alts[0].ci, pick: altPick, cost: alts[0].cost });
+                applyPickToSchedule(otherBlock, altPick);
+                // Update time index for the swap
+                var altFn = normName(altPick.field);
+                addToFieldTimeIndex(altFn, otherBlock.startTime, otherBlock.endTime, otherBlock.bunk, otherBlock.divName, normName(altPick._activity));
+                removeFromFieldTimeIndex(curFieldNorm, otherBlock.startTime, otherBlock.endTime, otherBlock.bunk);
+                invalidateRotationCacheForBunk(otherBlock.bunk);
+                _todayCache.clear();
+                // Now re-check: can WE get something?
+                var postFresh = [];
+                for (var pci = 0; pci < allCandidateOptions.length; pci++) {
+                    var pC = allCandidateOptions[pci];
+                    if (disabledSet.indexOf(pC.field) !== -1) continue;
+                    if (window.GlobalFieldLocks?.isFieldLocked(pC.field, slots)) continue;
+                    if (checkCrossDivisionTimeConflict(pC.field, blockDiv, startMin, endMin, bunk)) continue;
+                    var pfp = _fieldPropertyMap.get(pC.field);
+                    var pCap = pfp ? pfp.capacity : getFieldCapacity(pC.field);
+                    var pSt = pfp ? pfp.sharingType : getSharingType(pC.field);
+                    if (pSt === 'not_sharable') {
+                        if (getFieldUsageFromTimeIndex(pC._fieldNorm, startMin, endMin, bunk) >= pCap) continue;
+                    } else {
+                        if (countSameDivisionUsage(pC.field, blockDiv, startMin, endMin, bunk) >= pCap) continue;
+                    }
+                    var pToday = getActivitiesDoneToday(bunk, slots[0] ?? 999);
+                    var pAct = normName(pC.activityName);
+                    if (pAct && pAct !== 'free' && pAct !== 'free play' && pToday.has(pAct)) continue;
+                    if (!activityProperties[pC.field] && !activityProperties[pC.activityName] && pC.type !== 'special') continue;
+                    setScratchPick(pC);
+                    var pCost = calculatePenaltyCost(block, _scratchPick);
+                    if (pCost < 500000) postFresh.push({ ci: pci, cost: pCost });
+                }
+                if (postFresh.length > 0) {
+                    postFresh.sort(function(a, b) { return a.cost - b.cost; });
+                    var ourPick = clonePick(allCandidateOptions[postFresh[0].ci]);
+                    undoPickFromSchedule(block, _assignments.get(bi).pick);
+                    _assignments.set(bi, { candIdx: postFresh[0].ci, pick: ourPick, cost: postFresh[0].cost });
+                    applyPickToSchedule(block, ourPick);
+                    var ourFn = normName(ourPick.field);
+                    addToFieldTimeIndex(ourFn, startMin, endMin, bunk, blockDiv, normName(ourPick._activity));
+                    var ourAn = normName(ourPick._activity);
+                    if (ourAn && ourAn !== ourFn) addToFieldTimeIndex(ourAn, startMin, endMin, bunk, blockDiv, ourAn);
+                    invalidateRotationCacheForBunk(bunk);
+                    _todayCache.clear();
+                    resolved++;
+                    displaced = true;
+                    console.log('[SOLVER-v12.4]   🔄 ' + bunk + ' → ' + ourPick.field + ' [displaced ' + otherBlock.bunk + ' → ' + altPick.field + ']');
+                } else {
+                    // Undo — didn't help
+                    undoPickFromSchedule(otherBlock, altPick);
+                    removeFromFieldTimeIndex(altFn, otherBlock.startTime, otherBlock.endTime, otherBlock.bunk);
+                    _assignments.set(otherBi, saved);
+                    applyPickToSchedule(otherBlock, saved.pick);
+                    addToFieldTimeIndex(curFieldNorm, otherBlock.startTime, otherBlock.endTime, otherBlock.bunk, otherBlock.divName, normName(saved.pick._activity));
+                    invalidateRotationCacheForBunk(otherBlock.bunk);
+                    _todayCache.clear();
+                }
+            }
+            if (!displaced) {
+                console.log('[SOLVER-v12.4]   ❌ ' + bunk + ' @ ' + startMin + '-' + endMin + ' — no available fields');
+            }
+        }
+        console.log('[SOLVER-v12.4] 🧠 Complete: ' + resolved + '/' + freeIndices.length + ' resolved');
+        return resolved;
+    }
+
+    // ========================================================================
     // ★★★ v12.0: MAIN SOLVER PIPELINE ★★★
     // ========================================================================
 
@@ -1969,6 +2224,11 @@ if (!blockDivName && bunk) {
         var t9 = performance.now();
         postSolveLocalSearch(activityBlocks);
         console.log('[SOLVER] Step 9: Polish (' + (performance.now() - t9).toFixed(1) + 'ms)');
+
+        // ═══ STEP 9.5: Deep Free Resolution ★★★ v12.4 ★★★ ═══
+        var t95 = performance.now();
+        var deepResolved = deepFreeResolution(activityBlocks);
+        console.log('[SOLVER] Step 9.5: Deep Free — ' + deepResolved + ' resolved (' + (performance.now() - t95).toFixed(1) + 'ms)');
 
         // ═══ REPORT ═══
         var solveTime = performance.now() - solveStartTime;
