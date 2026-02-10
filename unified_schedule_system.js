@@ -2686,7 +2686,25 @@ if (bypassStatus.highlight) {
             };
         }
 
-        let conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
+       // ★ Check GlobalFieldLocks for league games / specialty events on this field
+const globalLock = window.GlobalFieldLocks?.isFieldLocked?.(fieldName, slots, claimingDivision);
+if (globalLock) {
+    const lockDesc = globalLock.leagueName 
+        ? `League game: ${globalLock.leagueName}` 
+        : (globalLock.activity || globalLock.lockedBy || 'Another event');
+    console.log(`[CascadeClaim] ❌ BLOCKED by global lock: ${lockDesc}`);
+    return { 
+        success: false, 
+        plan: [], 
+        blocked: [{ 
+            reason: `${lockDesc} is using ${fieldName} during this time. Please reschedule the league game first or choose a different field.`,
+            globalLock: true,
+            lockInfo: globalLock
+        }] 
+    };
+}
+
+let conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
         let iteration = 0;
         const MAX_ITERATIONS = 50;
 
