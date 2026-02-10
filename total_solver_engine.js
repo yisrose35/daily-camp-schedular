@@ -1,7 +1,21 @@
 // ============================================================================
-// total_solver_engine.js (ULTIMATE v12.1 - HYPER-OPTIMIZED CONSTRAINT SOLVER)
+// total_solver_engine.js (ULTIMATE v12.3 - HYPER-OPTIMIZED CONSTRAINT SOLVER)
 // ============================================================================
-// ★★★ v12.1: PERFORMANCE + QUALITY — SAME-FIELD ACTIVITY ENFORCEMENT ★★★
+// ★★★ v12.3: STRICT CROSS-GRADE EXCLUSIVITY — ALL FIELD TYPES ★★★
+//
+// WHAT'S NEW IN v12.3 (over v12.1):
+// ──────────────────────────────────
+// QUALITY:
+//  Q1. STRICT CROSS-GRADE EXCLUSIVITY:
+//      - Now enforced on ALL field types (including 'all').
+//      - If a field is used by Grade 1, Grade 2 cannot use it, even if
+//        the field type is 'all' or 'custom'.
+//      - Logic applied universally in:
+//        * Domain building
+//        * Cost evaluation
+//        * AC-3 propagation
+//        * Augmenting path matching
+//        * Safety backstop
 //
 // WHAT'S NEW IN v12.1 (over v12.0):
 // ──────────────────────────────────
@@ -30,7 +44,7 @@
 //  D1. ALL LOGGING GATED — debug, rotation, cross-div, and v12 logging
 //      controlled by flags. Zero console overhead in production.
 //
-// SOLVING PIPELINE (v12.1):
+// SOLVING PIPELINE (v12.3):
 //   1. buildAllCandidateOptions()        — master activity list (once)
 //   2. buildFieldTimeIndex()             — sorted time-indexed field usage (w/ Activity Name)
 //   3. precomputeFieldProperties()       — capacity + sharing type map
@@ -191,7 +205,7 @@
     // Built ONCE per solve. Eliminates repeated property chain lookups.
     // ========================================================================
 
-   function precomputeFieldProperties() {
+    function precomputeFieldProperties() {
         _fieldPropertyMap.clear();
         var props = activityProperties || {};
 
@@ -521,7 +535,7 @@
             score = window.RotationEngine.calculateRotationScore({
                 bunkName: bunk,
                 activityName: activityName,
-               divisionName: getBunkDivision(bunk),
+                divisionName: getBunkDivision(bunk),
                 beforeSlotIndex: 999,
                 allActivities: null,
                 activityProperties: activityProperties
@@ -742,25 +756,13 @@
             var sType = fp ? fp.sharingType : getSharingType(fieldName);
             var cap = fp ? fp.capacity : getFieldCapacity(fieldName);
 
+            // ★★★ v12.3: ALWAYS block cross-grade field sharing ★★★
+            if (checkCrossDivisionTimeConflict(fieldName, blockDivName, blockStart, blockEnd, bunk)) return 999999;
+            if (checkSameFieldActivityMismatch(fieldName, blockStart, blockEnd, act, bunk)) return 999999;
             if (sType === 'not_sharable') {
                 if (getFieldUsageFromTimeIndex(fieldNorm, blockStart, blockEnd, bunk) >= cap) return 999999;
-
-            } else if (sType === 'same_division' || sType === 'custom') {
-                // Cross-division conflict = instant block
-                if (checkCrossDivisionTimeConflict(fieldName, blockDivName, blockStart, blockEnd, bunk)) return 999999;
-                // ★★★ v12.1: Same-field bunks must play same sport ★★★
-                if (checkSameFieldActivityMismatch(fieldName, blockStart, blockEnd, act, bunk)) return 999999;
-                // Same-division capacity
-                if (countSameDivisionUsage(fieldName, blockDivName, blockStart, blockEnd, bunk) >= cap) return 999999;
-
-            } else if (sType === 'all') {
-                // type 'all' — enforce total capacity + same activity
-                if (checkSameFieldActivityMismatch(fieldName, blockStart, blockEnd, act, bunk)) return 999999;
-                if (getFieldUsageFromTimeIndex(fieldNorm, blockStart, blockEnd, bunk) >= cap) return 999999;
-
             } else {
-                // Unrecognized — enforce total capacity
-                if (getFieldUsageFromTimeIndex(fieldNorm, blockStart, blockEnd, bunk) >= cap) return 999999;
+                if (countSameDivisionUsage(fieldName, blockDivName, blockStart, blockEnd, bunk) >= cap) return 999999;
             }
         }
 
@@ -991,13 +993,12 @@ if (!blockDivName && bunk) {
                     var capacity = fieldProp ? fieldProp.capacity : getFieldCapacity(fieldName);
                     var sharingType = fieldProp ? fieldProp.sharingType : getSharingType(fieldName);
 
+                    // ★★★ v12.3: ALWAYS block cross-grade field sharing ★★★
+                    if (checkCrossDivisionTimeConflict(fieldName, blockDivName, startMin, endMin, bunk)) continue;
                     if (sharingType === 'not_sharable') {
                         if (getFieldUsageFromTimeIndex(fieldNorm, startMin, endMin, bunk) >= capacity) continue;
-                    } else if (sharingType === 'same_division') {
-                        if (countSameDivisionUsage(fieldName, blockDivName, startMin, endMin, bunk) >= capacity) continue;
-                        if (checkCrossDivisionTimeConflict(fieldName, blockDivName, startMin, endMin, bunk)) continue;
                     } else {
-                        if (getFieldUsageFromTimeIndex(fieldNorm, startMin, endMin, bunk) >= capacity) continue;
+                        if (countSameDivisionUsage(fieldName, blockDivName, startMin, endMin, bunk) >= capacity) continue;
                     }
                 }
 
@@ -1185,20 +1186,13 @@ if (!blockDivName && bunk) {
         var oDivName = otherBlock.divName || '';
 
         if (sharingType === 'not_sharable') return true;
-
-        if (sharingType === 'same_division') {
-            if (aDivName !== oDivName) return true;
-            var overlapStart = Math.max(aStart, oStart);
-            var overlapEnd = Math.min(aEnd, oEnd);
-            var existingUsage = countSameDivisionUsage(assignedPick.field, aDivName, overlapStart, overlapEnd, otherBlock.bunk);
-            return existingUsage >= capacity;
-        }
-
-        // type='all'
-        var overlapStart2 = Math.max(aStart, oStart);
-        var overlapEnd2 = Math.min(aEnd, oEnd);
-        var totalUsage = getFieldUsageFromTimeIndex(normName(assignedPick.field), overlapStart2, overlapEnd2, otherBlock.bunk);
-        return totalUsage >= capacity;
+        // ★★★ v12.3: Different grade = always conflict ★★★
+        if (aDivName && oDivName && aDivName !== oDivName) return true;
+        // Same grade — check capacity
+        var overlapStart = Math.max(aStart, oStart);
+        var overlapEnd = Math.min(aEnd, oEnd);
+        var existingUsage = countSameDivisionUsage(assignedPick.field, aDivName, overlapStart, overlapEnd, otherBlock.bunk);
+        return existingUsage >= capacity;
     }
 
     // ========================================================================
@@ -1371,7 +1365,23 @@ if (!blockDivName && bunk) {
                         }
                     }
                 } else {
-                    canFit = (existingUsage + currentGroupUsage < capacity);
+                    // ★★★ v12.3: type='all' also blocks cross-grade sharing ★★★
+                    var crossConflictAll = checkCrossDivisionTimeConflict(fieldName, block2.divName, block2.startTime, block2.endTime, block2.bunk);
+                    if (!crossConflictAll && block2.divName) {
+                        for (var griAll = 0; griAll < results.length; griAll++) {
+                            var grAll = results[griAll];
+                            if (grAll.candIdx === -1) continue;
+                            if (normName(grAll.pick.field) !== fieldNorm2) continue;
+                            var grBlockAll = activityBlocks[grAll.blockIdx];
+                            if (grBlockAll.divName && grBlockAll.divName !== block2.divName) {
+                                if (grBlockAll.startTime < block2.endTime && grBlockAll.endTime > block2.startTime) {
+                                    crossConflictAll = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    canFit = !crossConflictAll && (existingUsage + currentGroupUsage < capacity);
                 }
 
                if (canFit) {
@@ -1427,7 +1437,8 @@ if (!blockDivName && bunk) {
                                if (altExisting + altGroupUsage < altCapacity) {
                                     // ★★★ v12.1: Cross-div check on augmenting path alt field ★★★
                                     var altSharingType = getSharingType(altCand.field);
-                                    if (altSharingType === 'same_division' || altSharingType === 'not_sharable' || altSharingType === 'custom') {
+                                    // ★★★ v12.3: ALL types enforce cross-grade exclusivity ★★★
+                                    {
                                         var altCrossConflict = checkCrossDivisionTimeConflict(altCand.field, holderBlock.divName, holderBlock.startTime, holderBlock.endTime, holderBlock.bunk);
                                         if (altCrossConflict) continue;
                                         // Also check in-group for cross-div
@@ -1615,14 +1626,12 @@ if (!blockDivName && bunk) {
         var capacity = fieldProp ? fieldProp.capacity : getFieldCapacity(fieldName);
         var sharingType = fieldProp ? fieldProp.sharingType : getSharingType(fieldName);
 
+        // ★★★ v12.3: ALWAYS block cross-grade field sharing ★★★
+        if (checkCrossDivisionTimeConflict(fieldName, blockDivName, startMin, endMin, bunk)) return false;
         if (sharingType === 'not_sharable') {
             return getFieldUsageFromTimeIndex(fieldNorm, startMin, endMin, bunk) < capacity;
         }
-        if (sharingType === 'same_division') {
-            if (countSameDivisionUsage(fieldName, blockDivName, startMin, endMin, bunk) >= capacity) return false;
-            return !checkCrossDivisionTimeConflict(fieldName, blockDivName, startMin, endMin, bunk);
-        }
-        return getFieldUsageFromTimeIndex(fieldNorm, startMin, endMin, bunk) < capacity;
+        return countSameDivisionUsage(fieldName, blockDivName, startMin, endMin, bunk) < capacity;
     }
 
     // ========================================================================
@@ -2011,8 +2020,8 @@ if (!blockDivName && bunk) {
             if (ftDivs.size <= 1) continue;
             var ftFieldName = ftKey.split(':')[0];
             var ftSharingType = getSharingType(ftFieldName);
-            if (ftSharingType === 'all') continue;
-            if (ftSharingType === 'same_division' || ftSharingType === 'not_sharable' || ftSharingType === 'custom') {
+            // ★★★ v12.3: ALL types enforce cross-grade exclusivity ★★★
+            if (ftSharingType === 'all' || ftSharingType === 'same_division' || ftSharingType === 'not_sharable' || ftSharingType === 'custom') {
                 var keepDiv = ftUsers[0].div;
                 for (var fti = 1; fti < ftUsers.length; fti++) {
                     if (ftUsers[fti].div !== keepDiv) {
@@ -2098,13 +2107,12 @@ if (!blockDivName && bunk) {
             var sharingType = getSharingType(fieldName);
 
             if (hasValidTimes) {
+                // ★★★ v12.3: ALWAYS block cross-grade field sharing ★★★
+                if (checkCrossDivisionTimeConflict(fieldName, blockDivName, startMin, endMin, bunk)) continue;
                 if (sharingType === 'not_sharable') {
                     if (getFieldUsageFromTimeIndex(fieldNorm, startMin, endMin, bunk) >= capacity) continue;
-                } else if (sharingType === 'same_division') {
-                    if (countSameDivisionUsage(fieldName, blockDivName, startMin, endMin, bunk) >= capacity) continue;
-                    if (checkCrossDivisionTimeConflict(fieldName, blockDivName, startMin, endMin, bunk)) continue;
                 } else {
-                    if (getFieldUsageFromTimeIndex(fieldNorm, startMin, endMin, bunk) >= capacity) continue;
+                    if (countSameDivisionUsage(fieldName, blockDivName, startMin, endMin, bunk) >= capacity) continue;
                 }
             }
 
@@ -2243,14 +2251,14 @@ if (!blockDivName && bunk) {
         var totalEntries = 0;
         for (var entries of _fieldTimeIndex.values()) totalEntries += entries.length;
         console.log('  Total time entries: ' + totalEntries);
-        console.log('Assigned blocks:       ' + _assignedBlocks.size);
-        console.log('Active assignments:    ' + _assignments.size);
+        console.log('Assigned blocks:        ' + _assignedBlocks.size);
+        console.log('Active assignments:     ' + _assignments.size);
         if (_slotGroups) console.log('Slot groups:          ' + _slotGroups.size);
         if (_domains) {
             var avg = _domains.size > 0
                 ? (Array.from(_domains.values()).reduce(function(s, d) { return s + d.size; }, 0) / _domains.size).toFixed(1)
                 : '0';
-            console.log('Avg domain size:       ' + avg);
+            console.log('Avg domain size:        ' + avg);
         }
         console.log('\nPerf Counters:');
         console.log('  Rotation cache hits:  ' + _perfCounters.rotationCacheHits);
