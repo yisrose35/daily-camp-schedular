@@ -1229,9 +1229,10 @@
                     } catch (err) {
                         logError('Visibility save failed:', err);
                     }
-                    // Use sendBeacon for reliable cloud save
-                    if (!_permissionRevoked && window._sendBeaconSave) {
-                        window._sendBeaconSave(dateKey);
+                    // Attempt cloud save (visibilitychange gives more time than beforeunload)
+                    if (!_permissionRevoked) {
+                        window.ScheduleDB?.saveSchedule?.(dateKey, getWindowGlobals(), { immediate: true })
+                            .catch(() => {});
                     }
                 }
             }
