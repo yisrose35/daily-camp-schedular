@@ -766,7 +766,8 @@
                 }
             }
         }
-
+// ★★★ v17.12: Clear generation flag ★★★
+        window._generationInProgress = false;
         // ★★★ 2. FORCE CLOUD LOAD + AUTO-SNAPSHOT FOR PRESERVATION ★★★
         if (allowedDivisions && (!existingScheduleSnapshot || Object.keys(existingScheduleSnapshot).length === 0)) {
             console.log("[OPTIMIZER] Partial generation detected without snapshot. Loading latest from cloud first...");
