@@ -895,8 +895,6 @@
                             window.leagueAssignments = mergedLeagues;
                         }
                         
-                        if (cloudResult.data.divisionTimes) {
-                        
                         // Also hydrate divisionTimes if available
                         if (cloudResult.data.divisionTimes) {
                             window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(cloudResult.data.divisionTimes) || cloudResult.data.divisionTimes;
@@ -918,7 +916,6 @@
                 const currentData = window.loadCurrentDailyData?.() || {};
                 snapshotSource = currentData.scheduleAssignments;
             }
-
             if (snapshotSource && Object.keys(snapshotSource).length > 0) {
                 existingScheduleSnapshot = JSON.parse(JSON.stringify(snapshotSource));
                 if (!existingUnifiedTimes) {
