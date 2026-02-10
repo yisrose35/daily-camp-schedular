@@ -2771,8 +2771,14 @@ if (bypassStatus.highlight) {
         for (const [sport, sportFields] of Object.entries(fieldsBySport)) {
             (sportFields || []).forEach(fName => {
                 if (excludeSet.has(fName)) return;
-                if (disabledFields.includes(fName)) return;
-                if (window.GlobalFieldLocks?.isFieldLocked(fName, slots, divName)) return;
+if (disabledFields.includes(fName)) return;
+if (window.GlobalFieldLocks?.isFieldLocked(fName, slots, divName)) return;
+
+// ★ Rainy day filtering: skip rainy-day-only activities on normal days
+const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
+const fieldProps = activityProps[fName] || {};
+if (!isRainyMode && (fieldProps.rainyDayOnly === true || fieldProps.rainyDayExclusive === true)) return;
+if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availableOnRainyDay === false)) return;
 
                 let available = true;
                 const props = activityProps[fName] || {};
