@@ -729,7 +729,7 @@
     // ★★★ MAIN ENTRY POINT ★★★
     // =========================================================================
 
-    window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
+    window.runSkeletonOptimizer = async function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
         console.log("\n" + "=".repeat(70));
         console.log("★★★ OPTIMIZER STARTED (v17.11 - RBAC + CAPACITY FIX) ★★★");
         // ★★★ SCHEDULER RESTRICTION ★★★
