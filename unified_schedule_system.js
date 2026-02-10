@@ -3176,7 +3176,18 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
         const previewArea = document.getElementById('multi-conflict-preview');
         const resolutionMode = document.getElementById('multi-resolution-mode');
         const submitBtn = document.getElementById('multi-edit-submit');
-
+// Check for global lock blocks (league games etc)
+const globalBlocks = result.blocked.filter(b => b.globalLock);
+if (globalBlocks.length > 0) {
+    previewArea.style.display = 'block';
+    previewArea.style.cssText = 'background: #fef2f2; border: 1px solid #ef4444; border-radius: 8px; padding: 12px;';
+    previewArea.innerHTML = `<div style="color: #991b1b; font-weight: 500;">
+        🚫 Cannot use this field
+        <div style="font-weight: 400; margin-top: 6px; font-size: 0.9rem;">${globalBlocks[0].reason}</div>
+    </div>`;
+    submitBtn.disabled = true;
+    return;
+}
         if (result.plan.length === 0 && result.blocked.length === 0) {
             previewArea.style.display = 'block';
             previewArea.style.cssText = 'background: #d1fae5; border: 1px solid #10b981; border-radius: 8px; padding: 12px;';
