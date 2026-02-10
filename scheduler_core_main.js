@@ -741,7 +741,8 @@
             }
             console.log(`[RBAC] ★ SCHEDULER RESTRICTION APPLIED: Generating for [${allowedDivisions.join(', ')}] only`);
         }
-
+// ★★★ v17.12: Set flag to prevent remote merges during generation ★★★
+        window._generationInProgress = true;
         // ★★★ 1. AUTO-DETECT ALLOWED DIVISIONS ★★★
         if (!allowedDivisions) {
             if (window.MultiSchedulerCore && typeof window.MultiSchedulerCore.getUserDivisions === 'function') {
