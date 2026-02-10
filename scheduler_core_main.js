@@ -736,6 +736,7 @@
                     let slotType = "General Activity Slot";
                     const lower = activityLabel.toLowerCase().trim();
                     if (lower.includes("sport")) slotType = "Sports Slot";
+                    else if (lower.includes("special")) slotType = "Special Activity";
 
                     console.log(`[SmartTile] ${bunk} -> GENERATE: ${slotType}`);
 
