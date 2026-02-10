@@ -660,25 +660,73 @@
                 }
 
                 if (window.GlobalFieldLocks?.isFieldLocked(activityLabel, slots, divName)) {
-                    console.log(`[SmartTile] ${bunk} - ${activityLabel} is LOCKED for ${divName}, falling back to solver`);
+                    console.log(`[SmartTile] ${bunk} - ${activityLabel} is LOCKED for ${divName}, trying alternatives`);
                     
-                    // Don't silently drop — queue for solver as a general activity slot
-                    let fallbackSlotType = "General Activity Slot";
-                    const lowerAct = activityLabel.toLowerCase().trim();
-                    if (lowerAct.includes("sport")) fallbackSlotType = "Sports Slot";
-                    else if (lowerAct.includes("special") || knownSpecialNames.has(lowerAct)) fallbackSlotType = "Special Activity";
+                    // Try the other main first, then fallback
+                    const alternatives = [];
+                    if (!isSame(activityLabel, job.main1)) alternatives.push(job.main1);
+                    if (!isSame(activityLabel, job.main2)) alternatives.push(job.main2);
+                    if (job.fallbackActivity) alternatives.push(job.fallbackActivity);
                     
-                    schedulableSlotBlocks.push({
-                        divName,
-                        bunk,
-                        event: fallbackSlotType,
-                        startTime: startMin,
-                        endTime: endMin,
-                        slots,
-                        fromSmartTile: true,
-                        _lockedFallback: true
-                    });
-                    console.log(`[SmartTile] ${bunk} -> QUEUED as "${fallbackSlotType}" (locked fallback)`);
+                    let placed = false;
+                    for (const alt of alternatives) {
+                        if (!alt) continue;
+                        
+                        if (window.GlobalFieldLocks?.isFieldLocked(alt, slots, divName)) {
+                            console.log(`[SmartTile] ${bunk} - alt "${alt}" also locked, trying next`);
+                            continue;
+                        }
+                        
+                        if (needsGeneration(alt)) {
+                            let slotType = "General Activity Slot";
+                            const lowerAlt = alt.toLowerCase().trim();
+                            if (lowerAlt.includes("sport")) slotType = "Sports Slot";
+                            
+                            schedulableSlotBlocks.push({
+                                divName,
+                                bunk,
+                                event: slotType,
+                                startTime: startMin,
+                                endTime: endMin,
+                                slots,
+                                fromSmartTile: true,
+                                _lockedFallback: true
+                            });
+                            console.log(`[SmartTile] ${bunk} -> QUEUED as "${slotType}" (fallback from locked "${activityLabel}")`);
+                            placed = true;
+                            break;
+                        } else {
+                            console.log(`[SmartTile] ${bunk} -> DIRECT FILL: ${alt} (fallback from locked "${activityLabel}")`);
+                            window.fillBlock({
+                                divName,
+                                bunk,
+                                startTime: startMin,
+                                endTime: endMin,
+                                slots
+                            }, {
+                                field: alt,
+                                sport: null,
+                                _fixed: true,
+                                _activity: alt
+                            }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                            placed = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!placed) {
+                        schedulableSlotBlocks.push({
+                            divName,
+                            bunk,
+                            event: "General Activity Slot",
+                            startTime: startMin,
+                            endTime: endMin,
+                            slots,
+                            fromSmartTile: true,
+                            _lockedFallback: true
+                        });
+                        console.log(`[SmartTile] ${bunk} -> QUEUED as "General Activity Slot" (all alternatives locked)`);
+                    }
                     return;
                 }
 
