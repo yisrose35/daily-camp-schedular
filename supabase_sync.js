@@ -263,12 +263,35 @@
     // MULTI-SCHEDULER SYNC: REFRESH VIEW
     // =========================================================================
 
-    async function refreshMultiSchedulerView(dateKey, forceOverwrite = false) {
+   async function refreshMultiSchedulerView(dateKey, forceOverwrite = false) {
         if (!dateKey) dateKey = getCurrentDateKey();
         
         log('Refreshing Multi-Scheduler view for:', dateKey);
         
-        // Step 1: Force hydrate from localStorage
+        // ★★★ v6.2 FIX: Load from CLOUD first so we get all schedulers' data ★★★
+        try {
+            if (window.ScheduleDB?.loadSchedule && navigator.onLine) {
+                const cloudResult = await window.ScheduleDB.loadSchedule(dateKey);
+                if (cloudResult?.success && cloudResult.data) {
+                    const DAILY_KEY = 'campDailyData_v1';
+                    const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                    allData[dateKey] = {
+                        ...allData[dateKey],
+                        scheduleAssignments: cloudResult.data.scheduleAssignments || {},
+                        leagueAssignments: cloudResult.data.leagueAssignments || {},
+                        unifiedTimes: cloudResult.data.unifiedTimes || allData[dateKey]?.unifiedTimes || [],
+                        divisionTimes: cloudResult.data.divisionTimes || allData[dateKey]?.divisionTimes || {}
+                    };
+                    localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+                    log('☁️ Updated localStorage from cloud:', 
+                        Object.keys(cloudResult.data.scheduleAssignments || {}).length, 'bunks');
+                }
+            }
+        } catch (e) {
+            log('Cloud refresh failed, using localStorage:', e.message);
+        }
+        
+        // Step 1: Force hydrate from localStorage (now contains cloud data)
         forceHydrateFromLocalStorage(dateKey, forceOverwrite);
         
         // Step 2: Ensure empty state for unscheduled divisions
