@@ -45,7 +45,7 @@
             .from(VERSIONS_TABLE)
             .select('*')
             .eq('camp_id', campId)
-            .eq('date', dateKey)
+            .eq('date_key', dateKey)
             .order('created_at', { ascending: false });
 
         if (error) {
