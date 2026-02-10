@@ -176,10 +176,18 @@
             window._divisionTimesLocked = true;
             
             try {
-                // Call original optimizer
-                if (originalRunSkeletonOptimizer) {
-                    return originalRunSkeletonOptimizer.call(this, manualSkeleton, externalOverrides, allowedDivisions, existingScheduleSnapshot, existingUnifiedTimes);
+                // ★★★ FIX v1.5: Lazy lookup — scheduler_core_main.js loads AFTER this file ★★★
+                const optimizer = originalRunSkeletonOptimizer || window._coreRunSkeletonOptimizer;
+                if (optimizer) {
+                    return optimizer.call(this, manualSkeleton, externalOverrides, allowedDivisions, existingScheduleSnapshot, existingUnifiedTimes);
+                } else {
+                    console.error('[DivTimesIntegration] ❌ No original optimizer found! scheduler_core_main.js may not have loaded.');
+                    return false;
                 }
+            } catch (e) {
+                console.error('[DivTimesIntegration] ❌ Optimizer error:', e.message);
+                console.error(e.stack);
+                return false;
             } finally {
                 window._divisionTimesLocked = false;
             }
