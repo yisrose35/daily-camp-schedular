@@ -3046,23 +3046,8 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
                     `).join('')}
                 </div>
             </div>
-            <div id="time-range-area" style="display: none; margin-bottom: 20px;">
-                <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Time range:</div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-                    <div>
-                        <label style="font-size: 0.85rem; color: #6b7280;">Start</label>
-                        <select id="edit-start-slot" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-top: 4px;">
-                            ${divSlots.map((t, i) => `<option value="${i}" ${i === slotIdx ? 'selected' : ''}>${t.label || minutesToTimeStr(t.startMin)}</option>`).join('')}
-                        </select>
-                    </div>
-                    <div>
-                        <label style="font-size: 0.85rem; color: #6b7280;">End</label>
-                        <select id="edit-end-slot" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-top: 4px;">
-                            ${divSlots.map((t, i) => `<option value="${i}" ${i === slotIdx ? 'selected' : ''}>${t.label || minutesToTimeStr(t.endMin)}</option>`).join('')}
-                        </select>
-                    </div>
-                </div>
-            </div>
+            <input type="hidden" id="edit-start-slot" value="${slotIdx}">
+            <input type="hidden" id="edit-end-slot" value="${slotIdx}">
             <div style="display: flex; gap: 12px;">
                 <button onclick="closeIntegratedEditModal()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">Cancel</button>
                 <button onclick="proceedWithScope()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">Continue →</button>
@@ -3076,13 +3061,13 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
     function setupScopeModalHandlers() {
         const radios = document.querySelectorAll('input[name="edit-scope"]');
         const bunkArea = document.getElementById('bunk-selection-area');
-        const timeArea = document.getElementById('time-range-area');
+        const timeArea = null;
 
         radios.forEach(radio => {
             radio.addEventListener('change', () => {
                 const scope = radio.value;
                 bunkArea.style.display = scope === 'select' ? 'block' : 'none';
-                timeArea.style.display = (scope === 'division' || scope === 'select') ? 'block' : 'none';
+                // Time range is fixed to clicked slot - no UI needed
 
                 document.querySelectorAll('.edit-scope-option').forEach(opt => {
                     opt.style.borderColor = '#e5e7eb';
