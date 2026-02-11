@@ -70,7 +70,54 @@ if (!DEMO_ACTIVE) {
 
     window.__CAMPISTRY_DEMO_MODE__ = true;
 
-    console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;font-weight:bold');
+// =====================================================================
+// PORTABLE OFFLINE: Auto-load offline_data.json on first run
+// Only runs on file:// AND only if localStorage is empty
+// =====================================================================
+if (IS_FILE_PROTOCOL && !localStorage.getItem('campGlobalSettings_v1')) {
+    (async function() {
+        try {
+            const pagePath = window.location.pathname;
+            const dir = pagePath.substring(0, pagePath.lastIndexOf('/') + 1);
+            const dataUrl = 'file://' + dir + 'offline_data.json';
+
+            console.log('📦 [Portable] Loading offline_data.json...');
+            const resp = await fetch(dataUrl);
+            if (!resp.ok) throw new Error('Not found');
+            const backup = await resp.json();
+
+            if (backup.globalSettings) {
+                localStorage.setItem('campGlobalSettings_v1', JSON.stringify(backup.globalSettings));
+                localStorage.setItem('CAMPISTRY_LOCAL_CACHE', JSON.stringify(backup.globalSettings));
+            }
+            if (backup.dailyData) {
+                localStorage.setItem('campDailyData_v1', JSON.stringify(backup.dailyData));
+            }
+            if (backup.rotationHistory) {
+                localStorage.setItem('campRotationHistory_v1', JSON.stringify(backup.rotationHistory));
+            }
+            if (backup.smartTileHistory) {
+                localStorage.setItem('campSmartTileHistory_v1', JSON.stringify(backup.smartTileHistory));
+            }
+            if (backup.smartTileSpecialHistory) {
+                localStorage.setItem('campSmartTileSpecialHistory_v1', JSON.stringify(backup.smartTileSpecialHistory));
+            }
+            if (backup.leagueHistory) {
+                localStorage.setItem('campLeagueHistory_v1', JSON.stringify(backup.leagueHistory));
+            }
+            if (backup.specialtyLeagueHistory) {
+                localStorage.setItem('campSpecialtyLeagueHistory_v1', JSON.stringify(backup.specialtyLeagueHistory));
+            }
+
+            console.log('📦 [Portable] Data loaded! Refreshing...');
+            window.location.reload();
+        } catch (e) {
+            console.warn('📦 [Portable] No offline_data.json found — starting empty');
+        }
+    })();
+}
+
+console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;font-weight:bold');
     console.log('%c   All data is local — no internet required.', 'color:#F59E0B');
     console.log('%c   Disable: disableDemoMode()  or  ?demo=false', 'color:#999');
 
