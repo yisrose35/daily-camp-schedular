@@ -1,4 +1,4 @@
-{
+window.__OFFLINE_DATA__ ={
   "globalSettings": {
     "app1": {
       "bunks": [
