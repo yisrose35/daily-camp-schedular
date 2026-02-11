@@ -578,44 +578,16 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
     }
 
     function setupFullscreenKiosk() {
-        // Try immediately (works if already had a gesture)
-        enterFullscreen();
-
-        // Also retry on first user interaction (browsers require a gesture)
-        const onFirstInteraction = () => {
+        const goFull = () => {
             if (!document.fullscreenElement && !document.webkitFullscreenElement) {
                 enterFullscreen();
             }
-            document.removeEventListener('click', onFirstInteraction);
-            document.removeEventListener('touchstart', onFirstInteraction);
-            document.removeEventListener('keydown', onFirstInteraction);
         };
-        document.addEventListener('click', onFirstInteraction);
-        document.addEventListener('touchstart', onFirstInteraction);
-        document.addEventListener('keydown', onFirstInteraction);
-
-        // Re-enter fullscreen if user accidentally exits (e.g. Escape key)
-        document.addEventListener('fullscreenchange', () => {
-            if (!document.fullscreenElement && DEMO_ACTIVE) {
-                // Small delay then re-enter — prevents rapid toggle
-                setTimeout(() => {
-                    if (!document.fullscreenElement && DEMO_ACTIVE) {
-                        enterFullscreen();
-                    }
-                }, 500);
-            }
+        ['click', 'touchstart', 'keydown', 'mousemove', 'mousedown', 'scroll'].forEach(evt => {
+            document.addEventListener(evt, goFull, { passive: true });
         });
-        document.addEventListener('webkitfullscreenchange', () => {
-            if (!document.webkitFullscreenElement && DEMO_ACTIVE) {
-                setTimeout(() => {
-                    if (!document.webkitFullscreenElement && DEMO_ACTIVE) {
-                        enterFullscreen();
-                    }
-                }, 500);
-            }
-        });
+        goFull();
     }
-
     // =========================================================================
     // 13. PASSWORD-PROTECTED EXIT
     // =========================================================================
