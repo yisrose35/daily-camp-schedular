@@ -711,14 +711,19 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
 
         const banner = document.createElement('div');
         banner.id = 'campistry-demo-banner';
-        banner.innerHTML = `
-            <span style="margin-right:8px">🎭</span>
-            <span><strong>DEMO MODE</strong> — Offline · All data stored locally</span>
-            <button id="demo-exit-btn" title="Exit demo mode" style="
-                margin-left:auto; background:rgba(255,255,255,0.2); border:1px solid rgba(255,255,255,0.3);
-                color:white; padding:2px 10px; border-radius:4px; cursor:pointer; font-size:12px;
-            ">Exit Demo</button>
-        `;
+       banner.innerHTML = `
+        <span style="margin-right:8px">🎭</span>
+        <span><strong>DEMO MODE</strong> — Offline · All data stored locally</span>
+        <button id="demo-reset-btn" title="Reset to original data" style="
+            margin-left:auto; background:rgba(255,255,255,0.2); border:1px solid rgba(255,255,255,0.3);
+            color:white; padding:2px 10px; border-radius:4px; cursor:pointer; font-size:12px;
+            margin-right:8px;
+        ">🔄 Reset</button>
+        <button id="demo-exit-btn" title="Exit demo mode" style="
+            background:rgba(255,255,255,0.2); border:1px solid rgba(255,255,255,0.3);
+            color:white; padding:2px 10px; border-radius:4px; cursor:pointer; font-size:12px;
+        ">Exit Demo</button>
+    `;
         banner.style.cssText = `
             position:fixed; top:0; left:0; right:0; z-index:99999;
             background:linear-gradient(135deg,#F59E0B,#D97706); color:white;
