@@ -109,9 +109,8 @@ if (window.__OFFLINE_DATA__) {
         }));
     }
 
-    console.log('📦 [Portable] All data loaded! Refreshing...');
+    console.log('📦 [Portable] All data loaded!');
     delete window.__OFFLINE_DATA__;
-    window.location.reload();
 }
 console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;font-weight:bold');
     console.log('%c   All data is local — no internet required.', 'color:#F59E0B');
