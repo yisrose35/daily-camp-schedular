@@ -74,58 +74,45 @@ if (!DEMO_ACTIVE) {
 // PORTABLE OFFLINE: Auto-load offline_data.json on first run
 // Only runs on file:// AND only if localStorage is empty
 // =====================================================================
-if (IS_FILE_PROTOCOL && !localStorage.getItem('campGlobalSettings_v1')) {
-    (async function() {
-        try {
-            const pagePath = window.location.pathname;
-            const dir = pagePath.substring(0, pagePath.lastIndexOf('/') + 1);
-            const dataUrl = 'file://' + dir + 'offline_data.json';
+if (!localStorage.getItem('campGlobalSettings_v1') && window.__OFFLINE_DATA__) {
+    const backup = window.__OFFLINE_DATA__;
+    console.log('📦 [Portable] Loading embedded offline data...');
 
-            console.log('📦 [Portable] Loading offline_data.json...');
-            const resp = await fetch(dataUrl);
-            if (!resp.ok) throw new Error('Not found');
-            const backup = await resp.json();
+    if (backup.globalSettings) {
+        const gs = JSON.stringify(backup.globalSettings);
+        localStorage.setItem('campGlobalSettings_v1', gs);
+        localStorage.setItem('CAMPISTRY_LOCAL_CACHE', gs);
+        localStorage.setItem('campistryGlobalSettings', gs);
+        localStorage.setItem('CAMPISTRY_UNIFIED_STATE', gs);
+    }
+    if (backup.dailyData) {
+        localStorage.setItem('campDailyData_v1', JSON.stringify(backup.dailyData));
+    }
+    if (backup.rotationHistory) {
+        localStorage.setItem('campRotationHistory_v1', JSON.stringify(backup.rotationHistory));
+    }
+    if (backup.leagueHistory) {
+        localStorage.setItem('campLeagueHistory_v2', JSON.stringify(backup.leagueHistory));
+    }
+    if (backup.specialtyLeagueHistory) {
+        localStorage.setItem('campSpecialtyLeagueHistory_v1', JSON.stringify(backup.specialtyLeagueHistory));
+    }
+    if (backup.skeletons) {
+        Object.entries(backup.skeletons).forEach(([key, val]) => {
+            localStorage.setItem(key, JSON.stringify(val));
+        });
+    }
+    if (backup.globalSettings?.divisions) {
+        localStorage.setItem('campGlobalRegistry_v1', JSON.stringify({
+            divisions: backup.globalSettings.divisions,
+            bunks: backup.globalSettings.bunks || backup.globalSettings.app1?.bunks || []
+        }));
+    }
 
-            // ★ Write to ALL keys the app reads from
-            if (backup.globalSettings) {
-                const gs = JSON.stringify(backup.globalSettings);
-                localStorage.setItem('campGlobalSettings_v1', gs);
-                localStorage.setItem('CAMPISTRY_LOCAL_CACHE', gs);
-                localStorage.setItem('campistryGlobalSettings', gs);
-                localStorage.setItem('CAMPISTRY_UNIFIED_STATE', gs);
-            }
-            if (backup.dailyData) {
-                localStorage.setItem('campDailyData_v1', JSON.stringify(backup.dailyData));
-            }
-            if (backup.rotationHistory) {
-                localStorage.setItem('campRotationHistory_v1', JSON.stringify(backup.rotationHistory));
-            }
-            if (backup.leagueHistory) {
-                localStorage.setItem('campLeagueHistory_v2', JSON.stringify(backup.leagueHistory));
-            }
-            if (backup.specialtyLeagueHistory) {
-                localStorage.setItem('campSpecialtyLeagueHistory_v1', JSON.stringify(backup.specialtyLeagueHistory));
-            }
-            if (backup.skeletons) {
-                Object.entries(backup.skeletons).forEach(([key, val]) => {
-                    localStorage.setItem(key, JSON.stringify(val));
-                });
-            }
-            if (backup.globalSettings?.divisions) {
-                localStorage.setItem('campGlobalRegistry_v1', JSON.stringify({
-                    divisions: backup.globalSettings.divisions,
-                    bunks: backup.globalSettings.bunks || backup.globalSettings.app1?.bunks || []
-                }));
-            }
-
-            console.log('📦 [Portable] All data loaded! Refreshing...');
-            window.location.reload();
-        } catch (e) {
-            console.warn('📦 [Portable] No offline_data.json found — starting empty');
-        }
-    })();
+    console.log('📦 [Portable] All data loaded! Refreshing...');
+    delete window.__OFFLINE_DATA__;
+    window.location.reload();
 }
-
 console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;font-weight:bold');
     console.log('%c   All data is local — no internet required.', 'color:#F59E0B');
     console.log('%c   Disable: disableDemoMode()  or  ?demo=false', 'color:#999');
