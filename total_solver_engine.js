@@ -1144,13 +1144,30 @@
 
     function solveSlotGroups(activityBlocks) {
         var groupsSolved = 0, blocksAssigned = 0;
+        // ★★★ v13.0-FIX2: Global tracker — survives across ALL groups ★★★
+        var globalBunkActivities = new Map(); // bunk → Set<actNorm>
+        // Seed with pre-solver placements (leagues, smart tiles, split tiles, etc.)
+        var allBunks = Object.keys(window.scheduleAssignments || {});
+        for (var gbi = 0; gbi < allBunks.length; gbi++) {
+            var gbBunk = allBunks[gbi];
+            var gbSlots = window.scheduleAssignments[gbBunk] || [];
+            for (var gsi = 0; gsi < gbSlots.length; gsi++) {
+                var gbEntry = gbSlots[gsi];
+                if (!gbEntry || gbEntry.continuation || gbEntry._isTransition) continue;
+                var gbAct = normName(gbEntry._activity || gbEntry.sport || gbEntry.field);
+                if (gbAct && gbAct !== 'free' && gbAct !== 'free play' && gbAct !== 'transition/buffer') {
+                    if (!globalBunkActivities.has(gbBunk)) globalBunkActivities.set(gbBunk, new Set());
+                    globalBunkActivities.get(gbBunk).add(gbAct);
+                }
+            }
+        }
         var sortedGroups = Array.from(_slotGroups.entries()).sort(function(a, b) { return a[1].length - b[1].length; });
         for (var [, blockIndices] of sortedGroups) {
             // ★★★ v13.0-FIX: Clear stale today-cache before each group ★★★
             _todayCache.clear();
             var unassigned = blockIndices.filter(function(bi) { return !_assignedBlocks.has(bi); });
             if (unassigned.length === 0) continue;
-            var groupAssignments = solveGroupMatchingAugmented(activityBlocks, unassigned);
+            var groupAssignments = solveGroupMatchingAugmented(activityBlocks, unassigned, globalBunkActivities);
             for (var ga of groupAssignments) {
                 if (_assignedBlocks.has(ga.blockIdx)) continue;
                 var block = activityBlocks[ga.blockIdx];
@@ -1164,6 +1181,12 @@
                 }
                 invalidateRotationCacheForBunk(block.bunk);
                 propagateAssignment(activityBlocks, ga.blockIdx, ga.pick);
+                // ★★★ v13.0-FIX2: Update global tracker ★★★
+                var gaActForTracker = normName(ga.pick._activity || ga.pick.field);
+                if (gaActForTracker && gaActForTracker !== 'free' && gaActForTracker !== 'free play') {
+                    if (!globalBunkActivities.has(block.bunk)) globalBunkActivities.set(block.bunk, new Set());
+                    globalBunkActivities.get(block.bunk).add(gaActForTracker);
+                }
                 blocksAssigned++;
             }
             // ★★★ v13.0-FIX: Invalidate caches after group picks applied ★★★
@@ -1174,13 +1197,21 @@
         return blocksAssigned;
     }
 
-    function solveGroupMatchingAugmented(activityBlocks, unassignedIndices) {
+    function solveGroupMatchingAugmented(activityBlocks, unassignedIndices, globalBunkActivities) {
+        globalBunkActivities = globalBunkActivities || new Map();
         var results = [], blockOptions = [];
         for (var bi of unassignedIndices) {
             var domain = _domains.get(bi);
             if (!domain || domain.size === 0) { results.push({ blockIdx: bi, candIdx: -1, pick: { field: "Free", sport: null, _activity: "Free" }, cost: 100000 }); continue; }
             var block = activityBlocks[bi], scored = [];
-            for (var ci of domain) { var cand = allCandidateOptions[ci]; if (!isPickStillValid(block, cand)) continue; setScratchPick(cand); var cost = calculatePenaltyCost(block, _scratchPick); if (cost < 500000) scored.push({ bi: bi, ci: ci, cost: cost }); }
+            for (var ci of domain) { var cand = allCandidateOptions[ci]; if (!isPickStillValid(block, cand)) continue;
+                // ★★★ v13.0-FIX2: Check global cross-group tracker ★★★
+                var p1ActNorm = normName(cand.activityName);
+                if (p1ActNorm && p1ActNorm !== 'free' && p1ActNorm !== 'free play') {
+                    var p1GlobalDone = globalBunkActivities.get(block.bunk);
+                    if (p1GlobalDone && p1GlobalDone.has(p1ActNorm)) continue;
+                }
+                setScratchPick(cand); var cost = calculatePenaltyCost(block, _scratchPick); if (cost < 500000) scored.push({ bi: bi, ci: ci, cost: cost }); }
             scored.sort(function(a, b) { return a.cost - b.cost; });
             blockOptions.push({ bi: bi, options: scored, domainSize: scored.length });
         }
@@ -1193,12 +1224,15 @@
             var block2 = activityBlocks[bo.bi], assigned = false;
             for (var oi = 0; oi < bo.options.length; oi++) {
                 var opt = bo.options[oi], cand2 = allCandidateOptions[opt.ci];
-                // ★★★ v13.0-FIX: Skip if this bunk already got this activity in this group ★★★
+                // ★★★ v13.0-FIX2: Skip if activity already done by this bunk (in-group, cross-group, or pre-solver) ★★★
                 var candActNorm_chk = normName(cand2.activityName);
                 if (candActNorm_chk && candActNorm_chk !== 'free' && candActNorm_chk !== 'free play') {
                     var bunkDoneInGroup = bunkActivitiesInGroup.get(block2.bunk);
                     if (bunkDoneInGroup && bunkDoneInGroup.has(candActNorm_chk)) continue;
-                    // Also check live schedule for cross-group duplicates
+                    // Check global cross-group tracker
+                    var globalDone = globalBunkActivities.get(block2.bunk);
+                    if (globalDone && globalDone.has(candActNorm_chk)) continue;
+                    // Also check live schedule for pre-solver placements
                     var liveDone = getActivitiesDoneToday(block2.bunk, block2.slots?.[0] ?? 999);
                     if (liveDone.has(candActNorm_chk)) continue;
                 }
