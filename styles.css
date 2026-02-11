@@ -2017,7 +2017,7 @@ label.override-checkbox span {
   align-items: center;
   justify-content: space-between;
   padding: 0.7rem 1.25rem;
-  height: 60px;
+  height: 65px;
   overflow: hidden;
   background: var(--bg-secondary, #FFFFFF);
   border-bottom: 1px solid var(--slate-200, #E2E8F0);
@@ -2178,7 +2178,7 @@ label.override-checkbox span {
 /* Sidebar: off-canvas, slides in with body.sidebar-open */
 .sidebar {
   position: fixed;
-  top: 60px;
+  top: 65px;
   left: 0;
   bottom: 0;
   width: 240px;
