@@ -735,10 +735,32 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
         // Push page content down so nothing hides behind the banner
         document.body.style.paddingTop = (banner.offsetHeight) + 'px';
 
-        // ★★★ Password-protected exit ★★★
-        document.getElementById('demo-exit-btn')?.addEventListener('click', () => {
-            promptDemoExit();
-        });
+        // ★★★ Reset to original data ★★★
+    document.getElementById('demo-reset-btn')?.addEventListener('click', () => {
+        if (!confirm('Reset all data back to the original? This cannot be undone.')) return;
+        const keysToRemove = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && (
+                key.startsWith('camp') ||
+                key.startsWith('CAMPISTRY') ||
+                key.startsWith('schedule') ||
+                key.startsWith('campistry')
+            )) {
+                keysToRemove.push(key);
+            }
+        }
+        keysToRemove.forEach(key => localStorage.removeItem(key));
+        // Keep demo mode flag so it reloads into demo mode and re-imports
+        localStorage.setItem('campistry_demo_mode', 'true');
+        console.log('📦 Cleared', keysToRemove.length, 'keys. Reloading...');
+        window.location.reload();
+    });
+
+    // ★★★ Password-protected exit ★★★
+    document.getElementById('demo-exit-btn')?.addEventListener('click', () => {
+        promptDemoExit();
+    });
 
         // ★★★ Enter fullscreen kiosk mode ★★★
         setupFullscreenKiosk();
