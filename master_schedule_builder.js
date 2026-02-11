@@ -391,10 +391,10 @@ function getGroupedLocationOptions() {
   
   // Build groups array (only include non-empty groups)
   const groups = [];
-  if (pinnedOptions.length > 0) groups.push({ label: '📌 Pinned Defaults', options: pinnedOptions });
-  if (facilities.length > 0) groups.push({ label: '🏢 Facilities', options: facilities });
-  if (allFields.length > 0) groups.push({ label: '🏟️ Fields', options: allFields });
-  if (allSpecials.length > 0) groups.push({ label: '🎨 Special Activities', options: allSpecials });
+  if (pinnedOptions.length > 0) groups.push({ label: 'Pinned Defaults', options: pinnedOptions });
+  if (facilities.length > 0) groups.push({ label: 'Facilities', options: facilities });
+  if (allFields.length > 0) groups.push({ label: 'Fields', options: allFields });
+  if (allSpecials.length > 0) groups.push({ label: 'Special Activities', options: allSpecials });
   
   const hasAny = groups.some(g => g.options.length > 0);
   return { groups, hasAny };
@@ -1322,7 +1322,7 @@ function addDropListeners(selector) {
         const modalFields = [
           { name: 'eventName', label: 'Event Name', type: 'text', default: '', placeholder: 'e.g., Regroup, Assembly, Davening' },
           { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
-          { name: 'endTime', label: 'End Time', type: 'text', default: endStr }
+          { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
         ];
         
         // Add grouped locations if available
@@ -1378,7 +1378,7 @@ function addDropListeners(selector) {
           title: name,
           fields: [
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
-            { name: 'endTime', label: 'End Time', type: 'text', default: endStr }
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
           ]
         });
         if (!result) return;
@@ -1409,7 +1409,7 @@ function addDropListeners(selector) {
           title: name,
           fields: [
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
-            { name: 'endTime', label: 'End Time', type: 'text', default: endStr }
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
           ]
         });
         if (!result) return;
