@@ -862,7 +862,24 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
         console.log('═══════════════════════════════════════════');
         console.log('Commands:  disableDemoMode()  |  demoStatus()  |  loadDemoData(json)');
     };
+// =====================================================================
+    // PORTABLE OFFLINE: Fix absolute links to use relative paths
+    // =====================================================================
+    function fixAbsoluteLinks() {
+        document.querySelectorAll('a').forEach(a => {
+            const href = a.getAttribute('href');
+            if (href && href.includes('campistry.org/')) {
+                const filename = href.split('/').pop();
+                a.setAttribute('href', filename);
+            }
+        });
+    }
 
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', fixAbsoluteLinks);
+    } else {
+        fixAbsoluteLinks();
+    }
     console.log('🎭 Demo mode ready. Run demoStatus() for details.');
 
 })();
