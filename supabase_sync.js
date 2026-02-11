@@ -414,6 +414,7 @@
         const indicator = document.createElement('div');
         indicator.id = 'campistry-sync-status';
         indicator.style.cssText = `
+        display: none;
             position: fixed;
             bottom: 20px;
             left: 20px;
