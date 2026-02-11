@@ -1230,8 +1230,8 @@ function addDropListeners(selector) {
           title: 'Smart Tile Setup',
           description: 'Fills Main 1 based on capacity, rest get Main 2. Next period they swap. If Main 1 is full, Fallback is used.',
           fields: [
-            { name: 'startTime', label: 'Start Time', type: 'text', default: startStr },
-            { name: 'endTime', label: 'End Time', type: 'text', default: endStr },
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am' },
             { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', placeholder: 'e.g., Special, Swim' },
             { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', placeholder: 'e.g., Sports, Activity' },
             { name: 'fallbackActivity', label: 'Fallback (when Main 1 is full)', type: 'text', default: 'Activity', placeholder: 'e.g., Activity, Sports' }
@@ -1255,8 +1255,8 @@ function addDropListeners(selector) {
           title: 'Split Activity Setup',
           description: 'Splits division into two groups. Midway through the time block, groups SWAP.\n\nExamples: Swim, Sports, Art, Special, Activity',
           fields: [
-            { name: 'startTime', label: 'Start Time', type: 'text', default: startStr },
-            { name: 'endTime', label: 'End Time', type: 'text', default: endStr },
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am' },
             { name: 'main1', label: 'Main 1 (Group 1 starts here)', type: 'text', placeholder: 'e.g., Swim, Sports, Art' },
             { name: 'main2', label: 'Main 2 (Group 2 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' }
           ]
@@ -1295,8 +1295,8 @@ function addDropListeners(selector) {
           title: `Elective for ${divName}`,
           description: 'Select activities to RESERVE for this division only. Other divisions cannot use these during this time.',
           fields: [
-            { name: 'startTime', label: 'Start Time', type: 'text', default: startStr },
-            { name: 'endTime', label: 'End Time', type: 'text', default: endStr },
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am' },
             { name: 'activities', label: 'Reserve Locations', type: 'checkbox-group', options: locations }
           ]
         });
@@ -1321,7 +1321,7 @@ function addDropListeners(selector) {
         // Build modal fields
         const modalFields = [
           { name: 'eventName', label: 'Event Name', type: 'text', default: '', placeholder: 'e.g., Regroup, Assembly, Davening' },
-          { name: 'startTime', label: 'Start Time', type: 'text', default: startStr },
+          { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
           { name: 'endTime', label: 'End Time', type: 'text', default: endStr }
         ];
         
@@ -1377,7 +1377,7 @@ function addDropListeners(selector) {
         const result = await showModal({
           title: name,
           fields: [
-            { name: 'startTime', label: 'Start Time', type: 'text', default: startStr },
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
             { name: 'endTime', label: 'End Time', type: 'text', default: endStr }
           ]
         });
@@ -1408,7 +1408,7 @@ function addDropListeners(selector) {
         const result = await showModal({
           title: name,
           fields: [
-            { name: 'startTime', label: 'Start Time', type: 'text', default: startStr },
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
             { name: 'endTime', label: 'End Time', type: 'text', default: endStr }
           ]
         });
