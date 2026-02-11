@@ -652,8 +652,10 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
                 // Exit fullscreen before reload
                 if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
                 else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-                console.log('🎭 Demo mode disabled. Reloading...');
-                window.location.reload();
+               console.log('🎭 Demo mode disabled. Closing...');
+                window.close();
+                // Fallback if window.close doesn't work
+                setTimeout(() => { window.location.reload(); }, 500);
             } else {
                 errorEl.textContent = 'Incorrect password';
                 pwInput.value = '';
