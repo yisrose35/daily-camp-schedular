@@ -572,7 +572,13 @@
     <!-- SCRIPTS -->
     <!-- ========================================= -->
     <script src="demo_mode.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+if (window.location.protocol === 'file:') {
+    document.write('<script src="supabase-js-local.js"><\/script>');
+} else {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>');
+}
+</script>
     <script src="supabase_client.js"></script>
     <script src="campistry_security.js"></script>
     <script src="landing.js"></script>
