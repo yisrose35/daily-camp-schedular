@@ -1,972 +1,1191 @@
 // ============================================================================
-// total_solver_engine.js (ULTIMATE v12.4 - SMART RESOURCE PLANNING)
+// total_solver_engine.js (ULTIMATE v13.0 - HUMAN-INTELLIGENT SCHEDULING)
 // ============================================================================
+// ★★★ v13.0: ACTIVITY-FIRST PLANNER + THREE-PASS SIMULATION ★★★
 // ★★★ v12.4: SCARCITY-AWARE SORTING + DEEP FREE RESOLUTION ★★★
 // ★★★ v12.3: STRICT CROSS-GRADE EXCLUSIVITY — ALL FIELD TYPES ★★★
 //
 // WHAT'S NEW IN v12.3 (over v12.1):
 // ──────────────────────────────────
 // QUALITY:
-//  Q1. STRICT CROSS-GRADE EXCLUSIVITY:
-//      - Now enforced on ALL field types (including 'all').
-//      - If a field is used by Grade 1, Grade 2 cannot use it, even if
-//        the field type is 'all' or 'custom'.
-//      - Logic applied universally in:
-//        * Domain building
-//        * Cost evaluation
-//        * AC-3 propagation
-//        * Augmenting path matching
-//        * Safety backstop
+//  Q1. STRICT CROSS-GRADE EXCLUSIVITY:
+//      - Now enforced on ALL field types (including 'all').
+//      - If a field is used by Grade 1, Grade 2 cannot use it, even if
+//        the field type is 'all' or 'custom'.
+//      - Logic applied universally in:
+//        * Domain building
+//        * Cost evaluation
+//        * AC-3 propagation
+//        * Augmenting path matching
+//        * Safety backstop
 //
 // WHAT'S NEW IN v12.1 (over v12.0):
 // ──────────────────────────────────
 // QUALITY:
-//  Q1. SAME-FIELD ACTIVITY CONSISTENCY:
-//      - Enforces that if multiple bunks share a field (e.g. sharing type 'all'
-//        or 'same_division'), they MUST be doing the same activity/sport.
-//      - Adds 'activityName' to the high-performance Time Index.
-//      - Adds live checks during candidate filtering and augmenting path matching.
-//      - Adds a final backstop safety sweep to catch and fix any activity mismatches.
+//  Q1. SAME-FIELD ACTIVITY CONSISTENCY:
+//      - Enforces that if multiple bunks share a field (e.g. sharing type 'all'
+//        or 'same_division'), they MUST be doing the same activity/sport.
+//      - Adds 'activityName' to the high-performance Time Index.
+//      - Adds live checks during candidate filtering and augmenting path matching.
+//      - Adds a final backstop safety sweep to catch and fix any activity mismatches.
 //
 // PERFORMANCE:
-//  P1. FUSED DOMAIN INITIALIZATION — compat matrix + domain init merged into
-//      ONE pass. Eliminates the entire buildCompatibilityMatrix step and its
-//      O(N×C) redundant iteration. Domains built directly with ALL checks.
-//  P2. PRE-COMPUTED FIELD PROPERTY MAP — capacity, sharing type, and division
-//      preferences cached in a Map ONCE. Eliminates repeated property chain
-//      lookups in every hot path.
-//  P3. BATCHED ROTATION SCORING — rotation scores pre-computed per bunk×activity
-//      ONCE before domain init.
-//  P4. SORTED TIME INDEX — field time entries sorted by startMin for binary
-//      search on overlap queries.
-//  P5. REUSABLE SCRATCH OBJECTS — pick objects reused during cost evaluation.
+//  P1. FUSED DOMAIN INITIALIZATION — compat matrix + domain init merged into
+//      ONE pass. Eliminates the entire buildCompatibilityMatrix step and its
+//      O(N×C) redundant iteration. Domains built directly with ALL checks.
+//  P2. PRE-COMPUTED FIELD PROPERTY MAP — capacity, sharing type, and division
+//      preferences cached in a Map ONCE. Eliminates repeated property chain
+//      lookups in every hot path.
+//  P3. BATCHED ROTATION SCORING — rotation scores pre-computed per bunk×activity
+//      ONCE before domain init.
+//  P4. SORTED TIME INDEX — field time entries sorted by startMin for binary
+//      search on overlap queries.
+//  P5. REUSABLE SCRATCH OBJECTS — pick objects reused during cost evaluation.
 //
 // DIAGNOSTICS:
-//  D1. ALL LOGGING GATED — debug, rotation, cross-div, and v12 logging
-//      controlled by flags. Zero console overhead in production.
+//  D1. ALL LOGGING GATED — debug, rotation, cross-div, and v12 logging
+//      controlled by flags. Zero console overhead in production.
 //
 // SOLVING PIPELINE (v12.3):
-//   1. buildAllCandidateOptions()        — master activity list (once)
-//   2. buildFieldTimeIndex()             — sorted time-indexed field usage (w/ Activity Name)
-//   3. precomputeFieldProperties()       — capacity + sharing type map
-//   4. precomputeRotationScores()        — bunk×activity score map
-//   5. buildDomainsAndSlotGroups()       — FUSED domain + group build
-//   6. propagateAC3()                    — arc consistency
-//   7. solveSlotGroups()                 — augmenting path matching (w/ Activity Checks)
-//   8. backjumpSolver()                  — resolve remaining
-//   9. postSolveLocalSearch()            — polish + swap chains
-//   10. Cross-Division & Activity Sweep  — final safety check
+//   1. buildAllCandidateOptions()        — master activity list (once)
+//   2. buildFieldTimeIndex()             — sorted time-indexed field usage (w/ Activity Name)
+//   3. precomputeFieldProperties()       — capacity + sharing type map
+//   4. precomputeRotationScores()        — bunk×activity score map
+//   5. buildDomainsAndSlotGroups()       — FUSED domain + group build
+//   6. propagateAC3()                    — arc consistency
+//   7. solveSlotGroups()                 — augmenting path matching (w/ Activity Checks)
+//   8. backjumpSolver()                  — resolve remaining
+//   9. postSolveLocalSearch()            — polish + swap chains
+//   10. Cross-Division & Activity Sweep  — final safety check
 // ============================================================================
 
 (function () {
-    'use strict';
+    'use strict';
 
-    const Solver = {};
-    const MAX_MATCHUP_ITERATIONS = 2000;
+    const Solver = {};
+    const MAX_MATCHUP_ITERATIONS = 2000;
 
-    // ★★★ v12.0: ALL LOGGING GATED — set to true ONLY for debugging ★★★
-    const DEBUG_MODE = false;
-    const DEBUG_ROTATION = false;
-    const DEBUG_CROSS_DIV = false;
-    const DEBUG_V12 = false;
+    // ★★★ v12.0: ALL LOGGING GATED — set to true ONLY for debugging ★★★
+    const DEBUG_MODE = false;
+    const DEBUG_ROTATION = false;
+    const DEBUG_CROSS_DIV = false;
+    const DEBUG_V12 = false;
 
-    let globalConfig = null;
-    let activityProperties = {};
-    let allCandidateOptions = [];
+    let globalConfig = null;
+    let activityProperties = {};
+    let allCandidateOptions = [];
 
-    // ========================================================================
-    // SOLVER-WIDE CACHES (cleared per solve cycle)
-    // ========================================================================
+    // ========================================================================
+    // SOLVER-WIDE CACHES (cleared per solve cycle)
+    // ========================================================================
 
-    const _normalizedNames = new Map();
-    let _rotationScoreCache = new Map();
-    let _todayCache = new Map();
-    let _fieldTimeIndex = new Map();
+    const _normalizedNames = new Map();
+    let _rotationScoreCache = new Map();
+    let _todayCache = new Map();
+    let _fieldTimeIndex = new Map();
 
-    // ★★★ v12.0: NEW pre-computed lookup tables ★★★
-    let _fieldPropertyMap = new Map();     // fieldName → { capacity, sharingType, prefList, prefExclusive }
-    let _rotationScoreMap = new Map();     // "bunk|activity" → score
-    let _bunkDivisionCache = new Map();    // bunk → divName
+    // ★★★ v12.0: NEW pre-computed lookup tables ★★★
+    let _fieldPropertyMap = new Map();     // fieldName → { capacity, sharingType, prefList, prefExclusive }
+    let _rotationScoreMap = new Map();     // "bunk|activity" → score
+    let _bunkDivisionCache = new Map();    // bunk → divName
 
-    // Domain-based structures
-    let _domains = null;          // Map<blockIdx, Set<candIdx>>
-    let _slotGroups = null;       // Map<timeKey, blockIdx[]>
-    let _assignedBlocks = new Set();
-    let _assignments = new Map(); // blockIdx → { candIdx, pick, cost }
+    // Domain-based structures
+    let _domains = null;          // Map<blockIdx, Set<candIdx>>
+    let _slotGroups = null;       // Map<timeKey, blockIdx[]>
+    let _assignedBlocks = new Set();
+    let _assignments = new Map(); // blockIdx → { candIdx, pick, cost }
 
-    // ★★★ v12.0: Performance counters ★★★
-    let _perfCounters = {
-        rotationCacheHits: 0,
-        rotationCacheMisses: 0,
-        timeIndexQueries: 0,
-        domainPruned: 0,
-        augmentingPathAttempts: 0,
-        augmentingPathSuccesses: 0
-    };
+    // ★★★ v13.0: Activity-First Planner state ★★★
+    let _activityPlan = new Map();      // blockIdx → { activity, steering }
+    let _activityDebt = new Map();      // "bunk|activity" → debtScore
+    let _scarcityMap = new Map();       // "field|startMin" → scarcityRatio
+    let _uniqueFieldMap = new Map();    // activity → number of fields that host it
+    let _timeConstrainedBoost = new Map(); // activity → { windowMinutes, totalMinutes }
+    let _skeletonContext = new Map();   // blockIdx → { prevType, nextType, prevEvent, nextEvent }
+    let _smallBunkFlags = new Set();    // set of bunk names that are below min-player threshold
+    let _passNumber = 0;               // current pass (1=pencil, 2=ink attempt, 3=final)
+    let _passAnalysis = null;           // analysis results from previous pass
 
-    function clearAllCaches() {
-        _rotationScoreCache.clear();
-        _todayCache.clear();
-        _assignedBlocks.clear();
-        _assignments.clear();
-        _fieldPropertyMap.clear();
-        _rotationScoreMap.clear();
-        _domains = null;
-        _slotGroups = null;
-        _perfCounters = {
-            rotationCacheHits: 0, rotationCacheMisses: 0,
-            timeIndexQueries: 0, domainPruned: 0,
-            augmentingPathAttempts: 0, augmentingPathSuccesses: 0
-        };
-    }
+    // ★★★ v12.0: Performance counters ★★★
+    let _perfCounters = {
+        rotationCacheHits: 0,
+        rotationCacheMisses: 0,
+        timeIndexQueries: 0,
+        domainPruned: 0,
+        augmentingPathAttempts: 0,
+        augmentingPathSuccesses: 0
+    };
 
-    // ========================================================================
-    // LOGGING HELPERS (NO-OP when flags are false)
-    // ========================================================================
+    function clearAllCaches() {
+        _rotationScoreCache.clear();
+        _todayCache.clear();
+        _assignedBlocks.clear();
+        _assignments.clear();
+        _fieldPropertyMap.clear();
+        _rotationScoreMap.clear();
+        _domains = null;
+        _slotGroups = null;
+        // ★★★ v13.0: Clear planner state ★★★
+        _activityPlan.clear();
+        _scarcityMap.clear();
+        _skeletonContext.clear();
+        // Don't clear _activityDebt — it persists across passes
+        // Don't clear _uniqueFieldMap, _timeConstrainedBoost, _smallBunkFlags — rebuilt per solve
+        _perfCounters = {
+            rotationCacheHits: 0, rotationCacheMisses: 0,
+            timeIndexQueries: 0, domainPruned: 0,
+            augmentingPathAttempts: 0, augmentingPathSuccesses: 0
+        };
+    }
 
-    function debugLog() { if (DEBUG_MODE) console.log.apply(console, ['[SOLVER]'].concat(Array.from(arguments))); }
-    function rotationLog() { if (DEBUG_ROTATION) console.log.apply(console, ['[ROTATION]'].concat(Array.from(arguments))); }
-    function crossDivLog() { if (DEBUG_CROSS_DIV) console.log.apply(console, ['[CROSS-DIV]'].concat(Array.from(arguments))); }
-    function v12Log() { if (DEBUG_V12) console.log.apply(console, ['[v12]'].concat(Array.from(arguments))); }
+    // ========================================================================
+    // LOGGING HELPERS (NO-OP when flags are false)
+    // ========================================================================
 
-    // ========================================================================
-    // PRE-NORMALIZED NAME UTILITY
-    // ========================================================================
+    function debugLog() { if (DEBUG_MODE) console.log.apply(console, ['[SOLVER]'].concat(Array.from(arguments))); }
+    function rotationLog() { if (DEBUG_ROTATION) console.log.apply(console, ['[ROTATION]'].concat(Array.from(arguments))); }
+    function crossDivLog() { if (DEBUG_CROSS_DIV) console.log.apply(console, ['[CROSS-DIV]'].concat(Array.from(arguments))); }
+    function v12Log() { if (DEBUG_V12) console.log.apply(console, ['[v12]'].concat(Array.from(arguments))); }
 
-    function normName(name) {
-        if (!name) return '';
-        var cached = _normalizedNames.get(name);
-        if (cached !== undefined) return cached;
-        cached = name.toLowerCase().trim();
-        _normalizedNames.set(name, cached);
-        return cached;
-    }
+    // ========================================================================
+    // PRE-NORMALIZED NAME UTILITY
+    // ========================================================================
 
-    // ========================================================================
-    // ROTATION CONFIG — DELEGATES TO ROTATION ENGINE
-    // ========================================================================
+    function normName(name) {
+        if (!name) return '';
+        var cached = _normalizedNames.get(name);
+        if (cached !== undefined) return cached;
+        cached = name.toLowerCase().trim();
+        _normalizedNames.set(name, cached);
+        return cached;
+    }
 
-    const ROTATION_CONFIG = new Proxy({}, {
-        get: function(target, prop) {
-            if (window.RotationEngine?.CONFIG?.[prop] !== undefined) {
-                return window.RotationEngine.CONFIG[prop];
-            }
-            var defaults = {
-                YESTERDAY_PENALTY: 12000,
-                TWO_DAYS_AGO_PENALTY: 8000,
-                THREE_DAYS_AGO_PENALTY: 5000,
-                SAME_DAY_PENALTY: Infinity,
-                TIE_BREAKER_RANDOMNESS: 300,
-                ADJACENT_BUNK_BONUS: -150,
-                NEARBY_BUNK_BONUS: -100
-            };
-            return defaults[prop] !== undefined ? defaults[prop] : 0;
-        }
-    });
+    // ========================================================================
+    // ROTATION CONFIG — DELEGATES TO ROTATION ENGINE
+    // ========================================================================
 
-    // ========================================================================
-    // BUNK → DIVISION CACHE
-    // ========================================================================
+    const ROTATION_CONFIG = new Proxy({}, {
+        get: function(target, prop) {
+            if (window.RotationEngine?.CONFIG?.[prop] !== undefined) {
+                return window.RotationEngine.CONFIG[prop];
+            }
+            var defaults = {
+                YESTERDAY_PENALTY: 12000,
+                TWO_DAYS_AGO_PENALTY: 8000,
+                THREE_DAYS_AGO_PENALTY: 5000,
+                SAME_DAY_PENALTY: Infinity,
+                TIE_BREAKER_RANDOMNESS: 300,
+                ADJACENT_BUNK_BONUS: -150,
+                NEARBY_BUNK_BONUS: -100
+            };
+            return defaults[prop] !== undefined ? defaults[prop] : 0;
+        }
+    });
 
-    function getBunkDivision(bunkName) {
-        if (!bunkName) return '';
-        var cached = _bunkDivisionCache.get(bunkName);
-        if (cached !== undefined) return cached;
+    // ========================================================================
+    // BUNK → DIVISION CACHE
+    // ========================================================================
 
-        if (window.SchedulerCoreUtils?.getDivisionForBunk) {
-            var div = window.SchedulerCoreUtils.getDivisionForBunk(bunkName);
-            _bunkDivisionCache.set(bunkName, div || '');
-            return div || '';
-        }
+    function getBunkDivision(bunkName) {
+        if (!bunkName) return '';
+        var cached = _bunkDivisionCache.get(bunkName);
+        if (cached !== undefined) return cached;
 
-        var divisions = window.divisions || {};
-        for (var divName in divisions) {
-            var bunks = divisions[divName]?.bunks || [];
-            if (bunks.indexOf(bunkName) !== -1) {
-                _bunkDivisionCache.set(bunkName, divName);
-                return divName;
-            }
-        }
-        _bunkDivisionCache.set(bunkName, '');
-        return '';
-    }
+        if (window.SchedulerCoreUtils?.getDivisionForBunk) {
+            var div = window.SchedulerCoreUtils.getDivisionForBunk(bunkName);
+            _bunkDivisionCache.set(bunkName, div || '');
+            return div || '';
+        }
 
-    function clearBunkDivisionCache() {
-        _bunkDivisionCache.clear();
-    }
+        var divisions = window.divisions || {};
+        for (var divName in divisions) {
+            var bunks = divisions[divName]?.bunks || [];
+            if (bunks.indexOf(bunkName) !== -1) {
+                _bunkDivisionCache.set(bunkName, divName);
+                return divName;
+            }
+        }
+        _bunkDivisionCache.set(bunkName, '');
+        return '';
+    }
 
-    function getBunkNumber(bunkName) {
-        if (!bunkName) return null;
-        var m = String(bunkName).match(/(\d+)/);
-        return m ? parseInt(m[1], 10) : null;
-    }
+    function clearBunkDivisionCache() {
+        _bunkDivisionCache.clear();
+    }
 
-    // ========================================================================
-    // ★★★ v12.0 P2: PRE-COMPUTED FIELD PROPERTY MAP ★★★
-    // Built ONCE per solve. Eliminates repeated property chain lookups.
-    // ========================================================================
+    function getBunkNumber(bunkName) {
+        if (!bunkName) return null;
+        var m = String(bunkName).match(/(\d+)/);
+        return m ? parseInt(m[1], 10) : null;
+    }
 
-    function precomputeFieldProperties() {
-        _fieldPropertyMap.clear();
-        var props = activityProperties || {};
+    // ========================================================================
+    // ★★★ v12.0 P2: PRE-COMPUTED FIELD PROPERTY MAP ★★★
+    // Built ONCE per solve. Eliminates repeated property chain lookups.
+    // ========================================================================
 
-        // ★★★ v12.2 FIX: Load field sharing rules from campGlobalSettings_v1.fields[] ★★★
-        // The UI stores field properties in a fields[] array, not in activityProperties.
-        // Build a lookup so the solver sees the correct sharing/capacity rules.
-        var _storedFieldProps = {};
-        try {
-            var gs = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
-            var storedFields = gs.fields || gs.app1?.fields || [];
-            for (var fi = 0; fi < storedFields.length; fi++) {
-                var sf = storedFields[fi];
-                if (sf && sf.name) _storedFieldProps[sf.name] = sf;
-            }
-        } catch(e) { /* ignore parse errors */ }
+    function precomputeFieldProperties() {
+        _fieldPropertyMap.clear();
+        var props = activityProperties || {};
 
-        // Process all known fields from candidates
-        for (var i = 0; i < allCandidateOptions.length; i++) {
-            var cand = allCandidateOptions[i];
-            var fieldName = cand.field;
-            if (_fieldPropertyMap.has(fieldName)) continue;
+        // ★★★ v12.2 FIX: Load field sharing rules from campGlobalSettings_v1.fields[] ★★★
+        // The UI stores field properties in a fields[] array, not in activityProperties.
+        // Build a lookup so the solver sees the correct sharing/capacity rules.
+        var _storedFieldProps = {};
+        try {
+            var gs = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
+            var storedFields = gs.fields || gs.app1?.fields || [];
+            for (var fi = 0; fi < storedFields.length; fi++) {
+                var sf = storedFields[fi];
+                if (sf && sf.name) _storedFieldProps[sf.name] = sf;
+            }
+        } catch(e) { /* ignore parse errors */ }
 
-            // Merge: activityProperties takes precedence, then stored fields
-            var fieldProps = props[fieldName] || _storedFieldProps[fieldName] || {};
-            // If activityProperties entry exists but has no sharableWith, check stored fields
-            if (!fieldProps.sharableWith && !fieldProps.sharable && _storedFieldProps[fieldName]) {
-                fieldProps = _storedFieldProps[fieldName];
-            }
-            var capacity = 1;
-            var sharingType = 'not_sharable';
-            var prefList = null;
-            var prefExclusive = false;
+        // Process all known fields from candidates
+        for (var i = 0; i < allCandidateOptions.length; i++) {
+            var cand = allCandidateOptions[i];
+            var fieldName = cand.field;
+            if (_fieldPropertyMap.has(fieldName)) continue;
 
-            // Capacity + sharing type
-            if (fieldProps.sharableWith) {
-                var sw = fieldProps.sharableWith;
-                if (sw.type === 'not_sharable') { capacity = 1; sharingType = 'not_sharable'; }
-                else if (sw.type === 'all') { capacity = parseInt(sw.capacity) || 999; sharingType = 'all'; }
-                else if (sw.type === 'same_division') { capacity = parseInt(sw.capacity) || 2; sharingType = 'same_division'; }
-                else if (sw.type === 'custom') { capacity = parseInt(sw.capacity) || 2; sharingType = 'custom'; }
-                else if (sw.capacity) { capacity = parseInt(sw.capacity); sharingType = 'same_division'; }
-                else { capacity = 2; sharingType = 'same_division'; }
-            } else if (fieldProps.sharable) {
-                capacity = 2; sharingType = 'same_division';
-            }
+            // Merge: activityProperties takes precedence, then stored fields
+            var fieldProps = props[fieldName] || _storedFieldProps[fieldName] || {};
+            // If activityProperties entry exists but has no sharableWith, check stored fields
+            if (!fieldProps.sharableWith && !fieldProps.sharable && _storedFieldProps[fieldName]) {
+                fieldProps = _storedFieldProps[fieldName];
+            }
+            var capacity = 1;
+            var sharingType = 'not_sharable';
+            var prefList = null;
+            var prefExclusive = false;
 
-            // Division preferences
-            var prefProps = fieldProps;
-            if (!prefProps?.preferences?.enabled) {
-                // Also check activity name props
-                var actProps = props[cand.activityName];
-                if (actProps?.preferences?.enabled) prefProps = actProps;
-            }
-            if (prefProps?.preferences?.enabled) {
-                prefList = prefProps.preferences.list || [];
-                prefExclusive = !!prefProps.preferences.exclusive;
-            }
+            // Capacity + sharing type
+            if (fieldProps.sharableWith) {
+                var sw = fieldProps.sharableWith;
+                if (sw.type === 'not_sharable') { capacity = 1; sharingType = 'not_sharable'; }
+                else if (sw.type === 'all') { capacity = parseInt(sw.capacity) || 999; sharingType = 'all'; }
+                else if (sw.type === 'same_division') { capacity = parseInt(sw.capacity) || 2; sharingType = 'same_division'; }
+                else if (sw.type === 'custom') { capacity = parseInt(sw.capacity) || 2; sharingType = 'custom'; }
+                else if (sw.capacity) { capacity = parseInt(sw.capacity); sharingType = 'same_division'; }
+                else { capacity = 2; sharingType = 'same_division'; }
+            } else if (fieldProps.sharable) {
+                capacity = 2; sharingType = 'same_division';
+            }
 
-            _fieldPropertyMap.set(fieldName, {
-                capacity: capacity,
-                sharingType: sharingType,
-                prefList: prefList,
-                prefExclusive: prefExclusive,
-                hasProps: true
-            });
-        }
+            // Division preferences
+            var prefProps = fieldProps;
+            if (!prefProps?.preferences?.enabled) {
+                // Also check activity name props
+                var actProps = props[cand.activityName];
+                if (actProps?.preferences?.enabled) prefProps = actProps;
+            }
+            if (prefProps?.preferences?.enabled) {
+                prefList = prefProps.preferences.list || [];
+                prefExclusive = !!prefProps.preferences.exclusive;
+            }
 
-        v12Log('Field properties pre-computed: ' + _fieldPropertyMap.size + ' fields');
-    }
+            _fieldPropertyMap.set(fieldName, {
+                capacity: capacity,
+                sharingType: sharingType,
+                prefList: prefList,
+                prefExclusive: prefExclusive,
+                hasProps: true
+            });
+        }
 
-    function getFieldCapacity(fieldName) {
-        var cached = _fieldPropertyMap.get(fieldName);
-        if (cached) return cached.capacity;
+        v12Log('Field properties pre-computed: ' + _fieldPropertyMap.size + ' fields');
+    }
 
-        // Fallback for fields not in candidate list
-        if (window.SchedulerCoreUtils?.getFieldCapacity) {
-            return window.SchedulerCoreUtils.getFieldCapacity(fieldName, activityProperties);
-        }
-        return 1;
-    }
+    function getFieldCapacity(fieldName) {
+        var cached = _fieldPropertyMap.get(fieldName);
+        if (cached) return cached.capacity;
 
-    function getSharingType(fieldName) {
-        var cached = _fieldPropertyMap.get(fieldName);
-        if (cached) return cached.sharingType;
+        // Fallback for fields not in candidate list
+        if (window.SchedulerCoreUtils?.getFieldCapacity) {
+            return window.SchedulerCoreUtils.getFieldCapacity(fieldName, activityProperties);
+        }
+        return 1;
+    }
 
-        var props = activityProperties[fieldName] || {};
-        if (props.sharableWith?.type) return props.sharableWith.type;
-        if (props.sharable) return 'same_division';
-        return 'not_sharable';
-    }
+    function getSharingType(fieldName) {
+        var cached = _fieldPropertyMap.get(fieldName);
+        if (cached) return cached.sharingType;
 
-    // ========================================================================
-    // ★★★ v12.0 P4: SORTED TIME INDEX — Binary search for overlaps ★★★
-    // ========================================================================
+        var props = activityProperties[fieldName] || {};
+        if (props.sharableWith?.type) return props.sharableWith.type;
+        if (props.sharable) return 'same_division';
+        return 'not_sharable';
+    }
 
-    function buildFieldTimeIndex() {
-        _fieldTimeIndex.clear();
-        var schedules = window.scheduleAssignments || {};
-        var divisions = window.divisions || {};
-        var allDivTimes = window.divisionTimes || {};
+    // ========================================================================
+    // ★★★ v12.0 P4: SORTED TIME INDEX — Binary search for overlaps ★★★
+    // ========================================================================
 
-        for (var divName in divisions) {
-            var divSlots = allDivTimes[divName] || [];
-            var bunks = divisions[divName]?.bunks || [];
-            for (var bi = 0; bi < bunks.length; bi++) {
-                var bunk = bunks[bi];
-                var bunkAssignments = schedules[bunk] || [];
-                for (var slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
-                    var entry = bunkAssignments[slotIdx];
-                    if (!entry || entry.continuation) continue;
-                    var slot = divSlots[slotIdx];
-                    if (!slot || slot.startMin === undefined) continue;
+    function buildFieldTimeIndex() {
+        _fieldTimeIndex.clear();
+        var schedules = window.scheduleAssignments || {};
+        var divisions = window.divisions || {};
+        var allDivTimes = window.divisionTimes || {};
 
-                    var fieldNorm = normName(entry.field);
-                    var actNorm = normName(entry._activity);
-                    var fieldLabel = normName(
-                        window.SchedulerCoreUtils?.fieldLabel?.(entry.field) || ''
-                    );
-                    
-                    var entryActivityNorm = normName(entry._activity || entry.sport || entry.field);
-                    var names = new Set([fieldNorm, actNorm, fieldLabel].filter(function(n) { return n; }));
-                    for (var name of names) {
-                        addToFieldTimeIndex(name, slot.startMin, slot.endMin, bunk, divName, entryActivityNorm);
-                    }
-                }
-            }
-        }
+        for (var divName in divisions) {
+            var divSlots = allDivTimes[divName] || [];
+            var bunks = divisions[divName]?.bunks || [];
+            for (var bi = 0; bi < bunks.length; bi++) {
+                var bunk = bunks[bi];
+                var bunkAssignments = schedules[bunk] || [];
+                for (var slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
+                    var entry = bunkAssignments[slotIdx];
+                    if (!entry || entry.continuation) continue;
+                    var slot = divSlots[slotIdx];
+                    if (!slot || slot.startMin === undefined) continue;
 
-        // ★★★ v12.0: Sort all entries by startMin for binary search ★★★
-        for (var [key, entries] of _fieldTimeIndex) {
-            entries.sort(function(a, b) { return a.startMin - b.startMin; });
-        }
+                    var fieldNorm = normName(entry.field);
+                    var actNorm = normName(entry._activity);
+                    var fieldLabel = normName(
+                        window.SchedulerCoreUtils?.fieldLabel?.(entry.field) || ''
+                    );
+                    
+                    var entryActivityNorm = normName(entry._activity || entry.sport || entry.field);
+                    var names = new Set([fieldNorm, actNorm, fieldLabel].filter(function(n) { return n; }));
+                    for (var name of names) {
+                        addToFieldTimeIndex(name, slot.startMin, slot.endMin, bunk, divName, entryActivityNorm);
+                    }
+                }
+            }
+        }
 
-        v12Log('Field time index built: ' + _fieldTimeIndex.size + ' entries (sorted)');
-    }
+        // ★★★ v12.0: Sort all entries by startMin for binary search ★★★
+        for (var [key, entries] of _fieldTimeIndex) {
+            entries.sort(function(a, b) { return a.startMin - b.startMin; });
+        }
 
-    function addToFieldTimeIndex(fieldNorm, startMin, endMin, bunk, divName, activityName) {
-        if (!_fieldTimeIndex.has(fieldNorm)) _fieldTimeIndex.set(fieldNorm, []);
-        // Insert maintaining sort order (most inserts are at the end or near it)
-        var entries = _fieldTimeIndex.get(fieldNorm);
-        entries.push({ startMin: startMin, endMin: endMin, bunk: bunk, divName: divName, activityName: activityName || '' });
-        // Re-sort only if needed (entries pushed out of order)
-        if (entries.length > 1 && entries[entries.length - 1].startMin < entries[entries.length - 2].startMin) {
-            entries.sort(function(a, b) { return a.startMin - b.startMin; });
-        }
-    }
+        v12Log('Field time index built: ' + _fieldTimeIndex.size + ' entries (sorted)');
+    }
 
-    function removeFromFieldTimeIndex(fieldNorm, startMin, endMin, bunk) {
-        var entries = _fieldTimeIndex.get(fieldNorm);
-        if (!entries) return;
-        var idx = entries.findIndex(function(e) {
-            return e.bunk === bunk && e.startMin === startMin && e.endMin === endMin;
-        });
-        if (idx !== -1) entries.splice(idx, 1);
-    }
+    function addToFieldTimeIndex(fieldNorm, startMin, endMin, bunk, divName, activityName) {
+        if (!_fieldTimeIndex.has(fieldNorm)) _fieldTimeIndex.set(fieldNorm, []);
+        // Insert maintaining sort order (most inserts are at the end or near it)
+        var entries = _fieldTimeIndex.get(fieldNorm);
+        entries.push({ startMin: startMin, endMin: endMin, bunk: bunk, divName: divName, activityName: activityName || '' });
+        // Re-sort only if needed (entries pushed out of order)
+        if (entries.length > 1 && entries[entries.length - 1].startMin < entries[entries.length - 2].startMin) {
+            entries.sort(function(a, b) { return a.startMin - b.startMin; });
+        }
+    }
 
-    // ★★★ v12.0 P4: Binary search for first entry that could overlap ★★★
-    function findFirstOverlapIndex(entries, queryStart, queryEnd) {
-        // Find first entry where endMin > queryStart (could overlap)
-        // Since entries are sorted by startMin, we look for entries where startMin < queryEnd
-        var lo = 0, hi = entries.length;
-        while (lo < hi) {
-            var mid = (lo + hi) >> 1;
-            if (entries[mid].startMin >= queryEnd) {
-                hi = mid;
-            } else {
-                lo = mid + 1;
-            }
-        }
-        return lo;  // Upper bound — scan from 0 to lo-1
-    }
+    function removeFromFieldTimeIndex(fieldNorm, startMin, endMin, bunk) {
+        var entries = _fieldTimeIndex.get(fieldNorm);
+        if (!entries) return;
+        var idx = entries.findIndex(function(e) {
+            return e.bunk === bunk && e.startMin === startMin && e.endMin === endMin;
+        });
+        if (idx !== -1) entries.splice(idx, 1);
+    }
 
-    function getFieldUsageFromTimeIndex(fieldNorm, startMin, endMin, excludeBunk) {
-        _perfCounters.timeIndexQueries++;
-        var entries = _fieldTimeIndex.get(fieldNorm);
-        if (!entries || entries.length === 0) return 0;
-        var count = 0;
-        var upperBound = findFirstOverlapIndex(entries, startMin, endMin);
-        for (var i = 0; i < upperBound; i++) {
-            var e = entries[i];
-            if (e.bunk === excludeBunk) continue;
-            if (e.endMin > startMin) count++;  // startMin < endMin is guaranteed by upperBound
-        }
-        return count;
-    }
+    // ★★★ v12.0 P4: Binary search for first entry that could overlap ★★★
+    function findFirstOverlapIndex(entries, queryStart, queryEnd) {
+        // Find first entry where endMin > queryStart (could overlap)
+        // Since entries are sorted by startMin, we look for entries where startMin < queryEnd
+        var lo = 0, hi = entries.length;
+        while (lo < hi) {
+            var mid = (lo + hi) >> 1;
+            if (entries[mid].startMin >= queryEnd) {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        return lo;  // Upper bound — scan from 0 to lo-1
+    }
 
-    function checkCrossDivisionTimeConflict(fieldName, blockDivName, startMin, endMin, excludeBunk) {
-        if (startMin === undefined || endMin === undefined) return null;
-        var fieldNorm = normName(fieldName);
-        var entries = _fieldTimeIndex.get(fieldNorm);
-        if (!entries) return null;
+    function getFieldUsageFromTimeIndex(fieldNorm, startMin, endMin, excludeBunk) {
+        _perfCounters.timeIndexQueries++;
+        var entries = _fieldTimeIndex.get(fieldNorm);
+        if (!entries || entries.length === 0) return 0;
+        var count = 0;
+        var upperBound = findFirstOverlapIndex(entries, startMin, endMin);
+        for (var i = 0; i < upperBound; i++) {
+            var e = entries[i];
+            if (e.bunk === excludeBunk) continue;
+            if (e.endMin > startMin) count++;  // startMin < endMin is guaranteed by upperBound
+        }
+        return count;
+    }
 
-        var upperBound = findFirstOverlapIndex(entries, startMin, endMin);
-        for (var i = 0; i < upperBound; i++) {
-            var e = entries[i];
-            if (e.divName === blockDivName) continue;
-            if (e.bunk === excludeBunk) continue;
-            if (e.endMin > startMin) {
-                return {
-                    conflictingDiv: e.divName,
-                    conflictingBunk: e.bunk,
-                    theirTime: e.startMin + '-' + e.endMin,
-                    ourTime: startMin + '-' + endMin,
-                    overlapTime: Math.max(startMin, e.startMin) + '-' + Math.min(endMin, e.endMin)
-                };
-            }
-        }
-        return null;
-    }
+    function checkCrossDivisionTimeConflict(fieldName, blockDivName, startMin, endMin, excludeBunk) {
+        if (startMin === undefined || endMin === undefined) return null;
+        var fieldNorm = normName(fieldName);
+        var entries = _fieldTimeIndex.get(fieldNorm);
+        if (!entries) return null;
 
-    function countSameDivisionUsage(fieldName, divisionName, startMin, endMin, excludeBunk) {
-        var fieldNorm = normName(fieldName);
-        var entries = _fieldTimeIndex.get(fieldNorm);
-        if (!entries) return 0;
-        var count = 0;
-        var upperBound = findFirstOverlapIndex(entries, startMin, endMin);
-        for (var i = 0; i < upperBound; i++) {
-            var e = entries[i];
-            if (e.divName !== divisionName) continue;
-            if (e.bunk === excludeBunk) continue;
-            if (e.endMin > startMin) count++;
-        }
-        return count;
-    }
+        var upperBound = findFirstOverlapIndex(entries, startMin, endMin);
+        for (var i = 0; i < upperBound; i++) {
+            var e = entries[i];
+            if (e.divName === blockDivName) continue;
+            if (e.bunk === excludeBunk) continue;
+            if (e.endMin > startMin) {
+                return {
+                    conflictingDiv: e.divName,
+                    conflictingBunk: e.bunk,
+                    theirTime: e.startMin + '-' + e.endMin,
+                    ourTime: startMin + '-' + endMin,
+                    overlapTime: Math.max(startMin, e.startMin) + '-' + Math.min(endMin, e.endMin)
+                };
+            }
+        }
+        return null;
+    }
 
-    // ★★★ v12.1: Same-field activity mismatch check ★★★
-    // When bunks share a field, they MUST be doing the same sport/activity.
-    // Returns the conflicting activity name if mismatch found, null if OK.
-    function checkSameFieldActivityMismatch(fieldName, startMin, endMin, activityName, excludeBunk) {
-        if (!activityName || activityName === 'Free' || activityName === 'free') return null;
-        var fieldNorm = normName(fieldName);
-        var actNorm = normName(activityName);
-        var entries = _fieldTimeIndex.get(fieldNorm);
-        if (!entries) return null;
-        var upperBound = findFirstOverlapIndex(entries, startMin, endMin);
-        for (var i = 0; i < upperBound; i++) {
-            var e = entries[i];
-            if (e.bunk === excludeBunk) continue;
-            if (e.endMin <= startMin) continue;
-            // Entry overlaps in time — check activity
-            if (e.activityName && e.activityName !== actNorm) {
-                return e.activityName;
-            }
-        }
-        return null;
-    }
+    function countSameDivisionUsage(fieldName, divisionName, startMin, endMin, excludeBunk) {
+        var fieldNorm = normName(fieldName);
+        var entries = _fieldTimeIndex.get(fieldNorm);
+        if (!entries) return 0;
+        var count = 0;
+        var upperBound = findFirstOverlapIndex(entries, startMin, endMin);
+        for (var i = 0; i < upperBound; i++) {
+            var e = entries[i];
+            if (e.divName !== divisionName) continue;
+            if (e.bunk === excludeBunk) continue;
+            if (e.endMin > startMin) count++;
+        }
+        return count;
+    }
 
-    // ========================================================================
-    // ★★★ v12.0 P3: BATCHED ROTATION SCORING ★★★
-    // Pre-compute rotation scores per bunk×activity ONCE.
-    // ========================================================================
+    // ★★★ v12.1: Same-field activity mismatch check ★★★
+    // When bunks share a field, they MUST be doing the same sport/activity.
+    // Returns the conflicting activity name if mismatch found, null if OK.
+    function checkSameFieldActivityMismatch(fieldName, startMin, endMin, activityName, excludeBunk) {
+        if (!activityName || activityName === 'Free' || activityName === 'free') return null;
+        var fieldNorm = normName(fieldName);
+        var actNorm = normName(activityName);
+        var entries = _fieldTimeIndex.get(fieldNorm);
+        if (!entries) return null;
+        var upperBound = findFirstOverlapIndex(entries, startMin, endMin);
+        for (var i = 0; i < upperBound; i++) {
+            var e = entries[i];
+            if (e.bunk === excludeBunk) continue;
+            if (e.endMin <= startMin) continue;
+            // Entry overlaps in time — check activity
+            if (e.activityName && e.activityName !== actNorm) {
+                return e.activityName;
+            }
+        }
+        return null;
+    }
 
-    function precomputeRotationScores(activityBlocks) {
-        _rotationScoreMap.clear();
+    // ========================================================================
+    // ★★★ v12.0 P3: BATCHED ROTATION SCORING ★★★
+    // Pre-compute rotation scores per bunk×activity ONCE.
+    // ========================================================================
 
-        // Collect unique bunk×activity pairs needed
-        var pairs = new Set();
-        var bunkSet = new Set();
-        var actSet = new Set();
+    function precomputeRotationScores(activityBlocks) {
+        _rotationScoreMap.clear();
 
-        for (var i = 0; i < activityBlocks.length; i++) {
-            bunkSet.add(activityBlocks[i].bunk);
-        }
-        for (var j = 0; j < allCandidateOptions.length; j++) {
-            actSet.add(allCandidateOptions[j].activityName);
-        }
+        // Collect unique bunk×activity pairs needed
+        var pairs = new Set();
+        var bunkSet = new Set();
+        var actSet = new Set();
 
-        // For each bunk, score each activity
-        var scored = 0;
-        for (var bunk of bunkSet) {
-            var divName = getBunkDivision(bunk);
-            for (var actName of actSet) {
-                if (!actName || actName === 'Free') continue;
-                var key = bunk + '|' + actName;
-                if (_rotationScoreMap.has(key)) continue;
+        for (var i = 0; i < activityBlocks.length; i++) {
+            bunkSet.add(activityBlocks[i].bunk);
+        }
+        for (var j = 0; j < allCandidateOptions.length; j++) {
+            actSet.add(allCandidateOptions[j].activityName);
+        }
 
-                var score;
-                if (window.RotationEngine?.calculateRotationScore) {
-                    score = window.RotationEngine.calculateRotationScore({
-                        bunkName: bunk,
-                        activityName: actName,
-                        divisionName: divName,
-                        beforeSlotIndex: 0,  // Slot-independent for batch
-                        allActivities: null,
-                        activityProperties: activityProperties
-                    });
-                } else {
-                    // Basic fallback
-                    var todayActivities = getActivitiesDoneToday(bunk, 999);
-                    if (todayActivities.has(normName(actName))) {
-                        score = Infinity;
-                    } else {
-                        score = 0;
-                    }
-                }
+        // For each bunk, score each activity
+        var scored = 0;
+        for (var bunk of bunkSet) {
+            var divName = getBunkDivision(bunk);
+            for (var actName of actSet) {
+                if (!actName || actName === 'Free') continue;
+                var key = bunk + '|' + actName;
+                if (_rotationScoreMap.has(key)) continue;
 
-                _rotationScoreMap.set(key, score);
-                scored++;
-            }
-        }
+                var score;
+                if (window.RotationEngine?.calculateRotationScore) {
+                    score = window.RotationEngine.calculateRotationScore({
+                        bunkName: bunk,
+                        activityName: actName,
+                        divisionName: divName,
+                        beforeSlotIndex: 0,  // Slot-independent for batch
+                        allActivities: null,
+                        activityProperties: activityProperties
+                    });
+                } else {
+                    // Basic fallback
+                    var todayActivities = getActivitiesDoneToday(bunk, 999);
+                    if (todayActivities.has(normName(actName))) {
+                        score = Infinity;
+                    } else {
+                        score = 0;
+                    }
+                }
 
-        v12Log('Rotation scores pre-computed: ' + scored + ' bunk×activity pairs');
-    }
+                _rotationScoreMap.set(key, score);
+                scored++;
+            }
+        }
 
-    function getPrecomputedRotationScore(bunk, activityName) {
-        if (!activityName || activityName === 'Free') return 0;
-        var key = bunk + '|' + activityName;
-        var cached = _rotationScoreMap.get(key);
-        if (cached !== undefined) {
-            _perfCounters.rotationCacheHits++;
-            return cached;
-        }
-        _perfCounters.rotationCacheMisses++;
-
-        // Fallback: compute on demand
-        return getCachedRotationPenalty_fallback(bunk, activityName);
-    }
-
-    function getCachedRotationPenalty_fallback(bunk, activityName) {
-        if (!activityName || activityName === 'Free') return 0;
-        var key = bunk + '|' + activityName;
-        var cached = _rotationScoreCache.get(key);
-        if (cached !== undefined) return cached;
-
-        var score;
-        if (window.RotationEngine?.calculateRotationScore) {
-            score = window.RotationEngine.calculateRotationScore({
-                bunkName: bunk,
-                activityName: activityName,
-                divisionName: getBunkDivision(bunk),
-                beforeSlotIndex: 999,
-                allActivities: null,
-                activityProperties: activityProperties
-            });
-        } else {
-            var todayActivities = getActivitiesDoneToday(bunk, 999);
-            if (todayActivities.has(normName(activityName))) {
-                score = Infinity;
-            } else {
-                score = 0;
-            }
-        }
-
-        _rotationScoreCache.set(key, score);
-        _rotationScoreMap.set(key, score);
-        return score;
-    }
-
-  function invalidateRotationCacheForBunk(bunk) {
-        // Invalidate all entries for this bunk
-        for (var [key] of _rotationScoreCache) {
-            if (key.startsWith(bunk + '|')) _rotationScoreCache.delete(key);
-        }
-        for (var [key2] of _rotationScoreMap) {
-            if (key2.startsWith(bunk + '|')) _rotationScoreMap.delete(key2);
-        }
-        // ★★★ v12.1 FIX: Cache keys are "bunk:slotIdx", not just "bunk" ★★★
-        for (var [key3] of _todayCache) {
-            if (key3.startsWith(bunk + ':')) _todayCache.delete(key3);
-        }
-    }
+        v12Log('Rotation scores pre-computed: ' + scored + ' bunk×activity pairs');
+    }
 
     // ========================================================================
-    // TODAY ACTIVITIES CACHE
-    // ========================================================================
+    // ★★★ v13.0: PRECOMPUTE RESOURCE MAPS ★★★
+    // Built ONCE per solve. Identifies unique resources, time constraints,
+    // small bunks, and skeleton context for intelligent planning.
+    // ========================================================================
 
-    function getActivitiesDoneToday(bunk, beforeSlotIndex) {
-        var cacheKey = bunk + ':' + beforeSlotIndex;
-        var cached = _todayCache.get(cacheKey);
-        if (cached) return cached;
+    function precomputeResourceMaps(activityBlocks) {
+        _uniqueFieldMap.clear();
+        _timeConstrainedBoost.clear();
+        _smallBunkFlags.clear();
 
-        var activities = new Set();
-        var assignments = window.scheduleAssignments?.[bunk] || [];
-        for (var i = 0; i < Math.min(beforeSlotIndex, assignments.length); i++) {
-            var entry = assignments[i];
-            if (!entry || entry.continuation) continue;
-            var act = normName(entry._activity || entry.sport || entry.field);
-            if (act && act !== 'free' && act !== 'free play') activities.add(act);
-        }
-        _todayCache.set(cacheKey, activities);
-        return activities;
-    }
+        // --- 1. Unique Field Map: for each activity, how many fields host it? ---
+        var activityToFields = {};
+        for (var i = 0; i < allCandidateOptions.length; i++) {
+            var c = allCandidateOptions[i];
+            var act = c.activityName;
+            if (!act || act === 'Free') continue;
+            if (!activityToFields[act]) activityToFields[act] = new Set();
+            activityToFields[act].add(c.field);
+        }
+        for (var actName in activityToFields) {
+            _uniqueFieldMap.set(actName, activityToFields[actName].size);
+        }
 
-    function getDaysSinceActivity(bunk, activityName) {
-        if (window.RotationEngine?.getDaysSinceActivity) {
-            return window.RotationEngine.getDaysSinceActivity(bunk, activityName, 0);
-        }
-        return null;
-    }
+        // --- 2. Time-Constrained Activity Detection ---
+        // Activities with time rules have narrower windows — they should be prioritized
+        // during their available times so they don't go to waste.
+        var props = activityProperties || {};
+        for (var fieldName in props) {
+            var fp = props[fieldName];
+            if (!fp) continue;
+            var rules = fp.timeRules || [];
+            var availRules = rules.filter(function(r) { return r.type === 'Available'; });
+            if (availRules.length > 0) {
+                // This activity has explicit availability windows
+                var totalWindowMinutes = 0;
+                for (var ri = 0; ri < availRules.length; ri++) {
+                    var r = availRules[ri];
+                    var rStart = r.startMin ?? (window.SchedulerCoreUtils?.parseTimeToMinutes?.(r.start) || 0);
+                    var rEnd = r.endMin ?? (window.SchedulerCoreUtils?.parseTimeToMinutes?.(r.end) || 0);
+                    totalWindowMinutes += Math.max(0, rEnd - rStart);
+                }
+                // Compare to total day length (~480 min = 8 hours)
+                var totalDay = 480;
+                if (totalWindowMinutes < totalDay * 0.5) {
+                    // Available less than half the day — this is a constrained resource
+                    _timeConstrainedBoost.set(fieldName, {
+                        windowMinutes: totalWindowMinutes,
+                        totalMinutes: totalDay,
+                        boost: Math.round(3000 * (1 - totalWindowMinutes / totalDay))
+                    });
+                }
+            }
+        }
+        // Also check specials
+        var specials = window.getGlobalSpecialActivities?.() || [];
+        for (var si = 0; si < specials.length; si++) {
+            var sp = specials[si];
+            var spProps = activityProperties[sp.name];
+            if (spProps && spProps.timeRules && spProps.timeRules.length > 0) {
+                var spAvail = spProps.timeRules.filter(function(r) { return r.type === 'Available'; });
+                if (spAvail.length > 0 && !_timeConstrainedBoost.has(sp.name)) {
+                    var spWindow = 0;
+                    for (var sri = 0; sri < spAvail.length; sri++) {
+                        var sr = spAvail[sri];
+                        var srStart = sr.startMin ?? 0;
+                        var srEnd = sr.endMin ?? 0;
+                        spWindow += Math.max(0, srEnd - srStart);
+                    }
+                    if (spWindow < 240) {
+                        _timeConstrainedBoost.set(sp.name, {
+                            windowMinutes: spWindow,
+                            totalMinutes: 480,
+                            boost: Math.round(3000 * (1 - spWindow / 480))
+                        });
+                    }
+                }
+            }
+        }
 
-    function getActivityCount(bunk, activityName) {
-        if (window.RotationEngine?.getActivityCount) {
-            return window.RotationEngine.getActivityCount(bunk, activityName);
-        }
-        var globalSettings = window.loadGlobalSettings?.() || {};
-        var historicalCounts = globalConfig?.historicalCounts || globalSettings.historicalCounts || {};
-        var manualOffsets = globalSettings.manualUsageOffsets || {};
-        var baseCount = historicalCounts[bunk]?.[activityName] || 0;
-        var offset = manualOffsets[bunk]?.[activityName] || 0;
-        return Math.max(0, baseCount + offset);
-    }
+        // --- 3. Small Bunk Detection ---
+        // Bunks whose size alone is below the min-player threshold for most sports
+        var bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || {};
+        var sportMeta = window.getSportMetaData?.() || window.sportMetaData || {};
+        var minThresholds = [];
+        for (var sport in sportMeta) {
+            if (sportMeta[sport].minPlayers) minThresholds.push(sportMeta[sport].minPlayers);
+        }
+        if (minThresholds.length > 0) {
+            // Use the median min-player threshold as the "small bunk" cutoff
+            minThresholds.sort(function(a, b) { return a - b; });
+            var medianMin = minThresholds[Math.floor(minThresholds.length / 2)];
+            for (var bunkName in bunkMeta) {
+                var size = bunkMeta[bunkName]?.size || 0;
+                if (size > 0 && size < medianMin) {
+                    _smallBunkFlags.add(bunkName);
+                }
+            }
+        }
 
-    // ========================================================================
-    // CANDIDATE OPTIONS BUILDER (called ONCE per solve)
-    // ========================================================================
+        // --- 4. Skeleton Context (what's before/after each block) ---
+        // Group blocks by bunk, sort by time, then record prev/next types
+        var bunkBlocks = {};
+        for (var bi = 0; bi < activityBlocks.length; bi++) {
+            var blk = activityBlocks[bi];
+            var bk = blk.bunk;
+            if (!bunkBlocks[bk]) bunkBlocks[bk] = [];
+            bunkBlocks[bk].push({ idx: bi, startTime: blk.startTime || 0, event: blk.event || '' });
+        }
 
-    const KNOWN_SPORTS = new Set([
-        'hockey', 'soccer', 'football', 'baseball', 'kickball', 'basketball',
-        'lineup', 'running bases', 'newcomb', 'volleyball', 'dodgeball',
-        'general activity slot', 'sports slot', 'special activity',
-        'ga slot', 'sport slot', 'free', 'free play'
-    ]);
+        // Also pull skeleton data for non-general blocks (leagues, swim, etc.)
+        var dailyData = window.loadCurrentDailyData?.() || {};
+        var skeleton = dailyData.manualSkeleton || [];
 
-    function isSportName(name) {
-        return name ? KNOWN_SPORTS.has(normName(name)) : false;
-    }
+        for (var bunkKey in bunkBlocks) {
+            var bBlocks = bunkBlocks[bunkKey];
+            bBlocks.sort(function(a, b) { return a.startTime - b.startTime; });
 
-    // ★★★ v12.1: LIVE type-balance check for General Activity Slot fairness ★★★
-    function getLiveTypeBalance(bunk, beforeSlot) {
-        var todayDone = getActivitiesDoneToday(bunk, beforeSlot);
-        var sports = 0;
-        var specials = 0;
-        todayDone.forEach(function(act) {
-            if (window.RotationEngine?.isSpecialActivity?.(act)) {
-                specials++;
-            } else if (act !== 'free' && act !== 'free play' && act !== 'lunch' &&
-                       act !== 'snacks' && act !== 'swim' && act !== 'dismissal') {
-                sports++;
-            }
-        });
-        return { sports: sports, specials: specials };
-    }
+            var bunkDiv = getBunkDivision(bunkKey);
 
-    // ★★★ v12.1: LIVE type-balance check for General Activity Slot fairness ★★★
-    function isSpecialCandidate(cand) {
-        return cand && (cand.type === 'special' || cand._type === 'special');
-    }
+            // Build full timeline: skeleton events + general blocks for this bunk's division
+            var fullTimeline = [];
+            for (var ski = 0; ski < skeleton.length; ski++) {
+                var sk = skeleton[ski];
+                if (sk.division !== bunkDiv) continue;
+                var skStart = window.SchedulerCoreUtils?.parseTimeToMinutes?.(sk.startTime) || 0;
+                fullTimeline.push({
+                    startTime: skStart,
+                    event: sk.event || sk.type || '',
+                    type: sk.type || ''
+                });
+            }
+            fullTimeline.sort(function(a, b) { return a.startTime - b.startTime; });
 
-    function buildAllCandidateOptions(config) {
-        var options = [];
-        var seenKeys = new Set();
-        var disabledFields = window.currentDisabledFields || config.disabledFields || [];
-        var disabledSet = new Set(disabledFields);
+            for (var bbi = 0; bbi < bBlocks.length; bbi++) {
+                var curBlock = bBlocks[bbi];
+                var prevType = null, nextType = null;
+                var prevEvent = '', nextEvent = '';
 
-        config.masterFields?.forEach(function(f) {
-            if (disabledSet.has(f.name)) return;
-            (f.activities || []).forEach(function(sport) {
-                var key = f.name + '|' + sport;
-                if (!seenKeys.has(key)) {
-                    seenKeys.add(key);
-                    options.push({
-                        field: f.name, sport: sport, activityName: sport, type: 'sport',
-                        _fieldNorm: normName(f.name), _actNorm: normName(sport)
-                    });
-                }
-            });
-        });
+                // Find what's before and after in the full timeline
+                for (var ti = 0; ti < fullTimeline.length; ti++) {
+                    if (fullTimeline[ti].startTime < curBlock.startTime) {
+                        prevEvent = fullTimeline[ti].event;
+                        prevType = categorizeSkeletonEvent(fullTimeline[ti]);
+                    }
+                    if (fullTimeline[ti].startTime > curBlock.startTime && nextType === null) {
+                        nextEvent = fullTimeline[ti].event;
+                        nextType = categorizeSkeletonEvent(fullTimeline[ti]);
+                    }
+                }
 
-        config.masterSpecials?.forEach(function(s) {
-            if (!s.name || disabledSet.has(s.name)) return;
-            var key = s.name + '|special';
-            if (!seenKeys.has(key)) {
-                seenKeys.add(key);
-                options.push({
-                    field: s.name, sport: null, activityName: s.name, type: 'special',
-                    _fieldNorm: normName(s.name), _actNorm: normName(s.name)
-                });
-            }
-        });
+                _skeletonContext.set(curBlock.idx, {
+                    prevType: prevType,
+                    nextType: nextType,
+                    prevEvent: prevEvent,
+                    nextEvent: nextEvent,
+                    positionInDay: bbi,
+                    totalBlocksForBunk: bBlocks.length
+                });
+            }
+        }
 
-        var loadedData = window.SchedulerCoreUtils?.loadAndFilterData?.() || {};
-        var fieldsBySport = loadedData.fieldsBySport || {};
-        for (var sportKey in fieldsBySport) {
-            (fieldsBySport[sportKey] || []).forEach(function(fieldName) {
-                if (isSportName(fieldName)) return;
-                if (disabledSet.has(fieldName)) return;
-                var key = fieldName + '|' + sportKey;
-                if (!seenKeys.has(key)) {
-                    seenKeys.add(key);
-                    options.push({
-                        field: fieldName, sport: sportKey, activityName: sportKey, type: 'sport',
-                        _fieldNorm: normName(fieldName), _actNorm: normName(sportKey)
-                    });
-                }
-            });
-        }
+        v12Log('v13 Resource maps: ' + _uniqueFieldMap.size + ' activities, ' +
+               _timeConstrainedBoost.size + ' time-constrained, ' +
+               _smallBunkFlags.size + ' small bunks, ' +
+               _skeletonContext.size + ' skeleton contexts');
+    }
 
-        debugLog('=== TOTAL CANDIDATE OPTIONS:', options.length, '===');
-        return options;
-    }
+    function categorizeSkeletonEvent(item) {
+        var ev = (item.event || item.type || '').toLowerCase();
+        if (ev.includes('league')) return 'sport';
+        if (ev.includes('sport')) return 'sport';
+        if (ev.includes('swim') || ev.includes('pool')) return 'sport';
+        if (ev.includes('special')) return 'special';
+        if (ev.includes('elective')) return 'special';
+        if (ev.includes('lunch') || ev.includes('snack') || ev.includes('dismissal')) return 'break';
+        if (ev.includes('activity') || ev.includes('general')) return 'general';
+        if (ev.includes('smart')) return 'mixed';
+        return 'other';
+    }
 
-    // ========================================================================
-    // ★★★ v12.0 P5: REUSABLE SCRATCH PICK for cost evaluation ★★★
-    // ========================================================================
+    // ========================================================================
+    // ★★★ v13.0: ACTIVITY-FIRST PLANNER ★★★
+    // The "thinking" phase — runs BEFORE domain building.
+    // Mimics a human scheduler: look at history, build wish lists,
+    // allocate activities across division, then steer the solver.
+    // ========================================================================
 
-    var _scratchPick = { field: '', sport: null, _activity: '', _type: '' };
+    function activityFirstPlanner(activityBlocks) {
+        _activityPlan.clear();
+        _scarcityMap.clear();
 
-    function setScratchPick(cand) {
-        _scratchPick.field = cand.field;
-        _scratchPick.sport = cand.sport;
-        _scratchPick._activity = cand.activityName;
-        _scratchPick._type = cand.type;
-        return _scratchPick;
-    }
+        var divisions = window.divisions || {};
+        var bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || {};
+        var sportMeta = window.getSportMetaData?.() || window.sportMetaData || {};
 
-    function clonePick(cand) {
-        return {
-            field: cand.field, sport: cand.sport,
-            _activity: cand.activityName, _type: cand.type
-        };
-    }
+        // Group blocks by division + time slot
+        var divTimeGroups = {};  // "divName|startMin-endMin" → [blockIdx, ...]
+        for (var bi = 0; bi < activityBlocks.length; bi++) {
+            var blk = activityBlocks[bi];
+            if (!blk.divName) blk.divName = getBunkDivision(blk.bunk) || '';
+            var key = blk.divName + '|' + (blk.startTime || '?') + '-' + (blk.endTime || '?');
+            if (!divTimeGroups[key]) divTimeGroups[key] = [];
+            divTimeGroups[key].push(bi);
+        }
 
-   // ========================================================================
-    // PENALTY ENGINE (uses pre-computed lookups)
-    // ========================================================================
+        // For each division×time group, run the allocation
+        for (var groupKey in divTimeGroups) {
+            var blockIndices = divTimeGroups[groupKey];
+            if (blockIndices.length === 0) continue;
 
-    function calculatePenaltyCost(block, pick) {
-        var bunk = block.bunk;
-        var act = pick._activity;
-        var fieldName = pick.field;
-        var actNorm = normName(act);
-        var fieldNorm = normName(fieldName);
-        var blockDivName = block.divName || '';
-        var blockStart = block.startTime;
-        var blockEnd = block.endTime;
-        var slots = block.slots || [];
-        var penalty = 0;
+            var sampleBlock = activityBlocks[blockIndices[0]];
+            var divName = sampleBlock.divName;
+            var startMin = sampleBlock.startTime;
+            var endMin = sampleBlock.endTime;
+            if (startMin === undefined || endMin === undefined) continue;
 
-        // =================================================================
-        // HARD CONSTRAINTS (return 999999 = impossible)
-        // =================================================================
+            // ══════════════════════════════════════════════════════════
+            // PHASE A: BUILD WISH LISTS (per bunk)
+            // ══════════════════════════════════════════════════════════
+            var wishLists = {};  // bunk → [{ activity, need, actType }, ...]
+            var bunkSizes = {}; // bunk → player count
 
-        // ── 1. Same-day activity duplicate ───────────────────────────────
-        // Pre-computed rotation scores used beforeSlotIndex=0 so they miss
-        // same-day duplicates. Check LIVE schedule state.
-        if (actNorm && actNorm !== 'free' && actNorm !== 'free play') {
-            var todayDone = getActivitiesDoneToday(bunk, slots[0] ?? 999);
-            if (todayDone.has(actNorm)) return 999999;
-        }
+            for (var i = 0; i < blockIndices.length; i++) {
+                var block = activityBlocks[blockIndices[i]];
+                var bunk = block.bunk;
+                var bSize = bunkMeta[bunk]?.size || 0;
+                bunkSizes[bunk] = bSize;
 
-        // ── 2. Field capacity & cross-division sharing ───────────────────
-        // Domains from Step 5 go stale as Steps 6-8 assign blocks.
-        // Check the LIVE field time index for every assignment attempt.
-        if (fieldName && fieldName !== 'Free' &&
-            blockDivName && blockStart !== undefined && blockEnd !== undefined) {
+                var wishes = [];
 
-            var fp = _fieldPropertyMap.get(fieldName);
-            var sType = fp ? fp.sharingType : getSharingType(fieldName);
-            var cap = fp ? fp.capacity : getFieldCapacity(fieldName);
+                // Get all candidate activities for this block
+                var candidateActivities = new Set();
+                for (var ci = 0; ci < allCandidateOptions.length; ci++) {
+                    var cand = allCandidateOptions[ci];
+                    if (!cand.activityName || cand.activityName === 'Free') continue;
+                    candidateActivities.add(cand.activityName);
+                }
 
-            // ★★★ v12.3: ALWAYS block cross-grade field sharing ★★★
-            if (checkCrossDivisionTimeConflict(fieldName, blockDivName, blockStart, blockEnd, bunk)) return 999999;
-            if (checkSameFieldActivityMismatch(fieldName, blockStart, blockEnd, act, bunk)) return 999999;
-            if (sType === 'not_sharable') {
-                if (getFieldUsageFromTimeIndex(fieldNorm, blockStart, blockEnd, bunk) >= cap) return 999999;
-            } else {
-                if (countSameDivisionUsage(fieldName, blockDivName, blockStart, blockEnd, bunk) >= cap) return 999999;
-            }
-        }
+                // Score each activity by rotation need
+                for (var actName of candidateActivities) {
+                    var actNorm = normName(actName);
 
-        // ── 3. Division preference exclusivity ───────────────────────────
-        var fieldProp = _fieldPropertyMap.get(fieldName);
-        if (fieldProp?.prefList) {
-            if (fieldProp.prefList.indexOf(blockDivName) === -1 && fieldProp.prefExclusive) return 999999;
-        } else {
-            var actPrefProps = activityProperties[act];
-            if (actPrefProps?.preferences?.enabled &&
-                (actPrefProps.preferences.list || []).indexOf(blockDivName) === -1 &&
-                actPrefProps.preferences.exclusive) return 999999;
-        }
+                    // Same-day duplicate check
+                    var todayDone = getActivitiesDoneToday(bunk, block.slots?.[0] ?? 999);
+                    if (todayDone.has(actNorm)) continue;
 
-        // ── 4. Rotation score (recency / streak / variety) ──────────────
-        var rotationPenalty = getPrecomputedRotationScore(bunk, act);
-        if (rotationPenalty === Infinity) return 999999;
+                    // Get rotation score (lower = more needed)
+                    var rotScore = getPrecomputedRotationScore(bunk, actName);
+                    if (rotScore === Infinity) continue;
 
-        // ── 5. Max lifetime usage ────────────────────────────────────────
-        var specialRule = activityProperties[act];
-        if (specialRule?.maxUsage > 0) {
-            var hist = getActivityCount(bunk, act);
-            var todayCount = getActivitiesDoneToday(bunk, slots[0] || 999).has(actNorm) ? 1 : 0;
-            if (hist + todayCount >= specialRule.maxUsage) return 999999;
-        }
+                    // Check time availability for this activity
+                    var actProps = activityProperties[actName];
+                    if (actProps?.timeRules?.length > 0) {
+                        // Check if activity is available at this time
+                        var timeAvail = false;
+                        var tempSlots = block.slots || [];
+                        for (var tsi = 0; tsi < tempSlots.length; tsi++) {
+                            if (window.SchedulerCoreUtils?.isTimeAvailable?.(tempSlots[tsi], actProps)) {
+                                timeAvail = true;
+                                break;
+                            }
+                        }
+                        // Also check division restrictions on time rules
+                        if (actProps.timeRules) {
+                            var divFilteredRules = actProps.timeRules.filter(function(r) {
+                                return !r.divisions || r.divisions.length === 0 || r.divisions.includes(divName);
+                            });
+                            if (divFilteredRules.length === 0 && actProps.timeRules.some(function(r) { return r.type === 'Available'; })) {
+                                continue; // No applicable rules for this division
+                            }
+                        }
+                        if (!timeAvail) continue;
+                    }
 
-        // =================================================================
-        // SOFT PENALTIES (lower = better, scored additively)
-        // =================================================================
+                    // Solo player count check — can this bunk do this activity ALONE?
+                    var soloCheck = window.SchedulerCoreUtils?.checkPlayerCountForSport?.(actName, bSize, false);
+                    var needsSharing = soloCheck && !soloCheck.valid && soloCheck.severity === 'hard';
 
-        // ── Rotation score ───────────────────────────────────────────────
-        penalty += rotationPenalty;
+                    // Determine activity type
+                    var isSpecial = window.RotationEngine?.isSpecialActivity?.(actName) ||
+                                   (allCandidateOptions.some(function(c) { return c.activityName === actName && c.type === 'special'; }));
 
-        // ── ★★★ v12.1: Live sport/special type balance for General Activity Slots ★★★
-        // Without this, sports dominate due to having more field×activity combinations.
-        if (block.event === 'General Activity Slot' || block.event === 'general activity slot') {
-            var typeBalance = getLiveTypeBalance(bunk, slots[0] ?? 0);
-            var pickIsSpecial = (pick._type === 'special');
-            var imbalance = typeBalance.sports - typeBalance.specials;
+                    // Apply debt bonus from previous passes
+                    var debtKey = bunk + '|' + actName;
+                    var debtBonus = _activityDebt.get(debtKey) || 0;
 
-            if (!pickIsSpecial && imbalance >= 2) {
-                // Already 2+ more sports than specials — strong penalty on more sports
-                penalty += 3000 + (imbalance - 1) * 1000;
-            } else if (!pickIsSpecial && imbalance >= 1) {
-                // 1 more sport than special — moderate penalty
-                penalty += 1500;
-            } else if (pickIsSpecial && imbalance >= 2) {
-                // Specials behind by 2+ — strong bonus for picking special
-                penalty -= 2000;
-            } else if (pickIsSpecial && imbalance >= 1) {
-                // Specials behind by 1 — moderate bonus
-                penalty -= 1000;
-            } else if (pickIsSpecial && typeBalance.specials > typeBalance.sports + 1) {
-                // Too many specials already — gentle penalty
-                penalty += 1500;
-            }
-        }
-        // ── Bunk size vs field capacity ──────────────────────────────────
-        var bunkMeta = window.getBunkMetaData?.(bunk) || globalConfig?.bunkMetaData?.[bunk] || {};
-        if (bunkMeta.size) {
-            var apCap = activityProperties[fieldName]?.capacity;
-            if (apCap && bunkMeta.size > apCap) penalty += 5000;
-        }
+                    // Time-constrained boost: if this activity has a narrow window and
+                    // we're IN that window, boost its priority so it doesn't go to waste
+                    var timeBoost = 0;
+                    var tcInfo = _timeConstrainedBoost.get(actName);
+                    if (tcInfo) {
+                        timeBoost = -tcInfo.boost; // Negative = more desirable
+                    }
 
-        // ── Division preferences (soft bonus) ────────────────────────────
-        if (fieldProp?.prefList) {
-            var prefIdx = fieldProp.prefList.indexOf(blockDivName);
-            if (prefIdx !== -1) {
-                penalty -= (50 - prefIdx * 5);
-            } else {
-                penalty += 8000;
-            }
-        } else {
-            var actPrefProps2 = activityProperties[act];
-            if (actPrefProps2?.preferences?.enabled) {
-                var prefIdx2 = (actPrefProps2.preferences.list || []).indexOf(blockDivName);
-                if (prefIdx2 !== -1) {
-                    penalty -= (50 - prefIdx2 * 5);
-                } else {
-                    penalty += 8000;
-                }
-            }
-        }
+                    wishes.push({
+                        activity: actName,
+                        need: rotScore + debtBonus + timeBoost,  // Lower = more needed
+                        actType: isSpecial ? 'special' : 'sport',
+                        needsSharing: needsSharing,
+                        bunkSize: bSize
+                    });
+                }
 
-        // ── Adjacent bunk bonus ──────────────────────────────────────────
-        if (slots.length > 0 && window.fieldUsageBySlot) {
-            var slotUsage = window.fieldUsageBySlot[slots[0]]?.[fieldName];
-            if (slotUsage?.bunks) {
-                var myNum = getBunkNumber(bunk) || 0;
-                for (var otherBunk in slotUsage.bunks) {
-                    if (otherBunk === bunk) continue;
-                    var otherNum = getBunkNumber(otherBunk) || 0;
-                    var distance = Math.abs(myNum - otherNum);
-                    if (distance === 1) penalty += ROTATION_CONFIG.ADJACENT_BUNK_BONUS;
-                    else if (distance <= 3) penalty += (ROTATION_CONFIG.NEARBY_BUNK_BONUS || -100);
-                }
-            }
-        }
+                // Sort by need (lowest = most wanted)
+                wishes.sort(function(a, b) { return a.need - b.need; });
+                wishLists[bunk] = wishes;
+            }
 
-        // ── Tie-breaking randomness ──────────────────────────────────────
-        penalty += Math.random() * (ROTATION_CONFIG.TIE_BREAKER_RANDOMNESS || 300);
+            // ══════════════════════════════════════════════════════════
+            // PHASE B: ACTIVITY ALLOCATION (division-wide matching)
+            // ══════════════════════════════════════════════════════════
 
-        return penalty;
-    }
+            // Count supply: how many fields can host each activity at this time?
+            var activitySupply = {};  // activity → available slots count
+            for (var ci2 = 0; ci2 < allCandidateOptions.length; ci2++) {
+                var c2 = allCandidateOptions[ci2];
+                if (!c2.activityName || c2.activityName === 'Free') continue;
+                if (!activitySupply[c2.activityName]) activitySupply[c2.activityName] = 0;
 
-    // ========================================================================
-    // BLOCK SORTING
-    // ========================================================================
+                // Check if this specific field is available at this time
+                var fp = _fieldPropertyMap.get(c2.field);
+                var cap = fp ? fp.capacity : 1;
+                var sType = fp ? fp.sharingType : 'not_sharable';
 
-    Solver.sortBlocksByDifficulty = function (blocks, config) {
-        var meta = config.bunkMetaData || {};
-        blocks.forEach(function(b) {
-            if (!b.divName && !b.division) b.divName = getBunkDivision(b.bunk);
-        });
+                // Cross-div check
+                if (divName && startMin !== undefined) {
+                    if (checkCrossDivisionTimeConflict(c2.field, divName, startMin, endMin, null)) continue;
+                }
 
-        // ★★★ v12.4: SCARCITY-AWARE SORTING ★★★
-        // Count general activity blocks per bunk per division.
-        // Divisions with fewer blocks/bunk are MORE constrained → solve first.
-        var divBlockCounts = {};
-        for (var i = 0; i < blocks.length; i++) {
-            if (blocks[i]._isLeague) continue;
-            var dn = blocks[i].divName || blocks[i].division || '';
-            if (!divBlockCounts[dn]) divBlockCounts[dn] = 0;
-            divBlockCounts[dn]++;
-        }
+                // Capacity check
+                if (sType === 'not_sharable') {
+                    var used = getFieldUsageFromTimeIndex(c2._fieldNorm, startMin, endMin, null);
+                    if (used < cap) activitySupply[c2.activityName]++;
+                } else {
+                    var sameDivUsed = countSameDivisionUsage(c2.field, divName, startMin, endMin, null);
+                    if (sameDivUsed < cap) activitySupply[c2.activityName]++;
+                }
+            }
 
-        var divScarcity = {};
-        var divisions = window.divisions || {};
-        for (var dk in divisions) {
-            var bc = (divisions[dk].bunks || []).length;
-            divScarcity[dk] = (bc > 0 && divBlockCounts[dk]) ? (divBlockCounts[dk] / bc) : 999;
-        }
+            // Deduplicate supply (multiple candidates for same activity on same field)
+            // Actually we want unique field slots per activity
+            var actFieldSlots = {};
+            for (var ci3 = 0; ci3 < allCandidateOptions.length; ci3++) {
+                var c3 = allCandidateOptions[ci3];
+                if (!c3.activityName || c3.activityName === 'Free') continue;
+                if (!actFieldSlots[c3.activityName]) actFieldSlots[c3.activityName] = new Set();
+                actFieldSlots[c3.activityName].add(c3.field);
+            }
+            for (var afs in actFieldSlots) {
+                activitySupply[afs] = actFieldSlots[afs].size;
+            }
 
-        v12Log('Scarcity (blocks/bunk): ' + JSON.stringify(divScarcity));
+            // Small bunk pairing: pair small bunks with neighbors BEFORE allocation
+            var bunkList = blockIndices.map(function(bi) { return activityBlocks[bi].bunk; });
+            var pairedBunks = new Map();  // smallBunk → partnerBunk
 
-        return blocks.sort(function(a, b) {
-            // Leagues always first
-            if (a._isLeague && !b._isLeague) return -1;
-            if (!a._isLeague && b._isLeague) return 1;
+            for (var sbi = 0; sbi < bunkList.length; sbi++) {
+                var sBunk = bunkList[sbi];
+                if (!_smallBunkFlags.has(sBunk)) continue;
+                if (pairedBunks.has(sBunk)) continue;
 
-            // ★★★ SCARCITY: fewer blocks/bunk = solve first ★★★
-            var divA = a.divName || a.division || '';
-            var divB = b.divName || b.division || '';
-            var sA = divScarcity[divA] || 999;
-            var sB = divScarcity[divB] || 999;
-            if (Math.abs(sA - sB) > 1) return sA - sB;
+                // Find nearest neighbor that isn't already paired
+                var myNum = getBunkNumber(sBunk) || 0;
+                var bestPartner = null;
+                var bestDist = Infinity;
+                for (var pbi = 0; pbi < bunkList.length; pbi++) {
+                    var pBunk = bunkList[pbi];
+                    if (pBunk === sBunk) continue;
+                    if (pairedBunks.has(pBunk) && pairedBunks.get(pBunk) !== sBunk) continue;
+                    var pNum = getBunkNumber(pBunk) || 0;
+                    var dist = Math.abs(myNum - pNum);
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        bestPartner = pBunk;
+                    }
+                }
+                if (bestPartner) {
+                    pairedBunks.set(sBunk, bestPartner);
+                }
+            }
 
-            // Then by division number (original behavior as tiebreaker)
-            if (divA !== divB) return (parseInt(divA) || 999) - (parseInt(divB) || 999);
+            // Allocate: greedy assignment, most-needed bunks first
+            var allocated = {};  // bunk → activityName
+            var activityUsed = {};  // activity → count of bunks assigned
 
-            // Then by bunk number
-            var numA = getBunkNumber(a.bunk) || Infinity;
-            var numB = getBunkNumber(b.bunk) || Infinity;
-            if (numA !== numB) return numA - numB;
+            // Sort bunks by how constrained they are (fewer wishes = solve first)
+            var sortedBunks = bunkList.slice().sort(function(a, b) {
+                return (wishLists[a]?.length || 0) - (wishLists[b]?.length || 0);
+            });
 
-            // Then by time
-            var timeA = a.startTime ?? (a.slots?.[0] * 30 + 660) ?? 0;
-            var timeB = b.startTime ?? (b.slots?.[0] * 30 + 660) ?? 0;
-            return timeA - timeB;
-        });
-    };
+            for (var abi = 0; abi < sortedBunks.length; abi++) {
+                var aBunk = sortedBunks[abi];
+                if (allocated[aBunk]) continue;
+                var wishes2 = wishLists[aBunk] || [];
 
-    // ========================================================================
-    // ★★★ v12.0 P1: FUSED DOMAIN + SLOT GROUP BUILD ★★★
-    // Replaces: buildCompatibilityMatrix + buildSlotGroups + initializeDomains
-    // ONE pass builds everything: domains, slot groups, and validates candidates.
-    // ========================================================================
+                for (var wi = 0; wi < wishes2.length; wi++) {
+                    var wish = wishes2[wi];
+                    var supply = activitySupply[wish.activity] || 0;
+                    var used2 = activityUsed[wish.activity] || 0;
 
-    function buildDomainsAndSlotGroups(activityBlocks) {
-        var numBlocks = activityBlocks.length;
-        var numCands = allCandidateOptions.length;
-        var domains = new Map();
-        var slotGroups = new Map();
-        var disabledFields = window.currentDisabledFields || globalConfig?.disabledFields || [];
-        var disabledSet = new Set(disabledFields);
+                    // Check if there's capacity for this activity
+                    if (used2 >= supply) continue;
 
-        // Pre-compute which candidates are globally disabled or locked
-        // (These checks don't depend on the block, so do them ONCE)
-        var globallyValidCands = new Uint8Array(numCands);
-        for (var ci = 0; ci < numCands; ci++) {
-            var cand = allCandidateOptions[ci];
-            if (disabledSet.has(cand.field)) continue;
+                    // If this bunk needs sharing, check if partner can also do this activity
+                    if (wish.needsSharing && pairedBunks.has(aBunk)) {
+                        var partner = pairedBunks.get(aBunk);
+                        var combinedSize = (bunkSizes[aBunk] || 0) + (bunkSizes[partner] || 0);
+                        var combinedCheck = window.SchedulerCoreUtils?.checkPlayerCountForSport?.(wish.activity, combinedSize, false);
+                        if (combinedCheck && !combinedCheck.valid && combinedCheck.severity === 'hard') {
+                            continue; // Even combined, too many/few players
+                        }
+                    }
 
-            // Activity properties must exist
-            var hasFieldProps = !!activityProperties[cand.field];
-            var hasActivityProps = !!activityProperties[cand.activityName];
-            if (!hasFieldProps && !hasActivityProps && cand.type !== 'special') continue;
+                    // Check combined player count with anyone already assigned to this activity
+                    var projectedPlayers = bunkSizes[aBunk] || 0;
+                    for (var existBunk in allocated) {
+                        if (allocated[existBunk] === wish.activity) {
+                            projectedPlayers += (bunkSizes[existBunk] || 0);
+                        }
+                    }
+                    var maxReqs = window.SchedulerCoreUtils?.getSportPlayerRequirements?.(wish.activity);
+                    if (maxReqs?.maxPlayers && projectedPlayers > maxReqs.maxPlayers * 1.3) {
+                        continue; // Would exceed max by >30%
+                    }
 
-            globallyValidCands[ci] = 1;
-        }
+                    // Assign!
+                    allocated[aBunk] = wish.activity;
+                    activityUsed[wish.activity] = (activityUsed[wish.activity] || 0) + 1;
 
-        var globallyValidCount = 0;
-        for (var k = 0; k < numCands; k++) if (globallyValidCands[k]) globallyValidCount++;
-        v12Log('Globally valid candidates: ' + globallyValidCount + '/' + numCands);
+                    // If paired small bunk, try to assign partner the same activity
+                    if (pairedBunks.has(aBunk) && !allocated[pairedBunks.get(aBunk)]) {
+                        var prt = pairedBunks.get(aBunk);
+                        var prtWishes = wishLists[prt] || [];
+                        var prtWantsThis = prtWishes.some(function(w) { return w.activity === wish.activity; });
+                        if (prtWantsThis && (activityUsed[wish.activity] || 0) < (activitySupply[wish.activity] || 0)) {
+                            allocated[prt] = wish.activity;
+                            activityUsed[wish.activity]++;
+                        }
+                    }
+                    break;
+                }
 
-        for (var bi = 0; bi < numBlocks; bi++) {
-            var block = activityBlocks[bi];
-            var domain = new Set();
-            var bunk = block.bunk;
-           var blockDivName = block.divName || block.division || '';
+                // Track debt for bunks that didn't get their #1 wish
+                if (allocated[aBunk] && wishes2.length > 0 && allocated[aBunk] !== wishes2[0].activity) {
+                    var debtKey2 = aBunk + '|' + wishes2[0].activity;
+                    var existing = _activityDebt.get(debtKey2) || 0;
+                    _activityDebt.set(debtKey2, existing - 2000);  // Negative = boost priority next time
+                }
+            }
+
+            // ══════════════════════════════════════════════════════════
+            // PHASE C: WRITE PLAN + SCARCITY MAP
+            // ══════════════════════════════════════════════════════════
+
+            for (var pi = 0; pi < blockIndices.length; pi++) {
+                var bIdx = blockIndices[pi];
+                var pBunk = activityBlocks[bIdx].bunk;
+                if (allocated[pBunk]) {
+                    _activityPlan.set(bIdx, {
+                        activity: allocated[pBunk],
+                        steering: -8000  // Strong bonus for matching plan
+                    });
+                }
+            }
+
+            // Scarcity map: for each activity, demand vs supply
+            for (var scAct in activityUsed) {
+                var demand = 0;
+                for (var scBunk in wishLists) {
+                    if (wishLists[scBunk]?.some(function(w) { return w.activity === scAct; })) demand++;
+                }
+                var scSupply = activitySupply[scAct] || 1;
+                if (demand > scSupply) {
+                    var scKey = scAct + '|' + startMin;
+                    _scarcityMap.set(scKey, demand / scSupply);
+                }
+            }
+        }
+
+        console.log('[SOLVER-v13] 🧠 Activity-First Planner: ' + _activityPlan.size + ' blocks planned, ' +
+                    _scarcityMap.size + ' scarce resources, ' + _activityDebt.size + ' debt entries');
+    }
+
+    // ========================================================================
+    // ★★★ v13.0: PASS ANALYSIS — Learn from simulation results ★★★
+    // ========================================================================
+
+    function analyzePassResult(activityBlocks, passNum) {
+        var analysis = {
+            passNumber: passNum,
+            freeBlocks: [],
+            yesterdayRepeats: [],
+            playerViolations: [],
+            bottlenecks: {},   // "field|time" → { demand, supply }
+            freeBlockBunks: new Set(),
+            totalFree: 0,
+            totalBlocks: activityBlocks.length,
+            score: 0
+        };
+
+        var bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || {};
+
+        for (var i = 0; i < activityBlocks.length; i++) {
+            var asgn = _assignments.get(i);
+            if (!asgn) continue;
+            var block = activityBlocks[i];
+            var actNorm = normName(asgn.pick._activity || asgn.pick.field);
+
+            // Count Free blocks
+            if (actNorm === 'free' || actNorm === 'free (timeout)') {
+                analysis.freeBlocks.push({
+                    blockIdx: i,
+                    bunk: block.bunk,
+                    divName: block.divName,
+                    startTime: block.startTime,
+                    endTime: block.endTime
+                });
+                analysis.freeBlockBunks.add(block.bunk);
+                analysis.totalFree++;
+                analysis.score += 10000;  // Heavy penalty for Free
+            }
+
+            // Check yesterday repeats
+            if (actNorm && actNorm !== 'free') {
+                var daysSince = getDaysSinceActivity(block.bunk, asgn.pick._activity);
+                if (daysSince === 1) {
+                    analysis.yesterdayRepeats.push({
+                        blockIdx: i,
+                        bunk: block.bunk,
+                        activity: asgn.pick._activity
+                    });
+                    analysis.score += 5000;
+                }
+            }
+
+            // Check player count violations
+            if (actNorm && actNorm !== 'free' && asgn.pick.field && asgn.pick.field !== 'Free') {
+                var fieldNorm = normName(asgn.pick.field);
+                var entries = _fieldTimeIndex.get(fieldNorm) || [];
+                var totalPlayers = bunkMeta[block.bunk]?.size || 0;
+                for (var ei = 0; ei < entries.length; ei++) {
+                    var e = entries[ei];
+                    if (e.bunk === block.bunk) continue;
+                    if (e.endMin <= block.startTime || e.startMin >= block.endTime) continue;
+                    totalPlayers += (bunkMeta[e.bunk]?.size || 0);
+                }
+                var pCheck = window.SchedulerCoreUtils?.checkPlayerCountForSport?.(asgn.pick._activity, totalPlayers, false);
+                if (pCheck && !pCheck.valid) {
+                    analysis.playerViolations.push({
+                        blockIdx: i,
+                        bunk: block.bunk,
+                        activity: asgn.pick._activity,
+                        players: totalPlayers,
+                        severity: pCheck.severity
+                    });
+                    analysis.score += (pCheck.severity === 'hard' ? 8000 : 2000);
+                }
+            }
+
+            // Rotation quality score
+            if (actNorm && actNorm !== 'free') {
+                analysis.score += Math.min(asgn.cost || 0, 50000);
+            }
+        }
+
+        console.log('[SOLVER-v13] 📊 Pass ' + passNum + ' Analysis: ' +
+                    analysis.totalFree + ' Free, ' +
+                    analysis.yesterdayRepeats.length + ' yesterday repeats, ' +
+                    analysis.playerViolations.length + ' player violations, ' +
+                    'Score: ' + analysis.score);
+
+        return analysis;
+    }
+
+    // ========================================================================
+    // ★★★ v13.0: ADJUST PLAN FROM ANALYSIS ★★★
+    // ========================================================================
+
+    function adjustPlanFromAnalysis(activityBlocks, analysis) {
+        if (!analysis) return;
+
+        // 1. Bunks that were Free → boost their priority for ALL activities
+        for (var fi = 0; fi < analysis.freeBlocks.length; fi++) {
+            var fb = analysis.freeBlocks[fi];
+            // Add debt so these bunks get priority in next pass
+            for (var ci = 0; ci < allCandidateOptions.length; ci++) {
+                var c = allCandidateOptions[ci];
+                if (!c.activityName || c.activityName === 'Free') continue;
+                var dKey = fb.bunk + '|' + c.activityName;
+                var existing = _activityDebt.get(dKey) || 0;
+                _activityDebt.set(dKey, existing - 5000);  // Big boost
+            }
+        }
+
+        // 2. Yesterday repeats → increase penalty for that activity for that bunk
+        for (var yi = 0; yi < analysis.yesterdayRepeats.length; yi++) {
+            var yr = analysis.yesterdayRepeats[yi];
+            var yrKey = yr.bunk + '|' + yr.activity;
+            var yrExisting = _activityDebt.get(yrKey) || 0;
+            _activityDebt.set(yrKey, yrExisting + 10000);  // Penalize repeating
+        }
+
+        // 3. Player violations → remove those activity+bunk combos from plan
+        for (var pvi = 0; pvi < analysis.playerViolations.length; pvi++) {
+            var pv = analysis.playerViolations[pvi];
+            if (pv.severity === 'hard') {
+                var pvKey = pv.bunk + '|' + pv.activity;
+                _activityDebt.set(pvKey, (_activityDebt.get(pvKey) || 0) + 20000);
+            }
+        }
+
+        console.log('[SOLVER-v13] 🔧 Plan adjusted: ' + _activityDebt.size + ' debt entries after analysis');
+    }
+
+    // ========================================================================
+    // ★★★ v12.0 P1: FUSED DOMAIN + SLOT GROUP BUILD ★★★
+    // Replaces: buildCompatibilityMatrix + buildSlotGroups + initializeDomains
+    // ONE pass builds everything: domains, slot groups, and validates candidates.
+    // ========================================================================
+
+    function buildDomainsAndSlotGroups(activityBlocks) {
+        var numBlocks = activityBlocks.length;
+        var numCands = allCandidateOptions.length;
+        var domains = new Map();
+        var slotGroups = new Map();
+        var disabledFields = window.currentDisabledFields || globalConfig?.disabledFields || [];
+        var disabledSet = new Set(disabledFields);
+
+        // Pre-compute which candidates are globally disabled or locked
+        // (These checks don't depend on the block, so do them ONCE)
+        var globallyValidCands = new Uint8Array(numCands);
+        for (var ci = 0; ci < numCands; ci++) {
+            var cand = allCandidateOptions[ci];
+            if (disabledSet.has(cand.field)) continue;
+
+            // Activity properties must exist
+            var hasFieldProps = !!activityProperties[cand.field];
+            var hasActivityProps = !!activityProperties[cand.activityName];
+            if (!hasFieldProps && !hasActivityProps && cand.type !== 'special') continue;
+
+            globallyValidCands[ci] = 1;
+        }
+
+        var globallyValidCount = 0;
+        for (var k = 0; k < numCands; k++) if (globallyValidCands[k]) globallyValidCount++;
+        v12Log('Globally valid candidates: ' + globallyValidCount + '/' + numCands);
+
+        for (var bi = 0; bi < numBlocks; bi++) {
+            var block = activityBlocks[bi];
+            block._blockIdx = bi;  // ★★★ v13.0: Tag for plan/context lookup ★★★
+            var domain = new Set();
+            var bunk = block.bunk;
+           var blockDivName = block.divName || block.division || '';
 if (!blockDivName && bunk) {
-    blockDivName = getBunkDivision(bunk) || '';
-    if (blockDivName) block.divName = blockDivName;
+    blockDivName = getBunkDivision(bunk) || '';
+    if (blockDivName) block.divName = blockDivName;
 }
             var slots = block.slots || [];
 
@@ -1941,7 +2160,7 @@ if (!blockDivName && bunk) {
     // ========================================================================
     // After the main solver + polish, any remaining Free blocks get one more
     // shot. This mimics a human scheduler looking at the board and saying:
-    //   "Wait, there are open fields — why is this bunk sitting Free?"
+    //    "Wait, there are open fields — why is this bunk sitting Free?"
     //    
     // Phase 1: Fresh direct assignment (re-scan ALL candidates, current state)
     // Phase 2: Displacement — move a same-div bunk to its alternative to
@@ -2027,7 +2246,7 @@ if (!blockDivName && bunk) {
                 invalidateRotationCacheForBunk(bunk);
                 _todayCache.clear();
                 resolved++;
-                console.log('[SOLVER-v12.4]   ✅ ' + bunk + ' → ' + pick.field + ' (' + pick._activity + ')');
+                console.log('[SOLVER-v12.4]    ✅ ' + bunk + ' → ' + pick.field + ' (' + pick._activity + ')');
                 continue;
             }
             // ═══ PHASE 2: Displacement chain ═══
@@ -2121,7 +2340,7 @@ if (!blockDivName && bunk) {
                     _todayCache.clear();
                     resolved++;
                     displaced = true;
-                    console.log('[SOLVER-v12.4]   🔄 ' + bunk + ' → ' + ourPick.field + ' [displaced ' + otherBlock.bunk + ' → ' + altPick.field + ']');
+                    console.log('[SOLVER-v12.4]    🔄 ' + bunk + ' → ' + ourPick.field + ' [displaced ' + otherBlock.bunk + ' → ' + altPick.field + ']');
                 } else {
                     // Undo — didn't help
                     undoPickFromSchedule(otherBlock, altPick);
@@ -2134,7 +2353,7 @@ if (!blockDivName && bunk) {
                 }
             }
             if (!displaced) {
-                console.log('[SOLVER-v12.4]   ❌ ' + bunk + ' @ ' + startMin + '-' + endMin + ' — no available fields');
+                console.log('[SOLVER-v12.4]    ❌ ' + bunk + ' @ ' + startMin + '-' + endMin + ' — no available fields');
             }
         }
         console.log('[SOLVER-v12.4] 🧠 Complete: ' + resolved + '/' + freeIndices.length + ' resolved');
@@ -2142,7 +2361,118 @@ if (!blockDivName && bunk) {
     }
 
     // ========================================================================
-    // ★★★ v12.0: MAIN SOLVER PIPELINE ★★★
+    // ★★★ v13.0: INTERNAL SOLVE PASS (runs one full pipeline iteration) ★★★
+    // ========================================================================
+
+    function runSolvePass(activityBlocks, config, passNum, isShadow) {
+        _passNumber = passNum;
+
+        // Reset per-pass state (but NOT debt — that accumulates across passes)
+        _rotationScoreCache.clear();
+        _todayCache.clear();
+        _assignedBlocks.clear();
+        _assignments.clear();
+        _domains = null;
+        _slotGroups = null;
+        _activityPlan.clear();
+        _scarcityMap.clear();
+        _perfCounters = {
+            rotationCacheHits: 0, rotationCacheMisses: 0,
+            timeIndexQueries: 0, domainPruned: 0,
+            augmentingPathAttempts: 0, augmentingPathSuccesses: 0
+        };
+
+        // If shadow pass, save schedule state so we can restore it
+        var savedSchedule = null;
+        var savedFieldUsage = null;
+        if (isShadow) {
+            savedSchedule = JSON.parse(JSON.stringify(window.scheduleAssignments || {}));
+            savedFieldUsage = JSON.parse(JSON.stringify(window.fieldUsageBySlot || {}));
+        }
+
+        // Clear any previous pass assignments from schedule
+        for (var bi = 0; bi < activityBlocks.length; bi++) {
+            var blk = activityBlocks[bi];
+            if (window.scheduleAssignments?.[blk.bunk]) {
+                for (var si = 0; si < (blk.slots || []).length; si++) {
+                    var slotIdx = blk.slots[si];
+                    var existing = window.scheduleAssignments[blk.bunk][slotIdx];
+                    if (existing && !existing._fixed && !existing._bunkOverride) {
+                        window.scheduleAssignments[blk.bunk][slotIdx] = null;
+                        // Clean field usage
+                        if (existing.field && window.fieldUsageBySlot?.[slotIdx]?.[existing.field]) {
+                            var fu = window.fieldUsageBySlot[slotIdx][existing.field];
+                            if (fu.bunks) delete fu.bunks[blk.bunk];
+                            if (fu.count > 0) fu.count--;
+                        }
+                    }
+                }
+            }
+        }
+
+        var passLabel = isShadow ? '✏️ PENCIL' : '🖊️ INK';
+        console.log('\n[SOLVER-v13] ═══ PASS ' + passNum + ' (' + passLabel + ') ═══');
+
+        // ═══ Rebuild time index (reflects current schedule state) ═══
+        buildFieldTimeIndex();
+
+        // ═══ Rebuild rotation scores ═══
+        precomputeRotationScores(activityBlocks);
+
+        // ═══ Step 5.5: Activity-First Planner ═══
+        var t55 = performance.now();
+        activityFirstPlanner(activityBlocks);
+        console.log('[SOLVER-v13] Step 5.5: Activity-First Planner (' + (performance.now() - t55).toFixed(1) + 'ms)');
+
+        // ═══ Build domains + slot groups ═══
+        var fusedResult = buildDomainsAndSlotGroups(activityBlocks);
+        _domains = fusedResult.domains;
+        _slotGroups = fusedResult.slotGroups;
+
+        // ═══ AC-3 ═══
+        var ac3Result = propagateAC3(activityBlocks);
+
+        // ═══ Augmenting path matching ═══
+        var matchedCount = solveSlotGroups(activityBlocks);
+
+        // ═══ Backjump ═══
+        var remaining = activityBlocks.length - _assignedBlocks.size;
+        if (remaining > 0) {
+            backjumpSolver(activityBlocks);
+        }
+
+        // ═══ Post-solve polish ═══
+        postSolveLocalSearch(activityBlocks);
+
+        // ═══ Deep Free Resolution ═══
+        deepFreeResolution(activityBlocks);
+
+        // ═══ Analyze this pass ═══
+        var analysis = analyzePassResult(activityBlocks, passNum);
+
+        // If shadow pass, restore original schedule state
+        if (isShadow) {
+            // Undo all assignments from this pass
+            for (var ubi = 0; ubi < activityBlocks.length; ubi++) {
+                var uBlk = activityBlocks[ubi];
+                if (window.scheduleAssignments?.[uBlk.bunk]) {
+                    for (var usi = 0; usi < (uBlk.slots || []).length; usi++) {
+                        window.scheduleAssignments[uBlk.bunk][uBlk.slots[usi]] = null;
+                    }
+                }
+            }
+            // Restore saved state
+            window.scheduleAssignments = savedSchedule;
+            window.fieldUsageBySlot = savedFieldUsage;
+            // Rebuild time index from restored state
+            buildFieldTimeIndex();
+        }
+
+        return analysis;
+    }
+
+    // ========================================================================
+    // ★★★ v13.0: MAIN SOLVER PIPELINE ★★★
     // ========================================================================
 
     Solver.solveSchedule = function (allBlocks, config) {
@@ -2154,6 +2484,7 @@ if (!blockDivName && bunk) {
         // ═══ RESET ═══
         clearAllCaches();
         clearBunkDivisionCache();
+        _activityDebt.clear();  // Fresh debt for this solve
 
         if (!window.leagueRoundState) window.leagueRoundState = {};
         if (!globalConfig.rotationHistory) globalConfig.rotationHistory = {};
@@ -2166,8 +2497,8 @@ if (!blockDivName && bunk) {
             window.RotationEngine.clearHistoryCache();
         }
 
-        console.log('\n[SOLVER] ★★★ HYPER-OPTIMIZED v12.1 — FUSED CONSTRAINT SOLVER ★★★');
-        console.log('[SOLVER] Pipeline: FieldProps → RotScores → FusedDomains → AC-3 → AugMatch → Backjump → Polish');
+        console.log('\n[SOLVER] ★★★ v13.0 — HUMAN-INTELLIGENT THREE-PASS SOLVER ★★★');
+        console.log('[SOLVER] Pipeline: ResourceMaps → [ActivityPlan → Domains → AC-3 → AugMatch → Backjump → Polish] × 3');
         console.log('[SOLVER] ' + activityBlocks.length + ' activity blocks to solve');
 
         // ═══ STEP 1: Build candidate options ONCE ═══
@@ -2175,60 +2506,75 @@ if (!blockDivName && bunk) {
         allCandidateOptions = buildAllCandidateOptions(config);
         console.log('[SOLVER] Step 1: ' + allCandidateOptions.length + ' candidates (' + (performance.now() - t1).toFixed(1) + 'ms)');
 
-        // ═══ STEP 2: Build sorted time-indexed field map ═══
+        // ═══ STEP 2: Build initial time index ═══
         var t2 = performance.now();
         buildFieldTimeIndex();
-        console.log('[SOLVER] Step 2: Field time index (sorted) (' + (performance.now() - t2).toFixed(1) + 'ms)');
+        console.log('[SOLVER] Step 2: Field time index (' + (performance.now() - t2).toFixed(1) + 'ms)');
 
-        // ═══ STEP 3: Pre-compute field properties ★NEW★ ═══
+        // ═══ STEP 3: Pre-compute field properties ═══
         var t3 = performance.now();
         precomputeFieldProperties();
         console.log('[SOLVER] Step 3: Field properties (' + _fieldPropertyMap.size + ' fields) (' + (performance.now() - t3).toFixed(1) + 'ms)');
 
-        // ═══ STEP 4: Pre-compute rotation scores ★NEW★ ═══
+        // ═══ STEP 4: Pre-compute initial rotation scores ═══
         var t4 = performance.now();
         precomputeRotationScores(activityBlocks);
         console.log('[SOLVER] Step 4: Rotation scores (' + _rotationScoreMap.size + ' pairs) (' + (performance.now() - t4).toFixed(1) + 'ms)');
 
-        // ═══ STEP 5: Fused Domain + Slot Group Build ★REPLACES Steps 3-5 of v11★ ═══
-        var t5 = performance.now();
-        var fusedResult = buildDomainsAndSlotGroups(activityBlocks);
-        _domains = fusedResult.domains;
-        _slotGroups = fusedResult.slotGroups;
-        var avgDomain = _domains.size > 0
-            ? (Array.from(_domains.values()).reduce(function(s, d) { return s + d.size; }, 0) / _domains.size).toFixed(1)
-            : '0';
-        console.log('[SOLVER] Step 5: Fused domains+groups (' + _slotGroups.size + ' groups, avg domain ' + avgDomain + ') (' + (performance.now() - t5).toFixed(1) + 'ms)');
+        // ═══ STEP 4.5: Precompute resource maps (once) ═══
+        var t45 = performance.now();
+        precomputeResourceMaps(activityBlocks);
+        console.log('[SOLVER] Step 4.5: Resource maps (' + (performance.now() - t45).toFixed(1) + 'ms)');
 
-        // ═══ STEP 6: AC-3 Constraint Propagation ═══
-        var t6 = performance.now();
-        var ac3Result = propagateAC3(activityBlocks);
-        console.log('[SOLVER] Step 6: AC-3 — ' + ac3Result.autoAssigned + ' auto-assigned, ' + ac3Result.propagated + ' pruned (' + (performance.now() - t6).toFixed(1) + 'ms)');
+        // ═══════════════════════════════════════════════════════════════
+        // THREE-PASS PIPELINE
+        // Pass 1: Pencil (silent simulation)
+        // Pass 2: Ink attempt (if Pass 1 had issues, use lessons learned)
+        // Pass 3: Final ink (if Pass 2 still has issues, one more try)
+        // ═══════════════════════════════════════════════════════════════
 
-        // ═══ STEP 7: Augmenting Path Matching ★IMPROVED★ ═══
-        var t7 = performance.now();
-        var matchedCount = solveSlotGroups(activityBlocks);
-        console.log('[SOLVER] Step 7: AugMatch ' + matchedCount + ' (total: ' + _assignedBlocks.size + '/' + activityBlocks.length + ') (' + (performance.now() - t7).toFixed(1) + 'ms)');
+        var MAX_PASSES = 3;
+        var bestAnalysis = null;
+        var passAnalyses = [];
 
-        // ═══ STEP 8: Backjump Solver ═══
-        var remaining = activityBlocks.length - _assignedBlocks.size;
-        if (remaining > 0) {
-            var t8 = performance.now();
-            var bjSolved = backjumpSolver(activityBlocks);
-            console.log('[SOLVER] Step 8: Backjump ' + bjSolved + '/' + remaining + ' (' + (performance.now() - t8).toFixed(1) + 'ms)');
-        } else {
-            console.log('[SOLVER] Step 8: Skipped (all assigned!)');
+        for (var passNum = 1; passNum <= MAX_PASSES; passNum++) {
+            var isShadow = (passNum < MAX_PASSES); // Last pass is always ink
+            var isPencil = (passNum === 1);
+
+            // For pass 2+, check if we even need another pass
+            if (passNum > 1 && bestAnalysis && bestAnalysis.totalFree === 0 &&
+                bestAnalysis.yesterdayRepeats.length === 0 &&
+                bestAnalysis.playerViolations.filter(function(v) { return v.severity === 'hard'; }).length === 0) {
+                console.log('[SOLVER-v13] ✨ Pass ' + (passNum - 1) + ' was perfect — committing!');
+                break;
+            }
+
+            // If this is pass 2+, adjust plan based on previous analysis
+            if (passNum > 1 && bestAnalysis) {
+                adjustPlanFromAnalysis(activityBlocks, bestAnalysis);
+            }
+
+            // On the LAST pass, always commit (not shadow)
+            if (passNum === MAX_PASSES) isShadow = false;
+
+            var analysis = runSolvePass(activityBlocks, config, passNum, isShadow);
+            passAnalyses.push(analysis);
+
+            // Track best result
+            if (!bestAnalysis || analysis.score < bestAnalysis.score) {
+                bestAnalysis = analysis;
+            }
+
+            // If shadow pass was perfect, run one more as ink to commit
+            if (isShadow && analysis.totalFree === 0 &&
+                analysis.yesterdayRepeats.length === 0 &&
+                analysis.playerViolations.filter(function(v) { return v.severity === 'hard'; }).length === 0) {
+                console.log('[SOLVER-v13] ✨ Pass ' + passNum + ' simulation was perfect — committing as ink...');
+                // Run final ink pass
+                runSolvePass(activityBlocks, config, passNum + 1, false);
+                passNum = MAX_PASSES; // Exit loop
+            }
         }
-
-        // ═══ STEP 9: Post-Solve Polish ═══
-        var t9 = performance.now();
-        postSolveLocalSearch(activityBlocks);
-        console.log('[SOLVER] Step 9: Polish (' + (performance.now() - t9).toFixed(1) + 'ms)');
-
-        // ═══ STEP 9.5: Deep Free Resolution ★★★ v12.4 ★★★ ═══
-        var t95 = performance.now();
-        var deepResolved = deepFreeResolution(activityBlocks);
-        console.log('[SOLVER] Step 9.5: Deep Free — ' + deepResolved + ' resolved (' + (performance.now() - t95).toFixed(1) + 'ms)');
 
         // ═══ REPORT ═══
         var solveTime = performance.now() - solveStartTime;
@@ -2239,17 +2585,21 @@ if (!blockDivName && bunk) {
         }
 
         console.log('\n[SOLVER] ══════════════════════════════════════════');
-        console.log('[SOLVER] ✅ v12.1 SOLVE COMPLETE: ' + solveTime.toFixed(0) + 'ms');
+        console.log('[SOLVER] ✅ v13.0 SOLVE COMPLETE: ' + solveTime.toFixed(0) + 'ms (' + passAnalyses.length + ' passes)');
         console.log('[SOLVER]    ' + activityBlocks.length + ' blocks, ' + freeCount + ' Free');
-        console.log('[SOLVER]    AC-3: ' + ac3Result.autoAssigned + ' | AugMatch: ' + matchedCount + ' | Backjump: ' + (activityBlocks.length - ac3Result.autoAssigned - matchedCount));
-        if (_perfCounters.augmentingPathAttempts > 0) {
-            console.log('[SOLVER]    Augmenting paths: ' + _perfCounters.augmentingPathSuccesses + '/' + _perfCounters.augmentingPathAttempts + ' successful');
+        for (var pai = 0; pai < passAnalyses.length; pai++) {
+            var pa = passAnalyses[pai];
+            console.log('[SOLVER]    Pass ' + pa.passNumber + ': Score=' + pa.score + ', Free=' + pa.totalFree +
+                        ', YdayRepeats=' + pa.yesterdayRepeats.length + ', PlayerViolations=' + pa.playerViolations.length);
         }
-        console.log('[SOLVER]    Rotation cache: ' + _perfCounters.rotationCacheHits + ' hits, ' + _perfCounters.rotationCacheMisses + ' misses');
-        console.log('[SOLVER]    Time index queries: ' + _perfCounters.timeIndexQueries + ', domain pruned: ' + _perfCounters.domainPruned);
+        console.log('[SOLVER]    Activity plan: ' + _activityPlan.size + ' blocks steered');
+        console.log('[SOLVER]    Scarcity map: ' + _scarcityMap.size + ' scarce resources');
+        console.log('[SOLVER]    Small bunks: ' + _smallBunkFlags.size + ' detected');
+        console.log('[SOLVER]    Time-constrained: ' + _timeConstrainedBoost.size + ' activities boosted');
+        console.log('[SOLVER]    Unique resources: ' + Array.from(_uniqueFieldMap.entries()).filter(function(e) { return e[1] === 1; }).length + ' single-field activities protected');
         console.log('[SOLVER] ══════════════════════════════════════════\n');
 
-       // ═══ STEP 10: Cross-Division Safety Sweep ★★★ v12.1 BACKSTOP ★★★ ═══
+        // ═══ STEP 10: Cross-Division Safety Sweep ★★★ v12.1 BACKSTOP ★★★ ═══
         var crossDivFixes = 0;
         var fieldTimeUsage = new Map();
         for (var sbi = 0; sbi < activityBlocks.length; sbi++) {
@@ -2523,32 +2873,32 @@ if (!blockDivName && bunk) {
     };
 
     Solver.debugSolverStats = function() {
-        console.log('\n=== SOLVER v12.1 STATS ===');
-        console.log('Normalized names:      ' + _normalizedNames.size);
-        console.log('Rotation score map:    ' + _rotationScoreMap.size);
+        console.log('\n=== SOLVER v13.0 STATS ===');
+        console.log('Normalized names:       ' + _normalizedNames.size);
+        console.log('Rotation score map:     ' + _rotationScoreMap.size);
         console.log('Rotation score cache: ' + _rotationScoreCache.size);
-        console.log('Field property map:    ' + _fieldPropertyMap.size);
+        console.log('Field property map:     ' + _fieldPropertyMap.size);
         console.log('Today activity cache: ' + _todayCache.size);
-        console.log('Field time index:      ' + _fieldTimeIndex.size + ' fields');
+        console.log('Field time index:       ' + _fieldTimeIndex.size + ' fields');
         var totalEntries = 0;
         for (var entries of _fieldTimeIndex.values()) totalEntries += entries.length;
         console.log('  Total time entries: ' + totalEntries);
-        console.log('Assigned blocks:        ' + _assignedBlocks.size);
-        console.log('Active assignments:     ' + _assignments.size);
-        if (_slotGroups) console.log('Slot groups:          ' + _slotGroups.size);
+        console.log('Assigned blocks:         ' + _assignedBlocks.size);
+        console.log('Active assignments:      ' + _assignments.size);
+        if (_slotGroups) console.log('Slot groups:           ' + _slotGroups.size);
         if (_domains) {
             var avg = _domains.size > 0
                 ? (Array.from(_domains.values()).reduce(function(s, d) { return s + d.size; }, 0) / _domains.size).toFixed(1)
                 : '0';
-            console.log('Avg domain size:        ' + avg);
+            console.log('Avg domain size:         ' + avg);
         }
         console.log('\nPerf Counters:');
         console.log('  Rotation cache hits:  ' + _perfCounters.rotationCacheHits);
         console.log('  Rotation cache misses:' + _perfCounters.rotationCacheMisses);
-        console.log('  Time index queries:    ' + _perfCounters.timeIndexQueries);
-        console.log('  Domain pruned:         ' + _perfCounters.domainPruned);
-        console.log('  Aug path attempts:     ' + _perfCounters.augmentingPathAttempts);
-        console.log('  Aug path successes:    ' + _perfCounters.augmentingPathSuccesses);
+        console.log('  Time index queries:     ' + _perfCounters.timeIndexQueries);
+        console.log('  Domain pruned:          ' + _perfCounters.domainPruned);
+        console.log('  Aug path attempts:      ' + _perfCounters.augmentingPathAttempts);
+        console.log('  Aug path successes:     ' + _perfCounters.augmentingPathSuccesses);
     };
 
     Solver.debugDomains = function(blockIdx) {
