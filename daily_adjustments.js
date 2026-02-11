@@ -1694,7 +1694,7 @@ function addDropListeners(gridEl) {
       if (tileData.type === 'smart') {
         let startTime, endTime, startResult, endResult;
         while (true) {
-          startTime = prompt("Smart Tile for " + divName + ".\n\nEnter Start Time:", startStr);
+          startTime = prompt("Smart Tile for " + divName + ".\n\nEnter Start Time (e.g., 11:00am):")
           if (!startTime) return;
           startResult = validateTime(startTime, true);
           if (startResult.valid) {
@@ -1703,7 +1703,7 @@ function addDropListeners(gridEl) {
           }
         }
         while (true) {
-          endTime = prompt("Enter End Time:");
+          endTime = prompt(name + "End" (e.g., 11:45am):")
           if (!endTime) return;
           endResult = validateTime(endTime, false, isNightActivity);
           if (endResult.valid) {
