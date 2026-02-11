@@ -2117,7 +2117,7 @@ label.override-checkbox span {
 }
 
 .app-logo-flow-img {
-  height: 45px;
+  height: 35px;
   max-height: 45px;
   width: auto;
   position: relative;
@@ -2125,7 +2125,7 @@ label.override-checkbox span {
 }
 
 .app-logo-me-img {
-  height: 53px;
+  height: 45px;
   max-height: 60px;
   width: auto;
   position: relative;
@@ -2178,7 +2178,7 @@ label.override-checkbox span {
 /* Sidebar: off-canvas, slides in with body.sidebar-open */
 .sidebar {
   position: fixed;
-  top: 56px;
+  top: 40px;
   left: 0;
   bottom: 0;
   width: 240px;
