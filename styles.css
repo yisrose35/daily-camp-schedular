@@ -2178,7 +2178,7 @@ label.override-checkbox span {
 /* Sidebar: off-canvas, slides in with body.sidebar-open */
 .sidebar {
   position: fixed;
-  top: 40px;
+  top: 60px;
   left: 0;
   bottom: 0;
   width: 240px;
