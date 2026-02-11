@@ -2017,7 +2017,7 @@ label.override-checkbox span {
   align-items: center;
   justify-content: space-between;
   padding: 0.7rem 1.25rem;
-  height: 80px;
+  height: 60px;
   overflow: hidden;
   background: var(--bg-secondary, #FFFFFF);
   border-bottom: 1px solid var(--slate-200, #E2E8F0);
