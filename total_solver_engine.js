@@ -1035,14 +1035,6 @@
         }
         return { domains: domains, slotGroups: slotGroups };
     }
-
-// ═══════════════════════════════════════════════════════════════════════
-// END OF PART 1 — Continue in total_solver_engine_part2.js
-// ═══════════════════════════════════════════════════════════════════════
- // ═══════════════════════════════════════════════════════════════════════
-// PART 2 — Paste directly after Part 1 (replace the "END OF PART 1" comment)
-// ═══════════════════════════════════════════════════════════════════════
-
     // ========================================================================
     // AC-3 CONSTRAINT PROPAGATION
     // ========================================================================
@@ -1154,6 +1146,8 @@
         var groupsSolved = 0, blocksAssigned = 0;
         var sortedGroups = Array.from(_slotGroups.entries()).sort(function(a, b) { return a[1].length - b[1].length; });
         for (var [, blockIndices] of sortedGroups) {
+            // ★★★ v13.0-FIX: Clear stale today-cache before each group ★★★
+            _todayCache.clear();
             var unassigned = blockIndices.filter(function(bi) { return !_assignedBlocks.has(bi); });
             if (unassigned.length === 0) continue;
             var groupAssignments = solveGroupMatchingAugmented(activityBlocks, unassigned);
@@ -1172,6 +1166,8 @@
                 propagateAssignment(activityBlocks, ga.blockIdx, ga.pick);
                 blocksAssigned++;
             }
+            // ★★★ v13.0-FIX: Invalidate caches after group picks applied ★★★
+            _todayCache.clear();
             groupsSolved++;
         }
         v12Log('Slot groups: ' + groupsSolved + ' groups, ' + blocksAssigned + ' assigned');
@@ -1190,11 +1186,22 @@
         }
         blockOptions.sort(function(a, b) { return a.domainSize - b.domainSize; });
         var fieldUsageInGroup = new Map(), fieldDivsInGroup = new Map();
+        // ★★★ v13.0-FIX: Track activities assigned per bunk within group to prevent same-day duplicates ★★★
+        var bunkActivitiesInGroup = new Map();
         for (var bo of blockOptions) {
             if (_assignedBlocks.has(bo.bi)) continue;
             var block2 = activityBlocks[bo.bi], assigned = false;
             for (var oi = 0; oi < bo.options.length; oi++) {
                 var opt = bo.options[oi], cand2 = allCandidateOptions[opt.ci];
+                // ★★★ v13.0-FIX: Skip if this bunk already got this activity in this group ★★★
+                var candActNorm_chk = normName(cand2.activityName);
+                if (candActNorm_chk && candActNorm_chk !== 'free' && candActNorm_chk !== 'free play') {
+                    var bunkDoneInGroup = bunkActivitiesInGroup.get(block2.bunk);
+                    if (bunkDoneInGroup && bunkDoneInGroup.has(candActNorm_chk)) continue;
+                    // Also check live schedule for cross-group duplicates
+                    var liveDone = getActivitiesDoneToday(block2.bunk, block2.slots?.[0] ?? 999);
+                    if (liveDone.has(candActNorm_chk)) continue;
+                }
                 var fieldNorm2 = cand2._fieldNorm, fieldName = cand2.field;
                 var fieldProp = _fieldPropertyMap.get(fieldName);
                 var capacity = fieldProp ? fieldProp.capacity : getFieldCapacity(fieldName);
@@ -1254,6 +1261,10 @@
                     fieldUsageInGroup.set(fieldNorm2, currentGroupUsage + 1);
                     if (!fieldDivsInGroup.has(fieldNorm2)) fieldDivsInGroup.set(fieldNorm2, new Set());
                     fieldDivsInGroup.get(fieldNorm2).add(block2.divName || '');
+                    // ★★★ v13.0-FIX: Record activity for this bunk ★★★
+                    if (!bunkActivitiesInGroup.has(block2.bunk)) bunkActivitiesInGroup.set(block2.bunk, new Set());
+                    var assignedActNorm = normName(cand2.activityName);
+                    if (assignedActNorm && assignedActNorm !== 'free') bunkActivitiesInGroup.get(block2.bunk).add(assignedActNorm);
                     assigned = true; break;
                 }
                 // Augmenting path
@@ -1285,6 +1296,14 @@
                                     fieldUsageInGroup.set(fieldNorm2, (fieldUsageInGroup.get(fieldNorm2) || 0) + 1);
                                     if (!fieldDivsInGroup.has(fieldNorm2)) fieldDivsInGroup.set(fieldNorm2, new Set());
                                     fieldDivsInGroup.get(fieldNorm2).add(block2.divName || '');
+                                    // ★★★ v13.0-FIX: Record activity for this bunk (aug path) ★★★
+                                    if (!bunkActivitiesInGroup.has(block2.bunk)) bunkActivitiesInGroup.set(block2.bunk, new Set());
+                                    var augActNorm = normName(cand2.activityName);
+                                    if (augActNorm && augActNorm !== 'free') bunkActivitiesInGroup.get(block2.bunk).add(augActNorm);
+                                    // Also update holder's activity record
+                                    if (!bunkActivitiesInGroup.has(holderBlock.bunk)) bunkActivitiesInGroup.set(holderBlock.bunk, new Set());
+                                    var holderActNorm = normName(altCand.activityName);
+                                    if (holderActNorm && holderActNorm !== 'free') bunkActivitiesInGroup.get(holderBlock.bunk).add(holderActNorm);
                                     assigned = true; _perfCounters.augmentingPathSuccesses++; break;
                                 }
                             }
@@ -1322,6 +1341,8 @@
         unassigned.sort(function(a, b) { return (_domains.get(a)?.size || 0) - (_domains.get(b)?.size || 0); });
         for (var bi of unassigned) {
             if (_assignedBlocks.has(bi) || iterations > MAX_ITERATIONS) break; iterations++;
+            // ★★★ v13.0-FIX: Fresh cache for each backjump block ★★★
+            _todayCache.clear();
             var block = activityBlocks[bi], domain = _domains.get(bi);
             if (!domain || domain.size === 0) {
                 var lastChancePick = null;
