@@ -45,12 +45,24 @@
         return;
     }
 
-    const DEMO_ACTIVE = localStorage.getItem('campistry_demo_mode') === 'true';
+   let DEMO_ACTIVE = localStorage.getItem('campistry_demo_mode') === 'true';
 
-    if (!DEMO_ACTIVE) {
-        // Not in demo mode — this script does nothing
-        return;
-    }
+// =====================================================================
+// PORTABLE OFFLINE: Auto-enable when opened from file system (USB/folder)
+// This ONLY runs when protocol is file:// — never on https://
+// =====================================================================
+const IS_FILE_PROTOCOL = window.location.protocol === 'file:';
+
+if (IS_FILE_PROTOCOL && !DEMO_ACTIVE) {
+    localStorage.setItem('campistry_demo_mode', 'true');
+    DEMO_ACTIVE = true;
+    console.log('📦 [Portable] file:// detected — offline mode enabled automatically');
+}
+
+if (!DEMO_ACTIVE) {
+    // Not in demo mode — this script does nothing
+    return;
+}
 
     // =========================================================================
     // 2. DEMO MODE IS ON — set global flag immediately
