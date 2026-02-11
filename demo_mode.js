@@ -86,9 +86,13 @@ if (IS_FILE_PROTOCOL && !localStorage.getItem('campGlobalSettings_v1')) {
             if (!resp.ok) throw new Error('Not found');
             const backup = await resp.json();
 
+            // ★ Write to ALL keys the app reads from
             if (backup.globalSettings) {
-                localStorage.setItem('campGlobalSettings_v1', JSON.stringify(backup.globalSettings));
-                localStorage.setItem('CAMPISTRY_LOCAL_CACHE', JSON.stringify(backup.globalSettings));
+                const gs = JSON.stringify(backup.globalSettings);
+                localStorage.setItem('campGlobalSettings_v1', gs);
+                localStorage.setItem('CAMPISTRY_LOCAL_CACHE', gs);
+                localStorage.setItem('campistryGlobalSettings', gs);
+                localStorage.setItem('CAMPISTRY_UNIFIED_STATE', gs);
             }
             if (backup.dailyData) {
                 localStorage.setItem('campDailyData_v1', JSON.stringify(backup.dailyData));
@@ -96,20 +100,25 @@ if (IS_FILE_PROTOCOL && !localStorage.getItem('campGlobalSettings_v1')) {
             if (backup.rotationHistory) {
                 localStorage.setItem('campRotationHistory_v1', JSON.stringify(backup.rotationHistory));
             }
-            if (backup.smartTileHistory) {
-                localStorage.setItem('campSmartTileHistory_v1', JSON.stringify(backup.smartTileHistory));
-            }
-            if (backup.smartTileSpecialHistory) {
-                localStorage.setItem('campSmartTileSpecialHistory_v1', JSON.stringify(backup.smartTileSpecialHistory));
-            }
             if (backup.leagueHistory) {
-                localStorage.setItem('campLeagueHistory_v1', JSON.stringify(backup.leagueHistory));
+                localStorage.setItem('campLeagueHistory_v2', JSON.stringify(backup.leagueHistory));
             }
             if (backup.specialtyLeagueHistory) {
                 localStorage.setItem('campSpecialtyLeagueHistory_v1', JSON.stringify(backup.specialtyLeagueHistory));
             }
+            if (backup.skeletons) {
+                Object.entries(backup.skeletons).forEach(([key, val]) => {
+                    localStorage.setItem(key, JSON.stringify(val));
+                });
+            }
+            if (backup.globalSettings?.divisions) {
+                localStorage.setItem('campGlobalRegistry_v1', JSON.stringify({
+                    divisions: backup.globalSettings.divisions,
+                    bunks: backup.globalSettings.bunks || backup.globalSettings.app1?.bunks || []
+                }));
+            }
 
-            console.log('📦 [Portable] Data loaded! Refreshing...');
+            console.log('📦 [Portable] All data loaded! Refreshing...');
             window.location.reload();
         } catch (e) {
             console.warn('📦 [Portable] No offline_data.json found — starting empty');
