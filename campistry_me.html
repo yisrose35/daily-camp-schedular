@@ -1071,7 +1071,13 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"><svg id="toastIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg><span id="toastMessage">Success!</span></div>
 <!-- Script load order: Supabase → client → security → demo → Me -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+if (window.location.protocol === 'file:') {
+    document.write('<script src="supabase-js-local.js"><\/script>');
+} else {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>');
+}
+</script>
 <script src="supabase_client.js"></script>
 <script src="campistry_security.js"></script>
 <script src="demo_mode.js"></script>
