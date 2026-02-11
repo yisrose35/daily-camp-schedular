@@ -74,7 +74,7 @@ if (!DEMO_ACTIVE) {
 // PORTABLE OFFLINE: Auto-load offline_data.json on first run
 // Only runs on file:// AND only if localStorage is empty
 // =====================================================================
-if (!localStorage.getItem('campGlobalSettings_v1') && window.__OFFLINE_DATA__) {
+if (window.__OFFLINE_DATA__) {
     const backup = window.__OFFLINE_DATA__;
     console.log('📦 [Portable] Loading embedded offline data...');
 
