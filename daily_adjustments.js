@@ -706,6 +706,20 @@ function activateFullDayRainyMode() {
     skeletonSwitched = switchToRainySkeleton();
   }
   
+  // ★★★ RAINY DAY FIX: Clear stale league data & rebuild divisionTimes ★★★
+  // When switching to rainy skeleton, the old divisionTimes still has league slots
+  // and old leagueAssignments persist. Clear them so render doesn't show stale leagues.
+  window.leagueAssignments = {};
+  if (skeletonSwitched) {
+    const dailyData = window.loadCurrentDailyData?.() || {};
+    const newSkeleton = dailyData.manualSkeleton || [];
+    if (newSkeleton.length > 0 && window.DivisionTimesSystem) {
+      const divs = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
+      window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(newSkeleton, divs);
+      console.log('[RainyDay] ✅ Rebuilt divisionTimes from rainy skeleton');
+    }
+  }
+  
   showRainyDayNotification(true, stats.outdoorFieldNames.length, false, skeletonSwitched);
 }
 // ★★★ Build resource overrides for the stacker ★★★
