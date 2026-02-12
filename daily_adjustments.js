@@ -726,19 +726,32 @@ function activateFullDayRainyMode() {
 function buildRainyDayResourceOverrides() {
   const g = window.loadGlobalSettings?.() || {};
   const fields = g.app1?.fields || [];
+  const specials = g.app1?.specialActivities || [];
   const overrides = {};
   
+  // Fields
   fields.forEach(f => {
     if (!f?.name) return;
-    // Rainy day capacity override
     if (f.rainyDayCapacity > 0) {
       if (!overrides[f.name]) overrides[f.name] = {};
       overrides[f.name].capacity = f.rainyDayCapacity;
     }
-    // Rainy day all-day availability (bypass time rules)
     if (f.rainyDayAvailableAllDay) {
       if (!overrides[f.name]) overrides[f.name] = {};
       overrides[f.name].ignoreTimeRules = true;
+    }
+  });
+  
+  // Special Activities
+  specials.forEach(s => {
+    if (!s?.name) return;
+    if (s.rainyDayCapacity > 0) {
+      if (!overrides[s.name]) overrides[s.name] = {};
+      overrides[s.name].capacity = s.rainyDayCapacity;
+    }
+    if (s.rainyDayAvailableAllDay) {
+      if (!overrides[s.name]) overrides[s.name] = {};
+      overrides[s.name].ignoreTimeRules = true;
     }
   });
   
