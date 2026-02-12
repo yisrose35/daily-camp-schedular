@@ -62,6 +62,165 @@ const PIXELS_PER_MINUTE = 2;
 const INCREMENT_MINS = 30;
 const SNAP_MINS = 5;
 
+const SNAP_MINS = 5;
+
+// =================================================================
+// IN-APP MODAL SYSTEM (replaces browser prompt/confirm/alert)
+// =================================================================
+function daShowModal(config) {
+  return new Promise((resolve) => {
+    const existing = document.getElementById('da-modal-input-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'da-modal-input-overlay';
+    overlay.className = 'da-modal-overlay';
+    overlay.innerHTML = `
+      <div class="da-modal" style="max-width:${config.wide ? '560px' : '460px'};">
+        <div class="da-modal-header">
+          <h3>${config.title || 'Input Required'}</h3>
+          <button class="da-modal-close da-modal-close-x">&times;</button>
+        </div>
+        <div class="da-modal-body">
+          ${config.description ? '<p class="da-modal-desc">' + config.description + '</p>' : ''}
+          <div class="da-modal-fields-container"></div>
+          ${config.warning ? '<div class="da-modal-warning">' + config.warning + '</div>' : ''}
+        </div>
+        <div class="da-modal-footer">
+          <button class="da-btn da-btn-ghost da-modal-cancel-x">Cancel</button>
+          <button class="da-btn da-btn-primary da-modal-confirm-x">${config.confirmText || 'Confirm'}</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    const fieldsContainer = overlay.querySelector('.da-modal-fields-container');
+    const inputs = {};
+
+    (config.fields || []).forEach(function(field) {
+      const fieldEl = document.createElement('div');
+      fieldEl.className = 'da-modal-field';
+
+      if (field.type === 'text' || field.type === 'time') {
+        fieldEl.innerHTML = '<label>' + field.label + '</label>' +
+          '<input type="text" class="da-input da-modal-focusable" data-field="' + field.name + '"' +
+          ' value="' + (field.default || '') + '" placeholder="' + (field.placeholder || '') + '">';
+        inputs[field.name] = function() { return fieldEl.querySelector('input').value.trim(); };
+      }
+      else if (field.type === 'select') {
+        var options = (field.options || []).map(function(o) {
+          var val = typeof o === 'object' ? (o.value !== undefined ? o.value : o) : o;
+          var label = typeof o === 'object' ? (o.label !== undefined ? o.label : o) : o;
+          var selected = val === field.default ? ' selected' : '';
+          return '<option value="' + val + '"' + selected + '>' + label + '</option>';
+        }).join('');
+        fieldEl.innerHTML = '<label>' + field.label + '</label>' +
+          '<select class="da-select da-modal-focusable" data-field="' + field.name + '">' + options + '</select>';
+        inputs[field.name] = function() { return fieldEl.querySelector('select').value; };
+      }
+      else if (field.type === 'checkbox-group') {
+        var checkboxes = (field.options || []).map(function(o) {
+          return '<label class="da-modal-cb-item">' +
+            '<input type="checkbox" value="' + o + '" data-group="' + field.name + '">' +
+            '<span>' + o + '</span></label>';
+        }).join('');
+        fieldEl.innerHTML = '<label>' + field.label + '</label>' +
+          '<div class="da-modal-cb-group">' + checkboxes + '</div>';
+        inputs[field.name] = function() {
+          var checked = fieldEl.querySelectorAll('input[data-group="' + field.name + '"]:checked');
+          return Array.from(checked).map(function(c) { return c.value; });
+        };
+      }
+
+      fieldsContainer.appendChild(fieldEl);
+    });
+
+    setTimeout(function() {
+      var firstInput = overlay.querySelector('.da-modal-focusable');
+      if (firstInput) firstInput.focus();
+    }, 50);
+
+    var close = function(result) { overlay.remove(); resolve(result); };
+
+    overlay.querySelector('.da-modal-close-x').onclick = function() { close(null); };
+    overlay.querySelector('.da-modal-cancel-x').onclick = function() { close(null); };
+    overlay.onclick = function(e) { if (e.target === overlay) close(null); };
+
+    overlay.querySelector('.da-modal-confirm-x').onclick = function() {
+      var result = {};
+      Object.keys(inputs).forEach(function(key) { result[key] = inputs[key](); });
+      close(result);
+    };
+
+    overlay.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') {
+        overlay.querySelector('.da-modal-confirm-x').click();
+      }
+      if (e.key === 'Escape') close(null);
+    });
+  });
+}
+
+function daShowConfirm(message, opts) {
+  opts = opts || {};
+  return new Promise(function(resolve) {
+    var existing = document.getElementById('da-modal-input-overlay');
+    if (existing) existing.remove();
+
+    var overlay = document.createElement('div');
+    overlay.id = 'da-modal-input-overlay';
+    overlay.className = 'da-modal-overlay';
+    overlay.innerHTML =
+      '<div class="da-modal" style="max-width:420px;">' +
+        '<div class="da-modal-body" style="padding:24px;">' +
+          '<p style="margin:0;font-size:14px;color:#334155;line-height:1.6;">' + message + '</p>' +
+        '</div>' +
+        '<div class="da-modal-footer">' +
+          '<button class="da-btn da-btn-ghost da-confirm-no">' + (opts.cancelText || 'Cancel') + '</button>' +
+          '<button class="da-btn ' + (opts.danger ? 'da-btn-danger' : 'da-btn-primary') + ' da-confirm-yes">' + (opts.confirmText || 'Confirm') + '</button>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(overlay);
+    overlay.querySelector('.da-confirm-no').onclick = function() { overlay.remove(); resolve(false); };
+    overlay.querySelector('.da-confirm-yes').onclick = function() { overlay.remove(); resolve(true); };
+    overlay.onclick = function(e) { if (e.target === overlay) { overlay.remove(); resolve(false); } };
+    overlay.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') { overlay.remove(); resolve(true); }
+      if (e.key === 'Escape') { overlay.remove(); resolve(false); }
+    });
+    setTimeout(function() { overlay.querySelector('.da-confirm-yes').focus(); }, 50);
+  });
+}
+
+function daShowAlert(message) {
+  return new Promise(function(resolve) {
+    var existing = document.getElementById('da-modal-input-overlay');
+    if (existing) existing.remove();
+
+    var overlay = document.createElement('div');
+    overlay.id = 'da-modal-input-overlay';
+    overlay.className = 'da-modal-overlay';
+    overlay.innerHTML =
+      '<div class="da-modal" style="max-width:400px;">' +
+        '<div class="da-modal-body" style="padding:24px;">' +
+          '<p style="margin:0;font-size:14px;color:#334155;line-height:1.6;">' + message + '</p>' +
+        '</div>' +
+        '<div class="da-modal-footer">' +
+          '<button class="da-btn da-btn-primary da-alert-ok">OK</button>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(overlay);
+    overlay.querySelector('.da-alert-ok').onclick = function() { overlay.remove(); resolve(); };
+    overlay.onclick = function(e) { if (e.target === overlay) { overlay.remove(); resolve(); } };
+    overlay.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' || e.key === 'Escape') { overlay.remove(); resolve(); }
+    });
+    setTimeout(function() { overlay.querySelector('.da-alert-ok').focus(); }, 50);
+  });
+}
+
 // =================================================================
 // TILES - From v3.9 (working tile definitions)
 // =================================================================
