@@ -1,5 +1,5 @@
 // =================================================================
-// daily_adjustments.js  (v5.1 - Merged: v3.9 Logic + v5.0 UI)
+// daily_adjustments.js  (v5.2 - In-App Modals + Merged: v3.9 Logic + v5.0 UI)
 // =================================================================
 // MERGED VERSION:
 // - v5.0 UI: Sidebar layout, modern CSS, subtabs, modal system
