@@ -1774,7 +1774,7 @@ function addDropListeners(gridEl) {
     };
     cell.ondragleave = () => { cell.style.background = ''; };
     
-    cell.ondrop = (e) => {
+   cell.ondrop = async (e) => {
       if (e.dataTransfer.types.includes('text/event-move')) return;
       e.preventDefault();
       cell.style.background = '';
@@ -1797,341 +1797,226 @@ function addDropListeners(gridEl) {
       const endStr = minutesToTime(endMin);
       let newEvent = null;
       let isNightActivity = false;
-      
-      const validateTime = (timeStr, isStartTime, allowNightActivity = false) => {
+
+      // --- Async time validation helper ---
+      async function validateTimeAsync(timeStr, isStartTime, allowNightActivity) {
         const timeMin = parseTimeToMinutes(timeStr);
         if (timeMin === null) {
-          alert("Invalid time format. Please use '9:00am' or '2:30pm'.");
+          await daShowAlert("Invalid time format. Please use '9:00am' or '2:30pm'.");
           return { valid: false, minutes: null, isNight: false };
         }
-        
-        // ★ EARLY/LATE TILE GUARD — flag tiles outside 8am-8pm
-        // Exception: skip if the division's own time range covers this time
-        const GUARD_START = 480;  // 8:00 AM
-        const GUARD_END = 1200;   // 8:00 PM
+        const GUARD_START = 480, GUARD_END = 1200;
         const outsideDefaultHours = (timeMin < GUARD_START || timeMin > GUARD_END);
         const coveredByDivision = (divStartMin !== null && divEndMin !== null && timeMin >= divStartMin && timeMin <= divEndMin);
         if (outsideDefaultHours && !coveredByDivision) {
-          const ok = confirm(
-            `⚠️ Unusual Time Warning\n\n"${timeStr}" is outside normal camp hours (8:00 AM – 8:00 PM).\n\nJust confirming — is this tile correct?\n\nClick OK to proceed, Cancel to re-enter.`
-          );
+          const ok = await daShowConfirm('⚠️ <strong>Unusual Time Warning</strong><br><br>"' + timeStr + '" is outside normal camp hours (8:00 AM – 8:00 PM).<br><br>Is this tile correct?');
           if (!ok) return { valid: false, minutes: null, isNight: false };
         }
-        
         if (divStartMin !== null && timeMin < divStartMin) {
-          alert("Error: " + timeStr + " is before this division's start time of " + div.startTime + ".");
+          await daShowAlert(timeStr + " is before this division's start time of " + div.startTime + ".");
           return { valid: false, minutes: null, isNight: false };
         }
-        
         if (divEndMin !== null && (isStartTime ? timeMin >= divEndMin : timeMin > divEndMin)) {
-          if (allowNightActivity) {
-            return { valid: true, minutes: timeMin, isNight: true };
-          }
-          
-          const isNight = confirm(
-            `⏰ "${timeStr}" is after this division's end time (${div.endTime}).\n\n` +
-            `Is this a NIGHT ACTIVITY / LATE NIGHT event?\n\n` +
-            `Click OK for Night Activity, Cancel to re-enter time.`
-          );
-          
-          if (isNight) {
-            return { valid: true, minutes: timeMin, isNight: true };
-          } else {
-            return { valid: false, minutes: null, isNight: false };
-          }
+          if (allowNightActivity) return { valid: true, minutes: timeMin, isNight: true };
+          const isNight = await daShowConfirm('⏰ "' + timeStr + '" is after this division\'s end time (' + div.endTime + ').<br><br>Is this a <strong>Night Activity / Late Night</strong> event?', { confirmText: 'Yes, Night Activity', cancelText: 'Re-enter' });
+          if (isNight) return { valid: true, minutes: timeMin, isNight: true };
+          else return { valid: false, minutes: null, isNight: false };
         }
-        
         return { valid: true, minutes: timeMin, isNight: false };
-      };
-      
-      // Handle SMART TILE
+      }
+
+      // --- Validate start+end from a modal result ---
+      async function validateStartEnd(st, et, nightOverride) {
+        const stResult = await validateTimeAsync(st, true, false);
+        if (!stResult.valid) return null;
+        let night = stResult.isNight || !!nightOverride;
+        const etResult = await validateTimeAsync(et, false, night);
+        if (!etResult.valid) return null;
+        if (etResult.minutes <= stResult.minutes) { await daShowAlert("End time must be after start time."); return null; }
+        if (etResult.isNight) night = true;
+        return { startTime: st, endTime: et, startMin: stResult.minutes, endMin: etResult.minutes, isNight: night };
+      }
+
+      // ===== SMART TILE =====
       if (tileData.type === 'smart') {
-        let startTime, endTime, startResult, endResult;
-        while (true) {
-          startTime = prompt("Smart Tile for " + divName + ".\n\nEnter Start Time (e.g., 11:00am):")
-          if (!startTime) return;
-          startResult = validateTime(startTime, true);
-          if (startResult.valid) {
-            isNightActivity = startResult.isNight;
-            break;
-          }
-        }
-        while (true) {
-          endTime = prompt(name + "End" (e.g., 11:45am):")
-          if (!endTime) return;
-          endResult = validateTime(endTime, false, isNightActivity);
-          if (endResult.valid) {
-            if (endResult.minutes <= startResult.minutes) alert("End time must be after start time.");
-            else {
-              if (endResult.isNight) isNightActivity = true;
-              break;
-            }
-          }
-        }
-        const rawMains = prompt("Enter the TWO MAIN activities (e.g., Swim / Special):");
-        if (!rawMains) return;
-        const mains = rawMains.split(/,|\//).map(s => s.trim()).filter(Boolean);
-        if (mains.length < 2) { alert("Please enter TWO distinct activities."); return; }
-        const [main1, main2] = mains;
-        const pick = prompt("Which activity requires a fallback?\n\n1: " + main1 + "\n2: " + main2);
-        if (!pick) return;
-        let fallbackFor;
-        if (pick.trim() === "1" || pick.trim().toLowerCase() === main1.toLowerCase()) fallbackFor = main1;
-        else if (pick.trim() === "2" || pick.trim().toLowerCase() === main2.toLowerCase()) fallbackFor = main2;
-        else { alert("Invalid choice."); return; }
-        const fallbackActivity = prompt("If \"" + fallbackFor + "\" is unavailable, what should be played?\nExample: Sports");
-        if (!fallbackActivity) return;
+        const result = await daShowModal({
+          title: 'Smart Tile for ' + divName,
+          description: 'Balances two activities across bunks. One group gets Activity A while another gets Activity B, then they swap. Includes fallback if primary is full.',
+          fields: [
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr },
+            { name: 'main1', label: 'Main Activity 1 (limited capacity)', type: 'text', placeholder: 'e.g., Swim, Special' },
+            { name: 'main2', label: 'Main Activity 2 (everyone else)', type: 'text', placeholder: 'e.g., Sports, Activity' },
+            { name: 'fallbackActivity', label: 'Fallback (when Main 1 is full)', type: 'text', default: 'Activity', placeholder: 'e.g., Activity, Sports' }
+          ]
+        });
+        if (!result || !result.startTime || !result.endTime || !result.main1 || !result.main2) return;
+        const times = await validateStartEnd(result.startTime, result.endTime);
+        if (!times) return;
+        isNightActivity = times.isNight;
         newEvent = {
           id: 'evt_' + Math.random().toString(36).slice(2, 9),
-          type: "smart", event: main1 + " / " + main2, division: divName,
-          startTime, endTime, smartData: { main1, main2, fallbackFor, fallbackActivity },
+          type: "smart", event: result.main1 + " / " + result.main2, division: divName,
+          startTime: result.startTime, endTime: result.endTime,
+          smartData: { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: result.fallbackActivity || 'Activity' },
           isNightActivity: isNightActivity
         };
       }
-      // Handle SPLIT TILE - CRITICAL FIX from v3.9
+      // ===== SPLIT TILE =====
       else if (tileData.type === 'split') {
-        let startTime, endTime, startResult, endResult;
-        
-        while (true) {
-          startTime = prompt("Enter Start Time for the *full* block:", startStr);
-          if (!startTime) return;
-          startResult = validateTime(startTime, true);
-          if (startResult.valid) {
-            isNightActivity = startResult.isNight;
-            break;
-          }
-        }
-        
-        while (true) {
-          endTime = prompt("Enter End Time for the *full* block:");
-          if (!endTime) return;
-          endResult = validateTime(endTime, false, isNightActivity);
-          if (endResult.valid) {
-            if (endResult.minutes <= startResult.minutes) alert("End time must be after start time.");
-            else {
-              if (endResult.isNight) isNightActivity = true;
-              break;
-            }
-          }
-        }
-        
-        const eventName1 = prompt(
-          "Enter name for FIRST activity (Main 1):\n\n" +
-          "• Group 1 does this FIRST half\n" +
-          "• Group 2 does this SECOND half\n\n" +
-          "Examples: Swim, Sports, Art"
-        );
-        if (!eventName1) return;
-        
-        const eventName2 = prompt(
-          "Enter name for SECOND activity (Main 2):\n\n" +
-          "• Group 2 does this FIRST half\n" +
-          "• Group 1 does this SECOND half\n\n" +
-          "Examples: Swim, Sports, Art"
-        );
-        if (!eventName2) return;
-        
-        const event1 = mapEventNameForOptimizer(eventName1);
-        const event2 = mapEventNameForOptimizer(eventName2);
-        
+        const result = await daShowModal({
+          title: 'Split Activity for ' + divName,
+          description: 'Splits division into two groups. Group 1 does Main 1 first, Group 2 does Main 2 first. Midway through, they SWAP.',
+          fields: [
+            { name: 'startTime', label: 'Start Time (full block)', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+            { name: 'endTime', label: 'End Time (full block)', type: 'text', placeholder: 'e.g., 11:30am', default: endStr },
+            { name: 'main1', label: 'Main 1 (Group 1 starts here)', type: 'text', placeholder: 'e.g., Swim, Sports, Art' },
+            { name: 'main2', label: 'Main 2 (Group 2 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' }
+          ]
+        });
+        if (!result || !result.startTime || !result.endTime || !result.main1 || !result.main2) return;
+        const times = await validateStartEnd(result.startTime, result.endTime);
+        if (!times) return;
+        isNightActivity = times.isNight;
+        const event1 = mapEventNameForOptimizer(result.main1);
+        const event2 = mapEventNameForOptimizer(result.main2);
         newEvent = {
           id: 'evt_' + Math.random().toString(36).slice(2, 9),
-          type: 'split',
-          event: eventName1 + " / " + eventName2,
-          division: divName,
-          startTime,
-          endTime,
-          // CRITICAL: Ensure .event property is always present in subEvents
+          type: 'split', event: result.main1 + " / " + result.main2, division: divName,
+          startTime: result.startTime, endTime: result.endTime,
           subEvents: [
-            { ...event1, event: event1.event || eventName1 },
-            { ...event2, event: event2.event || eventName2 }
+            { ...event1, event: event1.event || result.main1 },
+            { ...event2, event: event2.event || result.main2 }
           ],
           isNightActivity: isNightActivity
         };
-        
-        console.log(`[SPLIT TILE] Created split tile for ${divName}:`, newEvent.subEvents);
+        console.log('[SPLIT TILE] Created split tile for ' + divName + ':', newEvent.subEvents);
       }
-      // Handle ELECTIVE
+      // ===== ELECTIVE =====
       else if (tileData.type === 'elective') {
-        let startTime, endTime, startResult, endResult;
-        while (true) {
-          startTime = prompt("Elective for " + divName + ".\n\nEnter Start Time:", startStr);
-          if (!startTime) return;
-          startResult = validateTime(startTime, true);
-          if (startResult.valid) {
-            isNightActivity = startResult.isNight;
-            break;
-          }
-        }
-        while (true) {
-          endTime = prompt("Enter End Time:");
-          if (!endTime) return;
-          endResult = validateTime(endTime, false, isNightActivity);
-          if (endResult.valid) {
-            if (endResult.minutes <= startResult.minutes) alert("End time must be after start time.");
-            else {
-              if (endResult.isNight) isNightActivity = true;
-              break;
-            }
-          }
-        }
-        
         const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
         const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
         const allLocations = [...new Set([...allFields, ...allSpecials])].sort();
-        
-        const activitiesInput = prompt(
-          "Which activities should be RESERVED for " + divName + " during this time?\n\n" +
-          "Available:\n" + allLocations.join(', ') + "\n\n" +
-          "Enter names separated by commas:"
-        );
-        if (!activitiesInput) return;
-        
-        const electiveActivities = activitiesInput.split(',').map(s => s.trim()).filter(Boolean);
-        if (electiveActivities.length === 0) { alert("Please enter at least one activity."); return; }
-        
+        const result = await daShowModal({
+          title: 'Elective for ' + divName,
+          description: 'Select activities to RESERVE for this division only. Other divisions cannot use these during this time.',
+          wide: true,
+          fields: [
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am', default: endStr },
+            { name: 'activities', label: 'Reserve Activities', type: 'checkbox-group', options: allLocations }
+          ]
+        });
+        if (!result || !result.startTime || !result.endTime) return;
+        const electiveActivities = result.activities || [];
+        if (electiveActivities.length === 0) { await daShowAlert("Please select at least one activity."); return; }
+        const times = await validateStartEnd(result.startTime, result.endTime);
+        if (!times) return;
+        isNightActivity = times.isNight;
         newEvent = {
           id: 'evt_' + Math.random().toString(36).slice(2, 9),
-          type: 'elective',
-          event: 'Elective',
-          division: divName,
-          startTime, endTime,
-          electiveActivities,
-          isNightActivity: isNightActivity
+          type: 'elective', event: 'Elective', division: divName,
+          startTime: result.startTime, endTime: result.endTime,
+          electiveActivities, isNightActivity
         };
       }
-      // Handle PINNED tiles (lunch, snacks, custom, dismissal, swim)
-      else if (['lunch', 'snacks', 'custom', 'dismissal', 'swim'].includes(tileData.type)) {
+      // ===== CUSTOM PINNED =====
+      else if (tileData.type === 'custom') {
+        const result = await daShowModal({
+          title: 'Custom Pinned Event for ' + divName,
+          description: 'Create a fixed event like Assembly, Special Program, etc.',
+          fields: [
+            { name: 'eventName', label: 'Event Name', type: 'text', placeholder: 'e.g., Regroup, Assembly', default: 'Regroup' },
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am', default: endStr }
+          ]
+        });
+        if (!result || !result.eventName || !result.startTime || !result.endTime) return;
+        const times = await validateStartEnd(result.startTime, result.endTime);
+        if (!times) return;
+        isNightActivity = times.isNight;
+        const reservedFields = await promptForReservedFields(result.eventName);
+        newEvent = {
+          id: Date.now().toString(), type: 'pinned', event: result.eventName.trim(),
+          division: divName, startTime: result.startTime, endTime: result.endTime,
+          reservedFields: reservedFields,
+          location: reservedFields.length === 1 ? reservedFields[0] : null,
+          isNightActivity
+        };
+      }
+      // ===== OTHER PINNED (lunch, snacks, dismissal, swim) =====
+      else if (['lunch', 'snacks', 'dismissal', 'swim'].includes(tileData.type)) {
         let name = tileData.name;
         let reservedFields = [];
         let defaultLocation = null;
-        
         if (window.getPinnedTileDefaultLocation) {
           defaultLocation = window.getPinnedTileDefaultLocation(tileData.type);
-          if (defaultLocation) {
-            reservedFields = [defaultLocation];
-          }
+          if (defaultLocation) reservedFields = [defaultLocation];
         }
-        
-        if (tileData.type === 'custom') {
-          name = prompt("Event Name:", "Regroup");
-          if (!name) return;
-          const manualFields = promptForReservedFields(name);
-          if (manualFields && manualFields.length > 0) {
-            reservedFields = manualFields;
-          }
-        } else if (tileData.type === 'swim') {
-          if (reservedFields.length === 0) {
-            const swimField = (masterSettings.app1?.fields || []).find(f => 
-              f.name.toLowerCase().includes('swim') || f.name.toLowerCase().includes('pool')
-            );
-            if (swimField) reservedFields = [swimField.name];
-          }
+        if (tileData.type === 'swim' && reservedFields.length === 0) {
+          const swimField = (masterSettings.app1?.fields || []).find(f =>
+            f.name.toLowerCase().includes('swim') || f.name.toLowerCase().includes('pool')
+          );
+          if (swimField) reservedFields = [swimField.name];
         }
-        
-        let st, et, stResult, etResult;
-        while (true) {
-          st = prompt(name + " Start:", startStr);
-          if (!st) return;
-          stResult = validateTime(st, true);
-          if (stResult.valid) {
-            isNightActivity = stResult.isNight;
-            break;
-          }
-        }
-        while (true) {
-          et = prompt(name + " End:", endStr);
-          if (!et) return;
-          etResult = validateTime(et, false, isNightActivity);
-          if (etResult.valid) {
-            if (etResult.minutes <= stResult.minutes) alert("End time must be after start time.");
-            else {
-              if (etResult.isNight) isNightActivity = true;
-              break;
-            }
-          }
-        }
-        
-        newEvent = { 
-          id: Date.now().toString(), 
-          type: 'pinned', 
-          event: name, 
-          division: divName, 
-          startTime: st, 
-          endTime: et, 
+        const result = await daShowModal({
+          title: name + ' for ' + divName,
+          fields: [
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr }
+          ]
+        });
+        if (!result || !result.startTime || !result.endTime) return;
+        const times = await validateStartEnd(result.startTime, result.endTime);
+        if (!times) return;
+        isNightActivity = times.isNight;
+        newEvent = {
+          id: Date.now().toString(), type: 'pinned', event: name, division: divName,
+          startTime: result.startTime, endTime: result.endTime,
           reservedFields,
           location: defaultLocation || (reservedFields.length > 0 ? reservedFields[0] : null),
-          isNightActivity: isNightActivity
+          isNightActivity
         };
       }
-      // Handle LEAGUE tiles
+      // ===== LEAGUE =====
       else if (tileData.type === 'league') {
-        let startTime, endTime, startResult, endResult;
-        while (true) {
-          startTime = prompt("League Game start time:", startStr);
-          if (!startTime) return;
-          startResult = validateTime(startTime, true);
-          if (startResult.valid) {
-            isNightActivity = startResult.isNight;
-            break;
-          }
-        }
-        while (true) {
-          endTime = prompt("League Game end time:");
-          if (!endTime) return;
-          endResult = validateTime(endTime, false, isNightActivity);
-          if (endResult.valid) {
-            if (endResult.minutes <= startResult.minutes) alert("End time must be after start time.");
-            else {
-              if (endResult.isNight) isNightActivity = true;
-              break;
-            }
-          }
-        }
-        newEvent = { 
-          id: 'evt_' + Math.random().toString(36).slice(2, 9), 
-          type: 'league', 
-          event: 'League Game', 
-          division: divName, 
-          startTime, 
-          endTime, 
-          isNightActivity 
+        const result = await daShowModal({
+          title: 'League Game for ' + divName,
+          fields: [
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr }
+          ]
+        });
+        if (!result || !result.startTime || !result.endTime) return;
+        const times = await validateStartEnd(result.startTime, result.endTime);
+        if (!times) return;
+        isNightActivity = times.isNight;
+        newEvent = {
+          id: 'evt_' + Math.random().toString(36).slice(2, 9),
+          type: 'league', event: 'League Game', division: divName,
+          startTime: result.startTime, endTime: result.endTime, isNightActivity
         };
       }
+      // ===== SPECIALTY LEAGUE =====
       else if (tileData.type === 'specialty_league') {
-        let startTime, endTime, startResult, endResult;
-        while (true) {
-          startTime = prompt("Specialty League start time:", startStr);
-          if (!startTime) return;
-          startResult = validateTime(startTime, true);
-          if (startResult.valid) {
-            isNightActivity = startResult.isNight;
-            break;
-          }
-        }
-        while (true) {
-          endTime = prompt("Specialty League end time:");
-          if (!endTime) return;
-          endResult = validateTime(endTime, false, isNightActivity);
-          if (endResult.valid) {
-            if (endResult.minutes <= startResult.minutes) alert("End time must be after start time.");
-            else {
-              if (endResult.isNight) isNightActivity = true;
-              break;
-            }
-          }
-        }
-        newEvent = { 
-          id: 'evt_' + Math.random().toString(36).slice(2, 9), 
-          type: 'specialty_league', 
-          event: 'Specialty League', 
-          division: divName, 
-          startTime, 
-          endTime, 
-          isNightActivity 
+        const result = await daShowModal({
+          title: 'Specialty League for ' + divName,
+          fields: [
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr }
+          ]
+        });
+        if (!result || !result.startTime || !result.endTime) return;
+        const times = await validateStartEnd(result.startTime, result.endTime);
+        if (!times) return;
+        isNightActivity = times.isNight;
+        newEvent = {
+          id: 'evt_' + Math.random().toString(36).slice(2, 9),
+          type: 'specialty_league', event: 'Specialty League', division: divName,
+          startTime: result.startTime, endTime: result.endTime, isNightActivity
         };
       }
-      // Handle standard slots (Activity, Sports, Special)
+      // ===== STANDARD SLOTS (Activity, Sports, Special) =====
       else {
         let name = tileData.name;
         let finalType = tileData.type;
@@ -2139,37 +2024,20 @@ function addDropListeners(gridEl) {
         else if (tileData.type === 'sports') { name = "Sports Slot"; finalType = 'slot'; }
         else if (tileData.type === 'special') { name = "Special Activity"; finalType = 'slot'; }
         if (!name) return;
-        
-        let st, et, stResult, etResult;
-        while (true) {
-          st = prompt(name + " Start:", startStr);
-          if (!st) return;
-          stResult = validateTime(st, true);
-          if (stResult.valid) {
-            isNightActivity = stResult.isNight;
-            break;
-          }
-        }
-        while (true) {
-          et = prompt(name + " End:", endStr);
-          if (!et) return;
-          etResult = validateTime(et, false, isNightActivity);
-          if (etResult.valid) {
-            if (etResult.minutes <= stResult.minutes) alert("End time must be after start time.");
-            else {
-              if (etResult.isNight) isNightActivity = true;
-              break;
-            }
-          }
-        }
-        newEvent = { 
-          id: Date.now().toString(), 
-          type: finalType, 
-          event: name, 
-          division: divName, 
-          startTime: st, 
-          endTime: et, 
-          isNightActivity 
+        const result = await daShowModal({
+          title: name + ' for ' + divName,
+          fields: [
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr }
+          ]
+        });
+        if (!result || !result.startTime || !result.endTime) return;
+        const times = await validateStartEnd(result.startTime, result.endTime);
+        if (!times) return;
+        isNightActivity = times.isNight;
+        newEvent = {
+          id: Date.now().toString(), type: finalType, event: name, division: divName,
+          startTime: result.startTime, endTime: result.endTime, isNightActivity
         };
       }
       
