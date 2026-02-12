@@ -1105,30 +1105,23 @@ function showRainyDayNotification(activated, disabledCount = 0, isMidDay = false
 // =================================================================
 // FIELD RESERVATION HELPERS
 // =================================================================
-function promptForReservedFields(eventName) {
+async function promptForReservedFields(eventName) {
   const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
   const specialActivities = (masterSettings.app1?.specialActivities || []).map(s => s.name);
   const allLocations = [...new Set([...allFields, ...specialActivities])].sort();
   if (allLocations.length === 0) return [];
-  
-  const fieldInput = prompt(
-    `Which field(s) will "${eventName}" use?\n\n` +
-    `This reserves the field so the scheduler won't assign it to other bunks.\n\n` +
-    `Available fields:\n${allLocations.join(', ')}\n\n` +
-    `Enter field names separated by commas (or leave blank if none):`,
-    ''
-  );
-  if (!fieldInput || !fieldInput.trim()) return [];
-  
-  const requested = fieldInput.split(',').map(f => f.trim()).filter(Boolean);
-  const validated = [], invalid = [];
-  requested.forEach(name => {
-    const match = allLocations.find(loc => loc.toLowerCase() === name.toLowerCase());
-    if (match) validated.push(match);
-    else invalid.push(name);
+
+  const result = await daShowModal({
+    title: 'Reserve Fields for "' + eventName + '"',
+    description: 'Select which field(s) this event will use. This reserves them so the scheduler won\'t assign them to other bunks.',
+    fields: [
+      { name: 'fields', label: 'Available Fields & Activities', type: 'checkbox-group', options: allLocations }
+    ],
+    confirmText: 'Reserve Selected'
   });
-  if (invalid.length > 0) alert("Warning: These fields were not found and will be ignored:\n" + invalid.join(', '));
-  return validated;
+
+  if (!result) return [];
+  return result.fields || [];
 }
 
 // =================================================================
