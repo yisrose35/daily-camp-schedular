@@ -475,6 +475,10 @@ function saveData(){
             // ★ Indoor/Outdoor for rainy day
             rainyDayAvailable: f.rainyDayAvailable === true,
             
+            // ★ Rainy day overrides
+            ...(f.rainyDayCapacity > 0 ? { rainyDayCapacity: f.rainyDayCapacity } : {}),
+            ...(f.rainyDayAvailableAllDay ? { rainyDayAvailableAllDay: true } : {}),
+            
             // ★ v3.2: Field type category (derived from rainyDayAvailable if not set)
             type: f.type || (f.rainyDayAvailable ? 'indoor' : 'outdoor'),
             
