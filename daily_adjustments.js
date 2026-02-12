@@ -2588,10 +2588,9 @@ function renderBunkOverridesUI() {
       type = 'sport';
     }
     
-    if (!activity) { alert('Please select an activity.'); return; }
-    if (!startEl.value || !endEl.value) { alert('Please enter a start and end time.'); return; }
-    if (selectedBunks.length === 0) { alert('Please select at least one bunk.'); return; }
-    
+   if (!activity) { daShowAlert('Please select an activity.'); return; }
+    if (!startEl.value || !endEl.value) { daShowAlert('Please enter a start and end time.'); return; }
+    if (selectedBunks.length === 0) { daShowAlert('Please select at least one bunk.'); return; }
     const startMin = parseTimeToMinutes(startEl.value);
     const endMin = parseTimeToMinutes(endEl.value);
     
