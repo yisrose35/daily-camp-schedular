@@ -145,7 +145,9 @@ function validateSpecialActivity(activity, activityName) {
         maxUsage: (() => { if (activity.maxUsage == null || activity.maxUsage === "") return null; const p = parseInt(activity.maxUsage, 10); return (!isNaN(p) && p > 0) ? p : null; })(),
         frequencyWeeks: parseInt(activity.frequencyWeeks, 10) || 0, rainyDayExclusive: activity.rainyDayExclusive === true,
         rainyDayOnly: activity.rainyDayOnly === true, prepDuration: parseInt(activity.prepDuration, 10) || 0,
-        location: activity.location || null, isIndoor, rainyDayAvailable: isIndoor, availableOnRainyDay: isIndoor
+        location: activity.location || null, isIndoor, rainyDayAvailable: isIndoor, availableOnRainyDay: isIndoor,
+        ...(activity.rainyDayCapacity > 0 ? { rainyDayCapacity: parseInt(activity.rainyDayCapacity, 10) } : {}),
+        ...(activity.rainyDayAvailableAllDay === true ? { rainyDayAvailableAllDay: true } : {})
     };
 }
 
@@ -153,7 +155,8 @@ function createDefaultActivity(name) {
     return { name, type: 'Special', available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
         maxUsage: null, frequencyWeeks: 0, rainyDayExclusive: false, prepDuration: 0,
-        location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true };
+        location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
+        rainyDayCapacity: null, rainyDayAvailableAllDay: false };
 }
 
 function validateAllActivities(activities) { if (!Array.isArray(activities)) return []; return activities.map(a => validateSpecialActivity(a, a?.name)); }
@@ -401,7 +404,14 @@ function renderDetailPane() {
 function summarySharing(item) { if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "No sharing (1 bunk only)"; return 'Up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks (same grade)'; }
 function summaryAccess(item) { if (!item.limitUsage?.enabled) return "Open to all grades"; const c = Object.keys(item.limitUsage.divisions||{}).length; if (c===0) return "\u26A0 Restricted (none selected)"; return c + ' grade' + (c!==1?'s':'') + ' allowed' + (item.limitUsage.usePriority?" \u00B7 prioritized":""); }
 function summaryTime(item) { const c = (item.timeRules||[]).length; return c ? c + ' rule(s) active' : "Available all day"; }
-function summaryWeather(item) { return item.isIndoor ? "\uD83C\uDFE0 Indoor (Rain OK)" : "\uD83C\uDF33 Outdoor"; }
+function summaryWeather(item) {
+    let s = item.isIndoor ? 'Indoor · Rainy day available' : 'Outdoor · Disabled on rain';
+    const overrides = [];
+    if (item.rainyDayCapacity > 0) overrides.push('cap:' + item.rainyDayCapacity);
+    if (item.rainyDayAvailableAllDay && (item.timeRules||[]).length > 0) overrides.push('bypass time rules');
+    if (overrides.length > 0) s += ' · 🌧️ ' + overrides.join(', ');
+    return s;
+}
 function summaryLocation(item) { return item.location || "No field assigned"; }
 
 // SHARING — v3.2: Toggle pattern matching fields.js
@@ -585,9 +595,94 @@ function renderWeatherSettings(item) {
     const container = document.createElement("div");
     const isIndoor = item.isIndoor === true;
     const updateSummary = () => { const s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if(s) s.textContent = summaryWeather(item); };
-    container.innerHTML = '<div style="margin-bottom:16px;"><p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Mark as indoor to keep available during Rainy Day Mode.</p><div style="display:flex; align-items:center; gap:12px; padding:14px; background:' + (isIndoor?'#e6f4f7':'#fef3c7') + '; border:1px solid ' + (isIndoor?'#b2dce6':'#fcd34d') + '; border-radius:10px;"><span style="font-size:28px;">' + (isIndoor?'\uD83C\uDFE0':'\uD83C\uDF33') + '</span><div style="flex:1;"><div style="font-weight:600; color:' + (isIndoor?'#0A4A56':'#92400e') + ';">' + (isIndoor?'Indoor':'Outdoor') + '</div><div style="font-size:0.85rem; color:' + (isIndoor?'#0F5F6E':'#b45309') + ';">' + (isIndoor?'Available on rainy days':'Disabled during rainy days') + '</div></div><label class="switch"><input type="checkbox" id="weather-toggle" ' + (isIndoor?'checked':'') + '><span class="slider"></span></label></div></div>';
+    // Indoor/Outdoor toggle section
+    const indoorHtml = '<div style="margin-bottom:16px;">'
+        + '<p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Mark as indoor to keep available during Rainy Day Mode.</p>'
+        + '<div style="display:flex; align-items:center; gap:12px; padding:14px; background:' + (isIndoor ? '#e6f4f7' : '#fef3c7') + '; border:1px solid ' + (isIndoor ? '#b2dce6' : '#fcd34d') + '; border-radius:10px;">'
+        + '<span style="font-size:28px;">' + (isIndoor ? '\uD83C\uDFE0' : '\uD83C\uDF33') + '</span>'
+        + '<div style="flex:1;">'
+        + '<div style="font-weight:600; color:' + (isIndoor ? '#0A4A56' : '#92400e') + ';">' + (isIndoor ? 'Indoor' : 'Outdoor') + '</div>'
+        + '<div style="font-size:0.85rem; color:' + (isIndoor ? '#0F5F6E' : '#b45309') + ';">' + (isIndoor ? 'Available on rainy days' : 'Disabled during rainy days') + '</div>'
+        + '</div>'
+        + '<label class="switch"><input type="checkbox" id="weather-toggle" ' + (isIndoor ? 'checked' : '') + '><span class="slider"></span></label>'
+        + '</div></div>';
+    // Rainy Day Overrides section (capacity + time bypass) — matches fields.js
+    const regularCapacity = parseInt(item.sharableWith?.capacity) || 1;
+    const hasTimeRules = (item.timeRules || []).length > 0;
+    const overridesHtml = '<div style="margin-top:20px; padding-top:16px; border-top:1px solid #e5e7eb;">'
+        + '<div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">'
+        + '<span style="font-size:1.1rem;">\uD83C\uDF27\uFE0F</span>'
+        + '<div style="font-weight:600; font-size:0.95rem; color:#1e293b;">Rainy Day Overrides</div>'
+        + '</div>'
+        // Capacity Override
+        + '<div style="background:#f0f9ff; border:1px solid #bae6fd; border-radius:10px; padding:14px; margin-bottom:12px;">'
+        + '<div style="font-weight:600; font-size:0.9rem; color:#0c4a6e; margin-bottom:8px;">'
+        + '\uD83D\uDCCA Capacity Override'
+        + '<span style="font-weight:400; font-size:0.8rem; color:#0369a1;"> (regular: ' + regularCapacity + ')</span>'
+        + '</div>'
+        + '<div style="display:flex; align-items:center; gap:10px;">'
+        + '<label style="font-size:0.85rem; color:#334155;">Rainy day capacity:</label>'
+        + '<input type="number" id="rainy-day-capacity-input" min="1" max="20" placeholder="Same" value="' + (item.rainyDayCapacity || '') + '" style="width:70px; padding:6px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:0.9rem;">'
+        + '<span style="font-size:0.8rem; color:#64748b;">bunks</span>'
+        + '</div>'
+        + '<div style="font-size:0.75rem; color:#64748b; margin-top:6px;">Leave empty = use regular capacity.</div>'
+        + '</div>'
+        // Ignore Time Restrictions
+        + '<div style="background:#fefce8; border:1px solid #fde68a; border-radius:10px; padding:14px;">'
+        + '<div style="display:flex; align-items:center; justify-content:space-between;">'
+        + '<div>'
+        + '<div style="font-weight:600; font-size:0.9rem; color:#713f12;">\u23F0 Ignore Time Restrictions on Rain Days</div>'
+        + '<div style="font-size:0.8rem; color:#a16207;">' + (hasTimeRules ? (item.timeRules.length + ' time rule(s) can be bypassed') : 'No time restrictions configured') + '</div>'
+        + '</div>'
+        + '<label class="switch"><input type="checkbox" id="rainy-day-all-day-toggle" ' + (item.rainyDayAvailableAllDay ? 'checked' : '') + ' ' + (!hasTimeRules ? 'disabled' : '') + '><span class="slider"></span></label>'
+        + '</div></div>'
+        + '</div>';
+    container.innerHTML = indoorHtml + overridesHtml;
+    // Bind indoor toggle
     const tog = container.querySelector('#weather-toggle');
-    if (tog) { tog.onchange = function() { item.isIndoor=this.checked; item.rainyDayAvailable=this.checked; item.availableOnRainyDay=this.checked; saveData(); const p=container.parentElement; if(p){p.innerHTML='';p.appendChild(renderWeatherSettings(item));} updateSummary(); renderMasterList(); }; }
+    if (tog) {
+        tog.onchange = function() {
+            item.isIndoor = this.checked;
+            item.rainyDayAvailable = this.checked;
+            item.availableOnRainyDay = this.checked;
+            saveData();
+            const p = container.parentElement;
+            if (p) { p.innerHTML = ''; p.appendChild(renderWeatherSettings(item)); }
+            updateSummary();
+            renderMasterList();
+        };
+    }
+    // Bind capacity override
+    const capInput = container.querySelector('#rainy-day-capacity-input');
+    if (capInput) {
+        capInput.addEventListener('change', function() {
+            const val = this.value.trim();
+            if (val === '' || val === '0') {
+                delete item.rainyDayCapacity;
+                item.rainyDayCapacity = null;
+            } else {
+                const parsed = parseInt(val, 10);
+                if (!isNaN(parsed) && parsed > 0 && parsed <= 20) {
+                    item.rainyDayCapacity = parsed;
+                } else {
+                    alert('Enter a number between 1 and 20.');
+                    this.value = item.rainyDayCapacity || '';
+                    return;
+                }
+            }
+            saveData();
+            updateSummary();
+        });
+    }
+    // Bind all-day toggle
+    const allDayTog = container.querySelector('#rainy-day-all-day-toggle');
+    if (allDayTog) {
+        allDayTog.addEventListener('change', function() {
+            item.rainyDayAvailableAllDay = this.checked;
+            saveData();
+            updateSummary();
+        });
+    }
     return container;
 }
 
@@ -596,7 +691,7 @@ function renderPrepDurationSettings(item) {
     const hp = (item.prepDuration||0) > 0;
     container.innerHTML = '<div style="margin-bottom:16px;"><p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Some activities need prep time. Example: <strong>Skits</strong> = 30min practice + 60min performance.</p><div style="background:' + (hp?'#faf5ff':'#f9fafb') + '; border:1px solid ' + (hp?'#d8b4fe':'#e5e7eb') + '; border-radius:10px; padding:14px;"><div style="display:flex; align-items:center; gap:12px; margin-bottom:' + (hp?'12px':'0') + ';"><div style="flex:1;"><div style="font-weight:600; color:' + (hp?'#6b21a8':'#374151') + ';">' + (hp?'Has Prep Phase':'Single Phase') + '</div><div style="font-size:0.8rem; color:' + (hp?'#7c3aed':'#6b7280') + ';">' + (hp?item.prepDuration+' min prep + main':'No prep needed') + '</div></div><label class="switch"><input type="checkbox" id="prep-duration-toggle" ' + (hp?'checked':'') + '><span class="slider"></span></label></div><div id="prep-duration-config" style="display:' + (hp?'block':'none') + ';"><div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #e9d5ff;"><label style="font-size:0.85rem;">Prep time:</label><input type="number" id="prep-duration-input" min="5" max="120" step="5" value="' + (item.prepDuration||30) + '" style="width:70px; padding:6px 10px; border:1px solid #d8b4fe; border-radius:6px; text-align:center;"><span style="font-size:0.85rem; color:#64748b;">minutes</span></div></div></div></div>';
     const pt = container.querySelector("#prep-duration-toggle");
-    if (pt) { pt.addEventListener("change", function() { const c = container.querySelector("#prep-duration-config"); if(this.checked){c.style.display="block";item.prepDuration=parseInt(container.querySelector("#prep-duration-input").value,10)||30;}else{c.style.display="none";item.prepDuration=0;} saveData(); const s=container.closest('.detail-section')?.querySelector('.detail-section-summary'); if(s)s.textContent=(item.prepDuration>0)?item.prepDuration+'min prep':'None'; }); }
+    if (pt) { pt.addEventListener("change", function() { const c = container.querySelector("#prep-duration-config"); if(this.checked){c.style.display="block";item.prepDuration=parseInt(container.querySelector("#prep-duration-input").value,10)||30;}else{c.style.display="none";item.prepDuration=0;} saveData(); const s=container.closest('.detail-section')?.querySelector('.detail-section-summary'); if(s)s.textContent=(item.prepDuration>0)?item.prepDuration+'min prep'; }); }
     const di = container.querySelector("#prep-duration-input");
     if (di) { di.addEventListener("change", function() { const v=parseInt(this.value,10); if(!isNaN(v)&&v>=5&&v<=120){item.prepDuration=v;saveData();const s=container.closest('.detail-section')?.querySelector('.detail-section-summary');if(s)s.textContent=v+'min prep';} }); }
     return container;
