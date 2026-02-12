@@ -18,6 +18,8 @@
 // - Mobile Touch Support for Drag & Drop
 // - RBAC checks for Editing & Optimizer
 // - Split Tile subEvents structure fix
+// - v5.2: In-App Modal System (daShowModal/daShowConfirm/daShowAlert)
+//   replaces ALL browser prompt()/confirm()/alert() dialogs
 // =================================================================
 (function() {
 'use strict';
