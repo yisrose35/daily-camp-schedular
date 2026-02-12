@@ -2336,16 +2336,15 @@ function renderToolbar() {
 // =================================================================
 // RUN OPTIMIZER
 // =================================================================
-function runOptimizer() {
+async function runOptimizer() {
   if (!window.AccessControl?.checkEditAccess?.('run optimizer')) return;
-  if (!window.runSkeletonOptimizer) { alert("Error: 'runSkeletonOptimizer' not found."); return; }
-  if (dailyOverrideSkeleton.length === 0) { alert("Skeleton is empty."); return; }
+  if (!window.runSkeletonOptimizer) { await daShowAlert("Error: 'runSkeletonOptimizer' not found."); return; }
+  if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
   saveDailySkeleton();
   const success = window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
-  if (success) { alert("Schedule Generated!"); window.showTab?.('schedule'); }
-  else { alert("Error. Check console."); }
+  if (success) { await daShowAlert("✅ Schedule Generated!"); window.showTab?.('schedule'); }
+  else { await daShowAlert("❌ Error generating schedule. Check console."); }
 }
-
 // =================================================================
 // TRIPS FORM
 // =================================================================
