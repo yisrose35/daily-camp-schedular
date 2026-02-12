@@ -1648,15 +1648,7 @@ function renderWeatherSettings(item) {
     
     return container;
 }
-```
 
-(Same `return container;` — you're adding the two handlers between the existing toggle handler and the return.)
-
----
-
-**Prep Duration section** — the `sections.push` line is harder to find without seeing your exact code. Search your `special_activities.js` for the string `summaryLocation`. You'll find a line like:
-```
-sections.push({ title: "📍 Location"
 
 //------------------------------------------------------------------
 // HELPERS
