@@ -2110,12 +2110,13 @@ function addRemoveListeners(gridEl) {
       selectTile(tile.dataset.id);
     };
     
-    tile.ondblclick = (e) => {
+    tile.ondblclick = async (e) => {
       e.stopPropagation();
       if (e.target.classList.contains('da-resize-handle')) return;
       const id = tile.dataset.id;
       if (!id) return;
-      if (confirm("Delete this block?")) {
+      const ok = await daShowConfirm("Delete this block?", { danger: true, confirmText: 'Delete' });
+      if (ok) {
         dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => x.id !== id);
         selectedTileId = null;
         saveDailySkeleton();
