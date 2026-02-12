@@ -2298,19 +2298,23 @@ function renderToolbar() {
     </div>
   `;
   
-  document.getElementById('da-load-select').onchange = function() {
+  document.getElementById('da-load-select').onchange = async function() {
     const name = this.value;
-    if (name && savedSkeletons[name] && confirm('Load "' + name + '"?')) {
-      dailyOverrideSkeleton = JSON.parse(JSON.stringify(savedSkeletons[name]));
-      clearDisplacedTiles();
-      saveDailySkeleton();
-      renderGrid();
+    if (name && savedSkeletons[name]) {
+      const ok = await daShowConfirm('Load template "' + name + '"?');
+      if (ok) {
+        dailyOverrideSkeleton = JSON.parse(JSON.stringify(savedSkeletons[name]));
+        clearDisplacedTiles();
+        saveDailySkeleton();
+        renderGrid();
+      }
     }
     this.value = '';
   };
   
-  document.getElementById('da-clear-btn').onclick = () => {
-    if (confirm('Clear all blocks?')) {
+  document.getElementById('da-clear-btn').onclick = async () => {
+    const ok = await daShowConfirm('Clear all blocks?', { danger: true, confirmText: 'Clear All' });
+    if (ok) {
       dailyOverrideSkeleton = [];
       saveDailySkeleton();
       renderGrid();
