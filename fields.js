@@ -1551,8 +1551,49 @@ function renderWeatherSettings(item) {
         
         <div style="background: #f9fafb; border-radius: 8px; padding: 12px; font-size: 0.85rem; color: #4b5563;">
             <strong>💡 Tip:</strong> Indoor facilities like gyms, covered courts, and activity rooms 
-            should be marked as indoor. Outdoor fields like soccer fields, baseball diamonds, 
-            and open courts should remain as outdoor.
+            should be marked as indoor.
+        </div>
+        
+        <!-- Rainy Day Overrides -->
+        <div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid #e5e7eb;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+                <span style="font-size: 1.1rem;">🌧️</span>
+                <div style="font-weight: 600; font-size: 0.95rem; color: #1e293b;">Rainy Day Overrides</div>
+            </div>
+            
+            <div style="background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 10px; padding: 14px; margin-bottom: 12px;">
+                <div style="font-weight: 600; font-size: 0.9rem; color: #0c4a6e; margin-bottom: 8px;">
+                    📊 Capacity Override
+                    <span style="font-weight:400; font-size:0.8rem; color:#0369a1;"> (regular: ${item.sharableWith?.capacity || 1})</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <label style="font-size: 0.85rem; color: #334155;">Rainy day capacity:</label>
+                    <input type="number" id="rainy-day-capacity-input" min="1" max="20" 
+                           placeholder="Same" value="${item.rainyDayCapacity || ''}"
+                           style="width:70px; padding:6px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:0.9rem;">
+                    <span style="font-size: 0.8rem; color: #64748b;">bunks</span>
+                </div>
+                <div style="font-size:0.75rem; color:#64748b; margin-top:6px;">Leave empty = use regular capacity.</div>
+            </div>
+            
+            <div style="background: #fefce8; border: 1px solid #fde68a; border-radius: 10px; padding: 14px;">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <div>
+                        <div style="font-weight: 600; font-size: 0.9rem; color: #713f12;">
+                            ⏰ Ignore Time Restrictions on Rain Days
+                        </div>
+                        <div style="font-size: 0.8rem; color: #a16207;">
+                            ${(item.timeRules?.length > 0) ? item.timeRules.length + ' time rule(s) can be bypassed' : 'No time restrictions configured'}
+                        </div>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="rainy-day-all-day-toggle" 
+                               ${item.rainyDayAvailableAllDay ? 'checked' : ''}
+                               ${(!item.timeRules || item.timeRules.length === 0) ? 'disabled' : ''}>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
         </div>
     `;
     
