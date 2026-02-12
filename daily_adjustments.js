@@ -495,11 +495,20 @@ function renderRainyDayPanel() {
                 <strong>${stats.rainySpecials}</strong>
                 <span>Rainy-Only Activities</span>
               </div>
-              <div class="da-rainy-stat disabled">
+             <div class="da-rainy-stat disabled">
                 <span>🚫</span>
                 <strong>${stats.outdoorFields}</strong>
                 <span>Outdoor (Disabled)</span>
               </div>
+            ` + (isMidDay ? `
+              </div>
+              <div style="margin-top:12px; padding:0 12px 12px;">
+                <button id="da-rain-clears-btn" class="da-btn da-btn-warning da-btn-sm" style="width:100%;">
+                  ☀️ Rain Cleared — Switch Back to Regular
+                </button>
+              </div>
+              <div class="da-rainy-stats" style="display:none;">
+            ` : '') + `
             ` : `
               <!-- REGULAR DAY STATS -->
               <div class="da-rainy-stat">
