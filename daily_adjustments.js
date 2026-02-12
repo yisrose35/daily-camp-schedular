@@ -2921,11 +2921,11 @@ function renderOverrideDetailPane() {
       const start = document.getElementById('da-rule-start').value.trim();
       const end = document.getElementById('da-rule-end').value.trim();
       
-      if (!start || !end) { alert('Please enter start and end times.'); return; }
+     if (!start || !end) { daShowAlert('Please enter start and end times.'); return; }
       const startMin = parseTimeToMinutes(start);
       const endMin = parseTimeToMinutes(end);
-      if (startMin === null || endMin === null) { alert('Invalid time format. Use format like 9:00am or 2:30pm'); return; }
-      if (startMin >= endMin) { alert('End time must be after start time.'); return; }
+      if (startMin === null || endMin === null) { daShowAlert('Invalid time format. Use format like 9:00am or 2:30pm.'); return; }
+      if (startMin >= endMin) { daShowAlert('End time must be after start time.'); return; }
       
       dailyRules.push({ type: ruleType, start, end });
       currentOverrides.dailyFieldAvailability[name] = dailyRules;
