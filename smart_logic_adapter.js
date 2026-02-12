@@ -303,16 +303,21 @@
             // 3. Check daily overrides (from daily_adjustments.js)
             const dailyRules = dailyFieldAvailability?.[specialName] || [];
             
-            // 4. Check time rules (daily override takes precedence over global)
+           // 4. Check time rules (daily override takes precedence over global)
+            // ★ Rainy day: bypass time rules if rainyDayAvailableAllDay is set
+            const bypassTimeRules = isRainyMode && props.rainyDayAvailableAllDay === true;
             const effectiveRules = dailyRules.length > 0 ? dailyRules : (props.timeRules || []);
             
-            if (effectiveRules.length > 0) {
+            if (effectiveRules.length > 0 && !bypassTimeRules) {
                 const isOpen = checkTimeRulesForBlock(startMin, endMin, effectiveRules, slots);
                 
                 if (!isOpen) {
                     log(`    ❌ ${specialName}: closed during ${startMin}-${endMin} (time rules)`);
                     return;
                 }
+            }
+            if (bypassTimeRules && effectiveRules.length > 0) {
+                log(`    🌧️ ${specialName}: bypassing ${effectiveRules.length} time rule(s) (rainy day override)`);
             }
 
             // 5. Calculate capacity from special_activities.js / fields.js
