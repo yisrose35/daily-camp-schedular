@@ -711,20 +711,55 @@ function activateMidDayRainyMode(customStartTime = null) {
     window.saveCurrentDailyData?.("preRainyDayDisabledFields", overrides.disabledFields || []);
   }
   
-  // Analyze and categorize activities
-  const activityAnalysis = analyzeActivitiesForMidDayRain(rainStartMin);
-  console.log("[RainyDay] Activity analysis:", activityAnalysis);
+  // ★★★ NEW: Store the current skeleton name for restoration later ★★★
+  const currentDateKey = window.currentScheduleDate;
+  const assignments = masterSettings.app1?.skeletonAssignments || {};
+  const skeletons = masterSettings.app1?.savedSkeletons || {};
+  const [Y, M, D] = (currentDateKey || '').split('-').map(Number);
+  let dow = 0;
+  if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const regularSkeletonName = assignments[dayNames[dow]] || assignments["Default"];
+  window.saveCurrentDailyData?.("_preRainySkeletonName", regularSkeletonName);
   
-  // Backup the schedule before making changes
-  backupPreservedSchedule(rainStartMin);
-  
-  // Clear in-progress and future activities from schedule
-  clearActivitiesFromRainStart(rainStartMin, activityAnalysis);
+  // ★★★ NEW: Use the stacking algorithm instead of just clearing ★★★
+  if (window.MidDayRainStacker) {
+    // Build resource overrides from settings
+    const resourceOverrides = buildRainyDayResourceOverrides();
+    
+    // Run the stacking algorithm
+    const result = window.MidDayRainStacker.handleMidDayRainStart(rainStartMin, resourceOverrides);
+    
+    if (result.success) {
+      console.log("[RainyDay] ✅ Stacker rebuilt schedule successfully");
+      console.log("[RainyDay] Summary:", result.summary);
+      
+      // Update module state
+      dailyOverrideSkeleton = result.rebuiltSkeleton;
+    } else {
+      console.error("[RainyDay] ❌ Stacker failed:", result.error);
+      // Fall back to old behavior (clear and switch)
+      backupPreservedSchedule(rainStartMin);
+      const activityAnalysis = analyzeActivitiesForMidDayRain(rainStartMin);
+      clearActivitiesFromRainStart(rainStartMin, activityAnalysis);
+      if (isAutoSkeletonSwitchEnabled()) {
+        switchToRainySkeleton();
+      }
+    }
+  } else {
+    // Fallback: old behavior if stacker not loaded
+    console.warn("[RainyDay] MidDayRainStacker not available, using legacy mode");
+    backupPreservedSchedule(rainStartMin);
+    const activityAnalysis = analyzeActivitiesForMidDayRain(rainStartMin);
+    clearActivitiesFromRainStart(rainStartMin, activityAnalysis);
+    if (isAutoSkeletonSwitchEnabled()) {
+      switchToRainySkeleton();
+    }
+  }
   
   // Disable outdoor fields
   const existingDisabled = overrides.disabledFields || [];
   const newDisabled = [...new Set([...existingDisabled, ...stats.outdoorFieldNames])];
-  
   overrides.disabledFields = newDisabled;
   currentOverrides.disabledFields = newDisabled;
   window.saveCurrentDailyData?.("overrides", overrides);
@@ -737,17 +772,9 @@ function activateMidDayRainyMode(customStartTime = null) {
   window.saveCurrentDailyData?.("rainyDayStartTime", rainStartMin);
   window.saveCurrentDailyData?.("isRainyDay", true);
   
-  // Store analysis for UI display
-  window.saveCurrentDailyData?.("midDayRainAnalysis", activityAnalysis);
-  
-  let skeletonSwitched = false;
-  if (isAutoSkeletonSwitchEnabled()) {
-    skeletonSwitched = switchToRainySkeleton();
-  }
-  
-  showRainyDayNotification(true, stats.outdoorFieldNames.length, true, skeletonSwitched, activityAnalysis.completedCount);
+  let skeletonSwitched = true; // Stacker handles this
+  showRainyDayNotification(true, stats.outdoorFieldNames.length, true, skeletonSwitched);
   console.log("[RainyDay] Activated mid-day mode at", minutesToTime(rainStartMin));
-  console.log("[RainyDay] Kept:", activityAnalysis.completedCount, "| Cut short:", activityAnalysis.inProgressCount, "| Cleared:", activityAnalysis.futureCount);
 }
 
 // Analyze activities relative to rain start time
