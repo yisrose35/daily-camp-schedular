@@ -3291,8 +3291,25 @@ function getStyles() {
     
     /* Badge for time rules */
     .da-badge-time { background:#dbeafe; color:#1d4ed8; }
-  </style>`;
-}
+
+    /* ============================================ */
+    /* IN-APP MODAL STYLES (v5.2)                  */
+    /* ============================================ */
+    #da-modal-input-overlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(15,23,42,0.5); display:flex; align-items:center; justify-content:center; z-index:100000; backdrop-filter:blur(2px); animation:daModalFadeIn 0.15s ease; }
+    @keyframes daModalFadeIn { from { opacity:0; } to { opacity:1; } }
+    #da-modal-input-overlay .da-modal { animation:daModalSlideUp 0.2s ease; }
+    @keyframes daModalSlideUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+    .da-modal-desc { margin:0 0 16px; font-size:13px; color:#64748b; line-height:1.5; }
+    .da-modal-field { margin-bottom:16px; }
+    .da-modal-field:last-child { margin-bottom:0; }
+    .da-modal-field label { display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:6px; }
+    .da-modal-warning { background:#fef3c7; border:1px solid #fcd34d; border-radius:8px; padding:12px; margin-top:12px; font-size:13px; color:#92400e; }
+    .da-modal-cb-group { display:grid; grid-template-columns:repeat(2, 1fr); gap:8px; max-height:200px; overflow-y:auto; padding:8px; background:#f8fafc; border-radius:6px; border:1px solid #e2e8f0; }
+    .da-modal-cb-item { display:flex; align-items:center; gap:8px; padding:6px 8px; background:#fff; border-radius:4px; cursor:pointer; font-size:12px; transition:background 0.1s; }
+    .da-modal-cb-item:hover { background:#f1f5f9; }
+    .da-modal-cb-item input { margin:0; cursor:pointer; }
+    .da-modal-cb-item span { color:#334155; }
+  </style>`;}
 
 // =================================================================
 // MAIN HTML
