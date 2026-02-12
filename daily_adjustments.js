@@ -62,7 +62,7 @@ const PIXELS_PER_MINUTE = 2;
 const INCREMENT_MINS = 30;
 const SNAP_MINS = 5;
 
-const SNAP_MINS = 5;
+
 
 // =================================================================
 // IN-APP MODAL SYSTEM (replaces browser prompt/confirm/alert)
