@@ -2391,11 +2391,11 @@ function renderTripsForm() {
     const startTime = document.getElementById("da-trip-start").value.trim();
     const endTime = document.getElementById("da-trip-end").value.trim();
     
-    if (!division || !tripName || !startTime || !endTime) { alert("Complete all fields."); return; }
+   if (!division || !tripName || !startTime || !endTime) { daShowAlert("Complete all fields."); return; }
     const startMin = parseTimeToMinutes(startTime);
     const endMin = parseTimeToMinutes(endTime);
-    if (startMin == null || endMin == null) { alert("Invalid time."); return; }
-    if (endMin <= startMin) { alert("End must be after start."); return; }
+    if (startMin == null || endMin == null) { daShowAlert("Invalid time format. Use format like 9:00am or 2:30pm."); return; }
+    if (endMin <= startMin) { daShowAlert("End time must be after start time."); return; }
     
     loadDailySkeleton();
     const newEvent = { id: 'trip_' + Date.now(), type: "pinned", event: tripName, division, startTime, endTime, reservedFields: [] };
@@ -2405,7 +2405,7 @@ function renderTripsForm() {
     renderGrid();
     
     document.querySelector('.da-subtab[data-tab="skeleton"]').click();
-    alert("Trip added!");
+    daShowAlert("✅ Trip added!");
     document.getElementById("da-trip-name").value = "";
     document.getElementById("da-trip-start").value = "";
     document.getElementById("da-trip-end").value = "";
