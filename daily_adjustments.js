@@ -659,6 +659,18 @@ function bindRainyDayEvents() {
       showMidDayRainModal();
     };
   }
+
+  const rainClearsBtn = document.getElementById('da-rain-clears-btn');
+  if (rainClearsBtn) {
+    rainClearsBtn.onclick = function(e) {
+      e.stopPropagation();
+      if (window.MidDayRainStacker?.showRainClearsModal) {
+        window.MidDayRainStacker.showRainClearsModal();
+      } else {
+        alert('Rain stacker module not loaded.');
+      }
+    };
+  }
 }
 
 function activateFullDayRainyMode() {
