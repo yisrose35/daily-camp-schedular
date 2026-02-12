@@ -708,7 +708,28 @@ function activateFullDayRainyMode() {
   
   showRainyDayNotification(true, stats.outdoorFieldNames.length, false, skeletonSwitched);
 }
-
+// ★★★ Build resource overrides for the stacker ★★★
+function buildRainyDayResourceOverrides() {
+  const g = window.loadGlobalSettings?.() || {};
+  const fields = g.app1?.fields || [];
+  const overrides = {};
+  
+  fields.forEach(f => {
+    if (!f?.name) return;
+    // Rainy day capacity override
+    if (f.rainyDayCapacity > 0) {
+      if (!overrides[f.name]) overrides[f.name] = {};
+      overrides[f.name].capacity = f.rainyDayCapacity;
+    }
+    // Rainy day all-day availability (bypass time rules)
+    if (f.rainyDayAvailableAllDay) {
+      if (!overrides[f.name]) overrides[f.name] = {};
+      overrides[f.name].ignoreTimeRules = true;
+    }
+  });
+  
+  return overrides;
+}
 function activateMidDayRainyMode(customStartTime = null) {
   if (!window.AccessControl?.checkEditAccess?.('activate mid-day rainy mode')) return;
   
