@@ -166,14 +166,22 @@
         if (window.SchedulerCoreUtils?.getFieldCapacity) {
             return window.SchedulerCoreUtils.getFieldCapacity(fieldName, activityProperties);
         }
-        // ★★★ Rainy day capacity override ★★★
+       // ★★★ Rainy day capacity override ★★★
         if (checkRainyDayMode()) {
             const g = window.loadGlobalSettings?.() || {};
+            // Check fields
             const fields = g.app1?.fields || [];
             const field = fields.find(f => f.name === fieldName);
             if (field?.rainyDayCapacity > 0) {
-                console.log(`[Capacity] 🌧️ Rainy override: ${fieldName} → ${field.rainyDayCapacity}`);
+                console.log(`[Capacity] 🌧️ Rainy override (field): ${fieldName} → ${field.rainyDayCapacity}`);
                 return field.rainyDayCapacity;
+            }
+            // Check special activities
+            const specials = g.app1?.specialActivities || [];
+            const special = specials.find(s => s.name === fieldName);
+            if (special?.rainyDayCapacity > 0) {
+                console.log(`[Capacity] 🌧️ Rainy override (special): ${fieldName} → ${special.rainyDayCapacity}`);
+                return special.rainyDayCapacity;
             }
         }
         // Fallback implementation
