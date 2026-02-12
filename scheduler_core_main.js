@@ -2004,6 +2004,19 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         // ★★★ STEP 4: PROCESS SPECIALTY LEAGUES FIRST ★★★
         // =========================================================================
 
+        // ★★★ RAINY DAY FIX: Skip ALL league processing on rainy days ★★★
+        // Rainy day skeletons have no league blocks, but stale masterLeagues config
+        // could still inject league data. Skip entirely to prevent ghost league rows.
+        const _skipLeagues = isRainyDayModeActive() || window.isRainyDay === true;
+        
+        if (_skipLeagues) {
+            console.log("\n[STEP 4] ⏭️ Skipping specialty leagues (rainy day mode)");
+            console.log("[STEP 5] ⏭️ Skipping regular leagues (rainy day mode)");
+            console.log("[STEP 5.5] ⏭️ Skipping league consolidation (rainy day mode)");
+            // Ensure leagueAssignments is clean
+            window.leagueAssignments = {};
+        } else {
+
         console.log("\n" + "=".repeat(50));
         console.log("★★★ STEP 4: SPECIALTY LEAGUES (PRIORITY 1) ★★★");
         console.log("=".repeat(50));
@@ -2231,10 +2244,11 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         
         console.log(`[STEP 5.5] League assignments consolidated for ${Object.keys(window.leagueAssignments).length} divisions`);
 
+        } // ★★★ END: Skip leagues on rainy day ★★★
+
         // =========================================================================
         // STEP 6: PROCESS SMART TILES
         // =========================================================================
-
         console.log("\n[STEP 6] Processing Smart Tiles...");
         const smartTileBlocks = processSmartTiles(manualSkeleton, externalOverrides, {
             divisions,
