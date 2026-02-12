@@ -513,8 +513,18 @@
             const actName = pick._activity;
             const fieldName = fieldLabel(pick.field);
 
+            // ★ Rainy day: bypass field unavailability for specials with rainyDayAvailableAllDay
+            const specialProps = activityProperties?.[actName];
+            const bypassTimeRules = isRainyMode && (specialProps?.rainyDayAvailableAllDay === true);
+
             if (isFieldUnavailable(fieldName, block)) {
-                return false;
+                // If bypassing time rules on rainy day AND the field is only "unavailable" due to time rules,
+                // allow it through. But if it's disabled for other reasons, still block.
+                if (!bypassTimeRules) return false;
+                // Only bypass if not explicitly disabled (i.e. not in currentDisabledFields)
+                const disabledFields = window.currentDisabledFields || [];
+                if (disabledFields.includes(fieldName)) return false;
+                console.log(`[findBestSpecial] 🌧️ "${actName}" bypassing time restrictions (rainy day override)`);
             }
 
             // ★ v6.5: Skip special if its assigned location/field is already locked
