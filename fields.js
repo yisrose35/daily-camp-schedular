@@ -1611,9 +1611,48 @@ function renderWeatherSettings(item) {
         const summaryEl = container.closest('.detail-section')?.querySelector('.detail-section-summary');
         if (summaryEl) summaryEl.textContent = summaryWeather(item);
     };
+
+    // ★ Rainy Day Capacity Override
+    const capacityInput = container.querySelector("#rainy-day-capacity-input");
+    if (capacityInput) {
+        capacityInput.addEventListener("change", function() {
+            const val = this.value.trim();
+            if (val === '' || val === '0') {
+                delete item.rainyDayCapacity;
+            } else {
+                const parsed = parseInt(val, 10);
+                if (!isNaN(parsed) && parsed > 0 && parsed <= 20) {
+                    item.rainyDayCapacity = parsed;
+                } else {
+                    alert("Enter a number between 1 and 20.");
+                    this.value = item.rainyDayCapacity || '';
+                    return;
+                }
+            }
+            saveData();
+        });
+    }
+
+    // ★ Rainy Day All-Day Availability Override
+    const allDayToggle = container.querySelector("#rainy-day-all-day-toggle");
+    if (allDayToggle) {
+        allDayToggle.addEventListener("change", function() {
+            item.rainyDayAvailableAllDay = this.checked;
+            saveData();
+        });
+    }
     
     return container;
 }
+```
+
+(Same `return container;` — you're adding the two handlers between the existing toggle handler and the return.)
+
+---
+
+**Prep Duration section** — the `sections.push` line is harder to find without seeing your exact code. Search your `special_activities.js` for the string `summaryLocation`. You'll find a line like:
+```
+sections.push({ title: "📍 Location"
 
 //------------------------------------------------------------------
 // HELPERS
