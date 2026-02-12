@@ -1249,7 +1249,7 @@ const TILE_DESCRIPTIONS = {
 
 function showTileInfo(tile) {
   const desc = TILE_DESCRIPTIONS[tile.type] || tile.description || 'No description available.';
-  alert(tile.name.toUpperCase() + "\n\n" + desc);
+  daShowAlert('<strong>' + tile.name.toUpperCase() + '</strong><br><br>' + desc);
 }
 
 function mapEventNameForOptimizer(name) {
