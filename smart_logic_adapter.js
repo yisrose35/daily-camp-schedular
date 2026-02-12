@@ -330,6 +330,12 @@
                 capacity = 2;
             }
 
+         // ★ Rainy day capacity override
+            if (isRainyMode && props.rainyDayCapacity > 0) {
+                log(`    🌧️ ${specialName}: Rainy day capacity override ${capacity} → ${props.rainyDayCapacity}`);
+                capacity = props.rainyDayCapacity;
+            }
+
             log(`    ✅ ${specialName}: AVAILABLE for ${divisionName} (capacity: ${capacity})`);
             
             available.push({
