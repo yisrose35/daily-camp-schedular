@@ -3498,12 +3498,15 @@ function setupKeyboardHandler() {
     
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedTileId) {
       e.preventDefault();
-      if (confirm("Delete this block?")) {
-        dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => x.id !== selectedTileId);
-        selectedTileId = null;
-        saveDailySkeleton();
-        renderGrid();
-      }
+      (async () => {
+        const ok = await daShowConfirm("Delete this block?", { danger: true, confirmText: 'Delete' });
+        if (ok) {
+          dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => x.id !== selectedTileId);
+          selectedTileId = null;
+          saveDailySkeleton();
+          renderGrid();
+        }
+      })();
     }
     if (e.key === 'Escape') {
       deselectAllTiles();
