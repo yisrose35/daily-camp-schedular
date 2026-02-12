@@ -166,7 +166,16 @@
         if (window.SchedulerCoreUtils?.getFieldCapacity) {
             return window.SchedulerCoreUtils.getFieldCapacity(fieldName, activityProperties);
         }
-        
+        // ★★★ Rainy day capacity override ★★★
+        if (checkRainyDayMode()) {
+            const g = window.loadGlobalSettings?.() || {};
+            const fields = g.app1?.fields || [];
+            const field = fields.find(f => f.name === fieldName);
+            if (field?.rainyDayCapacity > 0) {
+                console.log(`[Capacity] 🌧️ Rainy override: ${fieldName} → ${field.rainyDayCapacity}`);
+                return field.rainyDayCapacity;
+            }
+        }
         // Fallback implementation
         const props = activityProperties?.[fieldName] || {};
         
