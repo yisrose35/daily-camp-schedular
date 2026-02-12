@@ -2595,7 +2595,7 @@ function renderBunkOverridesUI() {
     const endMin = parseTimeToMinutes(endEl.value);
     
     if (startMin == null || endMin == null || endMin <= startMin) {
-      alert('Invalid time range.');
+      daShowAlert('Invalid time range. Use format like 9:00am.');
       return;
     }
     
