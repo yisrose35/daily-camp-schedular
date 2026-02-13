@@ -1582,8 +1582,22 @@ function triggerMidDayGeneration() {
     }
     
     // Refresh UI
+    // NOTE: updateTable → loadScheduleForDate may reload stale leagueAssignments
+    // from cloud/localStorage (the new empty data hasn't propagated yet).
+    // We clear it again after the UI refresh.
     window.updateTable?.();
     if (typeof window.renderGrid === 'function') window.renderGrid();
+    
+    // ★★★ FIX: Clear leagues AFTER updateTable since it reloads stale saved data ★★★
+    window.leagueAssignments = {};
+    
+    // Also clear again after a delay (cloud save may trigger another reload)
+    setTimeout(() => {
+        if (window.isRainyDay) {
+            window.leagueAssignments = {};
+            if (typeof window.renderGrid === 'function') window.renderGrid();
+        }
+    }, 1000);
 }
 
 function restorePreservedMorningSchedule() {
