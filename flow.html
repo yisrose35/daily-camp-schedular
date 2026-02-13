@@ -658,18 +658,32 @@ function showTab(id) {
     if (id === "helper") window.initHelperTab?.();
 }
 
-/* SIDEBAR (Mobile) */
+/* SIDEBAR (Mobile) — with scroll-lock to prevent content scrolling behind */
 (function () {
     const hamburger = document.getElementById("hamburgerBtn");
     const sidebar = document.getElementById("sidebar");
     const backdrop = document.getElementById("sidebarBackdrop");
+    let savedScrollY = 0;
 
-    hamburger?.addEventListener("click", () =>
-        document.body.classList.toggle("sidebar-open")
-    );
-    backdrop?.addEventListener("click", () =>
-        document.body.classList.remove("sidebar-open")
-    );
+    function openSidebar() {
+        savedScrollY = window.scrollY;
+        document.body.style.top = -savedScrollY + 'px';
+        document.body.classList.add("sidebar-open");
+    }
+    function closeSidebar() {
+        document.body.classList.remove("sidebar-open");
+        document.body.style.top = '';
+        window.scrollTo(0, savedScrollY);
+    }
+
+    hamburger?.addEventListener("click", () => {
+        if (document.body.classList.contains("sidebar-open")) {
+            closeSidebar();
+        } else {
+            openSidebar();
+        }
+    });
+    backdrop?.addEventListener("click", () => closeSidebar());
 
     sidebar?.querySelectorAll(".sidebar-item").forEach(btn => {
         btn.addEventListener("click", () => {
