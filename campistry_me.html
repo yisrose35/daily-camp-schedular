@@ -48,124 +48,112 @@
             -webkit-font-smoothing: antialiased;
         }
 
-        /* ==================== NAVIGATION ==================== */
-        .nav {
-            background: var(--bg-secondary);
-            border-bottom: 1px solid var(--border-light);
-            padding: 0.5rem 0;
-            height: auto;
-            min-height: 48px;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            backdrop-filter: blur(8px);
-            background: rgba(255,255,255,0.95);
-        }
-       .nav-inner {
-            max-width: 1280px;
-            margin: 0 auto;
-            padding: 0 0.75rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 6px;
-            overflow: hidden;
-        }
-        .nav-left { display: flex; align-items: center; gap: 2rem; }
-       .nav-back {
-            display: flex; align-items: center; gap: 0.25rem;
-            color: var(--text-secondary);
-            text-decoration: none;
-            font-weight: 500;
-            font-size: 0.8rem;
-            transition: color 0.15s;
-            flex-shrink: 0;
-        }
-        .nav-back:hover { color: var(--amber-600); }
-        .nav-back svg { transition: transform 0.15s; }
-        .nav-back:hover svg { transform: translateX(-2px); }
-        
-        .nav-brand {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-        }
-        .nav-icon {
-            width: 38px; height: 38px;
-            background: linear-gradient(135deg, var(--amber-500), var(--amber-600));
-            border-radius: var(--radius-md);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
-        }
-        .nav-title {
-            font-weight: 700;
-            font-size: 1.125rem;
-            color: var(--text-primary);
-        }
-        .nav-title span { color: var(--amber-600); }
-
-        /* Logo images in nav */
-        .nav-logo-main {
-            display: block;
-            flex-shrink: 0;
-            object-fit: contain;
-            vertical-align: middle;
-        }
-       .nav-logo-me {
-            height: 30px;
-            max-height: 32px;
-            width: auto;
-            position: relative;
-            top: 0;
-        }
-        .nav-logo-flow {
-            height: 28px;
-            max-height: 30px;
-            width: auto;
-            position: relative;
-            top: 0;
-        }
-        .nav-app-switch {
-            display: flex;
-            align-items: center;
-            margin-left: 8px;
-            text-decoration: none;
-            cursor: pointer;
-            transition: opacity 0.2s ease;
-        }
-        .nav-app-switch:hover {
-            opacity: 0.75;
-        }
-        
-       .sync-badge {
-            display: flex;
-            align-items: center;
-            gap: 0.375rem;
-            padding: 0.25rem 0.6rem;
-            background: var(--bg-tertiary);
-            border-radius: 100px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            color: var(--text-secondary);
-            white-space: nowrap;
-            flex-shrink: 0;
-            overflow: hidden;
-        }
-        .sync-dot {
-            width: 8px; height: 8px;
-            border-radius: 50%;
-            background: var(--green-500);
-            transition: all 0.2s;
-        }
-        .sync-dot.syncing {
-            background: var(--amber-500);
-            animation: pulse 1s ease-in-out infinite;
-        }
-        .sync-dot.error { background: var(--red-500); }
-        @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.6; transform: scale(0.95); } }
+        /* ==================== NAVIGATION (matches Flow header) ==================== */
+.app-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.7rem 1.25rem;
+    height: 65px;
+    overflow: hidden;
+    background: var(--bg-secondary, #FFFFFF);
+    border-bottom: 1px solid #e2e8f0;
+    box-shadow: 0 2px 4px rgba(15, 23, 42, 0.06);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+.hamburger-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 999px;
+    border: 1px solid #CBD5E1;
+    background: #F1F5F9;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    padding: 0 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.hamburger-btn span {
+    height: 2px;
+    width: 100%;
+    border-radius: 999px;
+    background: #334155;
+}
+.hamburger-btn:hover {
+    background: #E2E8F0;
+    border-color: var(--amber-600);
+}
+.app-logo-full {
+    display: block;
+    flex-shrink: 0;
+    object-fit: contain;
+    vertical-align: middle;
+}
+.app-logo-me-img {
+    height: 45px;
+    max-height: 60px;
+    width: auto;
+    position: relative;
+    top: 6px;
+}
+.app-logo-flow-img {
+    height: 43px;
+    max-height: 45px;
+    width: auto;
+    position: relative;
+    top: 2px;
+}
+.header-app-switch {
+    display: flex;
+    align-items: center;
+    margin-left: 16px;
+    text-decoration: none;
+    cursor: pointer;
+    transition: opacity 0.2s ease;
+}
+.header-app-switch:hover {
+    opacity: 0.75;
+}
+.sync-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.25rem 0.6rem;
+    background: #F1F5F9;
+    border-radius: 100px;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    flex-shrink: 0;
+    overflow: hidden;
+}
+.sync-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green-500);
+    transition: all 0.2s;
+}
+.sync-dot.syncing {
+    background: var(--amber-500);
+    animation: pulse 1s ease-in-out infinite;
+}
+.sync-dot.error { background: var(--red-500); }
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.6; transform: scale(0.95); } }
 
         /* ==================== MAIN LAYOUT ==================== */
         .main {
