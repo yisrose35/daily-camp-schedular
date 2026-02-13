@@ -632,3 +632,37 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     .form-actions button { width: 100%; }
     .card-header { flex-direction: column; align-items: flex-start; gap: 10px; }
 }
+/* ===== MOBILE MENU ===== */
+.dash-mobile-toggle {
+    display: none;
+    padding: 8px;
+    background: none;
+    border: 1px solid var(--slate-300);
+    border-radius: 8px;
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    min-height: 40px;
+    min-width: 40px;
+}
+.dash-mobile-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 12px;
+    background: white;
+    border: 1px solid var(--slate-200);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+    flex-direction: column;
+    min-width: 220px;
+    z-index: 100;
+    overflow: hidden;
+}
+.dash-mobile-menu.open { display: flex; }
+
+@media (max-width: 768px) {
+    .dash-mobile-toggle { display: flex; }
+    .nav-actions { display: none !important; }
+    .nav-inner { position: relative; }
+}
