@@ -70,13 +70,14 @@
             align-items: center;
         }
         .nav-left { display: flex; align-items: center; gap: 2rem; }
-        .nav-back {
-            display: flex; align-items: center; gap: 0.5rem;
+       .nav-back {
+            display: flex; align-items: center; gap: 0.25rem;
             color: var(--text-secondary);
             text-decoration: none;
             font-weight: 500;
-            font-size: 0.875rem;
+            font-size: 0.8rem;
             transition: color 0.15s;
+            flex-shrink: 0;
         }
         .nav-back:hover { color: var(--amber-600); }
         .nav-back svg { transition: transform 0.15s; }
