@@ -870,9 +870,41 @@ function rebuildFromTransition({ transitionTime, targetSkeletonName, isRainStart
         applyResourceOverrides(resourceOverrides, isRainStarting);
     }
 
-    // Save the rebuilt skeleton
-    window.saveCurrentDailyData?.('manualSkeleton', rebuiltSkeleton);
+    // Save the rebuilt skeleton — MUST use all storage paths
+    // daily_adjustments.js reads from: campManualSkeleton_{dateKey} (localStorage) 
+    //   and app1.dailySkeletons[dateKey] (cloud)
+    // optimizer reads from: window.dailyOverrideSkeleton, then falls back to above
+    // saveCurrentDailyData saves to: campDailyData_v1[dateKey].manualSkeleton
+    // We need ALL of these to be consistent.
+    
     window.dailyOverrideSkeleton = rebuiltSkeleton;
+    window.saveCurrentDailyData?.('manualSkeleton', rebuiltSkeleton);
+    
+    // ★★★ FIX: Also save to the paths daily_adjustments.js and the optimizer read ★★★
+    const dateKey = window.currentScheduleDate;
+    if (dateKey) {
+        // Path 1: localStorage (what daily_adjustments loadDailySkeleton reads first)
+        try {
+            const storageKey = `campManualSkeleton_${dateKey}`;
+            localStorage.setItem(storageKey, JSON.stringify(rebuiltSkeleton));
+            console.log(`[RainStacker] ✅ Saved skeleton to localStorage (${storageKey})`);
+        } catch (e) {
+            console.error('[RainStacker] Failed to save skeleton to localStorage:', e);
+        }
+        
+        // Path 2: app1.dailySkeletons (what optimizer's getSkeletonFromAnySource reads)
+        try {
+            const g = window.loadGlobalSettings?.() || {};
+            if (g.app1) {
+                if (!g.app1.dailySkeletons) g.app1.dailySkeletons = {};
+                g.app1.dailySkeletons[dateKey] = rebuiltSkeleton;
+                window.saveGlobalSettings?.('app1', g.app1);
+                console.log(`[RainStacker] ✅ Saved skeleton to app1.dailySkeletons`);
+            }
+        } catch (e) {
+            console.error('[RainStacker] Failed to save skeleton to app1:', e);
+        }
+    }
 
     console.log(`\n[RainStacker] ========================================`);
     console.log(`[RainStacker] REBUILD COMPLETE`);
@@ -1488,10 +1520,39 @@ function triggerMidDayGeneration() {
         }
         
         const dailyData = window.loadCurrentDailyData?.() || {};
-        const skeleton = dailyData.manualSkeleton || [];
+        let skeleton = dailyData.manualSkeleton || [];
+        
+        // ★★★ FIX: Check all skeleton sources if primary is empty ★★★
+        if (skeleton.length === 0) {
+            // Try window.dailyOverrideSkeleton (set by rebuildFromTransition)
+            skeleton = window.dailyOverrideSkeleton || [];
+            if (skeleton.length > 0) {
+                console.log(`[RainStacker] Found skeleton via window.dailyOverrideSkeleton: ${skeleton.length} blocks`);
+            }
+        }
+        if (skeleton.length === 0) {
+            // Try localStorage direct
+            const dateKey = window.currentScheduleDate;
+            try {
+                const stored = localStorage.getItem(`campManualSkeleton_${dateKey}`);
+                if (stored) skeleton = JSON.parse(stored) || [];
+                if (skeleton.length > 0) {
+                    console.log(`[RainStacker] Found skeleton via localStorage: ${skeleton.length} blocks`);
+                }
+            } catch (e) { /* ignore */ }
+        }
+        if (skeleton.length === 0) {
+            // Try app1.dailySkeletons
+            const dateKey = window.currentScheduleDate;
+            const g = window.loadGlobalSettings?.() || {};
+            skeleton = g.app1?.dailySkeletons?.[dateKey] || [];
+            if (skeleton.length > 0) {
+                console.log(`[RainStacker] Found skeleton via app1.dailySkeletons: ${skeleton.length} blocks`);
+            }
+        }
         
         if (skeleton.length === 0) {
-            console.warn('[RainStacker] No skeleton available for generation');
+            console.error('[RainStacker] ❌ No skeleton found from ANY source — manual generation required');
             return;
         }
         
