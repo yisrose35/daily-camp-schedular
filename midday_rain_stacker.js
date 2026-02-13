@@ -1561,6 +1561,11 @@ function triggerMidDayGeneration() {
         // Ensure leagueAssignments is clean (belt & suspenders)
         window.leagueAssignments = {};
         
+        // ★★★ FIX: Set flag to prevent loadScheduleForDate from reloading stale data ★★★
+        // updateTable → loadScheduleForDate rehydrates leagueAssignments from cloud/localStorage
+        // BEFORE the new (empty) data has propagated. This flag tells the system to skip reloading.
+        window._midDayRainGenerationInProgress = true;
+        
         // Dispatch events for PinnedPreservation
         window.dispatchEvent(new CustomEvent('campistry-generation-starting', {
             detail: { source: 'midday-rain-stacker' }
@@ -1572,8 +1577,27 @@ function triggerMidDayGeneration() {
             detail: { source: 'midday-rain-stacker' }
         }));
         
-        // Clean up
-        delete window._midDayPreRebuild;
+        // ★★★ FIX: Force-save clean leagueAssignments to all storage paths ★★★
+        window.leagueAssignments = {};
+        
+        // Save to campDailyData_v1 so subsequent loads see empty leagues
+        const dateKey = window.currentScheduleDate;
+        if (dateKey) {
+            try {
+                const DAILY_KEY = 'campDailyData_v1';
+                const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                if (allData[dateKey]) {
+                    allData[dateKey].leagueAssignments = {};
+                    localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+                    console.log('[RainStacker] ✅ Cleared leagueAssignments in campDailyData_v1');
+                }
+            } catch(e) {
+                console.error('[RainStacker] Failed to clear leagues in localStorage:', e);
+            }
+        }
+        
+        // Clean up flag
+        window._midDayRainGenerationInProgress = false;
         
         console.log('[RainStacker] ✅ Mid-day generation complete');
         
@@ -1591,13 +1615,27 @@ function triggerMidDayGeneration() {
     // ★★★ FIX: Clear leagues AFTER updateTable since it reloads stale saved data ★★★
     window.leagueAssignments = {};
     
-    // Also clear again after a delay (cloud save may trigger another reload)
-    setTimeout(() => {
-        if (window.isRainyDay) {
-            window.leagueAssignments = {};
-            if (typeof window.renderGrid === 'function') window.renderGrid();
-        }
-    }, 1000);
+    // ★★★ BULLETPROOF FIX: Guard leagueAssignments from being repopulated ★★★
+    // Multiple systems (loadScheduleForDate, schedule_orchestrator, supabase_sync)
+    // hydrate leagueAssignments from saved data that still has stale leagues.
+    // This guard rejects any non-empty writes while rainy day mode is active.
+    if (window.isRainyDay && !window._leagueAssignmentsGuarded) {
+        let _guardedLA = {};
+        Object.defineProperty(window, 'leagueAssignments', {
+            get() { return _guardedLA; },
+            set(val) {
+                if (window.isRainyDay && val && Object.keys(val).length > 0) {
+                    console.log('[RainStacker] 🛡️ Blocked stale leagueAssignments reload (rainy day active)');
+                    _guardedLA = {};
+                    return;
+                }
+                _guardedLA = val;
+            },
+            configurable: true
+        });
+        window._leagueAssignmentsGuarded = true;
+        console.log('[RainStacker] 🛡️ Installed leagueAssignments guard for rainy day');
+    }
 }
 
 function restorePreservedMorningSchedule() {
@@ -1844,6 +1882,17 @@ function executeRainClears(clearTimeMin, regularSkeletonName) {
     // 2. Clear rainy day state
     window.isRainyDay = false;
     window.rainyDayStartTime = null;
+    
+    // Remove leagueAssignments guard if installed
+    if (window._leagueAssignmentsGuarded) {
+        delete window._leagueAssignmentsGuarded;
+        Object.defineProperty(window, 'leagueAssignments', {
+            value: window.leagueAssignments || {},
+            writable: true,
+            configurable: true
+        });
+        console.log('[RainStacker] 🛡️ Removed leagueAssignments guard');
+    }
     
     window.saveCurrentDailyData?.('rainyDayMode', false);
     window.saveCurrentDailyData?.('rainyDayStartTime', null);
