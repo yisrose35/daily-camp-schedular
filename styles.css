@@ -2284,7 +2284,18 @@ body.sidebar-open .sidebar-backdrop {
     display: none;
   }
 }
-
+@media (max-width: 600px) {
+  .app-header {
+    height: auto;
+    min-height: 50px;
+    padding: 6px 10px;
+  }
+  .app-logo-flow-img { height: 28px; max-height: 30px; }
+  .app-logo-me-img { height: 28px; max-height: 30px; }
+  .header-app-switch { margin-left: 4px; }
+  .app-content { padding: 0.5rem 0.5rem 1rem; }
+  .sidebar { top: 50px; width: 85vw; max-width: 280px; }
+}
 /* =============================== */
 /* Setup Tab Layout & Styling     */
 /* =============================== */
