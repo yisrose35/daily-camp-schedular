@@ -2155,11 +2155,11 @@ function addDropListeners(gridEl) {
       }
     };
     
-    // Mobile touch support
+    // Mobile touch support — defers to mobile_touch_drag.js when available
     cell.addEventListener('touchend', (e) => {
+      if (window.MobileTouchDrag) return;
       const paletteEl = document.getElementById('da-palette');
       if (!paletteEl) return;
-
       const touch = e.changedTouches[0];
       const elementAtPoint = document.elementFromPoint(touch.clientX, touch.clientY);
 
