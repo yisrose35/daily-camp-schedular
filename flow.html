@@ -688,7 +688,7 @@ function showTab(id) {
     sidebar?.querySelectorAll(".sidebar-item").forEach(btn => {
         btn.addEventListener("click", () => {
             showTab(btn.dataset.tab);
-            document.body.classList.remove("sidebar-open");
+            closeSidebar();
         });
     });
 })();
