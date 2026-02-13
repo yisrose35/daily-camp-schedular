@@ -1702,5 +1702,11 @@ function minutesToTime(min) {
 }
 
 window.initMasterScheduler = init;
-
+// Expose internals for mobile touch support
+window.MasterSchedulerInternal = {
+  get dailySkeleton() { return dailySkeleton; },
+  markUnsavedChanges: typeof markUnsavedChanges === 'function' ? markUnsavedChanges : function(){},
+  saveDraftToLocalStorage: typeof saveDraftToLocalStorage === 'function' ? saveDraftToLocalStorage : function(){},
+  renderGrid: typeof renderGrid === 'function' ? renderGrid : function(){}
+};
 })();
