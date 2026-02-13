@@ -832,7 +832,6 @@ function activateMidDayRainyMode(customStartTime = null) {
   overrides.disabledFields = newDisabled;
   currentOverrides.disabledFields = newDisabled;
   window.saveCurrentDailyData?.("overrides", overrides);
-  
   // Set window.isRainyDay
   window.isRainyDay = true;
   window.rainyDayStartTime = rainStartMin;
@@ -841,8 +840,13 @@ function activateMidDayRainyMode(customStartTime = null) {
   window.saveCurrentDailyData?.("rainyDayStartTime", rainStartMin);
   window.saveCurrentDailyData?.("isRainyDay", true);
   
+  // ★★★ FIX: Clear stale league data (same as full-day mode does) ★★★
+  // Without this, old leagueAssignments from the regular schedule persist
+  // and the renderer shows ghost league games in post-transition slots.
+  window.leagueAssignments = {};
+  
   let skeletonSwitched = true; // Stacker handles this
-  showRainyDayNotification(true, stats.outdoorFieldNames.length, true, skeletonSwitched);
+   showRainyDayNotification(true, stats.outdoorFieldNames.length, true, skeletonSwitched);
   console.log("[RainyDay] Activated mid-day mode at", minutesToTime(rainStartMin));
 }
 
