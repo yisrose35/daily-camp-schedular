@@ -1,28 +1,19 @@
 // =================================================================
-// mobile_touch_drag.js v1.0
+// mobile_touch_drag.js v2.0
 // =================================================================
 // UNIVERSAL MOBILE TOUCH DRAG-AND-DROP for Campistry Schedulers
 //
-// PROBLEM: HTML5 drag-and-drop does NOT work on mobile browsers.
-// The existing touchstart/touchend handlers in master_schedule_builder.js
-// and daily_adjustments.js are broken because:
-//   1. No touchmove tracking = no visual feedback during drag
-//   2. No preventDefault on touchmove = page scrolls instead of dragging
-//   3. The "drag from palette to grid" gesture doesn't work when
-//      layout is stacked (palette above grid) on mobile
-//   4. Daily Adjustments uses a 2-step approach (touch tile, then
-//      separately touch cell) that's unintuitive and broken
+// v2.0 CHANGES:
+// - Fixed DA palette tile drop (ensure ondrop fires correctly)
+// - Added touch-based RESIZE for tiles (both MS and DA)
+// - Added touch-based DRAG-TO-REPOSITION for existing tiles (both MS and DA)
+// - Better ghost positioning and cell detection
 //
-// SOLUTION: Two complementary interaction modes:
-//   MODE A — "Tap to Select, Tap to Place":
-//      1. Tap a tile in the palette → it becomes "selected" (highlighted)
-//      2. Tap a cell in the grid → tile is placed there
-//      3. Tap the selected tile again or tap empty space → deselect
-//
-//   MODE B — "Touch Drag" (for users who try to drag):
-//      1. Long-press a palette tile (300ms) → enters drag mode
-//      2. Move finger → ghost follows finger over the grid
-//      3. Lift finger → drop on the grid cell under the finger
+// FEATURES:
+//   MODE A — "Tap to Select, Tap to Place" (palette tiles)
+//   MODE B — "Long-press Drag" from palette (300ms hold)
+//   MODE C — "Touch Drag to Reposition" existing tiles on grid
+//   MODE D — "Touch Resize" via resize handles on tiles
 //
 // LOAD ORDER: After master_schedule_builder.js and daily_adjustments.js
 // =================================================================
@@ -32,27 +23,36 @@
 // =================================================================
 // STATE
 // =================================================================
-let selectedMSTile = null;     // Currently selected tile for Master Scheduler
-let selectedDATile = null;     // Currently selected tile for Daily Adjustments
+let selectedMSTile = null;
+let selectedDATile = null;
 let isDragging = false;
 let dragGhost = null;
 let dragTileData = null;
-let dragSourceModule = null;   // 'ms' or 'da'
+let dragSourceModule = null;
 let longPressTimer = null;
 const LONG_PRESS_MS = 300;
 
-// =================================================================
-// INITIALIZATION — hooks into both modules after they render
-// =================================================================
+// Resize state
+let isResizing = false;
+let resizeState = null;
 
-// Observe DOM for when palettes and grids are rendered/re-rendered
+// Reposition state  
+let isRepositioning = false;
+let repositionState = null;
+
+// Constants (must match both MS and DA)
+const PIXELS_PER_MINUTE = 2;
+const SNAP_MINS = 5;
+
+// =================================================================
+// INITIALIZATION
+// =================================================================
 const observer = new MutationObserver(() => {
   setupMasterSchedulerTouch();
   setupDailyAdjustmentsTouch();
 });
 
 function init() {
-  // Start observing
   const targets = [
     document.getElementById('master-scheduler-content'),
     document.getElementById('daily-adjustments-content')
@@ -62,15 +62,13 @@ function init() {
     observer.observe(t, { childList: true, subtree: true });
   });
 
-  // Also run once now
   setupMasterSchedulerTouch();
   setupDailyAdjustmentsTouch();
-
-  // Create the drag ghost element
   ensureGhost();
+  ensureStyles();
 
-  // Global touch-cancel cleanup
-  document.addEventListener('touchcancel', cleanupDrag);
+  // Global cleanup handlers
+  document.addEventListener('touchcancel', cleanupAll);
 }
 
 function ensureGhost() {
@@ -86,6 +84,61 @@ function ensureGhost() {
     transform: translate(-50%, -120%);
   `;
   document.body.appendChild(dragGhost);
+}
+
+function ensureStyles() {
+  if (document.getElementById('mobile-touch-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'mobile-touch-styles';
+  style.textContent = `
+    .mobile-selected {
+      outline: 3px solid #3b82f6 !important;
+      outline-offset: 2px !important;
+      box-shadow: 0 0 12px rgba(59,130,246,0.4) !important;
+    }
+    .mobile-drop-target {
+      background: rgba(59,130,246,0.06) !important;
+    }
+    .mobile-selection-bar {
+      position: sticky; top: 0; z-index: 100;
+      background: #eff6ff; border: 1px solid #93c5fd;
+      border-radius: 8px; padding: 8px 12px;
+      margin: 6px 0; display: none;
+      font-size: 12px; color: #1e40af;
+      text-align: center;
+    }
+    .mobile-selection-bar .bar-clear {
+      margin-left: 8px; background: #3b82f6; color: #fff;
+      border: none; border-radius: 4px; padding: 3px 8px;
+      font-size: 11px; cursor: pointer;
+    }
+    /* Touch-friendly resize handles */
+    @media (pointer: coarse) {
+      .resize-handle, .da-resize-handle {
+        height: 16px !important;
+        opacity: 0.7 !important;
+        background: rgba(59,130,246,0.3) !important;
+      }
+      .resize-handle-top, .da-resize-top { top: -4px !important; }
+      .resize-handle-bottom, .da-resize-bottom { bottom: -4px !important; }
+      .grid-event, .da-event {
+        touch-action: none;
+      }
+    }
+    /* Reposition feedback */
+    .mobile-repositioning {
+      opacity: 0.5 !important;
+      outline: 2px dashed #3b82f6 !important;
+    }
+    /* Resize tooltip for mobile */
+    #mobile-resize-tooltip {
+      position: fixed; padding: 6px 10px; background: #111827; color: #fff;
+      border-radius: 6px; font-size: 11px; font-weight: 600;
+      pointer-events: none; z-index: 100001; display: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3); text-align: center;
+    }
+  `;
+  document.head.appendChild(style);
 }
 
 // =================================================================
@@ -107,36 +160,25 @@ function setupMasterSchedulerTouch() {
                       document.querySelector('.ms-grid-wrapper');
   if (!palette || !gridWrapper) return;
 
-  // Avoid double-binding
   if (palette.dataset.mobileTouchBound === '1') return;
   palette.dataset.mobileTouchBound = '1';
 
-  // Inject the "selected tile" indicator bar
   injectSelectionBar(palette, 'ms');
 
-  // --- Bind palette tiles ---
   palette.querySelectorAll('.ms-tile').forEach(el => {
-    // Remove existing inline touch handlers to prevent conflicts
     el.removeEventListener('touchstart', el._msTouchStart);
     el.removeEventListener('touchend', el._msTouchEnd);
 
-    let tileType = null;
-    // Find tile data: try to parse from the existing dataset or match by text
-    try {
-      if (el.dataset.tileData) {
-        tileType = JSON.parse(el.dataset.tileData);
-      }
-    } catch(e) {}
-
-    // Attach new handlers
     el._msTouchStart = (e) => handlePaletteTouchStart(e, el, 'ms');
     el._msTouchEnd = (e) => handlePaletteTouchEnd(e, el, 'ms');
     el.addEventListener('touchstart', el._msTouchStart, { passive: false });
     el.addEventListener('touchend', el._msTouchEnd, { passive: false });
   });
 
-  // --- Bind grid cells for tap-to-place ---
   bindGridCellsForTap(gridWrapper, 'ms', '.grid-cell');
+  
+  // v2.0: Bind resize + reposition for existing grid tiles
+  bindGridTilesTouch(gridWrapper, 'ms');
 }
 
 // =================================================================
@@ -166,10 +208,13 @@ function setupDailyAdjustmentsTouch() {
   });
 
   bindGridCellsForTap(gridWrapper, 'da', '.da-grid-cell');
+  
+  // v2.0: Bind resize + reposition for existing grid tiles
+  bindGridTilesTouch(gridWrapper, 'da');
 }
 
 // =================================================================
-// SELECTION BAR (shows which tile is selected)
+// SELECTION BAR
 // =================================================================
 function injectSelectionBar(palette, module) {
   const barId = `${module}-mobile-selection-bar`;
@@ -177,54 +222,9 @@ function injectSelectionBar(palette, module) {
 
   const bar = document.createElement('div');
   bar.id = barId;
-  bar.style.cssText = `
-    display: none; padding: 8px 12px; margin: 6px;
-    background: #dbeafe; border: 2px solid #3b82f6;
-    border-radius: 8px; font-size: 12px; font-weight: 600;
-    color: #1d4ed8; text-align: center;
-    animation: mobileSelectPulse 1.5s ease-in-out infinite;
-  `;
-  bar.innerHTML = '<span class="bar-text">Tap a grid cell to place</span> <button class="bar-cancel" style="margin-left:8px;background:#3b82f6;color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;">Cancel</button>';
-
-  // Insert before the palette tiles
+  bar.className = 'mobile-selection-bar';
+  bar.innerHTML = `<span class="bar-text"></span><button class="bar-clear" onclick="window.MobileTouchDrag.clearSelection('${module}')">✕</button>`;
   palette.parentElement.insertBefore(bar, palette);
-
-  // Cancel button
-  bar.querySelector('.bar-cancel').addEventListener('click', () => {
-    clearSelection(module);
-  });
-  bar.querySelector('.bar-cancel').addEventListener('touchend', (e) => {
-    e.stopPropagation();
-    clearSelection(module);
-  });
-
-  // Inject pulse animation if not already present
-  if (!document.getElementById('mobile-touch-drag-styles')) {
-    const style = document.createElement('style');
-    style.id = 'mobile-touch-drag-styles';
-    style.textContent = `
-      @keyframes mobileSelectPulse {
-        0%, 100% { border-color: #3b82f6; background: #dbeafe; }
-        50% { border-color: #60a5fa; background: #bfdbfe; }
-      }
-      .ms-tile.mobile-selected,
-      .da-tile.mobile-selected {
-        outline: 3px solid #3b82f6 !important;
-        outline-offset: 2px !important;
-        box-shadow: 0 0 12px rgba(59,130,246,0.5) !important;
-        transform: scale(1.05) !important;
-      }
-      .grid-cell.mobile-drop-target,
-      .da-grid-cell.mobile-drop-target {
-        background: rgba(59,130,246,0.12) !important;
-        box-shadow: inset 0 0 0 2px rgba(59,130,246,0.3) !important;
-      }
-      #mobile-drag-ghost {
-        transition: none !important;
-      }
-    `;
-    document.head.appendChild(style);
-  }
 }
 
 // =================================================================
@@ -235,24 +235,22 @@ let touchStartTime = 0;
 let touchedEl = null;
 
 function handlePaletteTouchStart(e, el, module) {
+  if (isResizing || isRepositioning) return;
+  
   const touch = e.touches[0];
   touchStartPos = { x: touch.clientX, y: touch.clientY };
   touchStartTime = Date.now();
   touchedEl = el;
 
-  // Store tile data on the element
   storeTileDataOnElement(el, module);
 
-  // Start long-press timer for drag mode
   clearTimeout(longPressTimer);
   longPressTimer = setTimeout(() => {
-    // Entered drag mode
     if (touchedEl === el) {
       startDrag(el, module);
     }
   }, LONG_PRESS_MS);
 
-  // Attach move and end handlers to document for drag tracking
   document.addEventListener('touchmove', onDragTouchMove, { passive: false });
 }
 
@@ -266,15 +264,13 @@ function handlePaletteTouchEnd(e, el, module) {
   clearTimeout(longPressTimer);
   document.removeEventListener('touchmove', onDragTouchMove);
 
-  // If we're in drag mode, handle drop
   if (isDragging) {
     handleDrop(touch, module);
     return;
   }
 
-  // If it was a quick tap with minimal movement → toggle selection
   if (dist < 15 && elapsed < 500) {
-    e.preventDefault(); // Prevent ghost click
+    e.preventDefault();
     toggleTileSelection(el, module);
   }
 
@@ -287,35 +283,28 @@ function handlePaletteTouchEnd(e, el, module) {
 function toggleTileSelection(el, module) {
   const currentSel = module === 'ms' ? selectedMSTile : selectedDATile;
 
-  // If tapping the already-selected tile, deselect
   if (currentSel && currentSel.element === el) {
     clearSelection(module);
     return;
   }
 
-  // Clear previous selection
   clearSelection(module);
 
-  // Get tile data
   const tileData = getTileData(el, module);
   if (!tileData) return;
 
-  // Set new selection
   const selection = { element: el, tileData: tileData };
   if (module === 'ms') selectedMSTile = selection;
   else selectedDATile = selection;
 
-  // Visual feedback
   el.classList.add('mobile-selected');
 
-  // Show selection bar
   const bar = document.getElementById(`${module}-mobile-selection-bar`);
   if (bar) {
     bar.querySelector('.bar-text').textContent = `"${tileData.name || tileData.type}" selected — tap a grid cell to place`;
     bar.style.display = 'block';
   }
 
-  // Add drop-target hints to grid cells
   const cellClass = module === 'ms' ? '.grid-cell' : '.da-grid-cell';
   document.querySelectorAll(cellClass).forEach(cell => {
     cell.classList.add('mobile-drop-target');
@@ -323,7 +312,6 @@ function toggleTileSelection(el, module) {
 }
 
 function clearSelection(module) {
-  // Remove visual
   const prevSel = module === 'ms' ? selectedMSTile : selectedDATile;
   if (prevSel) {
     prevSel.element.classList.remove('mobile-selected');
@@ -332,11 +320,9 @@ function clearSelection(module) {
   if (module === 'ms') selectedMSTile = null;
   else selectedDATile = null;
 
-  // Hide bar
   const bar = document.getElementById(`${module}-mobile-selection-bar`);
   if (bar) bar.style.display = 'none';
 
-  // Remove drop-target hints
   const cellClass = module === 'ms' ? '.grid-cell' : '.da-grid-cell';
   document.querySelectorAll(cellClass).forEach(cell => {
     cell.classList.remove('mobile-drop-target');
@@ -347,15 +333,14 @@ function clearSelection(module) {
 // GRID CELL TAP-TO-PLACE BINDING
 // =================================================================
 function bindGridCellsForTap(wrapper, module, cellSelector) {
-  // Use event delegation on the wrapper
   if (wrapper.dataset.mobileTapBound === '1') return;
   wrapper.dataset.mobileTapBound = '1';
 
   wrapper.addEventListener('touchend', (e) => {
-    if (isDragging) return; // Don't interfere with drag drops
+    if (isDragging || isResizing || isRepositioning) return;
 
     const selection = module === 'ms' ? selectedMSTile : selectedDATile;
-    if (!selection) return; // No tile selected, let normal handling proceed
+    if (!selection) return;
 
     const touch = e.changedTouches[0];
     const el = document.elementFromPoint(touch.clientX, touch.clientY);
@@ -365,19 +350,13 @@ function bindGridCellsForTap(wrapper, module, cellSelector) {
     e.preventDefault();
     e.stopPropagation();
 
-    // Execute the drop
     executeDrop(cell, selection.tileData, touch, module);
-
-    // Clear selection after placing
     clearSelection(module);
   }, { passive: false });
-
-  // Also re-observe: when grid re-renders, the wrapper might get new cells
-  // We use delegation so no need to re-bind individual cells
 }
 
 // =================================================================
-// LONG-PRESS DRAG LOGIC
+// LONG-PRESS DRAG LOGIC (palette tiles)
 // =================================================================
 function startDrag(el, module) {
   isDragging = true;
@@ -389,13 +368,10 @@ function startDrag(el, module) {
     return;
   }
 
-  // Haptic feedback if available
   if (navigator.vibrate) navigator.vibrate(30);
 
-  // Visual: dim the tile
   el.style.opacity = '0.5';
 
-  // Show ghost
   ensureGhost();
   dragGhost = document.getElementById('mobile-drag-ghost');
   dragGhost.textContent = dragTileData.name || dragTileData.type;
@@ -403,7 +379,6 @@ function startDrag(el, module) {
   dragGhost.style.color = extractTextColor(el) || '#000';
   dragGhost.style.display = 'block';
 
-  // Position ghost at current touch
   const pos = touchStartPos;
   dragGhost.style.left = pos.x + 'px';
   dragGhost.style.top = pos.y + 'px';
@@ -411,29 +386,25 @@ function startDrag(el, module) {
 
 function onDragTouchMove(e) {
   if (!isDragging) {
-    // Check if we've moved enough to cancel the long-press
     const touch = e.touches[0];
     const dx = touch.clientX - touchStartPos.x;
     const dy = touch.clientY - touchStartPos.y;
     if (Math.sqrt(dx * dx + dy * dy) > 10) {
       clearTimeout(longPressTimer);
-      // If moving a lot in the palette, let the scroll happen
       document.removeEventListener('touchmove', onDragTouchMove);
     }
     return;
   }
 
-  e.preventDefault(); // Prevent scroll while dragging
+  e.preventDefault();
 
   const touch = e.touches[0];
 
-  // Move ghost
   if (dragGhost) {
     dragGhost.style.left = touch.clientX + 'px';
     dragGhost.style.top = touch.clientY + 'px';
   }
 
-  // Highlight cell under finger
   const cellSelector = dragSourceModule === 'ms' ? '.grid-cell' : '.da-grid-cell';
   document.querySelectorAll(cellSelector).forEach(c => c.style.background = '');
 
@@ -448,17 +419,12 @@ function handleDrop(touch, module) {
   isDragging = false;
   document.removeEventListener('touchmove', onDragTouchMove);
 
-  // Hide ghost
   if (dragGhost) dragGhost.style.display = 'none';
-
-  // Reset tile opacity
   if (touchedEl) touchedEl.style.opacity = '1';
 
-  // Clear cell highlights
   const cellSelector = module === 'ms' ? '.grid-cell' : '.da-grid-cell';
   document.querySelectorAll(cellSelector).forEach(c => c.style.background = '');
 
-  // Find target cell
   const el = document.elementFromPoint(touch.clientX, touch.clientY);
   const cell = el?.closest(cellSelector);
 
@@ -484,7 +450,6 @@ function cleanupDrag() {
 // EXECUTE DROP — calls the existing ondrop handlers
 // =================================================================
 function executeDrop(cell, tileData, touch, module) {
-  // Build a fake drop event that matches what the existing handlers expect
   const fakeEvent = {
     preventDefault: function() {},
     stopPropagation: function() {},
@@ -499,56 +464,531 @@ function executeDrop(cell, tileData, touch, module) {
     }
   };
 
-  // For Master Scheduler, use cell.ondrop
+  // For Master Scheduler
   if (module === 'ms' && cell.ondrop) {
     cell.ondrop(fakeEvent);
     return;
   }
 
-  // For Daily Adjustments, use cell.ondrop
-  if (module === 'da' && cell.ondrop) {
-    cell.ondrop(fakeEvent);
+  // For Daily Adjustments — try ondrop first (set by addDropListeners)
+  if (module === 'da') {
+    if (cell.ondrop) {
+      cell.ondrop(fakeEvent);
+      return;
+    }
+    // Fallback: dispatch a synthetic drop event for addEventListener-based handlers
+    try {
+      const dropEvt = new Event('drop', { bubbles: true, cancelable: true });
+      dropEvt.preventDefault = function() {};
+      // Can't set dataTransfer on native Event, so we patch it
+      Object.defineProperty(dropEvt, 'dataTransfer', { value: fakeEvent.dataTransfer });
+      Object.defineProperty(dropEvt, 'clientX', { value: touch.clientX });
+      Object.defineProperty(dropEvt, 'clientY', { value: touch.clientY });
+      cell.dispatchEvent(dropEvt);
+    } catch(err) {
+      console.warn('[MobileTouchDrag] DA fallback dispatch failed:', err);
+    }
     return;
   }
+}
 
-  // Fallback: try dispatching through the drop event listener
-  // (DA uses addEventListener('drop',...) in addDragToRepositionListeners)
-  try {
-    const dropEvt = new Event('drop', { bubbles: true });
-    dropEvt.preventDefault = function() {};
-    dropEvt.dataTransfer = fakeEvent.dataTransfer;
-    dropEvt.clientX = touch.clientX;
-    dropEvt.clientY = touch.clientY;
-    cell.dispatchEvent(dropEvt);
-  } catch(err) {
-    console.warn('[MobileTouchDrag] Fallback dispatch failed:', err);
+// =================================================================
+// v2.0: TOUCH RESIZE + REPOSITION FOR EXISTING GRID TILES
+// =================================================================
+function bindGridTilesTouch(wrapper, module) {
+  // Use a flag on the wrapper to track that we've set up delegation
+  const flagKey = `mobileTileTouchBound_${module}`;
+  if (wrapper.dataset[flagKey] === '1') return;
+  wrapper.dataset[flagKey] = '1';
+
+  const tileSelector = module === 'ms' ? '.grid-event' : '.da-event';
+  const handleTopClass = module === 'ms' ? 'resize-handle-top' : 'da-resize-top';
+  const handleBottomClass = module === 'ms' ? 'resize-handle-bottom' : 'da-resize-bottom';
+  const handleClass = module === 'ms' ? 'resize-handle' : 'da-resize-handle';
+
+  // We use event delegation on the wrapper for touchstart
+  wrapper.addEventListener('touchstart', (e) => {
+    if (isDragging) return;
+    
+    const touch = e.touches[0];
+    const target = e.target;
+    
+    // --- RESIZE: Check if touch is on a resize handle ---
+    if (target.classList.contains(handleClass) || 
+        target.classList.contains(handleTopClass) || 
+        target.classList.contains(handleBottomClass)) {
+      e.preventDefault();
+      e.stopPropagation();
+      startTouchResize(target, touch, module, wrapper);
+      return;
+    }
+    
+    // --- REPOSITION: Check if touch is on a tile (but not a handle) ---
+    const tile = target.closest(tileSelector);
+    if (tile && tile.dataset.id) {
+      // Start a long-press timer for repositioning
+      const startX = touch.clientX;
+      const startY = touch.clientY;
+      const tileId = tile.dataset.id;
+      
+      const repoTimer = setTimeout(() => {
+        // Only start if finger hasn't moved much
+        if (!isResizing && !isDragging && !isRepositioning) {
+          startTouchReposition(tile, tileId, { x: startX, y: startY }, module, wrapper);
+        }
+      }, LONG_PRESS_MS);
+      
+      // Store timer so we can cancel it
+      tile._repoTimer = repoTimer;
+      tile._repoStartPos = { x: startX, y: startY };
+    }
+  }, { passive: false });
+
+  // Global touchmove for resize and reposition
+  wrapper.addEventListener('touchmove', (e) => {
+    if (isResizing) {
+      e.preventDefault();
+      onTouchResizeMove(e.touches[0], module, wrapper);
+      return;
+    }
+    if (isRepositioning) {
+      e.preventDefault();
+      onTouchRepositionMove(e.touches[0], module, wrapper);
+      return;
+    }
+    
+    // Check if we should cancel a pending reposition long-press
+    const touch = e.touches[0];
+    const tileSelector2 = module === 'ms' ? '.grid-event' : '.da-event';
+    const tiles = wrapper.querySelectorAll(tileSelector2);
+    tiles.forEach(tile => {
+      if (tile._repoTimer && tile._repoStartPos) {
+        const dx = touch.clientX - tile._repoStartPos.x;
+        const dy = touch.clientY - tile._repoStartPos.y;
+        if (Math.sqrt(dx*dx + dy*dy) > 10) {
+          clearTimeout(tile._repoTimer);
+          tile._repoTimer = null;
+        }
+      }
+    });
+  }, { passive: false });
+
+  wrapper.addEventListener('touchend', (e) => {
+    // Cancel any pending reposition timers
+    const tileSelector2 = module === 'ms' ? '.grid-event' : '.da-event';
+    wrapper.querySelectorAll(tileSelector2).forEach(tile => {
+      if (tile._repoTimer) {
+        clearTimeout(tile._repoTimer);
+        tile._repoTimer = null;
+      }
+    });
+    
+    if (isResizing) {
+      e.preventDefault();
+      finishTouchResize(module, wrapper);
+      return;
+    }
+    if (isRepositioning) {
+      e.preventDefault();
+      finishTouchReposition(e.changedTouches[0], module, wrapper);
+      return;
+    }
+  }, { passive: false });
+
+  wrapper.addEventListener('touchcancel', () => {
+    if (isResizing) cancelTouchResize(module);
+    if (isRepositioning) cancelTouchReposition(module);
+  });
+}
+
+// =================================================================
+// TOUCH RESIZE
+// =================================================================
+function startTouchResize(handle, touch, module, wrapper) {
+  const tileSelector = module === 'ms' ? '.grid-event' : '.da-event';
+  const tile = handle.closest(tileSelector);
+  if (!tile || !tile.dataset.id) return;
+
+  const handleTopClass = module === 'ms' ? 'resize-handle-top' : 'da-resize-top';
+  const direction = handle.classList.contains(handleTopClass) ? 'top' : 'bottom';
+
+  const grid = module === 'ms' 
+    ? document.getElementById('scheduler-grid') 
+    : document.getElementById('da-skeleton-grid');
+  const earliestMin = parseInt(grid?.dataset.earliestMin, 10) || 540;
+
+  isResizing = true;
+  resizeState = {
+    tileEl: tile,
+    tileId: tile.dataset.id,
+    direction: direction,
+    startY: touch.clientY,
+    startTop: parseInt(tile.style.top, 10),
+    startHeight: tile.offsetHeight,
+    earliestMin: earliestMin,
+    module: module
+  };
+
+  tile.classList.add('mobile-repositioning');
+  if (navigator.vibrate) navigator.vibrate(20);
+  
+  // Create tooltip
+  let tooltip = document.getElementById('mobile-resize-tooltip');
+  if (!tooltip) {
+    tooltip = document.createElement('div');
+    tooltip.id = 'mobile-resize-tooltip';
+    document.body.appendChild(tooltip);
   }
+}
+
+function onTouchResizeMove(touch, module, wrapper) {
+  if (!resizeState) return;
+
+  const { tileEl, direction, startY, startTop, startHeight } = resizeState;
+  const deltaY = touch.clientY - startY;
+
+  let newTop = startTop, newHeight = startHeight;
+
+  if (direction === 'bottom') {
+    newHeight = Math.max(SNAP_MINS * PIXELS_PER_MINUTE, startHeight + deltaY);
+    newHeight = Math.round(newHeight / (SNAP_MINS * PIXELS_PER_MINUTE)) * (SNAP_MINS * PIXELS_PER_MINUTE);
+  } else {
+    const maxDelta = startHeight - (SNAP_MINS * PIXELS_PER_MINUTE);
+    const constrainedDelta = Math.min(deltaY, maxDelta);
+    const snappedDelta = Math.round(constrainedDelta / (SNAP_MINS * PIXELS_PER_MINUTE)) * (SNAP_MINS * PIXELS_PER_MINUTE);
+    newTop = startTop + snappedDelta;
+    newHeight = startHeight - snappedDelta;
+  }
+
+  tileEl.style.top = newTop + 'px';
+  tileEl.style.height = newHeight + 'px';
+
+  // Update tooltip
+  const { earliestMin } = resizeState;
+  const newStartMin = earliestMin + (newTop / PIXELS_PER_MINUTE);
+  const newEndMin = newStartMin + (newHeight / PIXELS_PER_MINUTE);
+  const duration = newEndMin - newStartMin;
+  const durationStr = duration < 60 ? `${duration}m` : `${Math.floor(duration/60)}h${duration%60 > 0 ? duration%60+'m' : ''}`;
+
+  const tooltip = document.getElementById('mobile-resize-tooltip');
+  if (tooltip) {
+    tooltip.innerHTML = `${minutesToTime(newStartMin)} – ${minutesToTime(newEndMin)} (${durationStr})`;
+    tooltip.style.display = 'block';
+    tooltip.style.left = (touch.clientX + 15) + 'px';
+    tooltip.style.top = (touch.clientY - 50) + 'px';
+  }
+}
+
+function finishTouchResize(module, wrapper) {
+  if (!resizeState) { isResizing = false; return; }
+
+  const { tileEl, tileId, earliestMin } = resizeState;
+  
+  const newTop = parseInt(tileEl.style.top, 10);
+  const newHeightPx = parseInt(tileEl.style.height, 10);
+  const newStartMin = earliestMin + (newTop / PIXELS_PER_MINUTE);
+  const newEndMin = newStartMin + (newHeightPx / PIXELS_PER_MINUTE);
+
+  if (module === 'ms') {
+    // Master Scheduler: update dailySkeleton (it's a local var in the IIFE, 
+    // but the grid re-render reads from it, so we use the exposed functions)
+    // MS doesn't expose dailySkeleton directly, so we fire a custom event
+    const event = findSkeletonEvent(tileId, module);
+    if (event) {
+      const div = window.divisions?.[event.division] || {};
+      const divStartMin = parseTimeToMinutes(div.startTime) || 540;
+      const divEndMin = parseTimeToMinutes(div.endTime) || 960;
+      
+      event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
+      event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
+
+      // Trigger save and re-render through the module's methods
+      if (window.MasterSchedulerInternal?.markUnsavedChanges) window.MasterSchedulerInternal.markUnsavedChanges();
+      if (window.MasterSchedulerInternal?.saveDraftToLocalStorage) window.MasterSchedulerInternal.saveDraftToLocalStorage();
+      if (window.MasterSchedulerInternal?.renderGrid) window.MasterSchedulerInternal.renderGrid();
+      else {
+        // Dispatch event for MS to handle
+        window.dispatchEvent(new CustomEvent('mobile-resize-complete', { 
+          detail: { id: tileId, startTime: event.startTime, endTime: event.endTime, module: 'ms' }
+        }));
+      }
+    }
+  } else {
+    // Daily Adjustments: update dailyOverrideSkeleton via exposed methods
+    const event = findSkeletonEvent(tileId, module);
+    if (event) {
+      const div = window.divisions?.[event.division] || {};
+      const divStartMin = parseTimeToMinutes(div.startTime) || 540;
+      const divEndMin = parseTimeToMinutes(div.endTime) || 960;
+      
+      if (event.isNightActivity) {
+        event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
+        event.endTime = minutesToTime(Math.round(newEndMin / SNAP_MINS) * SNAP_MINS);
+      } else {
+        event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
+        event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
+      }
+
+      // DA exposes saveDailySkeleton and renderGrid via window.DailyAdjustmentsInternal or as globals
+      if (window.DailyAdjustmentsInternal?.saveDailySkeleton) window.DailyAdjustmentsInternal.saveDailySkeleton();
+      if (window.DailyAdjustmentsInternal?.renderGrid) window.DailyAdjustmentsInternal.renderGrid();
+      else {
+        window.dispatchEvent(new CustomEvent('mobile-resize-complete', { 
+          detail: { id: tileId, startTime: event.startTime, endTime: event.endTime, module: 'da' }
+        }));
+      }
+    }
+  }
+
+  tileEl.classList.remove('mobile-repositioning');
+  const tooltip = document.getElementById('mobile-resize-tooltip');
+  if (tooltip) tooltip.style.display = 'none';
+  
+  isResizing = false;
+  resizeState = null;
+}
+
+function cancelTouchResize(module) {
+  if (resizeState) {
+    const { tileEl, startTop, startHeight } = resizeState;
+    tileEl.style.top = startTop + 'px';
+    tileEl.style.height = startHeight + 'px';
+    tileEl.classList.remove('mobile-repositioning');
+  }
+  const tooltip = document.getElementById('mobile-resize-tooltip');
+  if (tooltip) tooltip.style.display = 'none';
+  isResizing = false;
+  resizeState = null;
+}
+
+// =================================================================
+// TOUCH REPOSITION (drag existing tiles to new position)
+// =================================================================
+function startTouchReposition(tile, tileId, startPos, module, wrapper) {
+  const event = findSkeletonEvent(tileId, module);
+  if (!event) return;
+
+  const grid = module === 'ms' 
+    ? document.getElementById('scheduler-grid') 
+    : document.getElementById('da-skeleton-grid');
+  const earliestMin = parseInt(grid?.dataset.earliestMin, 10) || 540;
+  
+  const duration = parseTimeToMinutes(event.endTime) - parseTimeToMinutes(event.startTime);
+
+  isRepositioning = true;
+  repositionState = {
+    tileEl: tile,
+    tileId: tileId,
+    event: event,
+    startPos: startPos,
+    duration: duration,
+    earliestMin: earliestMin,
+    module: module,
+    originalDivision: event.division,
+    originalStartTime: event.startTime,
+    originalEndTime: event.endTime
+  };
+
+  tile.classList.add('mobile-repositioning');
+  if (navigator.vibrate) navigator.vibrate(30);
+
+  // Show ghost
+  ensureGhost();
+  dragGhost = document.getElementById('mobile-drag-ghost');
+  dragGhost.textContent = event.event || event.type || 'Block';
+  dragGhost.style.background = extractBgColor(tile) || '#fff';
+  dragGhost.style.color = extractTextColor(tile) || '#000';
+  dragGhost.style.display = 'block';
+  dragGhost.style.left = startPos.x + 'px';
+  dragGhost.style.top = startPos.y + 'px';
+}
+
+function onTouchRepositionMove(touch, module, wrapper) {
+  if (!repositionState) return;
+
+  // Move ghost
+  if (dragGhost) {
+    dragGhost.style.left = touch.clientX + 'px';
+    dragGhost.style.top = touch.clientY + 'px';
+  }
+
+  // Highlight cell under finger
+  const cellSelector = module === 'ms' ? '.grid-cell' : '.da-grid-cell';
+  document.querySelectorAll(cellSelector).forEach(c => c.style.background = '');
+
+  const el = document.elementFromPoint(touch.clientX, touch.clientY);
+  const cell = el?.closest(cellSelector);
+  if (cell) {
+    cell.style.background = 'rgba(59,130,246,0.15)';
+    
+    // Show preview of where it would land
+    const preview = cell.querySelector('.drop-preview, .da-drop-preview');
+    if (preview && repositionState) {
+      const rect = cell.getBoundingClientRect();
+      const y = touch.clientY - rect.top;
+      const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
+      const cellStartMin = parseInt(cell.dataset.startMin, 10);
+      const previewStartTime = minutesToTime(cellStartMin + snapMin);
+      const previewEndTime = minutesToTime(cellStartMin + snapMin + repositionState.duration);
+
+      preview.style.display = 'block';
+      preview.style.top = (snapMin * PIXELS_PER_MINUTE) + 'px';
+      preview.style.height = (repositionState.duration * PIXELS_PER_MINUTE) + 'px';
+      preview.innerHTML = `<div style="text-align:center;padding:4px;color:#3b82f6;font-weight:600;font-size:11px;">${previewStartTime} - ${previewEndTime}</div>`;
+    }
+  }
+}
+
+function finishTouchReposition(touch, module, wrapper) {
+  if (!repositionState) { isRepositioning = false; return; }
+
+  const cellSelector = module === 'ms' ? '.grid-cell' : '.da-grid-cell';
+  
+  // Clear all highlights and previews
+  document.querySelectorAll(cellSelector).forEach(c => {
+    c.style.background = '';
+    const preview = c.querySelector('.drop-preview, .da-drop-preview');
+    if (preview) { preview.style.display = 'none'; preview.innerHTML = ''; }
+  });
+
+  // Find target cell
+  const el = document.elementFromPoint(touch.clientX, touch.clientY);
+  const cell = el?.closest(cellSelector);
+
+  if (cell) {
+    const { event, duration } = repositionState;
+    const divName = cell.dataset.div;
+    const cellStartMin = parseInt(cell.dataset.startMin, 10);
+    const rect = cell.getBoundingClientRect();
+    const y = touch.clientY - rect.top;
+    const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
+
+    event.division = divName;
+    event.startTime = minutesToTime(cellStartMin + snapMin);
+    event.endTime = minutesToTime(cellStartMin + snapMin + duration);
+
+    if (module === 'ms') {
+      if (window.MasterSchedulerInternal?.markUnsavedChanges) window.MasterSchedulerInternal.markUnsavedChanges();
+      if (window.MasterSchedulerInternal?.saveDraftToLocalStorage) window.MasterSchedulerInternal.saveDraftToLocalStorage();
+      if (window.MasterSchedulerInternal?.renderGrid) window.MasterSchedulerInternal.renderGrid();
+      else {
+        window.dispatchEvent(new CustomEvent('mobile-reposition-complete', { 
+          detail: { id: repositionState.tileId, division: divName, startTime: event.startTime, endTime: event.endTime, module: 'ms' }
+        }));
+      }
+    } else {
+      // DA: also bump overlapping tiles
+      if (window.DailyAdjustmentsInternal?.bumpOverlappingTiles) {
+        window.DailyAdjustmentsInternal.bumpOverlappingTiles(event, divName);
+      }
+      if (window.DailyAdjustmentsInternal?.saveDailySkeleton) window.DailyAdjustmentsInternal.saveDailySkeleton();
+      if (window.DailyAdjustmentsInternal?.renderGrid) window.DailyAdjustmentsInternal.renderGrid();
+      else {
+        window.dispatchEvent(new CustomEvent('mobile-reposition-complete', { 
+          detail: { id: repositionState.tileId, division: divName, startTime: event.startTime, endTime: event.endTime, module: 'da' }
+        }));
+      }
+    }
+  }
+
+  // Cleanup
+  repositionState.tileEl.classList.remove('mobile-repositioning');
+  if (dragGhost) dragGhost.style.display = 'none';
+  isRepositioning = false;
+  repositionState = null;
+}
+
+function cancelTouchReposition(module) {
+  if (repositionState) {
+    const { event, originalDivision, originalStartTime, originalEndTime, tileEl } = repositionState;
+    event.division = originalDivision;
+    event.startTime = originalStartTime;
+    event.endTime = originalEndTime;
+    tileEl.classList.remove('mobile-repositioning');
+  }
+  if (dragGhost) dragGhost.style.display = 'none';
+  
+  const cellSelector = module === 'ms' ? '.grid-cell' : '.da-grid-cell';
+  document.querySelectorAll(cellSelector).forEach(c => {
+    c.style.background = '';
+    const preview = c.querySelector('.drop-preview, .da-drop-preview');
+    if (preview) { preview.style.display = 'none'; preview.innerHTML = ''; }
+  });
+  
+  isRepositioning = false;
+  repositionState = null;
+}
+
+// =================================================================
+// FIND SKELETON EVENT BY ID
+// =================================================================
+function findSkeletonEvent(tileId, module) {
+  if (module === 'ms') {
+    // Master Scheduler stores skeleton in a local var, but we can try to find it
+    // through the exposed internal reference or window globals
+    if (window.MasterSchedulerInternal?.dailySkeleton) {
+      return window.MasterSchedulerInternal.dailySkeleton.find(ev => ev.id === tileId);
+    }
+    // Try window._msDailySkeleton as a fallback
+    if (window._msDailySkeleton) {
+      return window._msDailySkeleton.find(ev => ev.id === tileId);
+    }
+    return null;
+  }
+  
+  if (module === 'da') {
+    // DA stores in dailyOverrideSkeleton
+    if (window.DailyAdjustmentsInternal?.dailyOverrideSkeleton) {
+      return window.DailyAdjustmentsInternal.dailyOverrideSkeleton.find(ev => ev.id === tileId);
+    }
+    if (window._daDailyOverrideSkeleton) {
+      return window._daDailyOverrideSkeleton.find(ev => ev.id === tileId);
+    }
+    return null;
+  }
+  
+  return null;
+}
+
+// =================================================================
+// UTILITY: Time parsing (matches both MS and DA)
+// =================================================================
+function parseTimeToMinutes(t) {
+  if (!t || typeof t !== 'string') return null;
+  let s = t.toLowerCase().trim();
+  let mer = null;
+  if (s.includes('am') || s.includes('pm')) {
+    mer = s.includes('am') ? 'am' : 'pm';
+    s = s.replace(/am|pm/g, '').trim();
+  }
+  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+  if (!m) return null;
+  let hh = parseInt(m[1], 10);
+  const mm = parseInt(m[2], 10);
+  if (isNaN(hh) || isNaN(mm)) return null;
+  if (mer) {
+    if (hh === 12) hh = mer === 'am' ? 0 : 12;
+    else if (mer === 'pm') hh += 12;
+  }
+  return hh * 60 + mm;
+}
+
+function minutesToTime(min) {
+  let h = Math.floor(min / 60), m = min % 60, ap = h >= 12 ? 'pm' : 'am';
+  h = h % 12 || 12;
+  return h + ':' + m.toString().padStart(2, '0') + ap;
 }
 
 // =================================================================
 // UTILITY: Extract tile data from element
 // =================================================================
 function storeTileDataOnElement(el, module) {
-  // The existing code stores tile data in el.dataset.tileData during touchstart
-  // We also need to handle cases where it's not there yet
-  if (el.dataset.tileData) return; // Already set
+  if (el.dataset.tileData) return;
 
-  // For MS: find by matching tile name from TILES array
   if (module === 'ms' && window.TILES) {
     const tileName = el.textContent.trim();
     const found = window.TILES.find(t => t.name === tileName);
     if (found) el.dataset.tileData = JSON.stringify(found);
-  }
-
-  // For DA: same approach
-  if (module === 'da') {
-    // DA tiles also exist in its own TILES array
-    // The palette render already sets dataset.tileData during touchstart
-    // via the existing handler. But in case it didn't fire, try to find it.
-    const tileName = el.textContent.trim();
-    // Try matching from the palette's rendered tiles
-    // (TILES is typically inside the DA IIFE, but the touchstart handler
-    //  should have set dataset.tileData already)
   }
 }
 
@@ -557,57 +997,24 @@ function getTileData(el, module) {
     try { return JSON.parse(el.dataset.tileData); } catch(e) {}
   }
 
-  // Fallback: try to reconstruct from the text
   const tileName = el.textContent.trim();
-
-  // Master Scheduler has a global-ish TILES reference
-  // Try to find it via the rendered grid's existing logic
-  if (module === 'ms') {
-    // MS tiles: Activity Slot, Sports Slot, Special Activity, Smart Tile, etc.
-    const typeMap = {
-      'Activity Slot': 'activity',
-      'Sports Slot': 'sports',
-      'Special Activity': 'special',
-      'Smart Tile': 'smart',
-      'Split Tile': 'split',
-      'Elective Block': 'elective',
-      'League Game': 'league',
-      'Specialty League': 'specialty_league',
-      'Swim / Pool': 'swim',
-      'Lunch': 'lunch',
-      'Snacks': 'snacks',
-      'Dismissal': 'dismissal',
-      'Custom Block': 'custom'
-    };
-    const type = typeMap[tileName];
-    if (type) {
-      return { type: type, name: tileName };
-    }
-  }
-
-  // DA uses same tile types
-  if (module === 'da') {
-    const typeMap = {
-      'Activity Slot': 'activity',
-      'Sports Slot': 'sports',
-      'Special Activity': 'special',
-      'Smart Tile': 'smart',
-      'Split Tile': 'split',
-      'Elective Block': 'elective',
-      'League Game': 'league',
-      'Specialty League': 'specialty_league',
-      'Swim / Pool': 'swim',
-      'Lunch': 'lunch',
-      'Snacks': 'snacks',
-      'Dismissal': 'dismissal',
-      'Custom Block': 'custom'
-    };
-    const type = typeMap[tileName];
-    if (type) {
-      return { type: type, name: tileName };
-    }
-  }
-
+  const typeMap = {
+    'Activity Slot': 'activity',
+    'Sports Slot': 'sports',
+    'Special Activity': 'special',
+    'Smart Tile': 'smart',
+    'Split Tile': 'split',
+    'Elective Block': 'elective',
+    'League Game': 'league',
+    'Specialty League': 'specialty_league',
+    'Swim / Pool': 'swim',
+    'Lunch': 'lunch',
+    'Snacks': 'snacks',
+    'Dismissal': 'dismissal',
+    'Custom Block': 'custom'
+  };
+  const type = typeMap[tileName];
+  if (type) return { type: type, name: tileName };
   return null;
 }
 
@@ -626,41 +1033,54 @@ function extractTextColor(el) {
 }
 
 // =================================================================
+// CLEANUP ALL
+// =================================================================
+function cleanupAll() {
+  cleanupDrag();
+  if (isResizing) cancelTouchResize(resizeState?.module || 'ms');
+  if (isRepositioning) cancelTouchReposition(repositionState?.module || 'ms');
+}
+
+// =================================================================
 // BOOT
 // =================================================================
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
 } else {
-  // Small delay to let MS and DA render first
   setTimeout(init, 500);
 }
 
-// Re-init when tabs switch (grids get re-rendered)
+// Re-init when tabs switch
 const origShowTab = window.showTab;
 if (typeof origShowTab === 'function') {
   window.showTab = function(id) {
     origShowTab(id);
-    // Small delay to let the tab render
     setTimeout(() => {
       if (id === 'master-scheduler') {
         const palette = document.querySelector('.ms-palette');
         if (palette) palette.dataset.mobileTouchBound = '0';
         const wrapper = document.querySelector('.ms-grid-wrapper');
-        if (wrapper) wrapper.dataset.mobileTapBound = '0';
+        if (wrapper) {
+          wrapper.dataset.mobileTapBound = '0';
+          wrapper.dataset.mobileTileTouchBound_ms = '0';
+        }
         setupMasterSchedulerTouch();
       }
       if (id === 'daily-adjustments') {
         const palette = document.getElementById('da-palette');
         if (palette) palette.dataset.mobileTouchBound = '0';
         const wrapper = document.querySelector('.da-grid-wrapper');
-        if (wrapper) wrapper.dataset.mobileTapBound = '0';
+        if (wrapper) {
+          wrapper.dataset.mobileTapBound = '0';
+          wrapper.dataset.mobileTileTouchBound_da = '0';
+        }
         setupDailyAdjustmentsTouch();
       }
     }, 300);
   };
 }
 
-// Expose for manual re-init if needed
+// Expose for manual re-init
 window.MobileTouchDrag = {
   init: init,
   setupMS: setupMasterSchedulerTouch,
