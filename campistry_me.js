@@ -293,9 +293,14 @@
     // =========================================================================
 
     async function init() {
-        const authed = await checkAuth();
-        if (!authed) return;
-        await loadAllData();
+    const authed = await checkAuth();
+    if (!authed) return;
+    // Initialize CampistryDB for cloud data access
+    if (window.CampistryDB?.initialize) {
+        try { await window.CampistryDB.initialize(); } 
+        catch (e) { console.warn('[Me] CampistryDB init warning:', e); }
+    }
+    await loadAllData();
         setupEventListeners();
         setupTabs();
         setupColorPresets();
