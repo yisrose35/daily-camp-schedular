@@ -1399,16 +1399,17 @@ function renderPalette() {
       };
       el.ondragend = () => { el.dragging = false; };
       
-      // Mobile touch support
+     // Mobile touch — primary handling by mobile_touch_drag.js
       let touchStartY = 0;
       el.addEventListener('touchstart', (e) => {
         touchStartY = e.touches[0].clientY;
         el.dataset.tileData = JSON.stringify(tile);
-        el.style.opacity = '0.6';
+        if (!window.MobileTouchDrag) el.style.opacity = '0.6';
       });
       
       el.addEventListener('touchend', (e) => {
         el.style.opacity = '1';
+        if (window.MobileTouchDrag) return;
         const touchEndY = e.changedTouches[0].clientY;
         if (Math.abs(touchEndY - touchStartY) < 10) {
           showTileInfo(tile);
