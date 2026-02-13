@@ -803,8 +803,10 @@ function activateMidDayRainyMode(customStartTime = null) {
       console.log("[RainyDay] ✅ Stacker rebuilt schedule successfully");
       console.log("[RainyDay] Summary:", result.summary);
       
-      // Update module state
+      // Update module state AND persist via saveDailySkeleton
       dailyOverrideSkeleton = result.rebuiltSkeleton;
+      window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+      saveDailySkeleton();
     } else {
       console.error("[RainyDay] ❌ Stacker failed:", result.error);
       // Fall back to old behavior (clear and switch)
