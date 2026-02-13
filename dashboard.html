@@ -26,9 +26,17 @@
             <a href="index.html" class="nav-logo">
                 <img src="Campistry_clean.png" alt="Campistry" class="dash-nav-logo-img">
             </a>
+            <button class="dash-mobile-toggle" id="dashMobileToggle" aria-label="Menu">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+            </button>
             <div class="nav-actions">
                 <span class="nav-user" id="navUserEmail">Loading...</span>
                 <button class="btn-ghost" onclick="handleLogout()">Sign Out</button>
+            </div>
+            <div id="dashMobileMenu" class="dash-mobile-menu">
+                <span id="navUserEmailMobile" style="padding:14px 16px;color:var(--slate-500);font-size:0.85rem;display:block;border-bottom:1px solid var(--slate-100);"></span>
+                <a href="index.html" style="padding:14px 16px;color:var(--slate-700);text-decoration:none;display:block;">Home</a>
+                <button onclick="handleLogout()" style="padding:14px 16px;text-align:left;background:none;border:none;color:var(--slate-700);font-size:0.95rem;cursor:pointer;width:100%;display:block;">Sign Out</button>
             </div>
         </div>
     </nav>
@@ -273,5 +281,30 @@ if (window.location.protocol === 'file:') {
     <script src="access_control.js"></script>
     <script src="team_subdivisions_ui.js"></script>
     <script>setTimeout(function(){ document.documentElement.classList.add('css-ready'); }, 3000);</script>
+    <script>
+// Dashboard mobile menu
+(function() {
+    var toggle = document.getElementById('dashMobileToggle');
+    var menu = document.getElementById('dashMobileMenu');
+    if (toggle && menu) {
+        toggle.addEventListener('click', function(e) {
+            e.stopPropagation();
+            menu.classList.toggle('open');
+        });
+        document.addEventListener('click', function(e) {
+            if (!menu.contains(e.target) && !toggle.contains(e.target)) {
+                menu.classList.remove('open');
+            }
+        });
+    }
+    // Sync email display
+    var src = document.getElementById('navUserEmail');
+    var dst = document.getElementById('navUserEmailMobile');
+    if (src && dst) {
+        new MutationObserver(function() { dst.textContent = src.textContent; })
+            .observe(src, { childList: true, characterData: true, subtree: true });
+    }
+})();
+</script>
 </body>
 </html>
