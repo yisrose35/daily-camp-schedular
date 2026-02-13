@@ -90,17 +90,25 @@ html, body {
     inset: 0 !important;
   }
 
-  /* HERO */
-  .hero { padding: 110px 20px 60px !important; min-height: auto !important; }
-  .hero-content { max-width: 100% !important; }
-  .hero-badge { font-size: 0.78rem !important; padding: 6px 14px !important; margin-bottom: 24px !important; }
-  .hero-title {
-    font-size: clamp(2rem, 8vw, 2.8rem) !important;
-    line-height: 1.12 !important;
-    margin-bottom: 16px !important;
-    letter-spacing: -0.03em !important;
+  /* HERO — "Camp-Tech, Reimagined" fills the opening screen */
+  .hero {
+    padding: 90px 20px 40px !important;
+    min-height: 100vh !important;
+    min-height: 100dvh !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
   }
-  .hero-sub { font-size: 1rem !important; line-height: 1.6 !important; margin-bottom: 28px !important; padding: 0 !important; }
+  .hero-content { max-width: 100% !important; }
+  .hero-badge { font-size: 0.75rem !important; padding: 6px 12px !important; margin-bottom: 20px !important; }
+  .hero-title {
+    font-size: clamp(2.8rem, 12vw, 4.5rem) !important;
+    line-height: 1.05 !important;
+    margin-bottom: 16px !important;
+    letter-spacing: -0.04em !important;
+  }
+  .hero-title-accent { font-size: inherit !important; }
+  .hero-sub { font-size: 0.95rem !important; line-height: 1.6 !important; margin-bottom: 24px !important; padding: 0 !important; }
   .hero-cta {
     flex-direction: column !important;
     gap: 10px !important;
@@ -116,8 +124,14 @@ html, body {
     font-size: 0.95rem !important;
     display: flex !important;
   }
-  .hero-stats { gap: 16px !important; justify-content: space-between !important; padding: 0 8px !important; }
-  .stat-value { font-size: 1rem !important; }
+  .hero-stats {
+    flex-direction: column !important;
+    gap: 14px !important;
+    align-items: center !important;
+    padding: 0 !important;
+  }
+  .stat { text-align: center !important; align-items: center !important; }
+  .stat-value { font-size: 0.95rem !important; }
   .stat-label { font-size: 0.75rem !important; }
   .stat-divider { display: none !important; }
 
@@ -179,7 +193,8 @@ html, body {
   /* FOOTER */
   .footer { padding: 48px 20px 32px !important; }
   .footer-main { grid-template-columns: 1fr !important; gap: 28px !important; text-align: center !important; }
-  .footer-brand { text-align: center !important; }
+  .footer-brand { text-align: center !important; max-width: none !important; }
+  .footer-brand p { max-width: none !important; text-align: center !important; margin-left: auto !important; margin-right: auto !important; }
   .footer-logo { justify-content: center !important; margin-bottom: 12px !important; }
   .footer-col { text-align: center !important; }
   .footer-col a { padding: 6px 0 !important; display: block !important; }
@@ -258,8 +273,8 @@ html, body {
     min-height: 36px !important; min-width: 36px !important;
     padding: 0 7px !important; flex-shrink: 0 !important;
   }
-  .app-logo-flow-img { height: 26px !important; max-height: 28px !important; top: 0 !important; }
-  .app-logo-me-img { height: 24px !important; max-height: 26px !important; top: 0 !important; }
+  .app-logo-flow-img { height: 24px !important; max-height: 26px !important; top: 0 !important; }
+  .app-logo-me-img { height: 22px !important; max-height: 24px !important; top: 0 !important; }
   .header-app-switch { margin-left: 4px !important; }
   .header-right { flex: 1 !important; justify-content: flex-end !important; min-width: 0 !important; }
   .header-date-label { display: none !important; }
@@ -285,7 +300,7 @@ html, body {
   .app-logo-flow-img { height: 22px !important; }
   .app-logo-me-img { height: 20px !important; }
   .header-date-input { max-width: 120px !important; }
-  .header-app-switch { display: none !important; }
+  .header-app-switch { display: flex !important; margin-left: 2px !important; }
 }
 
 
@@ -454,6 +469,28 @@ html, body {
   .stats-grid { grid-template-columns: 1fr !important; }
   .stat-card { padding: 10px !important; }
   .nav-back span { display: none !important; }
+}
+
+/* --- Campistry Me header — match Flow's compact height --- */
+@media (max-width: 768px) {
+  /* Me nav: compact like Flow */
+  .nav-left { gap: 0.5rem !important; }
+  .nav-logo-me { height: 26px !important; max-height: 28px !important; top: 0 !important; }
+  .nav-logo-flow { height: 24px !important; max-height: 26px !important; top: 0 !important; }
+  .nav-app-switch { margin-left: 4px !important; }
+  /* Sync badge: don't clip */
+  .sync-badge {
+    padding: 0.2rem 0.5rem !important;
+    font-size: 0.65rem !important;
+    gap: 0.25rem !important;
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
+    overflow: visible !important;
+  }
+  .sync-dot { width: 6px !important; height: 6px !important; }
+  /* Nav-back: compact */
+  .nav-back { font-size: 0.75rem !important; gap: 0.2rem !important; }
+  .nav-back svg { width: 14px !important; height: 14px !important; }
 }
 
 
