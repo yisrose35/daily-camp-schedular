@@ -529,5 +529,38 @@ textarea:focus {
     .btn {
         padding: 8px 16px;
         font-size: 0.85rem;
+        min-height: 44px;
+    }
+    
+    table {
+        display: block;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    
+    .card-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+}
+
+@media (max-width: 480px) {
+    :root {
+        --space-lg: 12px;
+        --space-xl: 16px;
+        --space-2xl: 24px;
+    }
+    
+    .card {
+        padding: var(--space-sm);
+        border-radius: var(--radius-lg);
+    }
+    
+    .btn {
+        padding: 10px 14px;
+        font-size: 0.82rem;
+        width: 100%;
+        justify-content: center;
     }
 }
