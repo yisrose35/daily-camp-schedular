@@ -1,0 +1,983 @@
+/* ============================================================
+   CAMPISTRY — MOBILE RESPONSIVENESS MASTER OVERRIDE
+   mobile-responsive.css v1.0
+   ============================================================
+   Load this file AFTER all other CSS files in every HTML page.
+   Add to each HTML <head>:
+     <link rel="stylesheet" href="mobile-responsive.css" />
+   ============================================================ */
+
+/* ============================================
+   0. GLOBAL MOBILE FOUNDATIONS
+   ============================================ */
+
+/* Prevent horizontal overflow on all pages */
+html, body {
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Better touch targets globally */
+@media (max-width: 768px) {
+  button, 
+  a, 
+  select, 
+  input[type="checkbox"], 
+  input[type="radio"],
+  .sidebar-item,
+  .da-subtab,
+  .ms-btn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Prevent zoom on input focus (iOS) */
+  input[type="text"],
+  input[type="time"],
+  input[type="date"],
+  input[type="number"],
+  input[type="email"],
+  input[type="password"],
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  /* Scrollable containers should scroll smoothly */
+  [style*="overflow"], 
+  .da-grid-wrapper, 
+  .ms-grid-wrapper,
+  .da-palette,
+  .ms-palette {
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* ============================================
+   1. LANDING PAGE (index.html + landing.css)
+   Already has good mobile support; patch gaps.
+   ============================================ */
+
+@media (max-width: 768px) {
+  /* Hero section */
+  .hero { padding: 100px 16px 60px; }
+  .hero-title { font-size: 2.2rem; line-height: 1.15; }
+  .hero-title-accent { font-size: inherit; }
+  .hero-sub { font-size: 1rem; padding: 0 8px; }
+  .hero-cta-group { 
+    flex-direction: column; 
+    gap: 12px; 
+    width: 100%; 
+    padding: 0 16px; 
+  }
+  .hero-cta-group .btn-primary,
+  .hero-cta-group .btn-ghost { 
+    width: 100%; 
+    text-align: center; 
+    justify-content: center;
+  }
+  .hero-badge { font-size: 0.8rem; }
+  
+  /* Products section */
+  .products-showcase { padding: 60px 16px; }
+  .product-tabs { 
+    flex-direction: column; 
+    gap: 8px; 
+    padding: 0 16px; 
+  }
+  .product-tab { width: 100%; justify-content: center; }
+  .product-panel { padding: 24px 16px; }
+  .product-panel-content { flex-direction: column; }
+  
+  /* Features section */
+  .features { padding: 60px 16px; }
+  .features-grid { 
+    grid-template-columns: 1fr; 
+    gap: 16px; 
+  }
+  .feature-card { padding: 20px; }
+  
+  /* Demo section */
+  .demo { padding: 60px 16px; }
+  .demo-features { 
+    grid-template-columns: 1fr; 
+    gap: 12px; 
+  }
+  
+  /* Pricing section */
+  .pricing { padding: 60px 16px; }
+  .pricing-grid { 
+    grid-template-columns: 1fr; 
+    gap: 16px; 
+  }
+  .pricing-card { padding: 24px 20px; }
+  
+  /* CTA section */
+  .cta { padding: 60px 16px; }
+  .cta h2 { font-size: 1.8rem; }
+  
+  /* Footer */
+  .footer { padding: 48px 16px 24px; }
+  .footer-grid { 
+    grid-template-columns: 1fr; 
+    gap: 24px; 
+    text-align: center; 
+  }
+  
+  /* Auth Modal */
+  .auth-modal-content { 
+    width: 95%; 
+    max-width: 400px; 
+    margin: 16px; 
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+  .auth-form { padding: 0 4px; }
+  
+  /* Section headers */
+  .section-badge { font-size: 0.75rem; }
+  .section-title { font-size: 1.6rem; }
+  .section-sub { font-size: 0.95rem; padding: 0 8px; }
+}
+
+@media (max-width: 480px) {
+  .hero-title { font-size: 1.8rem; }
+  .hero-sub { font-size: 0.9rem; }
+  .section-title { font-size: 1.35rem; }
+  .nav-logo img { height: 28px; }
+}
+
+
+/* ============================================
+   2. DASHBOARD (dashboard.html + dashboard.css)
+   ============================================ */
+
+@media (max-width: 768px) {
+  .dashboard { padding: 20px 12px 60px; }
+  .welcome-title { font-size: 1.5rem; }
+  .welcome-sub { font-size: 0.9rem; }
+  
+  .dashboard-grid { 
+    grid-template-columns: 1fr; 
+    gap: 16px; 
+  }
+  
+  .dashboard-card { padding: 16px; }
+  .card-header { 
+    flex-direction: column; 
+    align-items: flex-start; 
+    gap: 8px; 
+  }
+  
+  /* Stats */
+  .stats-grid { 
+    grid-template-columns: repeat(3, 1fr); 
+    gap: 8px; 
+  }
+  .stat-item { padding: 12px 6px 10px; }
+  .stat-item .stat-value { font-size: 1.5rem; }
+  .stat-item .stat-label { font-size: 0.65rem; }
+  
+  /* Products */
+  .products-grid { grid-template-columns: 1fr; }
+  .product-tile { padding: 16px; }
+  .product-status { font-size: 0.7rem; }
+  
+  /* Team */
+  .team-grid { grid-template-columns: 1fr; }
+  
+  /* Profile */
+  .profile-row { 
+    flex-direction: column; 
+    align-items: flex-start; 
+    gap: 4px; 
+  }
+  
+  /* Forms */
+  .form-actions { 
+    flex-direction: column; 
+    gap: 8px; 
+  }
+  .form-actions button { width: 100%; }
+  
+  /* Quick links */
+  .quick-links { 
+    flex-direction: column; 
+    align-items: center; 
+    gap: 12px; 
+  }
+  
+  /* Nav */
+  .nav-user { display: none; }
+  .nav-inner { padding: 0 12px; }
+  .dash-nav-logo-img { height: 30px; }
+}
+
+@media (max-width: 480px) {
+  .stats-grid { grid-template-columns: 1fr 1fr; }
+  .welcome-title { font-size: 1.3rem; }
+}
+
+
+/* ============================================
+   3. FLOW APP (flow.html + styles.css)
+   The core scheduling app — most complex.
+   ============================================ */
+
+@media (max-width: 768px) {
+  /* Header */
+  .app-header { 
+    height: auto;
+    min-height: 56px;
+    padding: 8px 12px; 
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .header-left { gap: 8px; }
+  .header-right { 
+    width: 100%;
+    justify-content: space-between;
+  }
+  .header-date-label { display: none; }
+  .header-date-input { 
+    width: 100%; 
+    max-width: 180px;
+  }
+  .app-logo-flow-img { height: 32px; max-height: 36px; }
+  .app-logo-me-img { height: 32px; max-height: 36px; }
+  .header-app-switch { margin-left: 8px; }
+  
+  /* Sidebar — already off-canvas, just ensure good sizing */
+  .sidebar { 
+    width: 260px; 
+    padding: 0.75rem; 
+    top: 56px;
+  }
+  .sidebar-item { 
+    padding: 0.65rem 0.75rem; 
+    font-size: 0.9rem;
+  }
+  
+  /* Content */
+  .app-content { 
+    padding: 0.75rem 0.75rem 1rem; 
+  }
+  
+  /* Setup tab */
+  .setup-grid { gap: 16px; }
+  .setup-card { padding: 12px 14px; }
+  .setup-card-header { 
+    flex-direction: column; 
+    align-items: flex-start; 
+    gap: 8px; 
+  }
+  
+  /* Division buttons / master list */
+  .master-list { 
+    display: flex; 
+    flex-wrap: wrap; 
+    gap: 8px; 
+  }
+  
+  /* Detail pane */
+  .detail-pane { padding: 12px; }
+  
+  /* Setup groups */
+  .setup-group { padding: 12px; }
+  .setup-button-row { 
+    flex-wrap: wrap; 
+    gap: 8px; 
+  }
+  .setup-button-row button { 
+    flex: 1 1 auto;
+    min-width: 120px;
+  }
+  
+  /* Schedule table (view tab) */
+  #scheduleTable { 
+    overflow-x: auto; 
+    -webkit-overflow-scrolling: touch;
+  }
+  #scheduleTable table { 
+    min-width: 600px; 
+  }
+  
+  /* Report tab */
+  #report-content { overflow-x: auto; }
+  
+  /* Page title */
+  .app-page-title { font-size: 1.15rem; }
+}
+
+@media (max-width: 480px) {
+  .app-header { padding: 6px 8px; }
+  .app-content { padding: 0.5rem; }
+  .setup-card { padding: 10px 12px; }
+  .hamburger-btn { width: 40px; height: 40px; }
+}
+
+
+/* ============================================
+   4. MASTER SCHEDULER (master_schedule_builder.js inline CSS)
+   Override the hardcoded inline styles.
+   ============================================ */
+
+@media (max-width: 900px) {
+  /* Container: stack sidebar below grid on tablets */
+  .ms-container { 
+    flex-direction: column !important; 
+    height: auto !important; 
+    min-height: auto !important;
+    max-height: none !important;
+  }
+  
+  /* Sidebar becomes horizontal palette strip */
+  .ms-sidebar { 
+    width: 100% !important; 
+    min-width: unset !important; 
+    max-height: 140px !important;
+    border-right: none !important; 
+    border-bottom: 1px solid #e2e8f0 !important;
+    flex-direction: row !important;
+    overflow: hidden !important;
+  }
+  .ms-sidebar-header { 
+    writing-mode: vertical-rl !important;
+    text-orientation: mixed !important;
+    padding: 10px 6px !important;
+    border-bottom: none !important;
+    border-right: 1px solid #e2e8f0 !important;
+    white-space: nowrap !important;
+    display: flex !important;
+    align-items: center !important;
+  }
+  .ms-sidebar-header h3 {
+    margin: 0 !important;
+    transform: rotate(180deg) !important;
+  }
+  .ms-palette { 
+    flex-direction: row !important; 
+    flex-wrap: wrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    gap: 4px !important;
+    padding: 8px !important;
+    align-content: flex-start !important;
+  }
+  .ms-tile { 
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
+    padding: 6px 10px !important;
+    font-size: 11px !important;
+  }
+  .ms-tile-divider { 
+    width: 1px !important;
+    height: 24px !important;
+    margin: 0 4px !important;
+  }
+  .ms-tile-label { 
+    padding: 2px 6px !important;
+    white-space: nowrap !important;
+  }
+  
+  /* Toolbar wrap */
+  .ms-toolbar { 
+    padding: 8px 10px !important; 
+    gap: 8px !important;
+    flex-wrap: wrap !important;
+  }
+  .ms-toolbar-group { 
+    padding: 0 6px !important; 
+    gap: 6px !important;
+    flex-wrap: wrap !important;
+  }
+  .ms-select { min-width: 100px !important; font-size: 11px !important; }
+  .ms-input { width: 100px !important; font-size: 11px !important; }
+  .ms-btn { padding: 6px 10px !important; font-size: 11px !important; }
+  
+  /* Grid wrapper — horizontal scrollable */
+  .ms-grid-wrapper { 
+    overflow-x: auto !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    max-height: calc(100vh - 320px) !important;
+  }
+  
+  /* Modal */
+  .ms-modal { 
+    min-width: unset !important; 
+    max-width: 95vw !important; 
+    width: 95vw !important;
+    max-height: 85vh !important;
+  }
+  .ms-modal-body { 
+    max-height: 60vh !important; 
+    overflow-y: auto !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .ms-sidebar { max-height: 120px !important; }
+  .ms-toolbar-group { 
+    width: 100% !important; 
+    border-right: none !important; 
+    padding: 0 !important;
+    justify-content: flex-start !important;
+  }
+  .ms-toolbar-group.status { width: 100% !important; }
+  .ms-toolbar { 
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+}
+
+
+/* ============================================
+   5. DAILY ADJUSTMENTS (daily_adjustments.js inline CSS)
+   Override the hardcoded inline styles.
+   ============================================ */
+
+@media (max-width: 900px) {
+  /* Container: stack sidebar and main vertically */
+  .da-container { 
+    flex-direction: column !important; 
+    height: auto !important; 
+    min-height: auto !important;
+    max-height: none !important;
+  }
+  
+  /* Sidebar becomes horizontal palette strip */
+  .da-sidebar { 
+    width: 100% !important; 
+    min-width: unset !important;
+    max-height: 130px !important;
+    border-right: none !important;
+    border-bottom: 1px solid var(--da-border, #e2e8f0) !important;
+    flex-direction: row !important;
+    overflow: hidden !important;
+  }
+  .da-sidebar-header { 
+    writing-mode: vertical-rl !important;
+    text-orientation: mixed !important;
+    padding: 8px 6px !important;
+    border-bottom: none !important;
+    border-right: 1px solid var(--da-border, #e2e8f0) !important;
+    display: flex !important;
+    align-items: center !important;
+  }
+  .da-sidebar-header h3 {
+    margin: 0 !important;
+    transform: rotate(180deg) !important;
+  }
+  .da-palette { 
+    flex-direction: row !important; 
+    flex-wrap: wrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    gap: 4px !important;
+    padding: 8px !important;
+    align-content: flex-start !important;
+  }
+  .da-tile { 
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
+    padding: 5px 8px !important;
+    font-size: 10px !important;
+  }
+  .da-tile-divider { 
+    width: 1px !important;
+    height: 20px !important;
+    margin: 0 3px !important;
+  }
+  .da-tile-label { 
+    white-space: nowrap !important;
+    padding: 2px 4px !important;
+  }
+  
+  /* Subtabs — scrollable horizontally */
+  .da-subtabs { 
+    overflow-x: auto !important; 
+    -webkit-overflow-scrolling: touch !important;
+    flex-wrap: nowrap !important;
+  }
+  .da-subtab { 
+    white-space: nowrap !important;
+    padding: 10px 14px !important;
+    font-size: 12px !important;
+    flex-shrink: 0 !important;
+  }
+  
+  /* Toolbar wrap */
+  .da-toolbar { 
+    flex-wrap: wrap !important; 
+    gap: 8px !important;
+    padding: 8px 12px !important;
+  }
+  
+  /* Grid scrollable */
+  .da-grid-wrapper { 
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    margin: 8px !important;
+    max-height: calc(100vh - 350px) !important;
+  }
+  .da-grid { 
+    min-width: 600px !important; 
+  }
+  
+  /* Form grid stacking */
+  .da-form-grid { 
+    grid-template-columns: 1fr !important; 
+    gap: 10px !important;
+  }
+  
+  /* Resource layout stacking */
+  .da-resource-layout { 
+    flex-direction: column !important; 
+    gap: 16px !important;
+  }
+  .da-resource-list { min-width: unset !important; }
+  .da-resource-detail { min-width: unset !important; }
+  
+  /* Modals */
+  .da-modal { 
+    width: 95vw !important; 
+    max-width: 95vw !important;
+    max-height: 85vh !important;
+  }
+  .da-modal-body { 
+    max-height: 55vh !important; 
+    overflow-y: auto !important;
+  }
+  .da-modal-cb-group { 
+    grid-template-columns: 1fr !important; 
+  }
+  
+  /* Section */
+  .da-section { padding: 12px; }
+  
+  /* Pane padding */
+  .da-pane { padding: 10px !important; }
+  
+  /* Rainy day panel */
+  #da-rainy-panel { overflow-x: auto; }
+}
+
+@media (max-width: 600px) {
+  .da-sidebar { max-height: 100px !important; }
+  .da-toolbar { 
+    flex-direction: column !important; 
+    align-items: stretch !important;
+  }
+  .da-toolbar-group { width: 100% !important; }
+}
+
+
+/* ============================================
+   6. CAMPISTRY ME (campistry_me.html inline CSS)
+   Already has some responsive rules; enhance.
+   ============================================ */
+
+@media (max-width: 768px) {
+  /* Me nav */
+  .nav-inner { 
+    padding-left: 12px !important; 
+    padding-right: 12px !important; 
+  }
+  
+  /* Main content area */
+  .main { 
+    padding: 16px 12px !important; 
+  }
+  
+  /* Stats grid */
+  .stats-grid { 
+    grid-template-columns: repeat(2, 1fr) !important; 
+    gap: 8px !important;
+  }
+  
+  /* Action bar */
+  .action-bar { 
+    flex-direction: column !important; 
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+  .search-input { 
+    max-width: none !important; 
+    width: 100% !important;
+  }
+  .action-spacer { display: none !important; }
+  
+  /* Tables inside Me */
+  .data-table-wrapper,
+  .table-wrapper { 
+    overflow-x: auto; 
+    -webkit-overflow-scrolling: touch; 
+  }
+  .data-table,
+  table { min-width: 500px; }
+  
+  /* Camper cards */
+  .camper-card { padding: 12px; }
+  
+  /* Modals in Me */
+  .modal-content,
+  .me-modal { 
+    width: 95vw !important; 
+    max-width: 95vw !important;
+    max-height: 85vh !important;
+    margin: 8px !important;
+  }
+  
+  /* CSV preview */
+  .csv-preview-table { 
+    overflow-x: auto; 
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (max-width: 480px) {
+  .stats-grid { grid-template-columns: 1fr !important; }
+  .stat-card { padding: 12px !important; }
+}
+
+
+/* ============================================
+   7. PRINT CENTER (styles.css — pc- prefixed)
+   ============================================ */
+
+@media (max-width: 768px) {
+  .pc-container { 
+    flex-direction: column !important; 
+    height: auto !important;
+  }
+  .pc-controls-top { 
+    flex-direction: column !important; 
+    align-items: stretch !important;
+    gap: 6px !important;
+  }
+  .pc-quick { 
+    flex-wrap: wrap !important; 
+    gap: 8px !important;
+  }
+  .pc-quick-name, 
+  .pc-quick-sub { 
+    width: 100% !important; 
+    min-width: unset !important;
+  }
+  .pc-view-options { 
+    flex-wrap: wrap !important; 
+    gap: 6px !important;
+  }
+  .pc-advanced-drawer { 
+    width: 100% !important; 
+    position: static !important;
+  }
+  .pc-workspace { 
+    overflow-x: auto !important; 
+    -webkit-overflow-scrolling: touch !important;
+  }
+  .pc-preview-area { 
+    overflow-x: auto !important;
+    padding: 8px !important;
+  }
+  .pc-scroll-arrow { display: none !important; }
+}
+
+
+/* ============================================
+   8. UNIFIED SCHEDULE SYSTEM / SCHEDULE TABLE
+   ============================================ */
+
+@media (max-width: 768px) {
+  #schedule .schedule-table-wrapper,
+  #scheduleTable {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  #scheduleTable table {
+    min-width: 700px;
+    font-size: 0.75rem;
+  }
+  
+  #scheduleTable th,
+  #scheduleTable td {
+    padding: 6px 8px;
+    white-space: nowrap;
+  }
+}
+
+
+/* ============================================
+   9. FIELDS / LOCATIONS / SPECIAL ACTIVITIES TABS
+   These use inline-styled JS containers.
+   ============================================ */
+
+@media (max-width: 768px) {
+  /* Fields tab containers */
+  #fields > div,
+  #locations > div,
+  #special_activities > div {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  /* Common inline flex rows in config tabs */
+  [style*="display:flex"][style*="gap"] {
+    flex-wrap: wrap !important;
+  }
+  
+  /* Priority lists */
+  [style*="display:grid"][style*="grid-template-columns"] {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+
+/* ============================================
+   10. LEAGUES / SPECIALTY LEAGUES TABS
+   ============================================ */
+
+@media (max-width: 768px) {
+  #leagues > div,
+  #specialty-leagues > div {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  /* League matchup grids */
+  .league-matchup-grid,
+  .league-standings-grid {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+
+/* ============================================
+   11. CAMPER LOCATOR
+   ============================================ */
+
+@media (max-width: 768px) {
+  #camper-locator {
+    overflow-x: auto;
+  }
+  
+  /* Locator search controls */
+  .locator-controls,
+  .camper-check-controls {
+    flex-direction: column !important;
+    gap: 8px !important;
+    align-items: stretch !important;
+  }
+  .locator-controls input,
+  .locator-controls select,
+  .camper-check-controls input,
+  .camper-check-controls select {
+    width: 100% !important;
+  }
+}
+
+
+/* ============================================
+   12. GLOBAL MODAL / DIALOG OVERRIDES
+   Catch-all for any modal that doesn't have
+   specific rules above.
+   ============================================ */
+
+@media (max-width: 768px) {
+  /* Generic modals with fixed positioning */
+  [style*="position: fixed"][style*="display: flex"][style*="align-items: center"],
+  [style*="position:fixed"][style*="display:flex"][style*="align-items:center"] {
+    padding: 8px !important;
+  }
+  
+  /* Generic modal inner boxes */
+  [style*="position: fixed"] > [style*="background: #fff"],
+  [style*="position: fixed"] > [style*="background:#fff"],
+  [style*="position:fixed"] > [style*="background:#fff"],
+  [style*="position:fixed"] > [style*="background: white"],
+  [style*="position: fixed"] > [style*="background: white"] {
+    max-width: 95vw !important;
+    max-height: 85vh !important;
+    overflow-y: auto !important;
+    margin: 8px !important;
+  }
+  
+  /* Subdivision status panel */
+  .subdivision-status-panel {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+  .subdivision-status-panel .subdivision-cards {
+    flex-wrap: wrap !important;
+  }
+}
+
+
+/* ============================================
+   13. MULTI-SCHEDULER SUBDIVISION UI
+   ============================================ */
+
+@media (max-width: 768px) {
+  .subdivision-status-panel {
+    padding: 12px !important;
+  }
+  .subdivision-cards {
+    flex-direction: column !important;
+    gap: 8px !important;
+  }
+  .subdivision-card {
+    width: 100% !important;
+  }
+}
+
+
+/* ============================================
+   14. HELPER / UPDATES TABS
+   ============================================ */
+
+@media (max-width: 768px) {
+  #helper-content,
+  #updates-content {
+    overflow-x: auto;
+  }
+  
+  /* Helper cards */
+  .helper-card,
+  .helper-section {
+    padding: 12px !important;
+  }
+}
+
+
+/* ============================================
+   15. TOAST NOTIFICATIONS
+   ============================================ */
+
+@media (max-width: 768px) {
+  .toast,
+  .access-denied-toast {
+    left: 12px !important;
+    right: 12px !important;
+    bottom: 12px !important;
+    max-width: none !important;
+    width: auto !important;
+  }
+}
+
+
+/* ============================================
+   16. EDIT RESTRICTIONS OVERLAYS
+   ============================================ */
+
+@media (max-width: 768px) {
+  .view-only-overlay {
+    top: 4px !important;
+    right: 4px !important;
+  }
+  .view-only-badge {
+    font-size: 0.65rem !important;
+    padding: 3px 6px !important;
+  }
+}
+
+
+/* ============================================
+   17. TEAM / SUBDIVISIONS UI (dashboard)
+   ============================================ */
+
+@media (max-width: 768px) {
+  .team-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  .invite-form {
+    flex-direction: column !important;
+    gap: 8px !important;
+  }
+  .invite-form input,
+  .invite-form select {
+    width: 100% !important;
+  }
+}
+
+
+/* ============================================
+   18. SAFE AREA INSETS (iPhone notch/gesture bar)
+   ============================================ */
+
+@supports (padding: env(safe-area-inset-bottom)) {
+  .app-header,
+  .nav {
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+  
+  body {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  
+  .toast,
+  .access-denied-toast {
+    bottom: calc(12px + env(safe-area-inset-bottom)) !important;
+  }
+  
+  .mobile-drawer {
+    padding-bottom: calc(32px + env(safe-area-inset-bottom));
+  }
+}
+
+
+/* ============================================
+   19. LANDSCAPE PHONE SPECIFIC
+   ============================================ */
+
+@media (max-height: 500px) and (orientation: landscape) {
+  .app-header { 
+    height: 48px; 
+    min-height: 48px; 
+    padding: 4px 12px;
+  }
+  .sidebar { top: 48px; }
+  
+  /* Modals take full height in landscape */
+  .da-modal,
+  .ms-modal,
+  .auth-modal-content {
+    max-height: 95vh !important;
+  }
+  
+  /* Grids take more space */
+  .ms-grid-wrapper,
+  .da-grid-wrapper {
+    max-height: calc(100vh - 200px) !important;
+  }
+}
+
+
+/* ============================================
+   20. SCROLLBAR STYLING FOR TOUCH DEVICES
+   ============================================ */
+
+@media (max-width: 768px) {
+  /* Thin scrollbars on mobile for horizontal scroll containers */
+  .ms-grid-wrapper::-webkit-scrollbar,
+  .da-grid-wrapper::-webkit-scrollbar,
+  #scheduleTable::-webkit-scrollbar,
+  .pc-workspace::-webkit-scrollbar {
+    height: 4px;
+    width: 4px;
+  }
+  
+  .ms-grid-wrapper::-webkit-scrollbar-thumb,
+  .da-grid-wrapper::-webkit-scrollbar-thumb,
+  #scheduleTable::-webkit-scrollbar-thumb,
+  .pc-workspace::-webkit-scrollbar-thumb {
+    background: rgba(0,0,0,0.2);
+    border-radius: 4px;
+  }
+}
