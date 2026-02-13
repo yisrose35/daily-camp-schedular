@@ -311,9 +311,9 @@
             while (!window.supabase && attempts < 20) { await new Promise(r => setTimeout(r, 100)); attempts++; }
             if (!window.supabase) { window.location.href = 'index.html'; return false; }
             const { data: { session } } = await window.supabase.auth.getSession();
-            if (!session) { window.location.href = 'landing.html'; return false; }
+            if (!session) { window.location.href = 'index.html'; return false; }
             return true;
-        } catch (e) { window.location.href = 'landing.html'; return false; }
+        } catch (e) { window.location.href = 'index.html'; return false; }
     }
 
     async function loadAllData() {
