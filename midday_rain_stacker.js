@@ -722,8 +722,57 @@ function rebuildFromTransition({ transitionTime, targetSkeletonName, isRainStart
     }
 
     // Load current skeleton (the one currently active)
-    const dailyData = window.loadCurrentDailyData?.() || {};
-    const currentSkeleton = dailyData.manualSkeleton || [];
+    // ★★★ FIX: Must check ALL storage paths, not just campDailyData_v1 ★★★
+    // The skeleton is stored in multiple places:
+    //   - window.dailyOverrideSkeleton (in-memory, set by daily_adjustments.js)
+    //   - campManualSkeleton_{dateKey} in localStorage (set by saveDailySkeleton)
+    //   - app1.dailySkeletons[dateKey] in global settings (set by saveDailySkeleton)
+    //   - campDailyData_v1[dateKey].manualSkeleton (set by saveCurrentDailyData)
+    // The first three are the authoritative paths; the last is often empty.
+    let currentSkeleton = [];
+    
+    // Try window.dailyOverrideSkeleton first (always up to date)
+    if (window.dailyOverrideSkeleton && window.dailyOverrideSkeleton.length > 0) {
+        currentSkeleton = window.dailyOverrideSkeleton;
+        console.log(`[RainStacker] Current skeleton from window.dailyOverrideSkeleton: ${currentSkeleton.length} blocks`);
+    }
+    
+    // Try localStorage path
+    if (currentSkeleton.length === 0) {
+        const dateKey = window.currentScheduleDate;
+        try {
+            const stored = localStorage.getItem(`campManualSkeleton_${dateKey}`);
+            if (stored) currentSkeleton = JSON.parse(stored) || [];
+            if (currentSkeleton.length > 0) {
+                console.log(`[RainStacker] Current skeleton from localStorage: ${currentSkeleton.length} blocks`);
+            }
+        } catch(e) { /* ignore */ }
+    }
+    
+    // Try app1.dailySkeletons
+    if (currentSkeleton.length === 0) {
+        const dateKey = window.currentScheduleDate;
+        currentSkeleton = g.app1?.dailySkeletons?.[dateKey] || [];
+        if (currentSkeleton.length > 0) {
+            console.log(`[RainStacker] Current skeleton from app1.dailySkeletons: ${currentSkeleton.length} blocks`);
+        }
+    }
+    
+    // Last resort: campDailyData_v1
+    if (currentSkeleton.length === 0) {
+        const dailyData = window.loadCurrentDailyData?.() || {};
+        currentSkeleton = dailyData.manualSkeleton || [];
+        if (currentSkeleton.length > 0) {
+            console.log(`[RainStacker] Current skeleton from campDailyData_v1: ${currentSkeleton.length} blocks`);
+        }
+    }
+    
+    if (currentSkeleton.length === 0) {
+        console.error('[RainStacker] ❌ No current skeleton found from ANY source');
+        return { success: false, error: 'No current skeleton found' };
+    }
+    
+    console.log(`[RainStacker] Current skeleton: ${currentSkeleton.length} blocks`);
 
     // Get divisions
     const divisions = g.app1?.divisions || {};
@@ -1560,6 +1609,45 @@ function triggerMidDayGeneration() {
         
         // Ensure leagueAssignments is clean (belt & suspenders)
         window.leagueAssignments = {};
+        
+        // ★★★ FIX: Wipe post-transition schedule assignments ★★★
+        // The old schedule still has afternoon assignments (including leagues).
+        // The optimizer's partial mode would try to preserve/merge these.
+        // We must clear everything from the rain start time onward so the
+        // optimizer generates fresh assignments for the new rainy skeleton.
+        const rainStartMin = window.rainyDayStartTime || 810;
+        const sa = window.scheduleAssignments || {};
+        const dt = window.divisionTimes || {};
+        let wipedCount = 0;
+        
+        Object.keys(sa).forEach(bunk => {
+            if (!Array.isArray(sa[bunk])) return;
+            
+            // Find which division this bunk belongs to
+            const divisions = window.divisions || {};
+            let bunkDiv = null;
+            for (const [divName, divData] of Object.entries(divisions)) {
+                if ((divData.bunks || []).includes(bunk)) { bunkDiv = divName; break; }
+            }
+            
+            const divSlots = dt[bunkDiv] || [];
+            
+            sa[bunk].forEach((entry, idx) => {
+                if (!entry) return;
+                const slot = divSlots[idx];
+                // Wipe if slot starts at or after rain, OR if we can't determine the time
+                if (slot && slot.startMin >= rainStartMin) {
+                    sa[bunk][idx] = null;
+                    wipedCount++;
+                } else if (!slot && idx >= 3) {
+                    // No divisionTimes info — conservatively wipe later slots
+                    sa[bunk][idx] = null;
+                    wipedCount++;
+                }
+            });
+        });
+        console.log(`[RainStacker] ★ Wiped ${wipedCount} post-transition assignments (from ${rainStartMin} min onward)`);
+        window.scheduleAssignments = sa;
         
         // ★★★ FIX: Set flag to prevent loadScheduleForDate from reloading stale data ★★★
         // updateTable → loadScheduleForDate rehydrates leagueAssignments from cloud/localStorage
