@@ -845,9 +845,26 @@ function activateMidDayRainyMode(customStartTime = null) {
   // and the renderer shows ghost league games in post-transition slots.
   window.leagueAssignments = {};
   
+  // ★★★ FIX: Clear stale league data (same as full-day mode) ★★★
+  window.leagueAssignments = {};
+
   let skeletonSwitched = true; // Stacker handles this
-   showRainyDayNotification(true, stats.outdoorFieldNames.length, true, skeletonSwitched);
+  showRainyDayNotification(true, stats.outdoorFieldNames.length, true, skeletonSwitched);
   console.log("[RainyDay] Activated mid-day mode at", minutesToTime(rainStartMin));
+  
+  // ★★★ FIX: Trigger generation AFTER all rainy state is configured ★★★
+  // The stacker rebuilt the skeleton but deferred generation because:
+  //   - window.isRainyDay must be true (set above)
+  //   - outdoor fields must be disabled (set above)
+  //   - leagueAssignments must be cleared (set above)
+  // Now all state is ready, so we trigger generation.
+  if (window.MidDayRainStacker?.triggerMidDayGeneration) {
+    // Small delay to let saves propagate
+    setTimeout(() => {
+      window.MidDayRainStacker.triggerMidDayGeneration();
+      renderGrid();
+    }, 300);
+  }
 }
 
 // Analyze activities relative to rain start time
