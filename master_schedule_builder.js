@@ -447,10 +447,10 @@ function init(){
   container.innerHTML = `
     <style>
       /* === MASTER SCHEDULER STYLES === */
-      .ms-container { display:flex; gap:0; height:calc(100vh - 120px); min-height:500px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; }
+      .ms-container { display:flex; gap:0; height:calc(100vh - 120px); min-height:300px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; }
       
       /* Left Sidebar - Scrollable */
-      .ms-sidebar { width:180px; min-width:180px; background:#f8fafc; border-right:1px solid #e2e8f0; display:flex; flex-direction:column; height:100%; max-height:100%; }
+      .ms-sidebar { width:180px; min-width:0; background:#f8fafc; border-right:1px solid #e2e8f0; display:flex; flex-direction:column; height:100%; max-height:100%; }
       .ms-sidebar-header { padding:14px 12px; border-bottom:1px solid #e2e8f0; background:#fff; flex-shrink:0; }
       .ms-sidebar-header h3 { margin:0; font-size:13px; font-weight:600; color:#475569; }
       .ms-palette { flex:1; overflow-y:auto; overflow-x:hidden; padding:10px; display:flex; flex-direction:column; gap:6px; scrollbar-width:thin; scrollbar-color:#cbd5e1 #f1f5f9; }
@@ -522,7 +522,7 @@ function init(){
       
       /* Modal Styles */
       #ms-modal-overlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(15,23,42,0.5); display:flex; align-items:center; justify-content:center; z-index:10000; }
-      .ms-modal { background:#fff; border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,0.3); min-width:360px; max-width:500px; max-height:80vh; overflow:hidden; }
+      .ms-modal { background:#fff; border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,0.3); min-width:280px; max-width:500px; width:95%; max-height:80vh; overflow:hidden; }
       .ms-modal-header { padding:16px 20px; border-bottom:1px solid #e2e8f0; display:flex; align-items:center; justify-content:space-between; }
       .ms-modal-header h3 { margin:0; font-size:16px; font-weight:600; color:#0f172a; }
       .ms-modal-close { background:none; border:none; font-size:20px; color:#94a3b8; cursor:pointer; padding:0; line-height:1; }
