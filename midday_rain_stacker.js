@@ -1424,63 +1424,27 @@ function prePlaceMorningAssignments(transitionMinutes) {
  * The scheduler fills in the CONTENT (which activity goes where).
  */
 function triggerPostRebuildGeneration(preservedSlotCount) {
-    console.log('[RainStacker] Triggering post-rebuild generation...');
-    console.log(`[RainStacker] ${preservedSlotCount} pre-transition slots already placed as _pinned`);
+    // ★★★ v2.1 FIX: Don't auto-generate here ★★★
+    // The stacker runs BEFORE daily_adjustments.js sets window.isRainyDay = true,
+    // disables outdoor fields, and clears leagueAssignments. If we generate here
+    // (even with a 300ms delay), the optimizer may run before all rainy day state
+    // is fully configured, causing:
+    //   - Leagues appearing in post-transition slots (isRainyDay not set yet)
+    //   - Wrong field availability (outdoor fields not disabled yet)
+    //   - Stale leagueAssignments persisting
+    //
+    // Instead, we set a flag that daily_adjustments.js checks after setting up
+    // all rainy day state. It then calls triggerMidDayGeneration() which is
+    // guaranteed to run with correct state.
     
-    // Small delay to let the skeleton save propagate
-    setTimeout(() => {
-        try {
-            // The skeleton is already saved. Now trigger generation.
-            // runSkeletonOptimizer reads from manualSkeleton in daily data.
-            
-            if (typeof window.runSkeletonOptimizer === 'function') {
-                const dailyData = window.loadCurrentDailyData?.() || {};
-                const skeleton = dailyData.manualSkeleton || [];
-                
-                if (skeleton.length > 0) {
-                    console.log(`[RainStacker] Running optimizer with ${skeleton.length} skeleton blocks`);
-                    console.log(`[RainStacker] ★ Morning/pre-transition entries are marked _pinned — PinnedPreservation will protect them`);
-                    
-                    // Dispatch event — PinnedPreservation will capture all _pinned entries
-                    // (including the morning ones we just placed via prePlaceMorningAssignments)
-                    window.dispatchEvent(new CustomEvent('campistry-generation-starting', {
-                        detail: { source: 'midday-rain-stacker' }
-                    }));
-                    
-                    // ★★★ FIX: Ensure leagueAssignments are clean before generation ★★★
-                    // The optimizer's Step 4/5 skips leagues on rainy days, but stale
-                    // leagueAssignments from before the rain would still render in the grid.
-                    window.leagueAssignments = {};
-                    
-                    // Run optimizer — it generates for ALL slots, but:
-                    // - Morning slots have _pinned entries that PinnedPreservation captured
-                    // - Afternoon slots are empty and will get fresh assignments
-                    window.runSkeletonOptimizer(skeleton);
-                    
-                    // PinnedPreservation restores morning entries after generation
-                    window.dispatchEvent(new CustomEvent('campistry-generation-complete', {
-                        detail: { source: 'midday-rain-stacker' }
-                    }));
-                    
-                    // Clean up temp data
-                    delete window._midDayPreRebuild;
-                    
-                    console.log('[RainStacker] ✅ Post-rebuild generation complete (morning preserved via PinnedPreservation)');
-                } else {
-                    console.warn('[RainStacker] No skeleton available for generation');
-                }
-            } else {
-                console.warn('[RainStacker] runSkeletonOptimizer not available — manual generation required');
-            }
-        } catch (e) {
-            console.error('[RainStacker] Post-rebuild generation failed:', e);
-        }
-        
-        // Refresh the UI
-        window.updateTable?.();
-        if (typeof window.renderGrid === 'function') window.renderGrid();
-        
-    }, 300); // Small delay for save propagation
+    console.log('[RainStacker] Skeleton rebuilt. Generation will be triggered by daily_adjustments after state setup.');
+    console.log(`[RainStacker] ${preservedSlotCount} pre-transition slots placed as _pinned`);
+    
+    // Store the count for later use
+    window._midDayPendingGeneration = {
+        preservedSlotCount,
+        timestamp: Date.now()
+    };
 }
 
 /**
@@ -1495,6 +1459,72 @@ function triggerPostRebuildGeneration(preservedSlotCount) {
  * 
  * This function is kept only as a manual safety net / fallback.
  */
+/**
+ * Trigger generation after mid-day rain mode is FULLY configured.
+ * Called by daily_adjustments.js AFTER:
+ *   - window.isRainyDay = true
+ *   - outdoor fields disabled
+ *   - leagueAssignments cleared
+ *   - rainyDayMode saved
+ * 
+ * This ensures the optimizer runs with correct rainy day state.
+ */
+function triggerMidDayGeneration() {
+    const pending = window._midDayPendingGeneration;
+    if (!pending) {
+        console.warn('[RainStacker] No pending mid-day generation');
+        return;
+    }
+    
+    delete window._midDayPendingGeneration;
+    
+    console.log('[RainStacker] ★ Triggering mid-day generation (all rainy state configured)');
+    console.log(`[RainStacker] isRainyDay=${window.isRainyDay}, leagueAssignments keys=${Object.keys(window.leagueAssignments || {}).length}`);
+    
+    try {
+        if (typeof window.runSkeletonOptimizer !== 'function') {
+            console.warn('[RainStacker] runSkeletonOptimizer not available — manual generation required');
+            return;
+        }
+        
+        const dailyData = window.loadCurrentDailyData?.() || {};
+        const skeleton = dailyData.manualSkeleton || [];
+        
+        if (skeleton.length === 0) {
+            console.warn('[RainStacker] No skeleton available for generation');
+            return;
+        }
+        
+        console.log(`[RainStacker] Running optimizer with ${skeleton.length} skeleton blocks`);
+        
+        // Ensure leagueAssignments is clean (belt & suspenders)
+        window.leagueAssignments = {};
+        
+        // Dispatch events for PinnedPreservation
+        window.dispatchEvent(new CustomEvent('campistry-generation-starting', {
+            detail: { source: 'midday-rain-stacker' }
+        }));
+        
+        window.runSkeletonOptimizer(skeleton);
+        
+        window.dispatchEvent(new CustomEvent('campistry-generation-complete', {
+            detail: { source: 'midday-rain-stacker' }
+        }));
+        
+        // Clean up
+        delete window._midDayPreRebuild;
+        
+        console.log('[RainStacker] ✅ Mid-day generation complete');
+        
+    } catch (e) {
+        console.error('[RainStacker] Mid-day generation failed:', e);
+    }
+    
+    // Refresh UI
+    window.updateTable?.();
+    if (typeof window.renderGrid === 'function') window.renderGrid();
+}
+
 function restorePreservedMorningSchedule() {
     const dailyData = window.loadCurrentDailyData?.() || {};
     const backup = dailyData.preservedScheduleBackup;
@@ -1782,6 +1812,7 @@ window.MidDayRainStacker = {
     
     // Post-rebuild
     triggerPostRebuildGeneration,
+    triggerMidDayGeneration,
     restorePreservedMorningSchedule, // Deprecated — kept as fallback
     
     // Rain clears UI
