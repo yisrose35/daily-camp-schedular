@@ -3607,5 +3607,13 @@ window.isRainyDayActive = isRainyDayActive;
 window.isMidDayModeActive = isMidDayModeActive;
 window.getMidDayStartTime = getMidDayStartTime;
 window.refreshSkeletonConflicts = function() { renderGrid(); };
+// === ADD THIS near the end of the IIFE, before the closing })(); ===
 
+// Expose internals for mobile touch support
+window.DailyAdjustmentsInternal = {
+  get dailyOverrideSkeleton() { return dailyOverrideSkeleton; },
+  saveDailySkeleton: typeof saveDailySkeleton === 'function' ? saveDailySkeleton : function(){},
+  renderGrid: typeof renderGrid === 'function' ? renderGrid : function(){},
+  bumpOverlappingTiles: typeof bumpOverlappingTiles === 'function' ? bumpOverlappingTiles : function(){}
+};
 })();
