@@ -90,30 +90,60 @@ html, body {
     inset: 0 !important;
   }
 
-  /* HERO — "Camp-Tech, Reimagined" fills the opening screen */
+  /* HERO — ONLY "Camp-Tech, Reimagined" visible on load */
   .hero {
-    padding: 90px 20px 40px !important;
-    min-height: 100vh !important;
-    min-height: 100dvh !important;
+    padding: 0 24px !important;
+    min-height: calc(100vh - 56px) !important;
+    min-height: calc(100dvh - 56px) !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
+    margin-top: 0 !important;
   }
-  .hero-content { max-width: 100% !important; }
-  .hero-badge { font-size: 0.75rem !important; padding: 6px 12px !important; margin-bottom: 20px !important; }
+  .hero-content {
+    max-width: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    min-height: calc(100vh - 56px) !important;
+    min-height: calc(100dvh - 56px) !important;
+    padding-top: 0 !important;
+    padding-bottom: 40px !important;
+  }
+  /* Hide badge above title — only title visible */
+  .hero-badge {
+    order: 2 !important;
+    font-size: 0.72rem !important;
+    padding: 5px 12px !important;
+    margin-bottom: 0 !important;
+    margin-top: auto !important;
+  }
   .hero-title {
-    font-size: clamp(2.8rem, 12vw, 4.5rem) !important;
-    line-height: 1.05 !important;
-    margin-bottom: 16px !important;
+    order: 1 !important;
+    font-size: clamp(3.2rem, 14vw, 5.5rem) !important;
+    line-height: 1.0 !important;
+    margin-bottom: 0 !important;
+    margin-top: auto !important;
     letter-spacing: -0.04em !important;
+    text-align: center !important;
   }
-  .hero-title-accent { font-size: inherit !important; }
-  .hero-sub { font-size: 0.95rem !important; line-height: 1.6 !important; margin-bottom: 24px !important; padding: 0 !important; }
+  .hero-title-accent { font-size: inherit !important; display: block !important; }
+  .hero-sub {
+    order: 3 !important;
+    font-size: 0.92rem !important;
+    line-height: 1.6 !important;
+    margin-bottom: 0 !important;
+    margin-top: 16px !important;
+    padding: 0 !important;
+  }
   .hero-cta {
+    order: 4 !important;
     flex-direction: column !important;
     gap: 10px !important;
     padding: 0 !important;
-    margin-bottom: 36px !important;
+    margin-top: 20px !important;
+    margin-bottom: 0 !important;
   }
   .hero-cta .btn-primary, .hero-cta .btn-ghost,
   .hero-cta > a, .hero-cta > button {
@@ -125,10 +155,12 @@ html, body {
     display: flex !important;
   }
   .hero-stats {
+    order: 5 !important;
     flex-direction: column !important;
     gap: 14px !important;
     align-items: center !important;
     padding: 0 !important;
+    margin-top: 24px !important;
   }
   .stat { text-align: center !important; align-items: center !important; }
   .stat-value { font-size: 0.95rem !important; }
