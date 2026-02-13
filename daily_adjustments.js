@@ -842,10 +842,7 @@ function activateMidDayRainyMode(customStartTime = null) {
   window.saveCurrentDailyData?.("rainyDayStartTime", rainStartMin);
   window.saveCurrentDailyData?.("isRainyDay", true);
   
-  // ★★★ FIX: Clear stale league data (same as full-day mode does) ★★★
-  // Without this, old leagueAssignments from the regular schedule persist
-  // and the renderer shows ghost league games in post-transition slots.
-  window.leagueAssignments = {};
+ 
   
   // ★★★ FIX: Clear stale league data (same as full-day mode) ★★★
   window.leagueAssignments = {};
