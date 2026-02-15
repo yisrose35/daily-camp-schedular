@@ -561,13 +561,7 @@
         window.initDailyAdjustments?.();
     }
     
-    if (window.supabase) {
-        window.supabase.auth.onAuthStateChange((event, session) => {
-            if (event === 'SIGNED_OUT') redirectToLogin();
-        });
-    }
-    
-    if (document.readyState === 'loading') {
+   if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', checkAuthAndBoot);
     } else {
         setTimeout(checkAuthAndBoot, 100);
