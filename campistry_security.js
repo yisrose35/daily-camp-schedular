@@ -51,7 +51,7 @@
 
         // Monitoring
         LOG_SUSPICIOUS_ACTIVITY: true,
-        MAX_DOM_MUTATIONS_PER_SECOND: 50, // Threshold for DOM mutation flood
+        MAX_DOM_MUTATIONS_PER_SECOND: 200, // Threshold for DOM mutation flood (raised for app boot)
         
         // Allowed domains for navigation/redirects
         ALLOWED_REDIRECT_DOMAINS: [
