@@ -2048,9 +2048,8 @@
         enumerable: true
     });
 
-    if (window.supabase) {
-        window.supabase.auth.onAuthStateChange((event, session) => {
-            if (event === 'SIGNED_IN' && session) {
+   if (window.supabase?.auth) {
+        window.supabase.auth.onAuthStateChange((event, session) => {            if (event === 'SIGNED_IN' && session) {
                 setTimeout(() => initialize(), 500);
             } else if (event === 'SIGNED_OUT') {
                 // Clean up subscription
