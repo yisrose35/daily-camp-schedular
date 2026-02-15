@@ -656,10 +656,11 @@ function bindRainyDayEvents() {
   if (midDayBtn) {
     midDayBtn.onclick = function(e) {
       e.stopPropagation();
-      showMidDayRainModal();
+      // TODO: Re-enable when mid-day mode is finalized
+      // showMidDayRainModal();
+      alert('Mid-Day Mode — feature coming soon!');
     };
   }
-
   const rainClearsBtn = document.getElementById('da-rain-clears-btn');
   if (rainClearsBtn) {
     rainClearsBtn.onclick = function(e) {
