@@ -427,17 +427,46 @@ document.addEventListener('DOMContentLoaded', function() {
                             localStorage.setItem('campistry_is_team_member', 'true');
                             console.log('[Landing] Invite detected, role:', existingInvite.role);
                         } else {
-                            // No invite — create camp (camp ID = user ID for owners)
-                            const { error: campError } = await supabase
-                                .from('camps')
-                                .insert([{
-                                    id: user.id,
-                                    owner: user.id,
-                                    name: campName,
-                                    address: ''
-                                }])
-                                .select()
-                                .single();
+                           // No invite — create camp (camp ID = user ID for owners)
+// ★ CHECK IF ACCESS CODE IS A PROMO CODE ★
+let planStatus = 'active';      // Default: full access (normal code)
+let trialStartedAt = null;
+let trialHours = null;
+
+if (accessCode) {
+    try {
+        const { data: promoResult } = await supabase
+            .rpc('validate_promo_code', { input_code: accessCode });
+        
+        if (promoResult && promoResult.valid) {
+            // This is a promo code → trial mode
+            planStatus = 'trial';
+            trialStartedAt = new Date().toISOString();
+            trialHours = promoResult.trial_hours || 48;
+            console.log('[Landing] Promo code detected:', accessCode, '→ trial for', trialHours, 'hours');
+        } else {
+            // Not a promo code (or invalid promo) → treat as normal access code
+            // The existing server-side trigger will validate it
+            console.log('[Landing] Not a promo code, using as regular access code');
+        }
+    } catch (promoErr) {
+        console.warn('[Landing] Promo check failed, proceeding with normal flow:', promoErr);
+    }
+}
+
+const { error: campError } = await supabase
+    .from('camps')
+    .insert([{
+        id: user.id,
+        owner: user.id,
+        name: campName,
+        address: '',
+        plan_status: planStatus,
+        trial_started_at: trialStartedAt,
+        trial_hours: trialHours
+    }])
+    .select()
+    .single();
 
                             if (campError && campError.code !== '23505') {
                                 console.error('[Landing] Camp creation failed:', campError);
