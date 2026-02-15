@@ -40,6 +40,57 @@
     // =============================================================
 
     /**
+     * ★★★ NEW: Normalize a matchup entry — handles both string and object formats ★★★
+     * Regular leagues store matchups as strings: "1 vs 4 @ Newcomb Cage (Newcomb)"
+     * Specialty leagues store matchups as objects: { teamA, teamB, field, sport }
+     */
+    function normalizeMatchup(m) {
+        if (typeof m === 'string') {
+            const raw = m;
+            let teamA = '', teamB = '', field = '', sport = '';
+            const atParts = m.split(' @ ');
+            const teamsPart = atParts[0] || '';
+            const fieldPart = atParts[1] || '';
+            const vsParts = teamsPart.split(/\s+vs\s+/i);
+            teamA = (vsParts[0] || '').trim();
+            teamB = (vsParts[1] || '').trim();
+            const dashParts = teamB.split(/\s+[—–-]\s+/);
+            if (dashParts.length > 1) { teamB = dashParts[0].trim(); sport = dashParts[1].trim(); }
+            if (fieldPart) {
+                const parenMatch = fieldPart.match(/^(.+?)\s*\((.+?)\)\s*$/);
+                if (parenMatch) { field = parenMatch[1].trim(); sport = sport || parenMatch[2].trim(); }
+                else { field = fieldPart.trim(); }
+            }
+            return { teamA, teamB, field, sport, raw };
+        } else if (m && typeof m === 'object') {
+            return { teamA: m.teamA || m.team1 || '', teamB: m.teamB || m.team2 || '', field: m.field || '', sport: m.sport || '', raw: m.display || `${m.teamA || m.team1 || '?'} vs ${m.teamB || m.team2 || '?'}` };
+        }
+        return { teamA: '', teamB: '', field: '', sport: '', raw: String(m) };
+    }
+
+    function findTeamMatchup(leagueData, team) {
+        if (!leagueData?.matchups || !team) return null;
+        const teamStr = String(team).toLowerCase().trim();
+        for (const m of leagueData.matchups) {
+            const norm = normalizeMatchup(m);
+            const tA = norm.teamA.toLowerCase().trim();
+            const tB = norm.teamB.toLowerCase().trim();
+            if (tA === teamStr || tB === teamStr) return norm;
+            if (tA.includes(teamStr) || tB.includes(teamStr) || teamStr.includes(tA) || teamStr.includes(tB)) return norm;
+        }
+        return null;
+    }
+
+    function buildAllMatchupsHtml(leagueData) {
+        if (!leagueData?.matchups?.length) return '';
+        return `<div style="margin-top:8px;">` + 
+            leagueData.matchups.map(m => {
+                const norm = normalizeMatchup(m);
+                return `<div style="padding:3px 0;">${norm.teamA} vs ${norm.teamB} @ <strong>${norm.field}</strong>${norm.sport ? ' (' + norm.sport + ')' : ''}</div>`;
+            }).join('') + `</div>`;
+    }
+
+    /**
      * ★★★ NEW: Get current time in minutes since midnight ★★★
      */
     function getCurrentTimeMinutes() {
@@ -625,49 +676,17 @@
                                        <strong>${camperName}</strong> has no team assigned yet — <a href="#" onclick="document.getElementById('loc-filter-roster').value='${camperName}'; document.getElementById('loc-filter-roster').focus(); document.getElementById('loc-filter-roster').dispatchEvent(new Event('keyup')); return false;">assign a team below</a> to see their exact field and matchup.`;
                     }
                 } else {
-                    // Has a team — try to find their matchup
-                    let match = null;
+                    // Has a team — find their matchup using normalized lookup
                     console.log(`[CamperLocator] League lookup — team: "${team}", leagueData:`, leagueData);
-                    if (leagueData?.matchups) {
-                        console.log(`[CamperLocator] Matchups available:`, leagueData.matchups.map(m => `${m.teamA} vs ${m.teamB} @ ${m.field}`));
-                        // Exact match first
-                        match = leagueData.matchups.find(m => m.teamA === team || m.teamB === team);
-                        // Fuzzy: case-insensitive
-                        if (!match) {
-                            const teamLower = String(team).toLowerCase().trim();
-                            match = leagueData.matchups.find(m => 
-                                String(m.teamA).toLowerCase().trim() === teamLower || 
-                                String(m.teamB).toLowerCase().trim() === teamLower
-                            );
-                        }
-                        // Fuzzy: partial/contains match
-                        if (!match) {
-                            const teamLower = String(team).toLowerCase().trim();
-                            match = leagueData.matchups.find(m => 
-                                String(m.teamA).toLowerCase().includes(teamLower) || 
-                                String(m.teamB).toLowerCase().includes(teamLower) ||
-                                teamLower.includes(String(m.teamA).toLowerCase()) ||
-                                teamLower.includes(String(m.teamB).toLowerCase())
-                            );
-                        }
-                    }
+                    const match = findTeamMatchup(leagueData, team);
                     
                     if (match) {
-                        const opponent = (String(match.teamA).toLowerCase().trim() === String(team).toLowerCase().trim()) ? match.teamB : match.teamA;
-                        locationHtml = `<span style="color:#059669; font-weight:bold; font-size:1.4rem;">${match.field}</span>`;
-                        detailsHtml = `<strong>${leagueData?.gameLabel || 'League Game'}</strong> — ${leagueData?.sport || "League"}<br>
-                                       <strong>${match.teamA}</strong> vs <strong>${match.teamB}</strong> @ <strong>${match.field}</strong>`;
+                        locationHtml = `<span style="color:#059669; font-weight:bold; font-size:1.4rem;">${match.field} - ${match.sport || leagueData?.sport || 'League'}</span>`;
+                        detailsHtml = `Team ${team}`;
                     } else {
-                        // No team match — show ALL matchups so the user can still see what's happening
+                        // No team match — show ALL matchups
                         locationHtml = `<span style="color:#d97706; font-weight:bold; font-size:1.4rem;">Leagues</span>`;
-                        let allMatchupsHtml = '';
-                        if (leagueData?.matchups?.length > 0) {
-                            allMatchupsHtml = `<div style="margin-top:8px;">` + 
-                                leagueData.matchups.map(m => 
-                                    `<div style="padding:3px 0;">${m.teamA} vs ${m.teamB} @ <strong>${m.field}</strong>${m.sport ? ' (' + m.sport + ')' : ''}</div>`
-                                ).join('') + `</div>`;
-                        }
-                        detailsHtml = `<strong>${leagueData?.gameLabel || 'League Game'}</strong> — Team <strong>${team}</strong> not found in matchups.<br>${allMatchupsHtml}`;
+                        detailsHtml = `<strong>${leagueData?.gameLabel || 'League Game'}</strong> — Team <strong>${team}</strong> not found in matchups.${buildAllMatchupsHtml(leagueData)}`;
                     }
                 }
             } else if (divSlots.length === 0) {
@@ -693,50 +712,29 @@
                     detailsHtml = `We know ${bunk} is playing leagues, but <strong>${camperName}</strong> has no team assigned.<br>
                                    <a href="#" onclick="document.getElementById('loc-filter-roster').value='${camperName}'; document.getElementById('loc-filter-roster').focus(); document.getElementById('loc-filter-roster').dispatchEvent(new Event('keyup')); return false;">Assign a team below</a> to see exact field.`;
                 } else {
-                    // ★★★ League lookup — robust team matching ★★★
+                    // ★★★ League lookup — normalized matchup handling ★★★
                     const leagueData = division 
                         ? window.leagueAssignments?.[division]?.[slotIdx]
                         : null;
-                        
-                    let match = null;
                     
-                    if (leagueData && leagueData.matchups) {
-                        // Exact match
-                        match = leagueData.matchups.find(m => m.teamA === team || m.teamB === team);
-                        // Case-insensitive
-                        if (!match) {
-                            const teamLower = String(team).toLowerCase().trim();
-                            match = leagueData.matchups.find(m => 
-                                String(m.teamA).toLowerCase().trim() === teamLower || 
-                                String(m.teamB).toLowerCase().trim() === teamLower
-                            );
-                        }
-                        // Partial/contains
-                        if (!match) {
-                            const teamLower = String(team).toLowerCase().trim();
-                            match = leagueData.matchups.find(m => 
-                                String(m.teamA).toLowerCase().includes(teamLower) || 
-                                String(m.teamB).toLowerCase().includes(teamLower) ||
-                                teamLower.includes(String(m.teamA).toLowerCase()) ||
-                                teamLower.includes(String(m.teamB).toLowerCase())
-                            );
-                        }
+                    // Also check assignment's own _allMatchups as fallback
+                    let effectiveLeagueData = leagueData;
+                    if (!effectiveLeagueData?.matchups && assignment._allMatchups) {
+                        effectiveLeagueData = { 
+                            matchups: assignment._allMatchups, 
+                            gameLabel: assignment._gameLabel, 
+                            sport: assignment.sport 
+                        };
                     }
+                    
+                    const match = findTeamMatchup(effectiveLeagueData, team);
 
                     if (match) {
-                        locationHtml = `<span style="color:#059669; font-weight:bold; font-size:1.4rem;">${match.field}</span>`;
-                        detailsHtml = `<strong>${leagueData?.gameLabel || 'League Game'}</strong> — ${leagueData?.sport || "League"}<br>
-                                       <strong>${match.teamA}</strong> vs <strong>${match.teamB}</strong> @ <strong>${match.field}</strong>`;
+                        locationHtml = `<span style="color:#059669; font-weight:bold; font-size:1.4rem;">${match.field} - ${match.sport || effectiveLeagueData?.sport || 'League'}</span>`;
+                        detailsHtml = `Team ${team}`;
                     } else {
                         locationHtml = `<span style="color:#d97706; font-weight:bold; font-size:1.4rem;">Leagues</span>`;
-                        let allMatchupsHtml = '';
-                        if (leagueData?.matchups?.length > 0) {
-                            allMatchupsHtml = `<div style="margin-top:8px;">` + 
-                                leagueData.matchups.map(m => 
-                                    `<div style="padding:3px 0;">${m.teamA} vs ${m.teamB} @ <strong>${m.field}</strong></div>`
-                                ).join('') + `</div>`;
-                        }
-                        detailsHtml = `<strong>${leagueData?.gameLabel || 'League Game'}</strong> — Team <strong>${team}</strong> not found in matchups.<br>${allMatchupsHtml}`;
+                        detailsHtml = `<strong>${effectiveLeagueData?.gameLabel || 'League Game'}</strong> — Team <strong>${team}</strong> not found in matchups.${buildAllMatchupsHtml(effectiveLeagueData)}`;
                     }
                 }
             } else {
