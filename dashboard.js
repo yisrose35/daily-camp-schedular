@@ -23,6 +23,8 @@
 // - Logout
 // - RBAC Team Section Visibility (owners only)
 // ============================================================================
+// Early global stub so inline onclick="handleLogout()" never throws
+function handleLogout() { if (window.logout) window.logout(); else { localStorage.clear(); sessionStorage.clear(); window.location.href = 'index.html'; } }
 (function() {
     'use strict';
     // ========================================
