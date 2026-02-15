@@ -141,53 +141,79 @@
             return false;
         }
         try {
+            // Refresh session if needed
             try {
                 const { error: refreshErr } = await client.auth.getSession();
                 if (refreshErr) console.warn('[Me] Session refresh warning:', refreshErr.message);
             } catch (_) {}
 
-            const { data, error } = await client.rpc('merge_camp_state', {
-                p_camp_id: campId,
-                p_partial_state: mergeData,
-                p_expected_version: _cloudVersion
-            });
+            // ★ v7.1: Read current state, merge, upsert
+            // (RPC merge_camp_state has uuid type mismatch — using direct upsert instead)
+            const { data: current, error: fetchError } = await client
+                .from('camp_state')
+                .select('state, version')
+                .eq('camp_id', campId)
+                .single();
 
-            if (error) {
-                const msg = error.message || '';
+            if (fetchError && fetchError.code !== 'PGRST116') {
+                const msg = fetchError.message || '';
                 if (msg.includes('401') || msg.includes('JWT') || msg.includes('expired')) {
-                    console.error('[Me] Session expired — please reload');
                     toast('Session expired — please reload the page', 'error');
                     return false;
                 }
                 if (msg.includes('403') || msg.includes('permission') || msg.includes('denied')) {
-                    console.error('[Me] Permission denied');
                     toast('Permission denied — check your access', 'error');
                     return false;
                 }
-                console.error('[Me] Cloud save RPC error:', msg);
-                // Fallback to legacy upsert if RPC function doesn't exist
-                if (msg.includes('merge_camp_state') || msg.includes('does not exist')) {
-                    return await saveToCloudLegacy(mergeData);
-                }
-                return false;
+                console.warn('[Me] Cloud fetch error:', msg);
             }
 
-            if (data && data.ok === false && data.error === 'version_conflict') {
+            const currentState = current?.state || {};
+            const currentVersion = current?.version || null;
+
+            // ★ Version conflict check
+            if (_cloudVersion && currentVersion && currentVersion !== _cloudVersion) {
                 if (retryCount >= MAX_CLOUD_RETRIES) {
                     console.error('[Me] ☁️ Version conflict — max retries reached');
                     toast('Sync conflict — please reload', 'error');
                     return false;
                 }
                 console.warn('[Me] ☁️ Version conflict (retry', retryCount + 1, ')');
-                const fresh = await loadFromCloud();
-                if (fresh) {
-                    return await saveToCloud(mergeData, retryCount + 1);
-                }
+                _cloudVersion = currentVersion;
+                return await saveToCloud(mergeData, retryCount + 1);
+            }
+
+            // ★ Deep merge — only overwrite Me-owned keys inside app1
+            const currentApp1 = currentState.app1 || {};
+            const mergeApp1 = mergeData.app1 || {};
+            const mergedApp1 = { ...currentApp1 };
+            if (mergeApp1.camperRoster !== undefined) mergedApp1.camperRoster = mergeApp1.camperRoster;
+            if (mergeApp1.divisions !== undefined) mergedApp1.divisions = mergeApp1.divisions;
+
+            const newState = {
+                ...currentState,
+                ...mergeData,
+                app1: mergedApp1,
+                updated_at: new Date().toISOString()
+            };
+
+            const { data: upsertData, error: upsertError } = await client
+                .from('camp_state')
+                .upsert({
+                    camp_id: campId,
+                    state: newState,
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'camp_id' })
+                .select('version')
+                .single();
+
+            if (upsertError) {
+                console.error('[Me] Cloud save error:', upsertError.message);
                 return false;
             }
 
-            if (data?.version) {
-                _cloudVersion = data.version;
+            if (upsertData?.version) {
+                _cloudVersion = upsertData.version;
             }
 
             console.log('[Me] ☁️ Cloud save complete (v' + (_cloudVersion || '?') + ')');
