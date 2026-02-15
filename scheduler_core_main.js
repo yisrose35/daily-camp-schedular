@@ -355,7 +355,7 @@
         }
         
         // ★★★ SPECIAL CASE: League blocks with bunks array (teams ≠ bunks) ★★★
-        if (block.type === 'league' && block.bunks && !block.bunk && !block.team) {
+        if ((block.type === 'league' || block.type === 'specialty_league') && block.bunks && !block.bunk && !block.team) {
             console.log(`[fillBlock] League block for ${block.divName} - storing matchups only (teams ≠ bunks)`);
             
             if (pick && (pick._allMatchups || pick._h2h) && block.divName && block.slots?.length > 0) {
