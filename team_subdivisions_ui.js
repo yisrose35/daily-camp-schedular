@@ -70,6 +70,34 @@
     }
 
     // =========================================================================
+    // DIVISION COLOR HELPERS
+    // =========================================================================
+
+    /**
+     * Render a single division name as a colored pill using its Campistry Me color.
+     * @param {string} divName - Division name
+     * @param {object} meDivisions - campStructure object (division → { color, grades })
+     * @returns {string} HTML string for a colored pill
+     */
+    function renderDivisionPill(divName, meDivisions) {
+        const color = (meDivisions && meDivisions[divName]?.color) || '#6B7280';
+        return `<span class="division-color-pill" style="display:inline-block;padding:3px 10px;border-radius:999px;font-size:0.8rem;font-weight:500;margin:2px 3px 2px 0;background:${color}18;color:${color};border:1px solid ${color}35;">${divName}</span>`;
+    }
+
+    /**
+     * Render a list of division names as colored pills.
+     * @param {string[]} divisions - Array of division names
+     * @param {object} meDivisions - campStructure object
+     * @returns {string} HTML string
+     */
+    function renderDivisionPills(divisions, meDivisions) {
+        if (!divisions || divisions.length === 0) {
+            return '<em style="color: var(--slate-400);">No divisions assigned</em>';
+        }
+        return divisions.map(d => renderDivisionPill(d, meDivisions)).join('');
+    }
+
+    // =========================================================================
     // DIVISIONS CARD (read-only display from campStructure)
     // =========================================================================
 
@@ -103,7 +131,7 @@
                             <a href="campistry_me.html" style="color: var(--camp-green, #147D91); font-weight: 600; text-decoration: none;">Create divisions in Campistry Me</a> to get started
                         </p>
                     </div>
-                ` : _subdivisions.map(sub => renderSubdivisionItem(sub)).join('')}
+                ` : _subdivisions.map(sub => renderSubdivisionItem(sub, meDivisions)).join('')}
             </div>
         `;
 
@@ -126,16 +154,14 @@
         });
     }
 
-    function renderSubdivisionItem(sub) {
-        const divisionsList = sub.divisions?.length > 0
-            ? sub.divisions.join(', ')
-            : '<em style="color: var(--slate-400);">No divisions assigned</em>';
+    function renderSubdivisionItem(sub, meDivisions) {
+        const divisionsList = renderDivisionPills(sub.divisions, meDivisions || _meDivisionsCache);
 
         return `
             <div class="subdivision-item" style="border-left: 4px solid ${sub.color || '#6B7280'};">
                 <div class="subdivision-info">
                     <div class="subdivision-name">${sub.name}</div>
-                    <div class="subdivision-divisions">${divisionsList}</div>
+                    <div class="subdivision-divisions" style="margin-top: 6px;">${divisionsList}</div>
                 </div>
                 <div class="subdivision-actions">
                     <button class="btn-icon subdivision-edit-btn" data-id="${sub.id}" title="Edit">
@@ -261,8 +287,12 @@
     // TEAM MEMBERS CARD
     // =========================================================================
 
-    function renderTeamCard(container) {
+    async function renderTeamCard(container) {
         if (!container) return;
+
+        // ★ Fetch Me divisions so member subdivision summaries can show colored pills
+        const meDivisions = await getMeDivisions(false);
+
         container.innerHTML = `
             <div class="card-header">
                 <h2>Team Members</h2>
@@ -288,7 +318,7 @@
                         <p style="color: var(--slate-600); margin: 0; font-weight: 500;">No team members yet</p>
                         <p style="color: var(--slate-400); font-size: 0.85rem; margin-top: 6px;">Invite members to join your camp team</p>
                     </div>
-                ` : _teamMembers.map(member => renderTeamMemberItem(member)).join('')}
+                ` : _teamMembers.map(member => renderTeamMemberItem(member, meDivisions)).join('')}
             </div>
         `;
 
@@ -299,19 +329,42 @@
         container.querySelectorAll('.member-remove-btn').forEach(btn => { btn.addEventListener('click', async () => { if (confirm('Remove this team member?')) { await window.AccessControl.removeTeamMember(btn.dataset.id); await refreshData(); renderTeamCard(container); } }); });
     }
 
-    function renderTeamMemberItem(member) {
+    function renderTeamMemberItem(member, meDivisions) {
         const roleClass = `role-${member.role}`;
         const roleName = window.AccessControl?.getRoleDisplayName(member.role) || member.role;
         const isPending = !member.accepted_at;
         const subdivisions = window.AccessControl?.getSubdivisions() || [];
-        const memberSubs = member.subdivision_ids?.map(id => { const s = subdivisions.find(x => x.id === id); return s?.name; }).filter(Boolean).join(', ') || '';
+
+        // ★ Build colored division pills from the member's assigned subdivisions
+        const memberSubNames = member.subdivision_ids?.map(id => {
+            const s = subdivisions.find(x => x.id === id);
+            return s?.name;
+        }).filter(Boolean) || [];
+
+        // Also collect the individual division names for colored pills
+        const memberDivisions = [];
+        if (member.subdivision_ids) {
+            member.subdivision_ids.forEach(id => {
+                const s = subdivisions.find(x => x.id === id);
+                if (s?.divisions) {
+                    s.divisions.forEach(d => {
+                        if (!memberDivisions.includes(d)) memberDivisions.push(d);
+                    });
+                }
+            });
+        }
+
+        const memberSubsHtml = memberDivisions.length > 0
+            ? renderDivisionPills(memberDivisions, meDivisions || _meDivisionsCache)
+            : (memberSubNames.length > 0 ? `<span style="color:var(--slate-500);font-size:0.8rem;">${memberSubNames.join(', ')}</span>` : '');
+
         const inviteUrl = isPending && member.invite_token ? `${window.location.origin}/invite.html?token=${member.invite_token}` : null;
 
         return `
             <div class="team-member-item ${isPending ? 'pending' : ''}">
                 <div class="member-info">
                     <div class="member-email">${member.email}${isPending ? '<span class="pending-badge">Pending</span>' : ''}</div>
-                    ${memberSubs ? `<div class="member-subdivisions">${memberSubs}</div>` : ''}
+                    ${memberSubsHtml ? `<div class="member-subdivisions" style="margin-top: 4px;">${memberSubsHtml}</div>` : ''}
                 </div>
                 <div class="member-actions">
                     <span class="${roleClass}">${roleName}</span>
@@ -331,8 +384,10 @@
     // INVITE MODAL — uses existing subdivision UUIDs (UNCHANGED)
     // =========================================================================
 
-    function showInviteModal() {
+    async function showInviteModal() {
         const subdivisions = window.AccessControl?.getSubdivisions() || [];
+        const meDivisions = await getMeDivisions(false);
+
         const modal = document.createElement('div');
         modal.className = 'modal-overlay';
         modal.id = 'invite-modal';
@@ -361,13 +416,19 @@
                         <p style="font-size: 0.85rem; color: var(--slate-500); margin-bottom: 8px;">Select which division groups this scheduler can manage</p>
                         ${subdivisions.length > 0 ? `
                             <div class="subdivision-checkboxes">
-                                ${subdivisions.map(sub => `
+                                ${subdivisions.map(sub => {
+                                    const divPills = sub.divisions?.length > 0
+                                        ? renderDivisionPills(sub.divisions, meDivisions)
+                                        : '<span style="color:var(--slate-400);font-size:0.8rem;">No divisions</span>';
+                                    return `
                                     <label class="checkbox-item" style="border-left: 3px solid ${sub.color}; padding-left: 10px;">
                                         <input type="checkbox" name="subdivision" value="${sub.id}">
-                                        <span>${sub.name}</span>
-                                        <small style="color: var(--slate-400); margin-left: 8px;">${sub.divisions?.join(', ') || 'No divisions'}</small>
-                                    </label>
-                                `).join('')}
+                                        <div style="display:flex;flex-direction:column;gap:2px;">
+                                            <span>${sub.name}</span>
+                                            <div style="margin-top:2px;">${divPills}</div>
+                                        </div>
+                                    </label>`;
+                                }).join('')}
                             </div>
                         ` : `<p style="color: var(--slate-500); font-style: italic;">No division groups created yet. Use the "Add" button in the Divisions card first.</p>`}
                     </div>
@@ -424,8 +485,10 @@
     // EDIT MEMBER MODAL — uses existing subdivision UUIDs (UNCHANGED)
     // =========================================================================
 
-    function showEditMemberModal(member) {
+    async function showEditMemberModal(member) {
         const subdivisions = window.AccessControl?.getSubdivisions() || [];
+        const meDivisions = await getMeDivisions(false);
+
         const modal = document.createElement('div');
         modal.className = 'modal-overlay';
         modal.id = 'edit-member-modal';
@@ -444,11 +507,19 @@
                     </div>
                     <div class="form-group" id="edit-subdivisions-group" style="display: ${member.role === 'scheduler' ? 'block' : 'none'};">
                         <label>Division Groups</label>
-                        ${subdivisions.length > 0 ? `<div class="subdivision-checkboxes">${subdivisions.map(sub => `
+                        ${subdivisions.length > 0 ? `<div class="subdivision-checkboxes">${subdivisions.map(sub => {
+                            const divPills = sub.divisions?.length > 0
+                                ? renderDivisionPills(sub.divisions, meDivisions)
+                                : '<span style="color:var(--slate-400);font-size:0.8rem;">No divisions</span>';
+                            return `
                             <label class="checkbox-item" style="border-left: 3px solid ${sub.color}; padding-left: 10px;">
                                 <input type="checkbox" name="subdivision" value="${sub.id}" ${member.subdivision_ids?.includes(sub.id) ? 'checked' : ''}>
-                                <span>${sub.name}</span>
-                            </label>`).join('')}</div>` : '<p style="color: var(--slate-500);">No division groups available</p>'}
+                                <div style="display:flex;flex-direction:column;gap:2px;">
+                                    <span>${sub.name}</span>
+                                    <div style="margin-top:2px;">${divPills}</div>
+                                </div>
+                            </label>`;
+                        }).join('')}</div>` : '<p style="color: var(--slate-500);">No division groups available</p>'}
                     </div>
                     <div id="edit-member-error" class="form-error"></div>
                     <div class="form-actions"><button type="button" class="btn-secondary" id="cancel-edit">Cancel</button><button type="submit" class="btn-primary">Save Changes</button></div>
@@ -546,6 +617,7 @@
             .form-actions{display:flex;justify-content:flex-end;gap:12px;margin-top:20px;padding-top:16px;border-top:1px solid var(--slate-200)}
             .form-error{background:#FEE2E2;color:#DC2626;padding:10px 14px;border-radius:8px;font-size:.9rem;margin-top:12px}.form-error:empty{display:none}
             .form-success{background:#D1FAE5;color:#059669;padding:10px 14px;border-radius:8px;font-size:.9rem;margin-top:12px}.form-success:empty{display:none}
+            .division-color-pill{transition:opacity .15s ease}.division-color-pill:hover{opacity:.8}
         `;
         document.head.appendChild(s);
     }
@@ -554,7 +626,7 @@
     // EXPORTS
     // =========================================================================
 
-    const TeamSubdivisionsUI = { initialize, refreshData, renderSubdivisionsCard, renderTeamCard, showSubdivisionModal, showInviteModal, getNextColor, copyToClipboard, showToast, openInviteEmail, sendInviteEmailViaResend, sendInviteEmail, SUBDIVISION_COLORS, injectStyles };
+    const TeamSubdivisionsUI = { initialize, refreshData, renderSubdivisionsCard, renderTeamCard, showSubdivisionModal, showInviteModal, getNextColor, getMeDivisions, renderDivisionPill, renderDivisionPills, copyToClipboard, showToast, openInviteEmail, sendInviteEmailViaResend, sendInviteEmail, SUBDIVISION_COLORS, injectStyles };
     window.TeamSubdivisionsUI = TeamSubdivisionsUI;
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', injectStyles); else injectStyles();
     console.log("[TeamUI] v2.1 loaded");
