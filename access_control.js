@@ -47,7 +47,7 @@
 (function() {
     'use strict';
 
-    console.log("🔐 Access Control v3.10 loading...");
+    console.log("🔐 Access Control v3.11 loading...");
 
     // =========================================================================
     // STATE
@@ -300,6 +300,18 @@
         // ★★★ v3.8: TRY SESSION CACHE FIRST ★★★
         if (tryRestoreFromCache(user.id)) {
             console.log("🔐 ⚡ Restored from session cache — skipping Supabase queries");
+            
+            // ★★★ v3.11 FIX: Set _initialized immediately for owner/admin on cache hit ★★★
+            // Owner/admin don't need subdivision data for permission checks.
+            // Without this, all permission checks fail-closed during async loads
+            // (loadSubdivisions, loadUserSubdivisionDetails) causing intermittent
+            // "locked out of post-edit" for the camp owner.
+            if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
+                _initialized = true;
+                calculateEditableDivisions();
+                console.log("🔐 ⚡ Owner/Admin instant-init from cache — permissions active immediately");
+            }
+            
             // ★★★ v3.9: Background-verify the cached role (non-blocking) ★★★
             // UI loads instantly from cache, but before any WRITE is allowed,
             // verifyBeforeWrite() will block until this completes.
@@ -321,6 +333,9 @@
         calculateEditableDivisions();
         
         _initialized = true;
+        
+        // ★★★ v3.11: Recalculate in case window.divisions loaded during async work ★★★
+        calculateEditableDivisions();
         
         setupDivisionChangeObserver();
         setupMembershipSubscription();  // ★★★ v3.7: Real-time membership updates ★★★
@@ -932,6 +947,14 @@
     // =========================================================================
 
     function getEditableDivisions() {
+        // ★★★ v3.11 FIX: Owner/Admin always gets ALL current divisions dynamically ★★★
+        // _editableDivisions may be empty if window.divisions wasn't loaded at init time.
+        // The polling interval recalculates eventually, but there's a gap where
+        // getEditableDivisions() returns [] causing cells to render as non-editable.
+        if (_initialized && (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN)) {
+            const allDivs = Object.keys(window.divisions || {});
+            return allDivs.length > 0 ? allDivs : [..._editableDivisions];
+        }
         return [..._editableDivisions];
     }
 
@@ -2056,6 +2079,6 @@
         });
     }
 
-    console.log("🔐 Access Control v3.10 loaded");
+    console.log("🔐 Access Control v3.11 loaded");
 
 })();
