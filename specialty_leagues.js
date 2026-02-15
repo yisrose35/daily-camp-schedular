@@ -673,10 +673,10 @@
         // ---------------------------------------------------------
         // MAIN TEMPLATE
         // ---------------------------------------------------------
-        container.innerHTML = `
+       container.innerHTML = `
             <div class="setup-grid">
-                <section class="setup-card setup-card-wide">
-                    <div class="setup-card-header">
+                <section class="setup-card setup-card-wide" style="border:none; box-shadow:none; background:transparent;">
+                    <div class="setup-card-header" style="margin-bottom:20px;">
                         <span class="setup-step-pill">Specialty Leagues</span>
                         <div class="setup-card-text">
                             <h3>Manage Specialty Leagues</h3>
@@ -684,24 +684,21 @@
                         </div>
                     </div>
 
-                    <div style="display:flex; flex-wrap:wrap; gap:20px; margin-top:10px;">
-                        <!-- LEFT COL: MASTER LIST -->
-                        <div style="flex:1; min-width:260px;">
-                            <div class="setup-subtitle">All Leagues</div>
-                            <p style="font-size:0.8rem; color:#6b7280; margin-top:4px;">
-                                Select a league to edit. Double-click title to rename.
-                            </p>
-                            
-                            <div class="setup-field-row" style="margin-top:10px;">
-                                <input id="sl-add-input" placeholder="Name (e.g. 'Soccer Cup')" class="form-input">
-                                <button id="sl-add-btn" class="btn btn-primary" style="white-space:nowrap;">+ Add</button>
+                    <div style="display:flex; flex-wrap:wrap; gap:24px;">
+                        <div style="flex:1; min-width:280px;">
+                            <div style="display:flex; justify-content:space-between; align-items:end; margin-bottom:8px;">
+                                <div class="setup-subtitle">All Leagues</div>
                             </div>
                             
-                            <div id="sl-master-list" class="settings-list" style="margin-top:12px; max-height:420px; overflow-y:auto;"></div>
+                            <div style="background:white; padding:10px; border-radius:12px; border:1px solid #E5E7EB; margin-bottom:12px; display:flex; gap:8px;">
+                                <input id="sl-add-input" placeholder="New League (e.g., Soccer Cup)" style="flex:1; border:none; outline:none; font-size:0.9rem;">
+                                <button id="sl-add-btn" style="background:#111; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
+                            </div>
+                            
+                            <div id="sl-master-list" class="master-list" style="max-height:600px; overflow-y:auto;"></div>
                         </div>
 
-                        <!-- RIGHT COL: DETAIL PANE -->
-                        <div style="flex:1.6; min-width:340px;">
+                        <div style="flex:1.4; min-width:340px;">
                             <div class="setup-subtitle">League Configuration</div>
                             <div id="sl-detail-pane" style="margin-top:8px;"></div>
                         </div>
