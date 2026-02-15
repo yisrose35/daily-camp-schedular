@@ -834,7 +834,7 @@
         
         try {
             if (!activeLeagueId || !specialtyLeagues[activeLeagueId]) {
-                detailPaneEl.innerHTML = `<p class="muted">Select a league.</p>`;
+                detailPaneEl.innerHTML = '<div style="height:300px; display:flex; align-items:center; justify-content:center; color:#9CA3AF; border:1px dashed #E5E7EB; border-radius:12px;">Select a league to edit details</div>';
                 return;
             }
 
