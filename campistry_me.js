@@ -52,18 +52,25 @@
 
     let _cachedCampId = null;
 
+    // ★ v7.1: UUID validation — prevents type mismatch errors with Supabase RPC
+    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    function isValidUuid(s) { return s && typeof s === 'string' && UUID_REGEX.test(s); }
+
     function getCampId() {
-        // Return cached value if we have one (set during init/auth)
         if (_cachedCampId) return _cachedCampId;
         
-        // Fallback chain
-        return window.CampistryDB?.getCampId?.() || 
-               localStorage.getItem('campistry_camp_id') || 
-               localStorage.getItem('campistry_user_id') || 
-               null;
+        // Only return values that are valid UUIDs
+        const candidates = [
+            window.CampistryDB?.getCampId?.(),
+            localStorage.getItem('campistry_camp_id'),
+            localStorage.getItem('campistry_user_id')
+        ];
+        for (const c of candidates) {
+            if (isValidUuid(c)) return c;
+        }
+        return null;
     }
 
-    // ★ v7.1: Async version that gets the proper UUID from Supabase session
     async function ensureCampId() {
         if (_cachedCampId) return _cachedCampId;
         try {
@@ -158,7 +165,8 @@
                     return false;
                 }
                 console.error('[Me] Cloud save RPC error:', msg);
-                if (msg.includes('merge_camp_state')) {
+                // Fallback to legacy upsert if RPC function doesn't exist
+                if (msg.includes('merge_camp_state') || msg.includes('does not exist')) {
                     return await saveToCloudLegacy(mergeData);
                 }
                 return false;
