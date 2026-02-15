@@ -616,8 +616,7 @@ body.sidebar-open {
   /* Config tabs */
   #fields > div, #locations > div, #special_activities > div { overflow-x: auto !important; }
   /* Leagues */
-  .league-panel-grid { flex-direction: column !important; gap: 16px !important; }
-  .league-panel-sidebar { flex: none !important; width: 100% !important; }
+ /* Leagues now uses setup-grid/setup-card pattern - flex wrap handles responsiveness */
   #leagues > div, #specialty-leagues > div { overflow-x: auto !important; }
   /* Locator */
   .locator-controls, .camper-check-controls { flex-direction: column !important; gap: 8px !important; align-items: stretch !important; }
