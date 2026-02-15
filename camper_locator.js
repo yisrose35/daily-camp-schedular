@@ -288,34 +288,7 @@
                     </div>
                 </section>
 
-                <section class="setup-card setup-card-wide">
-                    <div class="setup-card-header">
-                        <span class="setup-step-pill">Database</span>
-                        <div class="setup-card-text">
-                            <h3>Camper Database & Teams</h3>
-                            <p>Manage roster details and assign League Teams for accurate tracking.</p>
-                        </div>
-                    </div>
-
-                    <div style="margin-bottom:15px; display:flex; gap:15px; align-items:center; flex-wrap:wrap;">
-                        <input id="loc-filter-roster" placeholder="Filter by name, division, or bunk..." style="padding:8px 12px; width:280px; border:1px solid #ccc; border-radius:6px;">
-                        <span id="loc-roster-count" style="color:#666; font-size:0.9rem;"></span>
-                    </div>
-
-                    <div style="max-height:600px; overflow-y:auto; border:1px solid #eee; border-radius:8px;">
-                        <table class="report-table" style="margin:0;">
-                            <thead style="position:sticky; top:0; z-index:10; background:white;">
-                                <tr>
-                                    <th style="cursor:pointer;" onclick="window._sortCamperRoster('name')">Camper Name ↕</th>
-                                    <th style="cursor:pointer;" onclick="window._sortCamperRoster('division')">Division ↕</th>
-                                    <th style="cursor:pointer;" onclick="window._sortCamperRoster('bunk')">Bunk ↕</th>
-                                    <th>Assigned Team</th>
-                                </tr>
-                            </thead>
-                            <tbody id="loc-roster-body"></tbody>
-                        </table>
-                    </div>
-                </section>
+              
 
             </div>
         `;
