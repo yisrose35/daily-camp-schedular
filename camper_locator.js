@@ -1,10 +1,12 @@
 // =================================================================
-// camper_locator.js
+// camper_locator.js — PATCHED: Real-Time Division-Aware Locator
 //
 // Features:
 // - "Where are they?" Search Bar (Activity + Location + League Details)
 // - Camper Database (View/Edit League Teams)
 // - Integrated with Schedule & League Data
+// - ★ REAL-TIME: Uses divisionTimes for accurate time-based lookups
+// - ★ No more slot-index mismatches between divisions
 // =================================================================
 
 (function() {
@@ -34,8 +36,85 @@
     }
 
     // =============================================================
-    // HELPER: TIME & SLOTS
+    // HELPER: TIME & SLOTS — ★★★ REAL-TIME DIVISION-AWARE ★★★
     // =============================================================
+
+    /**
+     * ★★★ NEW: Get current time in minutes since midnight ★★★
+     */
+    function getCurrentTimeMinutes() {
+        const now = new Date();
+        return now.getHours() * 60 + now.getMinutes();
+    }
+
+    /**
+     * ★★★ NEW: Find the correct division-specific slot index for a given time ★★★
+     * Uses divisionTimes (per-division time structure) instead of unifiedTimes.
+     * This is critical because different divisions have different slot structures.
+     * 
+     * @param {string} divisionName - The division to look up
+     * @param {number} timeMinutes - Time in minutes since midnight
+     * @returns {number} Division-specific slot index, or -1 if not found
+     */
+    function findDivisionSlotForTime(divisionName, timeMinutes) {
+        const divSlots = window.divisionTimes?.[divisionName] || [];
+        
+        if (divSlots.length === 0) {
+            // Fallback: try SchedulerCoreUtils
+            if (window.SchedulerCoreUtils?.findSlotForTime) {
+                return window.SchedulerCoreUtils.findSlotForTime(divisionName, timeMinutes);
+            }
+            return -1;
+        }
+
+        // Find the slot that CONTAINS the current time
+        for (let i = 0; i < divSlots.length; i++) {
+            const slot = divSlots[i];
+            if (slot.startMin <= timeMinutes && timeMinutes < slot.endMin) {
+                return i;
+            }
+        }
+
+        // If before first slot, return first
+        if (timeMinutes < divSlots[0].startMin) {
+            return 0;
+        }
+
+        // If after last slot, return last
+        if (timeMinutes >= divSlots[divSlots.length - 1].endMin) {
+            return divSlots.length - 1;
+        }
+
+        return -1;
+    }
+
+    /**
+     * ★★★ NEW: Get the time label for a division slot ★★★
+     */
+    function getDivisionSlotLabel(divisionName, slotIdx) {
+        const divSlots = window.divisionTimes?.[divisionName] || [];
+        const slot = divSlots[slotIdx];
+        if (!slot) return "Unknown Time";
+        
+        return slot.label || `${minutesToTimeLabel(slot.startMin)} - ${minutesToTimeLabel(slot.endMin)}`;
+    }
+
+    /**
+     * Helper: Convert minutes to time label (e.g. 570 -> "9:30 AM")
+     */
+    function minutesToTimeLabel(mins) {
+        if (mins == null) return "??";
+        let h = Math.floor(mins / 60);
+        let m = mins % 60;
+        const ap = h >= 12 ? "PM" : "AM";
+        h = h % 12 || 12;
+        return `${h}:${m.toString().padStart(2, '0')} ${ap}`;
+    }
+
+    /**
+     * ★★★ KEPT for backward compat but no longer primary ★★★
+     * Only used if divisionTimes is unavailable
+     */
     function getCurrentSlotIndex() {
         const times = window.unifiedTimes || [];
         if (times.length === 0) return -1;
@@ -43,13 +122,11 @@
         const now = new Date();
         const nowMin = now.getHours() * 60 + now.getMinutes();
 
-        // Find the slot that contains the current time
         for (let i = 0; i < times.length; i++) {
             const t = times[i];
             const start = new Date(t.start);
             const sMin = start.getHours() * 60 + start.getMinutes();
             
-            // Assume 30 min slots if end is missing, or use actual end
             let eMin = sMin + (window.app1?.increments || 30);
             if (t.end) {
                 const end = new Date(t.end);
@@ -58,18 +135,55 @@
 
             if (nowMin >= sMin && nowMin < eMin) return i;
         }
-        return 0; // Default to first slot if out of bounds (or morning)
+        return 0;
     }
 
-    function getTimeOptions() {
-        const times = window.unifiedTimes || [];
-        if (times.length === 0) return `<option value="0">No Times Generated</option>`;
+    /**
+     * ★★★ NEW: Parse a typed time string into minutes since midnight ★★★
+     * Handles: "10:30 AM", "2:15 PM", "14:30", "9:00", "930", "230pm", etc.
+     * Returns -1 if unparseable.
+     */
+    function parseTypedTime(str) {
+        if (!str) return -1;
+        str = str.trim().toUpperCase();
         
-        let html = `<option value="now">🕒 Right Now</option>`;
-        times.forEach((t, idx) => {
-            html += `<option value="${idx}">${t.label}</option>`;
-        });
-        return html;
+        // Detect AM/PM
+        let isPM = false;
+        let isAM = false;
+        if (str.includes('PM') || str.includes('P.M')) { isPM = true; str = str.replace(/\s*(PM|P\.M\.?)/, ''); }
+        if (str.includes('AM') || str.includes('A.M')) { isAM = true; str = str.replace(/\s*(AM|A\.M\.?)/, ''); }
+        str = str.trim();
+        
+        let hours = 0, minutes = 0;
+        
+        if (str.includes(':')) {
+            const parts = str.split(':');
+            hours = parseInt(parts[0]);
+            minutes = parseInt(parts[1]) || 0;
+        } else {
+            const num = parseInt(str);
+            if (isNaN(num)) return -1;
+            if (num <= 12) {
+                hours = num;
+                minutes = 0;
+            } else if (num <= 2359) {
+                hours = Math.floor(num / 100);
+                minutes = num % 100;
+            } else {
+                return -1;
+            }
+        }
+        
+        if (isNaN(hours) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return -1;
+        
+        // Apply AM/PM
+        if (isPM && hours < 12) hours += 12;
+        if (isAM && hours === 12) hours = 0;
+        
+        // If no AM/PM specified and hour >= 1 and <= 6, assume PM (camp hours)
+        if (!isPM && !isAM && hours >= 1 && hours <= 6) hours += 12;
+        
+        return hours * 60 + minutes;
     }
 
     // =============================================================
@@ -106,10 +220,13 @@
 
                         <div style="flex:1; min-width:150px;">
                             <label style="font-weight:600; font-size:0.9rem; color:#444;">Time</label>
-                            <select id="loc-time-select" style="width:100%; padding:10px; font-size:1rem; border:1px solid #ccc; border-radius:8px;">
-                                ${getTimeOptions()}
-                            </select>
+                            <input id="loc-time-input" type="text" placeholder="e.g. 10:30 AM" 
+                                   style="width:100%; padding:10px; font-size:1rem; border:1px solid #ccc; border-radius:8px;">
                         </div>
+
+                        <button id="loc-now-btn" style="padding:10px 18px; background:#059669; color:white; font-weight:bold; font-size:1rem; border:none; border-radius:8px; cursor:pointer;">
+                            🕒 Now
+                        </button>
 
                         <button id="loc-search-btn" style="padding:10px 24px; background:#0284c7; color:white; font-weight:bold; font-size:1rem; border:none; border-radius:8px; cursor:pointer;">
                             Find 🔍
@@ -155,7 +272,8 @@
         // References
         const searchInput = document.getElementById("loc-search-input");
         const suggestionsBox = document.getElementById("loc-search-suggestions");
-        const timeSelect = document.getElementById("loc-time-select");
+        const timeInput = document.getElementById("loc-time-input");
+        const nowBtn = document.getElementById("loc-now-btn");
         const searchBtn = document.getElementById("loc-search-btn");
         resultContainer = document.getElementById("loc-result-display");
         listContainer = document.getElementById("loc-roster-body");
@@ -163,11 +281,22 @@
 
         // --- Event Listeners ---
 
-        // 1. Search Button
-        searchBtn.onclick = () => performSearch(searchInput.value, timeSelect.value);
+        // 1. Search Button — uses typed time
+        searchBtn.onclick = () => performSearch(searchInput.value, timeInput.value.trim() || "now");
+        
+        // 2. Now Button — always uses current time
+        nowBtn.onclick = () => {
+            timeInput.value = "";
+            performSearch(searchInput.value, "now");
+        };
+        
+        // 3. Enter key on either input
         searchInput.onkeyup = (e) => {
-            if (e.key === "Enter") performSearch(searchInput.value, timeSelect.value);
+            if (e.key === "Enter") performSearch(searchInput.value, timeInput.value.trim() || "now");
             else showSuggestions(searchInput.value, suggestionsBox, searchInput);
+        };
+        timeInput.onkeyup = (e) => {
+            if (e.key === "Enter") performSearch(searchInput.value, timeInput.value.trim() || "now");
         };
 
         // 2. Hide suggestions on click away
@@ -237,10 +366,22 @@
         });
     }
 
+    /**
+     * ★★★ REWRITTEN: performSearch — Real-Time, Division-Aware ★★★
+     * 
+     * Instead of mapping to a unified slot index, we now:
+     * 1. Determine the target time in MINUTES
+     * 2. Use the camper's DIVISION to find the correct division-specific slot
+     * 3. Look up the assignment by that division-specific slot index
+     * 
+     * This means a camper in Division 1 (with 30-min slots) and a camper in
+     * Division 2 (with 45-min slots) both get the correct activity for the
+     * requested time, even though their slot structures are completely different.
+     */
     function performSearch(nameQuery, timeValue) {
         if (!nameQuery) return;
         
-        // Fix #1: Reload roster to catch any updates from other tabs
+        // Reload roster to catch any updates from other tabs
         loadRoster();
         
         // Find exact match or best guess
@@ -257,21 +398,50 @@
         }
 
         const camper = camperRoster[camperName];
+        const division = camper.division;
+        const bunk = camper.bunk;
         
-        // Determine Slot
-        let slotIdx = 0;
+        // ★★★ STEP 1: Determine target time in minutes ★★★
+        let targetTimeMin = 0;
         let timeLabel = "";
         
-        if (timeValue === "now") {
-            slotIdx = getCurrentSlotIndex();
-            timeLabel = "Right Now";
+        if (timeValue === "now" || timeValue === "") {
+            targetTimeMin = getCurrentTimeMinutes();
+            timeLabel = `Right Now (${minutesToTimeLabel(targetTimeMin)})`;
         } else {
-            slotIdx = parseInt(timeValue);
-            timeLabel = window.unifiedTimes[slotIdx]?.label || "Selected Time";
+            // Parse typed time string (e.g. "10:30 AM", "2:15 PM", "14:30", "9:00")
+            targetTimeMin = parseTypedTime(timeValue);
+            if (targetTimeMin < 0) {
+                resultContainer.style.display = 'block';
+                resultContainer.innerHTML = `<h3 style="color:red; margin:0;">⚠️ Couldn't understand "${timeValue}"</h3><p>Try a format like <strong>10:30 AM</strong> or <strong>2:15 PM</strong>.</p>`;
+                return;
+            }
+            timeLabel = minutesToTimeLabel(targetTimeMin);
         }
 
-        // Get Schedule
-        const assignment = window.scheduleAssignments?.[camper.bunk]?.[slotIdx];
+        // ★★★ STEP 2: Find the DIVISION-SPECIFIC slot index ★★★
+        let slotIdx = -1;
+        let slotTimeLabel = "";
+        
+        if (division && window.divisionTimes?.[division]) {
+            slotIdx = findDivisionSlotForTime(division, targetTimeMin);
+            if (slotIdx >= 0) {
+                slotTimeLabel = getDivisionSlotLabel(division, slotIdx);
+            }
+        }
+        
+        // Fallback to legacy unified lookup if divisionTimes unavailable
+        if (slotIdx < 0) {
+            if (timeValue === "now") {
+                slotIdx = getCurrentSlotIndex();
+            } else {
+                slotIdx = parseInt(timeValue) || 0;
+            }
+            console.warn(`[CamperLocator] No divisionTimes for "${division}", falling back to unified slot ${slotIdx}`);
+        }
+
+        // ★★★ STEP 3: Get the assignment using DIVISION-SPECIFIC slot index ★★★
+        const assignment = window.scheduleAssignments?.[bunk]?.[slotIdx];
         
         // --- RENDER RESULT ---
         resultContainer.style.display = 'block';
@@ -280,9 +450,24 @@
         let detailsHtml = "";
         let icon = "📍";
 
+        // ★★★ NEW: Show the actual time slot this maps to ★★★
+        const timeContext = slotTimeLabel ? 
+            `<div style="font-size:0.8rem; color:#0284c7; margin-top:2px;">${slotTimeLabel}</div>` : '';
+
         if (!assignment) {
-            locationHtml = `<span style="color:#999;">Unknown / Free Time</span>`;
-            detailsHtml = "No schedule data found for this time.";
+            // ★★★ IMPROVED: Better messaging when no assignment found ★★★
+            const divSlots = window.divisionTimes?.[division] || [];
+            
+            if (divSlots.length === 0) {
+                locationHtml = `<span style="color:#999;">No Schedule Generated</span>`;
+                detailsHtml = "No schedule has been generated yet for this division. Generate a schedule first.";
+            } else if (slotIdx < 0) {
+                locationHtml = `<span style="color:#999;">Outside Schedule Hours</span>`;
+                detailsHtml = `The selected time (${minutesToTimeLabel(targetTimeMin)}) is outside ${division}'s scheduled hours.`;
+            } else {
+                locationHtml = `<span style="color:#999;">No Activity Assigned</span>`;
+                detailsHtml = `${bunk} does not have an activity assigned at this time slot. This may be a gap in the schedule.`;
+            }
         } else {
             // Is it a League Game?
             const isLeague = assignment._h2h || (assignment.field && String(assignment.field).toLowerCase().includes("league"));
@@ -293,12 +478,12 @@
                 
                 if (!team) {
                     locationHtml = `<span style="color:#d97706;">Playing Leagues (Team Unknown)</span>`;
-                    detailsHtml = `We know ${camper.bunk} is playing leagues, but <strong>${camperName}</strong> has no team assigned.<br>
+                    detailsHtml = `We know ${bunk} is playing leagues, but <strong>${camperName}</strong> has no team assigned.<br>
                                    <a href="#" onclick="document.getElementById('loc-filter-roster').value='${camperName}'; document.getElementById('loc-filter-roster').focus(); document.getElementById('loc-filter-roster').dispatchEvent(new Event('keyup')); return false;">Assign a team below</a> to see exact field.`;
                 } else {
-                    // Fix #2: Added null check for camper.division
-                    const leagueData = camper.division 
-                        ? window.leagueAssignments?.[camper.division]?.[slotIdx]
+                    // ★★★ League lookup also uses division-specific slot index ★★★
+                    const leagueData = division 
+                        ? window.leagueAssignments?.[division]?.[slotIdx]
                         : null;
                         
                     let match = null;
@@ -335,6 +520,7 @@
                 </div>
                 <div style="margin-left:auto; text-align:right;">
                     <div style="font-size:0.9rem; color:#888; text-transform:uppercase; letter-spacing:1px; font-weight:bold;">${timeLabel}</div>
+                    ${timeContext}
                     ${locationHtml}
                 </div>
             </div>
@@ -386,96 +572,51 @@
                 return valB.localeCompare(valA, undefined, { numeric: true });
             }
         });
-
-        // Update count display
-        if (countEl) {
-            if (filter) {
-                countEl.textContent = `Showing ${filtered.length} of ${campers.length} campers`;
-            } else {
-                countEl.textContent = `${campers.length} campers total`;
-            }
-        }
-
-        // Show message if no campers
-        if (campers.length === 0) {
-            listContainer.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:30px; color:#666;">
-                <strong>No campers in database.</strong><br><br>
-                Import campers via CSV in the <strong>Setup tab</strong>.<br>
-                Use format: Division, Bunk Name, Camper Name
-            </td></tr>`;
-            return;
-        }
-
-        if (filtered.length === 0) {
-            listContainer.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:20px; color:#666;">No campers match "${filter}"</td></tr>`;
-            return;
-        }
-
-        // Build team options once
-        let teamOptions = `<option value="">-- Assign Team --</option>`;
-        teams.forEach(t => {
-            teamOptions += `<option value="${t}">${t}</option>`;
-        });
-
-        // Render ALL filtered campers (no limit!)
-        const fragment = document.createDocumentFragment();
         
+        if (countEl) countEl.textContent = `Showing ${filtered.length} of ${campers.length} campers`;
+
         filtered.forEach(name => {
             const data = camperRoster[name];
-            const row = document.createElement("tr");
+            const tr = document.createElement("tr");
+            
+            const teamOptions = teams.length > 0 ? 
+                teams.map(t => `<option value="${t}" ${data.team === t ? 'selected' : ''}>${t}</option>`).join("") : 
+                `<option disabled>No teams configured</option>`;
 
-            // Build options with current selection
-            let currentOptions = teamOptions.replace(
-                `value="${data.team}"`,
-                `value="${data.team}" selected`
-            );
-
-            row.innerHTML = `
+            tr.innerHTML = `
                 <td style="font-weight:600;">${name}</td>
-                <td>${data.division || "-"}</td>
-                <td>${data.bunk || "-"}</td>
+                <td>${data.division || "?"}</td>
+                <td>${data.bunk || "?"}</td>
                 <td>
-                    <select class="team-selector" data-name="${name}" style="padding:4px 8px; border-radius:4px; border:1px solid #ccc; width:100%; max-width:200px;">
-                        ${currentOptions}
+                    <select onchange="window._setCamperTeam('${name.replace(/'/g, "\\'")}', this.value)" 
+                            style="padding:4px 8px; border:1px solid #ccc; border-radius:4px;">
+                        <option value="">— None —</option>
+                        ${teamOptions}
                     </select>
                 </td>
             `;
-
-            fragment.appendChild(row);
-        });
-        
-        listContainer.appendChild(fragment);
-
-        // Add Listeners for team selectors
-        listContainer.querySelectorAll(".team-selector").forEach(sel => {
-            sel.onchange = (e) => {
-                const camperName = e.target.dataset.name;
-                if (!window.AccessControl?.canEdit?.()) {
-                    window.AccessControl?.showPermissionDenied?.('edit camper teams');
-                    e.target.value = camperRoster[camperName].team || ''; // revert
-                    return;
-                }
-                const newTeam = e.target.value;
-                camperRoster[camperName].team = newTeam;
-                saveRoster();
-            };
+            listContainer.appendChild(tr);
         });
     }
 
-    // Get all teams from the League System to populate dropdowns
+    // =============================================================
+    // TEAM HELPERS
+    // =============================================================
     function getAllTeams() {
+        const settings = window.loadGlobalSettings?.();
+        const leagues = settings?.app1?.leagueTeams || settings?.leagueTeams || {};
         const teams = new Set();
-        // 1. Regular Leagues
-        const leagues = window.masterLeagues || {};
-        Object.values(leagues).forEach(l => {
-            if (l.teams) l.teams.forEach(t => teams.add(t));
+        Object.values(leagues).forEach(divTeams => {
+            if (Array.isArray(divTeams)) divTeams.forEach(t => teams.add(t));
         });
-        // 2. Specialty Leagues
-        const special = window.masterSpecialtyLeagues || {};
-        Object.values(special).forEach(l => {
-            if (l.teams) l.teams.forEach(t => teams.add(t));
-        });
-        return Array.from(teams).sort();
+        return [...teams].sort();
     }
+
+    window._setCamperTeam = function(name, team) {
+        if (camperRoster[name]) {
+            camperRoster[name].team = team || null;
+            saveRoster();
+        }
+    };
 
 })();
