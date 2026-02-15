@@ -1179,30 +1179,8 @@ function createRainyDayToggleUI(container, onToggle) {
     const midDayBtn = container.querySelector('#rainy-midday-btn');
     if (midDayBtn) {
         midDayBtn.addEventListener('click', function() {
-            // Ask user for start time
-            const currentTime = minutesToTime(getCurrentTimeMinutes());
-            const inputTime = prompt(
-                "Enter the time to start rainy day mode:\n\n" +
-                "Everything BEFORE this time will be preserved.\n" +
-                "Only future slots will use rainy day settings.\n\n" +
-                "Format: 2:30pm, 10:00am, etc.",
-                currentTime
-            );
-            
-            if (!inputTime) return;
-            
-            const parsedTime = parseTimeToMinutes(inputTime);
-            if (parsedTime === null) {
-                alert("Invalid time format. Please use format like '2:30pm' or '10:00am'.");
-                return;
-            }
-            
-            const result = activateMidDayRainyMode(parsedTime, { autoSwitchSkeleton: true });
-            if (result) {
-                showMidDayActivationNotification(result);
-                createRainyDayToggleUI(container, onToggle);
-                if (onToggle) onToggle(true, true); // true = mid-day mode
-            }
+            // TODO: Re-enable when mid-day mode is finalized
+            alert('⏰ Mid-Day Mode — feature coming soon!');
         });
     }
 }
