@@ -496,19 +496,59 @@
     const loadingScreen = document.getElementById('auth-loading-screen');
     const mainApp = document.getElementById('main-app-container');
     
-    async function checkAuthAndBoot() {
-        try {
-            let attempts = 0;
-            while (!window.supabase && attempts < 20) {
-                await new Promise(r => setTimeout(r, 100));
-                attempts++;
+   async function checkAuthAndBoot() {
+    try {
+        // ★ FAST-PASS: If localStorage has auth tokens from a successful login,
+        // trust them and proceed — don't bounce back to landing page.
+        // Supabase session will be verified in the background.
+        const cachedUserId = localStorage.getItem('campistry_auth_user_id');
+        const cachedCampId = localStorage.getItem('campistry_camp_id');
+        const hasLocalAuth = !!(cachedUserId && cachedCampId);
+        
+        if (hasLocalAuth) {
+            console.log('🔑 [Auth] Fast-pass: cached auth found, proceeding with boot');
+        }
+        
+        let attempts = 0;
+        while (!window.supabase && attempts < 20) {
+            await new Promise(r => setTimeout(r, 100));
+            attempts++;
+        }
+        
+        if (!window.supabase) {
+            if (hasLocalAuth) {
+                console.warn('🔑 [Auth] Supabase SDK not loaded, but cached auth exists — proceeding');
+                // Still show the app; supabase will init eventually
+                showApp();
+                return;
             }
-            
-            if (!window.supabase) { redirectToLogin(); return; }
-            
-            const { data: { session }, error } = await window.supabase.auth.getSession();
-            
-            if (error || !session) { redirectToLogin(); return; }
+            redirectToLogin(); return;
+        }
+        
+        const { data: { session }, error } = await window.supabase.auth.getSession();
+        
+        if (error || !session) {
+            if (hasLocalAuth) {
+                console.warn('🔑 [Auth] No Supabase session yet, but cached auth exists — proceeding');
+                // Try to refresh the session in the background
+                window.supabase.auth.refreshSession().then(({ data, error }) => {
+                    if (error || !data?.session) {
+                        console.warn('🔑 [Auth] Background session refresh failed — clearing cache and redirecting');
+                        localStorage.removeItem('campistry_auth_user_id');
+                        localStorage.removeItem('campistry_camp_id');
+                        localStorage.removeItem('campistry_role');
+                        redirectToLogin();
+                    } else {
+                        console.log('🔑 [Auth] Background session refresh succeeded');
+                    }
+                });
+                // Don't wait — proceed to show app
+                await waitForCloudHydration();
+                showApp();
+                return;
+            }
+            redirectToLogin(); return;
+        }
             // Listen for sign-out after client is confirmed ready
             window.supabase.auth.onAuthStateChange((event) => {
                 if (event === 'SIGNED_OUT') redirectToLogin();
