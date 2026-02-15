@@ -419,29 +419,69 @@
             timeLabel = minutesToTimeLabel(targetTimeMin);
         }
 
-        // ★★★ STEP 2: Find the DIVISION-SPECIFIC slot index ★★★
+        // ★★★ STEP 2: Find assignment by REAL TIME — not slot index ★★★
         let slotIdx = -1;
         let slotTimeLabel = "";
+        let assignment = null;
         
-        if (division && window.divisionTimes?.[division]) {
-            slotIdx = findDivisionSlotForTime(division, targetTimeMin);
-            if (slotIdx >= 0) {
-                slotTimeLabel = getDivisionSlotLabel(division, slotIdx);
+        const bunkAssignments = window.scheduleAssignments?.[bunk];
+        const divSlots = window.divisionTimes?.[division] || [];
+        
+        if (bunkAssignments && divSlots.length > 0) {
+            // PRIMARY: Scan divisionTimes for the slot whose time range contains targetTimeMin
+            for (let i = 0; i < divSlots.length; i++) {
+                const ds = divSlots[i];
+                if (ds.startMin <= targetTimeMin && targetTimeMin < ds.endMin) {
+                    slotIdx = i;
+                    assignment = bunkAssignments[i] || null;
+                    slotTimeLabel = getDivisionSlotLabel(division, i);
+                    break;
+                }
+            }
+            
+            // SECONDARY: If no divisionTimes match, scan assignment metadata (_startMin/_endMin)
+            if (slotIdx < 0) {
+                for (let i = 0; i < bunkAssignments.length; i++) {
+                    const a = bunkAssignments[i];
+                    if (!a || a.continuation) continue;
+                    const aStart = a._startMin ?? a._blockStart;
+                    const aEnd = a._endMin;
+                    if (aStart != null && aEnd != null && aStart <= targetTimeMin && targetTimeMin < aEnd) {
+                        assignment = a;
+                        slotIdx = i;
+                        slotTimeLabel = `${minutesToTimeLabel(aStart)} - ${minutesToTimeLabel(aEnd)}`;
+                        break;
+                    }
+                }
+            }
+            
+            // TERTIARY: Handle multi-slot (continuation) blocks
+            // If the found assignment is a continuation, walk backward to find the parent
+            if (assignment && assignment.continuation && slotIdx >= 0) {
+                for (let i = slotIdx - 1; i >= 0; i--) {
+                    const a = bunkAssignments[i];
+                    if (a && !a.continuation) {
+                        assignment = a;
+                        // Keep slotIdx as-is for league lookups (they key by first slot)
+                        slotIdx = i;
+                        break;
+                    }
+                }
             }
         }
         
-        // Fallback to legacy unified lookup if divisionTimes unavailable
-        if (slotIdx < 0) {
-            if (timeValue === "now") {
+        // FALLBACK: No divisionTimes available — use legacy unified approach
+        if (slotIdx < 0 && bunkAssignments) {
+            if (timeValue === "now" || timeValue === "") {
                 slotIdx = getCurrentSlotIndex();
-            } else {
-                slotIdx = parseInt(timeValue) || 0;
             }
-            console.warn(`[CamperLocator] No divisionTimes for "${division}", falling back to unified slot ${slotIdx}`);
+            if (slotIdx >= 0) {
+                assignment = bunkAssignments[slotIdx] || null;
+            }
+            console.warn(`[CamperLocator] No divisionTimes for "${division}", fell back to unified slot ${slotIdx}`);
         }
-
-        // ★★★ STEP 3: Get the assignment using DIVISION-SPECIFIC slot index ★★★
-        const assignment = window.scheduleAssignments?.[bunk]?.[slotIdx];
+        
+        console.log(`[CamperLocator] ${camperName} (${bunk}, ${division}) @ ${minutesToTimeLabel(targetTimeMin)} → slot ${slotIdx}, found:`, assignment?.field || assignment?._activity || 'none');
         
         // --- RENDER RESULT ---
         resultContainer.style.display = 'block';
