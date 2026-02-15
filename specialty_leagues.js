@@ -856,39 +856,17 @@
             });
 
             const btnGroup = document.createElement('div');
-            btnGroup.style.display = 'flex';
-            btnGroup.style.gap = '8px';
+            btnGroup.className = 'league-btn-group';
 
             // EDIT SETUP BTN
             const editConfigBtn = document.createElement('button');
             editConfigBtn.textContent = 'Edit Setup';
-            Object.assign(editConfigBtn.style, {
-                background: '#FFFFFF',
-                color: '#111827',
-                border: '1px solid #D1D5DB',
-                borderRadius: '999px',
-                fontWeight: '500',
-                cursor: 'pointer',
-                padding: '6px 14px'
-            });
+            editConfigBtn.className = 'league-btn-neutral';
 
             // DELETE BTN
             const delBtn = document.createElement('button');
             delBtn.textContent = 'Delete';
-            Object.assign(delBtn.style, {
-                background: '#FFFFFF',
-                color: '#DC2626',
-                border: '1px solid #FECACA',
-                borderRadius: '999px',
-                cursor: 'pointer',
-                fontWeight: '600',
-                fontSize: '0.85rem',
-                padding: '6px 14px',
-                boxShadow: '0 4px 10px rgba(220,38,38,0.18)'
-            });
-            delBtn.onmouseenter = () => { delBtn.style.background = '#FEE2E2'; };
-            delBtn.onmouseleave = () => { delBtn.style.background = '#FFFFFF'; };
-           delBtn.onclick = () => {
+            delBtn.className = 'league-btn-delete';           delBtn.onclick = () => {
                 if (!window.AccessControl?.checkSetupAccess('delete specialty leagues')) return;
                 // ★ v2.2.7 FIX: confirm() renders plain text; escapeHtml produces HTML entities
                 // that show as literal "&amp;" etc. Use raw name since confirm() is XSS-safe.
