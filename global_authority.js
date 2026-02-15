@@ -84,13 +84,15 @@
     if (result.divisions && Object.keys(result.divisions).length > 0) {
       console.log("🧠 Registry reloaded with data, triggering UI refresh...");
       
-      // Re-init UI components if they exist
-      setTimeout(() => {
+      // Re-init UI components if they exist (debounced to prevent redundant calls)
+      if (window._globalRegistryRefreshTimer) clearTimeout(window._globalRegistryRefreshTimer);
+      window._globalRegistryRefreshTimer = setTimeout(() => {
+        window._globalRegistryRefreshTimer = null;
         window.initApp1?.();
         window.initLeagues?.();
         window.initScheduleSystem?.();
         window.updateTable?.();
-      }, 100);
+      }, 300);
     }
     
     return result;
