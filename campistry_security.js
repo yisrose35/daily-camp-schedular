@@ -880,9 +880,8 @@
      * Inject additional security headers via meta tags.
      */
     function injectSecurityMeta() {
-        const metas = [
+       const metas = [
             { httpEquiv: 'X-Content-Type-Options', content: 'nosniff' },
-            { httpEquiv: 'X-Frame-Options', content: 'SAMEORIGIN' },
             { name: 'referrer', content: 'strict-origin-when-cross-origin' }
         ];
         
