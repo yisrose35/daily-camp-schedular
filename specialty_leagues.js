@@ -779,7 +779,7 @@
             const items = Object.values(specialtyLeagues).sort((a,b) => a.name.localeCompare(b.name));
 
             if (items.length === 0) {
-                listEl.innerHTML = `<p class="muted">No specialty leagues yet.</p>`;
+                listEl.innerHTML = '<div style="padding:20px; text-align:center; color:#9CA3AF;">No specialty leagues yet.</div>';
                 return;
             }
 
@@ -843,18 +843,10 @@
 
             // --- HEADER ---
             const header = document.createElement('div');
-            Object.assign(header.style, {
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: '15px',
-                borderBottom: '2px solid #E5E7EB',
-                paddingBottom: '10px'
-            });
+            header.className = 'league-detail-header';
 
             const title = document.createElement('h3');
-            title.style.margin = '0';
-            title.style.fontSize = '1.1rem';
+            title.className = 'league-detail-title';
             title.textContent = league.name;
             title.title = "Double-click to rename";
             makeEditable(title, (newName) => {
