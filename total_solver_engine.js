@@ -563,7 +563,7 @@
         // Higher than YESTERDAY_PENALTY (12000) so solver prefers
         // repeating yesterday's activity over giving a Free.
         if (actNorm === 'free' || fieldName === 'Free') {
-            penalty += 15000;
+            penalty += 25000;
         }
 
         // Type balance for General Activity Slots
@@ -599,7 +599,64 @@
             }
         }
 
-        // Adjacent bunk bonus
+        // ★★★ ENHANCED SHARING INCENTIVE — strongly prefer occupied fields ★★★
+        if (fieldName && fieldName !== 'Free' && slots.length > 0 && blockStart !== undefined && blockEnd !== undefined) {
+            var sharingEntries = _fieldTimeIndex.get(fieldNorm) || [];
+            var fieldOccupied = false;
+            var sameActivityOnField = false;
+            for (var sei = 0; sei < sharingEntries.length; sei++) {
+                var se = sharingEntries[sei];
+                if (se.bunk === bunk) continue;
+                if (se.endMin <= blockStart || se.startMin >= blockEnd) continue;
+                fieldOccupied = true;
+                if (se.activity && se.activity === actNorm) sameActivityOnField = true;
+            }
+            if (sameActivityOnField) {
+                // Same activity already running on this field — HUGE bonus
+                penalty -= 3000;
+            } else if (fieldOccupied) {
+                // Field occupied but different activity — mild discouragement
+                penalty += 500;
+            } else {
+                // Empty field — slight penalty to prefer consolidation
+                penalty += 200;
+            }
+        }
+        // ★★★ FILL-TO-CAPACITY — pack fields to max within the grade ★★★
+        if (fieldName && fieldName !== 'Free' && blockStart !== undefined && blockEnd !== undefined) {
+            var fcFp = _fieldPropertyMap.get(fieldName);
+            var fcCap = fcFp ? fcFp.capacity : getFieldCapacity(fieldName);
+            var fcSameDiv = 0;
+            var fcSameAct = true;
+            var fcEntries = _fieldTimeIndex.get(fieldNorm) || [];
+            for (var fci = 0; fci < fcEntries.length; fci++) {
+                var fce = fcEntries[fci];
+                if (fce.bunk === bunk) continue;
+                if (fce.endMin <= blockStart || fce.startMin >= blockEnd) continue;
+                if (fce.divName === blockDivName) {
+                    fcSameDiv++;
+                    if (fce.activity && fce.activity !== actNorm) fcSameAct = false;
+                }
+            }
+            if (fcCap > 1 && fcSameAct) {
+                // How full is this field within the grade? (0 = empty, fcCap-1 = one spot left)
+                var spotsLeft = fcCap - 1 - fcSameDiv;  // -1 because we'd be taking a spot
+                if (fcSameDiv > 0 && spotsLeft >= 0) {
+                    // Field already has grade-mates doing same activity — reward filling it
+                    // Bonus SCALES: closer to full = bigger reward
+                    var fillRatio = fcSameDiv / (fcCap - 1);  // 0.5 = half full, 1.0 = one spot left
+                    penalty -= Math.round(3000 + (fillRatio * 5000));
+                    // cap=2, 1 bunk there: -3000 + -5000 = -8000
+                    // cap=3, 1 bunk there: -3000 + -2500 = -5500
+                    // cap=3, 2 bunks there: -3000 + -5000 = -8000 (last spot!)
+                }
+                if (fcSameDiv === 0 && fcCap > 1) {
+                    // Empty sharable field — penalize picking it if other fields could be filled
+                    penalty += 500;
+                }
+            }
+        }
+        // Adjacent bunk distance bonus
         if (slots.length > 0 && window.fieldUsageBySlot) {
             var slotUsage = window.fieldUsageBySlot[slots[0]]?.[fieldName];
             if (slotUsage?.bunks) {
@@ -608,8 +665,9 @@
                     if (otherBunk === bunk) continue;
                     var otherNum = getBunkNumber(otherBunk) || 0;
                     var distance = Math.abs(myNum - otherNum);
-                    if (distance === 1) penalty += ROTATION_CONFIG.ADJACENT_BUNK_BONUS;
-                    else if (distance <= 3) penalty += (ROTATION_CONFIG.NEARBY_BUNK_BONUS || -100);
+                    if (distance === 1) penalty -= 500;
+                    else if (distance <= 3) penalty -= 300;
+                    else penalty -= 100;
                 }
             }
         }
