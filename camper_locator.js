@@ -839,13 +839,34 @@
     // TEAM HELPERS
     // =============================================================
     function getAllTeams() {
-        const settings = window.loadGlobalSettings?.();
-        const leagues = settings?.app1?.leagueTeams || settings?.leagueTeams || {};
+        const settings = window.loadGlobalSettings?.() || {};
         const teams = new Set();
-        Object.values(leagues).forEach(divTeams => {
-            if (Array.isArray(divTeams)) divTeams.forEach(t => teams.add(t));
+
+        // Source 1: Regular leagues (settings.leagues)
+        const regularLeagues = settings.leagues || {};
+        Object.values(regularLeagues).forEach(league => {
+            if (league && Array.isArray(league.teams)) {
+                league.teams.forEach(t => teams.add(t));
+            }
         });
-        return [...teams].sort();
+
+        // Source 2: Specialty leagues (settings.specialtyLeagues)
+        const specLeagues = settings.specialtyLeagues || {};
+        Object.values(specLeagues).forEach(league => {
+            if (league && Array.isArray(league.teams)) {
+                league.teams.forEach(t => teams.add(t));
+            }
+        });
+
+        // Source 3: Legacy fallback (app1.leagueTeams) — old format
+        if (teams.size === 0) {
+            const legacy = settings.app1?.leagueTeams || settings.leagueTeams || {};
+            Object.values(legacy).forEach(divTeams => {
+                if (Array.isArray(divTeams)) divTeams.forEach(t => teams.add(t));
+            });
+        }
+
+        return [...teams].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     }
 
     window._setCamperTeam = function(name, team) {
