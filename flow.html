@@ -509,7 +509,10 @@
             const { data: { session }, error } = await window.supabase.auth.getSession();
             
             if (error || !session) { redirectToLogin(); return; }
-            
+            // Listen for sign-out after client is confirmed ready
+            window.supabase.auth.onAuthStateChange((event) => {
+                if (event === 'SIGNED_OUT') redirectToLogin();
+            });
             if (loadingScreen) {
                 const subtext = loadingScreen.querySelector('.auth-loading-subtext');
                 if (subtext) subtext.textContent = 'Loading your camp data...';
