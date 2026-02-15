@@ -38,9 +38,10 @@
 
         console.log("🛡️ Initializing permissions...");
 
-        // Get role from AccessControl
+        // Get role from AccessControl (with localStorage fallback for boot race condition)
         _userRole = window.AccessControl?.getCurrentRole?.() || 
                     window.getCampistryUserRole?.() || 
+                    localStorage.getItem('campistry_role') ||
                     'viewer';
 
         // Get user's assigned divisions
