@@ -349,7 +349,18 @@
         }
 
         camperRoster = global?.app1?.camperRoster || {};
-        structure = global?.campStructure || migrateOldStructure(global?.app1?.divisions || {});
+        
+        // ★ v7.1: Always prefer campStructure (has colors + grades).
+        // If missing, migrate from app1.divisions but preserve any colors
+        // that were previously saved in localStorage's campStructure.
+        if (global?.campStructure && Object.keys(global.campStructure).length > 0) {
+            structure = global.campStructure;
+        } else {
+            // Cloud may not have campStructure — check localStorage as backup for colors
+            const localBackup = readLocalSettings();
+            const localCS = localBackup.campStructure || {};
+            structure = migrateOldStructure(global?.app1?.divisions || {}, localCS);
+        }
         
         _leagueData = [];
         const allTeams = new Set();
@@ -367,15 +378,21 @@
         console.log('[Me] Loaded', Object.keys(structure).length, 'divisions,', Object.keys(camperRoster).length, 'campers');
     }
 
-    function migrateOldStructure(oldDivisions) {
+    function migrateOldStructure(oldDivisions, localCampStructure) {
+        const localCS = localCampStructure || {};
         const newStructure = {};
         Object.entries(oldDivisions).forEach(([divName, divData]) => {
             if (isUnsafeName(divName)) return;
             if (!divData || typeof divData !== 'object') return;
             const bunks = (divData.bunks || []).map(b => typeof b === 'string' ? b : b.name);
+            // ★ v7.1: Prefer color from: app1.divisions → localStorage campStructure → preset
+            const color = (divData.color && divData.color !== '#00C896' ? divData.color : null)
+                       || (localCS[divName]?.color)
+                       || divData.color
+                       || COLOR_PRESETS[Object.keys(newStructure).length % COLOR_PRESETS.length];
             newStructure[divName] = {
-                color: sanitizeColor(divData.color) || COLOR_PRESETS[Object.keys(newStructure).length % COLOR_PRESETS.length],
-                grades: bunks.length > 0 ? { 'Default': { bunks } } : {}
+                color: sanitizeColor(color),
+                grades: (localCS[divName]?.grades) || (bunks.length > 0 ? { 'Default': { bunks } } : {})
             };
         });
         return newStructure;
@@ -1327,7 +1344,11 @@
                     const localTime = new Date(local.updated_at || 0).getTime();
                     if (cloudTime > localTime) {
                         camperRoster = cloud.app1?.camperRoster || camperRoster;
-                        structure = cloud.campStructure || structure;
+                        // ★ v7.1: Only use cloud campStructure if it actually exists;
+                        // otherwise keep local structure (which has user's color choices)
+                        if (cloud.campStructure && Object.keys(cloud.campStructure).length > 0) {
+                            structure = cloud.campStructure;
+                        }
                         writeLocalSettings(cloud);
                         renderAll();
                     }
