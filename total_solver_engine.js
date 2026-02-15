@@ -558,8 +558,13 @@
             if (hist + todayCount >= specialRule.maxUsage) return 999999;
         }
 
-        // === SOFT PENALTIES ===
-        penalty += rotationPenalty;
+       // === SOFT PENALTIES ===
+        penalty += rotationPenalty;// ★★★ FREE PERIOD PENALTY — prefer any real activity over Free ★★★
+        // Higher than YESTERDAY_PENALTY (12000) so solver prefers
+        // repeating yesterday's activity over giving a Free.
+        if (actNorm === 'free' || fieldName === 'Free') {
+            penalty += 15000;
+        }
 
         // Type balance for General Activity Slots
         if (block.event === 'General Activity Slot' || block.event === 'general activity slot') {
