@@ -770,23 +770,27 @@
         listEl.innerHTML = '';
         const keys = Object.keys(leaguesByName).sort();
         if (keys.length === 0) {
-            listEl.innerHTML = '<p class="muted">No leagues yet.</p>';
+            listEl.innerHTML = '<div style="padding:20px; text-align:center; color:#9CA3AF;">No leagues created yet.</div>';
             return;
         }
         keys.forEach(function (name) {
             const item = leaguesByName[name];
             const el = document.createElement('div');
-            el.className = 'list-item';
-            if (name === selectedLeagueName) el.classList.add('selected');
+            el.className = 'list-item' + (name === selectedLeagueName ? ' selected' : '');
             el.onclick = function () {
                 selectedLeagueName = name;
                 renderMasterList();
                 renderDetailPane();
             };
-            // ★ FIX: Use escapeHtml for user content
-            el.innerHTML = '<span class="list-item-name">' + escapeHtml(name) + '</span>';
 
-           const tog = document.createElement('label');
+            const infoDiv = document.createElement('div');
+            const nameEl = document.createElement('div');
+            nameEl.className = 'list-item-name';
+            nameEl.textContent = name;
+            infoDiv.appendChild(nameEl);
+            el.appendChild(infoDiv);
+
+            const tog = document.createElement('label');
             tog.className = 'switch list-item-toggle';
             tog.onclick = function (e) { e.stopPropagation(); };
 
@@ -800,8 +804,10 @@
 
             const slider = document.createElement('span');
             slider.className = 'slider';
-            tog.append(cb, slider);
+            tog.appendChild(cb);
+            tog.appendChild(slider);
             el.appendChild(tog);
+
             listEl.appendChild(el);
         });
     }
