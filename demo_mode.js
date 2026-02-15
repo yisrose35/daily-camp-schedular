@@ -32,7 +32,6 @@
 
     if (params.get('demo') === 'true') {
         localStorage.setItem('campistry_demo_mode', 'true');
-        // Clean the URL so ?demo=true doesn't stick around
         const clean = new URL(window.location.href);
         clean.searchParams.delete('demo');
         window.history.replaceState({}, '', clean.toString());
@@ -41,7 +40,6 @@
         const clean = new URL(window.location.href);
         clean.searchParams.delete('demo');
         window.history.replaceState({}, '', clean.toString());
-        // Not in demo mode — exit immediately
         return;
     }
 
@@ -49,7 +47,6 @@
 
 // =====================================================================
 // PORTABLE OFFLINE: Auto-enable when opened from file system (USB/folder)
-// This ONLY runs when protocol is file:// — never on https://
 // =====================================================================
 const IS_FILE_PROTOCOL = window.location.protocol === 'file:';
 
@@ -60,7 +57,6 @@ if (IS_FILE_PROTOCOL && !DEMO_ACTIVE) {
 }
 
 if (!DEMO_ACTIVE) {
-    // Not in demo mode — this script does nothing
     return;
 }
 
@@ -72,7 +68,6 @@ if (!DEMO_ACTIVE) {
 
 // =====================================================================
 // PORTABLE OFFLINE: Auto-load offline_data.json on first run
-// Only runs on file:// AND only if localStorage is empty
 // =====================================================================
 if (window.__OFFLINE_DATA__) {
     const backup = window.__OFFLINE_DATA__;
@@ -132,20 +127,16 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
         } catch { return 'Demo Camp'; }
     })();
 
-    // Ensure localStorage cache keys are populated (so app doesn't redirect)
     localStorage.setItem('campistry_camp_id',      DEMO_CAMP_ID);
     localStorage.setItem('campistry_user_id',      DEMO_CAMP_ID);
     localStorage.setItem('campistry_auth_user_id', DEMO_USER_ID);
     localStorage.setItem('campistry_role',         'owner');
     localStorage.setItem('campistry_is_team_member', 'false');
 
-    // ★★★ Clear RBAC session cache so real-mode context doesn't bleed into demo ★★★
     try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
 
     // =========================================================================
-    // DEMO MODE GUARD — prevent casual console disabling
-    // Re-writes the flag if someone removes it via localStorage directly.
-    // Only the password modal can truly exit (it sets a bypass flag first).
+    // DEMO MODE GUARD
     // =========================================================================
 
     let _demoExitAuthorized = false;
@@ -156,7 +147,6 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
         }
     });
 
-    // Polling fallback (same-tab storage changes don't fire the event)
     setInterval(() => {
         if (!_demoExitAuthorized && localStorage.getItem('campistry_demo_mode') !== 'true') {
             localStorage.setItem('campistry_demo_mode', 'true');
@@ -201,14 +191,12 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
             _isSingle: false,
             _isMaybeSingle: false,
 
-            // ---- Operation starters ----
             select()          { chain._op = 'select';  return chain; },
             insert(d, opts)   { chain._op = 'insert';  chain._data = d; return chain; },
             upsert(d, opts)   { chain._op = 'upsert';  chain._data = d; return chain; },
             update(d)         { chain._op = 'update';  chain._data = d; return chain; },
             delete()          { chain._op = 'delete';  return chain; },
 
-            // ---- Filters (all are pass-through for the mock) ----
             eq(col, val)      { chain._filters[col] = val; return chain; },
             neq()             { return chain; },
             not()             { return chain; },
@@ -227,7 +215,6 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
             match()           { return chain; },
             filter()          { return chain; },
 
-            // ---- Modifiers ----
             order()           { return chain; },
             limit()           { return chain; },
             range()           { return chain; },
@@ -235,7 +222,6 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
             single()          { chain._isSingle = true;      return chain; },
             maybeSingle()     { chain._isMaybeSingle = true;  return chain; },
 
-            // ---- Thenable (makes `await` and `.then()` work) ----
             then(resolve, reject) {
                 try {
                     const result = resolveMockQuery(chain);
@@ -349,13 +335,48 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
             // FIELD_LOCKS
             // ·····························································
             case 'field_locks': {
-                // Return empty locks (or we could persist them in LS)
                 rows = [];
                 break;
             }
 
             // ·····························································
-            // CAMP_SUBDIVISIONS
+            // ★ FIX #1: SUBDIVISIONS — used by access_control.js &
+            // team_subdivisions_ui.js for dashboard Divisions & Team cards.
+            // Previously missing — queries fell through to default: []
+            // which meant AccessControl loaded 0 subdivisions in demo mode.
+            // Auto-generates from camp division structure if none saved.
+            // ·····························································
+            case 'subdivisions': {
+                try {
+                    const settings = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
+                    let subs = settings.subdivisions || [];
+                    if (subs.length === 0) {
+                        const divNames = Object.keys(settings.divisions || settings.campStructure || {});
+                        if (divNames.length > 0) {
+                            const colors = ['#7C3AED','#2563EB','#059669','#D97706','#DC2626','#8B5CF6','#0891B2','#65A30D'];
+                            subs = [{
+                                id: 'demo-sub-all',
+                                camp_id: DEMO_CAMP_ID,
+                                name: 'All Divisions',
+                                divisions: divNames,
+                                color: colors[0],
+                                created_at: '2025-01-01T00:00:00Z'
+                            }];
+                        }
+                    } else {
+                        subs = subs.map((s, i) => ({
+                            ...s,
+                            camp_id: s.camp_id || DEMO_CAMP_ID,
+                            id: s.id || ('demo-sub-' + i)
+                        }));
+                    }
+                    rows = subs;
+                } catch { rows = []; }
+                break;
+            }
+
+            // ·····························································
+            // CAMP_SUBDIVISIONS (legacy alias)
             // ·····························································
             case 'camp_subdivisions': {
                 try {
@@ -366,9 +387,53 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
             }
 
             // ·····························································
-            // SCHEDULE_VERSIONS
+            // ★ FIX #2: SCHEDULE_VERSIONS — return mock version data for
+            // post-edit verification queries. Previously returned [] which
+            // with .single() produced PGRST116 "not found" error popup.
+            // Now returns real data from localStorage so verification passes.
             // ·····························································
             case 'schedule_versions': {
+                try {
+                    const dateKey = _filters.date_key;
+                    if (dateKey) {
+                        const allDaily = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+                        const d = allDaily[dateKey];
+                        if (d) {
+                            rows = [{
+                                camp_id: DEMO_CAMP_ID,
+                                date_key: dateKey,
+                                scheduler_id: _filters.scheduler_id || DEMO_USER_ID,
+                                scheduler_name: 'Demo Director',
+                                schedule_data: {
+                                    scheduleAssignments: d.scheduleAssignments || {},
+                                    leagueAssignments: d.leagueAssignments || {},
+                                    unifiedTimes: d.unifiedTimes || [],
+                                    divisionTimes: d.divisionTimes || {}
+                                },
+                                updated_at: d._postEditAt
+                                    ? new Date(d._postEditAt).toISOString()
+                                    : (d.savedAt || new Date().toISOString())
+                            }];
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[Demo] Error reading schedule_versions:', e);
+                }
+                break;
+            }
+
+            // ·····························································
+            // NOTIFICATIONS — return empty (no pending notifications in demo)
+            // ·····························································
+            case 'notifications': {
+                rows = [];
+                break;
+            }
+
+            // ·····························································
+            // SCHEDULE_PROPOSALS — return empty
+            // ·····························································
+            case 'schedule_proposals': {
                 rows = [];
                 break;
             }
@@ -399,7 +464,6 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
             _name: name,
             on()          { return ch; },
             subscribe(cb) {
-                // Simulate successful subscription
                 if (typeof cb === 'function') setTimeout(() => cb('SUBSCRIBED'), 50);
                 return ch;
             },
@@ -416,7 +480,6 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
     const _authChangeCallbacks = [];
 
     const MOCK_CLIENT = {
-        // ---- AUTH ----
         auth: {
             getSession() {
                 return Promise.resolve({ data: { session: MOCK_SESSION }, error: null });
@@ -442,7 +505,6 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
                 return Promise.resolve({ data: { user: MOCK_USER, session: MOCK_SESSION }, error: null });
             },
             signOut() {
-                // In demo mode, "sign out" just goes back to dashboard
                 window.location.href = 'dashboard.html';
                 return Promise.resolve({ error: null });
             },
@@ -457,12 +519,10 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
             }
         },
 
-        // ---- DATABASE ----
         from(table) {
             return createQueryChain(table);
         },
 
-        // ---- REALTIME ----
         channel(name) {
             return createMockChannel(name);
         },
@@ -470,7 +530,6 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
         removeAllChannels() { return Promise.resolve('ok'); },
         getChannels()       { return []; },
 
-        // ---- STORAGE (if ever needed) ----
         storage: {
             from() {
                 return {
@@ -487,22 +546,10 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
     // =========================================================================
     // 9. INSTALL MOCK — protect window.supabase so the CDN can't overwrite it
     // =========================================================================
-    //
-    // The Supabase CDN <script> tag stays as-is in the HTML (no document.write).
-    // We use Object.defineProperty so that:
-    //   - Our mock is returned when anything reads `window.supabase`
-    //   - The CDN's attempt to set `window.supabase = factory` is silently ignored
-    //   - supabase_client.js's `window.supabase = _client` is accepted (it's our mock)
-    //
-    // When offline at the expo, the CDN script fails to load (harmless console
-    // error) but the mock is already in place so the app works perfectly.
-    //
 
     let _demoSupabase = {
         createClient(url, key, opts) {
             console.log('🎭 [Demo] Mock Supabase client created (offline mode)');
-            // After this, supabase_client.js sets window.supabase = _client
-            // which triggers our setter below with the MOCK_CLIENT value.
             return MOCK_CLIENT;
         }
     };
@@ -514,32 +561,27 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
             return _demoSupabase;
         },
         set(val) {
-            // Accept writes that look like an initialized client (from supabase_client.js)
-            // These have .auth (object) and .from (function) — i.e. MOCK_CLIENT
             if (val && typeof val.auth === 'object' && typeof val.from === 'function') {
                 _demoSupabase = val;
                 return;
             }
-            // Silently ignore everything else (CDN trying to overwrite with factory)
             console.log('🎭 [Demo] Blocked CDN overwrite of window.supabase');
         }
     });
 
     // =========================================================================
-    // 10. INTERCEPT fetch() FOR SUPABASE REST CALLS (rawQuery uses fetch)
+    // 10. INTERCEPT fetch() FOR SUPABASE REST CALLS
     // =========================================================================
 
     const _originalFetch = window.fetch;
     window.fetch = function (url, options) {
         if (typeof url === 'string' && url.includes('supabase.co')) {
-            // Return an empty successful response
             const body = JSON.stringify([]);
             return Promise.resolve(new Response(body, {
                 status: 200,
                 headers: { 'Content-Type': 'application/json' }
             }));
         }
-        // Non-Supabase URLs: use real fetch (or fail gracefully offline)
         return _originalFetch.call(this, url, options).catch(err => {
             console.warn('🎭 [Demo] Fetch failed (offline):', typeof url === 'string' ? url.substring(0, 80) : 'request');
             return new Response('', { status: 0, statusText: 'offline' });
@@ -553,14 +595,13 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
     const currentPage = window.location.pathname.split('/').pop() || 'index.html';
 
     if (currentPage === 'index.html' || currentPage === '') {
-        // On the landing/login page — skip straight to dashboard
         console.log('🎭 [Demo] Skipping login, redirecting to dashboard...');
         window.location.href = 'dashboard.html';
-        return; // Stop further execution of this script
+        return;
     }
 
     // =========================================================================
-    // 12. FULLSCREEN KIOSK MODE — hide browser chrome for expo presentations
+    // 12. FULLSCREEN KIOSK MODE
     // =========================================================================
 
     function enterFullscreen() {
@@ -571,7 +612,6 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
                  || el.msRequestFullscreen;
         if (rfs) {
             rfs.call(el).catch(() => {
-                // Fullscreen requires user gesture — we'll retry on first click
                 console.log('🎭 [Demo] Fullscreen needs user gesture, will retry on click');
             });
         }
@@ -588,6 +628,7 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
         });
         goFull();
     }
+
     // =========================================================================
     // 13. PASSWORD-PROTECTED EXIT
     // =========================================================================
@@ -595,41 +636,21 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
     const DEMO_EXIT_PASSWORD = 'JewishCamPExpo2026';
 
     function promptDemoExit() {
-        // Build a custom modal instead of using prompt() (which is blocked in fullscreen)
         const overlay = document.createElement('div');
         overlay.id = 'demo-exit-overlay';
-        overlay.style.cssText = `
-            position:fixed; inset:0; z-index:999999;
-            background:rgba(0,0,0,0.6); backdrop-filter:blur(4px);
-            display:flex; align-items:center; justify-content:center;
-            font-family:Inter,system-ui,sans-serif;
-        `;
+        overlay.style.cssText = 'position:fixed; inset:0; z-index:999999; background:rgba(0,0,0,0.6); backdrop-filter:blur(4px); display:flex; align-items:center; justify-content:center; font-family:Inter,system-ui,sans-serif;';
 
         const modal = document.createElement('div');
-        modal.style.cssText = `
-            background:white; border-radius:16px; padding:32px; width:360px;
-            box-shadow:0 20px 60px rgba(0,0,0,0.3); text-align:center;
-        `;
-        modal.innerHTML = `
-            <div style="font-size:2rem;margin-bottom:12px">🔒</div>
-            <h3 style="margin:0 0 8px;color:#1E293B;font-size:1.1rem">Exit Demo Mode</h3>
-            <p style="margin:0 0 20px;color:#64748B;font-size:0.9rem">Enter the password to exit demo mode.</p>
-            <input id="demo-exit-pw" type="password" placeholder="Password" autocomplete="off" style="
-                width:100%; padding:10px 14px; border:2px solid #E2E8F0; border-radius:10px;
-                font-size:1rem; outline:none; box-sizing:border-box; transition:border-color 0.2s;
-            " />
-            <p id="demo-exit-error" style="color:#EF4444;font-size:0.85rem;margin:8px 0 0;min-height:1.2em"></p>
-            <div style="display:flex;gap:10px;margin-top:16px">
-                <button id="demo-exit-cancel" style="
-                    flex:1; padding:10px; border:1px solid #E2E8F0; background:#F8FAFC;
-                    border-radius:10px; cursor:pointer; font-size:0.9rem; color:#64748B;
-                ">Cancel</button>
-                <button id="demo-exit-confirm" style="
-                    flex:1; padding:10px; border:none; background:#EF4444;
-                    border-radius:10px; cursor:pointer; font-size:0.9rem; color:white; font-weight:600;
-                ">Exit Demo</button>
-            </div>
-        `;
+        modal.style.cssText = 'background:white; border-radius:16px; padding:32px; width:360px; box-shadow:0 20px 60px rgba(0,0,0,0.3); text-align:center;';
+        modal.innerHTML = '<div style="font-size:2rem;margin-bottom:12px">🔒</div>' +
+            '<h3 style="margin:0 0 8px;color:#1E293B;font-size:1.1rem">Exit Demo Mode</h3>' +
+            '<p style="margin:0 0 20px;color:#64748B;font-size:0.9rem">Enter the password to exit demo mode.</p>' +
+            '<input id="demo-exit-pw" type="password" placeholder="Password" autocomplete="off" style="width:100%; padding:10px 14px; border:2px solid #E2E8F0; border-radius:10px; font-size:1rem; outline:none; box-sizing:border-box; transition:border-color 0.2s;" />' +
+            '<p id="demo-exit-error" style="color:#EF4444;font-size:0.85rem;margin:8px 0 0;min-height:1.2em"></p>' +
+            '<div style="display:flex;gap:10px;margin-top:16px">' +
+            '<button id="demo-exit-cancel" style="flex:1; padding:10px; border:1px solid #E2E8F0; background:#F8FAFC; border-radius:10px; cursor:pointer; font-size:0.9rem; color:#64748B;">Cancel</button>' +
+            '<button id="demo-exit-confirm" style="flex:1; padding:10px; border:none; background:#EF4444; border-radius:10px; cursor:pointer; font-size:0.9rem; color:white; font-weight:600;">Exit Demo</button>' +
+            '</div>';
 
         overlay.appendChild(modal);
         document.body.appendChild(overlay);
@@ -638,23 +659,19 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
         const errorEl = document.getElementById('demo-exit-error');
 
         pwInput.focus();
-
-        // Focus styling
         pwInput.addEventListener('focus', () => { pwInput.style.borderColor = '#3B82F6'; });
         pwInput.addEventListener('blur', () => { pwInput.style.borderColor = '#E2E8F0'; });
 
         function tryExit() {
             if (pwInput.value === DEMO_EXIT_PASSWORD) {
                 overlay.remove();
-                _demoExitAuthorized = true;  // ★★★ Bypass the guard ★★★
+                _demoExitAuthorized = true;
                 localStorage.removeItem('campistry_demo_mode');
                 try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
-                // Exit fullscreen before reload
                 if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
                 else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
                console.log('🎭 Demo mode disabled. Closing...');
                 window.close();
-                // Fallback if window.close doesn't work
                 setTimeout(() => { window.location.reload(); }, 500);
             } else {
                 errorEl.textContent = 'Incorrect password';
@@ -680,31 +697,15 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
 
         const banner = document.createElement('div');
         banner.id = 'campistry-demo-banner';
-       banner.innerHTML = `
-        <span style="margin-right:8px">🎭</span>
-        <span><strong>DEMO MODE</strong> — Offline · All data stored locally</span>
-        <button id="demo-reset-btn" title="Reset to original data" style="
-            margin-left:auto; background:rgba(255,255,255,0.2); border:1px solid rgba(255,255,255,0.3);
-            color:white; padding:2px 10px; border-radius:4px; cursor:pointer; font-size:12px;
-            margin-right:8px;
-        ">🔄 Reset</button>
-        <button id="demo-exit-btn" title="Exit demo mode" style="
-            background:rgba(255,255,255,0.2); border:1px solid rgba(255,255,255,0.3);
-            color:white; padding:2px 10px; border-radius:4px; cursor:pointer; font-size:12px;
-        ">Exit Demo</button>
-    `;
-        banner.style.cssText = `
-            position:fixed; top:0; left:0; right:0; z-index:99999;
-            background:linear-gradient(135deg,#F59E0B,#D97706); color:white;
-            padding:6px 16px; font-family:Inter,system-ui,sans-serif; font-size:13px;
-            display:flex; align-items:center; box-shadow:0 2px 8px rgba(0,0,0,0.15);
-        `;
+        banner.innerHTML = '<span style="margin-right:8px">🎭</span>' +
+            '<span><strong>DEMO MODE</strong> — Offline · All data stored locally</span>' +
+            '<button id="demo-reset-btn" title="Reset to original data" style="margin-left:auto; background:rgba(255,255,255,0.2); border:1px solid rgba(255,255,255,0.3); color:white; padding:2px 10px; border-radius:4px; cursor:pointer; font-size:12px; margin-right:8px;">🔄 Reset</button>' +
+            '<button id="demo-exit-btn" title="Exit demo mode" style="background:rgba(255,255,255,0.2); border:1px solid rgba(255,255,255,0.3); color:white; padding:2px 10px; border-radius:4px; cursor:pointer; font-size:12px;">Exit Demo</button>';
+        banner.style.cssText = 'position:fixed; top:0; left:0; right:0; z-index:99999; background:linear-gradient(135deg,#F59E0B,#D97706); color:white; padding:6px 16px; font-family:Inter,system-ui,sans-serif; font-size:13px; display:flex; align-items:center; box-shadow:0 2px 8px rgba(0,0,0,0.15);';
         document.body.prepend(banner);
 
-        // Push page content down so nothing hides behind the banner
         document.body.style.paddingTop = (banner.offsetHeight) + 'px';
 
-        // ★★★ Reset to original data ★★★
     document.getElementById('demo-reset-btn')?.addEventListener('click', () => {
         if (!confirm('Reset all data back to the original? This cannot be undone.')) return;
         const keysToRemove = [];
@@ -720,18 +721,15 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
             }
         }
         keysToRemove.forEach(key => localStorage.removeItem(key));
-        // Keep demo mode flag so it reloads into demo mode and re-imports
         localStorage.setItem('campistry_demo_mode', 'true');
         console.log('📦 Cleared', keysToRemove.length, 'keys. Reloading...');
         window.location.reload();
     });
 
-    // ★★★ Password-protected exit ★★★
     document.getElementById('demo-exit-btn')?.addEventListener('click', () => {
         promptDemoExit();
     });
 
-        // ★★★ Enter fullscreen kiosk mode ★★★
         setupFullscreenKiosk();
     }
 
@@ -745,7 +743,6 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
     // 15. PATCH SYNC STATUS — always show "synced" in demo mode
     // =========================================================================
 
-    // After the sync engine initializes, override the status indicator
     window.addEventListener('campistry-sync-ready', () => {
         const dot  = document.querySelector('.sync-dot, #syncDot');
         const text = document.querySelector('#syncText');
@@ -753,7 +750,6 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
         if (text) { text.textContent = 'Demo Mode'; }
     });
 
-    // Also patch ScheduleSync.getSyncStatus if it exists
     const _origGetSyncStatus = () => ({
         status: 'idle', isOnline: true, lastSync: Date.now(),
         queueLength: 0, initialHydrationDone: true,
@@ -763,7 +759,6 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
     Object.defineProperty(window, 'ScheduleSync', {
         configurable: true,
         set(val) {
-            // When the real ScheduleSync is assigned, patch it
             if (val && typeof val === 'object') {
                 val.getSyncStatus = _origGetSyncStatus;
                 val.isOnline = () => true;
@@ -776,7 +771,7 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
     });
 
     // =========================================================================
-    // 16. PATCH navigator.onLine — pretend we're online so no "offline" warnings
+    // 16. PATCH navigator.onLine
     // =========================================================================
 
     Object.defineProperty(navigator, 'onLine', {
@@ -788,7 +783,6 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
     // 17. GLOBAL UTILITY FUNCTIONS
     // =========================================================================
 
-    // ★★★ Password-protected — no more simple toggle ★★★
     window.enableDemoMode = function () {
         localStorage.setItem('campistry_demo_mode', 'true');
         try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
@@ -800,13 +794,6 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
         promptDemoExit();
     };
 
-    /**
-     * Load demo data from a Campistry backup JSON (the format produced by the export function).
-     * Run this ONCE while online to populate localStorage, then demo mode will use it.
-     *
-     * Usage:  loadDemoData(jsonObject)
-     *   or:   paste the JSON in console: loadDemoData({ globalSettings: {...}, dailyData: {...}, ... })
-     */
     window.loadDemoData = function (backup) {
         if (!backup) {
             console.error('Usage: loadDemoData({ globalSettings: {...}, dailyData: {...}, ... })');
@@ -840,9 +827,6 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
         }
     };
 
-    /**
-     * Quick status check
-     */
     window.demoStatus = function () {
         const globalRaw = localStorage.getItem('campGlobalSettings_v1');
         const dailyRaw  = localStorage.getItem('campDailyData_v1');
@@ -864,6 +848,7 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
         console.log('═══════════════════════════════════════════');
         console.log('Commands:  disableDemoMode()  |  demoStatus()  |  loadDemoData(json)');
     };
+
 // =====================================================================
     // PORTABLE OFFLINE: Fix absolute links to use relative paths
     // =====================================================================
