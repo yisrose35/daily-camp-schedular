@@ -516,13 +516,28 @@
         
         let locationHtml = "";
         let detailsHtml = "";
-        let icon = "📍";
 
         // ★★★ NEW: Show the actual time slot this maps to ★★★
         const timeContext = slotTimeLabel ? 
             `<div style="font-size:0.8rem; color:#0284c7; margin-top:2px;">${slotTimeLabel}</div>` : '';
 
         if (!assignment) {
+            // ★★★ First check: is the target time even within schedule hours? ★★★
+            let isOutsideSchedule = false;
+            if (divSlots.length > 0) {
+                const scheduleStart = divSlots[0].startMin;
+                const scheduleEnd = divSlots[divSlots.length - 1].endMin;
+                if (targetTimeMin < scheduleStart || targetTimeMin >= scheduleEnd) {
+                    isOutsideSchedule = true;
+                }
+            }
+            
+            if (isOutsideSchedule) {
+                const scheduleStart = minutesToTimeLabel(divSlots[0].startMin);
+                const scheduleEnd = minutesToTimeLabel(divSlots[divSlots.length - 1].endMin);
+                locationHtml = `<span style="color:#999;">Outside Schedule Hours</span>`;
+                detailsHtml = `${division}'s schedule runs from <strong>${scheduleStart}</strong> to <strong>${scheduleEnd}</strong>. The selected time is outside those hours.`;
+            } else {
             // ★★★ BEFORE giving up, check if this is a LEAGUE slot ★★★
             // League blocks may not have individual bunk assignments in scheduleAssignments.
             // Check divisionTimes event type AND leagueAssignments directly.
@@ -537,29 +552,46 @@
                                  slotType === 'specialty_league';
             
             // Also check leagueAssignments directly for this division + slot
-            // Try the exact slot index AND nearby indices (league data might be keyed by first slot of block)
+            // Scan ALL league entries and find the one whose time range contains targetTimeMin
             let leagueData = null;
             const la = window.leagueAssignments?.[division] || {};
+            
+            // First: exact slot index match
             if (la[slotIdx]) {
                 leagueData = la[slotIdx];
-            } else {
-                // Scan nearby slots (league blocks can span multiple slots, key is usually first)
+            }
+            
+            // Second: scan all league entries, match by TIME not by slot index
+            if (!leagueData) {
                 for (const key of Object.keys(la)) {
                     const keyNum = parseInt(key);
-                    if (!isNaN(keyNum)) {
-                        const keySlot = divSlots[keyNum];
-                        if (keySlot && keySlot.startMin <= targetTimeMin && targetTimeMin < keySlot.endMin) {
-                            leagueData = la[key];
+                    if (isNaN(keyNum)) continue;
+                    
+                    const keySlot = divSlots[keyNum];
+                    if (!keySlot) continue;
+                    
+                    // Check if the league block's divSlot time range contains our target
+                    if (keySlot.startMin <= targetTimeMin && targetTimeMin < keySlot.endMin) {
+                        leagueData = la[key];
+                        break;
+                    }
+                    
+                    // For multi-slot league blocks: check if the block SPANS our target time
+                    // Walk forward from keyNum to find the end of the contiguous league block
+                    let blockEndMin = keySlot.endMin;
+                    for (let j = keyNum + 1; j < divSlots.length; j++) {
+                        const nextEntry = bunkAssignments?.[j];
+                        if (nextEntry && (nextEntry.continuation || nextEntry._h2h || 
+                            String(nextEntry.field || '').toLowerCase().includes('league'))) {
+                            blockEndMin = divSlots[j]?.endMin || blockEndMin;
+                        } else {
                             break;
                         }
-                        // Also check if the league block's time range covers our target
-                        const ld = la[key];
-                        if (ld && ld._startMin != null && ld._endMin != null) {
-                            if (ld._startMin <= targetTimeMin && targetTimeMin < ld._endMin) {
-                                leagueData = ld;
-                                break;
-                            }
-                        }
+                    }
+                    
+                    if (keySlot.startMin <= targetTimeMin && targetTimeMin < blockEndMin) {
+                        leagueData = la[key];
+                        break;
                     }
                 }
             }
@@ -582,7 +614,6 @@
             
             if (isLeagueSlot || leagueData || foundLeagueAssignment) {
                 // This IS a league slot
-                icon = "🏆";
                 const team = camper.team;
                 
                 if (!team) {
@@ -596,22 +627,47 @@
                 } else {
                     // Has a team — try to find their matchup
                     let match = null;
+                    console.log(`[CamperLocator] League lookup — team: "${team}", leagueData:`, leagueData);
                     if (leagueData?.matchups) {
+                        console.log(`[CamperLocator] Matchups available:`, leagueData.matchups.map(m => `${m.teamA} vs ${m.teamB} @ ${m.field}`));
+                        // Exact match first
                         match = leagueData.matchups.find(m => m.teamA === team || m.teamB === team);
+                        // Fuzzy: case-insensitive
+                        if (!match) {
+                            const teamLower = String(team).toLowerCase().trim();
+                            match = leagueData.matchups.find(m => 
+                                String(m.teamA).toLowerCase().trim() === teamLower || 
+                                String(m.teamB).toLowerCase().trim() === teamLower
+                            );
+                        }
+                        // Fuzzy: partial/contains match
+                        if (!match) {
+                            const teamLower = String(team).toLowerCase().trim();
+                            match = leagueData.matchups.find(m => 
+                                String(m.teamA).toLowerCase().includes(teamLower) || 
+                                String(m.teamB).toLowerCase().includes(teamLower) ||
+                                teamLower.includes(String(m.teamA).toLowerCase()) ||
+                                teamLower.includes(String(m.teamB).toLowerCase())
+                            );
+                        }
                     }
                     
                     if (match) {
+                        const opponent = (String(match.teamA).toLowerCase().trim() === String(team).toLowerCase().trim()) ? match.teamB : match.teamA;
                         locationHtml = `<span style="color:#059669; font-weight:bold; font-size:1.4rem;">${match.field}</span>`;
-                        detailsHtml = `Playing <strong>${leagueData.sport || "League"}</strong><br>
-                                       Matchup: <strong>${match.teamA}</strong> vs <strong>${match.teamB}</strong>`;
-                        if (leagueData.gameLabel) {
-                            detailsHtml = `<strong>${leagueData.gameLabel}</strong> — ${leagueData.sport || "League"}<br>
-                                           Matchup: <strong>${match.teamA}</strong> vs <strong>${match.teamB}</strong><br>
-                                           Field: <strong>${match.field}</strong>`;
-                        }
+                        detailsHtml = `<strong>${leagueData?.gameLabel || 'League Game'}</strong> — ${leagueData?.sport || "League"}<br>
+                                       <strong>${match.teamA}</strong> vs <strong>${match.teamB}</strong> @ <strong>${match.field}</strong>`;
                     } else {
+                        // No team match — show ALL matchups so the user can still see what's happening
                         locationHtml = `<span style="color:#d97706; font-weight:bold; font-size:1.4rem;">Leagues</span>`;
-                        detailsHtml = `Team <strong>${team}</strong> — ${leagueData?.gameLabel || 'League Game'}<br>No specific matchup found (possible bye).`;
+                        let allMatchupsHtml = '';
+                        if (leagueData?.matchups?.length > 0) {
+                            allMatchupsHtml = `<div style="margin-top:8px;">` + 
+                                leagueData.matchups.map(m => 
+                                    `<div style="padding:3px 0;">${m.teamA} vs ${m.teamB} @ <strong>${m.field}</strong>${m.sport ? ' (' + m.sport + ')' : ''}</div>`
+                                ).join('') + `</div>`;
+                        }
+                        detailsHtml = `<strong>${leagueData?.gameLabel || 'League Game'}</strong> — Team <strong>${team}</strong> not found in matchups.<br>${allMatchupsHtml}`;
                     }
                 }
             } else if (divSlots.length === 0) {
@@ -624,12 +680,12 @@
                 locationHtml = `<span style="color:#999;">No Activity Assigned</span>`;
                 detailsHtml = `${bunk} does not have an activity assigned at this time slot. This may be a gap in the schedule.`;
             }
+            } // end of isOutsideSchedule else
         } else {
             // Is it a League Game?
             const isLeague = assignment._h2h || (assignment.field && String(assignment.field).toLowerCase().includes("league"));
             
             if (isLeague) {
-                icon = "🏆";
                 const team = camper.team;
                 
                 if (!team) {
@@ -637,7 +693,7 @@
                     detailsHtml = `We know ${bunk} is playing leagues, but <strong>${camperName}</strong> has no team assigned.<br>
                                    <a href="#" onclick="document.getElementById('loc-filter-roster').value='${camperName}'; document.getElementById('loc-filter-roster').focus(); document.getElementById('loc-filter-roster').dispatchEvent(new Event('keyup')); return false;">Assign a team below</a> to see exact field.`;
                 } else {
-                    // ★★★ League lookup also uses division-specific slot index ★★★
+                    // ★★★ League lookup — robust team matching ★★★
                     const leagueData = division 
                         ? window.leagueAssignments?.[division]?.[slotIdx]
                         : null;
@@ -645,16 +701,42 @@
                     let match = null;
                     
                     if (leagueData && leagueData.matchups) {
+                        // Exact match
                         match = leagueData.matchups.find(m => m.teamA === team || m.teamB === team);
+                        // Case-insensitive
+                        if (!match) {
+                            const teamLower = String(team).toLowerCase().trim();
+                            match = leagueData.matchups.find(m => 
+                                String(m.teamA).toLowerCase().trim() === teamLower || 
+                                String(m.teamB).toLowerCase().trim() === teamLower
+                            );
+                        }
+                        // Partial/contains
+                        if (!match) {
+                            const teamLower = String(team).toLowerCase().trim();
+                            match = leagueData.matchups.find(m => 
+                                String(m.teamA).toLowerCase().includes(teamLower) || 
+                                String(m.teamB).toLowerCase().includes(teamLower) ||
+                                teamLower.includes(String(m.teamA).toLowerCase()) ||
+                                teamLower.includes(String(m.teamB).toLowerCase())
+                            );
+                        }
                     }
 
                     if (match) {
                         locationHtml = `<span style="color:#059669; font-weight:bold; font-size:1.4rem;">${match.field}</span>`;
-                        detailsHtml = `Playing <strong>${leagueData.sport || "League"}</strong><br>
-                                       Matchup: <strong>${match.teamA}</strong> vs <strong>${match.teamB}</strong>`;
+                        detailsHtml = `<strong>${leagueData?.gameLabel || 'League Game'}</strong> — ${leagueData?.sport || "League"}<br>
+                                       <strong>${match.teamA}</strong> vs <strong>${match.teamB}</strong> @ <strong>${match.field}</strong>`;
                     } else {
-                        locationHtml = `<span>League (Bye or Break)</span>`;
-                        detailsHtml = `Team <strong>${team}</strong> does not have a match scheduled at this time.`;
+                        locationHtml = `<span style="color:#d97706; font-weight:bold; font-size:1.4rem;">Leagues</span>`;
+                        let allMatchupsHtml = '';
+                        if (leagueData?.matchups?.length > 0) {
+                            allMatchupsHtml = `<div style="margin-top:8px;">` + 
+                                leagueData.matchups.map(m => 
+                                    `<div style="padding:3px 0;">${m.teamA} vs ${m.teamB} @ <strong>${m.field}</strong></div>`
+                                ).join('') + `</div>`;
+                        }
+                        detailsHtml = `<strong>${leagueData?.gameLabel || 'League Game'}</strong> — Team <strong>${team}</strong> not found in matchups.<br>${allMatchupsHtml}`;
                     }
                 }
             } else {
@@ -669,7 +751,7 @@
 
         resultContainer.innerHTML = `
             <div style="display:flex; align-items:center; gap:20px; flex-wrap:wrap;">
-                <div style="font-size:3rem;">${icon}</div>
+                
                 <div>
                     <h2 style="margin:0; color:#333;">${camperName}</h2>
                     <p style="margin:0; color:#666;">${camper.division}${division !== camper.division ? ' &bull; ' + division : ''} &bull; ${camper.bunk}</p>
