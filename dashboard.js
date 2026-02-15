@@ -75,7 +75,12 @@
     // AUTH CHECK
     // ========================================
     
-    async function checkAuth() {
+   async function checkAuth() {
+        // ★ FAST-PASS: Check localStorage before giving up
+        const cachedUserId = localStorage.getItem('campistry_auth_user_id');
+        const cachedCampId = localStorage.getItem('campistry_camp_id');
+        const hasLocalAuth = !!(cachedUserId && cachedCampId);
+        
         // Wait for Supabase
         let attempts = 0;
         while (!window.supabase && attempts < 50) {
@@ -84,11 +89,54 @@
         }
         
         if (!window.supabase) {
-            console.error('Supabase not available');
-            window.location.href = 'index.html';
-            return;
+            if (hasLocalAuth) {
+                console.warn('🔑 [Dashboard] Supabase not loaded but cached auth exists — waiting longer');
+                // Give it more time since we know user was authenticated
+                let extraAttempts = 0;
+                while (!window.supabase && extraAttempts < 50) {
+                    await new Promise(r => setTimeout(r, 100));
+                    extraAttempts++;
+                }
+                if (!window.supabase) {
+                    console.error('Supabase still not available after extended wait');
+                    window.location.href = 'index.html';
+                    return;
+                }
+            } else {
+                console.error('Supabase not available');
+                window.location.href = 'index.html';
+                return;
+            }
         }
         
+        try {
+            const { data: { session } } = await window.supabase.auth.getSession();
+            
+            if (!session?.user) {
+                if (hasLocalAuth) {
+                    console.warn('🔑 [Dashboard] No session but cached auth — trying refresh');
+                    const { data: refreshData, error: refreshError } = await window.supabase.auth.refreshSession();
+                    if (refreshError || !refreshData?.session) {
+                        console.log('🔑 [Dashboard] Refresh failed — clearing cache, redirecting');
+                        localStorage.removeItem('campistry_auth_user_id');
+                        localStorage.removeItem('campistry_camp_id');
+                        localStorage.removeItem('campistry_role');
+                        window.location.href = 'index.html';
+                        return;
+                    }
+                    // Refresh succeeded — use this session
+                    currentUser = refreshData.session.user;
+                    console.log('🔑 [Dashboard] Session refreshed successfully:', currentUser.email);
+                } else {
+                    console.log('No session, redirecting to login');
+                    window.location.href = 'index.html';
+                    return;
+                }
+            } else {
+                currentUser = session.user;
+            }
+            
+            console.log('📊 User authenticated:', currentUser.email);        
         try {
             const { data: { session } } = await window.supabase.auth.getSession();
             
