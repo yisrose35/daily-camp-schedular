@@ -884,29 +884,24 @@
             detailPaneEl.appendChild(header);
 
             // --- CONFIG CONTAINER (Hidden by default) ---
-            const configContainer = document.createElement('div');
-            Object.assign(configContainer.style, {
-                display: 'none',
-                marginBottom: '20px',
-                animation: 'fadeIn 0.2s ease-in-out'
-            });
+           const configContainer = document.createElement('div');
+            configContainer.className = 'league-config-container';
 
             renderConfigSections(league, configContainer);
             detailPaneEl.appendChild(configContainer);
 
             editConfigBtn.onclick = () => {
-                const hidden = configContainer.style.display === 'none';
-                if (hidden) {
-                    configContainer.style.display = 'block';
-                    editConfigBtn.textContent = 'Close Setup';
-                    editConfigBtn.style.background = '#F3F4F6';
-                } else {
-                    configContainer.style.display = 'none';
+                const isOpen = configContainer.classList.contains('open');
+                if (isOpen) {
+                    configContainer.classList.remove('open');
                     editConfigBtn.textContent = 'Edit Setup';
-                    editConfigBtn.style.background = '#FFFFFF';
+                    editConfigBtn.classList.remove('active');
+                } else {
+                    configContainer.classList.add('open');
+                    editConfigBtn.textContent = 'Close Setup';
+                    editConfigBtn.classList.add('active');
                 }
             };
-
             // --- MAIN CONTENT ---
             const mainContent = document.createElement('div');
             renderGameResultsUI(league, mainContent);
