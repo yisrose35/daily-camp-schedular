@@ -1,6 +1,5 @@
-
 // =============================================================================
-// trial_guard.js v1.1 — CAMPISTRY FREE TRIAL ENFORCEMENT
+// trial_guard.js v1.2 — CAMPISTRY FREE TRIAL ENFORCEMENT
 // =============================================================================
 //
 // Runs on ALL app pages. Checks the camp's plan_status and trial_started_at.
@@ -14,6 +13,8 @@
 // The trial_hours is stored on the camp (set during signup from the promo code).
 // Default fallback is 48 hours if not specified.
 //
+// v1.2: Fixed "Upgrade Now" / "Contact Us" buttons to reliably open email client
+//
 // LOAD: After supabase_client.js and access_control.js on every app page.
 // =============================================================================
 
@@ -23,6 +24,7 @@
     const DEFAULT_TRIAL_HOURS = 48;
     const CHECK_INTERVAL_MS = 60 * 1000; // Re-check every 60 seconds
     const CONTACT_EMAIL = 'campistryoffice@gmail.com';
+    const MAILTO_URL = 'mailto:' + CONTACT_EMAIL + '?subject=' + encodeURIComponent('Campistry Upgrade Request') + '&body=' + encodeURIComponent("Hi,\nI'd like to upgrade my Campistry account.\n\nThanks!");
 
     // Skip in demo mode
     if (window.__CAMPISTRY_DEMO_MODE__ || window.location.search.includes('demo=true')) {
@@ -34,7 +36,7 @@
     const page = window.location.pathname.split('/').pop() || 'index.html';
     if (page === 'index.html' || page === 'invite.html') return;
 
-    console.log('⏱️ [Trial Guard] v1.1 loading...');
+    console.log('⏱️ [Trial Guard] v1.2 loading...');
 
     // =========================================================================
     // STATE
@@ -47,6 +49,10 @@
     // =========================================================================
     // HELPERS
     // =========================================================================
+
+    function openUpgradeEmail() {
+        window.location.href = MAILTO_URL;
+    }
 
     async function waitForSupabase(maxMs = 10000) {
         const start = Date.now();
@@ -173,15 +179,19 @@
             banner.innerHTML = `
                 <span>⏱️</span>
                 <span>Free trial: <strong id="trial-time-left">${formatTime(remainingMs)}</strong> remaining</span>
-                <a href="mailto:${CONTACT_EMAIL}?subject=Campistry%20Upgrade"
-                   style="color:white; background:rgba(255,255,255,0.2); padding:3px 12px; border-radius:4px; text-decoration:none; font-size:0.8rem; font-weight:600;">
-                    Upgrade Now</a>
+                <button id="trial-upgrade-btn"
+                   style="color:white; background:rgba(255,255,255,0.2); padding:3px 12px; border-radius:4px; border:none; cursor:pointer; font-size:0.8rem; font-weight:600;">
+                    Upgrade Now</button>
                 <button onclick="this.parentElement.remove();document.body.classList.remove('trial-banner-active');"
                         style="background:none;border:none;color:rgba(255,255,255,0.7);cursor:pointer;font-size:1.1rem;padding:0 4px;margin-left:4px;"
                         title="Dismiss">×</button>
             `;
             document.body.prepend(banner);
             document.body.classList.add('trial-banner-active');
+
+            // Attach click handler (more reliable than mailto href in dynamic elements)
+            var upgradeBtn = document.getElementById('trial-upgrade-btn');
+            if (upgradeBtn) upgradeBtn.addEventListener('click', openUpgradeEmail);
         }
 
         // Live countdown
@@ -227,9 +237,6 @@
             animation:trialFadeIn 0.4s ease-out;
         `;
 
-        const userEmail = window.supabase?.auth?.getUser?.()
-            ?.then?.(r => r.data?.user?.email) || '';
-
         overlay.innerHTML = `
             <div style="
                 background:white; border-radius:16px; padding:48px 40px; max-width:480px; width:90%;
@@ -248,18 +255,18 @@
                     <strong style="color:#0F5F6E;">Don't worry — all your data is saved.</strong><br>
                     Upgrade to continue right where you left off.
                 </p>
-                <a href="mailto:${CONTACT_EMAIL}?subject=Campistry%20Upgrade%20Request&body=Hi%2C%0AI'd%20like%20to%20upgrade%20my%20Campistry%20account.%0A%0AThanks!"
+                <button id="trial-lockout-upgrade-btn"
                    style="
                     display:inline-block; background:linear-gradient(135deg,#0F5F6E,#147D91);
                     color:white; padding:14px 32px; border-radius:10px; font-size:1rem;
-                    font-weight:600; text-decoration:none; margin-bottom:16px;
+                    font-weight:600; border:none; cursor:pointer; margin-bottom:16px;
                     box-shadow:0 4px 12px rgba(20,125,145,0.3); transition:transform 0.15s,box-shadow 0.15s;
                 " onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 6px 16px rgba(20,125,145,0.4)'"
                    onmouseout="this.style.transform='';this.style.boxShadow='0 4px 12px rgba(20,125,145,0.3)'"
-                >✉️ Contact Us to Upgrade</a>
+                >✉️ Contact Us to Upgrade</button>
                 <div style="margin-top:8px;">
-                    <a href="mailto:${CONTACT_EMAIL}" style="color:#94A3B8;font-size:0.85rem;text-decoration:none;">
-                        ${CONTACT_EMAIL}</a>
+                    <button id="trial-lockout-email-btn" style="background:none;border:none;color:#94A3B8;font-size:0.85rem;cursor:pointer;text-decoration:underline;">
+                        ${CONTACT_EMAIL}</button>
                 </div>
                 <div style="margin-top:24px;padding-top:20px;border-top:1px solid #E2E8F0;">
                     <button onclick="window.location.href='index.html'"
@@ -274,6 +281,13 @@
 
         document.body.appendChild(overlay);
         document.body.style.overflow = 'hidden';
+
+        // Attach click handlers (more reliable than mailto href in dynamic elements)
+        var lockoutBtn = document.getElementById('trial-lockout-upgrade-btn');
+        if (lockoutBtn) lockoutBtn.addEventListener('click', openUpgradeEmail);
+        var emailBtn = document.getElementById('trial-lockout-email-btn');
+        if (emailBtn) emailBtn.addEventListener('click', openUpgradeEmail);
+
         console.log('⏱️ [Trial] Lockout overlay shown');
     }
 
@@ -311,5 +325,5 @@
         getTimeRemainingFormatted: () => _trialEnd ? formatTimeLong(Math.max(0, _trialEnd - Date.now())) : null,
     });
 
-    console.log('⏱️ [Trial Guard] v1.1 loaded');
+    console.log('⏱️ [Trial Guard] v1.2 loaded');
 })();
