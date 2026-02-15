@@ -398,8 +398,36 @@
         }
 
         const camper = camperRoster[camperName];
-        const division = camper.division;
         const bunk = camper.bunk;
+        
+        // ★★★ CRITICAL: Resolve the ACTUAL division key for divisionTimes ★★★
+        // The roster stores the parent division name (e.g. "Juniors") but 
+        // divisionTimes is keyed by grade-level division (e.g. "3rd Grade").
+        // We need to find the actual key where this bunk exists.
+        let division = null;
+        
+        // Method 1: Use SchedulerCoreUtils.getDivisionForBunk (most reliable)
+        if (window.SchedulerCoreUtils?.getDivisionForBunk) {
+            division = window.SchedulerCoreUtils.getDivisionForBunk(bunk);
+        }
+        
+        // Method 2: Scan window.divisions directly
+        if (!division || !window.divisionTimes?.[division]) {
+            const divisions = window.divisions || {};
+            for (const [divKey, divData] of Object.entries(divisions)) {
+                if (divData.bunks && divData.bunks.some(b => String(b) === String(bunk))) {
+                    division = divKey;
+                    break;
+                }
+            }
+        }
+        
+        // Method 3: Fall back to roster's stored division name
+        if (!division) {
+            division = camper.division;
+        }
+        
+        console.log(`[CamperLocator] Resolved ${bunk} → division "${division}" (roster had "${camper.division}")`);
         
         // ★★★ STEP 1: Determine target time in minutes ★★★
         let targetTimeMin = 0;
@@ -556,7 +584,7 @@
                 <div style="font-size:3rem;">${icon}</div>
                 <div>
                     <h2 style="margin:0; color:#333;">${camperName}</h2>
-                    <p style="margin:0; color:#666;">${camper.division} &bull; ${camper.bunk}</p>
+                    <p style="margin:0; color:#666;">${camper.division}${division !== camper.division ? ' &bull; ' + division : ''} &bull; ${camper.bunk}</p>
                 </div>
                 <div style="margin-left:auto; text-align:right;">
                     <div style="font-size:0.9rem; color:#888; text-transform:uppercase; letter-spacing:1px; font-weight:bold;">${timeLabel}</div>
