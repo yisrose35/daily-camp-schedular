@@ -137,18 +137,7 @@
                 currentUser = session.user;
             }
             
-            console.log('📊 User authenticated:', currentUser.email);        
-        try {
-            const { data: { session } } = await window.supabase.auth.getSession();
-            
-            if (!session?.user) {
-               console.log('No session, redirecting to login');
-                window.location.href = 'index.html';
-                return;
-            }
-            
-            currentUser = session.user;
-            console.log('📊 User authenticated:', currentUser.email);
+           console.log('📊 User authenticated:', currentUser.email);
             
             // Determine user's role and camp membership
             await determineUserRole();
