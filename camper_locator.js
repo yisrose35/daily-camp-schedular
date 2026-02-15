@@ -523,10 +523,98 @@
             `<div style="font-size:0.8rem; color:#0284c7; margin-top:2px;">${slotTimeLabel}</div>` : '';
 
         if (!assignment) {
-            // ★★★ IMPROVED: Better messaging when no assignment found ★★★
-            const divSlots = window.divisionTimes?.[division] || [];
+            // ★★★ BEFORE giving up, check if this is a LEAGUE slot ★★★
+            // League blocks may not have individual bunk assignments in scheduleAssignments.
+            // Check divisionTimes event type AND leagueAssignments directly.
+            const divSlotInfo = divSlots[slotIdx];
+            const slotEvent = (divSlotInfo?.event || '').toLowerCase();
+            const slotType = (divSlotInfo?.type || '').toLowerCase();
             
-            if (divSlots.length === 0) {
+            const isLeagueSlot = slotEvent.includes('league') || 
+                                 slotEvent.includes('h2h') ||
+                                 slotType === 'league' || 
+                                 slotType === 'h2h' ||
+                                 slotType === 'specialty_league';
+            
+            // Also check leagueAssignments directly for this division + slot
+            // Try the exact slot index AND nearby indices (league data might be keyed by first slot of block)
+            let leagueData = null;
+            const la = window.leagueAssignments?.[division] || {};
+            if (la[slotIdx]) {
+                leagueData = la[slotIdx];
+            } else {
+                // Scan nearby slots (league blocks can span multiple slots, key is usually first)
+                for (const key of Object.keys(la)) {
+                    const keyNum = parseInt(key);
+                    if (!isNaN(keyNum)) {
+                        const keySlot = divSlots[keyNum];
+                        if (keySlot && keySlot.startMin <= targetTimeMin && targetTimeMin < keySlot.endMin) {
+                            leagueData = la[key];
+                            break;
+                        }
+                        // Also check if the league block's time range covers our target
+                        const ld = la[key];
+                        if (ld && ld._startMin != null && ld._endMin != null) {
+                            if (ld._startMin <= targetTimeMin && targetTimeMin < ld._endMin) {
+                                leagueData = ld;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Also scan bunkAssignments for ANY slot in this time range that has _h2h
+            let foundLeagueAssignment = null;
+            if (!leagueData && bunkAssignments) {
+                for (let i = 0; i < divSlots.length; i++) {
+                    const ds = divSlots[i];
+                    if (ds.startMin <= targetTimeMin && targetTimeMin < ds.endMin) {
+                        const a = bunkAssignments[i];
+                        if (a && (a._h2h || String(a.field || '').toLowerCase().includes('league'))) {
+                            foundLeagueAssignment = a;
+                            slotIdx = i;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            if (isLeagueSlot || leagueData || foundLeagueAssignment) {
+                // This IS a league slot
+                icon = "🏆";
+                const team = camper.team;
+                
+                if (!team) {
+                    locationHtml = `<span style="color:#d97706; font-weight:bold; font-size:1.4rem;">Leagues</span>`;
+                    detailsHtml = `<strong>${bunk}</strong> is playing leagues at this time.<br>
+                                   <strong>${camperName}</strong> has no team assigned yet — <a href="#" onclick="document.getElementById('loc-filter-roster').value='${camperName}'; document.getElementById('loc-filter-roster').focus(); document.getElementById('loc-filter-roster').dispatchEvent(new Event('keyup')); return false;">assign a team below</a> to see their exact field and matchup.`;
+                    if (leagueData?.gameLabel) {
+                        detailsHtml = `<strong>${leagueData.gameLabel}</strong> — ${bunk} is playing leagues at this time.<br>
+                                       <strong>${camperName}</strong> has no team assigned yet — <a href="#" onclick="document.getElementById('loc-filter-roster').value='${camperName}'; document.getElementById('loc-filter-roster').focus(); document.getElementById('loc-filter-roster').dispatchEvent(new Event('keyup')); return false;">assign a team below</a> to see their exact field and matchup.`;
+                    }
+                } else {
+                    // Has a team — try to find their matchup
+                    let match = null;
+                    if (leagueData?.matchups) {
+                        match = leagueData.matchups.find(m => m.teamA === team || m.teamB === team);
+                    }
+                    
+                    if (match) {
+                        locationHtml = `<span style="color:#059669; font-weight:bold; font-size:1.4rem;">${match.field}</span>`;
+                        detailsHtml = `Playing <strong>${leagueData.sport || "League"}</strong><br>
+                                       Matchup: <strong>${match.teamA}</strong> vs <strong>${match.teamB}</strong>`;
+                        if (leagueData.gameLabel) {
+                            detailsHtml = `<strong>${leagueData.gameLabel}</strong> — ${leagueData.sport || "League"}<br>
+                                           Matchup: <strong>${match.teamA}</strong> vs <strong>${match.teamB}</strong><br>
+                                           Field: <strong>${match.field}</strong>`;
+                        }
+                    } else {
+                        locationHtml = `<span style="color:#d97706; font-weight:bold; font-size:1.4rem;">Leagues</span>`;
+                        detailsHtml = `Team <strong>${team}</strong> — ${leagueData?.gameLabel || 'League Game'}<br>No specific matchup found (possible bye).`;
+                    }
+                }
+            } else if (divSlots.length === 0) {
                 locationHtml = `<span style="color:#999;">No Schedule Generated</span>`;
                 detailsHtml = "No schedule has been generated yet for this division. Generate a schedule first.";
             } else if (slotIdx < 0) {
