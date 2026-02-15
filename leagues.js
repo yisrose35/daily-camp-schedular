@@ -539,11 +539,10 @@
             return;
         }
         
-        // ★ FIX: Also skip if we just saved (within last 5 seconds)
-        // This prevents the focus event from loading stale data
+        // ★ FIX: Extended protection window to 8 seconds to cover cloud round-trip
         const timeSinceSave = Date.now() - _lastSaveTime;
-        if (timeSinceSave < 5000) {
-            console.log("[LEAGUES] Skipping refresh - recent save (" + timeSinceSave + "ms ago)");
+        if (timeSinceSave < 8000) {
+            console.log("[LEAGUES Skipping refresh - recent save (" + timeSinceSave + "ms ago)");
             return;
         }
         
