@@ -300,8 +300,7 @@
         const nowBtn = document.getElementById("loc-now-btn");
         const searchBtn = document.getElementById("loc-search-btn");
         resultContainer = document.getElementById("loc-result-display");
-        listContainer = document.getElementById("loc-roster-body");
-        const rosterFilter = document.getElementById("loc-filter-roster");
+        // Roster table removed — team assignments managed in Campistry Me
 
         // --- Event Listeners ---
 
