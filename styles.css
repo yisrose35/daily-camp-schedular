@@ -3807,3 +3807,176 @@ a:hover {
   text-align: center;
   font-size: 0.85rem;
 }
+/* ---------------------------------------------------------------
+   LEAGUES MASTER LIST (match #fields .master-list pattern)
+   --------------------------------------------------------------- */
+#leagues .master-list {
+  border: 1px solid var(--slate-200, #E5E7EB);
+  border-radius: var(--radius-md, 12px);
+  background: #fff;
+  overflow: hidden;
+}
+
+#leagues .list-item {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--slate-100, #F3F4F6);
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: background 0.15s;
+}
+
+#leagues .list-item:last-child {
+  border-bottom: none;
+}
+
+#leagues .list-item:hover {
+  background: var(--slate-50, #F9FAFB);
+}
+
+#leagues .list-item.selected {
+  background: var(--teal-tint-bg, #f0f9fb);
+  border-left: 3px solid var(--teal-primary, #147D91);
+}
+
+#leagues .list-item-name {
+  font-weight: 500;
+  color: var(--slate-800, #1F2937);
+  font-size: 0.9rem;
+}
+
+#leagues .switch {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+#leagues .switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+#leagues .slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: #ccc;
+  transition: .4s;
+  border-radius: 34px;
+}
+
+#leagues .slider:before {
+  position: absolute;
+  content: "";
+  height: 14px;
+  width: 14px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: .4s;
+  border-radius: 50%;
+}
+
+#leagues input:checked + .slider {
+  background-color: var(--teal-primary, #147D91);
+}
+
+#leagues input:checked + .slider:before {
+  transform: translateX(14px);
+}
+
+#leagues .muted {
+  color: var(--slate-500, #6B7280);
+  font-size: 0.85rem;
+}
+
+/* ---------------------------------------------------------------
+   SPECIALTY LEAGUES MASTER LIST (match #fields pattern)
+   --------------------------------------------------------------- */
+#specialty-leagues .master-list {
+  border: 1px solid var(--slate-200, #E5E7EB);
+  border-radius: var(--radius-md, 12px);
+  background: #fff;
+  overflow: hidden;
+}
+
+#specialty-leagues .list-item {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--slate-100, #F3F4F6);
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: background 0.15s;
+}
+
+#specialty-leagues .list-item:last-child {
+  border-bottom: none;
+}
+
+#specialty-leagues .list-item:hover {
+  background: var(--slate-50, #F9FAFB);
+}
+
+#specialty-leagues .list-item.selected {
+  background: var(--teal-tint-bg, #f0f9fb);
+  border-left: 3px solid var(--teal-primary, #147D91);
+}
+
+#specialty-leagues .list-item-name {
+  font-weight: 500;
+  color: var(--slate-800, #1F2937);
+  font-size: 0.9rem;
+}
+
+#specialty-leagues .switch {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+#specialty-leagues .switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+#specialty-leagues .slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: #ccc;
+  transition: .4s;
+  border-radius: 34px;
+}
+
+#specialty-leagues .slider:before {
+  position: absolute;
+  content: "";
+  height: 14px;
+  width: 14px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: .4s;
+  border-radius: 50%;
+}
+
+#specialty-leagues input:checked + .slider {
+  background-color: var(--teal-primary, #147D91);
+}
+
+#specialty-leagues input:checked + .slider:before {
+  transform: translateX(14px);
+}
+
+#specialty-leagues .muted {
+  color: var(--slate-500, #6B7280);
+  font-size: 0.85rem;
+}
