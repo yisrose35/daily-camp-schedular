@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -270,13 +271,9 @@
     <script src="demo_mode.js"></script>
     <script>
 if (window.location.protocol === 'file:') {
-    var s = document.createElement('script');
-    s.src = 'supabase-js-local.js';
-    document.head.appendChild(s);
+    document.write('<script src="supabase-js-local.js"><\/script>');
 } else {
-    var s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
-    document.head.appendChild(s);
+    document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>');
 }
 </script>
     <script src="supabase_client.js"></script>
