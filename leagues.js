@@ -386,10 +386,11 @@
             
             console.log("[LEAGUES] Data saved to cloud");
             
-            // ★ Clear flag after a short delay to allow sync to complete
+            // ★ Clear flag after protection window to prevent stale refresh
+            // Must match the 5-second window in refreshFromStorage
             setTimeout(() => {
                 _saveInProgress = false;
-            }, 500);
+            }, 5500);
         } catch (e) {
             console.error("[LEAGUES] Save failed:", e);
             _saveInProgress = false;
