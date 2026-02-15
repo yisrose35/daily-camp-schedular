@@ -786,8 +786,8 @@
             // ★ FIX: Use escapeHtml for user content
             el.innerHTML = '<span class="list-item-name">' + escapeHtml(name) + '</span>';
 
-            const tog = document.createElement('label');
-            tog.className = 'switch';
+           const tog = document.createElement('label');
+            tog.className = 'switch list-item-toggle';
             tog.onclick = function (e) { e.stopPropagation(); };
 
             const cb = document.createElement('input');
