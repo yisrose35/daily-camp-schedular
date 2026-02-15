@@ -50,16 +50,38 @@
         return window.CampistryDB?.getClient?.() || window.supabase || null;
     }
 
+    let _cachedCampId = null;
+
     function getCampId() {
+        // Return cached value if we have one (set during init/auth)
+        if (_cachedCampId) return _cachedCampId;
+        
+        // Fallback chain
         return window.CampistryDB?.getCampId?.() || 
                localStorage.getItem('campistry_camp_id') || 
                localStorage.getItem('campistry_user_id') || 
                null;
     }
 
+    // ★ v7.1: Async version that gets the proper UUID from Supabase session
+    async function ensureCampId() {
+        if (_cachedCampId) return _cachedCampId;
+        try {
+            const client = getSupabaseClient();
+            if (client) {
+                const { data } = await client.auth.getSession();
+                if (data?.session?.user?.id) {
+                    _cachedCampId = data.session.user.id;
+                    return _cachedCampId;
+                }
+            }
+        } catch (_) { /* fall through */ }
+        return getCampId();
+    }
+
     async function loadFromCloud() {
         const client = getSupabaseClient();
-        const campId = getCampId();
+        const campId = await ensureCampId();
         if (!client || !campId) {
             console.log('[Me] No client/campId for cloud load');
             return null;
@@ -102,7 +124,7 @@
     async function saveToCloud(mergeData, _retryCount) {
         const retryCount = _retryCount || 0;
         const client = getSupabaseClient();
-        const campId = getCampId();
+        const campId = await ensureCampId();
         if (!client || !campId) {
             console.log('[Me] No client/campId for cloud save');
             return false;
@@ -170,7 +192,7 @@
 
     async function saveToCloudLegacy(mergeData) {
         const client = getSupabaseClient();
-        const campId = getCampId();
+        const campId = await ensureCampId();
         if (!client || !campId) return false;
         try {
             try { await client.auth.getSession(); } catch (_) {}
@@ -287,6 +309,8 @@
             if (!window.supabase) { window.location.href = 'index.html'; return false; }
             const { data: { session } } = await window.supabase.auth.getSession();
             if (!session) { window.location.href = 'index.html'; return false; }
+            // ★ v7.1: Cache the user UUID for cloud operations
+            _cachedCampId = session.user.id;
             return true;
         } catch (e) { window.location.href = 'index.html'; return false; }
     }
