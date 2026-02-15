@@ -1,6 +1,11 @@
 // ============================================================================
-// landing.js — Campistry Landing Page (HARDENED v3.0)
+// landing.js — Campistry Landing Page (HARDENED v3.1)
 // ============================================================================
+// v3.1 CHANGES:
+//   - Added promo code detection during signup (checks promo_codes table)
+//   - Promo codes → plan_status='trial', normal codes → plan_status='active'
+//   - Removed email confirmation gate (users go straight through)
+//
 // v3.0 SECURITY FIXES:
 //   - Signup: creates camp + sets localStorage BEFORE redirect
 //   - Signup: checks for invite (pending OR already-accepted) to prevent phantom camps
@@ -376,21 +381,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 const user = data?.user;
 
-                if (authMode === 'signup' && user && !user.confirmed_at) {
-                    showAuthLoading(false);
-                    showAuthError('');
-                    const authSuccess = document.createElement('div');
-                    authSuccess.className = 'auth-success';
-                    authSuccess.style.display = 'block';
-                    authSuccess.textContent = 'Account created! Please check your email to confirm.';
-                    document.getElementById('authError')?.parentNode?.insertBefore(
-                        authSuccess, 
-                        document.getElementById('authError')
-                    );
-                    resetFormButton();
-                    return;
-                }
-
                 if (!user) {
                     throw new Error('Authentication failed. Please try again.');
                 }
@@ -427,55 +417,62 @@ document.addEventListener('DOMContentLoaded', function() {
                             localStorage.setItem('campistry_is_team_member', 'true');
                             console.log('[Landing] Invite detected, role:', existingInvite.role);
                         } else {
-                           // No invite — create camp (camp ID = user ID for owners)
-// ★ CHECK IF ACCESS CODE IS A PROMO CODE ★
-let planStatus = 'active';      // Default: full access (normal code)
-let trialStartedAt = null;
-let trialHours = null;
+                            // No invite — create camp (camp ID = user ID for owners)
+                            
+                            // ★★★ PROMO CODE DETECTION ★★★
+                            // Check if the access code is a promo code (trial) or regular (full access)
+                            let planStatus = 'active';
+                            let trialStartedAt = null;
+                            let trialHours = null;
 
-if (accessCode) {
-    try {
-        const { data: promoResult } = await supabase
-            .rpc('validate_promo_code', { input_code: accessCode });
-        
-        if (promoResult && promoResult.valid) {
-            // This is a promo code → trial mode
-            planStatus = 'trial';
-            trialStartedAt = new Date().toISOString();
-            trialHours = promoResult.trial_hours || 48;
-            console.log('[Landing] Promo code detected:', accessCode, '→ trial for', trialHours, 'hours');
-        } else {
-            // Not a promo code (or invalid promo) → treat as normal access code
-            // The existing server-side trigger will validate it
-            console.log('[Landing] Not a promo code, using as regular access code');
-        }
-    } catch (promoErr) {
-        console.warn('[Landing] Promo check failed, proceeding with normal flow:', promoErr);
-    }
-}
-
-const { error: campError } = await supabase
-    .from('camps')
-    .insert([{
-        id: user.id,
-        owner: user.id,
-        name: campName,
-        address: '',
-        plan_status: planStatus,
-        trial_started_at: trialStartedAt,
-        trial_hours: trialHours
-    }])
-    .select()
-    .single();
-
-                            if (campError && campError.code !== '23505') {
-                                console.error('[Landing] Camp creation failed:', campError);
-                                // Server-side access code trigger returns this error
-                                if (campError.message?.includes('access code')) {
-                                    throw new Error('Invalid access code. Contact campistryoffice@gmail.com for access.');
+                            if (accessCode) {
+                                try {
+                                    const { data: promoResult, error: promoError } = await supabase
+                                        .rpc('validate_promo_code', { input_code: accessCode });
+                                    
+                                    console.log('[Landing] Promo code check result:', promoResult, 'error:', promoError);
+                                    
+                                    if (!promoError && promoResult && promoResult.valid) {
+                                        planStatus = 'trial';
+                                        trialStartedAt = new Date().toISOString();
+                                        trialHours = promoResult.trial_hours || 48;
+                                        console.log('[Landing] ✅ Promo code accepted:', accessCode, '→ trial for', trialHours, 'hours');
+                                    } else {
+                                        console.log('[Landing] Not a promo code, using as regular access code');
+                                    }
+                                } catch (promoErr) {
+                                    console.warn('[Landing] Promo check failed, proceeding with normal flow:', promoErr);
                                 }
-                                throw new Error('Could not create camp. Please try again.');
                             }
+
+                            const { data: campData, error: campError } = await supabase
+                                .from('camps')
+                                .insert([{
+                                    id: user.id,
+                                    owner: user.id,
+                                    name: campName,
+                                    address: '',
+                                    plan_status: planStatus,
+                                    trial_started_at: trialStartedAt,
+                                    trial_hours: trialHours
+                                }])
+                                .select()
+                                .single();
+
+                            if (campError) {
+                                console.error('[Landing] Camp creation failed:', campError);
+                                if (campError.code === '23505') {
+                                    // Duplicate key — camp already exists, that's fine
+                                    console.log('[Landing] Camp already exists (23505), proceeding');
+                                } else if (campError.message?.includes('access code')) {
+                                    throw new Error('Invalid access code. Contact campistryoffice@gmail.com for access.');
+                                } else {
+                                    throw new Error('Could not create camp. Please try again.');
+                                }
+                            } else {
+                                console.log('[Landing] ✅ Camp created:', campData);
+                            }
+
                             localStorage.setItem('campistry_camp_id', user.id);
                             localStorage.setItem('campistry_user_id', user.id);
                             localStorage.setItem('campistry_auth_user_id', user.id);
@@ -485,6 +482,7 @@ const { error: campError } = await supabase
                         }
                     } catch (setupErr) {
                         console.error('[Landing] Post-signup setup error:', setupErr);
+                        throw setupErr;
                     }
 
                 // =============================================================
