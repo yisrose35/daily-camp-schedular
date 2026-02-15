@@ -78,13 +78,32 @@ document.addEventListener("DOMContentLoaded", async () => {
         attempts++;
     }
 
+    // ★ FAST-PASS: Check localStorage before redirecting
+    const cachedUserId = localStorage.getItem('campistry_auth_user_id');
+    const cachedCampId = localStorage.getItem('campistry_camp_id');
+    const hasLocalAuth = !!(cachedUserId && cachedCampId);
+    
     // Check session
     const { data: { session } } = await window.supabase?.auth?.getSession() || { data: { session: null } };
 
     if (!session) {
-        console.warn('[welcome.js] No active session, redirecting to login');
-        window.location.href = 'index.html';
-        return;
+        if (hasLocalAuth) {
+            console.log('🔑 [welcome.js] No Supabase session but cached auth found — proceeding');
+            // Try background refresh
+            window.supabase?.auth?.refreshSession().then(({ data, error }) => {
+                if (error || !data?.session) {
+                    console.warn('🔑 [welcome.js] Background refresh failed — redirecting');
+                    localStorage.removeItem('campistry_auth_user_id');
+                    localStorage.removeItem('campistry_camp_id');
+                    localStorage.removeItem('campistry_role');
+                    window.location.href = 'index.html';
+                }
+            });
+        } else {
+            console.warn('[welcome.js] No active session, redirecting to login');
+            window.location.href = 'index.html';
+            return;
+        }
     }
 
     // Show main app immediately once session is verified
