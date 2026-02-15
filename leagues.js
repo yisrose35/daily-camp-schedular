@@ -669,19 +669,39 @@
         setupBeforeUnloadHandler();
 
         // LAYOUT
-        const contentWrapper = document.createElement('div');
+       const contentWrapper = document.createElement('div');
         contentWrapper.innerHTML = `
-            <div class="league-panel-grid">
-              <section class="league-panel-sidebar">
-                <h3>Leagues</h3>
-                <div class="league-add-row">
-                  <input id="league-add-input" placeholder="League name..." class="league-add-input" />
-                  <button id="league-add-btn" class="league-add-btn">+ Add</button>
+            <div class="setup-grid">
+              <section class="setup-card setup-card-wide" style="border:none; box-shadow:none; background:transparent;">
+                <div class="setup-card-header" style="margin-bottom:20px;">
+                  <span class="setup-step-pill">Leagues</span>
+                  <div class="setup-card-text">
+                    <h3>Manage Leagues</h3>
+                    <p>Configure leagues, teams, standings, and game results.</p>
+                  </div>
                 </div>
-                <div id="leagues-master-list" class="master-list"></div>
-              </section>
-              <section class="league-panel-main">
-                <div id="leagues-detail-pane" style="margin-top:8px;"></div>
+
+                <div style="display:flex; flex-wrap:wrap; gap:24px;">
+                  <!-- LEFT SIDE: MASTER LIST -->
+                  <div style="flex:1; min-width:280px;">
+                    <div style="display:flex; justify-content:space-between; align-items:end; margin-bottom:8px;">
+                      <div class="setup-subtitle">All Leagues</div>
+                    </div>
+
+                    <div style="background:white; padding:10px; border-radius:12px; border:1px solid #E5E7EB; margin-bottom:12px; display:flex; gap:8px;">
+                      <input id="league-add-input" placeholder="New League (e.g., Soccer League)" style="flex:1; border:none; outline:none; font-size:0.9rem;">
+                      <button id="league-add-btn" style="background:#111; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
+                    </div>
+
+                    <div id="leagues-master-list" class="master-list" style="max-height:600px; overflow-y:auto;"></div>
+                  </div>
+
+                  <!-- RIGHT SIDE: DETAIL PANE -->
+                  <div style="flex:1.4; min-width:340px;">
+                    <div class="setup-subtitle">League Configuration</div>
+                    <div id="leagues-detail-pane" style="margin-top:8px;"></div>
+                  </div>
+                </div>
               </section>
             </div>`;
         container.appendChild(contentWrapper);
