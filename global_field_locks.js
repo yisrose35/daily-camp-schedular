@@ -75,13 +75,12 @@
                 return false;
             }
             
-            // Apply global lock
             this._locks[slotIdx][normalizedField] = {
-                ...lockInfo,
-                lockType: 'global',  // Explicitly mark as global
-                fieldName: fieldName, // Store original case
-                timestamp: Date.now()
-            };
+    ...lockInfo,
+    lockType: 'global',
+    fieldName: fieldName,
+    timestamp: Date.now()
+};
             
             // console.log(`[GLOBAL_LOCKS] 🔒 LOCKED: "${fieldName}" at slot ${slotIdx} by ${lockInfo.lockedBy} (${lockInfo.leagueName || lockInfo.activity})`);
         }
