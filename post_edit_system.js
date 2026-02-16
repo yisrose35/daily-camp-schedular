@@ -425,9 +425,16 @@
     // =========================================================================
 
     async function sendSchedulerNotification(affectedBunks, location, activity, notificationType) {
-        console.log(`[PostEdit] 📧 Sending ${notificationType} notification for bunks:`, affectedBunks);
+        // ★ DEMO FIX: No supabase users to notify in demo mode
+        if (window.__CAMPISTRY_DEMO_MODE__) {
+            console.log('[PostEdit] 🎭 Demo mode — skipping scheduler notification');
+            return;
+        }
+
+        console.log('[PostEdit] 📧 Sending ' + (notificationType || 'conflict') + ' notification for bunks:', affectedBunks);
         
         const supabase = window.CampistryDB?.getClient?.() || window.supabase;
+
         if (!supabase) {
             console.warn('[PostEdit] Supabase not available for notifications');
             return;
