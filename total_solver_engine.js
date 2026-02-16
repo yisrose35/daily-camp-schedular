@@ -1964,6 +1964,8 @@
         for (var cand of allCandidateOptions) {
             if (disabledFields.includes(cand.field)) continue;
             if (window.GlobalFieldLocks?.isFieldLocked(cand.field, slots)) continue;
+            // ★★★ FIX v13.1: Time-based lock check for cross-division league conflicts ★★★
+            if (hasValidTimes && isFieldLockedByTime(cand.field, startMin, endMin, blockDivName)) continue;
             var fieldName = cand.field, fieldNorm = cand._fieldNorm, capacity = getFieldCapacity(fieldName), sharingType = getSharingType(fieldName);
             if (hasValidTimes) {
                 if (checkCrossDivisionTimeConflict(fieldName, blockDivName, startMin, endMin, bunk)) continue;
