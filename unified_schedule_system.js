@@ -2883,9 +2883,84 @@ let conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
         const fieldsBySport = settings.fieldsBySport || {};
         const disabledFields = window.currentDisabledFields || [];
 
-        const candidates = [];
-        
+       const candidates = [];
+
+        // ★ DEMO FIX: Use proper field iteration in demo mode
+        if (window.__CAMPISTRY_DEMO_MODE__) {
+            const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
+            const disabledSet = new Set(disabledFields);
+            const seenKeys = new Set();
+
+            // Ensure activityProperties is populated
+            if (Object.keys(activityProps).length === 0 && window.refreshActivityPropertiesFromFields) {
+                window.refreshActivityPropertiesFromFields();
+            }
+
+            // Iterate app1.fields (primary source — fieldsBySport may be empty in demo)
+            for (const field of (app1.fields || [])) {
+                if (!field.name || field.available === false) continue;
+                if (excludeSet.has(field.name)) continue;
+                if (disabledSet.has(field.name)) continue;
+                if (window.GlobalFieldLocks?.isFieldLocked(field.name, slots, divName)) continue;
+
+                const fp = activityProps[field.name] || {};
+                if (!isRainyMode && (fp.rainyDayOnly === true || fp.rainyDayExclusive === true)) continue;
+                if (isRainyMode && (fp.rainyDayAvailable === false && field.rainyDayAvailable !== true)) continue;
+
+                let available = true;
+                const maxCap = fp.sharableWith?.capacity || (fp.sharable ? 2 : 1);
+                for (const slotIdx of slots) {
+                    const usage = simulatedUsage[slotIdx]?.[field.name];
+                    if (usage && usage.count >= maxCap) { available = false; break; }
+                }
+
+                if (available) {
+                    (field.activities || []).forEach(activity => {
+                        const key = field.name + '|' + activity;
+                        if (seenKeys.has(key)) return;
+                        seenKeys.add(key);
+                        const penalty = calculateRotationPenalty(bunk, activity, slots);
+                        if (penalty !== Infinity) {
+                            candidates.push({ field: field.name, activityName: activity, type: 'sport', penalty });
+                        }
+                    });
+                }
+            }
+
+            // Also add specials
+            for (const special of (app1.specialActivities || [])) {
+                if (!special.name) continue;
+                if (excludeSet.has(special.name) || disabledSet.has(special.name)) continue;
+                if (window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) continue;
+                if (!isRainyMode && (special.rainyDayOnly === true || special.rainyDayExclusive === true)) continue;
+                if (isRainyMode && special.rainyDayAvailable === false) continue;
+
+                const key = 'special|' + special.name;
+                if (seenKeys.has(key)) continue;
+                seenKeys.add(key);
+
+                let available = true;
+                const sp = activityProps[special.name] || {};
+                const maxCap = sp.sharableWith?.capacity || (sp.sharable ? 2 : 1);
+                for (const slotIdx of slots) {
+                    const usage = simulatedUsage[slotIdx]?.[special.name];
+                    if (usage && usage.count >= maxCap) { available = false; break; }
+                }
+                if (available) {
+                    const penalty = calculateRotationPenalty(bunk, special.name, slots);
+                    if (penalty !== Infinity) {
+                        candidates.push({ field: special.name, activityName: special.name, type: 'special', penalty });
+                    }
+                }
+            }
+
+            candidates.sort((a, b) => a.penalty - b.penalty);
+            console.log('[findAlternative] 🎭 Demo: ' + bunk + ': ' + candidates.length + ' candidates, best: ' + (candidates[0]?.activityName || 'none'));
+            return candidates[0] || null;
+        }
+
         for (const [sport, sportFields] of Object.entries(fieldsBySport)) {
+
             (sportFields || []).forEach(fName => {
                 if (excludeSet.has(fName)) return;
 if (disabledFields.includes(fName)) return;
