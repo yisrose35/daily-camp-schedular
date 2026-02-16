@@ -66,7 +66,7 @@
         FIVE_DAYS_AGO_PENALTY: 1500,             // 5 days ago - slight concern
         SIX_SEVEN_DAYS_PENALTY: 800,             // 6-7 days ago - mild
         FOUR_TO_SEVEN_DAYS_PENALTY: 800,         // Alias for compatibility
-        WEEK_PLUS_PENALTY: 200,                  // 8+ days ago - minimal
+        WEEK_PLUS_PENALTY: 0,                  // 8+ days ago - minimal
 
         // =====================================================================
         // ★★★ STREAK PENALTIES - Escalating for patterns ★★★
