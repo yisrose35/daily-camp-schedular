@@ -397,7 +397,7 @@ if (authMode === 'signup' && data?.user && !data?.session) {
 
 
 
-                const user = data?.user;
+                let user = data?.user;
 
                 if (!user) {
                     throw new Error('Authentication failed. Please try again.');
