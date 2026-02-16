@@ -1497,9 +1497,19 @@ actualSlots.forEach((slotIdx, i) => {
 // =========================================================================
 // HELPER: Find Best Activity (DIVISION-AWARE)
 // =========================================================================
-function findBestActivityForBunkDivisionAware(bunk, slots, divName, fieldUsageBySlot, activityProperties, avoidFields = []) {
-    const disabledFields = window.currentDisabledFields || [];
-    const avoidSet = new Set(avoidFields.map(f => (f || '').toLowerCase()));
+ function findBestActivityForBunkDivisionAware(bunk, slots, divName, fieldUsageBySlot, activityProperties, avoidFields = []) {
+        const disabledFields = window.currentDisabledFields || [];
+        const avoidSet = new Set(avoidFields.map(f => (f || '').toLowerCase()));
+
+        // ★ DEMO FIX: Ensure activityProperties is populated in demo mode
+        if (window.__CAMPISTRY_DEMO_MODE__ && (!activityProperties || Object.keys(activityProperties).length === 0)) {
+            activityProperties = window.getActivityProperties?.() || window.activityProperties || {};
+            if (Object.keys(activityProperties).length === 0 && window.refreshActivityPropertiesFromFields) {
+                window.refreshActivityPropertiesFromFields();
+                activityProperties = window.activityProperties || {};
+            }
+        }
+
     
     // Get time range for these slots
     const divSlots = window.divisionTimes?.[divName] || [];
