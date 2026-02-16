@@ -1133,6 +1133,22 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
         for (const cand of candidates) {
             if (avoidSet.has(cand.field.toLowerCase()) || avoidSet.has(cand.activityName?.toLowerCase())) continue;
             if (!isFieldAvailable(cand.field, slots, bunk, fieldUsageBySlot, activityProps)) continue;
+            
+            // ★★★ v4.1.2 FIX: Enforce limitUsage, timeRules & preferences ★★★
+            if (window.SchedulerCoreUtils?.canBlockFit) {
+                const divSlots_fb = window.divisionTimes?.[divName] || [];
+                const pseudoBlock = {
+                    bunk: bunk,
+                    divName: divName,
+                    startTime: slots.length > 0 && divSlots_fb[slots[0]] ? divSlots_fb[slots[0]].startMin : null,
+                    endTime: slots.length > 0 && divSlots_fb[slots[slots.length - 1]] ? divSlots_fb[slots[slots.length - 1]].endMin : null,
+                    slots: slots
+                };
+                if (!window.SchedulerCoreUtils.canBlockFit(pseudoBlock, cand.field, activityProps, fieldUsageBySlot, cand.activityName)) {
+                    continue;
+                }
+            }
+            
             const cost = calculatePenaltyCost(bunk, slots, cand, fieldUsageBySlot, activityProps);
             if (cost < Infinity) scoredPicks.push({ ...cand, cost });
         }
@@ -1140,8 +1156,7 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
         return scoredPicks.length > 0 ? scoredPicks[0] : null;
     }
 
-    function applyPickToBunk(bunk, slots, pick, fieldUsageBySlot, activityProps) {
-        const divName = getDivisionForBunk(bunk);
+    function applyPickToBunk(bunk, slots, pick, fieldUsageBySlot, activityProps) {        const divName = getDivisionForBunk(bunk);
         const divSlots = window.divisionTimes?.[divName] || [];
         
         let startMin = null, endMin = null;
