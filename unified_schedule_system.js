@@ -1535,11 +1535,26 @@ actualSlots.forEach((slotIdx, i) => {
         
         if (avoidSet.has(fieldLower) || avoidSet.has(actLower)) continue;
         
-        // Check field availability by TIME
+       // Check field availability by TIME
         if (!checkFieldAvailableByTime(cand.field, startMin, endMin, bunk, activityProperties)) continue;
         
         // Also check slot-based for backwards compat
         if (!isFieldAvailable(cand.field, slots, bunk, fieldUsageBySlot, activityProperties)) continue;
+        
+        // ★★★ v4.1.2 FIX: Enforce limitUsage, timeRules & preferences ★★★
+        // Without this, bumped bunks get assigned fields/specials their division can't access
+        if (window.SchedulerCoreUtils?.canBlockFit) {
+            const pseudoBlock = {
+                bunk: bunk,
+                divName: divName,
+                startTime: startMin,
+                endTime: endMin,
+                slots: slots
+            };
+            if (!window.SchedulerCoreUtils.canBlockFit(pseudoBlock, cand.field, activityProperties, fieldUsageBySlot, cand.activityName)) {
+                continue;
+            }
+        }
         
         const cost = calculatePenaltyCost(bunk, slots, cand, fieldUsageBySlot, activityProperties);
         if (cost < Infinity) {
@@ -1554,8 +1569,7 @@ actualSlots.forEach((slotIdx, i) => {
 
 
 // =========================================================================
-// HELPER: Check Field Available By Time (CROSS-DIVISION SAFE v2)
-// ★★★ v4.1.1: Now enforces sharableWith.type for cross-division rules ★★★
+// HELPER: Check Field Available By Time (CROSS-DIVISION SAFE v2)// ★★★ v4.1.1: Now enforces sharableWith.type for cross-division rules ★★★
 // =========================================================================
 function checkFieldAvailableByTime(fieldName, startMin, endMin, excludeBunk, activityProperties) {
     if (startMin === null || endMin === null) return true;
