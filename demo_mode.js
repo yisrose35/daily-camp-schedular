@@ -947,22 +947,7 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
         fireDemoInitEvents();
     }
 
-    // ── E: Make Me/Flow use localStorage directly, skip cloud indirection ──
-    // campistry_me.js loadFromCloud() queries camp_state through the mock,
-    // but the cloud vs local comparison can fail due to data shape differences.
-    // Simplest fix: make loadFromCloud return null in demo mode → loadAllData
-    // falls through to "cloud empty, use local" path → localStorage wins.
-    //
-    // We achieve this by making camp_state queries return empty when called
-    // by Me's loadFromCloud (which uses .single()). The mock already handles
-    // this — .single() on empty rows returns {data: null, error: PGRST116}.
-    // But currently camp_state always returns data. So we override it here:
-    // when __CAMPISTRY_DEMO_MODE__ and the page is Me, return data shaped
-    // so loadFromCloud gets the full local settings as "cloud" — this way
-    // local and cloud match, data loads, and edits save to localStorage.
-    //
-    // Actually even simpler: just expose the demo IDs globally so any
-    // getCampId() UUID fallback can find a usable value.
+    // ── E: Expose demo IDs globally for any code that needs them ──
     window.__DEMO_CAMP_ID__ = DEMO_CAMP_ID;
     window.__DEMO_USER_ID__ = DEMO_USER_ID;
 
