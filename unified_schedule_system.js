@@ -3065,8 +3065,9 @@ let conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
                 if (!special.name) continue;
                 if (excludeSet.has(special.name) || disabledSet.has(special.name)) continue;
                 if (window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) continue;
-                if (!isRainyMode && (special.rainyDayOnly === true || special.rainyDayExclusive === true)) continue;
+               if (!isRainyMode && (special.rainyDayOnly === true || special.rainyDayExclusive === true)) continue;
                 if (isRainyMode && special.rainyDayAvailable === false) continue;
+                if (_altIsBlockedForDiv(special.name)) continue;
 
                 const key = 'special|' + special.name;
                 if (seenKeys.has(key)) continue;
