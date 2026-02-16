@@ -280,20 +280,14 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
             }
 
             // ·····························································
-            // CAMP_STATE — return localStorage global settings
+            // CAMP_STATE — return empty so loadAllData uses localStorage directly.
+            // campistry_me.js reads localStorage via readLocalSettings() which
+            // is reliable. Going through the mock adds fragile indirection.
+            // Returning [] here makes .single() return null → loadFromCloud
+            // returns null → loadAllData picks the "cloud empty, use local" path.
             // ·····························································
             case 'camp_state': {
-                try {
-                    const raw = localStorage.getItem('campGlobalSettings_v1');
-                    const state = raw ? JSON.parse(raw) : {};
-                    rows = [{
-                        camp_id: DEMO_CAMP_ID,
-                        state: state,
-                        updated_at: state.updated_at || new Date().toISOString()
-                    }];
-                } catch {
-                    rows = [{ camp_id: DEMO_CAMP_ID, state: {}, updated_at: new Date().toISOString() }];
-                }
+                rows = [];
                 break;
             }
 
@@ -546,13 +540,23 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
     // =========================================================================
     // 9. INSTALL MOCK — protect window.supabase so the CDN can't overwrite it
     // =========================================================================
+    // ★ CRITICAL FIX: _demoSupabase must be MOCK_CLIENT itself (with .auth,
+    // .from(), etc.) — NOT just a {createClient} wrapper. When offline, the
+    // Supabase CDN fails to load, so supabase_client.js never runs. Pages like
+    // flow.html and campistry_me.html call window.supabase.auth.getSession()
+    // directly. If _demoSupabase only has createClient, .auth is undefined
+    // and everything breaks.
+    //
+    // We bolt createClient onto MOCK_CLIENT so supabase_client.js still works
+    // if it does load (e.g. file:// protocol or cached CDN).
+    // =========================================================================
 
-    let _demoSupabase = {
-        createClient(url, key, opts) {
-            console.log('🎭 [Demo] Mock Supabase client created (offline mode)');
-            return MOCK_CLIENT;
-        }
+    MOCK_CLIENT.createClient = function(url, key, opts) {
+        console.log('🎭 [Demo] Mock Supabase client created (offline mode)');
+        return MOCK_CLIENT;
     };
+
+    let _demoSupabase = MOCK_CLIENT;
 
     Object.defineProperty(window, 'supabase', {
         configurable: true,
@@ -869,160 +873,98 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
     }
 
     // =========================================================================
-    // 18. OFFLINE SAFETY NET — Ensure all init events fire even if SDK fails
+    // 18. DEMO MODE INSTANT BOOTSTRAP — Skip auth, assume owner, use localStorage
     // =========================================================================
-    // When offline (not file:// protocol, e.g. cached PWA or service worker),
-    // the Supabase CDN script fails to load. flow.html and campistry_me.html
-    // chain supabase_client.js to load only AFTER the CDN script succeeds,
-    // so supabase_client.js never loads, CampistryDB never inits, and every
-    // downstream system hangs waiting for 'campistry-db-ready'.
-    // This safety net detects that condition and bootstraps everything.
+    // In demo mode there's no server, no Supabase CDN, no auth session to check.
+    // We immediately set every flag and global that the app expects so pages
+    // (Flow, Me, Dashboard) can boot without waiting for anything.
     // =========================================================================
 
-    function ensureOfflineBootstrap() {
-        const BOOT_TIMEOUT = 4000;
+    // ── A: Hydrate window globals from localStorage right now ──
+    try {
+        const raw = localStorage.getItem('campGlobalSettings_v1');
+        if (raw) {
+            const settings = JSON.parse(raw);
+            window.divisions = settings.divisions || settings.campStructure || {};
+            window.globalBunks = settings.bunks || settings.app1?.bunks || [];
+            window.availableDivisions = Object.keys(window.divisions);
+        }
+    } catch (e) {
+        console.warn('🎭 [Demo] Hydration error:', e);
+    }
 
-        setTimeout(() => {
-            // If CampistryDB already initialized normally, nothing to do
-            if (window.CampistryDB?.isInitialized?.()) {
-                console.log('🎭 [Demo] CampistryDB initialized normally — safety net not needed');
-                return;
-            }
+    // ── B: Mark cloud hydration as done immediately ──
+    window.__CAMPISTRY_CLOUD_READY__ = true;
+    window.__CAMPISTRY_HYDRATED__ = true;
 
-            console.warn('🎭 [Demo] CampistryDB not initialized after ' + BOOT_TIMEOUT + 'ms — activating offline safety net');
+    // ── C: Pre-seed CampistryDB so nothing hangs on CampistryDB.ready ──
+    if (!window.CampistryDB) {
+        window.CampistryDB = {
+            client: MOCK_CLIENT,
+            initialize: () => Promise.resolve(true),
+            refresh: () => Promise.resolve({ campId: DEMO_CAMP_ID, role: 'owner' }),
+            ready: Promise.resolve(true),
+            isInitialized: () => true,
+            getClient: () => MOCK_CLIENT,
+            getCampId: () => DEMO_CAMP_ID,
+            getUserId: () => DEMO_USER_ID,
+            getSession: () => MOCK_SESSION,
+            getAccessToken: () => Promise.resolve('demo-access-token'),
+            getRole: () => 'owner',
+            isRoleVerified: () => true,
+            isOwner: () => true,
+            isAdmin: () => true,
+            isTeamMember: () => false,
+            isAuthenticated: () => true,
+            onAuthChange: () => {},
+            rawQuery: () => Promise.resolve(null),
+            config: Object.freeze({})
+        };
+        console.log('🎭 [Demo] CampistryDB ready (demo owner)');
+    }
 
-            // ── Step 1: Ensure window.supabase points to MOCK_CLIENT ──
-            // The property may still be the {createClient} wrapper if the
-            // CDN never loaded and supabase_client.js never called createClient.
-            if (!window.supabase || !window.supabase.auth) {
-                if (window.supabase && typeof window.supabase.createClient === 'function') {
-                    const mockClient = window.supabase.createClient('', '');
-                    try {
-                        Object.defineProperty(window, 'supabase', {
-                            configurable: true, enumerable: true,
-                            value: mockClient, writable: true
-                        });
-                    } catch (e) {
-                        window.supabase = mockClient;
-                    }
-                    console.log('🎭 [Demo] Resolved mock client from createClient()');
-                }
-            }
-
-            // ── Step 2: Bootstrap CampistryDB if missing or uninitialized ──
-            if (!window.CampistryDB) {
-                window.CampistryDB = {
-                    client: window.supabase || null,
-                    initialize: () => Promise.resolve(true),
-                    refresh: () => Promise.resolve({ campId: DEMO_CAMP_ID, role: 'owner' }),
-                    ready: Promise.resolve(true),
-                    isInitialized: () => true,
-                    getClient: () => window.supabase || null,
-                    getCampId: () => DEMO_CAMP_ID,
-                    getUserId: () => DEMO_USER_ID,
-                    getSession: () => MOCK_SESSION,
-                    getAccessToken: () => Promise.resolve('demo-access-token'),
-                    getRole: () => 'owner',
-                    isRoleVerified: () => true,
-                    isOwner: () => true,
-                    isAdmin: () => true,
-                    isTeamMember: () => false,
-                    isAuthenticated: () => true,
-                    onAuthChange: () => {},
-                    rawQuery: () => Promise.resolve(null),
-                    config: Object.freeze({})
-                };
-                console.log('🎭 [Demo] Created fallback CampistryDB');
-            } else if (!window.CampistryDB.isInitialized?.()) {
-                // CampistryDB object exists but never finished init — patch it
-                if (!window.CampistryDB.getCampId?.()) {
-                    window.CampistryDB.getCampId = () => DEMO_CAMP_ID;
-                }
-                if (!window.CampistryDB.getUserId?.()) {
-                    window.CampistryDB.getUserId = () => DEMO_USER_ID;
-                }
-                if (!window.CampistryDB.getRole?.() || window.CampistryDB.getRole() === 'viewer') {
-                    window.CampistryDB.getRole = () => 'owner';
-                }
-                window.CampistryDB.isRoleVerified = () => true;
-                console.log('🎭 [Demo] Patched existing CampistryDB with demo values');
-            }
-
-            // ── Step 3: Fire campistry-db-ready ──
-            window.dispatchEvent(new CustomEvent('campistry-db-ready', {
-                detail: { campId: DEMO_CAMP_ID, role: 'owner', isTeamMember: false, roleVerified: true }
-            }));
-
-            // ── Step 4: Force cloud hydration from localStorage ──
-            setTimeout(() => {
-                if (!window.__CAMPISTRY_CLOUD_READY__) {
-                    try {
-                        const raw = localStorage.getItem('campGlobalSettings_v1');
-                        if (raw) {
-                            const settings = JSON.parse(raw);
-                            window.divisions = settings.divisions || settings.campStructure || {};
-                            window.globalBunks = settings.bunks || settings.app1?.bunks || [];
-                            window.availableDivisions = Object.keys(window.divisions);
-                        }
-                    } catch (e) {
-                        console.warn('🎭 [Demo] Hydration error:', e);
-                    }
-                    window.__CAMPISTRY_CLOUD_READY__ = true;
-                    window.__CAMPISTRY_HYDRATED__ = true;
-                    window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
-                    console.log('🎭 [Demo] Cloud hydration forced from localStorage');
-                }
-            }, 500);
-
-            // ── Step 5: Fire ScheduleDB ready ──
-            setTimeout(() => {
-                if (!window.ScheduleDB?.isInitialized) {
-                    window.dispatchEvent(new CustomEvent('campistry-scheduledb-ready'));
-                    console.log('🎭 [Demo] ScheduleDB ready forced');
-                }
-            }, 800);
-
-            // ── Step 6: Fire RBAC events ──
-            setTimeout(() => {
-                if (!window.AccessControl?.isInitialized) {
-                    window.dispatchEvent(new CustomEvent('rbac-system-ready', {
-                        detail: { role: 'owner', isOwner: true }
-                    }));
-                    window.dispatchEvent(new CustomEvent('campistry-rbac-ready', {
-                        detail: { role: 'owner', isOwner: true }
-                    }));
-                    console.log('🎭 [Demo] RBAC events forced');
-                }
-            }, 1000);
-
-            // ── Step 7: Last resort — force-show app if loading screen stuck ──
-            setTimeout(() => {
-                const loadingScreen = document.getElementById('auth-loading-screen');
-                const mainApp = document.getElementById('main-app-container') ||
-                               document.getElementById('main-content');
-
-                if (loadingScreen && getComputedStyle(loadingScreen).display !== 'none') {
-                    console.warn('🎭 [Demo] Loading screen still visible after 6s — force-showing app');
-                    loadingScreen.style.display = 'none';
-                    if (mainApp) mainApp.style.display = 'block';
-                    window.__CAMPISTRY_BOOTED__ = true;
-                    window.refreshGlobalRegistry?.();
-                    window.initCalendar?.();
-                    window.initApp1?.();
-                    window.initLeagues?.();
-                    window.initScheduleSystem?.();
-                    window.initDailyAdjustments?.();
-                }
-            }, 6000);
-
-        }, BOOT_TIMEOUT);
+    // ── D: Fire all init events once DOM is ready ──
+    // Some listeners are registered during DOMContentLoaded, so fire events
+    // after DOM is parsed to ensure they're caught.
+    function fireDemoInitEvents() {
+        window.dispatchEvent(new CustomEvent('campistry-db-ready', {
+            detail: { campId: DEMO_CAMP_ID, role: 'owner', isTeamMember: false, roleVerified: true }
+        }));
+        window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
+        window.dispatchEvent(new CustomEvent('campistry-scheduledb-ready'));
+        window.dispatchEvent(new CustomEvent('rbac-system-ready', {
+            detail: { role: 'owner', isOwner: true }
+        }));
+        window.dispatchEvent(new CustomEvent('campistry-rbac-ready', {
+            detail: { role: 'owner', isOwner: true }
+        }));
+        console.log('🎭 [Demo] All init events fired');
     }
 
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', ensureOfflineBootstrap);
+        document.addEventListener('DOMContentLoaded', fireDemoInitEvents);
     } else {
-        ensureOfflineBootstrap();
+        fireDemoInitEvents();
     }
+
+    // ── E: Make Me/Flow use localStorage directly, skip cloud indirection ──
+    // campistry_me.js loadFromCloud() queries camp_state through the mock,
+    // but the cloud vs local comparison can fail due to data shape differences.
+    // Simplest fix: make loadFromCloud return null in demo mode → loadAllData
+    // falls through to "cloud empty, use local" path → localStorage wins.
+    //
+    // We achieve this by making camp_state queries return empty when called
+    // by Me's loadFromCloud (which uses .single()). The mock already handles
+    // this — .single() on empty rows returns {data: null, error: PGRST116}.
+    // But currently camp_state always returns data. So we override it here:
+    // when __CAMPISTRY_DEMO_MODE__ and the page is Me, return data shaped
+    // so loadFromCloud gets the full local settings as "cloud" — this way
+    // local and cloud match, data loads, and edits save to localStorage.
+    //
+    // Actually even simpler: just expose the demo IDs globally so any
+    // getCampId() UUID fallback can find a usable value.
+    window.__DEMO_CAMP_ID__ = DEMO_CAMP_ID;
+    window.__DEMO_USER_ID__ = DEMO_USER_ID;
 
     console.log('🎭 Demo mode ready. Run demoStatus() for details.');
 
