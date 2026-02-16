@@ -512,11 +512,18 @@
     // APPLY EDIT (Main entry point)
     // =========================================================================
 
-    async function applyEdit(bunk, editData) {
-        const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
-        const unifiedTimes = window.unifiedTimes || [];
-        
-        const isClear = activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
+   async function applyEdit(bunk, editData) {
+//         const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
+//         const unifiedTimes = window.unifiedTimes || [];
+//
+//         // ★ DEMO FIX: Guard against undefined activity
+//         if (window.__CAMPISTRY_DEMO_MODE__ && !activity && activity !== '') {
+//             console.error('[PostEdit] ❌ Demo: applyEdit called with undefined activity:', editData);
+//             alert('Error: No activity specified.');
+//             return;
+//         }
+//
+//         const isClear = activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
         // UPDATED: Use SchedulerCoreUtils
         const slots = window.SchedulerCoreUtils?.findSlotsForRange?.(startMin, endMin, unifiedTimes) || [];
         
