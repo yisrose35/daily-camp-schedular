@@ -1774,7 +1774,8 @@
                 for (var pci = 0; pci < allCandidateOptions.length; pci++) {
                     var pC = allCandidateOptions[pci];
                     if (disabledSet.indexOf(pC.field) !== -1) continue;
-                    if (window.GlobalFieldLocks?.isFieldLocked(pC.field, slots)) continue;
+                   if (window.GlobalFieldLocks?.isFieldLocked(pC.field, slots)) continue;
+                    if (isFieldLockedByTime(pC.field, startMin, endMin, blockDiv)) continue;
                     if (checkCrossDivisionTimeConflict(pC.field, blockDiv, startMin, endMin, bunk)) continue;
                     var pfp = _fieldPropertyMap.get(pC.field), pCap = pfp ? pfp.capacity : getFieldCapacity(pC.field), pSt = pfp ? pfp.sharingType : getSharingType(pC.field);
                     if (pSt === 'not_sharable') { if (getFieldUsageFromTimeIndex(pC._fieldNorm, startMin, endMin, bunk) >= pCap) continue; }
