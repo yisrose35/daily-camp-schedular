@@ -1043,6 +1043,12 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
         }
         for (const special of (app1.specialActivities || [])) {
             if (!special.name || disabledFields.includes(special.name) || window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) continue;
+            // ★ DEMO FIX: Filter rainy-day-only specials on normal days
+            if (window.__CAMPISTRY_DEMO_MODE__) {
+                const _isRainy = window.isRainyDayModeActive?.() || window.isRainyDay === true;
+                if (!_isRainy && (special.rainyDayOnly === true || special.rainyDayExclusive === true)) continue;
+                if (_isRainy && special.rainyDayAvailable === false) continue;
+            }
             const key = `special|${special.name}`;
             if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: special.name, sport: null, activityName: special.name, type: 'special' }); }
         }
