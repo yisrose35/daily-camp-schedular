@@ -365,19 +365,41 @@ document.addEventListener('DOMContentLoaded', function() {
                     result = await supabase.auth.signInWithPassword({ email, password });
                 }
 
-                const { data, error } = result;
+                let { data, error } = result;
 
-                if (error) {
-                    let errorMessage = error.message;
-                    if (error.message.includes('Invalid login credentials')) {
-                        errorMessage = 'Invalid email or password. Please try again.';
-                    } else if (error.message.includes('Email not confirmed')) {
-                        errorMessage = 'Please check your email to confirm your account before signing in.';
-                    } else if (error.message.includes('User already registered')) {
-                        errorMessage = 'An account with this email already exists. Try signing in instead.';
-                    }
-                    throw new Error(errorMessage);
-                }
+if (error) {
+    let errorMessage = error.message;
+    if (error.message.includes('Invalid login credentials')) {
+        errorMessage = 'Invalid email or password. Please try again.';
+    } else if (error.message.includes('Email not confirmed')) {
+        errorMessage = 'Please check your email to confirm your account before signing in.';
+    } else if (error.message.includes('User already registered')) {
+        errorMessage = 'An account with this email already exists. Try signing in instead.';
+    }
+    throw new Error(errorMessage);
+}
+
+// ★ v3.2 FIX: Owner signup — if no session returned (email confirmation is on),
+// auto-sign-in immediately so owners go straight to dashboard.
+// Email confirmation stays enabled for invited schedulers/admins via invite.html.
+if (authMode === 'signup' && data?.user && !data?.session) {
+    console.log('[Landing] Owner signup: no session — auto-signing in...');
+    showAuthLoading(true, 'Finalizing your account...');
+    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password
+    });
+    if (signInError) {
+        throw new Error('Account created but sign-in failed. Please try signing in.');
+    }
+    data = signInData;
+}
+
+const user = data?.user;
+
+if (!user) {
+    throw new Error('Authentication failed. Please try again.');
+}
 
                 const user = data?.user;
 
