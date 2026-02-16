@@ -1281,9 +1281,42 @@ function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedAc
     console.log(`[SmartRegen] Pinned: ${pinnedBunk} claiming ${pinnedField}`);
     if (bypassMode) console.log('[SmartRegen] 🔓 BYPASS MODE ACTIVE');
     
-    const { claimedStartMin, claimedEndMin, claimingDivision } = timeContext;
-    const activityProperties = window.getActivityProperties();
-    const results = { success: true, reassigned: [], failed: [], pinnedLock: null, bypassMode };
+   const { claimedStartMin, claimedEndMin, claimingDivision } = timeContext;
+        const _rawActivityProps = window.getActivityProperties();
+        let activityProperties = _rawActivityProps;
+
+        // ★ DEMO FIX: activityProperties may be empty in demo mode
+        if (window.__CAMPISTRY_DEMO_MODE__ && (!activityProperties || Object.keys(activityProperties).length === 0)) {
+            console.warn('[SmartRegen] 🎭 Demo: activityProperties empty — rebuilding');
+            if (window.refreshActivityPropertiesFromFields) {
+                window.refreshActivityPropertiesFromFields();
+                activityProperties = window.activityProperties || {};
+            }
+            if (Object.keys(activityProperties).length === 0) {
+                const settings = window.loadGlobalSettings?.() || {};
+                const fields = settings.app1?.fields || [];
+                const specials = settings.app1?.specialActivities || [];
+                fields.forEach(f => {
+                    if (f?.name) activityProperties[f.name] = {
+                        type: 'field', available: f.available !== false,
+                        sharableWith: f.sharableWith || { type: 'not_sharable', capacity: 1 },
+                        sharable: f.sharableWith?.type !== 'not_sharable',
+                        activities: f.activities || [],
+                        rainyDayAvailable: f.rainyDayAvailable === true
+                    };
+                });
+                specials.forEach(s => {
+                    if (s?.name) activityProperties[s.name] = {
+                        type: 'special', available: true,
+                        sharableWith: s.sharableWith || { type: 'not_sharable', capacity: 1 },
+                        rainyDayOnly: s.rainyDayOnly === true,
+                        rainyDayExclusive: s.rainyDayExclusive === true
+                    };
+                });
+                window.activityProperties = activityProperties;
+                console.log('[SmartRegen] 🎭 Built ' + Object.keys(activityProperties).length + ' entries from settings');
+            }
+        }    const results = { success: true, reassigned: [], failed: [], pinnedLock: null, bypassMode };
     
     // Lock the pinned field
     if (window.GlobalFieldLocks) {
