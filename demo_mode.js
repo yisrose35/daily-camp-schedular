@@ -875,9 +875,9 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
     // =========================================================================
     // 18. DEMO MODE INSTANT BOOTSTRAP — Skip auth, assume owner, use localStorage
     // =========================================================================
-    // In demo mode there's no server, no Supabase CDN, no auth session to check.
-    // We immediately set every flag and global that the app expects so pages
-    // (Flow, Me, Dashboard) can boot without waiting for anything.
+    // In demo mode there is NO server, NO CDN, NO auth. We set everything the
+    // app expects and LOCK it so that supabase_client.js (if it loads) cannot
+    // overwrite our demo CampistryDB with an uninitialized one.
     // =========================================================================
 
     // ── A: Hydrate window globals from localStorage right now ──
@@ -893,39 +893,48 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
         console.warn('🎭 [Demo] Hydration error:', e);
     }
 
-    // ── B: Mark cloud hydration as done immediately ──
+    // ── B: Mark cloud hydration as done ──
     window.__CAMPISTRY_CLOUD_READY__ = true;
     window.__CAMPISTRY_HYDRATED__ = true;
 
-    // ── C: Pre-seed CampistryDB so nothing hangs on CampistryDB.ready ──
-    if (!window.CampistryDB) {
-        window.CampistryDB = {
-            client: MOCK_CLIENT,
-            initialize: () => Promise.resolve(true),
-            refresh: () => Promise.resolve({ campId: DEMO_CAMP_ID, role: 'owner' }),
-            ready: Promise.resolve(true),
-            isInitialized: () => true,
-            getClient: () => MOCK_CLIENT,
-            getCampId: () => DEMO_CAMP_ID,
-            getUserId: () => DEMO_USER_ID,
-            getSession: () => MOCK_SESSION,
-            getAccessToken: () => Promise.resolve('demo-access-token'),
-            getRole: () => 'owner',
-            isRoleVerified: () => true,
-            isOwner: () => true,
-            isAdmin: () => true,
-            isTeamMember: () => false,
-            isAuthenticated: () => true,
-            onAuthChange: () => {},
-            rawQuery: () => Promise.resolve(null),
-            config: Object.freeze({})
-        };
-        console.log('🎭 [Demo] CampistryDB ready (demo owner)');
-    }
+    // ── C: Create and LOCK CampistryDB — supabase_client.js cannot overwrite ──
+    const DEMO_CAMPISTRY_DB = {
+        client: MOCK_CLIENT,
+        initialize: () => Promise.resolve(true),
+        refresh: () => Promise.resolve({ campId: DEMO_CAMP_ID, role: 'owner' }),
+        ready: Promise.resolve(true),
+        isInitialized: () => true,
+        getClient: () => MOCK_CLIENT,
+        getCampId: () => DEMO_CAMP_ID,
+        getUserId: () => DEMO_USER_ID,
+        getSession: () => MOCK_SESSION,
+        getAccessToken: () => Promise.resolve('demo-access-token'),
+        getRole: () => 'owner',
+        isRoleVerified: () => true,
+        isOwner: () => true,
+        isAdmin: () => true,
+        isTeamMember: () => false,
+        isAuthenticated: () => true,
+        onAuthChange: () => {},
+        rawQuery: () => Promise.resolve(null),
+        config: Object.freeze({})
+    };
 
-    // ── D: Fire all init events once DOM is ready ──
-    // Some listeners are registered during DOMContentLoaded, so fire events
-    // after DOM is parsed to ensure they're caught.
+    Object.defineProperty(window, 'CampistryDB', {
+        configurable: true,
+        enumerable: true,
+        get() { return DEMO_CAMPISTRY_DB; },
+        set(val) {
+            // supabase_client.js tries to set this — block it in demo mode
+            console.log('🎭 [Demo] Blocked CampistryDB overwrite — using demo owner');
+        }
+    });
+    console.log('🎭 [Demo] CampistryDB locked (owner, initialized, ready)');
+
+    // ── D: Fire init events — once now, and again after a short delay ──
+    // First fire catches anything already listening.
+    // Second fire (200ms) catches scripts that register listeners during
+    // DOMContentLoaded or after dynamic script loading.
     function fireDemoInitEvents() {
         window.dispatchEvent(new CustomEvent('campistry-db-ready', {
             detail: { campId: DEMO_CAMP_ID, role: 'owner', isTeamMember: false, roleVerified: true }
@@ -942,14 +951,74 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
     }
 
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', fireDemoInitEvents);
+        document.addEventListener('DOMContentLoaded', () => {
+            fireDemoInitEvents();
+            // Re-fire after scripts have had time to register listeners
+            setTimeout(fireDemoInitEvents, 200);
+            setTimeout(fireDemoInitEvents, 1000);
+        });
     } else {
         fireDemoInitEvents();
+        setTimeout(fireDemoInitEvents, 200);
+        setTimeout(fireDemoInitEvents, 1000);
     }
 
-    // ── E: Expose demo IDs globally for any code that needs them ──
+    // ── E: Expose demo IDs globally ──
     window.__DEMO_CAMP_ID__ = DEMO_CAMP_ID;
     window.__DEMO_USER_ID__ = DEMO_USER_ID;
+
+    // ── F: Intercept CDN script loading so page chains work offline ──
+    // On campistry_me.html and flow.html, scripts are chained:
+    //   CDN (supabase-js).onload → supabase_client.js → security → me.js
+    // When offline, CDN fails → onerror fires (not onload) → chain dies.
+    //
+    // PROPER FIX: Intercept script element creation. When any script
+    // targets the Supabase CDN, we skip the network request and immediately
+    // fire onload — because window.supabase (MOCK_CLIENT) is already
+    // available. The page's existing chain then proceeds normally,
+    // loading supabase_client.js → campistry_security.js → campistry_me.js
+    // all from local files.
+    const _origCreateElement = document.createElement.bind(document);
+    document.createElement = function(tagName, options) {
+        const el = _origCreateElement(tagName, options);
+        if (tagName.toLowerCase() !== 'script') return el;
+
+        // Patch the src property to intercept CDN URLs
+        let _realSrc = '';
+        const _nativeSrcSet = Object.getOwnPropertyDescriptor(
+            HTMLScriptElement.prototype, 'src'
+        )?.set;
+
+        Object.defineProperty(el, 'src', {
+            configurable: true,
+            enumerable: true,
+            get() { return _realSrc; },
+            set(val) {
+                _realSrc = val;
+                const isCDN = typeof val === 'string' && (
+                    val.includes('cdn.jsdelivr.net') ||
+                    val.includes('unpkg.com') ||
+                    (val.includes('supabase') && val.endsWith('.js') && val.startsWith('http'))
+                );
+
+                if (isCDN) {
+                    // Skip network request — mock is already installed
+                    console.log('🎭 [Demo] Skipped CDN load:', val.split('/').pop());
+                    // Fire onload on next tick so the chain continues
+                    setTimeout(() => { if (typeof el.onload === 'function') el.onload(); }, 0);
+                    return;
+                }
+
+                // Local script — load normally
+                if (_nativeSrcSet) {
+                    _nativeSrcSet.call(el, val);
+                } else {
+                    el.setAttribute('src', val);
+                }
+            }
+        });
+        return el;
+    };
 
     console.log('🎭 Demo mode ready. Run demoStatus() for details.');
 
