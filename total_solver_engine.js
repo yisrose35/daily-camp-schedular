@@ -1536,9 +1536,11 @@
         return solved;
     }
 
-    function isPickStillValid(block, cand) {
+   function isPickStillValid(block, cand) {
         var fieldName = cand.field, fieldNorm = cand._fieldNorm || normName(fieldName), bunk = block.bunk, blockDivName = block.divName || '', startMin = block.startTime, endMin = block.endTime;
         if (startMin === undefined || endMin === undefined) return true;
+        // ★★★ FIX v13.1: Time-based global lock check for cross-division league conflicts ★★★
+        if (isFieldLockedByTime(fieldName, startMin, endMin, blockDivName)) return false;
         var fieldProp = _fieldPropertyMap.get(fieldName);
         var capacity = fieldProp ? fieldProp.capacity : getFieldCapacity(fieldName);
         var sharingType = fieldProp ? fieldProp.sharingType : getSharingType(fieldName);
