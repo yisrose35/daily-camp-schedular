@@ -753,13 +753,24 @@ for (const futureDate of Object.keys(allDailyData)) {
             console.log(`\n[SpecialtyLeagues] 🔒 LOCKING FIELDS: ${usedFields.join(', ')}`);
 
             if (window.GlobalFieldLocks) {
-                window.GlobalFieldLocks.lockMultipleFields(usedFields, uniqueSlots, {
-                    lockedBy: 'specialty_league',
-                    leagueName: league.name,
-                    division: divName,
-                    activity: `${league.name} (${league.sport})`
-                });
-            }
+    // ★★★ FIX: Include time range for cross-division lock detection ★★★
+    const divSlots = window.divisionTimes?.[divName] || [];
+    let lockStartMin = null, lockEndMin = null;
+    if (uniqueSlots.length > 0 && divSlots[uniqueSlots[0]]) {
+        lockStartMin = divSlots[uniqueSlots[0]].startMin;
+        const lastSlot = divSlots[uniqueSlots[uniqueSlots.length - 1]];
+        lockEndMin = lastSlot?.endMin || (lockStartMin + 40);
+    }
+    
+    window.GlobalFieldLocks.lockMultipleFields(usedFields, uniqueSlots, {
+        lockedBy: 'specialty_league',
+        leagueName: league.name,
+        division: divName,
+        activity: `${league.name} (${league.sport})`,
+        startMin: lockStartMin,
+        endMin: lockEndMin
+    });
+}
 
             // Also lock in fieldUsageBySlot for compatibility
             blocks.forEach(block => {
