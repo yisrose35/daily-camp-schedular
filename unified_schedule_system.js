@@ -3003,6 +3003,21 @@ let conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
 
        const candidates = [];
 
+        // ★★★ v4.1.3 FIX: Division-level filtering for alternatives ★★★
+        function _altIsBlockedForDiv(fieldName) {
+            if (!divName) return false;
+            const props = activityProps[fieldName];
+            if (!props) return false;
+            if (props.limitUsage?.enabled) {
+                const allowedDivs = props.limitUsage.divisions || {};
+                if (!(divName in allowedDivs)) return true;
+            }
+            if (props.preferences?.enabled && props.preferences?.exclusive) {
+                if (!(props.preferences.list || []).includes(divName)) return true;
+            }
+            return false;
+        }
+
         // ★ DEMO FIX: Use proper field iteration in demo mode
         if (window.__CAMPISTRY_DEMO_MODE__) {
             const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
