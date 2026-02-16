@@ -867,6 +867,163 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
     } else {
         fixAbsoluteLinks();
     }
+
+    // =========================================================================
+    // 18. OFFLINE SAFETY NET — Ensure all init events fire even if SDK fails
+    // =========================================================================
+    // When offline (not file:// protocol, e.g. cached PWA or service worker),
+    // the Supabase CDN script fails to load. flow.html and campistry_me.html
+    // chain supabase_client.js to load only AFTER the CDN script succeeds,
+    // so supabase_client.js never loads, CampistryDB never inits, and every
+    // downstream system hangs waiting for 'campistry-db-ready'.
+    // This safety net detects that condition and bootstraps everything.
+    // =========================================================================
+
+    function ensureOfflineBootstrap() {
+        const BOOT_TIMEOUT = 4000;
+
+        setTimeout(() => {
+            // If CampistryDB already initialized normally, nothing to do
+            if (window.CampistryDB?.isInitialized?.()) {
+                console.log('🎭 [Demo] CampistryDB initialized normally — safety net not needed');
+                return;
+            }
+
+            console.warn('🎭 [Demo] CampistryDB not initialized after ' + BOOT_TIMEOUT + 'ms — activating offline safety net');
+
+            // ── Step 1: Ensure window.supabase points to MOCK_CLIENT ──
+            // The property may still be the {createClient} wrapper if the
+            // CDN never loaded and supabase_client.js never called createClient.
+            if (!window.supabase || !window.supabase.auth) {
+                if (window.supabase && typeof window.supabase.createClient === 'function') {
+                    const mockClient = window.supabase.createClient('', '');
+                    try {
+                        Object.defineProperty(window, 'supabase', {
+                            configurable: true, enumerable: true,
+                            value: mockClient, writable: true
+                        });
+                    } catch (e) {
+                        window.supabase = mockClient;
+                    }
+                    console.log('🎭 [Demo] Resolved mock client from createClient()');
+                }
+            }
+
+            // ── Step 2: Bootstrap CampistryDB if missing or uninitialized ──
+            if (!window.CampistryDB) {
+                window.CampistryDB = {
+                    client: window.supabase || null,
+                    initialize: () => Promise.resolve(true),
+                    refresh: () => Promise.resolve({ campId: DEMO_CAMP_ID, role: 'owner' }),
+                    ready: Promise.resolve(true),
+                    isInitialized: () => true,
+                    getClient: () => window.supabase || null,
+                    getCampId: () => DEMO_CAMP_ID,
+                    getUserId: () => DEMO_USER_ID,
+                    getSession: () => MOCK_SESSION,
+                    getAccessToken: () => Promise.resolve('demo-access-token'),
+                    getRole: () => 'owner',
+                    isRoleVerified: () => true,
+                    isOwner: () => true,
+                    isAdmin: () => true,
+                    isTeamMember: () => false,
+                    isAuthenticated: () => true,
+                    onAuthChange: () => {},
+                    rawQuery: () => Promise.resolve(null),
+                    config: Object.freeze({})
+                };
+                console.log('🎭 [Demo] Created fallback CampistryDB');
+            } else if (!window.CampistryDB.isInitialized?.()) {
+                // CampistryDB object exists but never finished init — patch it
+                if (!window.CampistryDB.getCampId?.()) {
+                    window.CampistryDB.getCampId = () => DEMO_CAMP_ID;
+                }
+                if (!window.CampistryDB.getUserId?.()) {
+                    window.CampistryDB.getUserId = () => DEMO_USER_ID;
+                }
+                if (!window.CampistryDB.getRole?.() || window.CampistryDB.getRole() === 'viewer') {
+                    window.CampistryDB.getRole = () => 'owner';
+                }
+                window.CampistryDB.isRoleVerified = () => true;
+                console.log('🎭 [Demo] Patched existing CampistryDB with demo values');
+            }
+
+            // ── Step 3: Fire campistry-db-ready ──
+            window.dispatchEvent(new CustomEvent('campistry-db-ready', {
+                detail: { campId: DEMO_CAMP_ID, role: 'owner', isTeamMember: false, roleVerified: true }
+            }));
+
+            // ── Step 4: Force cloud hydration from localStorage ──
+            setTimeout(() => {
+                if (!window.__CAMPISTRY_CLOUD_READY__) {
+                    try {
+                        const raw = localStorage.getItem('campGlobalSettings_v1');
+                        if (raw) {
+                            const settings = JSON.parse(raw);
+                            window.divisions = settings.divisions || settings.campStructure || {};
+                            window.globalBunks = settings.bunks || settings.app1?.bunks || [];
+                            window.availableDivisions = Object.keys(window.divisions);
+                        }
+                    } catch (e) {
+                        console.warn('🎭 [Demo] Hydration error:', e);
+                    }
+                    window.__CAMPISTRY_CLOUD_READY__ = true;
+                    window.__CAMPISTRY_HYDRATED__ = true;
+                    window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
+                    console.log('🎭 [Demo] Cloud hydration forced from localStorage');
+                }
+            }, 500);
+
+            // ── Step 5: Fire ScheduleDB ready ──
+            setTimeout(() => {
+                if (!window.ScheduleDB?.isInitialized) {
+                    window.dispatchEvent(new CustomEvent('campistry-scheduledb-ready'));
+                    console.log('🎭 [Demo] ScheduleDB ready forced');
+                }
+            }, 800);
+
+            // ── Step 6: Fire RBAC events ──
+            setTimeout(() => {
+                if (!window.AccessControl?.isInitialized) {
+                    window.dispatchEvent(new CustomEvent('rbac-system-ready', {
+                        detail: { role: 'owner', isOwner: true }
+                    }));
+                    window.dispatchEvent(new CustomEvent('campistry-rbac-ready', {
+                        detail: { role: 'owner', isOwner: true }
+                    }));
+                    console.log('🎭 [Demo] RBAC events forced');
+                }
+            }, 1000);
+
+            // ── Step 7: Last resort — force-show app if loading screen stuck ──
+            setTimeout(() => {
+                const loadingScreen = document.getElementById('auth-loading-screen');
+                const mainApp = document.getElementById('main-app-container') ||
+                               document.getElementById('main-content');
+
+                if (loadingScreen && getComputedStyle(loadingScreen).display !== 'none') {
+                    console.warn('🎭 [Demo] Loading screen still visible after 6s — force-showing app');
+                    loadingScreen.style.display = 'none';
+                    if (mainApp) mainApp.style.display = 'block';
+                    window.__CAMPISTRY_BOOTED__ = true;
+                    window.refreshGlobalRegistry?.();
+                    window.initCalendar?.();
+                    window.initApp1?.();
+                    window.initLeagues?.();
+                    window.initScheduleSystem?.();
+                    window.initDailyAdjustments?.();
+                }
+            }, 6000);
+
+        }, BOOT_TIMEOUT);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', ensureOfflineBootstrap);
+    } else {
+        ensureOfflineBootstrap();
+    }
+
     console.log('🎭 Demo mode ready. Run demoStatus() for details.');
 
 })();
