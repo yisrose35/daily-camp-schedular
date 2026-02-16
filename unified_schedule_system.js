@@ -1,4 +1,5 @@
 
+
 // =============================================================================
 // unified_schedule_system.js v4.1.0 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
 // =============================================================================
@@ -1028,88 +1029,21 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
         return 0;
     }
 
-   function buildCandidateOptions(slots, activityProps, disabledFields = [], divName = null) {
+    function buildCandidateOptions(slots, activityProps, disabledFields = [], divName = null) {
         const options = [], seenKeys = new Set();
         const settings = window.loadGlobalSettings?.() || {};
         const app1 = settings.app1 || {};
         const fieldsBySport = settings.fieldsBySport || {};
         
-        // ★★★ v4.1.2 FIX: Pre-compute time range for limitUsage & timeRules filtering ★★★
-        let _bcStartMin = null, _bcEndMin = null;
-        if (divName && slots.length > 0) {
-            const _bcDivSlots = window.divisionTimes?.[divName] || [];
-            if (_bcDivSlots[slots[0]]) _bcStartMin = _bcDivSlots[slots[0]].startMin;
-            if (_bcDivSlots[slots[slots.length - 1]]) _bcEndMin = _bcDivSlots[slots[slots.length - 1]].endMin;
-        }
-        
-        // ★★★ v4.1.2 FIX: Division-level field filtering (limitUsage + timeRules + preferences) ★★★
-        function _isFieldBlockedForDiv(fieldName) {
-            if (!divName) return false;
-            const props = activityProps?.[fieldName];
-            if (!props) return false;
-            
-            // Check limitUsage — if enabled and this division isn't listed, block it
-            if (props.limitUsage?.enabled) {
-                const allowedDivs = props.limitUsage.divisions || {};
-                if (!(divName in allowedDivs)) return true;
-            }
-            
-            // Check exclusive preferences — if enabled+exclusive and div not in list, block it
-            if (props.preferences?.enabled && props.preferences?.exclusive) {
-                const prefList = props.preferences.list || [];
-                if (prefList.length > 0 && !prefList.includes(divName)) return true;
-            }
-            
-            // Check timeRules — if Available rules exist and block is outside all of them, block it
-            if (props.timeRules?.length > 0 && _bcStartMin !== null && _bcEndMin !== null) {
-                const Utils = window.SchedulerCoreUtils;
-                const availRules = props.timeRules.filter(r => 
-                    (r.type === 'Available' || r.available === true) &&
-                    (!r.divisions || r.divisions.length === 0 || r.divisions.includes(divName))
-                );
-                const unavailRules = props.timeRules.filter(r => 
-                    (r.type === 'Unavailable' || r.available === false) &&
-                    (!r.divisions || r.divisions.length === 0 || r.divisions.includes(divName))
-                );
-                
-                // If Available rules exist for this div, must be within at least one
-                if (availRules.length > 0) {
-                    let withinAny = false;
-                    for (const rule of availRules) {
-                        const rStart = rule.startMin ?? (Utils?.parseTimeToMinutes?.(rule.start) ?? null);
-                        const rEnd = rule.endMin ?? (Utils?.parseTimeToMinutes?.(rule.end) ?? null);
-                        if (rStart !== null && rEnd !== null && _bcStartMin >= rStart && _bcEndMin <= rEnd) {
-                            withinAny = true;
-                            break;
-                        }
-                    }
-                    if (!withinAny) return true;
-                }
-                
-                // If Unavailable rules exist, block must not overlap any
-                for (const rule of unavailRules) {
-                    const rStart = rule.startMin ?? (Utils?.parseTimeToMinutes?.(rule.start) ?? null);
-                    const rEnd = rule.endMin ?? (Utils?.parseTimeToMinutes?.(rule.end) ?? null);
-                    if (rStart !== null && rEnd !== null && _bcStartMin < rEnd && _bcEndMin > rStart) {
-                        return true;
-                    }
-                }
-            }
-            
-            return false;
-        }
-        
         for (const [sport, sportFields] of Object.entries(fieldsBySport)) {
             (sportFields || []).forEach(fName => {
                 if (disabledFields.includes(fName) || window.GlobalFieldLocks?.isFieldLocked(fName, slots, divName)) return;
-                if (_isFieldBlockedForDiv(fName)) return;
                 const key = `${fName}|${sport}`;
                 if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: fName, sport, activityName: sport, type: 'sport' }); }
             });
         }
         for (const special of (app1.specialActivities || [])) {
             if (!special.name || disabledFields.includes(special.name) || window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) continue;
-            if (_isFieldBlockedForDiv(special.name)) continue;
             // ★ DEMO FIX: Filter rainy-day-only specials on normal days
             if (window.__CAMPISTRY_DEMO_MODE__) {
                 const _isRainy = window.isRainyDayModeActive?.() || window.isRainyDay === true;
@@ -1121,7 +1055,6 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
         }
         for (const field of (app1.fields || [])) {
             if (!field.name || field.available === false || disabledFields.includes(field.name) || window.GlobalFieldLocks?.isFieldLocked(field.name, slots, divName)) continue;
-            if (_isFieldBlockedForDiv(field.name)) continue;
             (field.activities || []).forEach(activity => {
                 const key = `${field.name}|${activity}`;
                 if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: field.name, sport: activity, activityName: activity, type: 'sport' }); }
@@ -1609,12 +1542,13 @@ actualSlots.forEach((slotIdx, i) => {
         endMin = divSlots[slots[slots.length - 1]]?.endMin || (startMin + 30);
     }
     
-    const candidates = buildCandidateOptions(slots, activityProperties, disabledFields, divName);
+    const candidates = buildCandidateOptions(slots, activityProperties, disabledFields);
     const scoredPicks = [];
     
     for (const cand of candidates) {
         const fieldLower = (cand.field || '').toLowerCase();
-        const actLower = (cand.activityName || '').toLowerCase();        
+        const actLower = (cand.activityName || '').toLowerCase();
+        
         if (avoidSet.has(fieldLower) || avoidSet.has(actLower)) continue;
         
        // Check field availability by TIME
@@ -3003,21 +2937,6 @@ let conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
 
        const candidates = [];
 
-        // ★★★ v4.1.3 FIX: Division-level filtering for alternatives ★★★
-        function _altIsBlockedForDiv(fieldName) {
-            if (!divName) return false;
-            const props = activityProps[fieldName];
-            if (!props) return false;
-            if (props.limitUsage?.enabled) {
-                const allowedDivs = props.limitUsage.divisions || {};
-                if (!(divName in allowedDivs)) return true;
-            }
-            if (props.preferences?.enabled && props.preferences?.exclusive) {
-                if (!(props.preferences.list || []).includes(divName)) return true;
-            }
-            return false;
-        }
-
         // ★ DEMO FIX: Use proper field iteration in demo mode
         if (window.__CAMPISTRY_DEMO_MODE__) {
             const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
@@ -3035,7 +2954,6 @@ let conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
                 if (excludeSet.has(field.name)) continue;
                 if (disabledSet.has(field.name)) continue;
                 if (window.GlobalFieldLocks?.isFieldLocked(field.name, slots, divName)) continue;
-                if (_altIsBlockedForDiv(field.name)) continue;
 
                 const fp = activityProps[field.name] || {};
                 if (!isRainyMode && (fp.rainyDayOnly === true || fp.rainyDayExclusive === true)) continue;
@@ -3065,11 +2983,9 @@ let conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
             for (const special of (app1.specialActivities || [])) {
                 if (!special.name) continue;
                 if (excludeSet.has(special.name) || disabledSet.has(special.name)) continue;
-               if (window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) continue;
-if (_altIsBlockedForDiv(special.name)) continue;
-               if (!isRainyMode && (special.rainyDayOnly === true || special.rainyDayExclusive === true)) continue;
+                if (window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) continue;
+                if (!isRainyMode && (special.rainyDayOnly === true || special.rainyDayExclusive === true)) continue;
                 if (isRainyMode && special.rainyDayAvailable === false) continue;
-                if (_altIsBlockedForDiv(special.name)) continue;
 
                 const key = 'special|' + special.name;
                 if (seenKeys.has(key)) continue;
@@ -3098,13 +3014,12 @@ if (_altIsBlockedForDiv(special.name)) continue;
         for (const [sport, sportFields] of Object.entries(fieldsBySport)) {
 
             (sportFields || []).forEach(fName => {
-               if (excludeSet.has(fName)) return;
+                if (excludeSet.has(fName)) return;
 if (disabledFields.includes(fName)) return;
 if (window.GlobalFieldLocks?.isFieldLocked(fName, slots, divName)) return;
-if (_altIsBlockedForDiv(fName)) return;
 
 // ★ Rainy day filtering: skip rainy-day-only activities on normal days
-const isRainyMode = window.isRainyDayModeActive?.
+const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
 const fieldProps = activityProps[fName] || {};
 if (!isRainyMode && (fieldProps.rainyDayOnly === true || fieldProps.rainyDayExclusive === true)) return;
 if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availableOnRainyDay === false)) return;
