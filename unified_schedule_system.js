@@ -2526,7 +2526,13 @@ if (bypassStatus.highlight) {
     // SCHEDULER NOTIFICATION
     // =========================================================================
 
-    async function sendSchedulerNotification(affectedBunks, location, activity, notificationType) {
+   async function sendSchedulerNotification(affectedBunks, location, activity, notificationType) {
+        // ★ DEMO FIX: No supabase in demo mode
+        if (window.__CAMPISTRY_DEMO_MODE__) {
+            console.log('[UnifiedSchedule] 🎭 Demo mode — skipping notification');
+            return;
+        }
+
         const supabase = window.CampistryDB?.getClient?.() || window.supabase;
         if (!supabase) return;
         const campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('currentCampId');
