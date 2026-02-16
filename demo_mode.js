@@ -967,59 +967,6 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
     window.__DEMO_CAMP_ID__ = DEMO_CAMP_ID;
     window.__DEMO_USER_ID__ = DEMO_USER_ID;
 
-    // ── F: Intercept CDN script loading so page chains work offline ──
-    // On campistry_me.html and flow.html, scripts are chained:
-    //   CDN (supabase-js).onload → supabase_client.js → security → me.js
-    // When offline, CDN fails → onerror fires (not onload) → chain dies.
-    //
-    // PROPER FIX: Intercept script element creation. When any script
-    // targets the Supabase CDN, we skip the network request and immediately
-    // fire onload — because window.supabase (MOCK_CLIENT) is already
-    // available. The page's existing chain then proceeds normally,
-    // loading supabase_client.js → campistry_security.js → campistry_me.js
-    // all from local files.
-    const _origCreateElement = document.createElement.bind(document);
-    document.createElement = function(tagName, options) {
-        const el = _origCreateElement(tagName, options);
-        if (tagName.toLowerCase() !== 'script') return el;
-
-        // Patch the src property to intercept CDN URLs
-        let _realSrc = '';
-        const _nativeSrcSet = Object.getOwnPropertyDescriptor(
-            HTMLScriptElement.prototype, 'src'
-        )?.set;
-
-        Object.defineProperty(el, 'src', {
-            configurable: true,
-            enumerable: true,
-            get() { return _realSrc; },
-            set(val) {
-                _realSrc = val;
-                const isCDN = typeof val === 'string' && (
-                    val.includes('cdn.jsdelivr.net') ||
-                    val.includes('unpkg.com') ||
-                    (val.includes('supabase') && val.endsWith('.js') && val.startsWith('http'))
-                );
-
-                if (isCDN) {
-                    // Skip network request — mock is already installed
-                    console.log('🎭 [Demo] Skipped CDN load:', val.split('/').pop());
-                    // Fire onload on next tick so the chain continues
-                    setTimeout(() => { if (typeof el.onload === 'function') el.onload(); }, 0);
-                    return;
-                }
-
-                // Local script — load normally
-                if (_nativeSrcSet) {
-                    _nativeSrcSet.call(el, val);
-                } else {
-                    el.setAttribute('src', val);
-                }
-            }
-        });
-        return el;
-    };
-
     console.log('🎭 Demo mode ready. Run demoStatus() for details.');
 
 })();
