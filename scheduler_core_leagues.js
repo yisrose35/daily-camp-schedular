@@ -780,14 +780,26 @@ for (const futureDate of Object.keys(allDailyData)) {
                 const usedFields = [...new Set(assignments.map(a => a.field))];
                 console.log(`\n   🔒 LOCKING FIELDS: ${usedFields.join(', ')}`);
 
-                if (window.GlobalFieldLocks && slots.length > 0) {
-                    window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
-                        lockedBy: 'regular_league',
-                        leagueName: league.name,
-                        division: leagueDivisions.join(', '),
-                        activity: `${league.name} League Game`
-                    });
-                }
+               if (window.GlobalFieldLocks && slots.length > 0) {
+    // ★★★ FIX: Include time range for cross-division lock detection ★★★
+    const sampleBlock = timeData.allBlocks[0];
+    const leagueDivName = leagueDivisions[0];
+    const leagueDivSlots = window.divisionTimes?.[leagueDivName] || [];
+    let lockStartMin = null, lockEndMin = null;
+    if (slots.length > 0 && leagueDivSlots[slots[0]]) {
+        lockStartMin = leagueDivSlots[slots[0]].startMin;
+        lockEndMin = leagueDivSlots[slots[slots.length - 1]]?.endMin || lockStartMin + 40;
+    }
+    
+    window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
+        lockedBy: 'regular_league',
+        leagueName: league.name,
+        division: leagueDivisions.join(', '),
+        activity: `${league.name} League Game`,
+        startMin: lockStartMin,
+        endMin: lockEndMin
+    });
+}
 
                 // Also lock in fieldUsageBySlot for compatibility
                 slots.forEach(slotIdx => {
