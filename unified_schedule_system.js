@@ -1609,13 +1609,12 @@ actualSlots.forEach((slotIdx, i) => {
         endMin = divSlots[slots[slots.length - 1]]?.endMin || (startMin + 30);
     }
     
-    const candidates = buildCandidateOptions(slots, activityProperties, disabledFields);
+    const candidates = buildCandidateOptions(slots, activityProperties, disabledFields, divName);
     const scoredPicks = [];
     
     for (const cand of candidates) {
         const fieldLower = (cand.field || '').toLowerCase();
-        const actLower = (cand.activityName || '').toLowerCase();
-        
+        const actLower = (cand.activityName || '').toLowerCase();        
         if (avoidSet.has(fieldLower) || avoidSet.has(actLower)) continue;
         
        // Check field availability by TIME
