@@ -623,7 +623,7 @@
         // Higher than YESTERDAY_PENALTY (12000) so solver prefers
         // repeating yesterday's activity over giving a Free.
         if (actNorm === 'free' || fieldName === 'Free') {
-            penalty += 25000;
+            penalty += 45000;
         }
 
         // Type balance for General Activity Slots
