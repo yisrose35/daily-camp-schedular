@@ -173,7 +173,78 @@
         
         return null;
     };
+// =========================================================================
+// ★★★ TIME-BASED LOCK CHECK (Cross-Division Safe) ★★★
+// =========================================================================
+/**
+ * Check if a field is locked during a specific TIME RANGE (not slot index).
+ * This is CRITICAL for cross-division conflict detection because different
+ * divisions have different slot indices for the same wall-clock times.
+ *
+ * @param {string} fieldName - Field to check
+ * @param {number} queryStartMin - Start time in minutes from midnight
+ * @param {number} queryEndMin - End time in minutes from midnight
+ * @param {string} [divisionContext] - Caller's division (for division locks)
+ * @returns {object|null} - Lock info if locked, null if available
+ */
+GlobalFieldLocks.isFieldLockedByTime = function(fieldName, queryStartMin, queryEndMin, divisionContext) {
+    if (!this._initialized) return null;
+    if (!fieldName || queryStartMin == null || queryEndMin == null) return null;
 
+    const normalizedField = fieldName.toLowerCase().trim();
+
+    // Scan ALL slot indices for locks on this field
+    for (const slotIdx in this._locks) {
+        const slotLocks = this._locks[slotIdx];
+        if (!slotLocks[normalizedField]) continue;
+
+        const lock = slotLocks[normalizedField];
+
+        // Skip division locks where caller IS the allowed division
+        if (lock.lockType === 'division' && lock.allowedDivision) {
+            if (divisionContext && divisionContext === lock.allowedDivision) {
+                continue;
+            }
+        }
+
+        // Get the lock's time range
+        let lockStartMin = lock.startMin;
+        let lockEndMin = lock.endMin;
+
+        // If lock doesn't have explicit times, try to derive from the lock's division slots
+        if (lockStartMin == null || lockEndMin == null) {
+            const lockDiv = lock.division;
+            if (lockDiv) {
+                // Handle comma-separated division strings (e.g., "Div A, Div B")
+                const firstDiv = lockDiv.split(',')[0].trim();
+                const divSlots = window.divisionTimes?.[firstDiv] || [];
+                const slot = divSlots[parseInt(slotIdx, 10)];
+                if (slot) {
+                    lockStartMin = slot.startMin;
+                    lockEndMin = slot.endMin;
+                }
+            }
+        }
+
+        // If we still can't determine time, skip (can't confirm conflict)
+        if (lockStartMin == null || lockEndMin == null) continue;
+
+        // Check TIME OVERLAP (not slot index match)
+        if (lockStartMin < queryEndMin && lockEndMin > queryStartMin) {
+            console.log(`[GLOBAL_LOCKS] ⏰ TIME-BASED LOCK HIT: "${fieldName}" locked ${lockStartMin}-${lockEndMin} overlaps query ${queryStartMin}-${queryEndMin} (by ${lock.lockedBy}: ${lock.leagueName || lock.activity})`);
+            return lock;
+        }
+    }
+
+    return null;
+};
+
+/**
+ * Convenience: check time-based availability (inverse of isFieldLockedByTime)
+ */
+GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, divisionContext) {
+    return this.isFieldLockedByTime(fieldName, startMin, endMin, divisionContext) === null;
+};
     // =========================================================================
     // CHECK IF FIELD IS AVAILABLE (inverse of isFieldLocked)
     // =========================================================================
