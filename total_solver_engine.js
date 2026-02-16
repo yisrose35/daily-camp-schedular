@@ -1138,7 +1138,9 @@
             for (var ci2 = 0; ci2 < numCands; ci2++) {
                 if (!globallyValidCands[ci2]) continue;
                 var cand2 = allCandidateOptions[ci2], fieldName = cand2.field, fieldNorm = cand2._fieldNorm;
-                if (window.GlobalFieldLocks?.isFieldLocked(fieldName, slots)) continue;
+                if (window.GlobalFieldLocks?.isFieldLocked(fieldName, slots, blockDivName)) continue;
+                // ★★★ FIX v13.1: TIME-BASED lock check for cross-division league conflicts ★★★
+                if (hasValidTimes && isFieldLockedByTime(fieldName, startMin, endMin, blockDivName)) continue;
                 var fieldProp = _fieldPropertyMap.get(fieldName);
                 if (fieldProp?.prefExclusive && fieldProp.prefList && fieldProp.prefList.indexOf(blockDivName) === -1) continue;
                 var fits = window.SchedulerCoreUtils?.canBlockFit?.(block, fieldName, activityProperties, window.fieldUsageBySlot, cand2.activityName, false);
