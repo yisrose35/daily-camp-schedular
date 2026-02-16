@@ -2459,6 +2459,75 @@ async function runOptimizer() {
   if (!window.runSkeletonOptimizer) { await daShowAlert("Error: 'runSkeletonOptimizer' not found."); return; }
   if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
   saveDailySkeleton();
+
+  // ★★★ PRE-GENERATION CLEAR ★★★
+  // Clear today's schedule before generating to prevent stale data
+  // from persisting when switching between regular ↔ rainy day modes.
+  // This mirrors the eraseCurrentDailyData logic but skips confirmation
+  // and cloud deletion (the new schedule will overwrite cloud on save).
+  console.log('[Optimizer] ★ Pre-generation clear: wiping current schedule data...');
+  const dateKey = window.currentScheduleDate;
+  const role = window.AccessControl?.getCurrentRole?.() || window.CampistryDB?.getRole?.() || 'owner';
+
+  if (role === 'scheduler') {
+      // Scheduler: only clear their own divisions' bunks
+      const myDivisions = window.AccessControl?.getEditableDivisions?.() || [];
+      const divisions = window.divisions || {};
+      const myBunks = [];
+      myDivisions.forEach(div => {
+          (divisions[div]?.bunks || []).forEach(b => myBunks.push(b));
+      });
+      myBunks.forEach(bunk => {
+          if (window.scheduleAssignments?.[bunk]) delete window.scheduleAssignments[bunk];
+          if (window.leagueAssignments?.[bunk]) delete window.leagueAssignments[bunk];
+      });
+      // Also clear division-keyed league assignments
+      myDivisions.forEach(div => {
+          if (window.leagueAssignments?.[div]) delete window.leagueAssignments[div];
+      });
+      console.log(`[Optimizer] Cleared ${myBunks.length} bunks for scheduler divisions: [${myDivisions.join(', ')}]`);
+  } else {
+      // Owner/Admin: clear everything
+      window.scheduleAssignments = {};
+      window.leagueAssignments = {};
+      console.log('[Optimizer] Cleared all scheduleAssignments and leagueAssignments');
+  }
+
+  // Also clear from localStorage for this date so nothing rehydrates stale data
+  try {
+      const all = window.loadAllDailyData?.() || {};
+      if (all[dateKey]) {
+          if (role === 'scheduler') {
+              const myDivisions = window.AccessControl?.getEditableDivisions?.() || [];
+              const divisions = window.divisions || {};
+              const myBunks = [];
+              myDivisions.forEach(div => {
+                  (divisions[div]?.bunks || []).forEach(b => myBunks.push(b));
+              });
+              if (all[dateKey].scheduleAssignments) {
+                  myBunks.forEach(b => delete all[dateKey].scheduleAssignments[b]);
+              }
+              if (all[dateKey].leagueAssignments) {
+                  myBunks.forEach(b => delete all[dateKey].leagueAssignments[b]);
+                  myDivisions.forEach(d => delete all[dateKey].leagueAssignments[d]);
+              }
+          } else {
+              if (all[dateKey].scheduleAssignments) all[dateKey].scheduleAssignments = {};
+              if (all[dateKey].leagueAssignments) all[dateKey].leagueAssignments = {};
+          }
+          localStorage.setItem('campDailyData', JSON.stringify(all));
+      }
+  } catch (e) {
+      console.warn('[Optimizer] Pre-clear localStorage cleanup failed:', e);
+  }
+
+  // Clear GlobalFieldLocks so stale locks don't interfere
+  if (window.GlobalFieldLocks?.clearAllLocks) {
+      window.GlobalFieldLocks.clearAllLocks();
+      console.log('[Optimizer] Cleared GlobalFieldLocks');
+  }
+  // ★★★ END PRE-GENERATION CLEAR ★★★
+
   const success = window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
   if (success) { await daShowAlert("✅ Schedule Generated!"); window.showTab?.('schedule'); }
   else { await daShowAlert("❌ Error generating schedule. Check console."); }
