@@ -1712,6 +1712,8 @@
                 var cand = allCandidateOptions[ci];
                 if (disabledSet.indexOf(cand.field) !== -1) continue;
                 if (window.GlobalFieldLocks?.isFieldLocked(cand.field, slots)) continue;
+                // ★★★ FIX v13.1: Time-based lock check for cross-division league conflicts ★★★
+                if (isFieldLockedByTime(cand.field, startMin, endMin, blockDiv)) continue;
                 if (checkCrossDivisionTimeConflict(cand.field, blockDiv, startMin, endMin, bunk)) continue;
                 var fp = _fieldPropertyMap.get(cand.field), cap = fp ? fp.capacity : getFieldCapacity(cand.field), sType = fp ? fp.sharingType : getSharingType(cand.field);
                 if (sType === 'not_sharable') { if (getFieldUsageFromTimeIndex(cand._fieldNorm, startMin, endMin, bunk) >= cap) continue; }
