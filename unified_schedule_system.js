@@ -3035,6 +3035,7 @@ let conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
                 if (excludeSet.has(field.name)) continue;
                 if (disabledSet.has(field.name)) continue;
                 if (window.GlobalFieldLocks?.isFieldLocked(field.name, slots, divName)) continue;
+                if (_altIsBlockedForDiv(field.name)) continue;
 
                 const fp = activityProps[field.name] || {};
                 if (!isRainyMode && (fp.rainyDayOnly === true || fp.rainyDayExclusive === true)) continue;
