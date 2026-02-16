@@ -50,8 +50,59 @@
     // HELPERS
     // =========================================================================
 
-    function openUpgradeEmail() {
-        window.location.href = MAILTO_URL;
+   function openUpgradeEmail() {
+        // Remove existing popup if any
+        const existing = document.getElementById('trial-upgrade-popup');
+        if (existing) existing.remove();
+
+        const popup = document.createElement('div');
+        popup.id = 'trial-upgrade-popup';
+        popup.style.cssText = `
+            position:fixed; inset:0; z-index:9999999;
+            background:rgba(15,23,42,0.6); backdrop-filter:blur(4px);
+            display:flex; align-items:center; justify-content:center;
+            animation:trialFadeIn 0.2s ease-out;
+        `;
+        popup.innerHTML = `
+            <div style="
+                background:white; border-radius:16px; padding:40px 36px; max-width:420px; width:90%;
+                text-align:center; box-shadow:0 25px 60px rgba(0,0,0,0.3);
+                animation:trialCardUp 0.3s ease-out;
+                font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+            ">
+                <div style="font-size:2.5rem;margin-bottom:12px;">✉️</div>
+                <h3 style="font-size:1.25rem;font-weight:700;color:#1E293B;margin:0 0 12px;">
+                    Upgrade Your Account
+                </h3>
+                <p style="color:#64748B;font-size:0.95rem;line-height:1.6;margin:0 0 8px;">
+                    Please contact us for more info:
+                </p>
+                <p style="margin:16px 0 24px;">
+                    <a href="mailto:${CONTACT_EMAIL}" style="
+                        color:#0F5F6E; font-weight:700; font-size:1.05rem;
+                        text-decoration:none; border-bottom:2px solid #0F5F6E;
+                        padding-bottom:2px;
+                    ">${CONTACT_EMAIL}</a>
+                </p>
+                <button id="trial-upgrade-popup-close" style="
+                    background:linear-gradient(135deg,#0F5F6E,#147D91); color:white;
+                    padding:10px 28px; border-radius:8px; font-size:0.9rem;
+                    font-weight:600; border:none; cursor:pointer;
+                    box-shadow:0 4px 12px rgba(20,125,145,0.3);
+                    transition:transform 0.15s,box-shadow 0.15s;
+                " onmouseover="this.style.transform='translateY(-2px)'"
+                   onmouseout="this.style.transform=''">Got it</button>
+            </div>
+        `;
+        document.body.appendChild(popup);
+
+        // Close handlers
+        document.getElementById('trial-upgrade-popup-close').addEventListener('click', function() {
+            popup.remove();
+        });
+        popup.addEventListener('click', function(e) {
+            if (e.target === popup) popup.remove();
+        });
     }
 
     async function waitForSupabase(maxMs = 10000) {
