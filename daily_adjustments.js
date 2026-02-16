@@ -2460,10 +2460,11 @@ async function runOptimizer() {
   if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
   saveDailySkeleton();
 
-  // ★★★ PRE-GENERATION CLEAR (v2 - BULLETPROOF) ★★★
-  // Clear today's schedule from ALL storage layers before generating.
-  // This prevents stale data (especially leagues from regular→rainy switches)
-  // from being rehydrated by loadScheduleForDate/updateTable during or after generation.
+  // ★★★ PRE-GENERATION CLEAR (v3) ★★★
+  // Clear stale schedule data from memory and localStorage before generating.
+  // This prevents old regular-day leagues from persisting when regenerating
+  // as rainy day (or vice versa). We do NOT delete from cloud here — the
+  // optimizer's own saveSchedule() at the end overwrites the cloud record.
   const dateKey = window.currentScheduleDate;
   console.log('[Optimizer] ★ Pre-generation clear for', dateKey);
 
@@ -2471,7 +2472,7 @@ async function runOptimizer() {
   window.scheduleAssignments = {};
   window.leagueAssignments = {};
 
-  // 2. Clear localStorage so loadScheduleForDate doesn't rehydrate stale data
+  // 2. Clear localStorage so mid-generation rehydration doesn't pull stale data
   try {
       const DAILY_KEY = 'campDailyData_v1';
       const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
@@ -2480,40 +2481,61 @@ async function runOptimizer() {
           allData[dateKey].leagueAssignments = {};
           localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
       }
-      // Also try the older key format
-      const allDataOld = JSON.parse(localStorage.getItem('campDailyData') || '{}');
-      if (allDataOld[dateKey]) {
-          allDataOld[dateKey].scheduleAssignments = {};
-          allDataOld[dateKey].leagueAssignments = {};
-          localStorage.setItem('campDailyData', JSON.stringify(allDataOld));
-      }
   } catch (e) {
       console.warn('[Optimizer] localStorage pre-clear failed:', e);
   }
 
-  // 3. Delete from cloud so realtime sync/orchestrator doesn't pull stale data
-  try {
-      if (window.ScheduleDB?.deleteSchedule && navigator.onLine) {
-          await window.ScheduleDB.deleteSchedule(dateKey);
-          console.log('[Optimizer] ★ Deleted cloud schedule for', dateKey);
-      }
-  } catch (e) {
-      console.warn('[Optimizer] Cloud pre-delete failed (non-fatal):', e);
-  }
-
-  // 4. Clear GlobalFieldLocks
+  // 3. Clear GlobalFieldLocks
   if (window.GlobalFieldLocks?.clearAllLocks) {
       window.GlobalFieldLocks.clearAllLocks();
   }
+
+  // 4. Block stale cloud rehydration during generation
+  window._preGenClearActive = true;
 
   console.log('[Optimizer] ★ Pre-generation clear complete. Running optimizer...');
   // ★★★ END PRE-GENERATION CLEAR ★★★
 
   const success = window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
-  if (success) { await daShowAlert("✅ Schedule Generated!"); window.showTab?.('schedule'); }
-  else { await daShowAlert("❌ Error generating schedule. Check console."); }
-}
-// =================================================================
+
+  // ★★★ POST-GENERATION CLEANUP ★★★
+  window._preGenClearActive = false;
+
+  if (success) {
+      // Force save the fresh schedule to ALL storage layers immediately
+      // so any subsequent updateTable/loadScheduleForDate sees the new data
+      try {
+          const freshData = {
+              scheduleAssignments: window.scheduleAssignments || {},
+              leagueAssignments: window.leagueAssignments || {},
+              unifiedTimes: window.unifiedTimes || [],
+              divisionTimes: window.divisionTimes || {},
+              isRainyDay: window.isRainyDay || false,
+              rainyDayStartTime: window.rainyDayStartTime ?? null
+          };
+
+          // Save to localStorage
+          const DAILY_KEY = 'campDailyData_v1';
+          const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+          allData[dateKey] = { ...allData[dateKey], ...freshData, savedAt: new Date().toISOString() };
+          localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+
+          // Save to cloud (non-blocking)
+          window.ScheduleDB?.saveSchedule?.(dateKey, freshData);
+
+          console.log('[Optimizer] ★ Post-generation save complete:', 
+              Object.keys(freshData.scheduleAssignments).length, 'bunks,',
+              Object.keys(freshData.leagueAssignments).length, 'league entries');
+      } catch (e) {
+          console.warn('[Optimizer] Post-generation save failed:', e);
+      }
+
+      await daShowAlert("✅ Schedule Generated!"); 
+      window.showTab?.('schedule');
+  } else { 
+      await daShowAlert("❌ Error generating schedule. Check console."); 
+  }
+}// =================================================================
 // TRIPS FORM
 // =================================================================
 function renderTripsForm() {
