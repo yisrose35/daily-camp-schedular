@@ -354,7 +354,67 @@
         }
         return null;
     }
+// ========================================================================
+    // ★★★ TIME-BASED GLOBAL FIELD LOCK CHECK (Cross-Division Safe) ★★★
+    // ========================================================================
+    // GlobalFieldLocks uses slot INDICES which are division-specific.
+    // A league locking Field B at DivA slot [5] won't block DivB slot [3]
+    // even if they overlap in wall-clock time. This helper checks by TIME.
+    // ========================================================================
 
+    function isFieldLockedByTime(fieldName, startMin, endMin, divisionContext) {
+        var GFL = window.GlobalFieldLocks;
+        if (!GFL || !GFL._initialized || !GFL._locks) return false;
+        if (!fieldName || startMin == null || endMin == null) return false;
+
+        // Use the dedicated method if available (from patched global_field_locks.js)
+        if (GFL.isFieldLockedByTime) {
+            return !!GFL.isFieldLockedByTime(fieldName, startMin, endMin, divisionContext);
+        }
+
+        // Inline fallback: scan all lock slots for time-based overlap
+        var normalizedField = fieldName.toLowerCase().trim();
+
+        for (var slotIdx in GFL._locks) {
+            var slotLocks = GFL._locks[slotIdx];
+            if (!slotLocks || !slotLocks[normalizedField]) continue;
+
+            var lock = slotLocks[normalizedField];
+
+            // Skip division locks where caller IS the allowed division
+            if (lock.lockType === 'division' && lock.allowedDivision) {
+                if (divisionContext && divisionContext === lock.allowedDivision) continue;
+            }
+
+            // Get the lock's actual time range
+            var lockStartMin = lock.startMin;
+            var lockEndMin = lock.endMin;
+
+            // If lock doesn't have explicit times, derive from the lock's division slots
+            if (lockStartMin == null || lockEndMin == null) {
+                var lockDiv = lock.division;
+                if (lockDiv) {
+                    var firstDiv = lockDiv.split(',')[0].trim();
+                    var divSlots = window.divisionTimes?.[firstDiv] || [];
+                    var slot = divSlots[parseInt(slotIdx, 10)];
+                    if (slot) {
+                        lockStartMin = slot.startMin;
+                        lockEndMin = slot.endMin;
+                    }
+                }
+            }
+
+            // Can't determine time — skip
+            if (lockStartMin == null || lockEndMin == null) continue;
+
+            // Check TIME OVERLAP
+            if (lockStartMin < endMin && lockEndMin > startMin) {
+                return true;
+            }
+        }
+
+        return false;
+    }
     // ========================================================================
     // BATCHED ROTATION SCORING
     // ========================================================================
