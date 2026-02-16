@@ -2513,10 +2513,19 @@ if (bypassStatus.highlight) {
     // APPLY EDIT
     // =========================================================================
 
-    async function applyEdit(bunk, editData) {
-        const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
-        const divName = getDivisionForBunk(bunk);
-        const isClear = activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
+   async function applyEdit(bunk, editData) {
+//         const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
+//         const divName = getDivisionForBunk(bunk);
+//
+//         // ★ DEMO FIX: Guard against undefined activity
+//         if (window.__CAMPISTRY_DEMO_MODE__ && !activity && activity !== '') {
+//             console.error('[UnifiedSchedule] ❌ Demo: applyEdit called with undefined activity:', editData);
+//             alert('Error: No activity specified.');
+//             return;
+//         }
+//
+//         const isClear = activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
+//
         const slots = findSlotsForRange(startMin, endMin, divName);
         if (slots.length === 0) { alert('Error: Could not find time slots.'); return; }
         window._postEditInProgress = true; 
