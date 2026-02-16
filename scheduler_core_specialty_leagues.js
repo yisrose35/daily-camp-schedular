@@ -762,14 +762,21 @@ for (const futureDate of Object.keys(allDailyData)) {
         lockEndMin = lastSlot?.endMin || (lockStartMin + 40);
     }
     
-    window.GlobalFieldLocks.lockMultipleFields(usedFields, uniqueSlots, {
-        lockedBy: 'specialty_league',
-        leagueName: league.name,
-        division: divName,
-        activity: `${league.name} (${league.sport})`,
-        startMin: lockStartMin,
-        endMin: lockEndMin
-    });
+   // ★★★ FIX v13.1: Include time range for cross-division lock detection ★★★
+var _specDivSlots = window.divisionTimes?.[divName] || [];
+var _specLockStart = null, _specLockEnd = null;
+if (uniqueSlots.length > 0 && _specDivSlots[uniqueSlots[0]]) {
+    _specLockStart = _specDivSlots[uniqueSlots[0]].startMin;
+    _specLockEnd = _specDivSlots[uniqueSlots[uniqueSlots.length - 1]]?.endMin || (_specLockStart + 40);
+}
+window.GlobalFieldLocks.lockMultipleFields(usedFields, uniqueSlots, {
+    lockedBy: 'specialty_league',
+    leagueName: league.name,
+    division: divName,
+    activity: `${league.name} (${league.sport})`,
+    startMin: _specLockStart,
+    endMin: _specLockEnd
+});
 }
 
             // Also lock in fieldUsageBySlot for compatibility
