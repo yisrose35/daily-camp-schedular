@@ -537,7 +537,7 @@
             return;
         }
 
-        const isClear = activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
+       const isClear = !activity || activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
         // UPDATED: Use SchedulerCoreUtils
         const slots = window.SchedulerCoreUtils?.findSlotsForRange?.(startMin, endMin, unifiedTimes) || [];
         
