@@ -473,13 +473,15 @@ ul {
 /* HERO SECTION */
 /* ============================================= */
 .hero {
-     padding-top: calc(140px + var(--promo-banner-height));
+    padding-top: calc(140px + var(--promo-banner-height));
+    padding-left: 24px;
+    padding-right: 24px;
+    padding-bottom: 100px;
     position: relative;
     min-height: 100vh;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 140px 24px 100px;
 }
 .hero-content {
     text-align: center;
