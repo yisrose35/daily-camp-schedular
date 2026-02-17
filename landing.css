@@ -1481,3 +1481,35 @@ ul {
     font-weight: 500;
 }
 .auth-footer a:hover { text-decoration: underline; }
+/* Expo Promo Banner */
+.promo-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 10px 24px;
+    background: linear-gradient(135deg, var(--camp-forest) 0%, var(--camp-green) 100%);
+    color: white;
+    font-size: 0.92rem;
+    text-align: center;
+}
+.promo-banner code {
+    background: rgba(255,255,255,0.2);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+.promo-banner-close {
+    color: white;
+    font-size: 1.3rem;
+    opacity: 0.7;
+    transition: opacity 0.2s;
+    line-height: 1;
+}
+.promo-banner-close:hover { opacity: 1; }
