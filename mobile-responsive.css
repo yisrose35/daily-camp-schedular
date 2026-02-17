@@ -93,7 +93,8 @@ html, body {
 
   /* HERO — "Camp-Tech, Reimagined" fills the opening screen */
   .hero {
-    padding: 90px 20px 40px !important;
+   .hero {
+    padding: calc(90px + var(--promo-banner-height, 0px)) 20px 40px !important;
     min-height: 100vh !important;
     min-height: 100dvh !important;
     display: flex !important;
