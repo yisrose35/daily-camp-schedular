@@ -51,6 +51,21 @@ html, body {
   .nav-logo { gap: 8px !important; font-size: 1.1rem !important; }
   .landing-logo-img { height: 32px !important; }
 
+  /* PROMO BANNER — mobile */
+  .promo-banner {
+    font-size: 0.78rem !important;
+    padding: 8px 12px !important;
+    gap: 8px !important;
+    flex-wrap: nowrap !important;
+  }
+  .promo-banner span {
+    line-height: 1.3 !important;
+  }
+  .promo-banner code {
+    padding: 1px 6px !important;
+    white-space: nowrap !important;
+  }
+
   /* FIX: Hamburger symbol — proper 3-line icon */
   .nav-mobile-toggle {
     display: flex !important;
@@ -78,12 +93,11 @@ html, body {
   }
 
   /* FIX: Mobile drawer — scroll doesn't clip bottom */
-  .mobile-drawer {
+ .mobile-drawer {
     height: 100vh !important;
     height: 100dvh !important;
     overflow-y: auto !important;
-    padding-top: 80px !important;
-    padding-bottom: 100px !important;
+    padding-top: calc(80px + var(--promo-banner-height, 0px)) !important;
     -webkit-overflow-scrolling: touch !important;
   }
   .mobile-overlay {
