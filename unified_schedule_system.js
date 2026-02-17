@@ -3112,16 +3112,26 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
             }
         });
 
-        (app1.fields || []).forEach(field => {
+       (app1.fields || []).forEach(field => {
             if (!field.name || field.available === false) return;
             if (excludeSet.has(field.name)) return;
             if (disabledFields.includes(field.name)) return;
             if (window.GlobalFieldLocks?.isFieldLocked(field.name, slots, divName)) return;
 
+            // ★★★ FIX: Enforce limitUsage & preferences for division access during drip-down ★★★
+            const _fProps = activityProps[field.name] || {};
+            if (_fProps.limitUsage?.enabled) {
+                const _allowedDivs = _fProps.limitUsage.divisions || {};
+                if (!(divName in _allowedDivs)) return;
+            }
+            if (_fProps.preferences?.enabled && _fProps.preferences?.exclusive) {
+                const _prefList = _fProps.preferences.list || [];
+                if (_prefList.length > 0 && !_prefList.includes(divName)) return;
+            }
+
             let available = true;
             const props = activityProps[field.name] || {};
             const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
-
             for (const slotIdx of slots) {
                 const usage = simulatedUsage[slotIdx]?.[field.name];
                 if (usage && usage.count >= maxCapacity) { available = false; break; }
