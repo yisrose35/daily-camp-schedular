@@ -501,8 +501,8 @@ html, body {
 @media (max-width: 768px) {
   /* Me nav: compact like Flow */
   .nav-left { gap: 0.5rem !important; }
-  .nav-logo-me { height: 26px !important; max-height: 28px !important; top: 0 !important; }
-  .nav-logo-flow { height: 24px !important; max-height: 26px !important; top: 0 !important; }
+  .nav-logo-me { height: 24px !important; max-height: 26px !important; top: 0 !important; }
+.nav-logo-flow { height: 22px !important; max-height: 24px !important; top: 0 !important; }
   .nav-app-switch { margin-left: 4px !important; }
   /* Sync badge: don't clip */
   .sync-badge {
