@@ -49,6 +49,9 @@
     --radius-lg: 14px;
     --radius-xl: 20px;
     
+    /* Promo Banner */
+    --promo-banner-height: 44px;
+    
     /* Transitions */
     --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
