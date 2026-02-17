@@ -3085,8 +3085,18 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
             if (!isRainyMode && (special.rainyDayOnly === true || special.rainyDayExclusive === true)) return;
             if (isRainyMode && (special.rainyDayAvailable === false || special.availableOnRainyDay === false || special.isIndoor === false)) return;
 
-            let available = true;
-            const props = activityProps[special.name] || {};
+            // ★★★ FIX: Enforce limitUsage & preferences for division access during drip-down ★★★
+            const _spProps = activityProps[special.name] || {};
+            if (_spProps.limitUsage?.enabled) {
+                const _allowedDivs = _spProps.limitUsage.divisions || {};
+                if (!(divName in _allowedDivs)) return;
+            }
+            if (_spProps.preferences?.enabled && _spProps.preferences?.exclusive) {
+                const _prefList = _spProps.preferences.list || [];
+                if (_prefList.length > 0 && !_prefList.includes(divName)) return;
+            }
+
+            let available = true;            const props = activityProps[special.name] || {};
             const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
 
             for (const slotIdx of slots) {
