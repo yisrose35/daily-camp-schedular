@@ -185,7 +185,8 @@ ul {
 /* NAVIGATION */
 /* ============================================= */
 .nav {
-    top: var(--promo-banner-height);
+    position: fixed;
+    top: var(--promo-banner-height);    
     left: 0;
     right: 0;
     z-index: 100;
