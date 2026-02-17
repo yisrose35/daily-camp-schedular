@@ -206,11 +206,17 @@
     // CONFLICT DETECTION
     // =========================================================================
 
-    function checkLocationConflict(locationName, slots, excludeBunk) {
+   function checkLocationConflict(locationName, slots, excludeBunk) {
+        if (!locationName) {
+            return {
+                hasConflict: false, conflicts: [],
+                editableConflicts: [], nonEditableConflicts: [],
+                globalLock: null, canShare: false, currentUsage: 0, maxCapacity: 1
+            };
+        }
         const assignments = window.scheduleAssignments || {};
         // UPDATED: Use SchedulerCoreUtils
-        const activityProperties = window.SchedulerCoreUtils?.getActivityProperties?.() || 
-                                   window.activityProperties || {};
+        const activityProperties = window.SchedulerCoreUtils?.getActivityProperties?.() ||                                   window.activityProperties || {};
         const locationInfo = activityProperties[locationName] || {};
         
         let maxCapacity = 1;
