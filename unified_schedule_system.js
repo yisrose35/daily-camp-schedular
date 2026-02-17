@@ -2617,7 +2617,7 @@ if (bypassStatus.highlight) {
             return;
         }
 
-        const isClear = activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
+       const isClear = !activity || activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
         const slots = findSlotsForRange(startMin, endMin, divName);
         if (slots.length === 0) { alert('Error: Could not find time slots.'); return; }
         window._postEditInProgress = true; 
