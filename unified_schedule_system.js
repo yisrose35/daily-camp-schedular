@@ -851,6 +851,13 @@ function shouldHighlightBunk(bunkName) {
 // CONFLICT DETECTION (TIME-BASED - CROSS-DIVISION COMPATIBLE)
 // =========================================================================
 function checkLocationConflict(locationName, slots, excludeBunk) {
+    if (!locationName) {
+        return {
+            hasConflict: false, conflicts: [],
+            editableConflicts: [], nonEditableConflicts: [],
+            globalLock: null, canShare: false, currentUsage: 0, maxCapacity: 1
+        };
+    }
     const assignments = window.scheduleAssignments || {};
     const activityProps = getActivityProperties();
     const locationInfo = activityProps[locationName] || {};
