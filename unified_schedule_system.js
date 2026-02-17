@@ -2959,6 +2959,16 @@ let conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
                 if (!isRainyMode && (fp.rainyDayOnly === true || fp.rainyDayExclusive === true)) continue;
                 if (isRainyMode && (fp.rainyDayAvailable === false && field.rainyDayAvailable !== true)) continue;
 
+                // ★★★ FIX: Enforce limitUsage for division access ★★★
+                if (fp.limitUsage?.enabled) {
+                    const allowedDivs = fp.limitUsage.divisions || {};
+                    if (!(divName in allowedDivs)) continue;
+                }
+                if (fp.preferences?.enabled && fp.preferences?.exclusive) {
+                    const prefList = fp.preferences.list || [];
+                    if (prefList.length > 0 && !prefList.includes(divName)) continue;
+                }
+
                 let available = true;
                 const maxCap = fp.sharableWith?.capacity || (fp.sharable ? 2 : 1);
                 for (const slotIdx of slots) {
@@ -2986,6 +2996,17 @@ let conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
                 if (window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) continue;
                 if (!isRainyMode && (special.rainyDayOnly === true || special.rainyDayExclusive === true)) continue;
                 if (isRainyMode && special.rainyDayAvailable === false) continue;
+
+                // ★★★ FIX: Enforce limitUsage for division access ★★★
+                const sp_props = activityProps[special.name] || {};
+                if (sp_props.limitUsage?.enabled) {
+                    const allowedDivs = sp_props.limitUsage.divisions || {};
+                    if (!(divName in allowedDivs)) continue;
+                }
+                if (sp_props.preferences?.enabled && sp_props.preferences?.exclusive) {
+                    const prefList = sp_props.preferences.list || [];
+                    if (prefList.length > 0 && !prefList.includes(divName)) continue;
+                }
 
                 const key = 'special|' + special.name;
                 if (seenKeys.has(key)) continue;
