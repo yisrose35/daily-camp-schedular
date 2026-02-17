@@ -1542,7 +1542,7 @@ actualSlots.forEach((slotIdx, i) => {
         endMin = divSlots[slots[slots.length - 1]]?.endMin || (startMin + 30);
     }
     
-    const candidates = buildCandidateOptions(slots, activityProperties, disabledFields);
+    const candidates = buildCandidateOptions(slots, activityProperties, disabledFields, divName);
     const scoredPicks = [];
     
     for (const cand of candidates) {
