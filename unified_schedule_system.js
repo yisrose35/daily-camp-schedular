@@ -3039,6 +3039,17 @@ let conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
 if (disabledFields.includes(fName)) return;
 if (window.GlobalFieldLocks?.isFieldLocked(fName, slots, divName)) return;
 
+// ★★★ FIX: Enforce limitUsage & preferences for division access during drip-down ★★★
+const _altProps = activityProps[fName] || {};
+if (_altProps.limitUsage?.enabled) {
+    const _allowedDivs = _altProps.limitUsage.divisions || {};
+    if (!(divName in _allowedDivs)) return;
+}
+if (_altProps.preferences?.enabled && _altProps.preferences?.exclusive) {
+    const _prefList = _altProps.preferences.list || [];
+    if (_prefList.length > 0 && !_prefList.includes(divName)) return;
+}
+
 // ★ Rainy day filtering: skip rainy-day-only activities on normal days
 const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
 const fieldProps = activityProps[fName] || {};
