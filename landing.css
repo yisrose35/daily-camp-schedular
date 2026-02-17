@@ -469,6 +469,7 @@ ul {
 /* HERO SECTION */
 /* ============================================= */
 .hero {
+     padding-top: calc(140px + var(--promo-banner-height));
     position: relative;
     min-height: 100vh;
     display: flex;
