@@ -3531,6 +3531,10 @@ if (globalBlocks.length > 0) {
     // =========================================================================
 
     async function createAutoBackup(activityName, divisionName) {
+        if (window.__CAMPISTRY_DEMO_MODE__) {
+            console.log('[AutoBackup] 🎭 Demo mode — skipping auto-backup');
+            return { success: true, reason: 'demo_mode' };
+        }
         if (!VersionManager?.saveVersion) {
             console.log('[AutoBackup] VersionManager not available, skipping backup');
             return { success: false, reason: 'VersionManager not available' };
