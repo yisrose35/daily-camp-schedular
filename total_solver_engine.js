@@ -619,11 +619,13 @@
         }
 
        // === SOFT PENALTIES ===
-        penalty += rotationPenalty;// ★★★ FREE PERIOD PENALTY — prefer any real activity over Free ★★★
-        // Higher than YESTERDAY_PENALTY (12000) so solver prefers
-        // repeating yesterday's activity over giving a Free.
+        penalty += rotationPenalty;
+        // ★★★ v14.0 FREE PERIOD PENALTY — Free is ALWAYS the worst option ★★★
+        // 100000 decisively outweighs all soft penalties combined (rotation,
+        // type balance, zone travel, scarcity, etc.) so the solver will
+        // exhaust every real option before considering Free.
         if (actNorm === 'free' || fieldName === 'Free') {
-            penalty += 45000;
+            penalty += 100000;
         }
 
         // Type balance for General Activity Slots
@@ -1507,7 +1509,7 @@
                 var lastChancePick = null;
                 if (block.startTime !== undefined && block.endTime !== undefined) {
                     var lcScored = [];
-                    for (var lci = 0; lci < allCandidateOptions.length; lci++) { var lcCand = allCandidateOptions[lci]; if (!isPickStillValid(block, lcCand)) continue; setScratchPick(lcCand); var lcCost = calculatePenaltyCost(block, _scratchPick); if (lcCost < 500000) lcScored.push({ ci: lci, cost: lcCost }); }
+                    for (var lci = 0; lci < allCandidateOptions.length; lci++) { var lcCand = allCandidateOptions[lci]; if (!isPickStillValid(block, lcCand)) continue; setScratchPick(lcCand); var lcCost = calculatePenaltyCost(block, _scratchPick); if (lcCost < 900000) lcScored.push({ ci: lci, cost: lcCost }); }
                     if (lcScored.length > 0) { lcScored.sort(function(x, y) { return x.cost - y.cost; }); lastChancePick = clonePick(allCandidateOptions[lcScored[0].ci]); }
                 }
                 _assignedBlocks.add(bi);
