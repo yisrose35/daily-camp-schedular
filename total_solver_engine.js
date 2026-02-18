@@ -1939,9 +1939,23 @@
                 }
             }
         }
-        if (crossDivFixes > 0) console.warn('[SOLVER] ★★★ Fixed ' + crossDivFixes + ' cross-division violations ★★★');
+        if (crossDivFixes > 0) {
+        console.warn('[SOLVER] ★★★ Fixed ' + crossDivFixes + ' cross-division violations ★★★');
+        // ★★★ v14.1: Re-solve displaced blocks instead of leaving them as Free ★★★
+        console.log('[SOLVER-v14.1] 🔄 Re-solving ' + crossDivFixes + ' displaced blocks...');
+        _todayCache.clear();
+        deepFreeResolution(activityBlocks);
+        postSolveLocalSearch(activityBlocks);
+        // Count remaining Free after re-solve
+        var postCrossDivFree = 0;
+        for (var pcdi = 0; pcdi < activityBlocks.length; pcdi++) {
+            var pcdAssign = _assignments.get(pcdi);
+            if (pcdAssign) { var pcdAct = normName(pcdAssign.pick._activity || pcdAssign.pick.field); if (pcdAct === 'free' || pcdAct === 'free (timeout)') postCrossDivFree++; }
+        }
+        console.log('[SOLVER-v14.1] ✅ Post cross-div re-solve: ' + postCrossDivFree + ' Free remaining');
+    }
 
-        // FORMAT OUTPUT
+    // FORMAT OUTPUT
         var results = [];
         for (var idx = 0; idx < activityBlocks.length; idx++) {
             var blk = activityBlocks[idx], assignmentResult = _assignments.get(idx);
