@@ -812,6 +812,69 @@
         }
 // ★★★ v17.12: Set flag to prevent remote merges during generation ★★★
         window._generationInProgress = true;
+
+        // ★★★ STEP 0: FULL DAILY SCHEDULE WIPE ★★★
+        // Before ANY generation, completely wipe today's schedule from all layers.
+        // This mirrors eraseCurrentDailyData() from calendar.js to ensure a clean slate.
+        // Without this, stale data (old leagues, old assignments, old field locks)
+        // can bleed into the new generation and cause ghost entries.
+        {
+            const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+            console.log(`[STEP 0] ★ FULL DAILY SCHEDULE WIPE for ${dateKey}`);
+
+            // 0a. Clear window globals
+            window.scheduleAssignments = {};
+            window.leagueAssignments = {};
+            console.log('[STEP 0] Cleared window.scheduleAssignments & leagueAssignments');
+
+            // 0b. Clear localStorage
+            try {
+                const DAILY_KEY = 'campDailyData_v1';
+                const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                if (allData[dateKey]) {
+                    allData[dateKey].scheduleAssignments = {};
+                    allData[dateKey].leagueAssignments = {};
+                    localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+                }
+                console.log('[STEP 0] Cleared localStorage daily data');
+            } catch (e) {
+                console.warn('[STEP 0] localStorage clear failed:', e);
+            }
+
+            // 0c. Delete from cloud (Supabase)
+            try {
+                const client = window.CampistryDB?.getClient?.() || window.supabase;
+                const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
+                if (client && campId) {
+                    // Fire-and-forget — don't await to avoid blocking generation
+                    client
+                        .from('daily_schedules')
+                        .delete()
+                        .eq('camp_id', campId)
+                        .eq('date_key', dateKey)
+                        .then(({ error }) => {
+                            if (error) console.warn('[STEP 0] Cloud delete error:', error.message);
+                            else console.log('[STEP 0] ☁️ Cloud schedule deleted for', dateKey);
+                        });
+                } else {
+                    console.log('[STEP 0] No Supabase client/campId — skipping cloud delete');
+                }
+            } catch (e) {
+                console.warn('[STEP 0] Cloud delete failed:', e);
+            }
+
+            // 0d. Clear GlobalFieldLocks
+            if (window.GlobalFieldLocks?.clearAllLocks) {
+                window.GlobalFieldLocks.clearAllLocks();
+                console.log('[STEP 0] Cleared GlobalFieldLocks');
+            }
+
+            // 0e. Block stale cloud rehydration during generation
+            window._preGenClearActive = true;
+
+            console.log('[STEP 0] ★ FULL WIPE COMPLETE — generating from clean slate');
+        }
+
         // ★★★ 1. AUTO-DETECT ALLOWED DIVISIONS ★★★
         if (!allowedDivisions) {
             if (window.MultiSchedulerCore && typeof window.MultiSchedulerCore.getUserDivisions === 'function') {
