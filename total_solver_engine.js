@@ -1338,7 +1338,7 @@
                     var p1GlobalDone = globalBunkActivities.get(block.bunk);
                     if (p1GlobalDone && p1GlobalDone.has(p1ActNorm)) continue;
                 }
-                setScratchPick(cand); var cost = calculatePenaltyCost(block, _scratchPick); if (cost < 500000) scored.push({ bi: bi, ci: ci, cost: cost }); }
+                setScratchPick(cand); var cost = calculatePenaltyCost(block, _scratchPick); if (cost < 900000) scored.push({ bi: bi, ci: ci, cost: cost }); }
             scored.sort(function(a, b) { return a.cost - b.cost; });
             blockOptions.push({ bi: bi, options: scored, domainSize: scored.length });
         }
@@ -1568,7 +1568,7 @@
         for (var bi of freeBlocks) {
             var block = activityBlocks[bi], domain = _domains.get(bi); if (!domain) continue;
             var scored = [];
-            for (var ci of domain) { var cand = allCandidateOptions[ci]; if (!isPickStillValid(block, cand)) continue; setScratchPick(cand); var cost = calculatePenaltyCost(block, _scratchPick); if (cost < 500000) scored.push({ ci: ci, cost: cost }); }
+            for (var ci of domain) { var cand = allCandidateOptions[ci]; if (!isPickStillValid(block, cand)) continue; setScratchPick(cand); var cost = calculatePenaltyCost(block, _scratchPick); if (cost < 900000) scored.push({ ci: ci, cost: cost }); }
             if (scored.length > 0) {
                 scored.sort(function(a, b) { return a.cost - b.cost; });
                 var best = scored[0], bestCand = allCandidateOptions[best.ci], bestPick = clonePick(bestCand);
