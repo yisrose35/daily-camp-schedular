@@ -473,7 +473,7 @@
         config.masterSpecials?.forEach(function(s) {
             if (!s.name || disabledSet.has(s.name)) return;
             var key = s.name + '|special';
-            if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: s.name, sport: null, activityName: s.name, type: 'special', _fieldNorm: normName(s.name), _actNorm: normName(s.name) }); }
+            if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: s.name, sport: null, activityName: s.name, type: 'special', _fieldNorm: normName(s.name), _actNorm: normName(s.name), _fullGrade: s.fullGrade === true }); }
         });
         var loadedData = window.SchedulerCoreUtils?.loadAndFilterData?.() || {};
         var fieldsBySport = loadedData.fieldsBySport || {};
@@ -494,7 +494,7 @@
     // ========================================================================
     var _scratchPick = { field: '', sport: null, _activity: '', _type: '' };
     function setScratchPick(cand) { _scratchPick.field = cand.field; _scratchPick.sport = cand.sport; _scratchPick._activity = cand.activityName; _scratchPick._type = cand.type; return _scratchPick; }
-    function clonePick(cand) { return { field: cand.field, sport: cand.sport, _activity: cand.activityName, _type: cand.type }; }
+    function clonePick(cand) { return { field: cand.field, sport: cand.sport, _activity: cand.activityName, _type: cand.type, _fullGrade: cand._fullGrade || false }; }
 
     // ========================================================================
     // PENALTY ENGINE (v15.0 — rainy-aware, fullGrade bonus, plan steering)
@@ -629,7 +629,7 @@
         // ★★★ v15.0: fullGrade steering — if this activity has _fullGrade, bonus ★★★
         // This makes the solver PREFER fullGrade picks, used in conjunction with
         // the fullGrade forcing logic in Part 2's solveGroupMatchingAugmented
-        if (pick._fullGrade || activityProperties[act]?._fullGrade) penalty -= 15000;
+        if (pick._fullGrade || activityProperties[act]?.fullGrade || activityProperties[act]?._fullGrade) penalty -= 15000;
 
         // Tie-breaker
         penalty += Math.random() * (ROTATION_CONFIG.TIE_BREAKER_RANDOMNESS || 300);
@@ -1107,7 +1107,7 @@
                     if (!bunkActsGrp.has(b2.bunk)) bunkActsGrp.set(b2.bunk,new Set());
                     var aAn=normName(c2.activityName); if (aAn&&aAn!=='free') bunkActsGrp.get(b2.bunk).add(aAn);
                     // ★ v15.0: Record fullGrade if activity has _fullGrade
-                    if (newPk._fullGrade||actProps[c2.activityName]?._fullGrade) { fullGradeMap.set(fgKey,{pick:newPk,candIdx:opt.ci,cost:opt.cost}); }
+                    if (newPk._fullGrade||actProps[c2.activityName]?.fullGrade||actProps[c2.activityName]?._fullGrade) { fullGradeMap.set(fgKey,{pick:newPk,candIdx:opt.ci,cost:opt.cost}); }
                     assigned=true; break;
                 }
                 // Augmenting path
