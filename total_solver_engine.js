@@ -1220,6 +1220,10 @@
         var freeIdx=[]; for (var i=0;i<activityBlocks.length;i++) { var a=S._assignments.get(i); if (!a) continue; var an=normName(a.pick._activity||a.pick.field); if (an==='free'||an==='free (timeout)') freeIdx.push(i); }
         if (freeIdx.length===0) return 0;
         console.log('[SOLVER-v12.4] 🧠 Deep Free Resolution: '+freeIdx.length+' Free blocks');
+        // Sort by division density (divisions with most Free blocks first)
+        var divFree = {};
+        for (var dfi of freeIdx) { var dfn = activityBlocks[dfi].divName || ''; divFree[dfn] = (divFree[dfn] || 0) + 1; }
+        freeIdx.sort(function(a, b) { return (divFree[activityBlocks[b].divName || ''] || 0) - (divFree[activityBlocks[a].divName || ''] || 0); });
         var resolved=0, disabled=window.currentDisabledFields||gCfg?.disabledFields||[];
         for (var idx=0;idx<freeIdx.length;idx++) {
             var bi=freeIdx[idx],blk=activityBlocks[bi],bunk=blk.bunk,bDiv=blk.divName||'',sM=blk.startTime,eM=blk.endTime,slots=blk.slots||[];
@@ -1262,8 +1266,8 @@
     function internalSolvePass(activityBlocks, passNum) {
         S._passNumber = passNum;
         S._assignedBlocks.clear(); S._assignments.clear(); S._todayCache.clear();
-        // Undo all schedule assignments for solver blocks
-        for (var i=0;i<activityBlocks.length;i++) { var blk=activityBlocks[i]; var slots=blk.slots||[]; if (!window.scheduleAssignments[blk.bunk]) continue; for (var si=0;si<slots.length;si++) { window.scheduleAssignments[blk.bunk][slots[si]]=null; } }
+        // Undo all schedule assignments for solver blocks (preserve _fixed and _bunkOverride)
+        for (var i=0;i<activityBlocks.length;i++) { var blk=activityBlocks[i]; var slots=blk.slots||[]; if (!window.scheduleAssignments[blk.bunk]) continue; for (var si=0;si<slots.length;si++) { var existing = window.scheduleAssignments[blk.bunk][slots[si]]; if (existing && !existing._fixed && !existing._bunkOverride) { if (existing.field && window.fieldUsageBySlot?.[slots[si]]?.[existing.field]) { var fu = window.fieldUsageBySlot[slots[si]][existing.field]; if (fu.bunks) delete fu.bunks[blk.bunk]; if (fu.count > 0) fu.count--; } window.scheduleAssignments[blk.bunk][slots[si]] = null; } } }
         S.buildFieldTimeIndex();
         S.precomputeFieldProperties();
         S.precomputeRotationScores(activityBlocks);
@@ -1286,30 +1290,70 @@
     // ★★★ v14.2: SAME-DAY DUPLICATE SWEEP ★★★
     // Final safety — scans entire schedule and removes duplicates
     // ========================================================================
-    function sameDayDuplicateSweep() {
+    function sameDayDuplicateSweep(activityBlocks) {
         var schedules = window.scheduleAssignments || {};
-        var fixed = 0;
-        for (var bunk in schedules) {
-            var slots = schedules[bunk]; if (!Array.isArray(slots)) continue;
-            var seen = new Set();
-            for (var i = 0; i < slots.length; i++) {
-                var entry = slots[i];
-                if (!entry || entry.continuation || entry._isTransition || entry._fixed) continue;
-                var act = normName(entry._activity || entry.sport || entry.field);
-                if (!act || act === 'free' || act === 'free play' || act === 'transition/buffer') continue;
-                // Skip special system events
-                if (act === 'lunch' || act === 'snacks' || act === 'swim' || act === 'dismissal' || act === 'regroup') continue;
-                if (seen.has(act)) {
-                    console.warn('[v14.2-SWEEP] Duplicate: ' + bunk + ' slot ' + i + ' → ' + act + ' (clearing)');
-                    slots[i] = { field: 'Free', sport: null, _activity: 'Free', _fixed: false };
-                    fixed++;
-                } else {
-                    seen.add(act);
+        var dupFixCount = 0;
+        var bunkActivityMap = new Map();
+        // Phase 1: Check solver blocks against each other
+        for (var di = 0; di < activityBlocks.length; di++) {
+            var dBlock = activityBlocks[di], dAssign = S._assignments.get(di);
+            if (!dAssign) continue;
+            var dActNorm = normName(dAssign.pick._activity || dAssign.pick.field);
+            if (!dActNorm || dActNorm === 'free' || dActNorm === 'free play') continue;
+            if (!bunkActivityMap.has(dBlock.bunk)) bunkActivityMap.set(dBlock.bunk, new Map());
+            var bunkMap = bunkActivityMap.get(dBlock.bunk);
+            if (bunkMap.has(dActNorm)) {
+                var existingIdx = bunkMap.get(dActNorm);
+                var existingCost = S._assignments.get(existingIdx)?.cost || 0;
+                var currentCost = dAssign.cost || 0;
+                var replaceIdx = currentCost >= existingCost ? di : existingIdx;
+                var keepIdx = replaceIdx === di ? existingIdx : di;
+                var replaceBlock = activityBlocks[replaceIdx];
+                S.undoPickFromSchedule(replaceBlock, S._assignments.get(replaceIdx).pick);
+                var freePick = { field: "Free", sport: null, _activity: "Free" };
+                S._assignments.set(replaceIdx, { candIdx: -1, pick: freePick, cost: 100000 });
+                S.applyPickToSchedule(replaceBlock, freePick);
+                bunkMap.set(dActNorm, keepIdx);
+                dupFixCount++;
+                console.warn('[v14.2-SWEEP] 🔧 Fixed same-day dup: ' + dBlock.bunk + ' "' + dActNorm + '" twice → block ' + replaceIdx + ' → Free');
+            } else {
+                bunkMap.set(dActNorm, di);
+            }
+        }
+        // Phase 2: Check solver blocks against pinned/fixed entries
+        for (var [dsBunk, dsActMap] of bunkActivityMap) {
+            var dsBunkSlots = schedules[dsBunk] || [];
+            var solverSlots = new Set();
+            for (var dsi2 = 0; dsi2 < activityBlocks.length; dsi2++) {
+                if (activityBlocks[dsi2].bunk === dsBunk) {
+                    (activityBlocks[dsi2].slots || []).forEach(function(s) { solverSlots.add(s); });
+                }
+            }
+            for (var dssi = 0; dssi < dsBunkSlots.length; dssi++) {
+                if (solverSlots.has(dssi)) continue;
+                var dsEntry = dsBunkSlots[dssi];
+                if (!dsEntry || dsEntry.continuation || dsEntry._isTransition) continue;
+                var dsAct = normName(dsEntry._activity || dsEntry.sport || dsEntry.field);
+                if (!dsAct || dsAct === 'free' || dsAct === 'free play') continue;
+                if (dsActMap.has(dsAct)) {
+                    var conflictIdx = dsActMap.get(dsAct);
+                    var conflictBlock = activityBlocks[conflictIdx];
+                    S.undoPickFromSchedule(conflictBlock, S._assignments.get(conflictIdx).pick);
+                    var freePick2 = { field: "Free", sport: null, _activity: "Free" };
+                    S._assignments.set(conflictIdx, { candIdx: -1, pick: freePick2, cost: 100000 });
+                    S.applyPickToSchedule(conflictBlock, freePick2);
+                    dsActMap.delete(dsAct);
+                    dupFixCount++;
+                    console.warn('[v14.2-SWEEP] 🔧 Fixed dup vs pinned: ' + dsBunk + ' "' + dsAct + '" solver block ' + conflictIdx + ' vs pinned slot ' + dssi);
                 }
             }
         }
-        if (fixed > 0) console.log('[v14.2-SWEEP] Cleared ' + fixed + ' duplicate assignments');
-        return fixed;
+        if (dupFixCount > 0) {
+            console.warn('[v14.2-SWEEP] ★★★ Fixed ' + dupFixCount + ' same-day duplicate(s) ★★★');
+            S._todayCache.clear();
+            deepFreeResolution(activityBlocks);
+        }
+        return dupFixCount;
     }
 
     // ========================================================================
@@ -1368,6 +1412,10 @@
         S.clearBunkDivisionCache();
         S.globalConfig = config || {};
         S.activityProperties = window.activityProperties || config.activityProperties || {};
+        if (!window.leagueRoundState) window.leagueRoundState = {};
+        if (!S.globalConfig.rotationHistory) S.globalConfig.rotationHistory = {};
+        if (!S.globalConfig.rotationHistory.leagues) S.globalConfig.rotationHistory.leagues = {};
+        if (window.RotationEngine?.clearHistoryCache) window.RotationEngine.clearHistoryCache();
 
         // ★★★ v15.0: DETECT RAINY DAY AND CACHE OVERRIDES ★★★
         S.detectRainyDayMode(config);
@@ -1429,8 +1477,8 @@
         S.buildFieldTimeIndex();
         crossDivisionReSolve(activityBlocks);
 
-        // v14.2: Same-day duplicate sweep
-        sameDayDuplicateSweep();
+        // v14.2: Same-day duplicate sweep (with pinned check)
+        sameDayDuplicateSweep(activityBlocks);
 
         // Final stats
         var freeCount = 0;
@@ -1445,12 +1493,51 @@
         console.log('║  ' + activityBlocks.length + ' blocks, ' + freeCount + ' Free');
         if (S._isRainyDay) console.log('║  🌧️ Rainy Day: ' + S._rainyCapOverrides.size + ' cap overrides, ' + S._rainyTimeBypasses.size + ' time bypasses');
         console.log('╚═══════════════════════════════════════════════════════════╝');
+
+        // Return results array (used by callers)
+        var results = [];
+        for (var rri = 0; rri < activityBlocks.length; rri++) {
+            var rrBlk = activityBlocks[rri], rrAsgn = S._assignments.get(rri);
+            var rrSolution = rrAsgn ? rrAsgn.pick : { field: "Free", sport: null, _activity: "Free" };
+            results.push({ block: rrBlk, pick: rrSolution, bunk: rrBlk.bunk, slots: rrBlk.slots, divName: rrBlk.divName, cost: rrAsgn?.cost ?? 100000 });
+        }
+        return results;
     };
 
     // ========================================================================
     // LEGACY API
     // ========================================================================
     Solver.generateSchedule = function(activityBlocks, config) { return Solver.solveSchedule(activityBlocks, config); };
+
+    Solver.getValidActivityPicks = function(block) {
+        var allCands = S.allCandidateOptions, actProps = S.activityProperties;
+        var picks = [], slots = block.slots || [], bunk = block.bunk;
+        var blockDiv = block.divName || block.division;
+        if (!blockDiv) { blockDiv = getBunkDivision(bunk); if (blockDiv) block.divName = blockDiv; }
+        var startMin = block.startTime, endMin = block.endTime;
+        if (startMin === undefined || endMin === undefined) {
+            var divSlots = window.divisionTimes?.[blockDiv] || [];
+            if (slots.length > 0 && divSlots[slots[0]]) { startMin = divSlots[slots[0]].startMin; var ls = divSlots[slots[slots.length - 1]]; endMin = ls ? ls.endMin : (startMin + 40); }
+        }
+        if (!allCands || allCands.length === 0) allCands = S.buildAllCandidateOptions(S.globalConfig || {});
+        var todayDone = S.getActivitiesDoneToday(bunk, slots[0] ?? 999);
+        for (var ci = 0; ci < allCands.length; ci++) {
+            var c = allCands[ci], fn = c.field, an = normName(c.activityName);
+            if (an && an !== 'free' && todayDone.has(an)) continue;
+            if (window.GlobalFieldLocks?.isFieldLocked(fn, slots, blockDiv)) continue;
+            if (startMin !== undefined && endMin !== undefined) {
+                if (S.isFieldLockedByTime(fn, startMin, endMin, blockDiv)) continue;
+                if (S.checkCrossDivisionTimeConflict(fn, blockDiv, startMin, endMin, bunk)) continue;
+            }
+            var fp = S._fieldPropertyMap.get(fn), cap = fp ? fp.capacity : S.getFieldCapacity(fn), st = fp ? fp.sharingType : S.getSharingType(fn);
+            if (startMin !== undefined && endMin !== undefined) {
+                if (st === 'not_sharable') { if (S.getFieldUsageFromTimeIndex(normName(fn), startMin, endMin, bunk) >= cap) continue; }
+                else { if (S.countSameDivisionUsage(fn, blockDiv, startMin, endMin, bunk) >= cap) continue; }
+            }
+            picks.push({ field: fn, sport: c.sport, _activity: c.activityName, _type: c.type });
+        }
+        return picks;
+    };
 
     // ========================================================================
     // LEAGUE MATCHUP ENGINE
@@ -1509,6 +1596,24 @@
         console.log('[DEBUG] Rainy Day Active:', S._isRainyDay);
         if (S._rainyCapOverrides.size > 0) { console.log('[DEBUG] Capacity Overrides:'); for (var [k, v] of S._rainyCapOverrides) console.log('  ' + k + ' → ' + v); }
         if (S._rainyTimeBypasses.size > 0) { console.log('[DEBUG] Time Bypasses:', Array.from(S._rainyTimeBypasses)); }
+    };
+    Solver.debugSolverStats = function() {
+        console.log('\n=== SOLVER v15.0 STATS ===');
+        console.log('Field property map: ' + S._fieldPropertyMap.size + ', Rotation score map: ' + (S._perfCounters.rotationCacheHits + S._perfCounters.rotationCacheMisses));
+        console.log('Field time index: ' + S._fieldTimeIndex.size + ' fields, Assigned: ' + S._assignedBlocks.size);
+        console.log('Aug path: ' + S._perfCounters.augmentingPathAttempts + ' attempts, ' + S._perfCounters.augmentingPathSuccesses + ' successes');
+        if (S._isRainyDay) console.log('🌧️ Rainy: ' + S._rainyCapOverrides.size + ' cap overrides, ' + S._rainyTimeBypasses.size + ' time bypasses');
+    };
+    Solver.debugDomains = function(blockIdx) {
+        if (!S._domains) { console.log('No domains'); return; } var d = S._domains.get(blockIdx); if (!d) { console.log('No domain for block ' + blockIdx); return; }
+        console.log('Block ' + blockIdx + ': ' + d.size + ' options');
+        for (var ci of d) { var c = S.allCandidateOptions[ci]; console.log('  [' + ci + '] ' + c.field + ' -> ' + c.activityName); }
+    };
+    Solver.debugCrossDivConflict = function(fieldName, divName, slotIdx) {
+        var divSlots = window.divisionTimes?.[divName] || [], slot = divSlots[slotIdx]; if (!slot) { console.log('Slot not found'); return; }
+        console.log('\n🔍 Cross-Division Check: "' + fieldName + '" at Div ' + divName + ' Slot ' + slotIdx + ' Time: ' + slot.startMin + '-' + slot.endMin);
+        var entries = S._fieldTimeIndex.get(normName(fieldName)) || [];
+        entries.forEach(function(e) { if (e.startMin < slot.endMin && e.endMin > slot.startMin) console.log('    ⚠️ OVERLAP: Div ' + e.divName + ' Bunk ' + e.bunk + ' (' + e.startMin + '-' + e.endMin + ')'); });
     };
 
     // ========================================================================
