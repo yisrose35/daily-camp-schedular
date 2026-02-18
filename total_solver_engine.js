@@ -1758,7 +1758,7 @@
                     _todayCache.clear(); var theirToday = getActivitiesDoneToday(otherBlock.bunk, otherBlock.slots?.[0] ?? 999);
                     var altAct = normName(altC.activityName); if (altAct && altAct !== 'free' && theirToday.has(altAct)) continue;
                     setScratchPick(altC); var altCost = calculatePenaltyCost(otherBlock, _scratchPick);
-                    if (altCost < 500000) alts.push({ ci: altCi, cost: altCost, cand: altC });
+                    if (altCost < 900000) alts.push({ ci: altCi, cost: altCost, cand: altC });
                 }
                 if (alts.length === 0) continue;
                 alts.sort(function(a, b) { return a.cost - b.cost; });
