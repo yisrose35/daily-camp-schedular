@@ -1608,7 +1608,7 @@
                         var altCand = allCandidateOptions[altCi]; if (altCand._fieldNorm === wantedFieldNorm) continue;
                         if (!isPickStillValid(blockerBlock, altCand)) continue;
                         setScratchPick(altCand); var altCost = calculatePenaltyCost(blockerBlock, _scratchPick);
-                        if (altCost < 500000) altScored.push({ ci: altCi, cost: altCost });
+                        if (altCost < 900000) altScored.push({ ci: altCi, cost: altCost });
                     }
                     if (altScored.length > 0) {
                         altScored.sort(function(x, y) { return x.cost - y.cost; });
