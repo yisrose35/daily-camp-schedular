@@ -403,6 +403,27 @@ function renderDetailPane() {
     detailPaneEl.appendChild(section("Full Grade", summaryFullGrade(item), () => renderFullGradeSettings(item)));
 }
 
+function summaryFullGrade(item) { return item.fullGrade ? 'Entire grade does it together' : 'Off (normal rotation)'; }
+function renderFullGradeSettings(item) {
+    const container = document.createElement("div");
+    const updateSummary = () => { const s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if (s) s.textContent = summaryFullGrade(item); };
+    const modeWrap = document.createElement("div"); modeWrap.style.cssText = "display:flex; gap:12px; margin-bottom:16px;";
+    const btnOff = document.createElement("button"); btnOff.textContent = "Normal Rotation";
+    btnOff.style.cssText = 'flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:' + (!item.fullGrade ? '#e6f4f7' : '#fff') + '; color:' + (!item.fullGrade ? '#0F5F6E' : '#333') + '; border-color:' + (!item.fullGrade ? '#147D91' : '#E5E7EB') + '; font-weight:' + (!item.fullGrade ? '600' : '400') + ';';
+    const btnOn = document.createElement("button"); btnOn.textContent = "Full Grade";
+    btnOn.style.cssText = 'flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:' + (item.fullGrade ? '#e6f4f7' : '#fff') + '; color:' + (item.fullGrade ? '#0F5F6E' : '#333') + '; border-color:' + (item.fullGrade ? '#147D91' : '#E5E7EB') + '; font-weight:' + (item.fullGrade ? '600' : '400') + ';';
+    btnOff.onclick = () => { item.fullGrade = false; saveData(); container.innerHTML = ''; container.appendChild(renderFullGradeSettings(item)); updateSummary(); };
+    btnOn.onclick = () => { item.fullGrade = true; saveData(); container.innerHTML = ''; container.appendChild(renderFullGradeSettings(item)); updateSummary(); };
+    modeWrap.appendChild(btnOff); modeWrap.appendChild(btnOn); container.appendChild(modeWrap);
+    const note = document.createElement("div"); note.style.cssText = "color:#6B7280; font-size:0.8rem; padding:10px; background:#f0f9fb; border-radius:8px; line-height:1.5;";
+    if (item.fullGrade) {
+        note.innerHTML = '<strong>Full Grade mode:</strong> When the scheduler assigns this activity, <strong>every bunk in the grade</strong> will get it in the same time slot. The whole grade does it once together.';
+    } else {
+        note.innerHTML = '<strong>Normal mode:</strong> Bunks are assigned this activity individually through the regular rotation.';
+    }
+    container.appendChild(note);
+    return container;
+}
 function summarySharing(item) { if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "No sharing (1 bunk only)"; return 'Up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks (same grade)'; }
 function summaryAccess(item) { if (!item.limitUsage?.enabled) return "Open to all grades"; const c = Object.keys(item.limitUsage.divisions||{}).length; if (c===0) return "\u26A0 Restricted (none selected)"; return c + ' grade' + (c!==1?'s':'') + ' allowed' + (item.limitUsage.usePriority?" \u00B7 prioritized":""); }
 function summaryTime(item) { const c = (item.timeRules||[]).length; return c ? c + ' rule(s) active' : "Available all day"; }
