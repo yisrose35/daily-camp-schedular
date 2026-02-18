@@ -129,35 +129,71 @@ function restorePreRainySkeleton() {
     const dailyData = window.loadCurrentDailyData?.() || {};
     const backup = dailyData.preRainyDayManualSkeleton;
     
+    // Determine the skeleton to restore
+    let skeletonToRestore = null;
+    let source = '';
+    
     if (backup && backup.length > 0) {
-        window.saveCurrentDailyData?.("manualSkeleton", JSON.parse(JSON.stringify(backup)));
-        window.saveCurrentDailyData?.("preRainyDayManualSkeleton", null);
-        console.log(`[RainyDay] Restored pre-rainy skeleton (${backup.length} blocks)`);
-        return true;
+        skeletonToRestore = JSON.parse(JSON.stringify(backup));
+        source = 'pre-rainy backup';
+    } else {
+        // ★ FALLBACK: Load day's default template from Main Builder assignments
+        console.log("[RainyDay] No pre-rainy backup, falling back to day's default template...");
+        const g = window.loadGlobalSettings?.() || {};
+        const assignments = g.app1?.skeletonAssignments || {};
+        const savedSkeletons = g.app1?.savedSkeletons || {};
+        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        const [Y, M, D] = dateKey.split('-').map(Number);
+        let dow = 0;
+        if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
+        const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        const tmplName = assignments[dayNames[dow]] || assignments["Default"];
+        
+        if (tmplName && savedSkeletons[tmplName] && savedSkeletons[tmplName].length > 0) {
+            skeletonToRestore = JSON.parse(JSON.stringify(savedSkeletons[tmplName]));
+            source = `default template "${tmplName}"`;
+        }
     }
     
-    // ★ FALLBACK: No backup exists — load the day's default template from Main Builder
-    console.log("[RainyDay] No pre-rainy backup found, falling back to day's default template...");
-    const g = window.loadGlobalSettings?.() || {};
-    const assignments = g.app1?.skeletonAssignments || {};
-    const savedSkeletons = g.app1?.savedSkeletons || {};
+    if (!skeletonToRestore || skeletonToRestore.length === 0) {
+        console.warn("[RainyDay] No skeleton to restore (no backup and no default template)");
+        return false;
+    }
+    
+    // ★ FIX: Write to ALL storage paths, not just saveCurrentDailyData
+    // saveCurrentDailyData only writes to campDailyData_v1 (lowest priority).
+    // loadDailySkeleton reads campManualSkeleton_{dateKey} FIRST.
     const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-    const [Y, M, D] = dateKey.split('-').map(Number);
-    let dow = 0;
-    if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
-    const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-    const tmplName = assignments[dayNames[dow]] || assignments["Default"];
     
-    if (tmplName && savedSkeletons[tmplName] && savedSkeletons[tmplName].length > 0) {
-        const defaultSkeleton = JSON.parse(JSON.stringify(savedSkeletons[tmplName]));
-        window.saveCurrentDailyData?.("manualSkeleton", defaultSkeleton);
-        window.saveCurrentDailyData?.("preRainyDayManualSkeleton", null);
-        console.log(`[RainyDay] ✅ Loaded day default template "${tmplName}" (${defaultSkeleton.length} blocks)`);
-        return true;
+    // Path 1: saveCurrentDailyData (campDailyData_v1)
+    window.saveCurrentDailyData?.("manualSkeleton", skeletonToRestore);
+    window.saveCurrentDailyData?.("preRainyDayManualSkeleton", null);
+    
+    // Path 2: localStorage campManualSkeleton_{dateKey} (what loadDailySkeleton reads FIRST)
+    try {
+        localStorage.setItem(`campManualSkeleton_${dateKey}`, JSON.stringify(skeletonToRestore));
+    } catch (e) {
+        console.warn("[RainyDay] Failed to write restored skeleton to localStorage:", e);
     }
     
-    console.warn("[RainyDay] No default template found for this day either");
-    return false;
+    // Path 3: app1.dailySkeletons (cloud path)
+    try {
+        const g = window.loadGlobalSettings?.() || {};
+        if (g.app1) {
+            if (!g.app1.dailySkeletons) g.app1.dailySkeletons = {};
+            g.app1.dailySkeletons[dateKey] = skeletonToRestore;
+            window.saveGlobalSettings?.('app1', g.app1);
+        }
+    } catch (e) {
+        console.warn("[RainyDay] Failed to write restored skeleton to app1:", e);
+    }
+    
+    // Path 4: window global
+    window.dailyOverrideSkeleton = skeletonToRestore;
+    
+    console.log(`[RainyDay] ✅ Restored skeleton from ${source} (${skeletonToRestore.length} blocks) — written to ALL storage paths`);
+    scheduleRainyDayCloudSync();
+    return true;
 }
 
 /**
