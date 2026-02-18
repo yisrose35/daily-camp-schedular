@@ -500,7 +500,8 @@
                 sport: null,
                 _activity: a.name,
                 _type: 'special',
-                _rainyDayOnly: a.rainyDayOnly || a.rainyDayExclusive || false
+                _rainyDayOnly: a.rainyDayOnly || a.rainyDayExclusive || false,
+                _fullGrade: a.fullGrade === true
             }));
 
         // ★★★ Log available specials for debugging ★★★
