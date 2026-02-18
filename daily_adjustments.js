@@ -2460,16 +2460,66 @@ async function runOptimizer() {
   if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
   saveDailySkeleton();
 
-  // ★★★ PRE-GENERATION CLEAR (v4) ★★★
-  // NOTE: The full wipe (memory + localStorage + cloud + field locks) now happens
-  // inside runSkeletonOptimizer STEP 0. This section only does a quick local clear
-  // as a belt-and-suspenders measure before the optimizer call.
-  console.log('[Optimizer] ★ Pre-generation clear (deferred to STEP 0 in core optimizer)');
+  // ★★★ PRE-GENERATION CLEAR (v4 — FULL WIPE) ★★★
+  const dateKey = window.currentScheduleDate;
+  console.log('[Optimizer] ★ PRE-GENERATION FULL WIPE for', dateKey);
+
+  // 1. Clear window globals
   window.scheduleAssignments = {};
   window.leagueAssignments = {};
-  window._preGenClearActive = true;
 
-  console.log('[Optimizer] ★ Pre-generation clear complete.
+  // 2. NUKE today's entry from ALL localStorage keys that store schedule data
+  try {
+      // Primary daily data store
+      const DAILY_KEY = 'campDailyData_v1';
+      const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+      if (allData[dateKey]) {
+          delete allData[dateKey];
+          localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+      }
+      
+      // Also check the orchestrator's key
+      const ORCH_KEY = 'campistry_schedule_data';
+      const orchData = JSON.parse(localStorage.getItem(ORCH_KEY) || '{}');
+      if (orchData[dateKey]) {
+          delete orchData[dateKey];
+          localStorage.setItem(ORCH_KEY, JSON.stringify(orchData));
+      }
+      
+      console.log('[Optimizer] Nuked localStorage entries for', dateKey);
+  } catch (e) {
+      console.warn('[Optimizer] localStorage nuke failed:', e);
+  }
+
+  // 3. Delete from cloud so no system can rehydrate stale data
+  try {
+      const client = window.CampistryDB?.getClient?.() || window.supabase;
+      const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
+      if (client && campId) {
+          // Await this one — we need cloud clean BEFORE generation starts
+          const { error } = await client
+              .from('daily_schedules')
+              .delete()
+              .eq('camp_id', campId)
+              .eq('date_key', dateKey);
+          if (error) console.warn('[Optimizer] Cloud delete error:', error.message);
+          else console.log('[Optimizer] ☁️ Cloud schedule deleted for', dateKey);
+      }
+  } catch (e) {
+      console.warn('[Optimizer] Cloud delete failed:', e);
+  }
+
+  // 4. Clear GlobalFieldLocks
+  if (window.GlobalFieldLocks?.clearAllLocks) {
+      window.GlobalFieldLocks.clearAllLocks();
+  }
+
+  // 5. Block rehydration during generation
+  window._preGenClearActive = true;
+  window._generationInProgress = true;
+
+  console.log('[Optimizer] ★ FULL WIPE COMPLETE. Running optimizer...');
+  // ★★★ END PRE-GENERATION CLEAR ★★★
 
   const success = window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
 
@@ -2478,7 +2528,6 @@ async function runOptimizer() {
 
   if (success) {
       // Force save the fresh schedule to ALL storage layers immediately
-      // so any subsequent updateTable/loadScheduleForDate sees the new data
       try {
           const freshData = {
               scheduleAssignments: window.scheduleAssignments || {},
@@ -2489,13 +2538,18 @@ async function runOptimizer() {
               rainyDayStartTime: window.rainyDayStartTime ?? null
           };
 
-          // Save to localStorage
+          // Save to BOTH localStorage keys
           const DAILY_KEY = 'campDailyData_v1';
           const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-          allData[dateKey] = { ...allData[dateKey], ...freshData, savedAt: new Date().toISOString() };
+          allData[dateKey] = { ...freshData, savedAt: new Date().toISOString() };
           localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
 
-          // Save to cloud (non-blocking)
+          const ORCH_KEY = 'campistry_schedule_data';
+          const orchData = JSON.parse(localStorage.getItem(ORCH_KEY) || '{}');
+          orchData[dateKey] = { ...freshData, _updatedAt: new Date().toISOString() };
+          localStorage.setItem(ORCH_KEY, JSON.stringify(orchData));
+
+          // Save to cloud
           window.ScheduleDB?.saveSchedule?.(dateKey, freshData);
 
           console.log('[Optimizer] ★ Post-generation save complete:', 
