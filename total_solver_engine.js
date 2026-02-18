@@ -1724,7 +1724,7 @@
                 if (!activityProperties[cand.field] && !activityProperties[cand.activityName] && cand.type !== 'special') continue;
                 if (window.SchedulerCoreUtils?.canBlockFit && !window.SchedulerCoreUtils.canBlockFit(block, cand.field, activityProperties, null, cand.activityName, false)) continue;
                 setScratchPick(cand); var cost = calculatePenaltyCost(block, _scratchPick);
-                if (cost < 500000) fresh.push({ ci: ci, cost: cost });
+                if (cost < 900000) fresh.push({ ci: ci, cost: cost });
             }
             if (fresh.length > 0) {
                 fresh.sort(function(a, b) { return a.cost - b.cost; });
