@@ -1358,6 +1358,8 @@
         var fieldUsageInGroup = new Map(), fieldDivsInGroup = new Map();
         // ★★★ v13.0-FIX: Track activities assigned per bunk within group to prevent same-day duplicates ★★★
         var bunkActivitiesInGroup = new Map();
+        // ★★★ v14.3: FULL GRADE TRACKING — div+timeKey → pick ★★★
+        var fullGradeAssignments = new Map(); // key: "divName|startTime|endTime" → { pick, candIdx, cost }
         for (var bo of blockOptions) {
             if (_assignedBlocks.has(bo.bi)) continue;
             var block2 = activityBlocks[bo.bi], assigned = false;
