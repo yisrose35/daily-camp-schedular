@@ -1785,7 +1785,7 @@
                     if (pAct && pAct !== 'free' && pAct !== 'free play' && pToday.has(pAct)) continue;
                     if (!activityProperties[pC.field] && !activityProperties[pC.activityName] && pC.type !== 'special') continue;
                     setScratchPick(pC); var pCost = calculatePenaltyCost(block, _scratchPick);
-                    if (pCost < 500000) postFresh.push({ ci: pci, cost: pCost });
+                    if (pCost < 900000) postFresh.push({ ci: pci, cost: pCost });
                 }
                 if (postFresh.length > 0) {
                     postFresh.sort(function(a, b) { return a.cost - b.cost; });
@@ -1977,7 +1977,7 @@
             var rotationPenalty = getPrecomputedRotationScore(bunk, cand.activityName); if (rotationPenalty === Infinity) continue;
             var fits = window.SchedulerCoreUtils?.canBlockFit?.(block, cand.field, activityProperties, window.fieldUsageBySlot, cand.activityName, false); if (!fits) continue;
             var pick = clonePick(cand), cost = calculatePenaltyCost(block, pick);
-            if (cost < 500000) picks.push({ pick: pick, cost: cost });
+            if (cost < 900000) picks.push({ pick: pick, cost: cost });
         }
         if (picks.length === 0 || !picks.some(function(p) { return p.pick?.field !== 'Free'; })) picks.push({ pick: { field: "Free", sport: null, _activity: "Free" }, cost: 100000 });
         return picks;
