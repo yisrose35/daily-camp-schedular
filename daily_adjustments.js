@@ -1175,6 +1175,29 @@ function restorePreRainySkeleton() {
     console.log(`[RainyDay] Restored pre-rainy skeleton`);
     return true;
   }
+  
+  // ★ FALLBACK: No backup — load the day's default template from Main Builder assignments
+  console.log("[RainyDay] No pre-rainy backup, falling back to day's default template...");
+  const assignments = masterSettings.app1?.skeletonAssignments || {};
+  const skeletons = masterSettings.app1?.savedSkeletons || {};
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  const [Y, M, D] = dateKey.split('-').map(Number);
+  let dow = 0;
+  if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const tmplName = assignments[dayNames[dow]] || assignments["Default"];
+  
+  if (tmplName && skeletons[tmplName] && skeletons[tmplName].length > 0) {
+    const defaultSkeleton = JSON.parse(JSON.stringify(skeletons[tmplName]));
+    window.saveCurrentDailyData?.("manualSkeleton", defaultSkeleton);
+    window.saveCurrentDailyData?.("preRainyDayManualSkeleton", null);
+    dailyOverrideSkeleton = defaultSkeleton;
+    window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+    console.log(`[RainyDay] ✅ Loaded day default template "${tmplName}" (${defaultSkeleton.length} blocks)`);
+    return true;
+  }
+  
+  console.warn("[RainyDay] No default template found for this day either");
   return false;
 }
 
