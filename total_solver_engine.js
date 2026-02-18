@@ -1518,12 +1518,11 @@
                 continue;
             }
             var scored = [];
-            for (var ci of domain) { var cand = allCandidateOptions[ci]; if (!isPickStillValid(block, cand)) continue; setScratchPick(cand); var cost = calculatePenaltyCost(block, _scratchPick); if (cost < 500000) scored.push({ ci: ci, cost: cost }); }
+            for (var ci of domain) { var cand = allCandidateOptions[ci]; if (!isPickStillValid(block, cand)) continue; setScratchPick(cand); var cost = calculatePenaltyCost(block, _scratchPick); if (cost < 900000) scored.push({ ci: ci, cost: cost }); }
             scored.sort(function(a, b) { return a.cost - b.cost; });
             if (scored.length > 0) {
                 var best = scored[0], bestCand = allCandidateOptions[best.ci], bestPick = clonePick(bestCand);
-                _assignedBlocks.add(bi); _assignments.set(bi, { candIdx: best.ci, pick: bestPick, cost: best.cost }); applyPickToSchedule(block, bestPick);
-                var fieldNorm = normName(bestPick.field);
+                _assignedBlocks.add(bi); _assignments.set(bi, { candIdx: best.ci, pick: bestPick, cost: best.cost }); applyPickToSchedule(block, bestPick);                var fieldNorm = normName(bestPick.field);
                 if (block.startTime !== undefined && block.endTime !== undefined) {
                     var bjActNorm = normName(bestPick._activity);
                     addToFieldTimeIndex(fieldNorm, block.startTime, block.endTime, block.bunk, block.divName, bjActNorm);
