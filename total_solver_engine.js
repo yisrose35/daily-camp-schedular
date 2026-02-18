@@ -592,6 +592,18 @@
         if (actNorm && actNorm !== 'free' && actNorm !== 'free play') {
             var todayDone = getActivitiesDoneToday(bunk, slots[0] ?? 999);
             if (todayDone.has(actNorm)) return 999999;
+        // ★★★ v14.2-FIX: Direct live check bypassing stale cache ★★★
+        if (actNorm && actNorm !== 'free' && actNorm !== 'free play') {
+            var liveSlots = window.scheduleAssignments?.[bunk] || [];
+            var mySlotSet = new Set(slots);
+            for (var lsi = 0; lsi < liveSlots.length; lsi++) {
+                if (mySlotSet.has(lsi)) continue;
+                var lsEntry = liveSlots[lsi];
+                if (!lsEntry || lsEntry.continuation || lsEntry._isTransition) continue;
+                var lsAct = normName(lsEntry._activity || lsEntry.sport || lsEntry.field);
+                if (lsAct === actNorm) return 999999;
+            }
+        }
         }
         if (fieldName && fieldName !== 'Free' && blockDivName && blockStart !== undefined && blockEnd !== undefined) {
             var fp = _fieldPropertyMap.get(fieldName);
