@@ -1537,9 +1537,22 @@
         return solved;
     }
 
-   function isPickStillValid(block, cand) {
+  function isPickStillValid(block, cand) {
         var fieldName = cand.field, fieldNorm = cand._fieldNorm || normName(fieldName), bunk = block.bunk, blockDivName = block.divName || '', startMin = block.startTime, endMin = block.endTime;
         if (startMin === undefined || endMin === undefined) return true;
+        // ★★★ v14.2-FIX: Direct same-day repeat check (bypass stale cache) ★★★
+        var candActNorm = normName(cand.activityName);
+        if (candActNorm && candActNorm !== 'free' && candActNorm !== 'free play') {
+            var bunkSlots = window.scheduleAssignments?.[bunk] || [];
+            var mySlots = new Set(block.slots || []);
+            for (var sdi = 0; sdi < bunkSlots.length; sdi++) {
+                if (mySlots.has(sdi)) continue;
+                var sdEntry = bunkSlots[sdi];
+                if (!sdEntry || sdEntry.continuation || sdEntry._isTransition) continue;
+                var sdAct = normName(sdEntry._activity || sdEntry.sport || sdEntry.field);
+                if (sdAct === candActNorm) return false;
+            }
+        }
         // ★★★ FIX v13.1: Time-based global lock check for cross-division league conflicts ★★★
         if (isFieldLockedByTime(fieldName, startMin, endMin, blockDivName)) return false;
         var fieldProp = _fieldPropertyMap.get(fieldName);
