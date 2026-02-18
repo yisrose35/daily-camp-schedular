@@ -2460,41 +2460,16 @@ async function runOptimizer() {
   if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
   saveDailySkeleton();
 
-  // ★★★ PRE-GENERATION CLEAR (v3) ★★★
-  // Clear stale schedule data from memory and localStorage before generating.
-  // This prevents old regular-day leagues from persisting when regenerating
-  // as rainy day (or vice versa). We do NOT delete from cloud here — the
-  // optimizer's own saveSchedule() at the end overwrites the cloud record.
-  const dateKey = window.currentScheduleDate;
-  console.log('[Optimizer] ★ Pre-generation clear for', dateKey);
-
-  // 1. Clear window globals
+  // ★★★ PRE-GENERATION CLEAR (v4) ★★★
+  // NOTE: The full wipe (memory + localStorage + cloud + field locks) now happens
+  // inside runSkeletonOptimizer STEP 0. This section only does a quick local clear
+  // as a belt-and-suspenders measure before the optimizer call.
+  console.log('[Optimizer] ★ Pre-generation clear (deferred to STEP 0 in core optimizer)');
   window.scheduleAssignments = {};
   window.leagueAssignments = {};
-
-  // 2. Clear localStorage so mid-generation rehydration doesn't pull stale data
-  try {
-      const DAILY_KEY = 'campDailyData_v1';
-      const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-      if (allData[dateKey]) {
-          allData[dateKey].scheduleAssignments = {};
-          allData[dateKey].leagueAssignments = {};
-          localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
-      }
-  } catch (e) {
-      console.warn('[Optimizer] localStorage pre-clear failed:', e);
-  }
-
-  // 3. Clear GlobalFieldLocks
-  if (window.GlobalFieldLocks?.clearAllLocks) {
-      window.GlobalFieldLocks.clearAllLocks();
-  }
-
-  // 4. Block stale cloud rehydration during generation
   window._preGenClearActive = true;
 
-  console.log('[Optimizer] ★ Pre-generation clear complete. Running optimizer...');
-  // ★★★ END PRE-GENERATION CLEAR ★★★
+  console.log('[Optimizer] ★ Pre-generation clear complete.
 
   const success = window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
 
