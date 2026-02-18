@@ -400,6 +400,7 @@ function renderDetailPane() {
     detailPaneEl.appendChild(section("Time Availability", summaryTime(item), () => renderTimeRules(item)));
     if (!isRainyDayItem) detailPaneEl.appendChild(section("Weather & Availability", summaryWeather(item), () => renderWeatherSettings(item)));
     detailPaneEl.appendChild(section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)));
+    detailPaneEl.appendChild(section("Full Grade", summaryFullGrade(item), () => renderFullGradeSettings(item)));
 }
 
 function summarySharing(item) { if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "No sharing (1 bunk only)"; return 'Up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks (same grade)'; }
