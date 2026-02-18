@@ -1180,14 +1180,50 @@ function restorePreRainySkeleton() {
   const dailyData = window.loadCurrentDailyData?.() || {};
   const backup = dailyData.preRainyDayManualSkeleton;
   
+  // Determine the skeleton to restore: backup first, then day's default template
+  let skeletonToRestore = null;
+  let source = '';
+  
   if (backup && backup.length > 0) {
-    window.saveCurrentDailyData?.("manualSkeleton", JSON.parse(JSON.stringify(backup)));
-    window.saveCurrentDailyData?.("preRainyDayManualSkeleton", null);
-    dailyOverrideSkeleton = JSON.parse(JSON.stringify(backup));
-    window.dailyOverrideSkeleton = dailyOverrideSkeleton;
-    console.log(`[RainyDay] Restored pre-rainy skeleton`);
-    return true;
+    skeletonToRestore = JSON.parse(JSON.stringify(backup));
+    source = 'pre-rainy backup';
+  } else {
+    // ★ FALLBACK: Load day's default template from Main Builder assignments
+    console.log("[RainyDay] No pre-rainy backup, falling back to day's default template...");
+    const assignments = masterSettings.app1?.skeletonAssignments || {};
+    const skeletons = masterSettings.app1?.savedSkeletons || {};
+    const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+    const [Y, M, D] = dateKey.split('-').map(Number);
+    let dow = 0;
+    if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
+    const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const tmplName = assignments[dayNames[dow]] || assignments["Default"];
+    
+    if (tmplName && skeletons[tmplName] && skeletons[tmplName].length > 0) {
+      skeletonToRestore = JSON.parse(JSON.stringify(skeletons[tmplName]));
+      source = `default template "${tmplName}"`;
+    }
   }
+  
+  if (!skeletonToRestore || skeletonToRestore.length === 0) {
+    console.warn("[RainyDay] No skeleton to restore (no backup and no default template)");
+    return false;
+  }
+  
+  // ★ FIX: Write to ALL storage paths via dailyOverrideSkeleton + saveDailySkeleton()
+  // saveCurrentDailyData only writes to campDailyData_v1 (Priority 3),
+  // but loadDailySkeleton reads campManualSkeleton_{dateKey} FIRST (Priority 1).
+  // Must use saveDailySkeleton() which writes to ALL paths.
+  dailyOverrideSkeleton = skeletonToRestore;
+  window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+  saveDailySkeleton();  // ★ Writes to localStorage, app1.dailySkeletons, AND cloud
+  
+  // Clean up backup
+  window.saveCurrentDailyData?.("preRainyDayManualSkeleton", null);
+  
+  console.log(`[RainyDay] ✅ Restored skeleton from ${source} (${skeletonToRestore.length} blocks)`);
+  return true;
+}
   
   // ★ FALLBACK: No backup — load the day's default template from Main Builder assignments
   console.log("[RainyDay] No pre-rainy backup, falling back to day's default template...");
