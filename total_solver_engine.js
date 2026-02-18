@@ -1980,7 +1980,69 @@
         console.log('[SOLVER-v14.1] ✅ Post cross-div re-solve: ' + postCrossDivFree + ' Free remaining');
     }
 
-    // FORMAT OUTPUT
+   // ★★★ v14.2-FIX: FINAL SAME-DAY DUPLICATE SWEEP ★★★
+    {
+        var dupFixCount = 0;
+        var bunkActivityMap = new Map();
+        for (var di = 0; di < activityBlocks.length; di++) {
+            var dBlock = activityBlocks[di], dAssign = _assignments.get(di);
+            if (!dAssign) continue;
+            var dActNorm = normName(dAssign.pick._activity || dAssign.pick.field);
+            if (!dActNorm || dActNorm === 'free' || dActNorm === 'free play') continue;
+            if (!bunkActivityMap.has(dBlock.bunk)) bunkActivityMap.set(dBlock.bunk, new Map());
+            var bunkMap = bunkActivityMap.get(dBlock.bunk);
+            if (bunkMap.has(dActNorm)) {
+                var existingIdx = bunkMap.get(dActNorm);
+                var existingCost = _assignments.get(existingIdx)?.cost || 0;
+                var currentCost = dAssign.cost || 0;
+                var replaceIdx = currentCost >= existingCost ? di : existingIdx;
+                var keepIdx = replaceIdx === di ? existingIdx : di;
+                var replaceBlock = activityBlocks[replaceIdx];
+                undoPickFromSchedule(replaceBlock, _assignments.get(replaceIdx).pick);
+                var freePick = { field: "Free", sport: null, _activity: "Free" };
+                _assignments.set(replaceIdx, { candIdx: -1, pick: freePick, cost: 100000 });
+                applyPickToSchedule(replaceBlock, freePick);
+                bunkMap.set(dActNorm, keepIdx);
+                dupFixCount++;
+                console.warn('[SOLVER-v14.2] 🔧 Fixed same-day dup: ' + dBlock.bunk + ' "' + dActNorm + '" twice → block ' + replaceIdx + ' → Free');
+            } else {
+                bunkMap.set(dActNorm, di);
+            }
+        }
+        // Check against pinned/fixed entries not managed by solver
+        for (var [dsBunk, dsActMap] of bunkActivityMap) {
+            var dsBunkSlots = window.scheduleAssignments?.[dsBunk] || [];
+            var solverSlots = new Set();
+            for (var dsi2 = 0; dsi2 < activityBlocks.length; dsi2++) {
+                if (activityBlocks[dsi2].bunk === dsBunk) {
+                    (activityBlocks[dsi2].slots || []).forEach(function(s) { solverSlots.add(s); });
+                }
+            }
+            for (var dssi = 0; dssi < dsBunkSlots.length; dssi++) {
+                if (solverSlots.has(dssi)) continue;
+                var dsEntry = dsBunkSlots[dssi];
+                if (!dsEntry || dsEntry.continuation || dsEntry._isTransition) continue;
+                var dsAct = normName(dsEntry._activity || dsEntry.sport || dsEntry.field);
+                if (!dsAct || dsAct === 'free' || dsAct === 'free play') continue;
+                if (dsActMap.has(dsAct)) {
+                    var conflictIdx = dsActMap.get(dsAct);
+                    var conflictBlock = activityBlocks[conflictIdx];
+                    undoPickFromSchedule(conflictBlock, _assignments.get(conflictIdx).pick);
+                    var freePick2 = { field: "Free", sport: null, _activity: "Free" };
+                    _assignments.set(conflictIdx, { candIdx: -1, pick: freePick2, cost: 100000 });
+                    applyPickToSchedule(conflictBlock, freePick2);
+                    dsActMap.delete(dsAct);
+                    dupFixCount++;
+                    console.warn('[SOLVER-v14.2] 🔧 Fixed dup vs pinned: ' + dsBunk + ' "' + dsAct + '" solver block ' + conflictIdx + ' vs pinned slot ' + dssi);
+                }
+            }
+        }
+        if (dupFixCount > 0) {
+            console.warn('[SOLVER-v14.2] ★★★ Fixed ' + dupFixCount + ' same-day duplicate(s) in final sweep ★★★');
+            _todayCache.clear();
+            deepFreeResolution(activityBlocks);
+        }
+    }
         var results = [];
         for (var idx = 0; idx < activityBlocks.length; idx++) {
             var blk = activityBlocks[idx], assignmentResult = _assignments.get(idx);
