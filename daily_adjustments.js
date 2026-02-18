@@ -1156,12 +1156,25 @@ function deactivateRainyDayMode() {
   window.saveCurrentDailyData?.("isRainyDay", false);
   
   if (isAutoSkeletonSwitchEnabled()) {
-    restorePreRainySkeleton();
+    const restored = restorePreRainySkeleton();
+    
+    // ★ Rebuild divisionTimes from restored skeleton (mirrors activate logic)
+    if (restored) {
+      const restoredDaily = window.loadCurrentDailyData?.() || {};
+      const restoredSkeleton = restoredDaily.manualSkeleton || [];
+      if (restoredSkeleton.length > 0 && window.DivisionTimesSystem) {
+        const divs = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
+        window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(restoredSkeleton, divs);
+        console.log('[RainyDay] ✅ Rebuilt divisionTimes from restored skeleton');
+      }
+    }
   }
   
+  // ★ Clear stale league data (mirrors activate pattern)
+  window.leagueAssignments = {};
+  
   showRainyDayNotification(false);
-  console.log("[RainyDay] Deactivated rainy mode, window.isRainyDay =", window.isRainyDay);
-}
+  console.log("[RainyDay] Deactivated rainy mode, window.isRainyDay =", window.isRainyDay);}
 
 function restorePreRainySkeleton() {
   const dailyData = window.loadCurrentDailyData?.() || {};
