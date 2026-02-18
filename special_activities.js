@@ -156,7 +156,7 @@ function createDefaultActivity(name) {
         limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
         maxUsage: null, frequencyWeeks: 0, rainyDayExclusive: false, prepDuration: 0,
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
-        rainyDayCapacity: null, rainyDayAvailableAllDay: false };
+        rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false };
 }
 
 function validateAllActivities(activities) { if (!Array.isArray(activities)) return []; return activities.map(a => validateSpecialActivity(a, a?.name)); }
