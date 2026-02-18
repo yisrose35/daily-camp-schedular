@@ -241,9 +241,10 @@
                 maxUsage: a.maxUsage || 0,
                 type: a.type || 'activity',
                 // ★★★ v2.2: Include rainy day properties for specials ★★★
-                rainyDayAvailable: a.rainyDayAvailable !== false,
+               rainyDayAvailable: a.rainyDayAvailable !== false,
                 rainyDayOnly: a.rainyDayOnly === true,
-                rainyDayExclusive: a.rainyDayExclusive === true
+                rainyDayExclusive: a.rainyDayExclusive === true,
+                fullGrade: a.fullGrade === true
             });
         });
 
