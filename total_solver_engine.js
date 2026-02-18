@@ -1363,6 +1363,26 @@
         for (var bo of blockOptions) {
             if (_assignedBlocks.has(bo.bi)) continue;
             var block2 = activityBlocks[bo.bi], assigned = false;
+            // ★★★ v14.3: FULL GRADE — check if a fullGrade pick already exists for this div+time ★★★
+            var fgKey = (block2.divName || '') + '|' + (block2.startTime ?? '') + '|' + (block2.endTime ?? '');
+            var fgExisting = fullGradeAssignments.get(fgKey);
+            if (fgExisting) {
+                // Force this bunk to get the same fullGrade activity
+                var fgPick = fgExisting.pick;
+                var fgActNorm = normName(fgPick._activity || fgPick.field);
+                // Check this bunk hasn't already done this activity today
+                var fgBunkDone = bunkActivitiesInGroup.get(block2.bunk);
+                var fgGlobalDone = globalBunkActivities.get(block2.bunk);
+                var fgAlreadyDone = (fgBunkDone && fgBunkDone.has(fgActNorm)) || (fgGlobalDone && fgGlobalDone.has(fgActNorm));
+                if (!fgAlreadyDone) {
+                    results.push({ blockIdx: bo.bi, candIdx: fgExisting.candIdx, pick: fgPick, cost: fgExisting.cost });
+                    if (!bunkActivitiesInGroup.has(block2.bunk)) bunkActivitiesInGroup.set(block2.bunk, new Set());
+                    bunkActivitiesInGroup.get(block2.bunk).add(fgActNorm);
+                    assigned = true;
+                    v12Log('[FULL_GRADE] Forced ' + block2.bunk + ' → ' + fgPick._activity + ' (matching division ' + block2.divName + ')');
+                }
+            }
+            if (assigned) continue;
             for (var oi = 0; oi < bo.options.length; oi++) {
                 var opt = bo.options[oi], cand2 = allCandidateOptions[opt.ci];
                 // ★★★ v13.0-FIX2: Skip if activity already done by this bunk (in-group, cross-group, or pre-solver) ★★★
