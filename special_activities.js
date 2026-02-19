@@ -403,6 +403,7 @@ function renderDetailPane() {
     detailPaneEl.appendChild(section("Full Grade", summaryFullGrade(item), () => renderFullGradeSettings(item)));
 }
 
+
 function summaryFullGrade(item) { return item.fullGrade ? 'Entire grade does it together' : 'Off (normal rotation)'; }
 function renderFullGradeSettings(item) {
     const container = document.createElement("div");
