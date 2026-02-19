@@ -2497,13 +2497,19 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
             // ★★★ REBUILD HISTORICAL COUNTS FROM ALL SCHEDULES ★★★
             // This ensures counts are accurate even after regeneration (no double-counting)
-            if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
-                // Small delay to ensure schedule is saved first
+            const schedDateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+            if (window.SchedulerCoreUtils?.reIncrementHistoricalCounts) {
+                setTimeout(() => {
+                    window.SchedulerCoreUtils.reIncrementHistoricalCounts(
+                        schedDateKey,
+                        window.scheduleAssignments || {},
+                        true
+                    );
+                }, 200);
+            } else if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
                 setTimeout(() => {
                     window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
                 }, 200);
-            } else {
-                console.warn('[OPTIMIZER] rebuildHistoricalCounts not available - counts may be stale');
             }
 
             console.log('📊 Rotation history updated, historical counts rebuild scheduled');
