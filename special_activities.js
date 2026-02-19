@@ -404,7 +404,7 @@ function renderDetailPane() {
     detailPaneEl.appendChild(section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)));
 }
 
-
+function summaryMaxUsage(item) { var m = parseInt(item.maxUsage) || 0; return m > 0 ? 'Max ' + m + ' time' + (m > 1 ? 's' : '') + ' per bunk' : 'No limit'; }
 function summaryFullGrade(item) { return item.fullGrade ? 'Entire grade does it together' : 'Off (normal rotation)'; }
 function renderFullGradeSettings(item) {
     const container = document.createElement("div");
