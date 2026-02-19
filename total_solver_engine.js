@@ -686,6 +686,7 @@ else penalty += 200;
     if (scarceActivities.size > 0) {
         console.log('[SOLVER] ★ Scarce activities detected:', Array.from(scarceActivities).join(', '), '(median fields:', medianFields + ')');
     }
+    Solver._scarceActivities = scarceActivities;
     // For each bunk, check if they need a scarce activity (never done or very under-done)
     var bunkNeedsScarce = {};
     for (var bi2 = 0; bi2 < blocks.length; bi2++) {
