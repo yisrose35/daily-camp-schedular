@@ -143,6 +143,7 @@ function validateSpecialActivity(activity, activityName) {
         name: activity.name || activityName || 'Unknown', type: 'Special', available: activity.available !== false,
         sharableWith, limitUsage, timeRules,
         maxUsage: (() => { if (activity.maxUsage == null || activity.maxUsage === "") return null; const p = parseInt(activity.maxUsage, 10); return (!isNaN(p) && p > 0) ? p : null; })(),
+        maxUsagePeriod: activity.maxUsagePeriod || 'half',
         frequencyWeeks: parseInt(activity.frequencyWeeks, 10) || 0, rainyDayExclusive: activity.rainyDayExclusive === true,
         rainyDayOnly: activity.rainyDayOnly === true, prepDuration: parseInt(activity.prepDuration, 10) || 0,
         location: activity.location || null, isIndoor, rainyDayAvailable: isIndoor, availableOnRainyDay: isIndoor,
@@ -155,7 +156,7 @@ function validateSpecialActivity(activity, activityName) {
 function createDefaultActivity(name) {
     return { name, type: 'Special', available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
-        maxUsage: null, frequencyWeeks: 0, rainyDayExclusive: false, prepDuration: 0,
+        maxUsage: null, maxUsagePeriod: 'half', frequencyWeeks: 0, rainyDayExclusive: false, prepDuration: 0,
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
         rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false };
 }
@@ -163,7 +164,7 @@ function createDefaultActivity(name) {
 function validateAllActivities(activities) { if (!Array.isArray(activities)) return []; return activities.map(a => validateSpecialActivity(a, a?.name)); }
 
 // =========================================================================
-// INIT — v3.2: Matches fields.js layout
+// INIT — v3.3: Consolidated accordion layout
 // =========================================================================
 function initSpecialActivitiesTab() {
     const container = document.getElementById("special_activities");
@@ -185,6 +186,10 @@ function initSpecialActivitiesTab() {
         #special_activities .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
         #special_activities .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
         #special_activities input:checked + .slider:before { transform: translateX(14px); }
+        #special_activities .grouped-section { border:1px solid #E5E7EB; border-radius:10px; overflow:hidden; margin-bottom:12px; }
+        #special_activities .grouped-section .detail-section { border-bottom:1px solid #F3F4F6; }
+        #special_activities .grouped-section .detail-section:last-child { border-bottom:none; }
+        #special_activities .group-label { font-size:0.7rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#9CA3AF; padding:8px 14px 4px; background:#FAFAFA; }
         .rainy-list { background: linear-gradient(to bottom, #f0f9ff, #fff) !important; border-color: #7dd3fc !important; }
         .rainy-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 0.7rem; color: #0284c7; background: #e0f2fe; padding: 2px 8px; border-radius: 999px; margin-left: 8px; }
         .weather-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 0.65rem; padding: 2px 6px; border-radius: 999px; margin-left: 6px; }
@@ -309,7 +314,6 @@ function createMasterListItem(item, isRainyDay) {
     const infoDiv = document.createElement("div");
     const nameEl = document.createElement("div"); nameEl.className = "list-item-name"; nameEl.textContent = item.name;
     if (isRainyDay) { const b = document.createElement("span"); b.className = "rainy-badge"; b.textContent = "Rainy Only"; nameEl.appendChild(b); }
-    else { const wb = document.createElement("span"); wb.className = 'weather-badge ' + (item.isIndoor ? 'indoor' : 'outdoor'); wb.textContent = item.isIndoor ? 'In' : 'Out'; nameEl.appendChild(wb); }
     infoDiv.appendChild(nameEl); el.appendChild(infoDiv);
     const tog = document.createElement("label"); tog.className = "switch list-item-toggle"; tog.onclick = e => e.stopPropagation();
     const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = item.available;
@@ -319,7 +323,7 @@ function createMasterListItem(item, isRainyDay) {
     return el;
 }
 
-// v3.2: Section builder matching fields.js accordion
+// v3.3: Section builder matching fields.js accordion
 function section(title, summary, builder) {
     const wrap = document.createElement("div"); wrap.className = "detail-section";
     const head = document.createElement("div"); head.className = "detail-section-header";
@@ -337,6 +341,15 @@ function section(title, summary, builder) {
         if (!open && !body.dataset.built) { body.innerHTML = ""; body.appendChild(builder()); body.dataset.built = "1"; }
     };
     wrap.appendChild(head); wrap.appendChild(body); return wrap;
+}
+
+// v3.3: Group builder — wraps multiple section() accordions into a bordered group
+function sectionGroup(label, sections) {
+    const group = document.createElement("div"); group.className = "grouped-section";
+    const lbl = document.createElement("div"); lbl.className = "group-label"; lbl.textContent = label;
+    group.appendChild(lbl);
+    sections.forEach(s => group.appendChild(s));
+    return group;
 }
 
 function renderDetailPane() {
@@ -387,25 +400,60 @@ function renderDetailPane() {
     header.appendChild(titleContainer); header.appendChild(delBtn);
     detailPaneEl.appendChild(header);
 
-    // AVAILABILITY STRIP (v3.2 NEW — matches fields.js)
+    // AVAILABILITY STRIP
     const avail = document.createElement("div");
     avail.style.cssText = "padding:12px; border-radius:8px; margin-bottom:20px; font-size:0.9rem; display:flex; justify-content:space-between; background:" + (item.available ? "#e6f4f7" : "#FEF2F2") + "; border:1px solid " + (item.available ? "#b2dce6" : "#FECACA") + "; color:" + (item.available ? "#0A4A56" : "#991B1B") + ";";
     avail.innerHTML = '<span>Special is <strong>' + (item.available ? 'AVAILABLE' : 'UNAVAILABLE') + '</strong></span><span style="font-size:0.8rem; opacity:0.8;">Toggle in master list</span>';
     detailPaneEl.appendChild(avail);
 
-    // ACCORDION SECTIONS (v3.2: uses section() builder)
-    detailPaneEl.appendChild(section("Field / Location", summaryLocation(item), () => renderLocationSettings(item)));
-    detailPaneEl.appendChild(section("Concurrent Use", summarySharing(item), () => renderSharing(item)));
-    detailPaneEl.appendChild(section("Division Access", summaryAccess(item), () => renderAccess(item)));
-    detailPaneEl.appendChild(section("Time Availability", summaryTime(item), () => renderTimeRules(item)));
-    if (!isRainyDayItem) detailPaneEl.appendChild(section("Weather & Availability", summaryWeather(item), () => renderWeatherSettings(item)));
-    detailPaneEl.appendChild(section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)));
-    detailPaneEl.appendChild(section("Full Grade", summaryFullGrade(item), () => renderFullGradeSettings(item)));
-    detailPaneEl.appendChild(section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)));
+    // v3.3: CONSOLIDATED ACCORDION GROUPS (4 groups instead of 8 sections)
+    // Group 1: Scheduling Rules — location + sharing + access
+    detailPaneEl.appendChild(sectionGroup("Scheduling Rules", [
+        section("Field / Location", summaryLocation(item), () => renderLocationSettings(item)),
+        section("Concurrent Use", summarySharing(item), () => renderSharing(item)),
+        section("Division Access", summaryAccess(item), () => renderAccess(item))
+    ]));
+
+    // Group 2: Time & Weather — time rules + weather (weather only for non-rainy-day items)
+    const timeWeatherSections = [section("Time Availability", summaryTime(item), () => renderTimeRules(item))];
+    if (!isRainyDayItem) timeWeatherSections.push(section("Weather & Availability", summaryWeather(item), () => renderWeatherSettings(item)));
+    detailPaneEl.appendChild(sectionGroup("Time & Weather", timeWeatherSections));
+
+    // Group 3: Rotation Rules — usage limit + full grade + prep duration
+    detailPaneEl.appendChild(sectionGroup("Rotation Rules", [
+        section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
+        section("Full Grade", summaryFullGrade(item), () => renderFullGradeSettings(item)),
+        section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item))
+    ]));
 }
 
-function summaryMaxUsage(item) { var m = parseInt(item.maxUsage) || 0; return m > 0 ? 'Max ' + m + ' time' + (m > 1 ? 's' : '') + ' per bunk' : 'No limit'; }
+// =========================================================================
+// SUMMARY HELPERS
+// =========================================================================
+function summaryMaxUsage(item) {
+    var m = parseInt(item.maxUsage) || 0;
+    if (m <= 0) return 'No limit';
+    var period = item.maxUsagePeriod || 'half';
+    var periodLabels = { 'half': 'per half', '1week': 'per week', '2weeks': 'per 2 weeks', '3weeks': 'per 3 weeks', '4weeks': 'per 4 weeks' };
+    return 'Max ' + m + ' time' + (m > 1 ? 's' : '') + ' ' + (periodLabels[period] || 'per half');
+}
 function summaryFullGrade(item) { return item.fullGrade ? 'Entire grade does it together' : 'Off (normal rotation)'; }
+function summarySharing(item) { if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "No sharing (1 bunk only)"; return 'Up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks (same grade)'; }
+function summaryAccess(item) { if (!item.limitUsage?.enabled) return "Open to all grades"; const c = Object.keys(item.limitUsage.divisions||{}).length; if (c===0) return "\u26A0 Restricted (none selected)"; return c + ' grade' + (c!==1?'s':'') + ' allowed' + (item.limitUsage.usePriority?" \u00B7 prioritized":""); }
+function summaryTime(item) { const c = (item.timeRules||[]).length; return c ? c + ' rule(s) active' : "Available all day"; }
+function summaryWeather(item) {
+    let s = item.isIndoor ? 'Indoor · Rainy day available' : 'Outdoor · Disabled on rain';
+    const overrides = [];
+    if (item.rainyDayCapacity > 0) overrides.push('cap:' + item.rainyDayCapacity);
+    if (item.rainyDayAvailableAllDay && (item.timeRules||[]).length > 0) overrides.push('bypass time rules');
+    if (overrides.length > 0) s += ' · 🌧️ ' + overrides.join(', ');
+    return s;
+}
+function summaryLocation(item) { return item.location || "No field assigned"; }
+
+// =========================================================================
+// RENDER: Full Grade Settings
+// =========================================================================
 function renderFullGradeSettings(item) {
     const container = document.createElement("div");
     const updateSummary = () => { const s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if (s) s.textContent = summaryFullGrade(item); };
@@ -426,25 +474,29 @@ function renderFullGradeSettings(item) {
     container.appendChild(note);
     return container;
 }
-    function renderMaxUsageSettings(item) {
+
+// =========================================================================
+// RENDER: Max Usage Settings — v3.3 rewrite with period dropdown
+// =========================================================================
+function renderMaxUsageSettings(item) {
     const container = document.createElement("div");
-    const updateSummary = () => { 
-        const s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); 
-        if (s) s.textContent = summaryMaxUsage(item); 
+    const updateSummary = () => {
+        const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (s) s.textContent = summaryMaxUsage(item);
     };
 
     const currentVal = parseInt(item.maxUsage) || 0;
     const isEnabled = currentVal > 0;
 
     // Toggle row
-    const toggleRow = document.createElement("div"); 
+    const toggleRow = document.createElement("div");
     toggleRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:16px;";
     const tog = document.createElement("label"); tog.className = "switch";
     const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = isEnabled;
     const sl = document.createElement("span"); sl.className = "slider";
     tog.appendChild(cb); tog.appendChild(sl);
-    const label = document.createElement("span"); 
-    label.style.cssText = "font-weight:500; font-size:0.9rem;"; 
+    const label = document.createElement("span");
+    label.style.cssText = "font-weight:500; font-size:0.9rem;";
     label.textContent = "Limit how many times a bunk can do this";
     toggleRow.appendChild(tog); toggleRow.appendChild(label);
     container.appendChild(toggleRow);
@@ -460,29 +512,77 @@ function renderFullGradeSettings(item) {
         }
         detailDiv.style.display = "block";
 
-        const row = document.createElement("div"); 
+        // Max count row
+        const row = document.createElement("div");
         row.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:12px;";
         row.innerHTML = '<span style="font-size:0.85rem;">Max times per bunk:</span>';
-        const numIn = document.createElement("input"); 
-        numIn.type = "number"; numIn.min = "1"; numIn.max = "50"; 
+        const numIn = document.createElement("input");
+        numIn.type = "number"; numIn.min = "1"; numIn.max = "50";
         numIn.value = parseInt(item.maxUsage) || 1;
         numIn.style.cssText = "width:60px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;";
-        numIn.onchange = () => { 
-            item.maxUsage = Math.min(50, Math.max(1, parseInt(numIn.value) || 1)); 
-            numIn.value = item.maxUsage; 
-            saveData(); 
-            updateSummary(); 
+        numIn.onchange = () => {
+            item.maxUsage = Math.min(50, Math.max(1, parseInt(numIn.value) || 1));
+            numIn.value = item.maxUsage;
+            saveData();
+            updateNote();
+            updateSummary();
         };
-        row.appendChild(numIn); 
+        row.appendChild(numIn);
         detailDiv.appendChild(row);
 
-        const note = document.createElement("div"); 
+        // Period dropdown row
+        const periodRow = document.createElement("div");
+        periodRow.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:12px;";
+        periodRow.innerHTML = '<span style="font-size:0.85rem;">Reset period:</span>';
+        const periodSel = document.createElement("select");
+        periodSel.style.cssText = "padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;";
+        const periods = [
+            { value: 'half', label: 'Entire half (no reset)' },
+            { value: '1week', label: 'Every week' },
+            { value: '2weeks', label: 'Every 2 weeks' },
+            { value: '3weeks', label: 'Every 3 weeks' },
+            { value: '4weeks', label: 'Every 4 weeks' }
+        ];
+        periods.forEach(p => {
+            const opt = document.createElement("option");
+            opt.value = p.value; opt.textContent = p.label;
+            if ((item.maxUsagePeriod || 'half') === p.value) opt.selected = true;
+            periodSel.appendChild(opt);
+        });
+        periodSel.onchange = () => {
+            item.maxUsagePeriod = periodSel.value;
+            saveData();
+            updateNote();
+            updateSummary();
+        };
+        periodRow.appendChild(periodSel);
+        detailDiv.appendChild(periodRow);
+
+        // Explanation note
+        const note = document.createElement("div");
+        note.id = "max-usage-note";
         note.style.cssText = "color:#6B7280; font-size:0.8rem; padding:10px; background:#f0f9fb; border-radius:8px; line-height:1.5;";
-        note.innerHTML = 'Each bunk can be scheduled for <strong>' + (parseInt(item.maxUsage) || 1) + 
-            '</strong> time' + ((parseInt(item.maxUsage) || 1) > 1 ? 's' : '') + 
-            ' max across the entire half. The scheduler will block this activity once a bunk reaches the limit.' +
-            '<br><span style="font-size:0.75rem; color:#9CA3AF;">Tracked via rotation history. Resets when you start a new half.</span>';
         detailDiv.appendChild(note);
+
+        const updateNote = () => {
+            const count = parseInt(item.maxUsage) || 1;
+            const period = item.maxUsagePeriod || 'half';
+            const periodTexts = {
+                'half': 'across the entire half. Resets when you start a new half.',
+                '1week': 'per week. Counter resets every Monday.',
+                '2weeks': 'per 2-week period. Counter resets every other Monday.',
+                '3weeks': 'per 3-week period.',
+                '4weeks': 'per 4-week (monthly) period.'
+            };
+            const noteEl = detailDiv.querySelector('#max-usage-note');
+            if (noteEl) {
+                noteEl.innerHTML = 'Each bunk can be scheduled for <strong>' + count +
+                    '</strong> time' + (count > 1 ? 's' : '') + ' max ' +
+                    (periodTexts[period] || periodTexts['half']) +
+                    '<br><span style="font-size:0.75rem; color:#9CA3AF;">Tracked via rotation history.</span>';
+            }
+        };
+        updateNote();
     };
 
     cb.onchange = () => {
@@ -500,20 +600,10 @@ function renderFullGradeSettings(item) {
     renderDetails();
     return container;
 }
-function summarySharing(item) { if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "No sharing (1 bunk only)"; return 'Up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks (same grade)'; }
-function summaryAccess(item) { if (!item.limitUsage?.enabled) return "Open to all grades"; const c = Object.keys(item.limitUsage.divisions||{}).length; if (c===0) return "\u26A0 Restricted (none selected)"; return c + ' grade' + (c!==1?'s':'') + ' allowed' + (item.limitUsage.usePriority?" \u00B7 prioritized":""); }
-function summaryTime(item) { const c = (item.timeRules||[]).length; return c ? c + ' rule(s) active' : "Available all day"; }
-function summaryWeather(item) {
-    let s = item.isIndoor ? 'Indoor · Rainy day available' : 'Outdoor · Disabled on rain';
-    const overrides = [];
-    if (item.rainyDayCapacity > 0) overrides.push('cap:' + item.rainyDayCapacity);
-    if (item.rainyDayAvailableAllDay && (item.timeRules||[]).length > 0) overrides.push('bypass time rules');
-    if (overrides.length > 0) s += ' · 🌧️ ' + overrides.join(', ');
-    return s;
-}
-function summaryLocation(item) { return item.location || "No field assigned"; }
 
-// SHARING — v3.2: Toggle pattern matching fields.js
+// =========================================================================
+// RENDER: Sharing — toggle pattern matching fields.js
+// =========================================================================
 function renderSharing(item) {
     const container = document.createElement("div");
     const updateSummary = () => { const s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if (s) s.textContent = summarySharing(item); };
@@ -549,7 +639,9 @@ function renderSharing(item) {
     renderContent(); return container;
 }
 
-// ACCESS — v3.2: Grade chips + priority matching fields.js
+// =========================================================================
+// RENDER: Access — grade chips + priority
+// =========================================================================
 function renderAccess(item) {
     const container = document.createElement("div");
     const updateSummary = () => { const s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if (s) s.textContent = summaryAccess(item); };
@@ -615,7 +707,9 @@ function renderAccess(item) {
     renderContent(); return container;
 }
 
-// TIME RULES, LOCATION, WEATHER, PREP, ADD/DELETE, CLEANUP, HELPERS, EXPORTS
+// =========================================================================
+// RENDER: Time Rules, Location, Weather, Prep, Add/Delete, Cleanup, Helpers
+// =========================================================================
 function renderTimeRules(item) {
     const container = document.createElement("div");
     if (item.timeRules && item.timeRules.length > 0) {
@@ -900,5 +994,5 @@ window.diagnoseSpecialActivities = function() {
     return { activities: storedActivities.length, issues: issues.length };
 };
 
-console.log("[SPECIAL_ACTIVITIES] Module v3.2 loaded");
+console.log("[SPECIAL_ACTIVITIES] Module v3.3 loaded");
 })();
