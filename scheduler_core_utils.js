@@ -2240,7 +2240,7 @@ const validActivities = Utils.getValidActivityNames();
             const allDaily = window.loadAllDailyData?.() || {};
             const oldSched = allDaily[dateKey]?.scheduleAssignments || {};
             let removed = 0;
-
+const validActivities = Utils.getValidActivityNames();
             Object.keys(oldSched).forEach(bunk => {
                 (oldSched[bunk] || []).forEach(entry => {
                     if (entry && entry._activity && !entry.continuation && !entry._isTransition) {
