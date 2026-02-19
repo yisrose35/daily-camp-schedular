@@ -744,13 +744,23 @@
                             <option value="">-- Select Division --</option>
                         </select>
                     </div>
-                    <div style="flex:1;min-width:140px;">
-                        <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Filter</label>
+                    <div style="flex:1;min-width:120px;">
+                        <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Type</label>
                         <select id="rotation-type-filter" style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;">
                             <option value="all">All Activities</option>
                             <option value="sport">Sports Only</option>
                             <option value="special">Special Only</option>
                         </select>
+                    </div>
+                    <div style="flex:1;min-width:140px;">
+                        <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Bunk</label>
+                        <select id="rotation-bunk-filter" style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;">
+                            <option value="">All Bunks</option>
+                        </select>
+                    </div>
+                    <div style="flex:1;min-width:160px;">
+                        <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Activity</label>
+                        <input id="rotation-activity-filter" type="text" placeholder="e.g. Basketball" style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;box-sizing:border-box;" />
                     </div>
                 </div>
             </div>
@@ -763,8 +773,34 @@
             divSelect.innerHTML += `<option value="${d}">${d}</option>`;
         });
 
-        divSelect.onchange = () => renderRotationTable(divSelect.value);
+        // When division changes, repopulate bunk dropdown then re-render
+        divSelect.onchange = () => {
+            populateRotationBunkFilter(divSelect.value);
+            renderRotationTable(divSelect.value);
+        };
         document.getElementById("rotation-type-filter").onchange = () => renderRotationTable(divSelect.value);
+        document.getElementById("rotation-bunk-filter").onchange = () => renderRotationTable(divSelect.value);
+
+        // Debounced activity search
+        let _activityFilterTimer = null;
+        document.getElementById("rotation-activity-filter").oninput = () => {
+            clearTimeout(_activityFilterTimer);
+            _activityFilterTimer = setTimeout(() => renderRotationTable(divSelect.value), 300);
+        };
+    }
+
+    /**
+     * Populate bunk filter dropdown for the selected division
+     */
+    function populateRotationBunkFilter(divName) {
+        const bunkSelect = document.getElementById("rotation-bunk-filter");
+        if (!bunkSelect) return;
+        bunkSelect.innerHTML = '<option value="">All Bunks</option>';
+        if (!divName) return;
+        const bunks = divisions[divName]?.bunks || [];
+        bunks.forEach(b => {
+            bunkSelect.innerHTML += `<option value="${b}">${b}</option>`;
+        });
     }
 
     /**
@@ -786,13 +822,29 @@
             return;
         }
 
+        // Type filter (sport/special/all)
         const filter = document.getElementById("rotation-type-filter")?.value || 'all';
         let filteredActivities = allActivities;
         if (filter === 'sport') filteredActivities = allActivities.filter(a => a.type === 'sport');
         if (filter === 'special') filteredActivities = allActivities.filter(a => a.type === 'special');
 
+        // Activity name search filter
+        const activitySearch = (document.getElementById("rotation-activity-filter")?.value || '').trim().toLowerCase();
+        if (activitySearch) {
+            filteredActivities = filteredActivities.filter(a => a.name.toLowerCase().includes(activitySearch));
+        }
+
         if (!filteredActivities.length) {
             container.innerHTML = `<div style="padding:20px;text-align:center;color:#6b7280;background:#f9fafb;border-radius:12px;">No activities match the filter.</div>`;
+            return;
+        }
+
+        // Bunk filter
+        const bunkFilter = document.getElementById("rotation-bunk-filter")?.value || '';
+        const filteredBunks = bunkFilter ? bunks.filter(b => b === bunkFilter) : bunks;
+
+        if (!filteredBunks.length) {
+            container.innerHTML = `<div style="padding:20px;text-align:center;color:#6b7280;background:#f9fafb;border-radius:12px;">No bunks match the filter.</div>`;
             return;
         }
 
@@ -860,7 +912,7 @@
                         <tbody>
         `;
 
-        bunks.forEach((bunk, bunkIdx) => {
+        filteredBunks.forEach((bunk, bunkIdx) => {
             let isFirstRow = true;
             const bunkBg = bunkIdx % 2 === 0 ? '#ffffff' : '#fafafa';
 
@@ -929,7 +981,7 @@
         html += `</tbody></table></div></div>`;
 
         // Summary stats
-        html += buildRotationSummary(bunks, filteredActivities, rawCounts, manualOffsets);
+        html += buildRotationSummary(filteredBunks, filteredActivities, rawCounts, manualOffsets);
 
         container.innerHTML = html;
 
