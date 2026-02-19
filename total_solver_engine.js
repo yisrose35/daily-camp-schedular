@@ -1117,7 +1117,16 @@ else penalty += 200;
             sc.sort(function(a,b){return a.cost-b.cost;});
             blockOpts.push({bi:bi,options:sc,domainSize:sc.length});
         }
-        blockOpts.sort(function(a,b){return a.domainSize-b.domainSize;});
+       // ★★★ v15.2: Blocks planned for scarce activities get processed first ★★★
+        var _scarceActs = Solver._scarceActivities || new Set();
+        blockOpts.sort(function(a,b){
+            var aBlk = activityBlocks[a.bi], bBlk = activityBlocks[b.bi];
+            var aPlan = S._activityPlan.get(a.bi), bPlan = S._activityPlan.get(b.bi);
+            var aScarce = (aPlan && _scarceActs.has(normName(aPlan.activity))) ? 1 : 0;
+            var bScarce = (bPlan && _scarceActs.has(normName(bPlan.activity))) ? 1 : 0;
+            if (aScarce !== bScarce) return bScarce - aScarce;
+            return a.domainSize - b.domainSize;
+        });
         var fieldUsageGrp = new Map(), fieldDivsGrp = new Map(), bunkActsGrp = new Map();
         // ★★★ v15.0: fullGrade per GRADE — key = "gradeName|start|end" ★★★
         var fullGradeMap = new Map();
