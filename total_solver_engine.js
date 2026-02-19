@@ -640,23 +640,73 @@ else penalty += 200;
     // ========================================================================
     // BLOCK SORTING
     // ========================================================================
-    Solver.sortBlocksByDifficulty = function (blocks, config) {
-        var meta = config.bunkMetaData || {};
-        blocks.forEach(function(b) { if (!b.divName && !b.division) b.divName = getBunkDivision(b.bunk); });
-        var divBlockCounts = {};
-        for (var i = 0; i < blocks.length; i++) { if (blocks[i]._isLeague) continue; var dn = blocks[i].divName || blocks[i].division || ''; if (!divBlockCounts[dn]) divBlockCounts[dn] = 0; divBlockCounts[dn]++; }
-        var divScarcity = {}, divisions = window.divisions || {};
-        for (var dk in divisions) { var bc = (divisions[dk].bunks || []).length; divScarcity[dk] = (bc > 0 && divBlockCounts[dk]) ? (divBlockCounts[dk] / bc) : 999; }
-        return blocks.sort(function(a, b) {
-            if (a._isLeague && !b._isLeague) return -1;
-            if (!a._isLeague && b._isLeague) return 1;
-            var divA = a.divName || a.division || '', divB = b.divName || b.division || '';
-            var sA = divScarcity[divA] || 999, sB = divScarcity[divB] || 999;
-            if (Math.abs(sA - sB) > 1) return sA - sB;
-            if (divA !== divB) return (parseInt(divA) || 999) - (parseInt(divB) || 999);
-            var numA = getBunkNumber(a.bunk) || Infinity, numB = getBunkNumber(b.bunk) || Infinity;
-            if (numA !== numB) return numA - numB;
-            var timeA = a.startTime ?? (a.slots?.[0] * 30 + 660) ?? 0, timeB = b.startTime ?? (b.slots?.[0] * 30 + 660) ?? 0;
+   Solver.sortBlocksByDifficulty = function (blocks, config) {
+    var meta = config.bunkMetaData || {};
+    blocks.forEach(function(b) { if (!b.divName && !b.division) b.divName = getBunkDivision(b.bunk); });
+    var divBlockCounts = {};
+    for (var i = 0; i < blocks.length; i++) { if (blocks[i]._isLeague) continue; var dn = blocks[i].divName || blocks[i].division || ''; if (!divBlockCounts[dn]) divBlockCounts[dn] = 0; divBlockCounts[dn]++; }
+    var divScarcity = {}, divisions = window.divisions || {};
+    for (var dk in divisions) { var bc = (divisions[dk].bunks || []).length; divScarcity[dk] = (bc > 0 && divBlockCounts[dk]) ? (divBlockCounts[dk] / bc) : 999; }
+
+    // ★★★ v15.2: SCARCE ACTIVITY PRIORITY ★★★
+    // Count how many fields each activity can be played on
+    var activityFieldCount = {};
+    for (var ci = 0; ci < allCandidateOptions.length; ci++) {
+        var cand = allCandidateOptions[ci];
+        var actName = cand.activityName;
+        if (!actName || actName === 'Free') continue;
+        if (!activityFieldCount[actName]) activityFieldCount[actName] = new Set();
+        activityFieldCount[actName].add(cand.field);
+    }
+    // Find the median field count to identify scarce activities
+    var fieldCounts = Object.values(activityFieldCount).map(function(s) { return s.size; });
+    fieldCounts.sort(function(a, b) { return a - b; });
+    var medianFields = fieldCounts.length > 0 ? fieldCounts[Math.floor(fieldCounts.length / 2)] : 1;
+    // Activities with far fewer fields than median are "scarce"
+    var scarceActivities = new Set();
+    for (var actKey in activityFieldCount) {
+        if (activityFieldCount[actKey].size <= Math.max(1, Math.floor(medianFields / 3))) {
+            scarceActivities.add(normName(actKey));
+        }
+    }
+    if (scarceActivities.size > 0) {
+        console.log('[SOLVER] ★ Scarce activities detected:', Array.from(scarceActivities).join(', '), '(median fields:', medianFields + ')');
+    }
+    // For each bunk, check if they need a scarce activity (never done or very under-done)
+    var bunkNeedsScarce = {};
+    for (var bi2 = 0; bi2 < blocks.length; bi2++) {
+        var blk = blocks[bi2];
+        if (blk._isLeague) continue;
+        var bunk = blk.bunk;
+        if (bunkNeedsScarce[bunk] !== undefined) continue;
+        bunkNeedsScarce[bunk] = false;
+        for (var scAct of scarceActivities) {
+            var count = getActivityCount(bunk, scAct);
+            var avg = 0;
+            var allActs = Object.keys(activityFieldCount);
+            for (var aai = 0; aai < allActs.length; aai++) { avg += getActivityCount(bunk, allActs[aai]); }
+            avg = allActs.length > 0 ? avg / allActs.length : 0;
+            if (count < avg - 0.5 || count === 0) {
+                bunkNeedsScarce[bunk] = true;
+                break;
+            }
+        }
+    }
+
+    return blocks.sort(function(a, b) {
+        if (a._isLeague && !b._isLeague) return -1;
+        if (!a._isLeague && b._isLeague) return 1;
+        // ★★★ v15.2: Bunks that need scarce activities go FIRST ★★★
+        var aNeedsScarce = bunkNeedsScarce[a.bunk] ? 1 : 0;
+        var bNeedsScarce = bunkNeedsScarce[b.bunk] ? 1 : 0;
+        if (aNeedsScarce !== bNeedsScarce) return bNeedsScarce - aNeedsScarce;
+        var divA = a.divName || a.division || '', divB = b.divName || b.division || '';
+        var sA = divScarcity[divA] || 999, sB = divScarcity[divB] || 999;
+        if (Math.abs(sA - sB) > 1) return sA - sB;
+        if (divA !== divB) return (parseInt(divA) || 999) - (parseInt(divB) || 999);
+        var numA = getBunkNumber(a.bunk) || Infinity, numB = getBunkNumber(b.bunk) || Infinity;
+        if (numA !== numB) return numA - numB;
+        var timeA = a.startTime ?? (a.slots?.[0] * 30 + 660) ?? 0, timeB = b.startTime ?? (b.slots?.[0] * 30 + 660) ?? 0;
             return timeA - timeB;
         });
     };
