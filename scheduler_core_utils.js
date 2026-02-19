@@ -2173,7 +2173,15 @@
 
     window.hydrateLocalStorageFromCloud = Utils.hydrateLocalStorageFromCloud;
 
-
+Utils.getValidActivityNames = function() {
+        const g = window.loadGlobalSettings?.() || {};
+        const fields = g.app1?.fields || [];
+        const specials = g.app1?.specialActivities || [];
+        const valid = new Set();
+        fields.forEach(f => (f.activities || []).forEach(a => valid.add(a)));
+        specials.forEach(s => { if (s.name) valid.add(s.name); });
+        return valid;
+    };
     Utils.incrementHistoricalCounts = function(dateKey, scheduleAssignments, saveToCloud = true) {
         console.log(`📊 [SchedulerCoreUtils] Incrementing counts for ${dateKey}...`);
 
