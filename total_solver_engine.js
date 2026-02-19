@@ -678,14 +678,30 @@ else penalty += 200;
     var medianFields = fieldCounts.length > 0 ? fieldCounts[Math.floor(fieldCounts.length / 2)] : 1;
     // Activities with far fewer fields than median are "scarce"
     var scarceActivities = new Set();
+    // Only check sports for scarcity — specials naturally have 1 field each
+    var sportFieldCounts = [];
     for (var actKey in activityFieldCount) {
-        if (activityFieldCount[actKey].size <= Math.max(1, Math.floor(medianFields / 3))) {
-            scarceActivities.add(normName(actKey));
+        var isSpecial = false;
+        for (var sci = 0; sci < allCandidateOptions.length; sci++) {
+            if (allCandidateOptions[sci].activityName === actKey && allCandidateOptions[sci].type === 'special') { isSpecial = true; break; }
+        }
+        if (!isSpecial) sportFieldCounts.push(activityFieldCount[actKey].size);
+    }
+    sportFieldCounts.sort(function(a, b) { return a - b; });
+    var sportMedian = sportFieldCounts.length > 0 ? sportFieldCounts[Math.floor(sportFieldCounts.length / 2)] : 1;
+    for (var actKey2 in activityFieldCount) {
+        var isSpecial2 = false;
+        for (var sci2 = 0; sci2 < allCandidateOptions.length; sci2++) {
+            if (allCandidateOptions[sci2].activityName === actKey2 && allCandidateOptions[sci2].type === 'special') { isSpecial2 = true; break; }
+        }
+        if (isSpecial2) continue; // Skip specials entirely
+        if (activityFieldCount[actKey2].size <= Math.max(1, Math.floor(sportMedian / 3))) {
+            scarceActivities.add(normName(actKey2));
         }
     }
     if (scarceActivities.size > 0) {
-        console.log('[SOLVER] ★ Scarce activities detected:', Array.from(scarceActivities).join(', '), '(median fields:', medianFields + ')');
-    }
+        console.log('[SOLVER] ★ Scarce SPORT activities detected:', Array.from(scarceActivities).join(', '), '(sport median fields:', sportMedian + ')');
+        }
     // Store for penalty engine to use
     Solver._scarceActivities = scarceActivities;
     // For each bunk, check if they need a scarce activity (never done or very under-done)
