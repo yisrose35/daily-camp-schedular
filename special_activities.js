@@ -1,5 +1,5 @@
 // ============================================================================
-// special_activities.js — PRODUCTION-READY v3.2
+// special_activities.js — PRODUCTION-READY v3.4
 // ============================================================================
 // v3.2: Visual parity with fields.js — setup-card layout, SVG accordions,
 //       availability strip, scoped list/switch styles, toggle sharing pattern
@@ -15,7 +15,7 @@
 (function() {
 'use strict';
 
-console.log("[SPECIAL_ACTIVITIES] Module v3.2 loading...");
+console.log("[SPECIAL_ACTIVITIES] Module v3.4 loading...");
 
 let specialActivities = [];
 let rainyDayActivities = [];
@@ -164,7 +164,7 @@ function createDefaultActivity(name) {
 function validateAllActivities(activities) { if (!Array.isArray(activities)) return []; return activities.map(a => validateSpecialActivity(a, a?.name)); }
 
 // =========================================================================
-// INIT — v3.3: Consolidated accordion layout
+// INIT — v3.4: Nested accordion layout
 // =========================================================================
 function initSpecialActivitiesTab() {
     const container = document.getElementById("special_activities");
@@ -186,10 +186,15 @@ function initSpecialActivitiesTab() {
         #special_activities .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
         #special_activities .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
         #special_activities input:checked + .slider:before { transform: translateX(14px); }
-        #special_activities .grouped-section { border:1px solid #E5E7EB; border-radius:10px; overflow:hidden; margin-bottom:12px; }
-        #special_activities .grouped-section .detail-section { border-bottom:1px solid #F3F4F6; }
-        #special_activities .grouped-section .detail-section:last-child { border-bottom:none; }
-        #special_activities .group-label { font-size:0.7rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#9CA3AF; padding:8px 14px 4px; background:#FAFAFA; }
+        #special_activities .outer-accordion { border:1px solid #E5E7EB; border-radius:10px; overflow:hidden; margin-bottom:12px; background:#fff; }
+        #special_activities .outer-accordion-header { display:flex; justify-content:space-between; align-items:center; padding:12px 14px; cursor:pointer; user-select:none; transition:background 0.15s; }
+        #special_activities .outer-accordion-header:hover { background:#F9FAFB; }
+        #special_activities .outer-accordion-header .oa-title { font-size:0.95rem; font-weight:600; color:#1F2937; }
+        #special_activities .outer-accordion-header .oa-hint { font-size:0.75rem; color:#9CA3AF; margin-top:1px; }
+        #special_activities .outer-accordion-body { display:none; border-top:1px solid #F3F4F6; }
+        #special_activities .outer-accordion-body .detail-section { border-bottom:1px solid #F3F4F6; }
+        #special_activities .outer-accordion-body .detail-section:last-child { border-bottom:none; }
+        #special_activities .outer-accordion-body .detail-section-header { padding-left:26px; }
         .rainy-list { background: linear-gradient(to bottom, #f0f9ff, #fff) !important; border-color: #7dd3fc !important; }
         .rainy-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 0.7rem; color: #0284c7; background: #e0f2fe; padding: 2px 8px; border-radius: 999px; margin-left: 8px; }
         .weather-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 0.65rem; padding: 2px 6px; border-radius: 999px; margin-left: 6px; }
@@ -343,13 +348,24 @@ function section(title, summary, builder) {
     wrap.appendChild(head); wrap.appendChild(body); return wrap;
 }
 
-// v3.3: Group builder — wraps multiple section() accordions into a bordered group
-function sectionGroup(label, sections) {
-    const group = document.createElement("div"); group.className = "grouped-section";
-    const lbl = document.createElement("div"); lbl.className = "group-label"; lbl.textContent = label;
-    group.appendChild(lbl);
-    sections.forEach(s => group.appendChild(s));
-    return group;
+// v3.4: Outer accordion — collapsible group that contains inner sub-accordions
+function sectionGroup(label, hint, sections) {
+    const group = document.createElement("div"); group.className = "outer-accordion";
+    const head = document.createElement("div"); head.className = "outer-accordion-header";
+    const textDiv = document.createElement("div");
+    textDiv.innerHTML = '<div class="oa-title">' + escapeHtml(label) + '</div>' + (hint ? '<div class="oa-hint">' + escapeHtml(hint) + '</div>' : '');
+    const caret = document.createElement("span");
+    caret.innerHTML = '<svg width="18" height="18" fill="none" stroke="#9CA3AF" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>';
+    caret.style.transition = "transform 0.2s";
+    head.appendChild(textDiv); head.appendChild(caret);
+    const body = document.createElement("div"); body.className = "outer-accordion-body";
+    sections.forEach(s => body.appendChild(s));
+    head.onclick = () => {
+        const open = body.style.display === "block";
+        body.style.display = open ? "none" : "block";
+        caret.style.transform = open ? "rotate(0deg)" : "rotate(-180deg)";
+    };
+    group.appendChild(head); group.appendChild(body); return group;
 }
 
 function renderDetailPane() {
@@ -406,21 +422,21 @@ function renderDetailPane() {
     avail.innerHTML = '<span>Special is <strong>' + (item.available ? 'AVAILABLE' : 'UNAVAILABLE') + '</strong></span><span style="font-size:0.8rem; opacity:0.8;">Toggle in master list</span>';
     detailPaneEl.appendChild(avail);
 
-    // v3.3: CONSOLIDATED ACCORDION GROUPS (4 groups instead of 8 sections)
+    // v3.4: NESTED ACCORDIONS — outer group expands to reveal inner sub-sections
     // Group 1: Scheduling Rules — location + sharing + access
-    detailPaneEl.appendChild(sectionGroup("Scheduling Rules", [
+    detailPaneEl.appendChild(sectionGroup("Scheduling Rules", "Location, sharing & grade access", [
         section("Field / Location", summaryLocation(item), () => renderLocationSettings(item)),
-        section("Concurrent Use", summarySharing(item), () => renderSharing(item)),
+        section("Sharing", summarySharing(item), () => renderSharing(item)),
         section("Division Access", summaryAccess(item), () => renderAccess(item))
     ]));
 
     // Group 2: Time & Weather — time rules + weather (weather only for non-rainy-day items)
     const timeWeatherSections = [section("Time Availability", summaryTime(item), () => renderTimeRules(item))];
     if (!isRainyDayItem) timeWeatherSections.push(section("Weather & Availability", summaryWeather(item), () => renderWeatherSettings(item)));
-    detailPaneEl.appendChild(sectionGroup("Time & Weather", timeWeatherSections));
+    detailPaneEl.appendChild(sectionGroup("Time & Weather", "When this special can be scheduled", timeWeatherSections));
 
     // Group 3: Rotation Rules — usage limit + full grade + prep duration
-    detailPaneEl.appendChild(sectionGroup("Rotation Rules", [
+    detailPaneEl.appendChild(sectionGroup("Rotation Rules", "Limits, full-grade mode & prep time", [
         section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
         section("Full Grade", summaryFullGrade(item), () => renderFullGradeSettings(item)),
         section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item))
@@ -994,5 +1010,5 @@ window.diagnoseSpecialActivities = function() {
     return { activities: storedActivities.length, issues: issues.length };
 };
 
-console.log("[SPECIAL_ACTIVITIES] Module v3.3 loaded");
+console.log("[SPECIAL_ACTIVITIES] Module v3.4 loaded");
 })();
