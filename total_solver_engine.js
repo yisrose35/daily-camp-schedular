@@ -1,3 +1,4 @@
+
 // ============================================================================
 // total_solver_engine_part1.js (v15.0 — FULL-GRADE + RAINY DAY)
 // ============================================================================
@@ -632,24 +633,10 @@ else penalty += 200;
         // the fullGrade forcing logic in Part 2's solveGroupMatchingAugmented
         if (pick._fullGrade || activityProperties[act]?.fullGrade || activityProperties[act]?._fullGrade) penalty -= 15000;
 
-        // ★★★ v15.2: SCARCE ACTIVITY BONUS ★★★
-        // If this activity is scarce (few fields) and this bunk is under-done on it, big bonus
-        if (Solver._scarceActivities && Solver._scarceActivities.has(actNorm)) {
-            var scarceCount = getActivityCount(bunk, act);
-            var scarceAvg = 0, scarceTotal = 0, scarceNum = 0;
-            for (var [scKey2] of _rotationScoreMap) {
-                if (scKey2.startsWith(bunk + '|')) { scarceTotal += getActivityCount(bunk, scKey2.split('|')[1]); scarceNum++; }
-            }
-            if (scarceNum > 0) scarceAvg = scarceTotal / scarceNum;
-            if (scarceCount <= scarceAvg) {
-                var scarceGap = scarceAvg - scarceCount;
-                penalty -= 10000 + (scarceGap * 3000);
-            }
-        }
-
         // Tie-breaker
         penalty += Math.random() * (ROTATION_CONFIG.TIE_BREAKER_RANDOMNESS || 300);
         return penalty;
+    }
 
     // ========================================================================
     // BLOCK SORTING
@@ -678,32 +665,14 @@ else penalty += 200;
     var medianFields = fieldCounts.length > 0 ? fieldCounts[Math.floor(fieldCounts.length / 2)] : 1;
     // Activities with far fewer fields than median are "scarce"
     var scarceActivities = new Set();
-    // Only check sports for scarcity — specials naturally have 1 field each
-    var sportFieldCounts = [];
     for (var actKey in activityFieldCount) {
-        var isSpecial = false;
-        for (var sci = 0; sci < allCandidateOptions.length; sci++) {
-            if (allCandidateOptions[sci].activityName === actKey && allCandidateOptions[sci].type === 'special') { isSpecial = true; break; }
-        }
-        if (!isSpecial) sportFieldCounts.push(activityFieldCount[actKey].size);
-    }
-    sportFieldCounts.sort(function(a, b) { return a - b; });
-    var sportMedian = sportFieldCounts.length > 0 ? sportFieldCounts[Math.floor(sportFieldCounts.length / 2)] : 1;
-    for (var actKey2 in activityFieldCount) {
-        var isSpecial2 = false;
-        for (var sci2 = 0; sci2 < allCandidateOptions.length; sci2++) {
-            if (allCandidateOptions[sci2].activityName === actKey2 && allCandidateOptions[sci2].type === 'special') { isSpecial2 = true; break; }
-        }
-        if (isSpecial2) continue; // Skip specials entirely
-        if (activityFieldCount[actKey2].size <= Math.max(1, Math.floor(sportMedian / 3))) {
-            scarceActivities.add(normName(actKey2));
+        if (activityFieldCount[actKey].size <= Math.max(1, Math.floor(medianFields / 3))) {
+            scarceActivities.add(normName(actKey));
         }
     }
     if (scarceActivities.size > 0) {
-        console.log('[SOLVER] ★ Scarce SPORT activities detected:', Array.from(scarceActivities).join(', '), '(sport median fields:', sportMedian + ')');
-        }
-    // Store for penalty engine to use
-    Solver._scarceActivities = scarceActivities;
+        console.log('[SOLVER] ★ Scarce activities detected:', Array.from(scarceActivities).join(', '), '(median fields:', medianFields + ')');
+    }
     // For each bunk, check if they need a scarce activity (never done or very under-done)
     var bunkNeedsScarce = {};
     for (var bi2 = 0; bi2 < blocks.length; bi2++) {
