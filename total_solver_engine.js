@@ -633,10 +633,23 @@ else penalty += 200;
         // the fullGrade forcing logic in Part 2's solveGroupMatchingAugmented
         if (pick._fullGrade || activityProperties[act]?.fullGrade || activityProperties[act]?._fullGrade) penalty -= 15000;
 
+       // ★★★ v15.2: SCARCE SPORT ACTIVITY BONUS (safe — sports only) ★★★
+        if (Solver._scarceActivities && Solver._scarceActivities.has(actNorm) && pick._type !== 'special') {
+            var scCount = getActivityCount(bunk, act);
+            var scAllActs = Object.keys(S?.activityProperties || {});
+            var scAvg = 0;
+            if (scAllActs.length > 0) {
+                for (var scai = 0; scai < scAllActs.length; scai++) scAvg += getActivityCount(bunk, scAllActs[scai]);
+                scAvg = scAvg / scAllActs.length;
+            }
+            if (scCount < scAvg) {
+                penalty -= Math.min(8000, 4000 + (scAvg - scCount) * 2000);
+            }
+        }
+
         // Tie-breaker
         penalty += Math.random() * (ROTATION_CONFIG.TIE_BREAKER_RANDOMNESS || 300);
-        return penalty;
-    }
+        return penalty;    }
 
     // ========================================================================
     // BLOCK SORTING
