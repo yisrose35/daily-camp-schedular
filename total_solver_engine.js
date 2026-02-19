@@ -632,10 +632,24 @@ else penalty += 200;
         // the fullGrade forcing logic in Part 2's solveGroupMatchingAugmented
         if (pick._fullGrade || activityProperties[act]?.fullGrade || activityProperties[act]?._fullGrade) penalty -= 15000;
 
+        // ★★★ v15.2: SCARCE ACTIVITY BONUS ★★★
+        // If this activity is scarce (few fields) and this bunk is under-done on it, big bonus
+        if (Solver._scarceActivities && Solver._scarceActivities.has(actNorm)) {
+            var scarceCount = getActivityCount(bunk, act);
+            var scarceAvg = 0, scarceTotal = 0, scarceNum = 0;
+            for (var [scKey2] of _rotationScoreMap) {
+                if (scKey2.startsWith(bunk + '|')) { scarceTotal += getActivityCount(bunk, scKey2.split('|')[1]); scarceNum++; }
+            }
+            if (scarceNum > 0) scarceAvg = scarceTotal / scarceNum;
+            if (scarceCount <= scarceAvg) {
+                var scarceGap = scarceAvg - scarceCount;
+                penalty -= 10000 + (scarceGap * 3000);
+            }
+        }
+
         // Tie-breaker
         penalty += Math.random() * (ROTATION_CONFIG.TIE_BREAKER_RANDOMNESS || 300);
         return penalty;
-    }
 
     // ========================================================================
     // BLOCK SORTING
