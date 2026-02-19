@@ -1236,7 +1236,13 @@
             await verifiedScheduleSave(dateKey);
             
             // Rebuild counts if available
-            if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+            if (window.SchedulerCoreUtils?.reIncrementHistoricalCounts) {
+                window.SchedulerCoreUtils.reIncrementHistoricalCounts(
+                    dateKey,
+                    window.scheduleAssignments || {},
+                    true
+                );
+            } else if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
                 window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
             }
         }, { once: false });
