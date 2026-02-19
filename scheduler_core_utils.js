@@ -2248,6 +2248,7 @@ const validActivities = Utils.getValidActivityNames();
                         const actLower = actName.toLowerCase();
                         if (actLower === 'free' || actLower.includes('transition')) return;
 
+                        if (!validActivities.has(actName)) return;
                         if (existingCounts[bunk]?.[actName]) {
                             existingCounts[bunk][actName] = Math.max(0, existingCounts[bunk][actName] - 1);
                             removed++;
