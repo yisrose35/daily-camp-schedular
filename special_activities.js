@@ -401,7 +401,9 @@ function renderDetailPane() {
     if (!isRainyDayItem) detailPaneEl.appendChild(section("Weather & Availability", summaryWeather(item), () => renderWeatherSettings(item)));
     detailPaneEl.appendChild(section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)));
     detailPaneEl.appendChild(section("Full Grade", summaryFullGrade(item), () => renderFullGradeSettings(item)));
+    detailPaneEl.appendChild(section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)));
 }
+
 
 function summaryFullGrade(item) { return item.fullGrade ? 'Entire grade does it together' : 'Off (normal rotation)'; }
 function renderFullGradeSettings(item) {
@@ -422,6 +424,80 @@ function renderFullGradeSettings(item) {
         note.innerHTML = '<strong>Normal mode:</strong> Bunks are assigned this activity individually through the regular rotation.';
     }
     container.appendChild(note);
+    return container;
+}
+    function renderMaxUsageSettings(item) {
+    const container = document.createElement("div");
+    const updateSummary = () => { 
+        const s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); 
+        if (s) s.textContent = summaryMaxUsage(item); 
+    };
+
+    const currentVal = parseInt(item.maxUsage) || 0;
+    const isEnabled = currentVal > 0;
+
+    // Toggle row
+    const toggleRow = document.createElement("div"); 
+    toggleRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:16px;";
+    const tog = document.createElement("label"); tog.className = "switch";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = isEnabled;
+    const sl = document.createElement("span"); sl.className = "slider";
+    tog.appendChild(cb); tog.appendChild(sl);
+    const label = document.createElement("span"); 
+    label.style.cssText = "font-weight:500; font-size:0.9rem;"; 
+    label.textContent = "Limit how many times a bunk can do this";
+    toggleRow.appendChild(tog); toggleRow.appendChild(label);
+    container.appendChild(toggleRow);
+
+    const detailDiv = document.createElement("div");
+    detailDiv.style.cssText = "margin-top:4px; padding-left:12px; border-left:2px solid #147D91;";
+
+    const renderDetails = () => {
+        detailDiv.innerHTML = "";
+        if (!cb.checked) {
+            detailDiv.style.display = "none";
+            return;
+        }
+        detailDiv.style.display = "block";
+
+        const row = document.createElement("div"); 
+        row.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:12px;";
+        row.innerHTML = '<span style="font-size:0.85rem;">Max times per bunk:</span>';
+        const numIn = document.createElement("input"); 
+        numIn.type = "number"; numIn.min = "1"; numIn.max = "50"; 
+        numIn.value = parseInt(item.maxUsage) || 1;
+        numIn.style.cssText = "width:60px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;";
+        numIn.onchange = () => { 
+            item.maxUsage = Math.min(50, Math.max(1, parseInt(numIn.value) || 1)); 
+            numIn.value = item.maxUsage; 
+            saveData(); 
+            updateSummary(); 
+        };
+        row.appendChild(numIn); 
+        detailDiv.appendChild(row);
+
+        const note = document.createElement("div"); 
+        note.style.cssText = "color:#6B7280; font-size:0.8rem; padding:10px; background:#f0f9fb; border-radius:8px; line-height:1.5;";
+        note.innerHTML = 'Each bunk can be scheduled for <strong>' + (parseInt(item.maxUsage) || 1) + 
+            '</strong> time' + ((parseInt(item.maxUsage) || 1) > 1 ? 's' : '') + 
+            ' max across the entire half. The scheduler will block this activity once a bunk reaches the limit.' +
+            '<br><span style="font-size:0.75rem; color:#9CA3AF;">Tracked via rotation history. Resets when you start a new half.</span>';
+        detailDiv.appendChild(note);
+    };
+
+    cb.onchange = () => {
+        if (cb.checked) {
+            item.maxUsage = parseInt(item.maxUsage) || 1;
+        } else {
+            item.maxUsage = null;
+        }
+        saveData();
+        renderDetails();
+        updateSummary();
+    };
+
+    container.appendChild(detailDiv);
+    renderDetails();
     return container;
 }
 function summarySharing(item) { if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "No sharing (1 bunk only)"; return 'Up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks (same grade)'; }
