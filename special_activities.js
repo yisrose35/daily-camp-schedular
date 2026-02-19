@@ -401,6 +401,7 @@ function renderDetailPane() {
     if (!isRainyDayItem) detailPaneEl.appendChild(section("Weather & Availability", summaryWeather(item), () => renderWeatherSettings(item)));
     detailPaneEl.appendChild(section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)));
     detailPaneEl.appendChild(section("Full Grade", summaryFullGrade(item), () => renderFullGradeSettings(item)));
+    detailPaneEl.appendChild(section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)));
 }
 
 
