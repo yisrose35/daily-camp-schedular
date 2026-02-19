@@ -78,10 +78,9 @@
         // =====================================================================
         // FREQUENCY PENALTIES - Compared to other activities
         // =====================================================================
-        HIGH_FREQUENCY_PENALTY: 3000,            // Done MUCH more than average
-        ABOVE_AVERAGE_PENALTY: 1200,             // Done more than average
-        SLIGHTLY_ABOVE_PENALTY: 500,             // Slightly above average
-
+       HIGH_FREQUENCY_PENALTY: 6000,
+ABOVE_AVERAGE_PENALTY: 3000,
+SLIGHTLY_ABOVE_PENALTY: 1500,
         // =====================================================================
         // ★★★ ENHANCED VARIETY BONUSES - MUCH STRONGER ★★★
         // =====================================================================
@@ -105,8 +104,8 @@
         // =====================================================================
         // ★★★ ACTIVITY COVERAGE TRACKING ★★★
         // =====================================================================
-        MISSING_ACTIVITY_BONUS: -3500,           // Bunk hasn't tried this at all
-        LOW_COVERAGE_BONUS: -1500,               // Bunk has tried <50% of activities
+       MISSING_ACTIVITY_BONUS: -7000,
+LOW_COVERAGE_BONUS: -3500,             // Bunk has tried <50% of activities
 
         // =====================================================================
         // LIMIT PENALTIES
