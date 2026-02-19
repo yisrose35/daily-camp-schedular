@@ -574,9 +574,9 @@
             var sharingEntries = _fieldTimeIndex.get(fieldNorm) || [];
             var fieldOccupied = false, sameActivityOnField = false;
             for (var sei = 0; sei < sharingEntries.length; sei++) { var se = sharingEntries[sei]; if (se.bunk === bunk) continue; if (se.endMin <= blockStart || se.startMin >= blockEnd) continue; fieldOccupied = true; if (se.activityName && se.activityName === actNorm) sameActivityOnField = true; }
-            if (sameActivityOnField) penalty -= 3000;
-            else if (fieldOccupied) penalty += 500;
-            else penalty += 200;
+           if (sameActivityOnField) penalty -= 1500;
+else if (fieldOccupied) penalty += 500;
+else penalty += 200;
         }
         // Fill-to-capacity
         if (fieldName && fieldName !== 'Free' && blockStart !== undefined && blockEnd !== undefined) {
@@ -587,7 +587,7 @@
             for (var fci = 0; fci < fcEntries.length; fci++) { var fce = fcEntries[fci]; if (fce.bunk === bunk) continue; if (fce.endMin <= blockStart || fce.startMin >= blockEnd) continue; if (fce.divName === blockDivName) { fcSameDiv++; if (fce.activityName && fce.activityName !== actNorm) fcSameAct = false; } }
             if (fcCap > 1 && fcSameAct) {
                 var spotsLeft = fcCap - 1 - fcSameDiv;
-                if (fcSameDiv > 0 && spotsLeft >= 0) { var fillRatio = fcSameDiv / (fcCap - 1); penalty -= Math.round(3000 + (fillRatio * 5000)); }
+                if (fcSameDiv > 0 && spotsLeft >= 0) { var fillRatio = fcSameDiv / (fcCap - 1); penalty -= Math.round(1500 + (fillRatio * 2000)); }
                 if (fcSameDiv === 0 && fcCap > 1) penalty += 500;
             }
         }
