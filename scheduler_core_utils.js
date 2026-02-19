@@ -1998,7 +1998,7 @@
      */
     Utils.rebuildHistoricalCounts = function(saveToCloud = true) {
         console.log('📊 [SchedulerCoreUtils] Rebuilding historical counts from all schedules...');
-
+        const validActivities = Utils.getValidActivityNames();
         const allDaily = window.loadAllDailyData?.() || {};
         const counts = {};
         let totalActivities = 0;
