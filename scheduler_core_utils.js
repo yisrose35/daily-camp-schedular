@@ -2204,6 +2204,7 @@ Utils.getValidActivityNames = function() {
                     const actLower = actName.toLowerCase();
                     if (actLower === 'free' || actLower.includes('transition')) return;
 
+                    if (!validActivities.has(actName)) return;
                     existingCounts[bunk] = existingCounts[bunk] || {};
                     existingCounts[bunk][actName] = (existingCounts[bunk][actName] || 0) + 1;
                     added++;
