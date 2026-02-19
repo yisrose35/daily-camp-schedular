@@ -729,6 +729,12 @@
                 }
 
                 console.log('🔗 ✅ Schedule loaded from cloud:', bunkCount, 'bunks');
+                if (window.SchedulerCoreUtils?.hydrateLocalStorageFromCloud) {
+                    console.log('🔗 Hydrating localStorage with all cloud schedule dates...');
+                    window.SchedulerCoreUtils.hydrateLocalStorageFromCloud().then(ok => {
+                        if (ok) console.log('🔗 ✅ localStorage hydrated with cloud history');
+                    });
+                }
                 return result;
             } else {
                 log('[CLOUD LOAD] No cloud data found');
