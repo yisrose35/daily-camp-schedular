@@ -2196,7 +2196,7 @@ Utils.getValidActivityNames = function() {
 
         const sched = scheduleAssignments || {};
         let added = 0;
-
+const validActivities = Utils.getValidActivityNames();
         Object.keys(sched).forEach(bunk => {
             (sched[bunk] || []).forEach(entry => {
                 if (entry && entry._activity && !entry.continuation && !entry._isTransition) {
