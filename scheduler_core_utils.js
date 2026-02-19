@@ -2022,6 +2022,7 @@
                             return;
                         }
 
+                        if (!validActivities.has(actName)) return;
                         counts[bunk] = counts[bunk] || {};
                         counts[bunk][actName] = (counts[bunk][actName] || 0) + 1;
                         totalActivities++;
