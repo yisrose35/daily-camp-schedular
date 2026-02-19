@@ -802,9 +802,10 @@
         const manualOffsets = global.manualUsageOffsets || {};
 
         // Compute raw historical counts and last done dates
-        const rawCounts = {};
+        const rawCounts = global.historicalCounts || {};
         const lastDone = {};
 
+        const rotHist = window.loadRotationHistory?.() || { bunks: {} };
         const sortedDates = Object.keys(allDaily).sort();
 
         sortedDates.forEach(dateKey => {
@@ -819,13 +820,23 @@
                         const act = entry._activity;
                         if (act === 'Free' || act.toLowerCase().includes('transition')) return;
 
-                        rawCounts[bunk] = rawCounts[bunk] || {};
-                        rawCounts[bunk][act] = (rawCounts[bunk][act] || 0) + 1;
-
                         lastDone[bunk] = lastDone[bunk] || {};
                         lastDone[bunk][act] = dateKey;
                     }
                 });
+            });
+        });
+
+        bunks.forEach(bunk => {
+            const bunkRotHist = rotHist.bunks?.[bunk] || {};
+            Object.keys(bunkRotHist).forEach(act => {
+                const ts = bunkRotHist[act];
+                if (!ts) return;
+                const dateFromTs = new Date(ts).toISOString().split('T')[0];
+                lastDone[bunk] = lastDone[bunk] || {};
+                if (!lastDone[bunk][act] || dateFromTs > lastDone[bunk][act]) {
+                    lastDone[bunk][act] = dateFromTs;
+                }
             });
         });
 
