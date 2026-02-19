@@ -815,15 +815,26 @@
     // ========================================================================
     // SCHEDULE APPLY / UNDO
     // ========================================================================
-    function applyPickToSchedule(block, pick) {
-        var bunk = block.bunk, slots = block.slots || [];
-        if (!window.scheduleAssignments[bunk]) return;
-        var fName = pick.field;
-        for (var i = 0; i < slots.length; i++) {
-            window.scheduleAssignments[bunk][slots[i]] = { field: fName, sport: pick.sport, continuation: i > 0, _fixed: false, _activity: pick._activity || fName, _fromSplitTile: block.fromSplitTile || false, _startMin: block.startTime, _endMin: block.endTime };
-            if (window.fieldUsageBySlot && window.fieldUsageBySlot[slots[i]]) { if (!window.fieldUsageBySlot[slots[i]][fName]) window.fieldUsageBySlot[slots[i]][fName] = { count: 0, bunks: {} }; window.fieldUsageBySlot[slots[i]][fName].count++; window.fieldUsageBySlot[slots[i]][fName].bunks[bunk] = pick.sport || pick._activity; }
-        }
+   function applyPickToSchedule(block, pick) {
+    var bunk = block.bunk, slots = block.slots || [];
+    if (!window.scheduleAssignments[bunk]) return;
+    var fName = pick.field;
+    for (var i = 0; i < slots.length; i++) {
+        window.scheduleAssignments[bunk][slots[i]] = { field: fName, sport: pick.sport, continuation: i > 0, _fixed: false, _activity: pick._activity || fName, _fromSplitTile: block.fromSplitTile || false, _startMin: block.startTime, _endMin: block.endTime };
+        if (window.fieldUsageBySlot && window.fieldUsageBySlot[slots[i]]) { if (!window.fieldUsageBySlot[slots[i]][fName]) window.fieldUsageBySlot[slots[i]][fName] = { count: 0, bunks: {} }; window.fieldUsageBySlot[slots[i]][fName].count++; window.fieldUsageBySlot[slots[i]][fName].bunks[bunk] = pick.sport || pick._activity; }
     }
+    // ★★★ v15.1 FIX: Clear stale caches so next penalty check sees this assignment ★★★
+    // Without this, _todayCache returns stale "not done today" for this bunk,
+    // allowing the same activity to be picked again for the same bunk.
+    for (var [tKey] of _todayCache) { if (tKey.startsWith(bunk + ':')) _todayCache.delete(tKey); }
+    // Also update the time index
+    if (block.startTime !== undefined && block.endTime !== undefined) {
+        var pickFieldNorm = normName(fName);
+        addToFieldTimeIndex(pickFieldNorm, block.startTime, block.endTime, bunk, block.divName || '', normName(pick._activity || fName));
+        var pickActNorm = normName(pick._activity || fName);
+        if (pickActNorm && pickActNorm !== pickFieldNorm) addToFieldTimeIndex(pickActNorm, block.startTime, block.endTime, bunk, block.divName || '', pickActNorm);
+    }
+}
     function undoPickFromSchedule(block, pick) {
         var bunk = block.bunk, slots = block.slots || [];
         if (!window.scheduleAssignments[bunk]) return;
