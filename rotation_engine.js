@@ -718,18 +718,32 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
     /**
      * Calculate FREQUENCY score - enhanced version
      */
-    RotationEngine.calculateFrequencyScore = function(bunkName, activityName, allActivities) {
-        var deviation = RotationEngine.getActivityUsageDeviation(bunkName, activityName, allActivities);
+   RotationEngine.calculateFrequencyScore = function(bunkName, activityName, allActivities) {
+    var deviation = RotationEngine.getActivityUsageDeviation(bunkName, activityName, allActivities);
 
-        if (deviation <= -3) return CONFIG.UNDER_UTILIZED_BONUS;
-        if (deviation <= -1) return CONFIG.SLIGHTLY_UNDER_BONUS;
-        if (deviation === 0) return 0;
-        if (deviation <= 1) return CONFIG.SLIGHTLY_ABOVE_PENALTY;
-        if (deviation <= 2) return CONFIG.ABOVE_AVERAGE_PENALTY;
+    // ★★★ v2.5 FIX: Also check absolute count vs min count across activities ★★★
+    var myCount = RotationEngine.getActivityCount(bunkName, activityName);
+    var allActs = allActivities || RotationEngine.getAllActivityNames();
+    var minCount = Infinity;
+    for (var i = 0; i < allActs.length; i++) {
+        var c = RotationEngine.getActivityCount(bunkName, allActs[i]);
+        if (c < minCount) minCount = c;
+    }
+    var absoluteGap = myCount - (minCount === Infinity ? 0 : minCount);
 
-        // Significantly over-used - escalating penalty
-        return CONFIG.HIGH_FREQUENCY_PENALTY + (deviation - 2) * 500;
-    };
+    // Hard escalation: if this activity is 3+ more than the least-used, massive penalty
+    if (absoluteGap >= 4) return CONFIG.HIGH_FREQUENCY_PENALTY * 3 + absoluteGap * 2000;
+    if (absoluteGap >= 3) return CONFIG.HIGH_FREQUENCY_PENALTY * 2 + absoluteGap * 1000;
+    if (absoluteGap >= 2) return CONFIG.HIGH_FREQUENCY_PENALTY + absoluteGap * 500;
+
+    if (deviation <= -3) return CONFIG.UNDER_UTILIZED_BONUS;
+    if (deviation <= -1) return CONFIG.SLIGHTLY_UNDER_BONUS;
+    if (deviation === 0) return 0;
+    if (deviation <= 1) return CONFIG.SLIGHTLY_ABOVE_PENALTY;
+    if (deviation <= 2) return CONFIG.ABOVE_AVERAGE_PENALTY;
+
+    return CONFIG.HIGH_FREQUENCY_PENALTY + (deviation - 2) * 500;
+};
 
     /**
      * ★★★ GOTCHA 2 FIX: Calculate VARIETY score ★★★
