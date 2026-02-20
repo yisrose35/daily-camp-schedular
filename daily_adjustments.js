@@ -2507,12 +2507,23 @@ async function runOptimizer() {
     if (!window.runSkeletonOptimizer) { await daShowAlert("Error: 'runSkeletonOptimizer' not found."); return; }
     if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
     saveDailySkeleton();
-
     if (window.SchedulerCoreUtils?.hydrateLocalStorageFromCloud) {
         await window.SchedulerCoreUtils.hydrateLocalStorageFromCloud();
     }
 
-  // ★★★ PRE-GENERATION CLEAR (v4 — FULL WIPE) ★★★
+    if (window.FluidScheduler?.isFluidMode?.()) {
+        console.log('[Optimizer] FLUID MODE — delegating to FluidScheduler');
+        const fluidSuccess = window.FluidScheduler.runFluidScheduler();
+        if (fluidSuccess) {
+            window.updateTable?.();
+            console.log('[Optimizer] Fluid schedule applied successfully');
+            return;
+        } else {
+            console.warn('[Optimizer] Fluid scheduler failed, falling back to standard mode');
+        }
+    }
+
+    // ★★★ PRE-GENERATION CLEAR (v4 — FULL WIPE) ★★★
   const dateKey = window.currentScheduleDate;
   console.log('[Optimizer] ★ PRE-GENERATION FULL WIPE for', dateKey);
 
