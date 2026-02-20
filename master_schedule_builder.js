@@ -1702,11 +1702,17 @@ function minutesToTime(min) {
 }
 
 window.initMasterScheduler = init;
-// Expose internals for mobile touch support
+// Expose internals for mobile touch support + auto build integration
 window.MasterSchedulerInternal = {
   get dailySkeleton() { return dailySkeleton; },
+  setSkeleton: function(newSkeleton) { dailySkeleton = newSkeleton; },
   markUnsavedChanges: typeof markUnsavedChanges === 'function' ? markUnsavedChanges : function(){},
   saveDraftToLocalStorage: typeof saveDraftToLocalStorage === 'function' ? saveDraftToLocalStorage : function(){},
-  renderGrid: typeof renderGrid === 'function' ? renderGrid : function(){}
+  renderGrid: typeof renderGrid === 'function' ? renderGrid : function(){},
+  renderPalette: typeof renderPalette === 'function' ? renderPalette : function(){},
+  renderToolbar: typeof renderToolbar === 'function' ? renderToolbar : function(){},
+  showModal: typeof showModal === 'function' ? showModal : null,
+  parseTimeToMinutes: typeof parseTimeToMinutes === 'function' ? parseTimeToMinutes : function(){ return null; },
+  minutesToTime: typeof minutesToTime === 'function' ? minutesToTime : function(){ return ''; },
 };
 })();
