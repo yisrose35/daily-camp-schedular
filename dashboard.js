@@ -292,7 +292,7 @@
         userName = null;
         campName = null;
         // Don't cache uncertain state
-        // localStorage.setItem('campistry_user_id', currentUser.id);    }
+        // localStorage.setItem('campistry_user_id', currentUser.id);     }
 
     // ========================================
     // ★★★ v2.4: CACHE RBAC CONTEXT FOR OTHER PAGES ★★★
