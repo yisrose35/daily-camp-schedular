@@ -92,8 +92,11 @@
             // Preserve any additional properties
             ...(f.transition ? { transition: f.transition } : {}),
             ...(f.preferences ? { preferences: f.preferences } : {}),
-            ...(f.minDurationMin ? { minDurationMin: f.minDurationMin } : {})
-        };
+            ...(f.minDurationMin ? { minDurationMin: f.minDurationMin } : {}),
+            ...(f.duration != null ? { duration: parseInt(f.duration) || null } : {}),
+            ...(f.availableDays ? { availableDays: f.availableDays } : {}),
+            ...(f.mustScheduleWhenAvailable ? { mustScheduleWhenAvailable: true } : 
+                {})
     }
 
     // =========================================================================
