@@ -3737,9 +3737,17 @@ function loadCurrentOverrides() {
 function init() {
   container = document.getElementById("daily-adjustments-content");
   if (!container) { console.error("Daily Adjustments: container not found"); return; }
-  
-  masterSettings.global = window.loadGlobalSettings?.() || {};
-  masterSettings.app1 = masterSettings.global.app1 || {};
+
+  if (window.isAutoMode?.()) {
+      container.innerHTML = '';
+      const autoContainer = document.createElement('div');
+      autoContainer.style.padding = '16px';
+      container.appendChild(autoContainer);
+      window.renderAutoBuilder?.(autoContainer);
+      return;
+  }
+
+  masterSettings.global = window.loadGlobalSettings?.() || {};  masterSettings.app1 = masterSettings.global.app1 || {};
   masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
   masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
   smartTileHistory = loadSmartTileHistory();
