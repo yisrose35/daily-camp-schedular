@@ -3633,6 +3633,9 @@ function getMainHTML() {
         <div id="da-pane-resources" class="da-pane">
           <div id="da-resources-container"></div>
         </div>
+        <div id="da-pane-fluid" class="da-pane">
+          <div id="da-fluid-container"></div>
+        </div>
       </div>
     </div>
   `;
