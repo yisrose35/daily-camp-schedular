@@ -903,12 +903,12 @@
         setupDivisionButtons();
         renderDivisionDetailPane();
         
-        window.renderAutoModeToggle?.(document.getElementById('schedule-mode-toggle'));
+        const modeToggleEl = document.getElementById('schedule-mode-toggle');
+        if (modeToggleEl) window.renderAutoModeToggle?.(modeToggleEl);
         console.log(`[app1] v${VERSION} initialized — grades are scheduling units`);
     }
 
     // ==================== WINDOW EXPORTS ====================
-    
     window.initApp1 = initApp1;
     
     window.getDivisions = () => state.divisions;
