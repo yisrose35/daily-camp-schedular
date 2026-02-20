@@ -3657,6 +3657,9 @@ function setupSubTabs() {
       if (pane) pane.classList.add('active');
       
       activeSubTab = tabId;
+      if (tabId === 'fluid') {
+          window.initFluidConfigPanel?.(container.querySelector('#da-fluid-container'));
+      }
     };
   });
 }
