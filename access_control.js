@@ -545,8 +545,26 @@
         // ★★★ CRITICAL FIX v3.6: Default to VIEWER for safety ★★★
         // Invited users who fell through should NOT get owner access
         // =====================================================================
+       // ★★★ v3.12 FIX: Trust localStorage if landing.js already set role ★★★
+        const lsRole = localStorage.getItem('campistry_role');
+        const lsCampId = localStorage.getItem('campistry_camp_id');
+
+        if (lsRole && lsCampId && lsRole !== 'viewer') {
+            console.log("🔐 ⚠️ No camp in DB yet but localStorage says role=" + lsRole + " — trusting");
+            _currentRole = lsRole;
+            _isTeamMember = localStorage.getItem('campistry_is_team_member') === 'true';
+            _campId = lsCampId;
+            _userName = _currentUser.email.split('@')[0];
+            _userSubdivisionIds = [];
+            _directDivisionAssignments = [];
+            _roleVerifiedFromDB = false;
+            localStorage.setItem('campistry_user_id', _campId);
+            localStorage.setItem('campistry_auth_user_id', _currentUser.id);
+            return;
+        }
+
         console.log("🔐 ⚠️ No camp association found - defaulting to VIEWER for safety");
-        _currentRole = ROLES.VIEWER;  // ★★★ SAFE DEFAULT - NOT OWNER! ★★★
+        _currentRole = ROLES.VIEWER;  // ★★★ SAFE DEFAULT - NOT OWNER!
         _isTeamMember = false;
         _campId = _currentUser.id;
         _campName = 'Unknown Camp';
