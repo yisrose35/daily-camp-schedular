@@ -904,6 +904,12 @@
         renderDivisionDetailPane();
         
         console.log(`[app1] v${VERSION} initialized — grades are scheduling units`);
+        setupDivisionButtons();
+    renderDivisionDetailPane();
+    
+    window.renderAutoModeToggle?.(document.getElementById('schedule-mode-toggle'));
+    console.log(`[app1] v${VERSION} initialized — grades are scheduling units`);
+}
     }
 
     // ==================== WINDOW EXPORTS ====================
