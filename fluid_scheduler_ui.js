@@ -48,7 +48,7 @@
 
         const desc = document.createElement("p");
         desc.style.cssText = "font-size:0.85rem; color:#6b7280; margin:0 0 14px 0;";
-        desc.innerHTML = 'How long this activity takes when scheduled. Used by the <strong>Fluid Scheduler</strong> to build time slots around activity needs. In structured mode, helps validate slot sizes.';
+        desc.innerHTML = 'How long this activity takes when scheduled. Used by the <strong>Auto Scheduler</strong> to build time slots around activity needs. In structured mode, helps validate slot sizes.';
         container.appendChild(desc);
 
         const inputArea = document.createElement("div");
@@ -283,6 +283,6 @@
     window.renderDurationSettings = renderDurationSettings;
     window.renderFluidModeSettings = renderFluidModeSettings;
 
-    console.log('🌊 Fluid Scheduler UI components loaded');
+    console.log('🌊 Auto Scheduler UI components loaded');
 
 })();
