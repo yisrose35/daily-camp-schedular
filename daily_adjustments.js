@@ -3610,6 +3610,7 @@ function getMainHTML() {
           <button class="da-subtab" data-tab="trips">Trips</button>
           <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
           <button class="da-subtab" data-tab="resources">Resources</button>
+          <button class="da-subtab" data-tab="fluid">Fluid Mode</button>
         </div>
         
         <div id="da-pane-skeleton" class="da-pane active">
