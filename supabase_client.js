@@ -295,14 +295,27 @@
             // New users will be redirected to create a camp in the auth flow
             // Invited users who fell through should NOT get owner access
             // =================================================================
+            // ★★★ v5.4 FIX: Trust localStorage if landing.js already set role ★★★
+            // During signup, landing.js sets role='owner' + camp_id BEFORE the
+            // camps.insert() finishes. onAuthStateChange fires detectCampAndRole()
+            // which races here before the row exists. Trust localStorage.
+            const lsRole = localStorage.getItem(CONFIG.CACHE_KEYS.ROLE);
+            const lsCampId = localStorage.getItem(CONFIG.CACHE_KEYS.CAMP_ID);
+
+            if (lsRole && lsCampId && lsRole !== 'viewer') {
+                log('⚠️ No camp in DB yet but localStorage says role=' + lsRole + ' — trusting (mid-signup)');
+                _campId = lsCampId;
+                _role = lsRole;
+                _isTeamMember = localStorage.getItem(CONFIG.CACHE_KEYS.IS_TEAM_MEMBER) === 'true';
+                _roleVerifiedFromDB = false;  // Will re-verify on next page load
+                return;
+            }
+
             log('⚠️ No camp association found - defaulting to VIEWER for safety');
             _campId = _userId;
-            _role = 'viewer';  // ★★★ SAFE DEFAULT - NOT OWNER! ★★★
+            _role = 'viewer';
             _isTeamMember = false;
-            _roleVerifiedFromDB = true;  // ★★★ V-002: Still verified (verified as "no association") ★★★
-            // Don't cache uncertain state - let next page load verify
-            // cacheValues();
-
+            _roleVerifiedFromDB = true;
         } catch (e) {
             logError('Camp/role detection failed:', e);
             // ★★★ V-002: On error, do NOT mark as verified — use safe default ★★★
