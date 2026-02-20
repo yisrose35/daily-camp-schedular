@@ -1,41 +1,36 @@
 // =================================================================
-// auto_build_engine.js — Constraint-Based Schedule Planner Engine
-// v1.0
+// auto_build_engine.js — Constraint-Based Schedule Planner v2.0
 // =================================================================
-// PURE LOGIC — no DOM, no UI. Takes a config describing what a
-// division's day should look like and produces an ordered skeleton.
+// Takes a flat list of "what needs to happen today" and arranges
+// it into a valid day timeline.
 //
-// KEY CONCEPT: Instead of manually placing blocks at exact times,
-// the user defines WHAT needs to happen + CONSTRAINTS, and this
-// engine figures out WHEN and in what ORDER.
+// Each item is simple:
+//   { name, type, minDuration, maxDuration, windowStart?, windowEnd?, fixed? }
 //
-// Inputs:
-//   - Activity blocks: "2× Sports, 1× Special, 1× Swim"
-//   - Fixed events: "Lunch = 20min, between 11:30am-1:30pm"
-//   - Availability windows: "Activity Master available 11:20-12:20"
-//   - Time constraints: "Swim must be between 1:00-3:00" (hard/soft)
-//   - Division time bounds: start and end of day
+// Example input:
+//   - Activity, 20-40min, anytime
+//   - Lunch, 20min, between 1pm-2pm
+//   - Art Show, 60min, 2:00-3:00 FIXED
+//   - Special, 30min, anytime
 //
-// Output:
-//   - Ordered array of skeleton blocks with calculated start/end times
+// Engine places fixed items first, then windowed, then flexible.
 //
 // LOAD ORDER: Before auto_build_ui.js
 // =================================================================
 (function() {
 'use strict';
 
-// =================================================================
-// TIME HELPERS
-// =================================================================
 function parseTime(str) {
-    if (!str) return null;
+    if (str === null || str === undefined) return null;
     if (typeof str === 'number') return str;
-    let s = str.toLowerCase().trim();
+    let s = String(str).toLowerCase().trim();
+    if (!s) return null;
     const isPM = s.includes('pm');
     const isAM = s.includes('am');
     s = s.replace(/am|pm/g, '').trim();
     const parts = s.split(':');
     let h = parseInt(parts[0], 10);
+    if (isNaN(h)) return null;
     const m = parseInt(parts[1], 10) || 0;
     if (isPM && h !== 12) h += 12;
     if (isAM && h === 12) h = 0;
@@ -43,448 +38,188 @@ function parseTime(str) {
 }
 
 function fmtTime(min) {
+    if (min == null) return '';
     let h = Math.floor(min / 60), m = min % 60, ap = h >= 12 ? 'pm' : 'am';
     h = h % 12 || 12;
     return h + ':' + String(m).padStart(2, '0') + ap;
 }
 
 const SNAP = 5;
-function snap(min) { return Math.round(min / SNAP) * SNAP; }
+function snap(v) { return Math.round(v / SNAP) * SNAP; }
 
 // =================================================================
-// MAIN SOLVER
+// SOLVER
 // =================================================================
-
-/**
- * Solve a schedule for one division given a config.
- *
- * @param {Object} config - The auto-build configuration
- *   .blocks[]         - Activity block requirements
- *   .fixedEvents[]    - Fixed events with flexible bounds
- *   .availabilities[] - Activity availability windows
- *   .defaultDuration  - Default block duration in minutes
- *
- * @param {string} divName - Division name
- * @param {number} dayStartMin - Division day start (minutes)
- * @param {number} dayEndMin   - Division day end (minutes)
- * @param {string} [currentDay] - Day of week for availability filtering
- *
- * @returns {Object} { placements[], warnings[], error? }
- */
-function solveSchedule(config, divName, dayStartMin, dayEndMin, currentDay) {
+function solve(items, dayStart, dayEnd) {
     const warnings = [];
-    const dur = config.defaultDuration || 50;
+    const placed = [];
 
-    // ─────────────────────────────────────────────────
-    // 1. EXPAND blocks into individual items
-    // ─────────────────────────────────────────────────
-    const activityItems = [];
-    (config.blocks || []).forEach(block => {
-        for (let i = 0; i < (block.count || 1); i++) {
-            activityItems.push({
-                role: 'activity',
-                type: block.type,
-                event: mapTypeToEvent(block.type),
-                skeletonType: mapTypeToSkeletonType(block.type),
-                duration: block.duration || dur,
-                constraint: block.constraint ? {
-                    startMin: parseTime(block.constraint.start),
-                    endMin: parseTime(block.constraint.end),
-                    hard: block.constraintType === 'hard'
-                } : null,
-                extra: block.extra || {}
-            });
-        }
+    const parsed = items.map(item => {
+        const ws = parseTime(item.windowStart);
+        const we = parseTime(item.windowEnd);
+        const minD = item.minDuration || 20;
+        const maxD = item.maxDuration || item.minDuration || 50;
+        let cls = 'flexible';
+        if (item.fixed && ws != null && we != null) cls = 'fixed';
+        else if (ws != null && we != null) cls = 'windowed';
+        return { ...item, _ws: ws, _we: we, _minD: minD, _maxD: maxD, _cls: cls };
     });
 
-    // ─────────────────────────────────────────────────
-    // 2. PARSE fixed events
-    // ─────────────────────────────────────────────────
-    const fixedItems = (config.fixedEvents || []).map(ev => ({
-        role: ev.type === 'wall' ? 'wall' : 'fixed',
-        event: ev.event,
-        skeletonType: 'pinned',
-        duration: ev.duration || 20,
-        earliestMin: parseTime(ev.earliest),
-        latestEndMin: parseTime(ev.latest),
-        extra: {}
-    }));
+    const fixed    = parsed.filter(p => p._cls === 'fixed');
+    const windowed = parsed.filter(p => p._cls === 'windowed');
+    const flexible = parsed.filter(p => p._cls === 'flexible');
 
-    // ─────────────────────────────────────────────────
-    // 3. PARSE availability windows
-    // ─────────────────────────────────────────────────
-    const availMap = {};
-    (config.availabilities || []).forEach(av => {
-        // Optional day-of-week filter
-        if (av.days && av.days.length > 0 && currentDay) {
-            const dayAbbrev = currentDay.substring(0, 3);
-            if (!av.days.some(d => d.toLowerCase().startsWith(dayAbbrev.toLowerCase()))) {
-                return; // Not available today
+    function overlaps(s, e) {
+        return placed.some(p => s < p.e && e > p.s);
+    }
+
+    function findGap(earliest, latest, dur) {
+        const occ = placed
+            .filter(p => p.s < latest && p.e > earliest)
+            .sort((a, b) => a.s - b.s);
+        let cursor = snap(Math.max(earliest, dayStart));
+        for (const o of occ) {
+            if (cursor + dur <= o.s) return cursor;
+            cursor = Math.max(cursor, snap(o.e));
+        }
+        if (cursor + dur <= Math.min(latest, dayEnd)) return cursor;
+        return null;
+    }
+
+    // Phase 1: Fixed items
+    fixed.sort((a, b) => a._ws - b._ws);
+    for (const item of fixed) {
+        const s = snap(item._ws);
+        const e = snap(item._we);
+        if (overlaps(s, e)) {
+            warnings.push(`"${item.name}" overlaps another fixed item`);
+        }
+        placed.push({ s, e, item });
+    }
+
+    // Phase 2: Windowed items (tightest window first)
+    windowed.sort((a, b) => (a._we - a._ws) - (b._we - b._ws));
+    for (const item of windowed) {
+        const earliest = Math.max(item._ws, dayStart);
+        const latest = Math.min(item._we, dayEnd);
+        let done = false;
+        for (let dur = item._maxD; dur >= item._minD; dur -= SNAP) {
+            const start = findGap(earliest, latest, dur);
+            if (start != null) {
+                placed.push({ s: start, e: start + dur, item });
+                done = true;
+                break;
             }
         }
-        availMap[av.name.toLowerCase().trim()] = {
-            name: av.name,
-            startMin: parseTime(av.start),
-            endMin: parseTime(av.end)
-        };
-    });
-
-    // ─────────────────────────────────────────────────
-    // 4. FIND the wall (dismissal)
-    // ─────────────────────────────────────────────────
-    let wallMin = dayEndMin;
-    const wallItem = fixedItems.find(f => f.role === 'wall');
-    if (wallItem) {
-        wallMin = wallItem.earliestMin || dayEndMin;
-    }
-
-    // ─────────────────────────────────────────────────
-    // 5. CLASSIFY items by constraint strength
-    // ─────────────────────────────────────────────────
-    // Priority order for placement:
-    //   A. Availability-bound activities (must happen in specific window)
-    //   B. Hard-constrained activities (must happen in time range)
-    //   C. Fixed events (lunch, snack — have bounds but are flexible)
-    //   D. Soft-constrained activities (prefer a window)
-    //   E. Unconstrained activities (go anywhere)
-
-    const availBound = [];    // A: matched to availability windows
-    const hardConstrained = []; // B: hard time constraints
-    const softConstrained = []; // D: soft time constraints
-    const unconstrained = [];   // E: no constraints
-
-    activityItems.forEach(item => {
-        // Check if this activity type matches an availability window
-        const availMatch = findAvailabilityMatch(item, availMap);
-        if (availMatch) {
-            item.constraint = {
-                startMin: availMatch.startMin,
-                endMin: availMatch.endMin,
-                hard: true
-            };
-            item._availName = availMatch.name;
-            availBound.push(item);
-        } else if (item.constraint && item.constraint.hard) {
-            hardConstrained.push(item);
-        } else if (item.constraint && !item.constraint.hard) {
-            softConstrained.push(item);
-        } else {
-            unconstrained.push(item);
-        }
-    });
-
-    // Fixed events (not the wall)
-    const fixedNonWall = fixedItems.filter(f => f.role === 'fixed');
-
-    // ─────────────────────────────────────────────────
-    // 6. PLACE items using interval scheduling
-    // ─────────────────────────────────────────────────
-    // We build a timeline of occupied intervals and place items
-    // in priority order, finding the best valid slot for each.
-
-    const placed = []; // { startMin, endMin, item }
-
-    // Helper: check if a proposed interval conflicts with already-placed items
-    function conflicts(startMin, endMin) {
-        return placed.some(p => startMin < p.endMin && endMin > p.startMin);
-    }
-
-    // Helper: find the best start time for an item within bounds
-    function findSlot(item, boundsStart, boundsEnd) {
-        const needed = item.duration;
-        // Try exact start first
-        for (let t = snap(boundsStart); t + needed <= boundsEnd; t += SNAP) {
-            if (!conflicts(t, t + needed)) {
-                return t;
-            }
-        }
-        return null; // no valid slot found
-    }
-
-    // --- A. Place availability-bound activities ---
-    // Sort by window start (earliest first)
-    availBound.sort((a, b) => a.constraint.startMin - b.constraint.startMin);
-    availBound.forEach(item => {
-        const ws = Math.max(item.constraint.startMin, dayStartMin);
-        const we = Math.min(item.constraint.endMin, wallMin);
-        const start = findSlot(item, ws, we);
-        if (start !== null) {
-            placed.push({ startMin: start, endMin: start + item.duration, item });
-        } else {
-            warnings.push(`"${item._availName || item.event}" could not fit in window ${fmtTime(ws)}-${fmtTime(we)}`);
-            // Fallback: place it unconstrained
-            unconstrained.push(item);
-        }
-    });
-
-    // --- B. Place hard-constrained activities ---
-    hardConstrained.sort((a, b) => a.constraint.startMin - b.constraint.startMin);
-    hardConstrained.forEach(item => {
-        const ws = Math.max(item.constraint.startMin, dayStartMin);
-        const we = Math.min(item.constraint.endMin, wallMin);
-        const start = findSlot(item, ws, we);
-        if (start !== null) {
-            placed.push({ startMin: start, endMin: start + item.duration, item });
-        } else {
-            warnings.push(`"${item.event}" HARD constraint ${fmtTime(ws)}-${fmtTime(we)} could not be satisfied`);
-        }
-    });
-
-    // --- C. Place fixed events (lunch, snack) ---
-    // Sort by earliest bound
-    fixedNonWall.sort((a, b) => (a.earliestMin || 0) - (b.earliestMin || 0));
-    fixedNonWall.forEach(item => {
-        const es = Math.max(item.earliestMin || dayStartMin, dayStartMin);
-        const le = Math.min(item.latestEndMin || wallMin, wallMin);
-        const start = findSlot(item, es, le);
-        if (start !== null) {
-            placed.push({ startMin: start, endMin: start + item.duration, item });
-        } else {
-            // Try wider range
-            const fallback = findSlot(item, dayStartMin, wallMin);
-            if (fallback !== null) {
-                placed.push({ startMin: fallback, endMin: fallback + item.duration, item });
-                warnings.push(`"${item.event}" placed outside preferred bounds`);
+        if (!done) {
+            const fb = findGap(dayStart, dayEnd, item._minD);
+            if (fb != null) {
+                placed.push({ s: fb, e: fb + item._minD, item });
+                warnings.push(`"${item.name}" placed outside its preferred window`);
             } else {
-                warnings.push(`"${item.event}" could not be placed at all`);
+                warnings.push(`"${item.name}" — no room in day`);
             }
         }
-    });
-
-    // --- D. Place soft-constrained activities ---
-    softConstrained.sort((a, b) => a.constraint.startMin - b.constraint.startMin);
-    softConstrained.forEach(item => {
-        const ws = Math.max(item.constraint.startMin, dayStartMin);
-        const we = Math.min(item.constraint.endMin, wallMin);
-        let start = findSlot(item, ws, we);
-        if (start !== null) {
-            placed.push({ startMin: start, endMin: start + item.duration, item });
-        } else {
-            // Soft — fall back to anywhere
-            start = findSlot(item, dayStartMin, wallMin);
-            if (start !== null) {
-                placed.push({ startMin: start, endMin: start + item.duration, item });
-                warnings.push(`"${item.event}" placed outside preferred window`);
-            } else {
-                warnings.push(`"${item.event}" could not be placed`);
-            }
-        }
-    });
-
-    // --- E. Place unconstrained activities ---
-    unconstrained.forEach(item => {
-        const start = findSlot(item, dayStartMin, wallMin);
-        if (start !== null) {
-            placed.push({ startMin: start, endMin: start + item.duration, item });
-        } else {
-            warnings.push(`"${item.event}" — no room left in the day`);
-        }
-    });
-
-    // --- Add wall (dismissal) ---
-    if (wallItem) {
-        placed.push({
-            startMin: wallMin,
-            endMin: wallMin + (wallItem.duration || 20),
-            item: wallItem
-        });
     }
 
-    // ─────────────────────────────────────────────────
-    // 7. COMPACT — close gaps between blocks
-    // ─────────────────────────────────────────────────
-    placed.sort((a, b) => a.startMin - b.startMin);
-    const compacted = compactSchedule(placed, dayStartMin, wallMin, warnings);
+    // Phase 3: Flexible items
+    for (const item of flexible) {
+        let done = false;
+        for (let dur = item._maxD; dur >= item._minD; dur -= SNAP) {
+            const start = findGap(dayStart, dayEnd, dur);
+            if (start != null) {
+                placed.push({ s: start, e: start + dur, item });
+                done = true;
+                break;
+            }
+        }
+        if (!done) warnings.push(`"${item.name}" — no room left`);
+    }
 
-    // ─────────────────────────────────────────────────
-    // 8. BUILD output placements
-    // ─────────────────────────────────────────────────
-    const placements = compacted.map(p => ({
-        startMin: p.startMin,
-        endMin: p.endMin,
-        event: p.item.event,
-        skeletonType: p.item.skeletonType,
-        role: p.item.role,
-        extra: p.item.extra || {}
-    }));
+    // Phase 4: Sort and compact
+    placed.sort((a, b) => a.s - b.s);
+    compact(placed, dayStart, dayEnd);
 
-    return { placements, warnings };
+    // Phase 5: Output
+    return {
+        placements: placed.map(p => ({
+            startMin: p.s,
+            endMin: p.e,
+            startTime: fmtTime(p.s),
+            endTime: fmtTime(p.e),
+            duration: p.e - p.s,
+            name: p.item.name,
+            type: p.item.type,
+            skeletonType: toSkeletonType(p.item.type),
+            skeletonEvent: toSkeletonEvent(p.item.type, p.item.name),
+            fixed: !!p.item.fixed
+        })),
+        warnings,
+        totalUsed: placed.reduce((sum, p) => sum + (p.e - p.s), 0),
+        totalAvailable: dayEnd - dayStart
+    };
 }
 
-// =================================================================
-// COMPACTION — close gaps between placed blocks
-// =================================================================
-
-function compactSchedule(placed, dayStartMin, wallMin, warnings) {
-    if (placed.length === 0) return placed;
-
-    // Separate wall from the rest
-    const wall = placed.find(p => p.item.role === 'wall');
-    const nonWall = placed.filter(p => p.item.role !== 'wall');
-
-    // Sort by start time
-    nonWall.sort((a, b) => a.startMin - b.startMin);
-
-    // Two-phase compaction:
-    // Phase 1: Respect constrained items' positions, compact unconstrained around them
-    // Phase 2: Close remaining gaps by sliding blocks forward
-
-    const anchored = []; // Items that must stay at their position (constrained/fixed)
-    const floating = []; // Items that can slide
-
-    nonWall.forEach(p => {
-        if (p.item.constraint && p.item.constraint.hard) {
-            anchored.push(p);
-        } else if (p.item.role === 'fixed') {
-            // Fixed events: check if they're near their earliest bound
-            anchored.push(p); // Keep them where the solver put them
-        } else {
-            floating.push(p);
+function compact(placed, dayStart, dayEnd) {
+    let cursor = dayStart;
+    for (let i = 0; i < placed.length; i++) {
+        const p = placed[i];
+        if (p.item._cls === 'fixed') {
+            cursor = Math.max(cursor, p.e);
+            continue;
         }
-    });
-
-    // Rebuild timeline: start from dayStartMin, place floating blocks
-    // in gaps around anchored blocks
-    const timeline = [];
-    const anchoredSet = new Set(anchored);
-
-    // Merge all into one sorted list
-    const all = [...nonWall].sort((a, b) => a.startMin - b.startMin);
-
-    let cursor = dayStartMin;
-    all.forEach(p => {
-        if (anchoredSet.has(p)) {
-            // Anchored: jump cursor to its position if needed
-            if (cursor < p.startMin) {
-                cursor = p.startMin;
-            }
-            // If cursor is past the anchored item's start, we have overlap — leave as is
-            timeline.push({ ...p, startMin: p.startMin, endMin: p.endMin });
-            cursor = Math.max(cursor, p.endMin);
-        } else {
-            // Floating: slide to cursor (compact forward)
-            // But don't overlap any anchored items
-            let bestStart = cursor;
-
-            // Check if sliding here would overlap an anchored item
-            for (const a of anchored) {
-                if (bestStart < a.endMin && bestStart + p.item.duration > a.startMin) {
-                    // Overlap — push past the anchor
-                    bestStart = a.endMin;
+        if (p.item._cls === 'windowed' && p.item._ws != null) {
+            cursor = Math.max(cursor, p.item._ws);
+        }
+        if (cursor < p.s) {
+            // Check we won't collide with a fixed item
+            const dur = p.e - p.s;
+            let target = cursor;
+            for (const other of placed) {
+                if (other === p) continue;
+                if (other.item._cls === 'fixed' && target < other.e && target + dur > other.s) {
+                    target = other.e;
+                    if (p.item._cls === 'windowed' && p.item._ws != null) {
+                        target = Math.max(target, p.item._ws);
+                    }
                 }
             }
-
-            if (bestStart + p.item.duration > wallMin) {
-                // Doesn't fit after compaction — keep original position
-                timeline.push(p);
-                warnings.push(`"${p.item.event}" could not be compacted — may have a gap`);
-            } else {
-                timeline.push({ ...p, startMin: bestStart, endMin: bestStart + p.item.duration });
-            }
-            cursor = Math.max(cursor, bestStart + p.item.duration);
+            p.s = target;
+            p.e = target + dur;
         }
-    });
-
-    // Add wall back
-    if (wall) timeline.push(wall);
-
-    return timeline.sort((a, b) => a.startMin - b.startMin);
+        cursor = p.e;
+    }
 }
 
-// =================================================================
-// HELPERS
-// =================================================================
-
-function findAvailabilityMatch(item, availMap) {
-    // Check if the activity type's event name matches an availability entry
-    const eventLower = (item.event || '').toLowerCase().trim();
-    if (availMap[eventLower]) return availMap[eventLower];
-
-    // Also check the skeleton type name
-    const typeLower = (item.type || '').toLowerCase().trim();
-    if (availMap[typeLower]) return availMap[typeLower];
-
-    return null;
-}
-
-function mapTypeToEvent(type) {
-    const map = {
-        'activity': 'General Activity Slot',
-        'sports': 'Sports Slot',
-        'special': 'Special Activity',
-        'league': 'League Game',
-        'specialty_league': 'Specialty League',
-        'swim': 'Swim',
-        'smart': 'Smart Tile',
-        'split': 'Split Activity',
-        'elective': 'Elective'
+function toSkeletonType(type) {
+    const m = {
+        activity:'slot', sports:'slot', special:'slot',
+        league:'league', specialty_league:'specialty_league',
+        swim:'pinned', lunch:'pinned', snack:'pinned', snacks:'pinned',
+        dismissal:'pinned', custom:'pinned',
+        smart:'smart', split:'split', elective:'elective'
     };
-    return map[type] || type;
+    return m[(type || '').toLowerCase()] || 'slot';
 }
 
-function mapTypeToSkeletonType(type) {
-    const map = {
-        'activity': 'slot',
-        'sports': 'slot',
-        'special': 'slot',
-        'league': 'league',
-        'specialty_league': 'specialty_league',
-        'swim': 'pinned',
-        'smart': 'smart',
-        'split': 'split',
-        'elective': 'elective'
+function toSkeletonEvent(type, name) {
+    const m = {
+        activity:'General Activity Slot', sports:'Sports Slot',
+        special:'Special Activity', league:'League Game',
+        specialty_league:'Specialty League'
     };
-    return map[type] || type;
+    return m[(type || '').toLowerCase()] || name || type || 'Activity';
 }
 
-// =================================================================
-// VALIDATION — check config before solving
-// =================================================================
-
-function validateConfig(config, dayStartMin, dayEndMin) {
+function validate(items, dayStart, dayEnd) {
     const errors = [];
-    const dur = config.defaultDuration || 50;
-
-    // Calculate total time needed
-    let totalNeeded = 0;
-    (config.blocks || []).forEach(b => {
-        totalNeeded += (b.count || 1) * (b.duration || dur);
-    });
-    (config.fixedEvents || []).forEach(f => {
-        totalNeeded += f.duration || 20;
-    });
-
-    const totalAvailable = dayEndMin - dayStartMin;
-    if (totalNeeded > totalAvailable) {
-        errors.push(`Total time needed (${totalNeeded}min) exceeds available time (${totalAvailable}min)`);
+    let totalMin = 0;
+    items.forEach(i => { totalMin += i.minDuration || 20; });
+    if (totalMin > dayEnd - dayStart) {
+        errors.push(`Need ${totalMin}min but day is only ${dayEnd - dayStart}min`);
     }
-
-    // Check for impossible constraints
-    (config.blocks || []).forEach(b => {
-        if (b.constraint && b.constraintType === 'hard') {
-            const ws = parseTime(b.constraint.start);
-            const we = parseTime(b.constraint.end);
-            if (ws !== null && we !== null) {
-                const window = we - ws;
-                const needed = (b.duration || dur) * (b.count || 1);
-                if (needed > window) {
-                    errors.push(`${mapTypeToEvent(b.type)} needs ${needed}min but hard window is only ${window}min`);
-                }
-            }
-        }
-    });
-
     return errors;
 }
 
-// =================================================================
-// PUBLIC API
-// =================================================================
-window.AutoBuildEngine = {
-    solveSchedule,
-    validateConfig,
-    parseTime,
-    fmtTime
-};
-
+window.AutoBuildEngine = { solve, validate, parseTime, fmtTime };
 })();
