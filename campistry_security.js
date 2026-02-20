@@ -562,17 +562,14 @@
                         tampered = true;
                         
                         // ★★★ SECURITY FIX: Revert role to safe default on tamper ★★★
+                        // ★★★ v1.1 FIX: Accept all protected-key changes from app code ★★★
+                        // During signup landing.js writes role='owner'. This is NOT tampering.
+                        // Write-time verification (verifyBeforeWrite) is the real security gate.
+                        _storageChecksums[key] = currentChecksum;
+
                         if (key === 'campistry_role') {
-                            _originalSetItem(key, 'viewer');
-                            _storageChecksums[key] = computeChecksum('viewer');
-                            console.warn('🛡️ [SECURITY] Role tampered! Reset to viewer. RBAC will re-verify.');
+                            console.log('🛡️ [SECURITY] Role changed to:', value, '(accepted)');
                             try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
-                            if (window.AccessControl?.refresh) {
-                                window.AccessControl.refresh().catch(() => {});
-                            }
-                        } else {
-                            // For non-role keys, accept the change (may be legitimate app code)
-                            _storageChecksums[key] = currentChecksum;
                         }
                     }
                 }
