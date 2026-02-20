@@ -2503,10 +2503,14 @@ function renderToolbar() {
 // RUN OPTIMIZER
 // =================================================================
 async function runOptimizer() {
-  if (!window.AccessControl?.checkEditAccess?.('run optimizer')) return;
-  if (!window.runSkeletonOptimizer) { await daShowAlert("Error: 'runSkeletonOptimizer' not found."); return; }
-  if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
-  saveDailySkeleton();
+    if (!window.AccessControl?.checkEditAccess?.('run optimizer')) return;
+    if (!window.runSkeletonOptimizer) { await daShowAlert("Error: 'runSkeletonOptimizer' not found."); return; }
+    if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
+    saveDailySkeleton();
+
+    if (window.SchedulerCoreUtils?.hydrateLocalStorageFromCloud) {
+        await window.SchedulerCoreUtils.hydrateLocalStorageFromCloud();
+    }
 
   // ★★★ PRE-GENERATION CLEAR (v4 — FULL WIPE) ★★★
   const dateKey = window.currentScheduleDate;

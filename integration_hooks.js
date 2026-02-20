@@ -729,6 +729,12 @@
                 }
 
                 console.log('🔗 ✅ Schedule loaded from cloud:', bunkCount, 'bunks');
+                if (window.SchedulerCoreUtils?.hydrateLocalStorageFromCloud) {
+                    console.log('🔗 Hydrating localStorage with all cloud schedule dates...');
+                    window.SchedulerCoreUtils.hydrateLocalStorageFromCloud().then(ok => {
+                        if (ok) console.log('🔗 ✅ localStorage hydrated with cloud history');
+                    });
+                }
                 return result;
             } else {
                 log('[CLOUD LOAD] No cloud data found');
@@ -1230,7 +1236,13 @@
             await verifiedScheduleSave(dateKey);
             
             // Rebuild counts if available
-            if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+            if (window.SchedulerCoreUtils?.reIncrementHistoricalCounts) {
+                window.SchedulerCoreUtils.reIncrementHistoricalCounts(
+                    dateKey,
+                    window.scheduleAssignments || {},
+                    true
+                );
+            } else if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
                 window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
             }
         }, { once: false });

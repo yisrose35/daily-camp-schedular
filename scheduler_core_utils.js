@@ -1998,7 +1998,7 @@
      */
     Utils.rebuildHistoricalCounts = function(saveToCloud = true) {
         console.log('📊 [SchedulerCoreUtils] Rebuilding historical counts from all schedules...');
-
+        const validActivities = Utils.getValidActivityNames();
         const allDaily = window.loadAllDailyData?.() || {};
         const counts = {};
         let totalActivities = 0;
@@ -2022,6 +2022,7 @@
                             return;
                         }
 
+                        if (!validActivities.has(actName)) return;
                         counts[bunk] = counts[bunk] || {};
                         counts[bunk][actName] = (counts[bunk][actName] || 0) + 1;
                         totalActivities++;
@@ -2048,6 +2049,253 @@
 
     // Export for easy console access
     window.rebuildHistoricalCounts = Utils.rebuildHistoricalCounts;
+
+    let _hydrateInProgress = false;
+    let _lastHydrateTime = 0;
+    const HYDRATE_COOLDOWN_MS = 60000;
+
+    Utils.hydrateLocalStorageFromCloud = async function(force = false) {
+        if (_hydrateInProgress) {
+            console.log('📊 [Hydrate] Already in progress, skipping');
+            return false;
+        }
+
+        if (!force && (Date.now() - _lastHydrateTime < HYDRATE_COOLDOWN_MS)) {
+            console.log('📊 [Hydrate] Cooldown active, using cached data');
+            return true;
+        }
+
+        if (!window.ScheduleDB?.loadDateRange) {
+            console.log('📊 [Hydrate] ScheduleDB not available');
+            return false;
+        }
+
+        _hydrateInProgress = true;
+
+        try {
+            console.log('📊 [Hydrate] Fetching ALL schedule dates from cloud...');
+
+            const today = new Date();
+            const start = new Date(today);
+            start.setDate(start.getDate() - 90);
+
+            const startStr = start.toISOString().split('T')[0];
+            const endStr = today.toISOString().split('T')[0];
+
+            const records = await window.ScheduleDB.loadDateRange(startStr, endStr);
+
+            if (!records || records.length === 0) {
+                console.log('📊 [Hydrate] No cloud records found');
+                _hydrateInProgress = false;
+                _lastHydrateTime = Date.now();
+                return false;
+            }
+
+            console.log(`📊 [Hydrate] Got ${records.length} cloud records, merging...`);
+
+            const DAILY_KEY = 'campDailyData_v1';
+            let allLocal = {};
+            try {
+                allLocal = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+            } catch (e) {
+                allLocal = {};
+            }
+
+            const datesSeen = new Set();
+            records.forEach(record => {
+                const dk = record.date_key;
+                if (!dk || !/^\d{4}-\d{2}-\d{2}$/.test(dk)) return;
+
+                datesSeen.add(dk);
+                const sd = record.schedule_data || {};
+                const localDate = allLocal[dk];
+                const cloudUpdated = record.updated_at ? new Date(record.updated_at).getTime() : 0;
+                const localUpdated = localDate?._savedAt || localDate?.savedAt || 0;
+                const localSavedTime = typeof localUpdated === 'number' ? localUpdated :
+                    (typeof localUpdated === 'string' ? new Date(localUpdated).getTime() : 0);
+
+                if (!localDate || !localDate.scheduleAssignments ||
+                    Object.keys(localDate.scheduleAssignments).length === 0 ||
+                    cloudUpdated > localSavedTime) {
+
+                    const existingAssignments = localDate?.scheduleAssignments || {};
+                    const cloudAssignments = sd.scheduleAssignments || {};
+
+                    allLocal[dk] = {
+                        ...(localDate || {}),
+                        scheduleAssignments: { ...existingAssignments, ...cloudAssignments },
+                        leagueAssignments: sd.leagueAssignments || localDate?.leagueAssignments || {},
+                        unifiedTimes: sd.unifiedTimes || localDate?.unifiedTimes || [],
+                        divisionTimes: sd.divisionTimes || localDate?.divisionTimes || {},
+                        isRainyDay: sd.isRainyDay ?? localDate?.isRainyDay ?? false,
+                        _hydratedAt: Date.now()
+                    };
+                }
+            });
+
+            try {
+                localStorage.setItem(DAILY_KEY, JSON.stringify(allLocal));
+                console.log(`📊 [Hydrate] ✅ Merged ${datesSeen.size} dates into localStorage. ` +
+                    `Total dates: ${Object.keys(allLocal).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).length}`);
+            } catch (e) {
+                console.warn('📊 [Hydrate] localStorage full, trimming old dates...', e);
+                const dateKeys = Object.keys(allLocal)
+                    .filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k))
+                    .sort();
+
+                while (dateKeys.length > 30) {
+                    delete allLocal[dateKeys.shift()];
+                }
+
+                try {
+                    localStorage.setItem(DAILY_KEY, JSON.stringify(allLocal));
+                    console.log('📊 [Hydrate] ✅ Saved trimmed data (last 30 dates)');
+                } catch (e2) {
+                    console.error('📊 [Hydrate] ❌ Still cannot save:', e2);
+                }
+            }
+
+            _lastHydrateTime = Date.now();
+            _hydrateInProgress = false;
+
+            if (window.RotationEngine?.clearHistoryCache) {
+                window.RotationEngine.clearHistoryCache();
+                console.log('📊 [Hydrate] Cleared rotation cache for fresh history');
+            }
+
+            return true;
+
+        } catch (e) {
+            console.error('📊 [Hydrate] Error:', e);
+            _hydrateInProgress = false;
+            return false;
+        }
+    };
+
+    window.hydrateLocalStorageFromCloud = Utils.hydrateLocalStorageFromCloud;
+
+Utils.getValidActivityNames = function() {
+        const g = window.loadGlobalSettings?.() || {};
+        const fields = g.app1?.fields || [];
+        const specials = g.app1?.specialActivities || [];
+        const valid = new Set();
+        fields.forEach(f => (f.activities || []).forEach(a => valid.add(a)));
+        specials.forEach(s => { if (s.name) valid.add(s.name); });
+        return valid;
+    };
+    Utils.incrementHistoricalCounts = function(dateKey, scheduleAssignments, saveToCloud = true) {
+        console.log(`📊 [SchedulerCoreUtils] Incrementing counts for ${dateKey}...`);
+
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const existingCounts = globalSettings.historicalCounts || {};
+        const countedDates = globalSettings.historicalCountedDates || {};
+
+        if (countedDates[dateKey]) {
+            console.log(`📊 [SchedulerCoreUtils] ${dateKey} already counted, skipping`);
+            return existingCounts;
+        }
+
+        const sched = scheduleAssignments || {};
+        let added = 0;
+const validActivities = Utils.getValidActivityNames();
+        Object.keys(sched).forEach(bunk => {
+            (sched[bunk] || []).forEach(entry => {
+                if (entry && entry._activity && !entry.continuation && !entry._isTransition) {
+                    const actName = entry._activity;
+                    const actLower = actName.toLowerCase();
+                    if (actLower === 'free' || actLower.includes('transition')) return;
+
+                    if (!validActivities.has(actName)) return;
+                    existingCounts[bunk] = existingCounts[bunk] || {};
+                    existingCounts[bunk][actName] = (existingCounts[bunk][actName] || 0) + 1;
+                    added++;
+                }
+            });
+        });
+
+        countedDates[dateKey] = Date.now();
+
+        console.log(`📊 [SchedulerCoreUtils] +${added} activities for ${dateKey}. ` +
+            `Dates counted: ${Object.keys(countedDates).length}`);
+
+        if (saveToCloud && window.saveGlobalSettings) {
+            window.saveGlobalSettings('historicalCounts', existingCounts);
+            window.saveGlobalSettings('historicalCountedDates', countedDates);
+            if (typeof window.forceSyncToCloud === 'function') {
+                setTimeout(() => window.forceSyncToCloud(), 100);
+            }
+        }
+
+        return existingCounts;
+    };
+
+
+    Utils.reIncrementHistoricalCounts = function(dateKey, newScheduleAssignments, saveToCloud = true) {
+        console.log(`📊 [SchedulerCoreUtils] Re-incrementing for ${dateKey}...`);
+
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const existingCounts = globalSettings.historicalCounts || {};
+        const countedDates = globalSettings.historicalCountedDates || {};
+
+        if (countedDates[dateKey]) {
+            const allDaily = window.loadAllDailyData?.() || {};
+            const oldSched = allDaily[dateKey]?.scheduleAssignments || {};
+            let removed = 0;
+const validActivities = Utils.getValidActivityNames();
+            Object.keys(oldSched).forEach(bunk => {
+                (oldSched[bunk] || []).forEach(entry => {
+                    if (entry && entry._activity && !entry.continuation && !entry._isTransition) {
+                        const actName = entry._activity;
+                        const actLower = actName.toLowerCase();
+                        if (actLower === 'free' || actLower.includes('transition')) return;
+
+                        if (!validActivities.has(actName)) return;
+                        if (existingCounts[bunk]?.[actName]) {
+                            existingCounts[bunk][actName] = Math.max(0, existingCounts[bunk][actName] - 1);
+                            removed++;
+                        }
+                    }
+                });
+            });
+
+            delete countedDates[dateKey];
+            console.log(`📊 Subtracted ${removed} old activities`);
+
+            if (window.saveGlobalSettings) {
+                window.saveGlobalSettings('historicalCounts', existingCounts);
+                window.saveGlobalSettings('historicalCountedDates', countedDates);
+            }
+        }
+
+        return Utils.incrementHistoricalCounts(dateKey, newScheduleAssignments, saveToCloud);
+    };
+
+
+    Utils.rebuildHistoricalCountsFromCloud = async function(saveToCloud = true) {
+        console.log('📊 [SchedulerCoreUtils] Full rebuild from cloud...');
+
+        await Utils.hydrateLocalStorageFromCloud(true);
+
+        const result = Utils.rebuildHistoricalCounts(saveToCloud);
+
+        const allDaily = window.loadAllDailyData?.() || {};
+        const countedDates = {};
+        Object.keys(allDaily).forEach(dk => {
+            if (/^\d{4}-\d{2}-\d{2}$/.test(dk) && allDaily[dk]?.scheduleAssignments) {
+                countedDates[dk] = Date.now();
+            }
+        });
+        if (saveToCloud && window.saveGlobalSettings) {
+            window.saveGlobalSettings('historicalCountedDates', countedDates);
+        }
+
+        return result;
+    };
+
+    window.incrementHistoricalCounts = Utils.incrementHistoricalCounts;
+    window.reIncrementHistoricalCounts = Utils.reIncrementHistoricalCounts;
+    window.rebuildHistoricalCountsFromCloud = Utils.rebuildHistoricalCountsFromCloud;
+
 
     // =================================================================
     // ★★★ NEW v7.5: DIAGNOSTIC FUNCTIONS ★★★

@@ -1,3 +1,5 @@
+
+
 // ============================================================================
 // total_solver_engine_part1.js (v15.0 — FULL-GRADE + RAINY DAY)
 // ============================================================================
@@ -510,15 +512,16 @@
         if (actNorm && actNorm !== 'free' && actNorm !== 'free play') {
             var todayDone = getActivitiesDoneToday(bunk, slots[0] ?? 999);
             if (todayDone.has(actNorm)) return 999999;
-            // v14.2: Direct live check bypassing stale cache
+           // v14.3: Direct live check — also check field name for robustness
             var liveSlots = window.scheduleAssignments?.[bunk] || [];
             var mySlotSet = new Set(slots);
             for (var lsi = 0; lsi < liveSlots.length; lsi++) {
                 if (mySlotSet.has(lsi)) continue;
                 var lsEntry = liveSlots[lsi];
                 if (!lsEntry || lsEntry.continuation || lsEntry._isTransition) continue;
-                var lsAct = normName(lsEntry._activity || lsEntry.sport || lsEntry.field);
-                if (lsAct === actNorm) return 999999;
+                var lsAct = normName(lsEntry._activity || lsEntry.sport || '');
+                var lsField = normName(lsEntry.field || '');
+                if ((lsAct && lsAct === actNorm) || (lsField && lsField !== 'free' && lsAct === actNorm)) return 999999;
             }
         }
         if (fieldName && fieldName !== 'Free' && blockDivName && blockStart !== undefined && blockEnd !== undefined) {
@@ -573,9 +576,9 @@
             var sharingEntries = _fieldTimeIndex.get(fieldNorm) || [];
             var fieldOccupied = false, sameActivityOnField = false;
             for (var sei = 0; sei < sharingEntries.length; sei++) { var se = sharingEntries[sei]; if (se.bunk === bunk) continue; if (se.endMin <= blockStart || se.startMin >= blockEnd) continue; fieldOccupied = true; if (se.activityName && se.activityName === actNorm) sameActivityOnField = true; }
-            if (sameActivityOnField) penalty -= 3000;
-            else if (fieldOccupied) penalty += 500;
-            else penalty += 200;
+           if (sameActivityOnField) penalty -= 1500;
+else if (fieldOccupied) penalty += 500;
+else penalty += 200;
         }
         // Fill-to-capacity
         if (fieldName && fieldName !== 'Free' && blockStart !== undefined && blockEnd !== undefined) {
@@ -586,7 +589,7 @@
             for (var fci = 0; fci < fcEntries.length; fci++) { var fce = fcEntries[fci]; if (fce.bunk === bunk) continue; if (fce.endMin <= blockStart || fce.startMin >= blockEnd) continue; if (fce.divName === blockDivName) { fcSameDiv++; if (fce.activityName && fce.activityName !== actNorm) fcSameAct = false; } }
             if (fcCap > 1 && fcSameAct) {
                 var spotsLeft = fcCap - 1 - fcSameDiv;
-                if (fcSameDiv > 0 && spotsLeft >= 0) { var fillRatio = fcSameDiv / (fcCap - 1); penalty -= Math.round(3000 + (fillRatio * 5000)); }
+                if (fcSameDiv > 0 && spotsLeft >= 0) { var fillRatio = fcSameDiv / (fcCap - 1); penalty -= Math.round(1500 + (fillRatio * 2000)); }
                 if (fcSameDiv === 0 && fcCap > 1) penalty += 500;
             }
         }
@@ -639,23 +642,74 @@
     // ========================================================================
     // BLOCK SORTING
     // ========================================================================
-    Solver.sortBlocksByDifficulty = function (blocks, config) {
-        var meta = config.bunkMetaData || {};
-        blocks.forEach(function(b) { if (!b.divName && !b.division) b.divName = getBunkDivision(b.bunk); });
-        var divBlockCounts = {};
-        for (var i = 0; i < blocks.length; i++) { if (blocks[i]._isLeague) continue; var dn = blocks[i].divName || blocks[i].division || ''; if (!divBlockCounts[dn]) divBlockCounts[dn] = 0; divBlockCounts[dn]++; }
-        var divScarcity = {}, divisions = window.divisions || {};
-        for (var dk in divisions) { var bc = (divisions[dk].bunks || []).length; divScarcity[dk] = (bc > 0 && divBlockCounts[dk]) ? (divBlockCounts[dk] / bc) : 999; }
-        return blocks.sort(function(a, b) {
-            if (a._isLeague && !b._isLeague) return -1;
-            if (!a._isLeague && b._isLeague) return 1;
-            var divA = a.divName || a.division || '', divB = b.divName || b.division || '';
-            var sA = divScarcity[divA] || 999, sB = divScarcity[divB] || 999;
-            if (Math.abs(sA - sB) > 1) return sA - sB;
-            if (divA !== divB) return (parseInt(divA) || 999) - (parseInt(divB) || 999);
-            var numA = getBunkNumber(a.bunk) || Infinity, numB = getBunkNumber(b.bunk) || Infinity;
-            if (numA !== numB) return numA - numB;
-            var timeA = a.startTime ?? (a.slots?.[0] * 30 + 660) ?? 0, timeB = b.startTime ?? (b.slots?.[0] * 30 + 660) ?? 0;
+   Solver.sortBlocksByDifficulty = function (blocks, config) {
+    var meta = config.bunkMetaData || {};
+    blocks.forEach(function(b) { if (!b.divName && !b.division) b.divName = getBunkDivision(b.bunk); });
+    var divBlockCounts = {};
+    for (var i = 0; i < blocks.length; i++) { if (blocks[i]._isLeague) continue; var dn = blocks[i].divName || blocks[i].division || ''; if (!divBlockCounts[dn]) divBlockCounts[dn] = 0; divBlockCounts[dn]++; }
+    var divScarcity = {}, divisions = window.divisions || {};
+    for (var dk in divisions) { var bc = (divisions[dk].bunks || []).length; divScarcity[dk] = (bc > 0 && divBlockCounts[dk]) ? (divBlockCounts[dk] / bc) : 999; }
+
+    // ★★★ v15.2: SCARCE ACTIVITY PRIORITY ★★★
+    // Count how many fields each activity can be played on
+    var activityFieldCount = {};
+    for (var ci = 0; ci < allCandidateOptions.length; ci++) {
+        var cand = allCandidateOptions[ci];
+        var actName = cand.activityName;
+        if (!actName || actName === 'Free') continue;
+        if (!activityFieldCount[actName]) activityFieldCount[actName] = new Set();
+        activityFieldCount[actName].add(cand.field);
+    }
+    // Find the median field count to identify scarce activities
+    var fieldCounts = Object.values(activityFieldCount).map(function(s) { return s.size; });
+    fieldCounts.sort(function(a, b) { return a - b; });
+    var medianFields = fieldCounts.length > 0 ? fieldCounts[Math.floor(fieldCounts.length / 2)] : 1;
+    // Activities with far fewer fields than median are "scarce"
+    var scarceActivities = new Set();
+    for (var actKey in activityFieldCount) {
+        if (activityFieldCount[actKey].size <= Math.max(1, Math.floor(medianFields / 3))) {
+            scarceActivities.add(normName(actKey));
+        }
+    }
+    if (scarceActivities.size > 0) {
+        console.log('[SOLVER] ★ Scarce activities detected:', Array.from(scarceActivities).join(', '), '(median fields:', medianFields + ')');
+    }
+       Solver._scarceActivities = scarceActivities;
+    // For each bunk, check if they need a scarce activity (never done or very under-done)
+    var bunkNeedsScarce = {};
+    for (var bi2 = 0; bi2 < blocks.length; bi2++) {
+        var blk = blocks[bi2];
+        if (blk._isLeague) continue;
+        var bunk = blk.bunk;
+        if (bunkNeedsScarce[bunk] !== undefined) continue;
+        bunkNeedsScarce[bunk] = false;
+        for (var scAct of scarceActivities) {
+            var count = getActivityCount(bunk, scAct);
+            var avg = 0;
+            var allActs = Object.keys(activityFieldCount);
+            for (var aai = 0; aai < allActs.length; aai++) { avg += getActivityCount(bunk, allActs[aai]); }
+            avg = allActs.length > 0 ? avg / allActs.length : 0;
+            if (count < avg - 0.5 || count === 0) {
+                bunkNeedsScarce[bunk] = true;
+                break;
+            }
+        }
+    }
+
+    return blocks.sort(function(a, b) {
+        if (a._isLeague && !b._isLeague) return -1;
+        if (!a._isLeague && b._isLeague) return 1;
+        // ★★★ v15.2: Bunks that need scarce activities go FIRST ★★★
+        var aNeedsScarce = bunkNeedsScarce[a.bunk] ? 1 : 0;
+        var bNeedsScarce = bunkNeedsScarce[b.bunk] ? 1 : 0;
+        if (aNeedsScarce !== bNeedsScarce) return bNeedsScarce - aNeedsScarce;
+        var divA = a.divName || a.division || '', divB = b.divName || b.division || '';
+        var sA = divScarcity[divA] || 999, sB = divScarcity[divB] || 999;
+        if (Math.abs(sA - sB) > 1) return sA - sB;
+        if (divA !== divB) return (parseInt(divA) || 999) - (parseInt(divB) || 999);
+        var numA = getBunkNumber(a.bunk) || Infinity, numB = getBunkNumber(b.bunk) || Infinity;
+        if (numA !== numB) return numA - numB;
+        var timeA = a.startTime ?? (a.slots?.[0] * 30 + 660) ?? 0, timeB = b.startTime ?? (b.slots?.[0] * 30 + 660) ?? 0;
             return timeA - timeB;
         });
     };
@@ -814,15 +868,26 @@
     // ========================================================================
     // SCHEDULE APPLY / UNDO
     // ========================================================================
-    function applyPickToSchedule(block, pick) {
-        var bunk = block.bunk, slots = block.slots || [];
-        if (!window.scheduleAssignments[bunk]) return;
-        var fName = pick.field;
-        for (var i = 0; i < slots.length; i++) {
-            window.scheduleAssignments[bunk][slots[i]] = { field: fName, sport: pick.sport, continuation: i > 0, _fixed: false, _activity: pick._activity || fName, _fromSplitTile: block.fromSplitTile || false, _startMin: block.startTime, _endMin: block.endTime };
-            if (window.fieldUsageBySlot && window.fieldUsageBySlot[slots[i]]) { if (!window.fieldUsageBySlot[slots[i]][fName]) window.fieldUsageBySlot[slots[i]][fName] = { count: 0, bunks: {} }; window.fieldUsageBySlot[slots[i]][fName].count++; window.fieldUsageBySlot[slots[i]][fName].bunks[bunk] = pick.sport || pick._activity; }
-        }
+   function applyPickToSchedule(block, pick) {
+    var bunk = block.bunk, slots = block.slots || [];
+    if (!window.scheduleAssignments[bunk]) return;
+    var fName = pick.field;
+    for (var i = 0; i < slots.length; i++) {
+        window.scheduleAssignments[bunk][slots[i]] = { field: fName, sport: pick.sport, continuation: i > 0, _fixed: false, _activity: pick._activity || fName, _fromSplitTile: block.fromSplitTile || false, _startMin: block.startTime, _endMin: block.endTime };
+        if (window.fieldUsageBySlot && window.fieldUsageBySlot[slots[i]]) { if (!window.fieldUsageBySlot[slots[i]][fName]) window.fieldUsageBySlot[slots[i]][fName] = { count: 0, bunks: {} }; window.fieldUsageBySlot[slots[i]][fName].count++; window.fieldUsageBySlot[slots[i]][fName].bunks[bunk] = pick.sport || pick._activity; }
     }
+    // ★★★ v15.1 FIX: Clear stale caches so next penalty check sees this assignment ★★★
+    // Without this, _todayCache returns stale "not done today" for this bunk,
+    // allowing the same activity to be picked again for the same bunk.
+    for (var [tKey] of _todayCache) { if (tKey.startsWith(bunk + ':')) _todayCache.delete(tKey); }
+    // Also update the time index
+    if (block.startTime !== undefined && block.endTime !== undefined) {
+        var pickFieldNorm = normName(fName);
+        addToFieldTimeIndex(pickFieldNorm, block.startTime, block.endTime, bunk, block.divName || '', normName(pick._activity || fName));
+        var pickActNorm = normName(pick._activity || fName);
+        if (pickActNorm && pickActNorm !== pickFieldNorm) addToFieldTimeIndex(pickActNorm, block.startTime, block.endTime, bunk, block.divName || '', pickActNorm);
+    }
+}
     function undoPickFromSchedule(block, pick) {
         var bunk = block.bunk, slots = block.slots || [];
         if (!window.scheduleAssignments[bunk]) return;
@@ -1053,7 +1118,16 @@
             sc.sort(function(a,b){return a.cost-b.cost;});
             blockOpts.push({bi:bi,options:sc,domainSize:sc.length});
         }
-        blockOpts.sort(function(a,b){return a.domainSize-b.domainSize;});
+       // ★★★ v15.2: Blocks planned for scarce activities get processed first ★★★
+        var _scarceActs = Solver._scarceActivities || new Set();
+        blockOpts.sort(function(a,b){
+            var aBlk = activityBlocks[a.bi], bBlk = activityBlocks[b.bi];
+            var aPlan = S._activityPlan.get(a.bi), bPlan = S._activityPlan.get(b.bi);
+            var aScarce = (aPlan && _scarceActs.has(normName(aPlan.activity))) ? 1 : 0;
+            var bScarce = (bPlan && _scarceActs.has(normName(bPlan.activity))) ? 1 : 0;
+            if (aScarce !== bScarce) return bScarce - aScarce;
+            return a.domainSize - b.domainSize;
+        });
         var fieldUsageGrp = new Map(), fieldDivsGrp = new Map(), bunkActsGrp = new Map();
         // ★★★ v15.0: fullGrade per GRADE — key = "gradeName|start|end" ★★★
         var fullGradeMap = new Map();
