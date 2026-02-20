@@ -1,0 +1,552 @@
+/* =================================================================
+   auto_build_styles.css — Auto Build Mode Styles
+   v1.0
+   
+   LOAD ORDER: After styles.css, before any JS that renders the panel
+   ================================================================= */
+
+/* ─────────────────────────────────────────────
+   Panel Container
+   ───────────────────────────────────────────── */
+.ab-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-bottom: 10px;
+}
+
+/* ─────────────────────────────────────────────
+   Division Tabs (Base / per-division)
+   ───────────────────────────────────────────── */
+.ab-div-tabs {
+    display: flex;
+    gap: 3px;
+    flex-wrap: wrap;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #e2e8f0;
+    margin-bottom: 2px;
+}
+
+.ab-div-tab {
+    padding: 3px 7px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid #e2e8f0;
+    background: #fff;
+    color: #64748b;
+    transition: all 0.15s;
+    line-height: 1.3;
+}
+
+.ab-div-tab:hover {
+    background: #f1f5f9;
+}
+
+.ab-div-tab.active {
+    background: #3b82f6;
+    color: #fff;
+    border-color: #3b82f6;
+}
+
+.ab-div-tab.has-override {
+    border-color: #f59e0b;
+}
+
+.ab-div-tab.has-override::after {
+    content: '*';
+    color: #f59e0b;
+    margin-left: 2px;
+    font-weight: 700;
+}
+
+.ab-div-tab.has-override.active::after {
+    color: #fef3c7;
+}
+
+/* ─────────────────────────────────────────────
+   Sections
+   ───────────────────────────────────────────── */
+.ab-section {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 8px 10px;
+}
+
+.ab-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    display: block;
+    margin-bottom: 6px;
+}
+
+.ab-empty-msg {
+    font-size: 10px;
+    color: #94a3b8;
+    text-align: center;
+    padding: 6px;
+    font-style: italic;
+}
+
+/* ─────────────────────────────────────────────
+   Block List (Activity Blocks)
+   ───────────────────────────────────────────── */
+.ab-block-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.ab-block-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 8px;
+    background: #f8fafc;
+    border-radius: 6px;
+    border: 1px solid #e2e8f0;
+    font-size: 11px;
+    position: relative;
+    min-height: 28px;
+}
+
+.ab-block-color {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+
+.ab-block-info {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.ab-block-type {
+    font-weight: 600;
+    color: #334155;
+    white-space: nowrap;
+}
+
+.ab-block-count {
+    color: #64748b;
+    font-size: 10px;
+}
+
+.ab-block-dur {
+    color: #94a3b8;
+    font-size: 9px;
+}
+
+.ab-block-controls {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+.ab-count-input {
+    width: 30px;
+    padding: 2px 3px;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    font-size: 10px;
+    text-align: center;
+}
+
+.ab-count-input:focus {
+    outline: none;
+    border-color: #3b82f6;
+}
+
+.ab-time-btn,
+.ab-remove-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px;
+    opacity: 0.4;
+    transition: opacity 0.15s;
+    line-height: 1;
+}
+
+.ab-time-btn:hover,
+.ab-remove-btn:hover {
+    opacity: 1;
+}
+
+.ab-time-tag {
+    font-size: 8px;
+    color: #3b82f6;
+    background: #eff6ff;
+    padding: 1px 5px;
+    border-radius: 10px;
+    position: absolute;
+    bottom: -1px;
+    right: 8px;
+    white-space: nowrap;
+}
+
+.ab-constraint-tag {
+    font-size: 8px;
+    padding: 1px 5px;
+    border-radius: 10px;
+    position: absolute;
+    bottom: -1px;
+    left: 26px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.ab-constraint-hard {
+    color: #dc2626;
+    background: #fef2f2;
+}
+
+.ab-constraint-soft {
+    color: #d97706;
+    background: #fffbeb;
+}
+
+/* Add row */
+.ab-add-row {
+    display: flex;
+    gap: 4px;
+}
+
+/* ─────────────────────────────────────────────
+   Fixed Events (Lunch, Snack, Dismissal)
+   ───────────────────────────────────────────── */
+.ab-fixed-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+
+.ab-fixed-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    background: #fefce8;
+    border-radius: 6px;
+    border: 1px solid #fde68a;
+    font-size: 11px;
+}
+
+.ab-fixed-icon {
+    font-size: 12px;
+    flex-shrink: 0;
+    line-height: 1;
+}
+
+.ab-fixed-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.ab-fixed-name {
+    font-weight: 600;
+    color: #713f12;
+    font-size: 11px;
+}
+
+.ab-fixed-time {
+    color: #a16207;
+    font-size: 10px;
+}
+
+.ab-fixed-bounds {
+    color: #ca8a04;
+    font-size: 9px;
+    font-style: italic;
+}
+
+.ab-fixed-controls {
+    display: flex;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+.ab-fixed-edit,
+.ab-fixed-remove {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 11px;
+    opacity: 0.4;
+    padding: 2px;
+    transition: opacity 0.15s;
+    line-height: 1;
+}
+
+.ab-fixed-edit:hover,
+.ab-fixed-remove:hover {
+    opacity: 1;
+}
+
+/* ─────────────────────────────────────────────
+   Availability Windows
+   ───────────────────────────────────────────── */
+.ab-avail-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-bottom: 4px;
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.ab-avail-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 8px;
+    background: #f0f9ff;
+    border-radius: 5px;
+    border: 1px solid #bae6fd;
+    font-size: 10px;
+}
+
+.ab-avail-name {
+    font-weight: 600;
+    color: #0c4a6e;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ab-avail-window {
+    color: #0369a1;
+    white-space: nowrap;
+    font-size: 9px;
+}
+
+.ab-avail-days {
+    color: #7c3aed;
+    font-size: 8px;
+    background: #f5f3ff;
+    padding: 0 4px;
+    border-radius: 3px;
+}
+
+.ab-avail-remove {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 11px;
+    opacity: 0.4;
+    padding: 1px;
+    flex-shrink: 0;
+}
+
+.ab-avail-remove:hover {
+    opacity: 1;
+}
+
+/* ─────────────────────────────────────────────
+   Common Input Elements
+   ───────────────────────────────────────────── */
+.ab-select {
+    padding: 5px 6px;
+    border: 1px solid #e2e8f0;
+    border-radius: 5px;
+    font-size: 11px;
+    background: #fff;
+    flex: 1;
+    min-width: 0;
+}
+
+.ab-select:focus {
+    outline: none;
+    border-color: #3b82f6;
+}
+
+.ab-input-sm {
+    width: 50px;
+    padding: 4px 6px;
+    border: 1px solid #e2e8f0;
+    border-radius: 5px;
+    font-size: 11px;
+    text-align: center;
+}
+
+.ab-input-sm:focus {
+    outline: none;
+    border-color: #3b82f6;
+}
+
+/* ─────────────────────────────────────────────
+   Buttons
+   ───────────────────────────────────────────── */
+.ab-btn {
+    border: none;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 5px 10px;
+    min-height: unset;
+}
+
+.ab-btn-primary {
+    background: #3b82f6;
+    color: #fff;
+}
+
+.ab-btn-primary:hover {
+    background: #2563eb;
+}
+
+.ab-btn-success {
+    background: #10b981;
+    color: #fff;
+}
+
+.ab-btn-success:hover {
+    background: #059669;
+}
+
+.ab-btn-ghost {
+    background: #f1f5f9;
+    color: #475569;
+    font-size: 10px;
+    padding: 4px 8px;
+}
+
+.ab-btn-ghost:hover {
+    background: #e2e8f0;
+}
+
+.ab-btn-lg {
+    width: 100%;
+    padding: 10px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.ab-btn-md {
+    width: 100%;
+    padding: 7px;
+    font-size: 11px;
+}
+
+.ab-btn-sm {
+    width: 100%;
+    padding: 4px;
+    font-size: 10px;
+}
+
+/* ─────────────────────────────────────────────
+   Build Results
+   ───────────────────────────────────────────── */
+.ab-build-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.ab-progress {
+    height: 3px;
+    background: #e2e8f0;
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 4px;
+}
+
+.ab-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #3b82f6, #10b981);
+    border-radius: 2px;
+    transition: width 0.3s;
+    width: 0%;
+}
+
+.ab-result-msg {
+    font-size: 10px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    margin-top: 4px;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.ab-result-success {
+    background: #ecfdf5;
+    color: #065f46;
+    border: 1px solid #a7f3d0;
+}
+
+.ab-result-warning {
+    background: #fffbeb;
+    color: #92400e;
+    border: 1px solid #fde68a;
+}
+
+.ab-result-error {
+    background: #fef2f2;
+    color: #991b1b;
+    border: 1px solid #fecaca;
+}
+
+/* ─────────────────────────────────────────────
+   Mobile Responsiveness
+   ───────────────────────────────────────────── */
+@media (max-width: 768px) {
+    .ab-btn,
+    .ab-select,
+    .ab-input-sm,
+    .ab-count-input {
+        min-height: 36px;
+    }
+
+    .ab-block-item,
+    .ab-fixed-item,
+    .ab-avail-item {
+        padding: 8px 10px;
+    }
+
+    .ab-div-tab {
+        padding: 6px 10px;
+        font-size: 11px;
+        min-height: 32px;
+    }
+
+    .ab-btn-lg {
+        padding: 14px;
+        font-size: 14px;
+    }
+
+    .ab-time-tag,
+    .ab-constraint-tag {
+        font-size: 9px;
+        position: static;
+        display: inline-block;
+        margin-top: 4px;
+    }
+
+    .ab-block-item {
+        flex-wrap: wrap;
+    }
+}
