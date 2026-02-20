@@ -19,7 +19,7 @@
 //
 // INTEGRATION:
 //   - Reads: specialActivities, fields, divisions, activityProperties
-//   - Reads: fluidRequirements from global settings
+//   - Reads: autoRequirements from global settings
 //   - Writes: scheduleAssignments, divisionTimes (per-bunk slots)
 //   - Called from: daily_adjustments.js runOptimizer or directly
 //
@@ -34,7 +34,7 @@
     const DEBUG = true;
 
     function log(...args) {
-        if (DEBUG) console.log('[FluidScheduler]', ...args);
+        if (DEBUG) console.log('[AutoScheduler]', ...args);
     }
 
     // ========================================================================
@@ -97,11 +97,11 @@
      * Merges camp-level settings with activity properties.
      * 
      * @param {string} divisionName
-     * @returns {Object|null} Config object or null if not in fluid mode
+     * @returns {Object|null} Config object or null if not in auto mode
      */
     function loadFluidConfig(divisionName) {
         const settings = window.loadGlobalSettings?.() || {};
-        const fluidReqs = settings.fluidRequirements;
+        const fluidReqs = settings.autoRequirements;
 
         if (!fluidReqs) return null;
 
@@ -341,8 +341,8 @@
     function buildFluidSchedule(divisionName) {
         const config = loadFluidConfig(divisionName);
         if (!config) {
-            log('No fluid config for division:', divisionName);
-            return { success: false, error: 'No fluid configuration' };
+            log('No auto config for division:', divisionName);
+            return { success: false, error: 'No auto configuration' };
         }
 
         log('');
@@ -767,7 +767,7 @@
         const scheduleAssignments = {};
         const divisionTimes = {};
 
-        // In fluid mode, each bunk has unique time slots
+        // In auto mode, each bunk has unique time slots
         // We create per-bunk divisionTimes entries
         for (const bunk of config.bunks) {
             const blocks = bunkSchedules[bunk].sort((a, b) => a.start - b.start);
@@ -820,7 +820,7 @@
             scheduleAssignments[bunk] = assignments;
 
             // For divisionTimes, we use the bunk's slots
-            // NOTE: In fluid mode, divisionTimes[divisionName] won't work as-is
+            // NOTE: In auto mode, divisionTimes[divisionName] won't work as-is
             // because each bunk has different slots. We store per-bunk.
             divisionTimes[bunk] = slots;
 
@@ -902,10 +902,10 @@
      * Run the fluid scheduler and apply results to the live system.
      * Called from runOptimizer or directly.
      */
-    function runFluidScheduler(allowedDivisions) {
+    function runAutoScheduler(allowedDivisions) {
         const settings = window.loadGlobalSettings?.() || {};
-        if (settings.scheduleMode !== 'fluid') {
-            log('Not in fluid mode, skipping');
+        if (settings.scheduleMode !== 'auto') {
+            log('Not in auto mode, skipping');
             return false;
         }
 
@@ -927,7 +927,7 @@
             Object.assign(window.scheduleAssignments || {}, result.scheduleAssignments);
 
             // Store per-bunk division times
-            // In fluid mode, we use bunk-level granularity
+            // In auto mode, we use bunk-level granularity
             if (!window.fluidDivisionTimes) window.fluidDivisionTimes = {};
             Object.assign(window.fluidDivisionTimes, result.divisionTimes);
 
@@ -947,20 +947,20 @@
     /**
      * Check if the camp is in fluid scheduling mode
      */
-    function isFluidMode() {
+    function isAutoMode() {
         const settings = window.loadGlobalSettings?.() || {};
-        return settings.scheduleMode === 'fluid';
+        return settings.scheduleMode === 'auto';
     }
 
     // ========================================================================
     // EXPORTS
     // ========================================================================
 
-    window.FluidScheduler = {
+    window.AutoScheduler = {
         VERSION,
         buildFluidSchedule,
-        runFluidScheduler,
-        isFluidMode,
+        runAutoScheduler,
+        isAutoMode,
         loadFluidConfig,
         buildActivityCatalog,
 
@@ -973,6 +973,6 @@
         _checkTimeRules: checkTimeRules
     };
 
-    console.log(`🌊 Fluid Scheduler v${VERSION} loaded`);
+    console.log(`🌊 Auto Scheduler v${VERSION} loaded`);
 
 })();
