@@ -157,6 +157,7 @@ function createDefaultActivity(name) {
     return { name, type: 'Special', available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
         maxUsage: null, maxUsagePeriod: 'half', frequencyWeeks: 0, rainyDayExclusive: false, prepDuration: 0,
+        duration: null, availableDays: null, mustScheduleWhenAvailable: false,
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
         rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false };
 }
