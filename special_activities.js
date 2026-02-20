@@ -149,7 +149,10 @@ function validateSpecialActivity(activity, activityName) {
         location: activity.location || null, isIndoor, rainyDayAvailable: isIndoor, availableOnRainyDay: isIndoor,
        ...(activity.rainyDayCapacity > 0 ? { rainyDayCapacity: parseInt(activity.rainyDayCapacity, 10) } : {}),
         ...(activity.rainyDayAvailableAllDay === true ? { rainyDayAvailableAllDay: true } : {}),
-        fullGrade: activity.fullGrade === true
+        fullGrade: activity.fullGrade === true,
+        duration: (activity.duration != null && parseInt(activity.duration, 10) > 0) ? parseInt(activity.duration, 10) : null,
+        availableDays: Array.isArray(activity.availableDays) ? activity.availableDays : null,
+        mustScheduleWhenAvailable: activity.mustScheduleWhenAvailable === true
     };
 }
 
