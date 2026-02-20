@@ -440,10 +440,12 @@ function renderDetailPane() {
     detailPaneEl.appendChild(sectionGroup("Time & Weather", "When this special can be scheduled", timeWeatherSections));
 
     // Group 3: Rotation Rules — usage limit + full grade + prep duration
-    detailPaneEl.appendChild(sectionGroup("Rotation Rules", "Limits, full-grade mode & prep time", [
+    detailPaneEl.appendChild(sectionGroup("Rotation Rules", "Limits, timing & scheduling mode", [
         section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
         section("Full Grade", summaryFullGrade(item), () => renderFullGradeSettings(item)),
-        section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item))
+        section("Activity Duration", summaryDuration(item), () => renderDurationSettings(item)),
+        section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)),
+        section("Fluid Scheduling", summaryFluidMode(item), () => renderFluidModeSettings(item))
     ]));
 }
 
