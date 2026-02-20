@@ -457,6 +457,19 @@ function summaryMaxUsage(item) {
     var periodLabels = { 'half': 'per half', '1week': 'per week', '2weeks': 'per 2 weeks', '3weeks': 'per 3 weeks', '4weeks': 'per 4 weeks' };
     return 'Max ' + m + ' time' + (m > 1 ? 's' : '') + ' ' + (periodLabels[period] || 'per half');
 }
+    function summaryDuration(item) {
+    var d = parseInt(item.duration) || 0;
+    if (d <= 0) return 'Not set';
+    var total = d + (parseInt(item.prepDuration) || 0);
+    if (item.prepDuration > 0) return d + 'min (+' + item.prepDuration + 'min prep = ' + total + 'min total)';
+    return d + ' minutes';
+}
+function summaryFluidMode(item) {
+    var parts = [];
+    if (item.mustScheduleWhenAvailable) parts.push('Must schedule');
+    if (item.availableDays && item.availableDays.length > 0) parts.push(item.availableDays.map(function(d){return d.charAt(0).toUpperCase()+d.slice(0,3);}).join(', '));
+    return parts.length > 0 ? parts.join(' \u00b7 ') : 'Standard rotation';
+}
 function summaryFullGrade(item) { return item.fullGrade ? 'Entire grade does it together' : 'Off (normal rotation)'; }
 function summarySharing(item) { if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "No sharing (1 bunk only)"; return 'Up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks (same grade)'; }
 function summaryAccess(item) { if (!item.limitUsage?.enabled) return "Open to all grades"; const c = Object.keys(item.limitUsage.divisions||{}).length; if (c===0) return "\u26A0 Restricted (none selected)"; return c + ' grade' + (c!==1?'s':'') + ' allowed' + (item.limitUsage.usePriority?" \u00B7 prioritized":""); }
