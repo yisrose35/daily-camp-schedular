@@ -272,14 +272,27 @@
         // ★★★ CRITICAL FIX v2.3: Default to VIEWER for safety ★★★
         // Invited users who fell through should NOT get owner access
         // =====================================================================
+        // ★★★ v2.5 FIX: Trust localStorage if landing.js already set role ★★★
+        const lsRole = localStorage.getItem('campistry_role');
+        const lsCampId = localStorage.getItem('campistry_camp_id');
+
+        if (lsRole && lsCampId && lsRole !== 'viewer') {
+            console.log('📊 ⚠️ No camp in DB yet but localStorage says role=' + lsRole + ' — trusting');
+            userRole = lsRole;
+            isTeamMember = localStorage.getItem('campistry_is_team_member') === 'true';
+            campName = currentUser.user_metadata?.camp_name || null;
+            userName = null;
+            localStorage.setItem('campistry_user_id', lsCampId);
+            return;
+        }
+
         console.log('📊 ⚠️ No camp association found - defaulting to VIEWER for safety');
         userRole = 'viewer';  // ★★★ SAFE DEFAULT - NOT OWNER! ★★★
         isTeamMember = false;
         userName = null;
         campName = null;
         // Don't cache uncertain state
-        // localStorage.setItem('campistry_user_id', currentUser.id);
-    }
+        // localStorage.setItem('campistry_user_id', currentUser.id);    }
 
     // ========================================
     // ★★★ v2.4: CACHE RBAC CONTEXT FOR OTHER PAGES ★★★
