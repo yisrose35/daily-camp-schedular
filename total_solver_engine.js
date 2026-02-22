@@ -986,8 +986,11 @@ else penalty += 200;
         var disabledSet = new Set(window.currentDisabledFields || gCfg?.disabledFields || []);
         var globallyValid = new Uint8Array(numCands);
         for (var ci = 0; ci < numCands; ci++) { var c = allCands[ci]; if (disabledSet.has(c.field)) continue; if (!actProps[c.field] && !actProps[c.activityName] && c.type !== 'special') continue; globallyValid[ci] = 1; }
-        for (var bi = 0; bi < numBlocks; bi++) {
+       for (var bi = 0; bi < numBlocks; bi++) {
             var block = activityBlocks[bi]; block._blockIdx = bi;
+            // ★★★ AUTO BUILD: Pre-compute duration-strict filter ★★★
+            var _dStrict = block._durationStrict === true;
+            var _dStrictDur = _dStrict ? (block.endTime - block.startTime) : 0;
             var domain = new Set(), bunk = block.bunk;
             var blockDiv = block.divName || block.division || '';
             if (!blockDiv && bunk) { blockDiv = getBunkDivision(bunk) || ''; if (blockDiv) block.divName = blockDiv; }
