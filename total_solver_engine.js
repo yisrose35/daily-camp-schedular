@@ -896,7 +896,21 @@ else penalty += 200;
         if (pick) { var fieldNorm = normName(pick.field); if (block.startTime !== undefined && block.endTime !== undefined) { removeFromFieldTimeIndex(fieldNorm, block.startTime, block.endTime, bunk); var actNorm = normName(pick._activity); if (actNorm && actNorm !== fieldNorm) removeFromFieldTimeIndex(actNorm, block.startTime, block.endTime, bunk); } }
         invalidateRotationCacheForBunk(bunk);
     }
-
+// ========================================================================
+    // ★★★ AUTO BUILD: Get configured duration for a special activity ★★★
+    // ========================================================================
+    function getActivityDuration(activityName) {
+        if (!activityName) return 0;
+        var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+        var specials = (gs.app1 && gs.app1.specialActivities) || [];
+        var name = (activityName || '').toLowerCase().trim();
+        for (var i = 0; i < specials.length; i++) {
+            if ((specials[i].name || '').toLowerCase().trim() === name) {
+                return specials[i].defaultDuration || specials[i].duration || 0;
+            }
+        }
+        return 0;
+    }
     // ========================================================================
     // EXPOSE INTERNALS TO PART 2
     // ========================================================================
