@@ -1785,7 +1785,11 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 if (slots.length > 0) {
                     const eventName = item.event || item.type || 'Pinned Event';
                     
-                    bunkList.forEach(bunk => {
+                    // ★★★ AUTO BUILD: Per-bunk pinned events ★★★
+                    const _pinnedTargetBunks = item._bunk 
+                        ? [item._bunk].filter(b => bunkList.includes(b)) 
+                        : bunkList;
+                    _pinnedTargetBunks.forEach(bunk => {
                         const existing = window.scheduleAssignments[bunk]?.[slots[0]];
                         if (existing && existing._bunkOverride) return;
 
