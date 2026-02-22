@@ -3753,35 +3753,33 @@ function loadCurrentOverrides() {
 // MAIN INIT
 // =================================================================
 function init() {
-  container = document.getElementById("daily-adjustments-content");
-  if (!container) { console.error("Daily Adjustments: container not found"); return; }
+  container = document.getElementById("daily-adjustments-content");
+  if (!container) { console.error("Daily Adjustments: container not found"); return; }
 
-  // 1. Get today's date
-  const dateKey = window.currentScheduleDate;
+  // 1. Read the Universal Builder Mode from the Setup tab
+  const globalMode = window.getCampBuilderMode ? window.getCampBuilderMode() : 'manual';
 
-  // 2. Check if today uses an Auto-Build template
-  const autoModeData = checkAutoModeForDay(dateKey);
+  // 2. If the camp is set to Auto Build mode, inject the Auto Builder UI
+  if (globalMode === 'auto') {
+      console.log('[DailyAdj] Universal mode is AUTO. Switching to Auto Builder UI.');
+      container.innerHTML = '';
+      const autoContainer = document.createElement('div');
+      autoContainer.style.height = '100%';
+      container.appendChild(autoContainer);
+      
+      if (typeof window.renderAutoBuilder === 'function') {
+          window.renderAutoBuilder(autoContainer);
+      } else {
+          autoContainer.innerHTML = '<div class="da-empty-state" style="padding:40px; color:#ef4444;">Auto Builder module is not loaded.</div>';
+      }
+      return; // Stop here, do not load the manual UI
+  }
 
-  // 3. If it IS an Auto Build day, load the Auto Builder UI instead!
-  if (autoModeData) {
-      console.log(`[DailyAdj] Switching to Auto Builder UI for ${dateKey}`);
-      container.innerHTML = ''; // Clear the screen
-      
-      // Load the Auto Builder inside Daily Adjustments
-      if (typeof window.renderAutoBuilder === 'function') {
-          window.renderAutoBuilder(container);
-      } else {
-          container.innerHTML = `<div style="padding:40px; text-align:center; color:#ef4444;">
-            Error: Auto-scheduler is active for today, but the Auto Builder module is not loaded.
-          </div>`;
-      }
-      return; // Stop here, do not load the manual UI
-  }
+  // 3. --- MANUAL MODE (Standard Daily Adjustments) ---
+  console.log('[DailyAdj] Universal mode is MANUAL. Loading standard UI.');
 
-  // 4. If it is NOT an auto build day, continue loading normal manual adjustments
-  masterSettings.global = window.loadGlobalSettings?.() || {};  
-  masterSettings.app1 = masterSettings.global.app1 || {};
-  masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
+  masterSettings.global = window.loadGlobalSettings?.() || {};  
+  masterSettings.app1 = masterSettings.global.app1 || {};  masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
   masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
   smartTileHistory = loadSmartTileHistory();
   
