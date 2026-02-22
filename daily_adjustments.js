@@ -3763,20 +3763,24 @@ function init() {
   const globalMode = window.getCampBuilderMode ? window.getCampBuilderMode() : 'manual';
 
   // 2. If the camp is set to Auto Build mode, inject the Auto Builder UI
-  if (globalMode === 'auto') {
-      console.log('[DailyAdj] Universal mode is AUTO. Switching to Auto Builder UI.');
-      container.innerHTML = '';
-      const autoContainer = document.createElement('div');
-      autoContainer.style.height = '100%';
-      container.appendChild(autoContainer);
-      
-      if (typeof window.renderAutoBuilder === 'function') {
-          window.renderAutoBuilder(autoContainer);
-      } else {
-          autoContainer.innerHTML = '<div class="da-empty-state" style="padding:40px; color:#ef4444;">Auto Builder module is not loaded.</div>';
-      }
-      return; // Stop here, do not load the manual UI
-  }
+ if (globalMode === 'auto') {
+      console.log('[DailyAdj] Universal mode is AUTO. Launching Auto Schedule Planner.');
+      if (typeof window.AutoSchedulePlanner?.init === 'function') {
+          try {
+              container.innerHTML = getStyles();
+              const autoContainer = document.createElement('div');
+              autoContainer.style.cssText = 'height:calc(100vh - 160px);overflow:auto;';
+              container.appendChild(autoContainer);
+              window.AutoSchedulePlanner.init(autoContainer);
+              console.log('[DailyAdj] ✅ Auto Schedule Planner loaded.');
+              return;
+          } catch (e) {
+              console.error('[DailyAdj] Auto Schedule Planner failed, falling back to manual:', e);
+          }
+      } else {
+          console.warn('[DailyAdj] AutoSchedulePlanner not loaded, falling back to manual mode.');
+      }
+  }
 
   // 3. --- MANUAL MODE (Standard Daily Adjustments) ---
   console.log('[DailyAdj] Universal mode is MANUAL. Loading standard UI.');
