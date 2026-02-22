@@ -95,8 +95,9 @@
             ...(f.minDurationMin ? { minDurationMin: f.minDurationMin } : {}),
             ...(f.duration != null ? { duration: parseInt(f.duration) || null } : {}),
             ...(f.availableDays ? { availableDays: f.availableDays } : {}),
-            ...(f.mustScheduleWhenAvailable ? { mustScheduleWhenAvailable: true } : 
+           ...(f.mustScheduleWhenAvailable ? { mustScheduleWhenAvailable: true } : 
                 {})
+        };
     }
 
     // =========================================================================
