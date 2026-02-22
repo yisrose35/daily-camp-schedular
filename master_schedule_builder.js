@@ -856,26 +856,26 @@ function renderDAWToolbar() {
   const loadOptions = autoNames.map(n => `<option value="${n}">${n}</option>`).join('');
   
   toolbar.innerHTML = `
-    <div class="ms-toolbar-group status" style="background:#2a2a3e; border-color:#3a3a52;">
-      <span class="ms-status-label" style="color:#8888aa;">Template:</span>
-      <span class="ms-status-name" style="color:#e2e8f0;">${currentLoadedTemplate || 'Untitled'}</span>
+    <div class="ms-toolbar-group status" style="background:#f1f5f9;">
+      <span class="ms-status-label" style="color:#64748b;">Template:</span>
+      <span class="ms-status-name" style="color:#0f172a;">${currentLoadedTemplate || 'Untitled'}</span>
     </div>
     
-    <div class="ms-toolbar-group" style="border-color:#3a3a52;">
-      <span class="ms-toolbar-label" style="color:#8888aa;">Load:</span>
-      <select id="daw-load-select" class="ms-select" style="background:#1e1e2e; color:#e2e8f0; border-color:#4a4a62;">
+    <div class="ms-toolbar-group">
+      <span class="ms-toolbar-label" style="color:#64748b;">Load:</span>
+      <select id="daw-load-select" class="ms-select">
         <option value="">Select...</option>
         ${loadOptions}
       </select>
     </div>
     
-    <div class="ms-toolbar-group" style="border-color:#3a3a52;">
-      <input type="text" id="daw-save-name" class="ms-input" placeholder="Template name..." style="background:#1e1e2e; color:#e2e8f0; border-color:#4a4a62;">
+    <div class="ms-toolbar-group">
+      <input type="text" id="daw-save-name" class="ms-input" placeholder="Template name...">
       <button id="daw-save-btn" class="ms-btn ms-btn-primary">Save Layers</button>
     </div>
     
-    <div class="ms-toolbar-group" style="border-color:#3a3a52;">
-      <button id="daw-copy-btn" class="ms-btn ms-btn-ghost" style="background:#2a2a3e; color:#e2e8f0;" title="Copy layers from one grade to others">📋 Copy To...</button>
+    <div class="ms-toolbar-group">
+      <button id="daw-copy-btn" class="ms-btn ms-btn-ghost" title="Copy layers from one grade to others">📋 Copy To...</button>
     </div>
     
     <div style="flex:1;"></div>
