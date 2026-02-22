@@ -3812,4 +3812,30 @@ window.DailyAdjustmentsInternal = {
   renderGrid: typeof renderGrid === 'function' ? renderGrid : function(){},
   bumpOverlappingTiles: typeof bumpOverlappingTiles === 'function' ? bumpOverlappingTiles : function(){}
 };
+  // ★★★ AUTO BUILDER v2: Check if today uses auto layers ★★★
+function checkAutoModeForDay(dateKey) {
+  const g = window.loadGlobalSettings?.() || {};
+  const app1 = g.app1 || {};
+  const assignments = app1.layerAssignments || {};
+  const templates = app1.autoLayerTemplates || {};
+  
+  // Determine day of week
+  const [Y, M, D] = (dateKey || '').split('-').map(Number);
+  if (!Y) return null;
+  const dow = new Date(Y, M - 1, D).getDay();
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const dayName = dayNames[dow];
+  
+  const templateName = assignments[dayName] || assignments['Default'];
+  if (!templateName || !templates[templateName]) return null;
+  
+  return { templateName, layers: templates[templateName] };
+}
+
+// Hook into daily adjustments render to check for auto mode
+const _origRenderDA = window.renderDailyAdjustments || window.initDailyAdjustments;
+if (_origRenderDA) {
+  // Will be integrated in auto_schedule_planner.js init
+  window._checkAutoModeForDay = checkAutoModeForDay;
+}
 })();
