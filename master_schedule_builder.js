@@ -816,7 +816,7 @@ function renderDAWPalette() {
   let html = '';
   html += '<div class="ms-daw-tile-label">Floaters</div>';
   DAW_LAYER_TYPES.filter(t => !t.anchor).forEach(t => {
-    html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}" style="color:#e2e8f0;">
+    html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}">
       <div class="ms-daw-tile-color" style="background:${t.color};"></div>
       ${t.name}
     </div>`;
