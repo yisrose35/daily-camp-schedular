@@ -3831,17 +3831,113 @@ function init() {
   container = document.getElementById("daily-adjustments-content");
   if (!container) { console.error("Daily Adjustments: container not found"); return; }
 
-  // 1. Read the Universal Builder Mode from the Setup tab
+  // 1. Read the Universal Builder Mode
   var globalMode = window.getCampBuilderMode ? window.getCampBuilderMode() : 'manual';
   var isAutoMode = (globalMode === 'auto');
 
+  // 2. AUTO MODE — Embed Master Builder + DA feature tabs
   if (isAutoMode) {
-      console.log('[DailyAdj] Universal mode is AUTO — using Master Builder styling.');
-  } else {
-      console.log('[DailyAdj] Universal mode is MANUAL. Loading standard UI.');
+      console.log('[DailyAdj] AUTO mode — embedding Master Builder with DA features.');
+
+      masterSettings.global = window.loadGlobalSettings?.() || {};
+      masterSettings.app1 = masterSettings.global.app1 || {};
+      masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
+      masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
+      smartTileHistory = loadSmartTileHistory();
+      loadCurrentOverrides();
+
+      var dailyData = window.loadCurrentDailyData?.() || {};
+      if (window.isRainyDay === undefined) {
+          window.isRainyDay = dailyData.isRainyDay === true || dailyData.rainyDayMode === true;
+      }
+
+      // Build the shell: subtabs + rainy day + master builder host + other panes
+      container.innerHTML = getStyles() + `
+        <div style="display:flex;flex-direction:column;height:calc(100vh - 120px);">
+          <div class="da-subtabs">
+            <button class="da-subtab active" data-tab="schedule">Schedule</button>
+            <button class="da-subtab" data-tab="trips">Trips</button>
+            <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
+            <button class="da-subtab" data-tab="resources">Resources</button>
+            <button class="da-subtab" data-tab="fluid">Fluid Mode</button>
+          </div>
+
+          <div id="da-pane-schedule" class="da-pane active" style="flex:1;overflow:hidden;display:flex;flex-direction:column;">
+            <div id="da-rainy-panel"></div>
+            <div id="da-displaced-tiles-panel" style="display:none;"></div>
+            <div id="da-master-builder-host" style="flex:1;overflow:hidden;"></div>
+          </div>
+
+          <div id="da-pane-trips" class="da-pane" style="display:none;overflow:auto;padding:16px;">
+            <div id="da-trips-container"></div>
+          </div>
+          <div id="da-pane-bunk-overrides" class="da-pane" style="display:none;overflow:auto;padding:16px;">
+            <div id="da-bunk-overrides-container"></div>
+          </div>
+          <div id="da-pane-resources" class="da-pane" style="display:none;overflow:auto;padding:16px;">
+            <div id="da-resources-container"></div>
+          </div>
+          <div id="da-pane-fluid" class="da-pane" style="display:none;overflow:auto;padding:16px;">
+            <div id="da-fluid-container"></div>
+          </div>
+        </div>
+      `;
+
+      // Wire subtabs
+      setupSubTabs();
+      setupKeyboardHandler();
+      setupVisibilityHandler();
+
+      // Render DA features
+      renderRainyDayPanel();
+      renderDisplacedTilesPanel();
+      renderTripsForm();
+      renderBunkOverridesUI();
+      renderResourceOverridesUI();
+
+      // Now inject the Master Builder into the host div
+      var host = container.querySelector('#da-master-builder-host');
+      if (host && typeof window.initMasterScheduler === 'function') {
+          // Temporarily hijack the master-scheduler-content ID
+          var origMsEl = document.getElementById('master-scheduler-content');
+          if (origMsEl) origMsEl.id = '_ms-content-parked';
+
+          host.id = 'master-scheduler-content';
+          window.initMasterScheduler();
+          host.id = 'da-master-builder-host';
+
+          if (origMsEl) origMsEl.id = 'master-scheduler-content';
+
+          // Load today's template
+          var assignments = masterSettings.app1?.skeletonAssignments || {};
+          var skeletons = masterSettings.app1?.savedSkeletons || {};
+          var dateStr = window.currentScheduleDate || '';
+          var parts = dateStr.split('-').map(Number);
+          var dow = 0;
+          if (parts[0] && parts[1] && parts[2]) dow = new Date(parts[0], parts[1] - 1, parts[2]).getDay();
+          var dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+          var tmplName = assignments[dayNames[dow]] || assignments['Default'];
+
+          if (tmplName && skeletons[tmplName] && window.MasterSchedulerInternal) {
+              window.MasterSchedulerInternal.setSkeleton(JSON.parse(JSON.stringify(skeletons[tmplName])));
+              window.MasterSchedulerInternal.renderGrid?.();
+              window.MasterSchedulerInternal.renderToolbar?.();
+              console.log('[DailyAdj] ✅ Loaded template "' + tmplName + '"');
+          }
+
+          // Auto-click the Auto mode toggle in the Master Builder
+          setTimeout(function() {
+              var autoBtn = host.querySelector('.ms-mode-btn[data-mode="auto"]');
+              if (autoBtn) autoBtn.click();
+          }, 150);
+      }
+
+      return;
   }
 
-  // 2. Load settings
+  // 3. MANUAL MODE — Standard Daily Adjustments
+  console.log('[DailyAdj] MANUAL mode. Loading standard UI.');
+
   masterSettings.global = window.loadGlobalSettings?.() || {};
   masterSettings.app1 = masterSettings.global.app1 || {};
   masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
@@ -3850,15 +3946,13 @@ function init() {
 
   loadCurrentOverrides();
 
-  // Initialize window.isRainyDay from loaded daily data
   var dailyData = window.loadCurrentDailyData?.() || {};
   if (window.isRainyDay === undefined) {
       window.isRainyDay = dailyData.isRainyDay === true || dailyData.rainyDayMode === true;
   }
   console.log("[DailyAdj] Initialized window.isRainyDay =", window.isRainyDay);
 
-  // 3. Render UI — auto mode uses MS classes, manual uses DA classes
-  container.innerHTML = getStyles() + getMainHTML(isAutoMode);
+  container.innerHTML = getStyles() + getMainHTML(false);
 
   setupSubTabs();
   setupKeyboardHandler();
@@ -3874,44 +3968,8 @@ function init() {
   renderTripsForm();
   renderBunkOverridesUI();
   renderResourceOverridesUI();
-
-  // Wire up Skeleton / Auto Layers view toggle (auto mode only)
-  if (isAutoMode) {
-      var viewToggles = container.querySelectorAll('.da-view-toggle');
-      viewToggles.forEach(function(btn) {
-          btn.addEventListener('click', function() {
-              viewToggles.forEach(function(b) {
-                  b.classList.remove('active');
-                  b.style.color = '#475569';
-                  b.style.borderBottomColor = 'transparent';
-              });
-              btn.classList.add('active');
-              btn.style.color = '#3b82f6';
-              btn.style.borderBottomColor = '#3b82f6';
-
-              var skelView = container.querySelector('#da-view-skeleton');
-              var autoView = container.querySelector('#da-view-auto-layers');
-              if (btn.dataset.view === 'skeleton') {
-                  if (skelView) skelView.style.display = '';
-                  if (autoView) autoView.style.display = 'none';
-              } else {
-                  if (skelView) skelView.style.display = 'none';
-                  if (autoView) {
-                      autoView.style.display = '';
-                      if (!autoView.dataset.initialized && typeof window.AutoSchedulePlanner?.init === 'function') {
-                          window.AutoSchedulePlanner.init(autoView);
-                          autoView.dataset.initialized = 'true';
-                      }
-                  }
-              }
-          });
-      });
-
-      // Auto-select the Auto Layers view
-      var autoBtn = container.querySelector('.da-view-toggle[data-view="auto-layers"]');
-      if (autoBtn) autoBtn.click();
-  }
 }
+  
 function cleanup() {
   if (_keyHandler) {
     document.removeEventListener('keydown', _keyHandler);
