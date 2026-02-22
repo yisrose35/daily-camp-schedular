@@ -561,12 +561,10 @@
                         logSecurityEvent('STORAGE_TAMPER', { key, tamperedValue: value });
                         tampered = true;
                         
-                        // ★★★ SECURITY FIX: Revert role to safe default on tamper ★★★
-                        // ★★★ v1.1 FIX: Accept all protected-key changes from app code ★★★
-                        // During signup landing.js writes role='owner'. This is NOT tampering.
-                        // Write-time verification (verifyBeforeWrite) is the real security gate.
+                       // ★★★ v1.1: Accept protected-key changes from app code ★★★
+                        // landing.js sets role during signup — not tampering.
+                        // verifyBeforeWrite() in access_control.js is the real gate.
                         _storageChecksums[key] = currentChecksum;
-
                         if (key === 'campistry_role') {
                             console.log('🛡️ [SECURITY] Role changed to:', value, '(accepted)');
                             try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
