@@ -2432,7 +2432,14 @@ function loadDailySkeleton() {
   let dow = 0; if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
   const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   const today = dayNames[dow];
+  
   let tmpl = assignments[today] || assignments["Default"];
+  
+  // Lock the UI onto the assigned template for the day
+  if (!currentLoadedTemplate && tmpl) {
+      currentLoadedTemplate = tmpl;
+  }
+  
   dailySkeleton = (tmpl && skeletons[tmpl]) ? JSON.parse(JSON.stringify(skeletons[tmpl])) : [];
 }
 
