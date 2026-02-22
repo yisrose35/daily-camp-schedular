@@ -1467,7 +1467,8 @@ function renderPalette() {
       if (!tile) return;
       
       const el = document.createElement('div');
-      el.className = 'da-tile';
+      const paletteIsMS = paletteEl.classList.contains('ms-palette');
+      el.className = paletteIsMS ? 'ms-tile' : 'da-tile';
       el.textContent = tile.name;
       el.style.cssText = tile.style;
       el.draggable = true;
