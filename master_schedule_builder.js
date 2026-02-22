@@ -1700,7 +1700,77 @@ function minutesToTime(min) {
   h = h % 12 || 12;
   return `${h}:${m.toString().padStart(2, '0')}${ap}`;
 }
+// ★★★ AUTO BUILDER v2: Mode toggle ★★★
+function renderModeToggle() {
+  const container = document.getElementById('master_scheduler');
+  if (!container) return;
+  
+  // Check if toggle already exists
+  if (container.querySelector('.ms-mode-toggle')) return;
+  
+  const toggle = document.createElement('div');
+  toggle.className = 'ms-mode-toggle';
+  toggle.style.cssText = 'display:flex; gap:4px; margin-bottom:12px; background:#f1f5f9; border-radius:8px; padding:3px; width:fit-content;';
+  
+  const btnManual = document.createElement('button');
+  btnManual.textContent = 'Manual';
+  btnManual.className = 'ms-mode-btn active';
+  btnManual.dataset.mode = 'manual';
+  
+  const btnAuto = document.createElement('button');
+  btnAuto.textContent = 'Auto';
+  btnAuto.className = 'ms-mode-btn';
+  btnAuto.dataset.mode = 'auto';
+  
+  [btnManual, btnAuto].forEach(btn => {
+    btn.style.cssText = 'padding:6px 16px; border:none; border-radius:6px; font-size:0.85rem; font-weight:600; cursor:pointer; transition:all 0.2s;';
+    btn.addEventListener('click', () => {
+      const mode = btn.dataset.mode;
+      container.querySelectorAll('.ms-mode-btn').forEach(b => {
+        b.classList.toggle('active', b === btn);
+        b.style.background = b === btn ? '#147D91' : 'transparent';
+        b.style.color = b === btn ? 'white' : '#64748b';
+      });
+      
+      const manualContainer = container.querySelector('.ms-grid-container, .ms-palette-and-grid');
+      const autoContainer = container.querySelector('#auto-planner-root');
+      
+      if (mode === 'auto') {
+        if (manualContainer) manualContainer.style.display = 'none';
+        if (!autoContainer) {
+          const div = document.createElement('div');
+          div.id = 'auto-planner-root';
+          container.appendChild(div);
+          window.AutoSchedulePlanner?.init('auto-planner-root');
+        } else {
+          autoContainer.style.display = '';
+        }
+      } else {
+        if (manualContainer) manualContainer.style.display = '';
+        if (autoContainer) autoContainer.style.display = 'none';
+      }
+    });
+  });
+  
+  // Set initial styles
+  btnManual.style.background = '#147D91';
+  btnManual.style.color = 'white';
+  btnAuto.style.background = 'transparent';
+  btnAuto.style.color = '#64748b';
+  
+  toggle.appendChild(btnManual);
+  toggle.appendChild(btnAuto);
+  
+  // Insert at top of container
+  container.insertBefore(toggle, container.firstChild);
+}
 
+// Call after init
+const _origInit = init;
+init = function() {
+  _origInit();
+  setTimeout(renderModeToggle, 100);
+};
 window.initMasterScheduler = init;
 // Expose internals for mobile touch support + auto build integration
 window.MasterSchedulerInternal = {
