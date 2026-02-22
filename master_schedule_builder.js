@@ -485,7 +485,8 @@ function init(){
       
       <!-- DAW Main -->
       <div class="ms-auto-container" style="flex:1; display:flex; flex-direction:column; overflow:hidden;">
-        <div id="daw-toolbar" class="ms-auto-toolbar"></div>
+        <div id="daw-toolbar" class="ms-toolbar"></div>
+        <div id="daw-expand" class="ms-expand"></div>
         <div class="ms-daw-wrapper">
           <div id="daw-grid" class="ms-daw-grid"></div>
         </div>
