@@ -435,11 +435,19 @@ function findPoolField(allLocations) {
 }
 
 // --- Init ---
-function init(){
-  container=document.getElementById("master-scheduler-content");
-  if(!container) return;
-    
-  loadDailySkeleton();
+function init(targetElement = null){
+  container = targetElement || document.getElementById("master-scheduler-content");
+  if(!container) return;
+
+  // 1. FRESH FETCH: Dynamically check the universal setting so it updates instantly
+  if (window.getCampBuilderMode) {
+      currentBuilderMode = window.getCampBuilderMode();
+  }
+  
+  // 2. CLEAR MEMORY: Reset the locked template so Day Assignments trigger correctly
+  currentLoadedTemplate = null;
+    
+  loadDailySkeleton();
   
   // Reset unsaved changes since we just loaded fresh
   hasUnsavedChanges = false;
