@@ -499,6 +499,98 @@ function init(){
       
       .ms-toolbar-label { font-size:11px; color:#94a3b8; font-weight:500; }
       
+      /* Mode Toggle */
+      .ms-mode-toggle { display:flex; background:#f1f5f9; border-radius:8px; padding:3px; gap:2px; }
+      .ms-mode-btn { padding:7px 16px; border:none; border-radius:6px; font-size:12px; font-weight:600; cursor:pointer; transition:all 0.2s; background:transparent; color:#64748b; white-space:nowrap; }
+      .ms-mode-btn:hover { color:#334155; }
+      .ms-mode-btn.active { background:#fff; color:#0f172a; box-shadow:0 1px 3px rgba(0,0,0,0.1); }
+      
+      
+      /* Auto Mode Container */
+      .ms-auto-container { display:flex; flex-direction:column; height:100%; }
+      .ms-auto-toolbar { background:#fff; border-bottom:1px solid #e2e8f0; padding:10px 16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+      
+      /* DAW Timeline Grid */
+      .ms-daw-wrapper { flex:1; overflow:auto; background:#1e1e2e; position:relative; }
+      .ms-daw-grid { position:relative; min-width:800px; }
+      
+      /* Time ruler at top */
+      .ms-daw-ruler { display:flex; height:32px; background:#2a2a3e; border-bottom:1px solid #3a3a52; position:sticky; top:0; z-index:10; margin-left:140px; }
+      .ms-daw-ruler-tick { flex:none; border-left:1px solid #3a3a52; padding:0 8px; font-size:10px; color:#8888aa; line-height:32px; font-family:'JetBrains Mono', 'SF Mono', monospace; }
+      .ms-daw-ruler-tick:nth-child(even) { color:#6666aa; }
+      
+      /* Grade rows */
+      .ms-daw-grade { display:flex; border-bottom:1px solid #2a2a3e; min-height:80px; position:relative; }
+      .ms-daw-grade:hover { background:rgba(255,255,255,0.02); }
+      .ms-daw-grade-label { width:140px; min-width:140px; background:#252538; border-right:1px solid #3a3a52; padding:10px 12px; display:flex; flex-direction:column; justify-content:center; position:sticky; left:0; z-index:5; }
+      .ms-daw-grade-name { font-size:13px; font-weight:600; color:#e2e8f0; }
+      .ms-daw-grade-info { font-size:10px; color:#8888aa; margin-top:2px; }
+      .ms-daw-grade-actions { margin-top:6px; display:flex; gap:4px; }
+      .ms-daw-grade-btn { padding:2px 6px; font-size:9px; border:1px solid #4a4a62; border-radius:3px; background:transparent; color:#8888aa; cursor:pointer; transition:all 0.15s; }
+      .ms-daw-grade-btn:hover { background:#3a3a52; color:#e2e8f0; }
+      
+      /* Track area (where bands go) */
+      .ms-daw-track { flex:1; position:relative; min-height:80px; }
+      
+      /* Layer bands */
+      .ms-daw-band { position:absolute; height:22px; border-radius:4px; cursor:pointer; display:flex; align-items:center; padding:0 8px; font-size:10px; font-weight:600; transition:box-shadow 0.15s, filter 0.15s; z-index:2; user-select:none; }
+      .ms-daw-band:hover { box-shadow:0 0 8px rgba(255,255,255,0.2); filter:brightness(1.15); z-index:3; }
+      .ms-daw-band.selected { outline:2px solid #fff; outline-offset:1px; z-index:4; }
+      .ms-daw-band .band-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+      .ms-daw-band .band-qty { background:rgba(0,0,0,0.3); padding:1px 5px; border-radius:3px; font-size:9px; margin-left:4px; flex-shrink:0; }
+      .ms-daw-band .band-resize { position:absolute; top:0; bottom:0; width:6px; cursor:ew-resize; z-index:5; }
+      .ms-daw-band .band-resize-left { left:-2px; }
+      .ms-daw-band .band-resize-right { right:-2px; }
+      
+      /* Band colors by type */
+      .ms-daw-band[data-type="sport"] { background:rgba(134,239,172,0.7); color:#14532d; }
+      .ms-daw-band[data-type="special"] { background:rgba(196,181,253,0.7); color:#3b1f6b; }
+      .ms-daw-band[data-type="activity"] { background:rgba(147,197,253,0.7); color:#1e3a5f; }
+      .ms-daw-band[data-type="swim"] { background:rgba(103,232,249,0.75); color:#155e75; }
+      .ms-daw-band[data-type="lunch"] { background:rgba(252,165,165,0.75); color:#7f1d1d; }
+      .ms-daw-band[data-type="snacks"] { background:rgba(253,224,71,0.75); color:#713f12; }
+      .ms-daw-band[data-type="dismissal"] { background:rgba(248,113,113,0.8); color:#fff; }
+      .ms-daw-band[data-type="custom"] { background:rgba(209,213,219,0.7); color:#374151; }
+      .ms-daw-band[data-type="league"] { background:rgba(165,180,252,0.7); color:#312e81; }
+      .ms-daw-band[data-type="elective"] { background:rgba(240,171,252,0.7); color:#701a75; }
+      
+      /* Grid lines */
+      .ms-daw-gridline { position:absolute; top:0; bottom:0; width:1px; background:#2a2a3e; z-index:1; pointer-events:none; }
+      .ms-daw-gridline.major { background:#3a3a52; }
+      
+      /* DAW Sidebar (layer palette) */
+      .ms-daw-sidebar { width:180px; min-width:0; background:#252538; border-right:1px solid #3a3a52; display:flex; flex-direction:column; height:100%; }
+      .ms-daw-sidebar-header { padding:14px 12px; border-bottom:1px solid #3a3a52; }
+      .ms-daw-sidebar-header h3 { margin:0; font-size:13px; font-weight:600; color:#e2e8f0; }
+      .ms-daw-palette { flex:1; overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:6px; }
+      .ms-daw-tile { padding:8px 10px; border-radius:5px; cursor:grab; font-size:11px; font-weight:600; transition:transform 0.15s; display:flex; align-items:center; gap:6px; }
+      .ms-daw-tile:hover { transform:translateX(3px); }
+      .ms-daw-tile:active { cursor:grabbing; }
+      .ms-daw-tile-color { width:14px; height:14px; border-radius:3px; flex-shrink:0; }
+      .ms-daw-tile-divider { height:1px; background:#3a3a52; margin:4px 0; }
+      .ms-daw-tile-label { font-size:10px; color:#8888aa; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; padding:4px 0; }
+      
+      /* Band popover for editing */
+      .ms-daw-popover { position:absolute; background:#2a2a3e; border:1px solid #4a4a62; border-radius:8px; padding:12px; z-index:20; min-width:200px; box-shadow:0 8px 24px rgba(0,0,0,0.5); }
+      .ms-daw-popover h4 { margin:0 0 10px; font-size:12px; color:#e2e8f0; }
+      .ms-daw-popover label { font-size:11px; color:#8888aa; display:block; margin-bottom:4px; }
+      .ms-daw-popover input, .ms-daw-popover select { width:100%; padding:6px 8px; background:#1e1e2e; border:1px solid #4a4a62; border-radius:4px; color:#e2e8f0; font-size:12px; box-sizing:border-box; margin-bottom:8px; }
+      .ms-daw-popover input:focus, .ms-daw-popover select:focus { outline:none; border-color:#6366f1; }
+      .ms-daw-pop-row { display:flex; gap:6px; align-items:center; margin-bottom:8px; }
+      .ms-daw-pop-op { width:28px; height:28px; border:1px solid #4a4a62; border-radius:4px; background:transparent; cursor:pointer; font-size:12px; font-weight:600; color:#8888aa; display:flex; align-items:center; justify-content:center; transition:all 0.1s; }
+      .ms-daw-pop-op:hover { background:#3a3a52; }
+      .ms-daw-pop-op.active { background:#6366f1; color:#fff; border-color:#6366f1; }
+      .ms-daw-pop-actions { display:flex; gap:6px; margin-top:10px; padding-top:10px; border-top:1px solid #3a3a52; }
+      .ms-daw-pop-btn { flex:1; padding:6px; border:none; border-radius:4px; font-size:11px; font-weight:500; cursor:pointer; }
+      .ms-daw-pop-btn-save { background:#6366f1; color:#fff; }
+      .ms-daw-pop-btn-save:hover { background:#4f46e5; }
+      .ms-daw-pop-btn-del { background:#ef4444; color:#fff; }
+      .ms-daw-pop-btn-del:hover { background:#dc2626; }
+      .ms-daw-pop-btn-cancel { background:#3a3a52; color:#e2e8f0; }
+      
+      /* Drop zone highlight */
+      .ms-daw-track.drop-target { background:rgba(99,102,241,0.1); outline:2px dashed #6366f1; outline-offset:-2px; }
+      
       /* Grid Area */
       .ms-grid-wrapper { flex:1; overflow:auto; background:#fff; }
       
