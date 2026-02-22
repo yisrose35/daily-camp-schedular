@@ -394,9 +394,55 @@
                 25% { transform: translateX(-2px); }
                 75% { transform: translateX(2px); }
             }
+
+            /* ===== Builder Mode Slider ===== */
+            .builder-mode-wrapper {
+                display: flex;
+                justify-content: center;
+                margin: 10px 0 24px 0;
+            }
+            .builder-mode-slider {
+                display: flex;
+                background: #E2E8F0;
+                border-radius: 999px;
+                padding: 4px;
+                position: relative;
+                width: 380px;
+                box-shadow: inset 0 2px 4px rgba(15, 23, 42, 0.05);
+            }
+            .builder-mode-option {
+                flex: 1;
+                text-align: center;
+                padding: 10px 0;
+                font-size: 0.95rem;
+                font-weight: 600;
+                color: #64748B;
+                cursor: pointer;
+                z-index: 2;
+                transition: color 0.3s;
+            }
+            .builder-mode-option.active {
+                color: #0D7C5C;
+            }
+            .builder-mode-indicator {
+                position: absolute;
+                top: 4px;
+                bottom: 4px;
+                width: calc(50% - 4px);
+                background: #FFFFFF;
+                border-radius: 999px;
+                box-shadow: 0 2px 8px rgba(15, 23, 42, 0.1);
+                transition: transform 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
+                z-index: 1;
+            }
+            .builder-mode-slider[data-mode="manual"] .builder-mode-indicator {
+                transform: translateX(0);
+            }
+            .builder-mode-slider[data-mode="auto"] .builder-mode-indicator {
+                transform: translateX(100%);
+            }
         `;
-        document.head.appendChild(style);
-    }
+        document.head.appendChild(style);    }
 
     // ==================== CAMPISTRY ME LINK BANNER ====================
 
