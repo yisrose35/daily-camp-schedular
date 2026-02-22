@@ -785,9 +785,32 @@ let dawSelectedBand = null;
 let dawDragData = null;
 
 function loadDAWLayers() {
-  // Load from global settings
   const g = window.loadGlobalSettings?.() || {};
-  dawLayers = g.app1?.autoLayerTemplates?.[currentLoadedTemplate || '_current'] || {};
+  const autoTemplates = g.app1?.autoLayerTemplates || {};
+  const assignments = window.getSkeletonAssignments?.() || {};
+  
+  const dateStr = window.currentScheduleDate || "";
+  const [Y, M, D] = dateStr.split('-').map(Number);
+  let dow = 0; if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const today = dayNames[dow];
+  
+  // Figure out which template is assigned to today
+  let tmpl = currentLoadedTemplate || assignments[today] || assignments["Default"];
+  
+  // Lock the UI onto the assigned template
+  if (!currentLoadedTemplate && tmpl) {
+      currentLoadedTemplate = tmpl;
+  }
+  
+  // Load the assigned template (or fallback to unsaved draft '_current')
+  if (tmpl && autoTemplates[tmpl]) {
+      dawLayers = JSON.parse(JSON.stringify(autoTemplates[tmpl]));
+  } else if (autoTemplates['_current']) {
+      dawLayers = JSON.parse(JSON.stringify(autoTemplates['_current']));
+  } else {
+      dawLayers = {};
+  }
   
   // If empty, seed from divisions
   if (Object.keys(dawLayers).length === 0) {
