@@ -152,17 +152,30 @@
 
             // Listen for auth changes
             client.auth.onAuthStateChange((event, session) => {
-                log('Auth state changed:', event);
-                _session = session;
-                _userId = session?.user?.id || null;
+            log('Auth state changed:', event);
+            _session = session;
+            _userId = session?.user?.id || null;
 
-                if (event === 'SIGNED_IN') {
-                    // ★★★ V-002 FIX: Mark role as unverified during re-detection ★★★
+            if (event === 'SIGNED_IN') {
+                // ★★★ v5.4: Skip role detection on landing page ★★★
+                // landing.js handles camp creation + role setting.
+                // Running detectCampAndRole here races against the DB insert.
+                const page = window.location.pathname.split('/').pop() || 'index.html';
+                if (page === 'index.html' || page === 'invite.html') {
+                    log('On landing/invite page — skipping detectCampAndRole (landing.js handles it)');
+                    // Just read localStorage that landing.js set
+                    _campId = localStorage.getItem(CONFIG.CACHE_KEYS.CAMP_ID);
+                    _role = localStorage.getItem(CONFIG.CACHE_KEYS.ROLE);
+                    _isTeamMember = localStorage.getItem(CONFIG.CACHE_KEYS.IS_TEAM_MEMBER) === 'true';
+                    _roleVerifiedFromDB = false;
+                    notifyAuthChange(event, session);
+                } else {
                     _roleVerifiedFromDB = false;
                     detectCampAndRole().then(() => {
                         notifyAuthChange(event, session);
                     });
-                } else if (event === 'SIGNED_OUT') {
+                }
+            } else if (event === 'SIGNED_OUT') {
                     _roleVerifiedFromDB = false;
                     clearCache();
                     notifyAuthChange(event, session);
