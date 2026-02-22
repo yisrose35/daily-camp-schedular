@@ -21,7 +21,21 @@ let dailySkeleton=[];
 let currentLoadedTemplate = null;
 let selectedTileId = null;
 let hasUnsavedChanges = false;
-let currentBuilderMode = 'manual'; // 'manual' or 'auto'
+
+// --- UNIVERSAL BUILDER MODE ---
+window.getCampBuilderMode = function() {
+  const g = window.loadGlobalSettings?.() || {};
+  return g.app1?.builderMode || 'manual';
+};
+window.setCampBuilderMode = function(mode) {
+  const g = window.loadGlobalSettings?.() || {};
+  if (!g.app1) g.app1 = {};
+  g.app1.builderMode = mode;
+  window.saveGlobalSettings?.('app1', g.app1);
+  window.forceSyncToCloud?.();
+};
+
+let currentBuilderMode = window.getCampBuilderMode();
 
 // --- Constants ---
 const SKELETON_DRAFT_KEY = 'master-schedule-draft';
