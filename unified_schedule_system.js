@@ -2078,8 +2078,136 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
         return table;
     }
 
-    function renderLeagueCell(block, bunks, divName, isEditable) {
-        const td = document.createElement('td');
+    // =========================================================================
+    // ★★★ AUTO BUILD: GANTT/TIMELINE RENDERER ★★★
+    // =========================================================================
+    
+    function renderDivisionTimeline(divName, divInfo, bunks, isEditable) {
+        const container = document.createElement('div');
+        container.className = 'schedule-timeline-container';
+        
+        const bunkTimelines = window._autoBuildTimelines || {};
+        const assignments = window.scheduleAssignments || {};
+        const divSlots = window.divisionTimes?.[divName] || [];
+        
+        let dayStart = 540, dayEnd = 960;
+        const divConfig = (window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {})[divName];
+        if (divConfig?.startTime) { const s = parseTimeToMinutes(divConfig.startTime); if (s !== null) dayStart = s; }
+        if (divConfig?.endTime) { const e = parseTimeToMinutes(divConfig.endTime); if (e !== null) dayEnd = e; }
+        bunks.forEach(bunk => {
+            (bunkTimelines[bunk] || []).forEach(block => {
+                if (block.startMin < dayStart) dayStart = block.startMin;
+                if (block.endMin > dayEnd) dayEnd = block.endMin;
+            });
+        });
+        
+        const totalMinutes = dayEnd - dayStart;
+        if (totalMinutes <= 0) return null;
+        const divColor = divInfo.color || '#4b5563';
+        
+        // Header
+        const header = document.createElement('div');
+        header.style.cssText = `background: ${divColor}; color: #fff; padding: 12px 16px; font-size: 1.1rem; font-weight: 600; border-radius: 8px 8px 0 0;`;
+        header.textContent = escapeHtml(divName);
+        container.appendChild(header);
+        
+        // Time axis
+        const axisRow = document.createElement('div');
+        axisRow.style.cssText = 'display: flex; position: relative; height: 24px; background: #f9fafb; border-bottom: 1px solid #e5e7eb; padding-left: 120px;';
+        const firstHour = Math.ceil(dayStart / 60), lastHour = Math.floor(dayEnd / 60);
+        for (let h = firstHour; h <= lastHour; h++) {
+            const offset = ((h * 60 - dayStart) / totalMinutes) * 100;
+            const marker = document.createElement('div');
+            marker.style.cssText = `position: absolute; left: ${offset}%; font-size: 10px; color: #6b7280; transform: translateX(-50%); top: 4px;`;
+            marker.textContent = `${h % 12 || 12}${h >= 12 ? 'pm' : 'am'}`;
+            axisRow.appendChild(marker);
+        }
+        container.appendChild(axisRow);
+        
+        // Bunk rows
+        bunks.forEach((bunk, bunkIdx) => {
+            const row = document.createElement('div');
+            row.style.cssText = `display: flex; align-items: stretch; min-height: 40px; border-bottom: 1px solid #f3f4f6; background: ${bunkIdx % 2 === 0 ? '#fff' : '#fafafa'};`;
+            
+            const label = document.createElement('div');
+            label.style.cssText = 'width: 120px; min-width: 120px; padding: 8px 12px; font-weight: 600; font-size: 0.85rem; color: #374151; display: flex; align-items: center; border-right: 1px solid #e5e7eb;';
+            label.textContent = escapeHtml(bunk);
+            row.appendChild(label);
+            
+            const timelineArea = document.createElement('div');
+            timelineArea.style.cssText = 'flex: 1; position: relative; min-height: 40px;';
+            
+            for (let h = firstHour; h <= lastHour; h++) {
+                const offset = ((h * 60 - dayStart) / totalMinutes) * 100;
+                const line = document.createElement('div');
+                line.style.cssText = `position: absolute; left: ${offset}%; width: 1px; height: 100%; background: #f3f4f6; top: 0; z-index: 0;`;
+                timelineArea.appendChild(line);
+            }
+            
+            let blocks = [];
+            if (bunkTimelines[bunk] && bunkTimelines[bunk].length > 0) {
+                blocks = bunkTimelines[bunk];
+            } else if (assignments[bunk] && divSlots.length > 0) {
+                for (let si = 0; si < divSlots.length; si++) {
+                    const entry = assignments[bunk]?.[si];
+                    if (!entry || entry.continuation || entry._isTransition) continue;
+                    const slot = divSlots[si];
+                    let endSlot = si;
+                    while (endSlot + 1 < divSlots.length && assignments[bunk]?.[endSlot + 1]?.continuation) endSlot++;
+                    blocks.push({
+                        startMin: slot.startMin, endMin: divSlots[endSlot].endMin,
+                        event: slot.event || 'Activity',
+                        _activity: entry._activity || entry.field,
+                        type: entry._pinned ? 'pinned' : (slot.type || 'slot')
+                    });
+                }
+            }
+            
+            blocks.forEach(block => {
+                const left = ((block.startMin - dayStart) / totalMinutes) * 100;
+                const width = ((block.endMin - block.startMin) / totalMinutes) * 100;
+                if (width <= 0) return;
+                const el = document.createElement('div');
+                el.className = 'timeline-block';
+                el.style.cssText = `position: absolute; left: ${left}%; width: ${width}%; top: 3px; bottom: 3px; border-radius: 4px; padding: 2px 6px; font-size: 0.75rem; font-weight: 500; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: ${isEditable ? 'pointer' : 'default'}; z-index: 1; display: flex; align-items: center; box-shadow: 0 1px 2px rgba(0,0,0,0.08); ${_getTimelineBlockStyle(block)}`;
+                const displayName = block._activity || block.event || '';
+                const duration = block.endMin - block.startMin;
+                el.textContent = width > 8 ? `${escapeHtml(displayName)} (${duration}m)` : escapeHtml(displayName);
+                el.title = `${displayName}\n${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(block.endMin)} (${duration}min)`;
+                if (isEditable) {
+                    el.onclick = () => {
+                        if (typeof window.enhancedEditCell === 'function') window.enhancedEditCell(bunk, block.startMin, block.endMin, displayName);
+                        else if (typeof window.editCell === 'function') window.editCell(bunk, block.startMin, block.endMin, displayName);
+                    };
+                }
+                timelineArea.appendChild(el);
+            });
+            
+            row.appendChild(timelineArea);
+            container.appendChild(row);
+        });
+        
+        container.style.cssText = 'border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 16px; background: #fff;';
+        return container;
+    }
+    
+    function _getTimelineBlockStyle(block) {
+        const type = block.type || '';
+        const event = (block.event || '').toLowerCase();
+        if (type === 'pinned' || type === 'fixed' || event.includes('lunch') || event.includes('snack') || event.includes('dismissal'))
+            return 'background: linear-gradient(135deg, #fef3c7, #fde68a); color: #92400e; border: 1px solid #f59e0b;';
+        if (block._scarce)
+            return 'background: linear-gradient(135deg, #fce7f3, #fbcfe8); color: #9d174d; border: 1px solid #ec4899;';
+        if (event.includes('special') || type === 'special_slot')
+            return 'background: linear-gradient(135deg, #e0e7ff, #c7d2fe); color: #3730a3; border: 1px solid #6366f1;';
+        if (event.includes('sport') || type === 'sport_slot')
+            return 'background: linear-gradient(135deg, #d1fae5, #a7f3d0); color: #065f46; border: 1px solid #10b981;';
+        if (event.includes('league'))
+            return 'background: linear-gradient(135deg, #e0f2fe, #bae6fd); color: #075985; border: 1px solid #0284c7;';
+        return 'background: linear-gradient(135deg, #f3f4f6, #e5e7eb); color: #374151; border: 1px solid #d1d5db;';
+    }
+
+    function renderLeagueCell(block, bunks, divName, isEditable) {        const td = document.createElement('td');
         td.colSpan = bunks.length;
         td.style.cssText = 'padding: 12px 16px; background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); border-left: 4px solid #0284c7; vertical-align: top;';
         
