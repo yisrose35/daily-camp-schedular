@@ -447,12 +447,7 @@ function init(){
   // Inject HTML with new layout
   container.innerHTML = `
     
-   <!-- Mode Toggle Bar -->
-    <div class="ms-mode-toggle" id="ms-mode-toggle" style="margin-bottom:0; padding:8px 16px; background:#fff; border:1px solid #e2e8f0; border-bottom:none; border-radius:12px 12px 0 0;">
-      <button class="ms-mode-btn active" data-mode="manual">Manual Build</button>
-<button class="ms-mode-btn" data-mode="auto">Auto Build</button>
-    </div>
-    
+      
     <!-- Manual Mode Container (current system) -->
     <div class="ms-container" id="ms-manual-container" style="border-radius:0 0 12px 12px;">
       <!-- Left Sidebar -->
