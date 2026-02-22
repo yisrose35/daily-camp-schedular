@@ -653,7 +653,14 @@ function init(){
       .ms-assign-item select { width:100%; padding:5px 6px; border:1px solid #e2e8f0; border-radius:4px; font-size:11px; }
     </style>
     
-    <div class="ms-container">
+   <!-- Mode Toggle Bar -->
+    <div class="ms-mode-toggle" id="ms-mode-toggle" style="margin-bottom:0; padding:8px 16px; background:#fff; border:1px solid #e2e8f0; border-bottom:none; border-radius:12px 12px 0 0;">
+      <button class="ms-mode-btn active" data-mode="manual">Manual Build</button>
+<button class="ms-mode-btn" data-mode="auto">Auto Build</button>
+    </div>
+    
+    <!-- Manual Mode Container (current system) -->
+    <div class="ms-container" id="ms-manual-container" style="border-radius:0 0 12px 12px;">
       <!-- Left Sidebar -->
       <div class="ms-sidebar">
         <div class="ms-sidebar-header">
@@ -668,6 +675,25 @@ function init(){
         <div id="scheduler-expand" class="ms-expand"></div>
         <div class="ms-grid-wrapper">
           <div id="scheduler-grid"></div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Auto Mode Container (DAW layer timeline) -->
+    <div id="ms-auto-container" class="ms-container" style="display:none; border-radius:0 0 12px 12px; background:#1e1e2e;">
+      <!-- DAW Sidebar -->
+      <div class="ms-daw-sidebar">
+        <div class="ms-daw-sidebar-header">
+          <h3>Layer Types</h3>
+        </div>
+        <div id="daw-palette" class="ms-daw-palette"></div>
+      </div>
+      
+      <!-- DAW Main -->
+      <div class="ms-auto-container" style="flex:1; display:flex; flex-direction:column; overflow:hidden;">
+        <div id="daw-toolbar" class="ms-auto-toolbar"></div>
+        <div class="ms-daw-wrapper">
+          <div id="daw-grid" class="ms-daw-grid"></div>
         </div>
       </div>
     </div>
