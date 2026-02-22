@@ -3894,21 +3894,23 @@ const isAutoMode = globalMode === 'auto';
   loadCurrentOverrides();
   
   // Initialize window.isRainyDay from loaded daily data
-  const dailyData = window.loadCurrentDailyData?.() || {};
+  var dailyData = window.loadCurrentDailyData?.() || {};
   if (window.isRainyDay === undefined) {
-    // Only set if not already defined (e.g., from another module)
     window.isRainyDay = dailyData.isRainyDay === true || dailyData.rainyDayMode === true;
   }
   console.log("[DailyAdj] Initialized window.isRainyDay =", window.isRainyDay);
-  
+
+  // Determine auto mode
+  var isAutoMode = (typeof globalMode !== 'undefined' && globalMode === 'auto');
+
   container.innerHTML = getStyles() + getMainHTML(isAutoMode);
-  
+
   setupSubTabs();
   setupKeyboardHandler();
   setupVisibilityHandler();
-  
+
   loadDailySkeleton();
-  
+
   renderPalette();
   renderRainyDayPanel();
   renderDisplacedTilesPanel();
