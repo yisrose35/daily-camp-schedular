@@ -964,7 +964,8 @@ else penalty += 200;
         applyPickToSchedule: applyPickToSchedule,
         undoPickFromSchedule: undoPickFromSchedule,
         getLiveTypeBalance: getLiveTypeBalance,
-        isSpecialCandidate: isSpecialCandidate
+        isSpecialCandidate: isSpecialCandidate,
+        getActivityDuration: getActivityDuration
     };
 
     console.log('[SOLVER] Part 1 loaded (v15.0 — fullGrade per-grade + rainy day overrides)');
