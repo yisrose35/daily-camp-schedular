@@ -2146,8 +2146,28 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
             else bgColor = '#f9fafb'; 
         }
         
-        td.textContent = displayText;
-        td.style.background = bgColor;
+       // ★★★ AUTO BUILDER v2: _subEntries = multiple activities in one slot ★★★
+        if (entry && entry._subEntries && entry._subEntries.length > 0) {
+            td.innerHTML = '';
+            td.style.padding = '2px';
+            td.style.background = bgColor;
+            const allSubs = [entry, ...entry._subEntries];
+            const totalMin = block.endMin - block.startMin;
+            allSubs.forEach((sub, si) => {
+                const subDiv = document.createElement('div');
+                const subDur = (sub._endMin || block.endMin) - (sub._startMin || block.startMin);
+                const hPct = Math.max(30, (subDur / totalMin) * 100);
+                const subText = formatEntry(sub);
+                const subBg = getEntryBackground(sub, block.event);
+                subDiv.style.cssText = 'padding:2px 4px; font-size:0.75rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border-radius:3px; margin-bottom:1px; background:' + subBg + ';';
+                subDiv.textContent = subText;
+                subDiv.title = subText + ' (' + subDur + 'min)';
+                td.appendChild(subDiv);
+            });
+        } else {
+            td.textContent = displayText;
+            td.style.background = bgColor;
+        }
         
         // Cell-specific bypass highlighting
 const bypassStatus = getCellBypassStatus(bunk, slotIdx);
