@@ -941,15 +941,19 @@ function renderDAWGrid() {
     return;
   }
   
-  // Find global time bounds
-  let globalStart = 540, globalEnd = 960;
+  // Find global time bounds dynamically based on divisions
+  let globalStart = null, globalEnd = null;
   grades.forEach(g => {
     const div = divisions[g];
     const s = parseTimeToMinutes(div?.startTime);
     const e = parseTimeToMinutes(div?.endTime);
-    if (s != null && s < globalStart) globalStart = s;
-    if (e != null && e > globalEnd) globalEnd = e;
+    if (s !== null && (globalStart === null || s < globalStart)) globalStart = s;
+    if (e !== null && (globalEnd === null || e > globalEnd)) globalEnd = e;
   });
+  
+  // Fallbacks if no times are set
+  if (globalStart === null) globalStart = 540; // 9:00 AM
+  if (globalEnd === null) globalEnd = 960;     // 4:00 PM
   
   const totalWidth = (globalEnd - globalStart) * DAW_PIXELS_PER_MINUTE;
   
