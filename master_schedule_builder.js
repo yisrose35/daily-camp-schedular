@@ -2491,7 +2491,7 @@ function minutesToTime(min) {
 }
 
 window.initMasterScheduler = init;
-window.renderAutoBuilder = function(el) { init(el); }; // Mounts Auto Builder inside Daily Adjustments
+
 // Expose internals for mobile touch support + auto build integration
 window.MasterSchedulerInternal = {
   get dailySkeleton() { return dailySkeleton; },
