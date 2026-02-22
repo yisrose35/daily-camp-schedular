@@ -516,13 +516,23 @@ function init(targetElement = null){
     
   renderToolbar();
   renderExpandSection();
-  renderPalette();
-  renderGrid();
-  
-  
-  
-  // Global keyboard listener for Delete key
-  document.addEventListener('keydown', handleKeyDown);
+ renderPalette();
+  renderGrid();
+  
+  // Force UI to match current universal mode immediately on load
+  const manualEl = document.getElementById('ms-manual-container');
+  const autoEl = document.getElementById('ms-auto-container');
+  if (currentBuilderMode === 'manual') {
+    if (manualEl) manualEl.style.display = 'flex';
+    if (autoEl) autoEl.style.display = 'none';
+  } else {
+    if (manualEl) manualEl.style.display = 'none';
+    if (autoEl) autoEl.style.display = 'flex';
+    renderDAW();
+  }
+
+  // Global keyboard listener for Delete key
+  document.addEventListener('keydown', handleKeyDown);
 }
 
 function handleKeyDown(e) {
