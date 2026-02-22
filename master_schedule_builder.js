@@ -497,8 +497,7 @@ function init(){
   renderPalette();
   renderGrid();
   
-  // Mode toggle
-  setupModeToggle();
+  
   
   // Global keyboard listener for Delete key
   document.addEventListener('keydown', handleKeyDown);
@@ -726,37 +725,7 @@ function renderToolbar() {
     }
   };
 }
-// =================================================================
-// MODE TOGGLE: Manual ↔ Auto (DAW)
-// =================================================================
-function setupModeToggle() {
-  const toggleBar = document.getElementById('ms-mode-toggle');
-  if (!toggleBar) return;
-  
-  toggleBar.querySelectorAll('.ms-mode-btn').forEach(btn => {
-    btn.onclick = () => {
-      const mode = btn.dataset.mode;
-      if (mode === currentBuilderMode) return;
-      
-      currentBuilderMode = mode;
-      toggleBar.querySelectorAll('.ms-mode-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      
-      const manualEl = document.getElementById('ms-manual-container');
-      const autoEl = document.getElementById('ms-auto-container');
-      
-      if (mode === 'manual') {
-        manualEl.style.display = 'flex';
-        autoEl.style.display = 'none';
-        renderGrid();
-      } else {
-        manualEl.style.display = 'none';
-        autoEl.style.display = 'flex';
-        renderDAW();
-      }
-    };
-  });
-}
+
 
 // =================================================================
 // DAW (Digital Audio Workstation) LAYER VIEW
