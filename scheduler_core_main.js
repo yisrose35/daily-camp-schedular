@@ -2028,7 +2028,10 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
             // General activity slot or other schedulable block
             if (normalizedGA || item.type === 'slot' || GENERATOR_TYPES.includes(item.type)) {
-                bunkList.forEach(bunk => {
+                // ★★★ AUTO BUILDER v2: _bunk field = only expand to that one bunk ★★★
+                const targetBunks = item._bunk ? [item._bunk].filter(b => bunkList.includes(b)) : bunkList;
+
+                targetBunks.forEach(bunk => {
                     const existing = window.scheduleAssignments[bunk]?.[slots[0]];
                     if (existing && existing._bunkOverride) return;
 
@@ -2039,7 +2042,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         type: 'slot',
                         startTime: sMin,
                         endTime: eMin,
-                        slots
+                        slots,
+                        _hintActivity: item._hintActivity || null,
+                        _slotType: item._slotType || null
                     });
                 });
             }
