@@ -346,9 +346,11 @@
 .al-container {
     display: flex;
     flex-direction: column;
-    height: 100%;
+    height: calc(100vh - 160px);
+    min-height: 300px;
     background: #fff;
-    border-radius: 10px;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
     overflow: hidden;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
@@ -359,11 +361,12 @@
 
 /* Toolbar */
 .al-toolbar {
-    display: flex; align-items: center; gap: 8px;
-    padding: 10px 16px; background: #f8fafc;
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px; background: #fff;
     border-bottom: 1px solid #e2e8f0; flex-wrap: wrap; min-height: 44px;
 }
-.al-toolbar-group { display: flex; align-items: center; gap: 6px; }
+.al-toolbar-group { display: flex; align-items: center; gap: 8px; padding: 0 12px; border-right: 1px solid #e2e8f0; }
+.al-toolbar-group:last-child { border-right: none; }
 .al-toolbar-sep { width: 1px; height: 24px; background: #e2e8f0; margin: 0 4px; }
 
 /* Buttons */
@@ -392,19 +395,25 @@
 
 /* Palette */
 .al-palette {
-    width: 140px; min-width: 140px; background: #f9fafb;
-    border-right: 1px solid #e2e8f0; padding: 10px 8px;
-    overflow-y: auto; display: flex; flex-direction: column; gap: 3px;
+    width: 180px; min-width: 180px; background: #f8fafc;
+    border-right: 1px solid #e2e8f0; padding: 10px;
+    overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+    scrollbar-width: thin; scrollbar-color: #cbd5e1 #f1f5f9;
 }
+.al-palette::-webkit-scrollbar { width: 6px; }
+.al-palette::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 3px; }
+.al-palette::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+.al-palette::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 .al-palette-title {
-    font-size: 10px; font-weight: 700; color: #94a3b8;
-    text-transform: uppercase; letter-spacing: 0.5px; padding: 4px 6px 8px;
+    font-size: 10px; font-weight: 600; color: #64748b;
+    text-transform: uppercase; letter-spacing: 0.5px; padding: 4px 0;
 }
 .al-tile {
-    padding: 7px 10px; border-radius: 6px; cursor: grab;
-    font-size: 11px; font-weight: 600; transition: transform 0.12s, box-shadow 0.12s; user-select: none;
+    padding: 10px 12px; border-radius: 6px; cursor: grab;
+    font-size: 12px; font-weight: 600; transition: transform 0.15s, box-shadow 0.15s;
+    user-select: none; text-shadow: 0 1px 2px rgba(0,0,0,0.2);
 }
-.al-tile:hover { transform: translateX(2px); box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+.al-tile:hover { transform: translateX(3px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
 .al-tile:active { cursor: grabbing; }
 
 /* Tile colors */
