@@ -3660,10 +3660,17 @@ function getMainHTML(useMS) {
           <div id="da-pane-skeleton" class="da-pane active">
             <div id="da-rainy-panel"></div>
             <div id="da-displaced-tiles-panel" style="display:none;"></div>
-            <div id="da-skeleton-toolbar" class="ms-toolbar"></div>
-            <div class="ms-grid-wrapper">
-              <div id="da-skeleton-grid"></div>
+            <div style="display:flex;gap:0;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+              <button class="da-view-toggle active" data-view="skeleton" style="padding:8px 16px;border:none;background:none;cursor:pointer;font-size:12px;font-weight:600;color:#475569;border-bottom:2px solid transparent;">✋ Skeleton</button>
+              <button class="da-view-toggle" data-view="auto-layers" style="padding:8px 16px;border:none;background:none;cursor:pointer;font-size:12px;font-weight:600;color:#475569;border-bottom:2px solid transparent;">⚡ Auto Layers</button>
             </div>
+            <div id="da-view-skeleton">
+              <div id="da-skeleton-toolbar" class="ms-toolbar"></div>
+              <div class="ms-grid-wrapper">
+                <div id="da-skeleton-grid"></div>
+              </div>
+            </div>
+            <div id="da-view-auto-layers" style="display:none;height:calc(100vh - 300px);overflow:auto;"></div>
           </div>
           
           <div id="da-pane-trips" class="da-pane">
@@ -3867,6 +3874,43 @@ function init() {
   renderTripsForm();
   renderBunkOverridesUI();
   renderResourceOverridesUI();
+
+  // Wire up Skeleton / Auto Layers view toggle (auto mode only)
+  if (isAutoMode) {
+      var viewToggles = container.querySelectorAll('.da-view-toggle');
+      viewToggles.forEach(function(btn) {
+          btn.addEventListener('click', function() {
+              viewToggles.forEach(function(b) {
+                  b.classList.remove('active');
+                  b.style.color = '#475569';
+                  b.style.borderBottomColor = 'transparent';
+              });
+              btn.classList.add('active');
+              btn.style.color = '#3b82f6';
+              btn.style.borderBottomColor = '#3b82f6';
+
+              var skelView = container.querySelector('#da-view-skeleton');
+              var autoView = container.querySelector('#da-view-auto-layers');
+              if (btn.dataset.view === 'skeleton') {
+                  if (skelView) skelView.style.display = '';
+                  if (autoView) autoView.style.display = 'none';
+              } else {
+                  if (skelView) skelView.style.display = 'none';
+                  if (autoView) {
+                      autoView.style.display = '';
+                      if (!autoView.dataset.initialized && typeof window.AutoSchedulePlanner?.init === 'function') {
+                          window.AutoSchedulePlanner.init(autoView);
+                          autoView.dataset.initialized = 'true';
+                      }
+                  }
+              }
+          });
+      });
+
+      // Auto-select the Auto Layers view
+      var autoBtn = container.querySelector('.da-view-toggle[data-view="auto-layers"]');
+      if (autoBtn) autoBtn.click();
+  }
 }
 function cleanup() {
   if (_keyHandler) {
