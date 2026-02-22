@@ -1,0 +1,220 @@
+/* =================================================================
+   auto_schedule_styles.css v2.0 — DAW Layer Planner Styles
+   ================================================================= */
+
+/* ---------------------------------------------------------------
+   PALETTE (left sidebar)
+   --------------------------------------------------------------- */
+.al-palette {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+.al-tile {
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.al-tile:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+}
+.al-tile:active {
+  transform: scale(0.97);
+}
+
+/* ---------------------------------------------------------------
+   TIMELINE
+   --------------------------------------------------------------- */
+.al-timeline {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fafafa;
+  padding: 12px;
+}
+
+.al-grade-row {
+  transition: box-shadow 0.2s;
+}
+.al-grade-row:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+.al-grade-timeline {
+  background: repeating-linear-gradient(
+    90deg,
+    transparent,
+    transparent 59px,
+    #f3f4f6 59px,
+    #f3f4f6 60px
+  );
+}
+
+/* ---------------------------------------------------------------
+   BANDS (layer visualizations on timeline)
+   --------------------------------------------------------------- */
+.al-band {
+  transition: box-shadow 0.15s, transform 0.1s;
+  position: relative;
+}
+.al-band:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  transform: translateY(-1px);
+  z-index: 10;
+}
+
+/* Pinned band: solid thick border, no dashing */
+.al-band-pinned {
+  border-style: solid !important;
+  border-width: 3px !important;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.3);
+}
+
+/* ---------------------------------------------------------------
+   POPOVER
+   --------------------------------------------------------------- */
+.al-popover {
+  animation: al-pop-in 0.15s ease-out;
+}
+
+@keyframes al-pop-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.al-popover input[type="text"],
+.al-popover input[type="number"],
+.al-popover select {
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+
+.al-popover input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #147D91;
+  cursor: pointer;
+}
+
+.al-popover button:hover {
+  filter: brightness(0.95);
+}
+
+/* ---------------------------------------------------------------
+   TOOLBAR
+   --------------------------------------------------------------- */
+.al-toolbar-btn:hover {
+  background: #f1f5f9 !important;
+  border-color: #9ca3af !important;
+}
+
+/* ---------------------------------------------------------------
+   MODE TOGGLE (Manual/Auto switch in Master Builder)
+   --------------------------------------------------------------- */
+.ms-mode-btn {
+  transition: all 0.2s ease;
+}
+.ms-mode-btn:hover {
+  filter: brightness(0.92);
+}
+
+/* ---------------------------------------------------------------
+   DAW VIEW IN DAILY ADJUSTMENTS
+   --------------------------------------------------------------- */
+.da-auto-container {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: white;
+  padding: 16px;
+  margin-top: 12px;
+}
+
+.da-auto-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.da-auto-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.da-auto-badge {
+  background: #147D91;
+  color: white;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.da-auto-generate-btn {
+  padding: 8px 20px;
+  background: #147D91;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.da-auto-generate-btn:hover {
+  background: #0f5f6e;
+}
+
+/* ---------------------------------------------------------------
+   SUB-ENTRIES DISPLAY (stacked activities in one cell)
+   --------------------------------------------------------------- */
+.al-sub-entry {
+  padding: 2px 4px;
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 3px;
+  margin-bottom: 1px;
+}
+.al-sub-entry:last-child {
+  margin-bottom: 0;
+}
+
+/* ---------------------------------------------------------------
+   DRAG-OVER EFFECTS
+   --------------------------------------------------------------- */
+.al-grade-timeline.drag-over {
+  background-color: rgba(20, 125, 145, 0.05);
+  outline: 2px dashed #147D91;
+  outline-offset: -2px;
+}
+
+/* ---------------------------------------------------------------
+   RESPONSIVE
+   --------------------------------------------------------------- */
+@media (max-width: 768px) {
+  .al-main {
+    flex-direction: column !important;
+  }
+  .al-palette {
+    width: 100% !important;
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+    gap: 4px !important;
+  }
+  .al-tile {
+    flex: 0 0 auto;
+    font-size: 0.7rem !important;
+    padding: 4px 8px !important;
+  }
+  .al-popover {
+    left: 16px !important;
+    right: 16px !important;
+    width: auto !important;
+  }
+}
