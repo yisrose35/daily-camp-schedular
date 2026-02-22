@@ -4476,12 +4476,12 @@ window.clearMyBypassHighlights = clearMyBypassHighlights;
     };
 
     window.UnifiedScheduleSystem = {
-        version: '4.1.0',
+        version: '4.2.0',
         
         // Core functions
         loadScheduleForDate, 
-        renderStaggeredView, 
-        findFirstSlotForTime,
+        renderStaggeredView,
+        renderDivisionTimeline,        findFirstSlotForTime,
         findSlotsForRange,
         getLeagueMatchups, 
         getEntryForBlock,
