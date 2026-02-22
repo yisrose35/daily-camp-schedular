@@ -933,7 +933,717 @@ function renderToolbar() {
     }
   };
 }
+// =================================================================
+// MODE TOGGLE: Manual ↔ Auto (DAW)
+// =================================================================
+function setupModeToggle() {
+  const toggleBar = document.getElementById('ms-mode-toggle');
+  if (!toggleBar) return;
+  
+  toggleBar.querySelectorAll('.ms-mode-btn').forEach(btn => {
+    btn.onclick = () => {
+      const mode = btn.dataset.mode;
+      if (mode === currentBuilderMode) return;
+      
+      currentBuilderMode = mode;
+      toggleBar.querySelectorAll('.ms-mode-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      
+      const manualEl = document.getElementById('ms-manual-container');
+      const autoEl = document.getElementById('ms-auto-container');
+      
+      if (mode === 'manual') {
+        manualEl.style.display = 'flex';
+        autoEl.style.display = 'none';
+        renderGrid();
+      } else {
+        manualEl.style.display = 'none';
+        autoEl.style.display = 'flex';
+        renderDAW();
+      }
+    };
+  });
+}
 
+// =================================================================
+// DAW (Digital Audio Workstation) LAYER VIEW
+// =================================================================
+const DAW_LAYER_TYPES = [
+  { type:'sport', name:'Sport', color:'#86efac' },
+  { type:'special', name:'Special Activity', color:'#c4b5fd' },
+  { type:'activity', name:'Activity', color:'#93c5fd' },
+  { type:'swim', name:'Swim', color:'#67e8f9', anchor:true },
+  { type:'lunch', name:'Lunch', color:'#fca5a5', anchor:true },
+  { type:'snacks', name:'Snacks', color:'#fde047', anchor:true },
+  { type:'dismissal', name:'Dismissal', color:'#f87171', anchor:true },
+  { type:'custom', name:'Custom Pinned', color:'#d1d5db', anchor:true },
+  { type:'league', name:'League Game', color:'#a5b4fc' },
+  { type:'elective', name:'Elective', color:'#f0abfc' },
+];
+
+const DAW_PIXELS_PER_MINUTE = 3;
+let dawLayers = {}; // { gradeKey: [{ id, type, startMin, endMin, qty, op }] }
+let dawSelectedBand = null;
+let dawDragData = null;
+
+function loadDAWLayers() {
+  // Load from global settings
+  const g = window.loadGlobalSettings?.() || {};
+  dawLayers = g.app1?.autoLayerTemplates?.[currentLoadedTemplate || '_current'] || {};
+  
+  // If empty, seed from divisions
+  if (Object.keys(dawLayers).length === 0) {
+    const divisions = window.divisions || {};
+    Object.keys(divisions).forEach(d => {
+      const div = divisions[d];
+      if (div.isParent) return;
+      dawLayers[d] = [];
+    });
+  }
+}
+
+function saveDAWLayers() {
+  const templateKey = currentLoadedTemplate || '_current';
+  const g = window.loadGlobalSettings?.() || {};
+  if (!g.app1) g.app1 = {};
+  if (!g.app1.autoLayerTemplates) g.app1.autoLayerTemplates = {};
+  g.app1.autoLayerTemplates[templateKey] = JSON.parse(JSON.stringify(dawLayers));
+  window.saveGlobalSettings?.('app1', g.app1);
+  window.forceSyncToCloud?.();
+}
+
+function renderDAWPalette() {
+  const pal = document.getElementById('daw-palette');
+  if (!pal) return;
+  
+  let html = '';
+  html += '<div class="ms-daw-tile-label">Floaters</div>';
+  DAW_LAYER_TYPES.filter(t => !t.anchor).forEach(t => {
+    html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}" style="color:#e2e8f0;">
+      <div class="ms-daw-tile-color" style="background:${t.color};"></div>
+      ${t.name}
+    </div>`;
+  });
+  
+  html += '<div class="ms-daw-tile-divider"></div>';
+  html += '<div class="ms-daw-tile-label">Anchors</div>';
+  DAW_LAYER_TYPES.filter(t => t.anchor).forEach(t => {
+    html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}" style="color:#e2e8f0;">
+      <div class="ms-daw-tile-color" style="background:${t.color};"></div>
+      ${t.name}
+    </div>`;
+  });
+  
+  pal.innerHTML = html;
+  
+  // Drag from palette
+  pal.querySelectorAll('.ms-daw-tile').forEach(tile => {
+    tile.addEventListener('dragstart', (e) => {
+      dawDragData = { source: 'palette', type: tile.dataset.type };
+      e.dataTransfer.setData('text/daw-layer', tile.dataset.type);
+      e.dataTransfer.effectAllowed = 'copy';
+    });
+  });
+}
+
+function renderDAWToolbar() {
+  const toolbar = document.getElementById('daw-toolbar');
+  if (!toolbar) return;
+  
+  const saved = window.getSavedSkeletons?.() || {};
+  const names = Object.keys(saved).sort();
+  // Also check if there are saved auto layer templates
+  const g = window.loadGlobalSettings?.() || {};
+  const autoTemplates = g.app1?.autoLayerTemplates || {};
+  const autoNames = Object.keys(autoTemplates).filter(n => n !== '_current').sort();
+  const loadOptions = autoNames.map(n => `<option value="${n}">${n}</option>`).join('');
+  
+  toolbar.innerHTML = `
+    <div class="ms-toolbar-group status" style="background:#2a2a3e; border-color:#3a3a52;">
+      <span class="ms-status-label" style="color:#8888aa;">Template:</span>
+      <span class="ms-status-name" style="color:#e2e8f0;">${currentLoadedTemplate || 'Untitled'}</span>
+    </div>
+    
+    <div class="ms-toolbar-group" style="border-color:#3a3a52;">
+      <span class="ms-toolbar-label" style="color:#8888aa;">Load:</span>
+      <select id="daw-load-select" class="ms-select" style="background:#1e1e2e; color:#e2e8f0; border-color:#4a4a62;">
+        <option value="">Select...</option>
+        ${loadOptions}
+      </select>
+    </div>
+    
+    <div class="ms-toolbar-group" style="border-color:#3a3a52;">
+      <input type="text" id="daw-save-name" class="ms-input" placeholder="Template name..." style="background:#1e1e2e; color:#e2e8f0; border-color:#4a4a62;">
+      <button id="daw-save-btn" class="ms-btn ms-btn-primary">Save Layers</button>
+    </div>
+    
+    <div class="ms-toolbar-group" style="border-color:#3a3a52;">
+      <button id="daw-copy-btn" class="ms-btn ms-btn-ghost" style="background:#2a2a3e; color:#e2e8f0;" title="Copy layers from one grade to others">📋 Copy To...</button>
+    </div>
+    
+    <div style="flex:1;"></div>
+    
+    <button id="daw-clear-btn" class="ms-btn ms-btn-warning">Clear All</button>
+  `;
+  
+  // Bindings
+  document.getElementById('daw-load-select').onchange = async function() {
+    const name = this.value;
+    if (!name) return;
+    if (autoTemplates[name]) {
+      const ok = await showConfirm(`Load auto template "${name}"?`);
+      if (ok) {
+        dawLayers = JSON.parse(JSON.stringify(autoTemplates[name]));
+        currentLoadedTemplate = name;
+        renderDAW();
+      }
+    }
+    this.value = '';
+  };
+  
+  document.getElementById('daw-save-btn').onclick = async () => {
+    const name = document.getElementById('daw-save-name').value.trim();
+    if (!name) { await showAlert('Enter a template name.'); return; }
+    
+    const g2 = window.loadGlobalSettings?.() || {};
+    if (!g2.app1) g2.app1 = {};
+    if (!g2.app1.autoLayerTemplates) g2.app1.autoLayerTemplates = {};
+    g2.app1.autoLayerTemplates[name] = JSON.parse(JSON.stringify(dawLayers));
+    window.saveGlobalSettings?.('app1', g2.app1);
+    window.forceSyncToCloud?.();
+    currentLoadedTemplate = name;
+    await showAlert(`Saved auto template "${name}".`);
+    renderDAWToolbar();
+  };
+  
+  document.getElementById('daw-clear-btn').onclick = async () => {
+    const ok = await showConfirm('Clear all layers from all grades?');
+    if (ok) {
+      Object.keys(dawLayers).forEach(k => { dawLayers[k] = []; });
+      saveDAWLayers();
+      renderDAWGrid();
+    }
+  };
+  
+  document.getElementById('daw-copy-btn').onclick = () => {
+    dawCopyLayersDialog();
+  };
+}
+
+function renderDAWGrid() {
+  const gridEl = document.getElementById('daw-grid');
+  if (!gridEl) return;
+  
+  const divisions = window.divisions || {};
+  const grades = Object.keys(divisions).filter(d => !divisions[d].isParent).sort((a, b) => {
+    const na = parseInt(a), nb = parseInt(b);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return a.localeCompare(b);
+  });
+  
+  if (grades.length === 0) {
+    gridEl.innerHTML = '<div style="padding:40px;text-align:center;color:#8888aa;">No grades configured. Go to Setup to create divisions.</div>';
+    return;
+  }
+  
+  // Find global time bounds
+  let globalStart = 540, globalEnd = 960;
+  grades.forEach(g => {
+    const div = divisions[g];
+    const s = parseTimeToMinutes(div?.startTime);
+    const e = parseTimeToMinutes(div?.endTime);
+    if (s != null && s < globalStart) globalStart = s;
+    if (e != null && e > globalEnd) globalEnd = e;
+  });
+  
+  const totalWidth = (globalEnd - globalStart) * DAW_PIXELS_PER_MINUTE;
+  
+  let html = '';
+  
+  // Time ruler
+  html += `<div class="ms-daw-ruler" style="width:${totalWidth}px;">`;
+  for (let m = globalStart; m < globalEnd; m += 30) {
+    const left = (m - globalStart) * DAW_PIXELS_PER_MINUTE;
+    html += `<div class="ms-daw-ruler-tick" style="position:absolute;left:${left}px;">${minutesToTime(m)}</div>`;
+  }
+  html += '</div>';
+  
+  // Grid lines container (behind bands)
+  html += `<div style="position:relative;">`;
+  
+  // Grade rows
+  grades.forEach(gradeKey => {
+    const div = divisions[gradeKey];
+    const divStart = parseTimeToMinutes(div?.startTime) || globalStart;
+    const divEnd = parseTimeToMinutes(div?.endTime) || globalEnd;
+    const layers = dawLayers[gradeKey] || [];
+    
+    // Calculate row height based on layer count (stacking)
+    const layerCount = Math.max(1, layers.length);
+    const rowHeight = Math.max(80, layerCount * 28 + 16);
+    
+    html += `<div class="ms-daw-grade" data-grade="${gradeKey}" style="height:${rowHeight}px;">`;
+    
+    // Grade label
+    const bunkCount = (div?.bunks || []).length;
+    html += `<div class="ms-daw-grade-label">
+      <div class="ms-daw-grade-name">${gradeKey}</div>
+      <div class="ms-daw-grade-info">${bunkCount} bunk${bunkCount !== 1 ? 's' : ''} · ${minutesToTime(divStart)}–${minutesToTime(divEnd)}</div>
+      <div class="ms-daw-grade-actions">
+        <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${gradeKey}">+ Add</button>
+        <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${gradeKey}">Clear</button>
+      </div>
+    </div>`;
+    
+    // Track area
+    html += `<div class="ms-daw-track" data-grade="${gradeKey}" style="width:${totalWidth}px;">`;
+    
+    // Gridlines
+    for (let m = globalStart; m < globalEnd; m += 30) {
+      const left = (m - globalStart) * DAW_PIXELS_PER_MINUTE;
+      const cls = m % 60 === 0 ? 'major' : '';
+      html += `<div class="ms-daw-gridline ${cls}" style="left:${left}px;"></div>`;
+    }
+    
+    // Inactive zones (before div start, after div end)
+    if (divStart > globalStart) {
+      const w = (divStart - globalStart) * DAW_PIXELS_PER_MINUTE;
+      html += `<div style="position:absolute;top:0;left:0;width:${w}px;height:100%;background:rgba(0,0,0,0.3);z-index:1;pointer-events:none;"></div>`;
+    }
+    if (divEnd < globalEnd) {
+      const left = (divEnd - globalStart) * DAW_PIXELS_PER_MINUTE;
+      const w = (globalEnd - divEnd) * DAW_PIXELS_PER_MINUTE;
+      html += `<div style="position:absolute;top:0;left:${left}px;width:${w}px;height:100%;background:rgba(0,0,0,0.3);z-index:1;pointer-events:none;"></div>`;
+    }
+    
+    // Render bands
+    layers.forEach((layer, idx) => {
+      const left = (layer.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
+      const width = (layer.endMin - layer.startMin) * DAW_PIXELS_PER_MINUTE;
+      const top = 6 + idx * 26;
+      const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
+      
+      html += `<div class="ms-daw-band ${dawSelectedBand === layer.id ? 'selected' : ''}" 
+        data-id="${layer.id}" data-type="${layer.type}" data-grade="${gradeKey}"
+        style="left:${left}px; width:${width}px; top:${top}px;"
+        draggable="true">
+        <div class="band-resize band-resize-left"></div>
+        <span class="band-label">${DAW_LAYER_TYPES.find(t => t.type === layer.type)?.name || layer.type}</span>
+        <span class="band-qty">${opSymbol}${layer.qty}</span>
+        <div class="band-resize band-resize-right"></div>
+      </div>`;
+    });
+    
+    html += '</div>'; // track
+    html += '</div>'; // grade row
+  });
+  
+  html += '</div>'; // relative container
+  
+  gridEl.innerHTML = html;
+  
+  // Bind events
+  bindDAWEvents(gridEl, globalStart, globalEnd);
+}
+
+function bindDAWEvents(gridEl, globalStart, globalEnd) {
+  // Click on band to select/edit
+  gridEl.querySelectorAll('.ms-daw-band').forEach(band => {
+    band.addEventListener('click', (e) => {
+      if (e.target.classList.contains('band-resize')) return;
+      const id = band.dataset.id;
+      const grade = band.dataset.grade;
+      dawSelectedBand = dawSelectedBand === id ? null : id;
+      
+      // Remove existing popovers
+      gridEl.querySelectorAll('.ms-daw-popover').forEach(p => p.remove());
+      
+      if (dawSelectedBand) {
+        const layer = (dawLayers[grade] || []).find(l => l.id === id);
+        if (layer) showDAWPopover(band, layer, grade);
+      }
+      
+      // Update selection styling
+      gridEl.querySelectorAll('.ms-daw-band').forEach(b => b.classList.remove('selected'));
+      if (dawSelectedBand) band.classList.add('selected');
+    });
+    
+    // Drag existing band to reposition
+    band.addEventListener('dragstart', (e) => {
+      if (e.target.classList.contains('band-resize')) { e.preventDefault(); return; }
+      const id = band.dataset.id;
+      const grade = band.dataset.grade;
+      const layer = (dawLayers[grade] || []).find(l => l.id === id);
+      if (!layer) return;
+      dawDragData = { source: 'band', id, grade, layer, offsetMin: 0 };
+      
+      const rect = band.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      dawDragData.offsetMin = Math.round(clickX / DAW_PIXELS_PER_MINUTE);
+      
+      e.dataTransfer.setData('text/daw-band-move', id);
+      e.dataTransfer.effectAllowed = 'move';
+      band.style.opacity = '0.4';
+    });
+    
+    band.addEventListener('dragend', () => {
+      band.style.opacity = '1';
+      dawDragData = null;
+    });
+    
+    // Resize handles
+    band.querySelectorAll('.band-resize').forEach(handle => {
+      let isResizing = false;
+      let startX, startMin, startWidth, isLeft;
+      
+      handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        isResizing = true;
+        isLeft = handle.classList.contains('band-resize-left');
+        startX = e.clientX;
+        
+        const id = band.dataset.id;
+        const grade = band.dataset.grade;
+        const layer = (dawLayers[grade] || []).find(l => l.id === id);
+        if (!layer) return;
+        startMin = isLeft ? layer.startMin : layer.endMin;
+        
+        const onMove = (e2) => {
+          if (!isResizing) return;
+          const dx = e2.clientX - startX;
+          const dMin = Math.round(dx / DAW_PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
+          const newMin = startMin + dMin;
+          
+          if (isLeft) {
+            layer.startMin = Math.max(globalStart, Math.min(layer.endMin - 15, newMin));
+          } else {
+            layer.endMin = Math.min(globalEnd, Math.max(layer.startMin + 15, newMin));
+          }
+          
+          // Live update position
+          const left = (layer.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
+          const width = (layer.endMin - layer.startMin) * DAW_PIXELS_PER_MINUTE;
+          band.style.left = left + 'px';
+          band.style.width = width + 'px';
+        };
+        
+        const onUp = () => {
+          isResizing = false;
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          saveDAWLayers();
+        };
+        
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    });
+  });
+  
+  // Drop on tracks (palette → track, or band move)
+  gridEl.querySelectorAll('.ms-daw-track').forEach(track => {
+    track.addEventListener('dragover', (e) => {
+      const isDawDrop = e.dataTransfer.types.includes('text/daw-layer') || e.dataTransfer.types.includes('text/daw-band-move');
+      if (!isDawDrop) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = e.dataTransfer.types.includes('text/daw-band-move') ? 'move' : 'copy';
+      track.classList.add('drop-target');
+    });
+    
+    track.addEventListener('dragleave', (e) => {
+      if (!track.contains(e.relatedTarget)) track.classList.remove('drop-target');
+    });
+    
+    track.addEventListener('drop', (e) => {
+      e.preventDefault();
+      track.classList.remove('drop-target');
+      
+      const grade = track.dataset.grade;
+      const rect = track.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const dropMin = Math.round((x / DAW_PIXELS_PER_MINUTE + globalStart) / SNAP_MINS) * SNAP_MINS;
+      
+      if (e.dataTransfer.types.includes('text/daw-layer')) {
+        // New band from palette
+        const type = e.dataTransfer.getData('text/daw-layer');
+        const layerDef = DAW_LAYER_TYPES.find(t => t.type === type);
+        if (!layerDef) return;
+        
+        const div = (window.divisions || {})[grade] || {};
+        const divStart = parseTimeToMinutes(div.startTime) || globalStart;
+        const divEnd = parseTimeToMinutes(div.endTime) || globalEnd;
+        
+        let startMin, endMin;
+        if (layerDef.anchor) {
+          // Anchors get a fixed 30-min window at drop point
+          startMin = Math.max(divStart, dropMin - 15);
+          endMin = Math.min(divEnd, startMin + 30);
+        } else {
+          // Floaters span the full division range
+          startMin = divStart;
+          endMin = divEnd;
+        }
+        
+        if (!dawLayers[grade]) dawLayers[grade] = [];
+        dawLayers[grade].push({
+          id: 'daw_' + Math.random().toString(36).slice(2, 9),
+          type,
+          startMin,
+          endMin,
+          qty: 1,
+          op: layerDef.anchor ? '=' : '>=',
+        });
+        
+        saveDAWLayers();
+        renderDAWGrid();
+      }
+      else if (e.dataTransfer.types.includes('text/daw-band-move') && dawDragData?.source === 'band') {
+        // Move existing band
+        const { id, grade: fromGrade, layer, offsetMin } = dawDragData;
+        const duration = layer.endMin - layer.startMin;
+        const newStart = Math.round((dropMin - offsetMin) / SNAP_MINS) * SNAP_MINS;
+        const newEnd = newStart + duration;
+        
+        // Remove from old grade if moving between grades
+        if (fromGrade !== grade) {
+          dawLayers[fromGrade] = (dawLayers[fromGrade] || []).filter(l => l.id !== id);
+          if (!dawLayers[grade]) dawLayers[grade] = [];
+          layer.startMin = Math.max(globalStart, newStart);
+          layer.endMin = Math.min(globalEnd, newEnd);
+          dawLayers[grade].push(layer);
+        } else {
+          layer.startMin = Math.max(globalStart, newStart);
+          layer.endMin = Math.min(globalEnd, newEnd);
+        }
+        
+        saveDAWLayers();
+        renderDAWGrid();
+      }
+      
+      dawDragData = null;
+    });
+  });
+  
+  // Grade action buttons
+  gridEl.querySelectorAll('[data-action="add-layer"]').forEach(btn => {
+    btn.onclick = () => {
+      const grade = btn.dataset.grade;
+      dawAddLayerDialog(grade);
+    };
+  });
+  
+  gridEl.querySelectorAll('[data-action="clear-grade"]').forEach(btn => {
+    btn.onclick = async () => {
+      const grade = btn.dataset.grade;
+      const ok = await showConfirm(`Clear all layers from ${grade}?`);
+      if (ok) {
+        dawLayers[grade] = [];
+        saveDAWLayers();
+        renderDAWGrid();
+      }
+    };
+  });
+  
+  // Click on empty track space to deselect
+  gridEl.addEventListener('click', (e) => {
+    if (e.target.classList.contains('ms-daw-track') || e.target.classList.contains('ms-daw-gridline')) {
+      dawSelectedBand = null;
+      gridEl.querySelectorAll('.ms-daw-band').forEach(b => b.classList.remove('selected'));
+      gridEl.querySelectorAll('.ms-daw-popover').forEach(p => p.remove());
+    }
+  });
+  
+  // Keyboard: Delete selected band
+  const dawKeyHandler = (e) => {
+    if (currentBuilderMode !== 'auto') return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+    
+    if ((e.key === 'Delete' || e.key === 'Backspace') && dawSelectedBand) {
+      e.preventDefault();
+      Object.keys(dawLayers).forEach(grade => {
+        dawLayers[grade] = (dawLayers[grade] || []).filter(l => l.id !== dawSelectedBand);
+      });
+      dawSelectedBand = null;
+      saveDAWLayers();
+      renderDAWGrid();
+    }
+    if (e.key === 'Escape') {
+      dawSelectedBand = null;
+      gridEl.querySelectorAll('.ms-daw-band').forEach(b => b.classList.remove('selected'));
+      gridEl.querySelectorAll('.ms-daw-popover').forEach(p => p.remove());
+    }
+  };
+  document.removeEventListener('keydown', dawKeyHandler);
+  document.addEventListener('keydown', dawKeyHandler);
+}
+
+function showDAWPopover(bandEl, layer, grade) {
+  // Remove existing
+  document.querySelectorAll('.ms-daw-popover').forEach(p => p.remove());
+  
+  const typeName = DAW_LAYER_TYPES.find(t => t.type === layer.type)?.name || layer.type;
+  
+  const popover = document.createElement('div');
+  popover.className = 'ms-daw-popover';
+  popover.innerHTML = `
+    <h4>${typeName}</h4>
+    <label>Time Window</label>
+    <div class="ms-daw-pop-row">
+      <input type="text" id="daw-pop-start" value="${minutesToTime(layer.startMin)}" style="width:45%;">
+      <span style="color:#8888aa;">→</span>
+      <input type="text" id="daw-pop-end" value="${minutesToTime(layer.endMin)}" style="width:45%;">
+    </div>
+    <label>Quantity</label>
+    <div class="ms-daw-pop-row">
+      <button class="ms-daw-pop-op ${layer.op === '>=' ? 'active' : ''}" data-op=">=">≥</button>
+      <button class="ms-daw-pop-op ${layer.op === '=' ? 'active' : ''}" data-op="=">=</button>
+      <button class="ms-daw-pop-op ${layer.op === '<=' ? 'active' : ''}" data-op="<=">≤</button>
+      <input type="number" id="daw-pop-qty" value="${layer.qty}" min="1" max="10" style="width:50px;">
+    </div>
+    <div class="ms-daw-pop-actions">
+      <button class="ms-daw-pop-btn ms-daw-pop-btn-save">Save</button>
+      <button class="ms-daw-pop-btn ms-daw-pop-btn-del">Delete</button>
+      <button class="ms-daw-pop-btn ms-daw-pop-btn-cancel">Close</button>
+    </div>
+  `;
+  
+  // Position below the band
+  const bandRect = bandEl.getBoundingClientRect();
+  const trackRect = bandEl.closest('.ms-daw-track').getBoundingClientRect();
+  popover.style.left = (bandRect.left - trackRect.left) + 'px';
+  popover.style.top = (bandRect.bottom - trackRect.top + 4) + 'px';
+  
+  bandEl.closest('.ms-daw-track').appendChild(popover);
+  
+  // Operator buttons
+  popover.querySelectorAll('.ms-daw-pop-op').forEach(btn => {
+    btn.onclick = () => {
+      popover.querySelectorAll('.ms-daw-pop-op').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    };
+  });
+  
+  // Save
+  popover.querySelector('.ms-daw-pop-btn-save').onclick = () => {
+    const startStr = popover.querySelector('#daw-pop-start').value;
+    const endStr = popover.querySelector('#daw-pop-end').value;
+    const s = parseTimeToMinutes(startStr);
+    const e2 = parseTimeToMinutes(endStr);
+    if (s != null) layer.startMin = s;
+    if (e2 != null) layer.endMin = e2;
+    layer.qty = parseInt(popover.querySelector('#daw-pop-qty').value) || 1;
+    const activeOp = popover.querySelector('.ms-daw-pop-op.active');
+    if (activeOp) layer.op = activeOp.dataset.op;
+    
+    saveDAWLayers();
+    renderDAWGrid();
+  };
+  
+  // Delete
+  popover.querySelector('.ms-daw-pop-btn-del').onclick = () => {
+    dawLayers[grade] = (dawLayers[grade] || []).filter(l => l.id !== layer.id);
+    dawSelectedBand = null;
+    saveDAWLayers();
+    renderDAWGrid();
+  };
+  
+  // Close
+  popover.querySelector('.ms-daw-pop-btn-cancel').onclick = () => {
+    popover.remove();
+    dawSelectedBand = null;
+    document.querySelectorAll('.ms-daw-band').forEach(b => b.classList.remove('selected'));
+  };
+}
+
+async function dawAddLayerDialog(grade) {
+  const div = (window.divisions || {})[grade] || {};
+  const divStart = parseTimeToMinutes(div.startTime) || 540;
+  const divEnd = parseTimeToMinutes(div.endTime) || 960;
+  
+  const typeOptions = DAW_LAYER_TYPES.map(t => ({ value: t.type, label: t.name }));
+  
+  const result = await showModal({
+    title: `Add Layer to ${grade}`,
+    fields: [
+      { name: 'type', label: 'Layer Type', type: 'select', options: typeOptions, default: 'activity' },
+      { name: 'startTime', label: 'Start Time', type: 'time', default: minutesToTime(divStart), placeholder: '9:00am' },
+      { name: 'endTime', label: 'End Time', type: 'time', default: minutesToTime(divEnd), placeholder: '4:00pm' },
+    ],
+    confirmText: 'Add Layer'
+  });
+  
+  if (!result) return;
+  
+  const startMin = parseTimeToMinutes(result.startTime) || divStart;
+  const endMin = parseTimeToMinutes(result.endTime) || divEnd;
+  
+  if (!dawLayers[grade]) dawLayers[grade] = [];
+  const layerDef = DAW_LAYER_TYPES.find(t => t.type === result.type);
+  
+  dawLayers[grade].push({
+    id: 'daw_' + Math.random().toString(36).slice(2, 9),
+    type: result.type,
+    startMin: Math.max(divStart, startMin),
+    endMin: Math.min(divEnd, endMin),
+    qty: 1,
+    op: layerDef?.anchor ? '=' : '>=',
+  });
+  
+  saveDAWLayers();
+  renderDAWGrid();
+}
+
+async function dawCopyLayersDialog() {
+  const divisions = window.divisions || {};
+  const grades = Object.keys(divisions).filter(d => !divisions[d].isParent).sort();
+  
+  if (grades.length < 2) {
+    await showAlert('Need at least 2 grades to copy between.');
+    return;
+  }
+  
+  const result = await showModal({
+    title: 'Copy Layers',
+    description: 'Copy all layers from one grade to others.',
+    fields: [
+      { name: 'from', label: 'Copy From', type: 'select', options: grades.map(g => ({ value: g, label: g })) },
+      { name: 'to', label: 'Copy To', type: 'checkbox-group', options: grades },
+    ],
+    confirmText: 'Copy'
+  });
+  
+  if (!result || !result.from || !result.to || result.to.length === 0) return;
+  
+  const source = dawLayers[result.from] || [];
+  let copied = 0;
+  result.to.forEach(targetGrade => {
+    if (targetGrade === result.from) return;
+    // Clone layers with new IDs, adjusting to target division times
+    const targetDiv = divisions[targetGrade] || {};
+    const tStart = parseTimeToMinutes(targetDiv.startTime) || 540;
+    const tEnd = parseTimeToMinutes(targetDiv.endTime) || 960;
+    
+    dawLayers[targetGrade] = source.map(l => ({
+      ...l,
+      id: 'daw_' + Math.random().toString(36).slice(2, 9),
+      startMin: Math.max(tStart, l.startMin),
+      endMin: Math.min(tEnd, l.endMin),
+    }));
+    copied++;
+  });
+  
+  saveDAWLayers();
+  renderDAWGrid();
+  await showAlert(`Copied layers to ${copied} grade(s).`);
+}
+
+function renderDAW() {
+  loadDAWLayers();
+  renderDAWPalette();
+  renderDAWToolbar();
+  renderDAWGrid();
+}
 function updateToolbarStatus() {
   const statusGroup = document.querySelector('.ms-toolbar-group.status');
   if (statusGroup) {
