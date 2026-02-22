@@ -319,8 +319,36 @@
                 debugLog("Background role verification complete:", _currentRole);
             });
         } else {
-            // Full Supabase resolution (first load / cache miss / cache expired)
-            await determineUserContext();
+            // ★★★ v3.12: Try localStorage before hitting DB ★★★
+    const lsRole = localStorage.getItem('campistry_role');
+    const lsCampId = localStorage.getItem('campistry_camp_id');
+    const lsAuthId = localStorage.getItem('campistry_auth_user_id');
+    
+    if (lsRole && lsCampId && lsAuthId === user.id) {
+        console.log("🔐 ⚡ Restored from localStorage — role=" + lsRole);
+        _currentRole = lsRole;
+        _campId = lsCampId;
+        _isTeamMember = localStorage.getItem('campistry_is_team_member') === 'true';
+        _userName = user.email?.split('@')[0];
+        _userSubdivisionIds = [];
+        _directDivisionAssignments = [];
+        _roleVerifiedFromDB = false;  // verifyBeforeWrite() will DB-check later
+        _initialized = true;
+        
+        // Still load subdivisions/details in background for schedulers
+        if (_isTeamMember) {
+            determineUserContext().catch(e => console.warn("🔐 Background context refresh failed:", e));
+        }
+        
+        // Fire loaded event
+        calculateEditableDivisions();
+        setupMembershipSubscription();
+        dispatchAccessLoadedEvent();
+        return;
+    }
+
+    // Full initialization — no cache available
+    await determineUserContext();
             _roleVerifiedFromDB = true;  // ★★★ v3.9: DB-verified via full path ★★★
         }
         
