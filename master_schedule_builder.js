@@ -813,11 +813,10 @@ function renderDAWPalette() {
   const pal = document.getElementById('daw-palette');
   if (!pal) return;
   
-  let html = '';
+ let html = '';
   html += '<div class="ms-daw-tile-label">Floaters</div>';
   DAW_LAYER_TYPES.filter(t => !t.anchor).forEach(t => {
-    html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}">
-      <div class="ms-daw-tile-color" style="background:${t.color};"></div>
+    html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}" style="${t.style}">
       ${t.name}
     </div>`;
   });
@@ -825,8 +824,7 @@ function renderDAWPalette() {
   html += '<div class="ms-daw-tile-divider"></div>';
   html += '<div class="ms-daw-tile-label">Anchors</div>';
   DAW_LAYER_TYPES.filter(t => t.anchor).forEach(t => {
-    html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}">
-      <div class="ms-daw-tile-color" style="background:${t.color};"></div>
+    html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}" style="${t.style}">
       ${t.name}
     </div>`;
   });
