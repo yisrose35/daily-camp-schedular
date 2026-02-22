@@ -3756,16 +3756,31 @@ function init() {
   container = document.getElementById("daily-adjustments-content");
   if (!container) { console.error("Daily Adjustments: container not found"); return; }
 
-  if (window.isAutoMode?.()) {
-      container.innerHTML = '';
-      const autoContainer = document.createElement('div');
-      autoContainer.style.padding = '16px';
-      container.appendChild(autoContainer);
-      window.renderAutoBuilder?.(autoContainer);
-      return;
+  // 1. Get today's date
+  const dateKey = window.currentScheduleDate;
+
+  // 2. Check if today uses an Auto-Build template
+  const autoModeData = checkAutoModeForDay(dateKey);
+
+  // 3. If it IS an Auto Build day, load the Auto Builder UI instead!
+  if (autoModeData) {
+      console.log(`[DailyAdj] Switching to Auto Builder UI for ${dateKey}`);
+      container.innerHTML = ''; // Clear the screen
+      
+      // Load the Auto Builder inside Daily Adjustments
+      if (typeof window.renderAutoBuilder === 'function') {
+          window.renderAutoBuilder(container);
+      } else {
+          container.innerHTML = `<div style="padding:40px; text-align:center; color:#ef4444;">
+            Error: Auto-scheduler is active for today, but the Auto Builder module is not loaded.
+          </div>`;
+      }
+      return; // Stop here, do not load the manual UI
   }
 
-  masterSettings.global = window.loadGlobalSettings?.() || {};  masterSettings.app1 = masterSettings.global.app1 || {};
+  // 4. If it is NOT an auto build day, continue loading normal manual adjustments
+  masterSettings.global = window.loadGlobalSettings?.() || {};  
+  masterSettings.app1 = masterSettings.global.app1 || {};
   masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
   masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
   smartTileHistory = loadSmartTileHistory();
