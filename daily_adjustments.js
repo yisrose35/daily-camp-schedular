@@ -3763,23 +3763,12 @@ function init() {
   const globalMode = window.getCampBuilderMode ? window.getCampBuilderMode() : 'manual';
 
   // 2. If the camp is set to Auto Build mode, inject the Auto Builder UI
- if (globalMode === 'auto') {
-      console.log('[DailyAdj] Universal mode is AUTO. Launching Auto Schedule Planner.');
-      if (typeof window.AutoSchedulePlanner?.init === 'function') {
-          try {
-              container.innerHTML = getStyles();
-              const autoContainer = document.createElement('div');
-              autoContainer.style.cssText = 'height:calc(100vh - 160px);overflow:auto;';
-              container.appendChild(autoContainer);
-              window.AutoSchedulePlanner.init(autoContainer);
-              console.log('[DailyAdj] ✅ Auto Schedule Planner loaded.');
-              return;
-          } catch (e) {
-              console.error('[DailyAdj] Auto Schedule Planner failed, falling back to manual:', e);
-          }
-      } else {
-          console.warn('[DailyAdj] AutoSchedulePlanner not loaded, falling back to manual mode.');
-      }
+// Auto mode: render the same skeleton builder as manual mode.
+  // The skeleton is loaded from today's template assignment automatically.
+  // No separate UI needed — auto vs manual is about HOW the schedule generates,
+  // not about a different editing interface.
+  if (globalMode === 'auto') {
+      console.log('[DailyAdj] Universal mode is AUTO. Loading skeleton builder (same as manual).');
   }
 
   // 3. --- MANUAL MODE (Standard Daily Adjustments) ---
