@@ -707,6 +707,9 @@ function init(){
   renderPalette();
   renderGrid();
   
+  // Mode toggle
+  setupModeToggle();
+  
   // Global keyboard listener for Delete key
   document.addEventListener('keydown', handleKeyDown);
 }
