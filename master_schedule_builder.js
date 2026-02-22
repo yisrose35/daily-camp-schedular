@@ -21,6 +21,7 @@ let dailySkeleton=[];
 let currentLoadedTemplate = null;
 let selectedTileId = null;
 let hasUnsavedChanges = false;
+let currentBuilderMode = 'manual'; // 'manual' or 'auto'
 
 // --- Constants ---
 const SKELETON_DRAFT_KEY = 'master-schedule-draft';
