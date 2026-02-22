@@ -1555,7 +1555,9 @@ function renderGrid() {
   const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
   gridEl.dataset.earliestMin = earliestMin;
   
-  let html = `<div class="da-grid" style="grid-template-columns:60px repeat(${availableDivisions.length}, 1fr);">`;
+ const gridEl_isMS = gridEl.closest('.ms-container') !== null;
+  const G = gridEl_isMS ? 'ms' : 'da';
+  let html = `<div class="${G}-grid" style="grid-template-columns:60px repeat(${availableDivisions.length}, 1fr);">`;
   
   // Header row
   html += `<div class="da-grid-header da-time-header">Time</div>`;
