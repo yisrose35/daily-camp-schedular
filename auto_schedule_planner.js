@@ -172,15 +172,131 @@ function minToX(min, dayStart) { return (min - dayStart) * MIN_WIDTH; }
 function xToMin(x, dayStart) { return snap(x / MIN_WIDTH + dayStart); }
 
 // =================================================================
+// IMPORT SKELETON FROM MASTER BUILDER
+// =================================================================
+/** Convert Master Builder skeleton blocks into Auto Planner layers */
+function importSkeletonFromMasterBuilder() {
+  var g = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+  var app1 = g.app1 || {};
+  var assignments = app1.skeletonAssignments || {};
+  var skeletons = app1.savedSkeletons || {};
+  
+  // Determine today's template
+  var dateStr = window.currentScheduleDate || '';
+  var parts = dateStr.split('-').map(Number);
+  if (!parts[0]) return false;
+  var dow = new Date(parts[0], parts[1] - 1, parts[2]).getDay();
+  var dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  var tmplName = assignments[dayNames[dow]] || assignments['Default'];
+  if (!tmplName || !skeletons[tmplName]) return false;
+  
+  var skeleton = skeletons[tmplName];
+  if (!skeleton || skeleton.length === 0) return false;
+  
+  console.log('[AutoPlanner] Importing skeleton "' + tmplName + '" (' + skeleton.length + ' blocks)');
+  
+  // Also check daily override skeleton (if user modified today's skeleton in DA)
+  var dailyData = window.loadCurrentDailyData ? window.loadCurrentDailyData() : {};
+  var dailySkeleton = dailyData.manualSkeleton;
+  if (dailySkeleton && dailySkeleton.length > 0) {
+    skeleton = dailySkeleton;
+    console.log('[AutoPlanner] Using daily override skeleton (' + skeleton.length + ' blocks)');
+  }
+  
+  // Map skeleton block types to layer types
+  var typeMap = {
+    'slot': 'activity',
+    'sports': 'sports', 'sport': 'sports',
+    'special': 'special',
+    'pinned': 'custom',
+    'league': 'league',
+    'specialty_league': 'specialty_league',
+    'smart': 'activity',
+    'split': 'split',
+    'elective': 'elective'
+  };
+  
+  // Map event names to types
+  var eventTypeMap = {
+    'general activity slot': 'activity',
+    'sports slot': 'sports',
+    'special activity': 'special',
+    'league game': 'league',
+    'specialty league': 'specialty_league',
+    'swim': 'swim',
+    'lunch': 'lunch',
+    'snacks': 'snack',
+    'snack': 'snack',
+    'dismissal': 'dismissal'
+  };
+  
+  layers = [];
+  skeleton.forEach(function(block) {
+    if (!block || !block.startTime || !block.endTime || !block.division) return;
+    var startMin = parseTime(block.startTime);
+    var endMin = parseTime(block.endTime);
+    if (startMin == null || endMin == null || endMin <= startMin) return;
+    
+    // Determine layer type
+    var layerType = 'activity';
+    var eventName = block.event || '';
+    var blockType = block.type || '';
+    
+    // Check event name first (more specific)
+    var lowerEvent = eventName.toLowerCase().trim();
+    if (eventTypeMap[lowerEvent]) {
+      layerType = eventTypeMap[lowerEvent];
+    } else if (typeMap[blockType]) {
+      layerType = typeMap[blockType];
+    }
+    
+    // Determine if pinned
+    var isPinned = blockType === 'pinned' || ['swim','lunch','snack','snacks','dismissal'].indexOf(layerType) >= 0;
+    
+    // Duration = full block duration
+    var duration = endMin - startMin;
+    
+    layers.push({
+      id: uid(),
+      type: layerType,
+      event: eventName || layerType,
+      startMin: startMin,
+      endMin: endMin,
+      periodMin: duration,
+      operator: isPinned ? '=' : '\u2265',
+      quantity: 1,
+      grade: block.division,
+      pinExact: isPinned,
+      _importedFrom: tmplName
+    });
+  });
+  
+  if (layers.length > 0) {
+    currentTemplate = tmplName + ' (imported)';
+    hasChanges = false;
+    saveDraftLayers();
+    return true;
+  }
+  return false;
+}
+
+// =================================================================
 // INIT / DESTROY
 // =================================================================
 function init(containerEl) {
   layerContainer = containerEl;
   if (!layerContainer) return;
   loadDraftLayers();
+  
+  // ★★★ If no layers yet, auto-import today's skeleton from Master Builder ★★★
+  if (layers.length === 0) {
+    var imported = importSkeletonFromMasterBuilder();
+    if (imported) console.log('[AutoPlanner] Imported', layers.length, 'layers from Master Builder skeleton');
+  }
+  
   render();
   setupGlobalListeners();
-  console.log('[AutoPlanner] v3.0 init \u2014', layers.length, 'layers');
+  console.log('[AutoPlanner] v3.0 init —', layers.length, 'layers');
 }
 
 function destroy() {
@@ -288,6 +404,7 @@ function renderToolbar() {
     '<button id="al-save-as-btn" class="al-btn al-btn-ghost al-btn-sm">Save As\u2026</button></div>' +
     '<div class="al-toolbar-sep"></div>' +
     '<div class="al-toolbar-group"><button id="al-copy-grade-btn" class="al-btn al-btn-ghost al-btn-sm">\uD83D\uDCCB Copy Grade</button>' +
+    '<button id="al-import-skeleton-btn" class="al-btn al-btn-ghost al-btn-sm">\uD83D\uDD04 Reload from Template</button>' +
     '<button id="al-clear-btn" class="al-btn al-btn-danger al-btn-sm">\uD83D\uDDD1 Clear All</button></div>' +
     '<div class="al-toolbar-sep"></div>' +
     '<div class="al-toolbar-group"><button id="al-preview-btn" class="al-btn al-btn-success al-btn-sm">\uD83D\uDC41 Preview</button>' +
@@ -712,6 +829,20 @@ function setupToolbarEvents() {
     if (layers.length === 0) return;
     if (!confirm('Clear all layers?')) return;
     layers = []; selectedLayerId = null; hasChanges = true; saveDraftLayers(); render();
+  };
+
+  var importBtn = $('al-import-skeleton-btn');
+  if (importBtn) importBtn.onclick = function() {
+    if (layers.length > 0 && !confirm('This will replace current layers with the Master Builder skeleton for today. Continue?')) return;
+    layers = [];
+    var imported = importSkeletonFromMasterBuilder();
+    if (imported) {
+      notify('Imported ' + layers.length + ' layers from template', 'success');
+      render();
+    } else {
+      notify('No template assigned for today', 'error');
+      render();
+    }
   };
 
   // ── PREVIEW via AutoBuildEngine ──
