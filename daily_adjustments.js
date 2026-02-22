@@ -3767,17 +3767,54 @@ function init() {
   // The skeleton is loaded from today's template assignment automatically.
   // No separate UI needed — auto vs manual is about HOW the schedule generates,
   // not about a different editing interface.
-  if (globalMode === 'auto') {
-      console.log('[DailyAdj] Universal mode is AUTO. Loading Auto Schedule Planner.');
-      if (typeof window.AutoSchedulePlanner?.init === 'function') {
+ if (globalMode === 'auto') {
+      console.log('[DailyAdj] Universal mode is AUTO. Rendering Master Builder with auto mode.');
+      if (typeof window.initMasterScheduler === 'function') {
           container.innerHTML = '';
-          const autoContainer = document.createElement('div');
-          autoContainer.style.cssText = 'height:calc(100vh - 160px);overflow:auto;';
-          container.appendChild(autoContainer);
-          window.AutoSchedulePlanner.init(autoContainer);
+
+          // Temporarily hijack the master-scheduler-content ID so initMasterScheduler renders here
+          const origMsEl = document.getElementById('master-scheduler-content');
+          if (origMsEl) origMsEl.id = '_ms-content-parked';
+
+          const host = document.createElement('div');
+          host.id = 'master-scheduler-content';
+          host.style.cssText = 'height:calc(100vh - 160px);';
+          container.appendChild(host);
+
+          window.initMasterScheduler();
+
+          // Restore original element's ID, rename ours
+          host.id = 'da-auto-host';
+          if (origMsEl) origMsEl.id = 'master-scheduler-content';
+
+          // Load today's assigned skeleton template
+          const g = window.loadGlobalSettings?.() || {};
+          const app1 = g.app1 || {};
+          const assignments = app1.skeletonAssignments || {};
+          const skeletons = app1.savedSkeletons || {};
+          const dateStr = window.currentScheduleDate || '';
+          const [Y, M, D] = dateStr.split('-').map(Number);
+          let dow = 0;
+          if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
+          const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+          const tmplName = assignments[dayNames[dow]] || assignments['Default'];
+
+          if (tmplName && skeletons[tmplName] && window.MasterSchedulerInternal) {
+              window.MasterSchedulerInternal.setSkeleton(JSON.parse(JSON.stringify(skeletons[tmplName])));
+              window.MasterSchedulerInternal.renderGrid?.();
+              window.MasterSchedulerInternal.renderToolbar?.();
+              console.log('[DailyAdj] ✅ Loaded template "' + tmplName + '" for today');
+          }
+
+          // Auto-switch to auto mode if the mode toggle exists
+          setTimeout(() => {
+              const autoBtn = host.querySelector('.ms-mode-btn[data-mode="auto"]');
+              if (autoBtn) autoBtn.click();
+          }, 150);
+
           return;
       }
-      console.warn('[DailyAdj] AutoSchedulePlanner not loaded. Falling back to manual.');
+      console.warn('[DailyAdj] Master Builder not available. Falling back to manual.');
   }
   // 3. --- MANUAL MODE (Standard Daily Adjustments) ---
   console.log('[DailyAdj] Universal mode is MANUAL. Loading standard UI.');
