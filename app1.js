@@ -952,9 +952,12 @@
 
     // ==================== INITIALIZATION ====================
     
-    function initApp1() {
+   function initApp1() {
         ensureSharedSetupStyles();
         loadData();
+        
+        // Render the top builder mode slider
+        renderBuilderModeSlider();
         
         // Style detail pane
         const detailPane = document.getElementById("division-detail-pane");
