@@ -3767,8 +3767,10 @@ function init() {
   // The skeleton is loaded from today's template assignment automatically.
   // No separate UI needed — auto vs manual is about HOW the schedule generates,
   // not about a different editing interface.
- if (globalMode === 'auto') {
-      console.log('[DailyAdj] Universal mode is AUTO. Rendering Master Builder with auto mode.');
+const isAutoMode = globalMode === 'auto';
+  if (isAutoMode) {
+      console.log('[DailyAdj] Universal mode is AUTO — using Master Builder styling.');
+  }
       if (typeof window.initMasterScheduler === 'function') {
           container.innerHTML = '';
 
