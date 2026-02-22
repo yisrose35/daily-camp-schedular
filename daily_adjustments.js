@@ -3617,7 +3617,51 @@ function getStyles() {
 // =================================================================
 // MAIN HTML
 // =================================================================
-function getMainHTML() {
+function getMainHTML(useMS) {
+  if (useMS) {
+    return `
+      <div class="ms-container" style="height:calc(100vh - 160px);">
+        <div class="ms-sidebar">
+          <div class="ms-sidebar-header"><h3>Tile Types</h3></div>
+          <div id="da-palette" class="ms-palette"></div>
+        </div>
+        
+        <div class="ms-main" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+          <div class="da-subtabs">
+            <button class="da-subtab active" data-tab="skeleton">Schedule</button>
+            <button class="da-subtab" data-tab="trips">Trips</button>
+            <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
+            <button class="da-subtab" data-tab="resources">Resources</button>
+            <button class="da-subtab" data-tab="fluid">Fluid Mode</button>
+          </div>
+          
+          <div id="da-pane-skeleton" class="da-pane active">
+            <div id="da-rainy-panel"></div>
+            <div id="da-displaced-tiles-panel" style="display:none;"></div>
+            <div id="da-skeleton-toolbar" class="ms-toolbar"></div>
+            <div class="ms-grid-wrapper">
+              <div id="da-skeleton-grid"></div>
+            </div>
+          </div>
+          
+          <div id="da-pane-trips" class="da-pane">
+            <div id="da-trips-container"></div>
+          </div>
+          
+          <div id="da-pane-bunk-overrides" class="da-pane">
+            <div id="da-bunk-overrides-container"></div>
+          </div>
+          
+          <div id="da-pane-resources" class="da-pane">
+            <div id="da-resources-container"></div>
+          </div>
+          <div id="da-pane-fluid" class="da-pane">
+            <div id="da-fluid-container"></div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
   return `
     <div class="da-container">
       <div class="da-sidebar">
@@ -3661,7 +3705,6 @@ function getMainHTML() {
     </div>
   `;
 }
-
 // =================================================================
 // SUBTAB NAVIGATION
 // =================================================================
@@ -3836,7 +3879,7 @@ const isAutoMode = globalMode === 'auto';
   }
   console.log("[DailyAdj] Initialized window.isRainyDay =", window.isRainyDay);
   
-  container.innerHTML = getStyles() + getMainHTML();
+  container.innerHTML = getStyles() + getMainHTML(isAutoMode);
   
   setupSubTabs();
   setupKeyboardHandler();
