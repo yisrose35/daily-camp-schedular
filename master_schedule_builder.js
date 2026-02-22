@@ -1575,6 +1575,7 @@ function renderDAW() {
   loadDAWLayers();
   renderDAWPalette();
   renderDAWToolbar();
+  renderDAWExpandSection();
   renderDAWGrid();
 }
 function updateToolbarStatus() {
