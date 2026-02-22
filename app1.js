@@ -448,7 +448,64 @@
 
     // Campistry Me link is now in the header (index.html)
 
-    // ==================== UI RENDERING ====================
+   // ==================== UI RENDERING ====================
+    
+    function renderBuilderModeSlider() {
+        if (document.getElementById('builder-mode-container')) return;
+
+        const globalData = window.loadGlobalSettings?.() || {};
+        const currentMode = globalData.app1?.builderMode || 'manual';
+
+        const wrapper = document.createElement('div');
+        wrapper.id = 'builder-mode-container';
+        wrapper.className = 'builder-mode-wrapper';
+
+        wrapper.innerHTML = `
+            <div class="builder-mode-slider" id="builderModeSlider" data-mode="${currentMode}">
+                <div class="builder-mode-indicator"></div>
+                <div class="builder-mode-option ${currentMode === 'manual' ? 'active' : ''}" data-target="manual">🛠️ Manual Builder</div>
+                <div class="builder-mode-option ${currentMode === 'auto' ? 'active' : ''}" data-target="auto">⚡ Auto Builder</div>
+            </div>
+        `;
+
+        wrapper.querySelectorAll('.builder-mode-option').forEach(opt => {
+            opt.addEventListener('click', (e) => {
+                const targetMode = e.currentTarget.dataset.target;
+                const slider = document.getElementById('builderModeSlider');
+                
+                // Update UI visually
+                slider.dataset.mode = targetMode;
+                wrapper.querySelectorAll('.builder-mode-option').forEach(o => o.classList.remove('active'));
+                e.currentTarget.classList.add('active');
+
+                // Save setting globally
+                const g = window.loadGlobalSettings?.() || {};
+                if (!g.app1) g.app1 = {};
+                g.app1.builderMode = targetMode;
+                window.saveGlobalSettings?.('app1', g.app1);
+                window.forceSyncToCloud?.();
+            });
+        });
+
+        // Safely inject it above the main setup grid layout
+        const divBtns = document.getElementById("divisionButtons");
+        if (divBtns) {
+            let layoutContainer = divBtns.parentElement;
+            // Traverse up to find the main flex container holding the sidebar and right pane
+            while (layoutContainer && layoutContainer.tagName !== 'BODY') {
+                const style = window.getComputedStyle(layoutContainer);
+                if (style.display === 'flex' || style.display === 'grid') {
+                    break;
+                }
+                layoutContainer = layoutContainer.parentElement;
+            }
+            if (layoutContainer && layoutContainer.tagName !== 'BODY') {
+                layoutContainer.parentNode.insertBefore(wrapper, layoutContainer);
+            } else {
+                divBtns.parentNode.insertBefore(wrapper, divBtns);
+            }
+        }
+    }
     
     /**
      * Render grade cards in the left panel, grouped by parent division
