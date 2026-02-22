@@ -2516,8 +2516,7 @@ window.MasterSchedulerInternal = {
     if (typeof saveDraftToLocalStorage === 'function') saveDraftToLocalStorage();
     if (typeof renderGrid === 'function') renderGrid();
     return result;
-  }
-};
+  },
   // DAW / Auto mode
   get currentMode() { return currentBuilderMode; },
   setMode: function(mode) {
