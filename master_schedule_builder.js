@@ -766,16 +766,16 @@ function setupModeToggle() {
 // DAW (Digital Audio Workstation) LAYER VIEW
 // =================================================================
 const DAW_LAYER_TYPES = [
-  { type:'sport', name:'Sport', color:'#86efac' },
-  { type:'special', name:'Special Activity', color:'#c4b5fd' },
-  { type:'activity', name:'Activity', color:'#93c5fd' },
-  { type:'swim', name:'Swim', color:'#67e8f9', anchor:true },
-  { type:'lunch', name:'Lunch', color:'#fca5a5', anchor:true },
-  { type:'snacks', name:'Snacks', color:'#fde047', anchor:true },
-  { type:'dismissal', name:'Dismissal', color:'#f87171', anchor:true },
-  { type:'custom', name:'Custom Pinned', color:'#d1d5db', anchor:true },
-  { type:'league', name:'League Game', color:'#a5b4fc' },
-  { type:'elective', name:'Elective', color:'#f0abfc' },
+  { type:'sport', name:'Sport', style:'background:#86efac;color:#14532d;' },
+  { type:'special', name:'Special Activity', style:'background:#c4b5fd;color:#3b1f6b;' },
+  { type:'activity', name:'Activity', style:'background:#93c5fd;color:#1e3a5f;' },
+  { type:'swim', name:'Swim', style:'background:#67e8f9;color:#155e75;', anchor:true },
+  { type:'lunch', name:'Lunch', style:'background:#fca5a5;color:#7f1d1d;', anchor:true },
+  { type:'snacks', name:'Snacks', style:'background:#fde047;color:#713f12;', anchor:true },
+  { type:'dismissal', name:'Dismissal', style:'background:#f87171;color:#fff;', anchor:true },
+  { type:'custom', name:'Custom Pinned', style:'background:#d1d5db;color:#374151;', anchor:true },
+  { type:'league', name:'League Game', style:'background:#a5b4fc;color:#312e81;' },
+  { type:'elective', name:'Elective', style:'background:#f0abfc;color:#701a75;' },
 ];
 
 const DAW_PIXELS_PER_MINUTE = 3;
