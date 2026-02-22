@@ -800,8 +800,9 @@ function loadDAWLayers() {
   }
 }
 
-function saveDAWLayers() {
-  const templateKey = currentLoadedTemplate || '_current';
+function saveDAWLayers(forceTemplateName = null) {
+  // Always save as a draft while editing, unless a specific template name is forced (Save/Update)
+  const templateKey = forceTemplateName || '_current';
   const g = window.loadGlobalSettings?.() || {};
   if (!g.app1) g.app1 = {};
   if (!g.app1.autoLayerTemplates) g.app1.autoLayerTemplates = {};
@@ -846,22 +847,45 @@ function renderDAWToolbar() {
   const toolbar = document.getElementById('daw-toolbar');
   if (!toolbar) return;
   
-  const saved = window.getSavedSkeletons?.() || {};
-  const names = Object.keys(saved).sort();
-  // Also check if there are saved auto layer templates
   const g = window.loadGlobalSettings?.() || {};
   const autoTemplates = g.app1?.autoLayerTemplates || {};
   const autoNames = Object.keys(autoTemplates).filter(n => n !== '_current').sort();
   const loadOptions = autoNames.map(n => `<option value="${n}">${n}</option>`).join('');
   
+  // Use shared assignments so Manual and Auto refer to the same default days
+  const assignments = window.getSkeletonAssignments?.() || {};
+  const dateStr = window.currentScheduleDate || "";
+  const [Y, M, D] = dateStr.split('-').map(Number);
+  let dow = 0; if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const todayName = dayNames[dow];
+  
+  const todayDefault = assignments[todayName] || assignments["Default"] || null;
+  const effectiveTemplate = currentLoadedTemplate || todayDefault;
+  const canUpdate = !!effectiveTemplate;
+  
+  let statusText;
+  let statusSubtext = '';
+  if (currentLoadedTemplate) {
+    statusText = currentLoadedTemplate;
+  } else if (todayDefault) {
+    statusText = todayDefault;
+    statusSubtext = `<span style="font-size:10px;color:#64748b;margin-left:4px;">(${todayName} default)</span>`;
+  } else {
+    statusText = 'No Template';
+  }
+  
   toolbar.innerHTML = `
-    <div class="ms-toolbar-group status" style="background:#f1f5f9;">
-      <span class="ms-status-label" style="color:#64748b;">Template:</span>
-      <span class="ms-status-name" style="color:#0f172a;">${currentLoadedTemplate || 'Untitled'}</span>
+    <div class="ms-toolbar-group status">
+      <span class="ms-status-label">Current:</span>
+      <span class="ms-status-name">${statusText}</span>${statusSubtext}
     </div>
+    <button id="daw-update-btn" class="ms-btn ms-btn-success" ${!canUpdate ? 'disabled' : ''}>
+      Update
+    </button>
     
     <div class="ms-toolbar-group">
-      <span class="ms-toolbar-label" style="color:#64748b;">Load:</span>
+      <span class="ms-toolbar-label">Load:</span>
       <select id="daw-load-select" class="ms-select">
         <option value="">Select...</option>
         ${loadOptions}
@@ -869,17 +893,29 @@ function renderDAWToolbar() {
     </div>
     
     <div class="ms-toolbar-group">
+      <span class="ms-toolbar-label">New:</span>
       <input type="text" id="daw-save-name" class="ms-input" placeholder="Template name...">
-      <button id="daw-save-btn" class="ms-btn ms-btn-primary">Save Layers</button>
+      <button id="daw-save-btn" class="ms-btn ms-btn-primary">Save</button>
     </div>
     
     <div class="ms-toolbar-group">
-      <button id="daw-copy-btn" class="ms-btn ms-btn-ghost" title="Copy layers from one grade to others">📋 Copy To...</button>
+      <button id="daw-copy-btn" class="ms-btn ms-btn-ghost" title="Copy layers to other grades">📋 Copy To...</button>
     </div>
     
-    <div style="flex:1;"></div>
+    <button id="daw-clear-btn" class="ms-btn ms-btn-warning ms-btn-icon" title="Clear Grid">
+      <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+      Clear
+    </button>
     
-    <button id="daw-clear-btn" class="ms-btn ms-btn-warning">Clear All</button>
+    <div class="ms-toolbar-group" style="border-right:none;">
+      <select id="daw-delete-select" class="ms-select" style="min-width:110px;">
+        <option value="">Delete...</option>
+        ${loadOptions}
+      </select>
+      <button id="daw-delete-btn" class="ms-btn ms-btn-danger ms-btn-icon" title="Delete Template">
+        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+      </button>
+    </div>
   `;
   
   // Bindings
@@ -897,35 +933,132 @@ function renderDAWToolbar() {
     this.value = '';
   };
   
+  document.getElementById('daw-update-btn').onclick = async () => {
+    const templateToUpdate = currentLoadedTemplate || todayDefault;
+    if (!templateToUpdate) return;
+    if (!window.AccessControl?.checkSetupAccess('update schedule templates')) return;
+    
+    const ok = await showConfirm(`Overwrite auto layers for "${templateToUpdate}"?`);
+    if (ok) {
+      saveDAWLayers(templateToUpdate);
+      currentLoadedTemplate = templateToUpdate;
+      await showAlert('Auto template updated successfully.');
+      renderDAWToolbar();
+    }
+  };
+  
   document.getElementById('daw-save-btn').onclick = async () => {
+    if (!window.AccessControl?.checkSetupAccess('save schedule templates')) return;
+    
     const name = document.getElementById('daw-save-name').value.trim();
     if (!name) { await showAlert('Enter a template name.'); return; }
     
-    const g2 = window.loadGlobalSettings?.() || {};
-    if (!g2.app1) g2.app1 = {};
-    if (!g2.app1.autoLayerTemplates) g2.app1.autoLayerTemplates = {};
-    g2.app1.autoLayerTemplates[name] = JSON.parse(JSON.stringify(dawLayers));
-    window.saveGlobalSettings?.('app1', g2.app1);
-    window.forceSyncToCloud?.();
+    if (autoTemplates[name]) {
+      const ok = await showConfirm(`"${name}" already exists. Overwrite?`);
+      if (!ok) return;
+    }
+    
+    saveDAWLayers(name);
     currentLoadedTemplate = name;
     await showAlert(`Saved auto template "${name}".`);
+    document.getElementById('daw-save-name').value = '';
     renderDAWToolbar();
+    renderDAWExpandSection();
   };
   
   document.getElementById('daw-clear-btn').onclick = async () => {
     const ok = await showConfirm('Clear all layers from all grades?');
     if (ok) {
       Object.keys(dawLayers).forEach(k => { dawLayers[k] = []; });
+      currentLoadedTemplate = null;
       saveDAWLayers();
       renderDAWGrid();
+      renderDAWToolbar();
     }
   };
   
-  document.getElementById('daw-copy-btn').onclick = () => {
-    dawCopyLayersDialog();
+  document.getElementById('daw-copy-btn').onclick = () => dawCopyLayersDialog();
+  
+  document.getElementById('daw-delete-btn').onclick = async () => {
+    if (!window.AccessControl?.checkSetupAccess('delete schedule templates')) return;
+    
+    const nameToDelete = document.getElementById('daw-delete-select').value;
+    if (!nameToDelete) { await showAlert('Please select a template to delete.'); return; }
+    
+    const ok = await showConfirm(`Permanently delete auto template "${nameToDelete}"?`);
+    if (ok) {
+      const g2 = window.loadGlobalSettings?.() || {};
+      if (g2.app1?.autoLayerTemplates?.[nameToDelete]) {
+        delete g2.app1.autoLayerTemplates[nameToDelete];
+        window.saveGlobalSettings?.('app1', g2.app1);
+        window.forceSyncToCloud?.();
+        
+        if (currentLoadedTemplate === nameToDelete) {
+          currentLoadedTemplate = null;
+          Object.keys(dawLayers).forEach(k => { dawLayers[k] = []; });
+          renderDAWGrid();
+        }
+        
+        await showAlert('Template deleted.');
+        renderDAWToolbar();
+        renderDAWExpandSection();
+      }
+    }
   };
 }
 
+function renderDAWExpandSection() {
+  const expandEl = document.getElementById('daw-expand');
+  if (!expandEl) return;
+  
+  // Combine names from Manual Builder and Auto Builder so assignments sync cleanly
+  const manualSaved = window.getSavedSkeletons?.() || {};
+  const g = window.loadGlobalSettings?.() || {};
+  const autoTemplates = g.app1?.autoLayerTemplates || {};
+  
+  const allNames = [...new Set([...Object.keys(manualSaved), ...Object.keys(autoTemplates)])]
+                    .filter(n => n !== '_current').sort();
+                    
+  const assignments = window.getSkeletonAssignments?.() || {};
+  const loadOptions = allNames.map(n => `<option value="${n}">${n}</option>`).join('');
+  
+  expandEl.innerHTML = `
+    <span class="ms-expand-trigger" onclick="this.nextElementSibling.classList.toggle('open')">
+      <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+      Day Assignments
+    </span>
+    <div class="ms-expand-content">
+      <div class="ms-assign-grid">
+        ${["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Default"].map(day => `
+          <div class="ms-assign-item">
+            <label>${day}</label>
+            <select data-day="${day}">
+              <option value="">None</option>
+              ${loadOptions}
+            </select>
+          </div>
+        `).join('')}
+      </div>
+      <button id="daw-assign-save-btn" class="ms-btn ms-btn-success" style="margin-top:12px;">Save Assignments</button>
+    </div>
+  `;
+  
+  expandEl.querySelectorAll('select[data-day]').forEach(sel => {
+    sel.value = assignments[sel.dataset.day] || '';
+  });
+  
+  document.getElementById('daw-assign-save-btn').onclick = async () => {
+    const map = {};
+    expandEl.querySelectorAll('select[data-day]').forEach(s => { 
+      if (s.value) map[s.dataset.day] = s.value; 
+    });
+    window.saveSkeletonAssignments?.(map);
+    window.forceSyncToCloud?.();
+    await showAlert('Assignments saved.');
+    renderToolbar(); // Sync manual toolbar status
+    renderDAWToolbar(); // Sync auto toolbar status
+  };
+}
 function renderDAWGrid() {
   const gridEl = document.getElementById('daw-grid');
   if (!gridEl) return;
