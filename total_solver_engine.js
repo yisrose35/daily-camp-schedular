@@ -1036,6 +1036,11 @@ else penalty += 200;
                     else { if (S.countSameDivisionUsage(fn, blockDiv, startMin, endMin, bunk) >= cap) continue; }
                 }
                 if (S.getPrecomputedRotationScore(bunk, c2.activityName) === Infinity) continue;
+                // ★★★ AUTO BUILD: Duration-strict — skip if activity duration doesn't match block ★★★
+                if (_dStrict && _dStrictDur > 0) {
+                    var _candDur = S.getActivityDuration(c2.activityName);
+                    if (_candDur > 0 && _candDur !== _dStrictDur) continue;
+                }
                 domain.add(ci2);
             }
             domains.set(bi, domain);
