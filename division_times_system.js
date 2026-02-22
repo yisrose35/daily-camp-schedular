@@ -214,6 +214,41 @@
             byDivision[div].push(block);
         });
 
+        // ★★★ AUTO BUILD: For divisions with per-bunk blocks, create superset timeline ★★★
+        for (const [divName, blocks] of Object.entries(byDivision)) {
+            const hasBunkBlocks = blocks.some(b => b._bunk);
+            if (hasBunkBlocks) {
+                log(`  ★ Division ${divName} has per-bunk blocks — building superset timeline`);
+                const timePoints = new Set();
+                blocks.forEach(b => {
+                    const s = parseTimeToMinutes(b.startTime);
+                    const e = parseTimeToMinutes(b.endTime);
+                    if (s !== null) timePoints.add(s);
+                    if (e !== null) timePoints.add(e);
+                });
+                const sorted = [...timePoints].sort((a, b) => a - b);
+                const supersetBlocks = [];
+                for (let i = 0; i < sorted.length - 1; i++) {
+                    const sMin = sorted[i];
+                    const eMin = sorted[i + 1];
+                    if (eMin - sMin < 3) continue;
+                    const covering = blocks.find(b => {
+                        const bs = parseTimeToMinutes(b.startTime);
+                        const be = parseTimeToMinutes(b.endTime);
+                        return bs !== null && be !== null && bs <= sMin && be >= eMin;
+                    });
+                    supersetBlocks.push({
+                        ...(covering || {}),
+                        startTime: minutesToTimeLabel(sMin),
+                        endTime: minutesToTimeLabel(eMin),
+                        _supersetSlot: true
+                    });
+                }
+                byDivision[divName] = supersetBlocks;
+                log(`    Created ${supersetBlocks.length} superset slots from ${blocks.length} blocks`);
+            }
+        }
+
         // Build slot array for each division
         for (const [divName, blocks] of Object.entries(byDivision)) {
             // Parse times and filter invalid
