@@ -3768,9 +3768,17 @@ function init() {
   // No separate UI needed — auto vs manual is about HOW the schedule generates,
   // not about a different editing interface.
   if (globalMode === 'auto') {
-      console.log('[DailyAdj] Universal mode is AUTO. Loading skeleton builder (same as manual).');
+      console.log('[DailyAdj] Universal mode is AUTO. Loading Auto Schedule Planner.');
+      if (typeof window.AutoSchedulePlanner?.init === 'function') {
+          container.innerHTML = '';
+          const autoContainer = document.createElement('div');
+          autoContainer.style.cssText = 'height:calc(100vh - 160px);overflow:auto;';
+          container.appendChild(autoContainer);
+          window.AutoSchedulePlanner.init(autoContainer);
+          return;
+      }
+      console.warn('[DailyAdj] AutoSchedulePlanner not loaded. Falling back to manual.');
   }
-
   // 3. --- MANUAL MODE (Standard Daily Adjustments) ---
   console.log('[DailyAdj] Universal mode is MANUAL. Loading standard UI.');
 
