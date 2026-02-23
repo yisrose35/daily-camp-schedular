@@ -43,6 +43,9 @@ let smartTileHistory = null;
 let dailyOverrideSkeleton = [];
 let selectedTileId = null;
 
+// ★★★ AUTO MODE: DA's own layer state (independent from master builder) ★★★
+let daAutoLayers = {};  // { gradeKey: [{ id, type, startMin, endMin, qty, op }] }
+
 // DOM References
 let skeletonContainer = null;
 let tripsFormContainer = null;
