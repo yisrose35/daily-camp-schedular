@@ -2538,29 +2538,7 @@ window.MasterSchedulerInternal = {
     if (typeof renderGrid === 'function') renderGrid();
     return result;
   },
-  // DAW / Auto mode
-  get currentMode() { return currentBuilderMode; },
-  setMode: function(mode) {
-    currentBuilderMode = mode;
-    const toggle = document.getElementById('ms-mode-toggle');
-    if (toggle) {
-      toggle.querySelectorAll('.ms-mode-btn').forEach(b => {
-        b.classList.toggle('active', b.dataset.mode === mode);
-      });
-    }
-    const manualEl = document.getElementById('ms-manual-container');
-    const autoEl = document.getElementById('ms-auto-container');
-    if (mode === 'manual') {
-      if (manualEl) manualEl.style.display = 'flex';
-      if (autoEl) autoEl.style.display = 'none';
-      renderGrid();
-    } else {
-      if (manualEl) manualEl.style.display = 'none';
-      if (autoEl) autoEl.style.display = 'flex';
-      renderDAW();
-    }
-  },
-  get dawLayers() { return dawLayers; },
-  renderDAW: typeof renderDAW === 'function' ? renderDAW : function(){},
+  // Mode (read from Setup & Config, no toggle needed)
+  get currentMode() { return builderMode; },
 };
 })();
