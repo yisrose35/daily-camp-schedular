@@ -2016,7 +2016,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     endTime: eMin,
                     slots,
                     bunks: bunkList,
-                    type: 'league'
+                    type: 'league',
+                    // ★★★ MULTIPLE LEAGUE SUPPORT: Pass through which league this block is for ★★★
+                    leagueName: item.leagueName || null
                 });
                 return;
             }
