@@ -2424,7 +2424,45 @@ function deselectAllTiles() {
 // =================================================================
 // LOAD/SAVE
 // =================================================================
-function loadDailySkeleton() {
+// =================================================================
+// AUTO MODE: Load layer template for today (independent from MS)
+// =================================================================
+function loadDAAutoLayers() {
+  const g = window.loadGlobalSettings?.() || {};
+  const autoTemplates = g.app1?.autoLayerTemplates || {};
+  const assignments = g.app1?.skeletonAssignments || {};
+  
+  const dateStr = window.currentScheduleDate || '';
+  const [Y, M, D] = dateStr.split('-').map(Number);
+  let dow = 0;
+  if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
+  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const today = dayNames[dow];
+  
+  let tmpl = assignments[today] || assignments['Default'];
+  console.log('[DailyAdj] Auto mode: loading layer template for', today, '→', tmpl || '(none)');
+  
+  if (tmpl && autoTemplates[tmpl]) {
+    daAutoLayers = JSON.parse(JSON.stringify(autoTemplates[tmpl]));
+  } else if (autoTemplates['_current']) {
+    daAutoLayers = JSON.parse(JSON.stringify(autoTemplates['_current']));
+  } else {
+    daAutoLayers = {};
+  }
+  
+  // If empty, seed with division keys
+  if (Object.keys(daAutoLayers).length === 0) {
+    const divisions = window.divisions || {};
+    Object.keys(divisions).forEach(d => {
+      const div = divisions[d];
+      if (div.isParent) return;
+      daAutoLayers[d] = [];
+    });
+  }
+  
+  console.log('[DailyAdj] Auto layers loaded:', Object.keys(daAutoLayers).length, 'grades');
+}
+  function loadDailySkeleton() {
   const dateKey = window.currentScheduleDate;
   console.log('[DailyAdj] loadDailySkeleton called for date:', dateKey);
   
