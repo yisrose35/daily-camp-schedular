@@ -3995,6 +3995,11 @@ function init() {
   setupVisibilityHandler();
 
   loadDailySkeleton();
+  
+  // ★ Auto mode: load layer template for today
+  if (window._daBuilderMode === 'auto') {
+    loadDAAutoLayers();
+  }
 
   renderPalette();
   renderRainyDayPanel();
