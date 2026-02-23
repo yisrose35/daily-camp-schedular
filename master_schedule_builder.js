@@ -1401,65 +1401,58 @@ function addDropListeners(selector) {
         };
       }
       // STANDARD SLOTS & LEAGUES
-else {
-let name = tileData.name;
-let finalType = tileData.type;
-    if (tileData.type === 'activity') { name = "General Activity Slot"; finalType = 'slot'; }
-    else if (tileData.type === 'sports') { name = "Sports Slot"; finalType = 'slot'; }
-    else if (tileData.type === 'special') { name = "Special Activity"; finalType = 'slot'; }
-    else if (tileData.type === 'league') { name = "League Game"; finalType = 'league'; }
-    else if (tileData.type === 'specialty_league') { name = "Specialty League"; finalType = 'specialty_league'; }
-    
-    // ★★★ MULTIPLE LEAGUE SUPPORT: Build league picker for league tiles ★★★
-    let leaguePickerField = [];
-    if (tileData.type === 'league') {
-      const _gs = window.loadGlobalSettings?.() || {};
-      const _lbn = _gs.leaguesByName || {};
-      const _leagueNames = Object.keys(_lbn).filter(ln => _lbn[ln] && _lbn[ln].enabled !== false);
-      if (_leagueNames.length > 0) {
-        leaguePickerField = [{
-          name: 'leagueName',
-          label: 'Which League?',
-          type: 'select',
-          options: [{ value: '', label: '— Any League (auto) —' }].concat(
-            _leagueNames.map(ln => ({ value: ln, label: ln }))
-          ),
-          default: ''
-        }];
-      }
-    }
+      else {
+        let name = tileData.name;
+        let finalType = tileData.type;
 
-    const result = await showModal({
-      title: name,
-      fields: [
-        ...leaguePickerField,
-        { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
-        { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
-      ]
-    });
-    if (!result) return;
-    
-    newEvent = {
-      id: Date.now().toString(),
-      type: finalType,
-      event: name,
-      division: divName,
-      startTime: result.startTime,
-      endTime: result.endTime
-    };
+        if (tileData.type === 'activity') { name = "General Activity Slot"; finalType = 'slot'; }
+        else if (tileData.type === 'sports') { name = "Sports Slot"; finalType = 'slot'; }
+        else if (tileData.type === 'special') { name = "Special Activity"; finalType = 'slot'; }
+        else if (tileData.type === 'league') { name = "League Game"; finalType = 'league'; }
+        else if (tileData.type === 'specialty_league') { name = "Specialty League"; finalType = 'specialty_league'; }
+        
+        // ★★★ MULTIPLE LEAGUE SUPPORT: Build league picker for league tiles ★★★
+        let leaguePickerField = [];
+        if (tileData.type === 'league') {
+          const _gs = window.loadGlobalSettings?.() || {};
+          const _lbn = _gs.leaguesByName || {};
+          const _leagueNames = Object.keys(_lbn).filter(ln => _lbn[ln] && _lbn[ln].enabled !== false);
+          if (_leagueNames.length > 0) {
+            leaguePickerField = [{
+              name: 'leagueName',
+              label: 'Which League?',
+              type: 'select',
+              options: [{ value: '', label: '— Any League (auto) —' }].concat(
+                _leagueNames.map(ln => ({ value: ln, label: ln }))
+              ),
+              default: ''
+            }];
+          }
+        }
 
-    // ★★★ MULTIPLE LEAGUE SUPPORT: Store selected league name ★★★
-    if (finalType === 'league' && result.leagueName) {
-      newEvent.leagueName = result.leagueName;
-      newEvent.event = result.leagueName; // Show league name on tile instead of generic "League Game"
-    }
-  }
+        const result = await showModal({
+          title: name,
+          fields: [
+            ...leaguePickerField,
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
+          ]
+        });
+        if (!result) return;
+        
+        newEvent = {
+          id: Date.now().toString(),
+          type: finalType,
+          event: name,
+          division: divName,
+          startTime: result.startTime,
+          endTime: result.endTime
+        };
 
-       
-        // ★★★ MULTIPLE LEAGUE SUPPORT: Attach selected league name ★★★
+        // ★★★ MULTIPLE LEAGUE SUPPORT: Store selected league name ★★★
         if (finalType === 'league' && result.leagueName) {
           newEvent.leagueName = result.leagueName;
-          newEvent.event = result.leagueName; // Show league name on tile
+          newEvent.event = result.leagueName;
         }
       }
 
