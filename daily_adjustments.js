@@ -2810,41 +2810,23 @@ async function runOptimizer() {
       // ★★★ AUTO MODE: Enrich bunk timelines with resolved activities ★★★
       if (isAutoMode && window._autoBuildTimelines) {
           const resolvedAssignments = window.scheduleAssignments || {};
-          const divTimes = window.divisionTimes || {};
           
           Object.keys(window._autoBuildTimelines).forEach(bunk => {
               const timeline = window._autoBuildTimelines[bunk];
               const bunkAssignments = resolvedAssignments[bunk];
               if (!timeline || !bunkAssignments) return;
               
-              let bunkDiv = null;
-              const divisions = window.divisions || {};
-              for (const [divName, divInfo] of Object.entries(divisions)) {
-                  if (divInfo.bunks && divInfo.bunks.includes(bunk)) {
-                      bunkDiv = divName;
-                      break;
+              // Timeline blocks and assignment slots are 1:1 — match by index
+              for (let i = 0; i < timeline.length && i < bunkAssignments.length; i++) {
+                  const entry = bunkAssignments[i];
+                  if (!entry || entry.continuation) continue;
+                  const resolved = entry._activity || entry.field || entry.activity;
+                  if (resolved) {
+                      timeline[i]._activity = resolved;
+                      if (entry.field) timeline[i]._field = entry.field;
+                      if (entry.sport) timeline[i]._sport = entry.sport;
                   }
               }
-              
-              const slots = bunkDiv ? (divTimes[bunkDiv] || []) : [];
-              
-              timeline.forEach(block => {
-                  for (let si = 0; si < slots.length; si++) {
-                      const slot = slots[si];
-                      if (slot.startMin === block.startMin || 
-                          (slot.startMin <= block.startMin && slot.endMin >= block.endMin)) {
-                          const entry = bunkAssignments[si];
-                          if (entry && !entry.continuation) {
-                              const resolved = entry._activity || entry.field || entry.activity;
-                              if (resolved) {
-                                  block._activity = resolved;
-                                  if (entry.field) block._field = entry.field;
-                              }
-                          }
-                          break;
-                      }
-                  }
-              });
           });
           console.log('[Optimizer] ★ Enriched auto timelines with resolved activities');
       }
