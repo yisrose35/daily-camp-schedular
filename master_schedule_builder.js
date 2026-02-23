@@ -20,6 +20,7 @@ let container=null, palette=null, grid=null;
 let dailySkeleton=[];
 let currentLoadedTemplate = null;
 let selectedTileId = null;
+let builderMode = 'manual';
 let hasUnsavedChanges = false;
 
 // --- UNIVERSAL BUILDER MODE ---
