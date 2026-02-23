@@ -1621,6 +1621,19 @@ function renderGrid() {
 
 // --- AUTO MODE: DAW Layer Timeline ---
 function renderDAWTimeline(gridEl) {
+  // ★★★ Use Master Builder's DAW grid renderer ★★★
+  if (typeof window.MasterSchedulerInternal?.renderDAWGridTo === 'function') {
+      gridEl.style.height = 'calc(100vh - 320px)';
+      gridEl.style.overflow = 'auto';
+      window.MasterSchedulerInternal.renderDAWGridTo(gridEl);
+      return;
+  }
+
+  // Fallback if master builder not loaded
+  gridEl.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;">Master Builder not loaded.</div>';
+  return;
+
+  // --- OLD auto_schedule_planner.js path (deprecated) ---
   if (typeof window.AutoSchedulePlanner?.init !== 'function') {
       gridEl.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;">Auto Schedule Planner not loaded.<br>Add <code>auto_schedule_planner.js</code> to flow.html.</div>';
       return;
