@@ -1521,11 +1521,17 @@ function renderPalette() {
 function renderGrid() {
   const gridEl = document.getElementById('da-skeleton-grid');
   if (!gridEl) return;
-  
+
+  // AUTO MODE: render DAW layer timeline instead of stacking grid
+  if (window._daBuilderMode === 'auto') {
+      renderDAWTimeline(gridEl);
+      return;
+  }
+
   const divisions = window.divisions || {};
   const availableDivisions = window.availableDivisions || [];
   if (availableDivisions.length === 0) {
-    gridEl.innerHTML = `<div class="da-empty-state">No divisions found. Please go to Setup to create divisions.</div>`;
+    gridEl.innerHTML = `<div class="da-empty-state">No divisions found.
     return;
   }
   
