@@ -2598,12 +2598,18 @@ function renderToolbar() {
   const names = Object.keys(savedSkeletons).sort();
   const loadOptions = names.map(n => `<option value="${n}">${n}</option>`).join('');
   
+  // ★ In auto mode, show auto layer templates instead of skeleton templates
+  const isAutoMode = window._daBuilderMode === 'auto';
+  const autoTemplates = isAutoMode ? (masterSettings.app1?.autoLayerTemplates || {}) : {};
+  const autoNames = Object.keys(autoTemplates).filter(n => n !== '_current').sort();
+  const autoLoadOptions = autoNames.map(n => `<option value="${n}">${n}</option>`).join('');
+  
   toolbar.innerHTML = `
     <div class="da-toolbar-group">
       <span class="da-toolbar-label">Template:</span>
       <select id="da-load-select" class="da-select">
         <option value="">Load...</option>
-        ${loadOptions}
+        ${isAutoMode ? autoLoadOptions : loadOptions}
       </select>
     </div>
     
