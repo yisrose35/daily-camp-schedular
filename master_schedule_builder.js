@@ -1803,6 +1803,14 @@ function softenColor(hexColor) {
 
 // --- RENDER GRID ---
 function renderGrid() {
+  if (!grid) return;
+
+  // AUTO MODE: render DAW layer timeline instead of stacking grid
+  if (builderMode === 'auto') {
+      renderDAWGrid();
+      return;
+  }
+
   const divisions = window.divisions || {};
   const availableDivisions = window.availableDivisions || [];
 
