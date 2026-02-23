@@ -1455,24 +1455,7 @@ let finalType = tileData.type;
     }
   }
 
-        const result = await showModal({
-          title: name,
-          fields: [
-            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
-            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
-          ]
-        });
-        if (!result) return;
-        
-        newEvent = {
-          id: Date.now().toString(),
-          type: finalType,
-          event: name,
-          division: divName,
-          startTime: result.startTime,
-          endTime: result.endTime
-        };
-
+       
         // ★★★ MULTIPLE LEAGUE SUPPORT: Attach selected league name ★★★
         if (finalType === 'league' && result.leagueName) {
           newEvent.leagueName = result.leagueName;
