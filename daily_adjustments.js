@@ -1624,45 +1624,19 @@ function renderGrid() {
 
 // --- AUTO MODE: DAW Layer Timeline ---
 function renderDAWTimeline(gridEl) {
-  // ★★★ Use Master Builder's DAW grid renderer ★★★
-  if (typeof window.MasterSchedulerInternal?.renderDAWGridTo === 'function') {
-      gridEl.style.height = 'calc(100vh - 320px)';
-      gridEl.style.overflow = 'auto';
-      window.MasterSchedulerInternal.renderDAWGridTo(gridEl);
+  if (typeof window.MasterSchedulerInternal?.renderDAWGridWith !== 'function') {
+      gridEl.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;">Master Schedule Builder not loaded.</div>';
       return;
   }
 
-  // Fallback if master builder not loaded
-  gridEl.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;">Master Builder not loaded.</div>';
-  return;
-
-  // --- OLD auto_schedule_planner.js path (deprecated) ---
-  if (typeof window.AutoSchedulePlanner?.init !== 'function') {
-      gridEl.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;">Auto Schedule Planner not loaded.<br>Add <code>auto_schedule_planner.js</code> to flow.html.</div>';
-      return;
-  }
-
-  if (!gridEl.dataset.dawInit) {
-      gridEl.innerHTML = '';
-      gridEl.style.height = 'calc(100vh - 320px)';
-      gridEl.style.overflow = 'auto';
-
-      var currentLayers = window.AutoSchedulePlanner.getLayers();
-      if (currentLayers.length === 0 && dailyOverrideSkeleton.length > 0) {
-          var converted = daConvertSkeletonToLayers(dailyOverrideSkeleton);
-          if (converted.length > 0) {
-              window.AutoSchedulePlanner.setLayers(converted);
-              console.log('[DailyAdj] Converted', converted.length, 'skeleton blocks to DAW layers');
-          }
-      }
-
-      window.AutoSchedulePlanner.init(gridEl);
-      gridEl.dataset.dawInit = 'true';
-  } else {
-      window.AutoSchedulePlanner.render();
-  }
+  gridEl.style.overflow = 'auto';
+  
+  window.MasterSchedulerInternal.renderDAWGridWith(gridEl, daAutoLayers, {
+    onLayersChanged: function(updatedLayers) {
+      daAutoLayers = updatedLayers;
+    }
+  });
 }
-
 function daConvertSkeletonToLayers(skeleton) {
   var layers = [];
   var eventTypeMap = {
