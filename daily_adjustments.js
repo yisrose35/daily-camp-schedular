@@ -1643,7 +1643,10 @@ function renderEventTile(ev, top, height) {
     content = `<strong>${eventName}</strong>`;
     if (isNight) content += ' 🌙';
     content += `<div style="font-size:10px;opacity:0.85;">${timeStr}</div>`;
-    
+    // ★★★ MULTIPLE LEAGUE SUPPORT: Show league name on tile ★★★
+    if (ev.leagueName) {
+      content += `<div style="font-size:9px;opacity:0.8;">🏆 ${ev.leagueName}</div>`;
+    }
     // Location display for larger tiles
     if (adjustedHeight > 50) {
       const locationDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
