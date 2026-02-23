@@ -437,18 +437,18 @@ function findPoolField(allLocations) {
 
 // --- Init ---
 function init(targetElement = null){
-  container = targetElement || document.getElementById("master-scheduler-content");
-  if(!container) return;
+  container = targetElement || document.getElementById("master-scheduler-content");
+  if(!container) return;
 
-  // 1. FRESH FETCH: Dynamically check the universal setting so it updates instantly
-  if (window.getCampBuilderMode) {
-      currentBuilderMode = window.getCampBuilderMode();
-  }
-  
-  // 2. CLEAR MEMORY: Reset the locked template so Day Assignments trigger correctly
-  currentLoadedTemplate = null;
-    
-  loadDailySkeleton();
+  // 1. FRESH FETCH: Dynamically check the universal setting so it updates instantly
+  if (window.getCampBuilderMode) {
+      currentBuilderMode = window.getCampBuilderMode();
+  }
+  
+  // 2. CLEAR MEMORY: Reset the locked template so Day Assignments trigger correctly
+  currentLoadedTemplate = null;
+    
+  loadDailySkeleton();
   
   // Reset unsaved changes since we just loaded fresh
   hasUnsavedChanges = false;
@@ -522,21 +522,21 @@ function init(targetElement = null){
   renderExpandSection();
   renderPalette();
   renderGrid();
-  
-  // Force UI to match current universal mode immediately on load
-  const manualEl = document.getElementById('ms-manual-container');
-  const autoEl = document.getElementById('ms-auto-container');
-  if (currentBuilderMode === 'manual') {
-    if (manualEl) manualEl.style.display = 'flex';
-    if (autoEl) autoEl.style.display = 'none';
-  } else {
-    if (manualEl) manualEl.style.display = 'none';
-    if (autoEl) autoEl.style.display = 'flex';
-    renderDAW();
-  }
+  
+  // Force UI to match current universal mode immediately on load
+  const manualEl = document.getElementById('ms-manual-container');
+  const autoEl = document.getElementById('ms-auto-container');
+  if (currentBuilderMode === 'manual') {
+    if (manualEl) manualEl.style.display = 'flex';
+    if (autoEl) autoEl.style.display = 'none';
+  } else {
+    if (manualEl) manualEl.style.display = 'none';
+    if (autoEl) autoEl.style.display = 'flex';
+    renderDAW();
+  }
 
-  // Global keyboard listener for Delete key
-  document.addEventListener('keydown', handleKeyDown);
+  // Global keyboard listener for Delete key
+  document.addEventListener('keydown', handleKeyDown);
 }
 
 function handleKeyDown(e) {
@@ -1082,9 +1082,16 @@ function renderDAWExpandSection() {
     renderDAWToolbar(); // Sync auto toolbar status
   };
 }
-function renderDAWGrid(targetEl) {
-  const gridEl = targetEl || document.getElementById('daw-grid');
+function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
+  const gridEl = externalEl || document.getElementById('daw-grid');
   if (!gridEl) return;
+
+  // When called externally (from DA), use provided layers + callbacks
+  const isExternal = !!externalEl;
+  const layerSource = isExternal ? externalLayers : dawLayers;
+  const onChanged = externalCallbacks?.onLayersChanged || null;
+  const onSave = isExternal ? (onChanged || function(){}) : saveDAWLayers;
+  const onRender = isExternal ? function(){ renderDAWGrid(externalEl, externalLayers, externalCallbacks); } : renderDAWGrid;
   
   const divisions = window.divisions || {};
   const grades = Object.keys(divisions).filter(d => !divisions[d].isParent).sort((a, b) => {
@@ -1132,7 +1139,7 @@ function renderDAWGrid(targetEl) {
     const div = divisions[gradeKey];
     const divStart = parseTimeToMinutes(div?.startTime) || globalStart;
     const divEnd = parseTimeToMinutes(div?.endTime) || globalEnd;
-    const layers = dawLayers[gradeKey] || [];
+    const layers = layerSource[gradeKey] || [];
     
     // Calculate row height based on layer count (stacking)
     const layerCount = Math.max(1, layers.length);
@@ -1199,10 +1206,15 @@ function renderDAWGrid(targetEl) {
   gridEl.innerHTML = html;
   
   // Bind events
-  bindDAWEvents(gridEl, globalStart, globalEnd);
+  bindDAWEvents(gridEl, globalStart, globalEnd, { layerSource, onSave, onRender, isExternal });
 }
 
-function bindDAWEvents(gridEl, globalStart, globalEnd) {
+function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
+  const layerSource = opts?.layerSource || dawLayers;
+  const onSave = opts?.onSave || saveDAWLayers;
+  const onRender = opts?.onRender || renderDAWGrid;
+  const isExternal = opts?.isExternal || false;
+
   // Click on band to select/edit
   gridEl.querySelectorAll('.ms-daw-band').forEach(band => {
     band.addEventListener('click', (e) => {
@@ -1215,8 +1227,8 @@ function bindDAWEvents(gridEl, globalStart, globalEnd) {
       gridEl.querySelectorAll('.ms-daw-popover').forEach(p => p.remove());
       
       if (dawSelectedBand) {
-        const layer = (dawLayers[grade] || []).find(l => l.id === id);
-        if (layer) showDAWPopover(band, layer, grade);
+        const layer = (layerSource[grade] || []).find(l => l.id === id);
+        if (layer) showDAWPopover(band, layer, grade, { onSave, onRender });
       }
       
       // Update selection styling
@@ -1229,7 +1241,7 @@ function bindDAWEvents(gridEl, globalStart, globalEnd) {
       if (e.target.classList.contains('band-resize')) { e.preventDefault(); return; }
       const id = band.dataset.id;
       const grade = band.dataset.grade;
-      const layer = (dawLayers[grade] || []).find(l => l.id === id);
+      const layer = (layerSource[grade] || []).find(l => l.id === id);
       if (!layer) return;
       dawDragData = { source: 'band', id, grade, layer, offsetMin: 0 };
       
@@ -1261,7 +1273,7 @@ function bindDAWEvents(gridEl, globalStart, globalEnd) {
         
         const id = band.dataset.id;
         const grade = band.dataset.grade;
-        const layer = (dawLayers[grade] || []).find(l => l.id === id);
+        const layer = (layerSource[grade] || []).find(l => l.id === id);
         if (!layer) return;
         startMin = isLeft ? layer.startMin : layer.endMin;
         
@@ -1288,7 +1300,7 @@ function bindDAWEvents(gridEl, globalStart, globalEnd) {
           isResizing = false;
           document.removeEventListener('mousemove', onMove);
           document.removeEventListener('mouseup', onUp);
-          saveDAWLayers();
+          onSave();
         };
         
         document.addEventListener('mousemove', onMove);
@@ -1341,8 +1353,8 @@ function bindDAWEvents(gridEl, globalStart, globalEnd) {
           endMin = divEnd;
         }
         
-        if (!dawLayers[grade]) dawLayers[grade] = [];
-        dawLayers[grade].push({
+        if (!layerSource[grade]) layerSource[grade] = [];
+        layerSource[grade].push({
           id: 'daw_' + Math.random().toString(36).slice(2, 9),
           type,
           startMin,
@@ -1351,8 +1363,8 @@ function bindDAWEvents(gridEl, globalStart, globalEnd) {
           op: layerDef.anchor ? '=' : '>=',
         });
         
-        saveDAWLayers();
-        renderDAWGrid();
+        onSave();
+        onRender();
       }
       else if (e.dataTransfer.types.includes('text/daw-band-move') && dawDragData?.source === 'band') {
         // Move existing band
@@ -1363,18 +1375,18 @@ function bindDAWEvents(gridEl, globalStart, globalEnd) {
         
         // Remove from old grade if moving between grades
         if (fromGrade !== grade) {
-          dawLayers[fromGrade] = (dawLayers[fromGrade] || []).filter(l => l.id !== id);
-          if (!dawLayers[grade]) dawLayers[grade] = [];
+          layerSource[fromGrade] = (layerSource[fromGrade] || []).filter(l => l.id !== id);
+          if (!layerSource[grade]) layerSource[grade] = [];
           layer.startMin = Math.max(globalStart, newStart);
           layer.endMin = Math.min(globalEnd, newEnd);
-          dawLayers[grade].push(layer);
+          layerSource[grade].push(layer);
         } else {
           layer.startMin = Math.max(globalStart, newStart);
           layer.endMin = Math.min(globalEnd, newEnd);
         }
         
-        saveDAWLayers();
-        renderDAWGrid();
+        onSave();
+        onRender();
       }
       
       dawDragData = null;
@@ -1394,9 +1406,9 @@ function bindDAWEvents(gridEl, globalStart, globalEnd) {
       const grade = btn.dataset.grade;
       const ok = await showConfirm(`Clear all layers from ${grade}?`);
       if (ok) {
-        dawLayers[grade] = [];
-        saveDAWLayers();
-        renderDAWGrid();
+        layerSource[grade] = [];
+        onSave();
+        onRender();
       }
     };
   });
@@ -1417,12 +1429,12 @@ function bindDAWEvents(gridEl, globalStart, globalEnd) {
     
     if ((e.key === 'Delete' || e.key === 'Backspace') && dawSelectedBand) {
       e.preventDefault();
-      Object.keys(dawLayers).forEach(grade => {
-        dawLayers[grade] = (dawLayers[grade] || []).filter(l => l.id !== dawSelectedBand);
+      Object.keys(layerSource).forEach(grade => {
+        layerSource[grade] = (layerSource[grade] || []).filter(l => l.id !== dawSelectedBand);
       });
       dawSelectedBand = null;
-      saveDAWLayers();
-      renderDAWGrid();
+      onSave();
+      onRender();
     }
     if (e.key === 'Escape') {
       dawSelectedBand = null;
@@ -1434,7 +1446,10 @@ function bindDAWEvents(gridEl, globalStart, globalEnd) {
   document.addEventListener('keydown', dawKeyHandler);
 }
 
-function showDAWPopover(bandEl, layer, grade) {
+function showDAWPopover(bandEl, layer, grade, opts) {
+  const onSave = opts?.onSave || saveDAWLayers;
+  const onRender = opts?.onRender || renderDAWGrid;
+  
   // Remove existing
   document.querySelectorAll('.ms-daw-popover').forEach(p => p.remove());
   
@@ -1492,16 +1507,16 @@ function showDAWPopover(bandEl, layer, grade) {
     const activeOp = popover.querySelector('.ms-daw-pop-op.active');
     if (activeOp) layer.op = activeOp.dataset.op;
     
-    saveDAWLayers();
-    renderDAWGrid();
+    onSave();
+    onRender();
   };
   
   // Delete
   popover.querySelector('.ms-daw-pop-btn-del').onclick = () => {
     dawLayers[grade] = (dawLayers[grade] || []).filter(l => l.id !== layer.id);
     dawSelectedBand = null;
-    saveDAWLayers();
-    renderDAWGrid();
+    onSave();
+    onRender();
   };
   
   // Close
@@ -2532,11 +2547,12 @@ window.MasterSchedulerInternal = {
     return result;
   },
   // Mode (read from Setup & Config, no toggle needed)
- get currentMode() { return builderMode; },
-  // ★ Expose DAW grid for DA to reuse
-  renderDAWGridTo: function(el) { loadDAWLayers(); renderDAWGrid(el); },
-  get dawLayers() { return dawLayers; },
-  saveDAWLayers: typeof saveDAWLayers === 'function' ? saveDAWLayers : function(){},
-  loadDAWLayers: typeof loadDAWLayers === 'function' ? loadDAWLayers : function(){},
+  get currentMode() { return builderMode; },
+  // ★ DAW grid utility for DA to render layers independently
+  renderDAWGridWith: function(el, layers, callbacks) {
+    renderDAWGrid(el, layers, callbacks);
+  },
+  DAW_LAYER_TYPES: DAW_LAYER_TYPES,
+  DAW_PIXELS_PER_MINUTE: DAW_PIXELS_PER_MINUTE,
 };
 })();
