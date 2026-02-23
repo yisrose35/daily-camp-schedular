@@ -690,12 +690,31 @@ for (const futureDate of Object.keys(allDailyData)) {
             const slots = sampleBlock?.slots || [];
 
             const processedLeagues = new Set();
+            // ★★★ MULTIPLE LEAGUE SUPPORT: Check if blocks at this time specify a league ★★★
+            const blocksAtTime = timeData.allBlocks;
+            const specifiedLeagueNames = new Set(
+                blocksAtTime
+                    .map(b => b.leagueName)
+                    .filter(Boolean)
+            );
+            
             const applicableLeagues = Object.values(masterLeagues).filter(l => {
                 if (!l.enabled) return false;
                 if (disabledLeagues?.includes(l.name)) return false;
                 if (!l.divisions || l.divisions.length === 0) return false;
+                
+                // ★★★ If blocks specify a league name, ONLY allow that league ★★★
+                if (specifiedLeagueNames.size > 0) {
+                    if (!specifiedLeagueNames.has(l.name)) return false;
+                }
+                
                 return divisionsAtTime.some(div => l.divisions.includes(div));
             });
+
+            console.log(`   Applicable leagues: [${applicableLeagues.map(l => l.name).join(', ')}]`);
+            if (specifiedLeagueNames.size > 0) {
+                console.log(`   ★ Filtered by block leagueName: [${[...specifiedLeagueNames].join(', ')}]`);
+            }
 
             for (const league of applicableLeagues) {
                 if (processedLeagues.has(league.name)) continue;
