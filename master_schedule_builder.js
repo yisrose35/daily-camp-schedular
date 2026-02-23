@@ -1399,13 +1399,36 @@ function addDropListeners(selector) {
       else {
         let name = tileData.name;
         let finalType = tileData.type;
+        let selectedLeagueName = null;
 
         if (tileData.type === 'activity') { name = "General Activity Slot"; finalType = 'slot'; }
         else if (tileData.type === 'sports') { name = "Sports Slot"; finalType = 'slot'; }
         else if (tileData.type === 'special') { name = "Special Activity"; finalType = 'slot'; }
         else if (tileData.type === 'league') { name = "League Game"; finalType = 'league'; }
         else if (tileData.type === 'specialty_league') { name = "Specialty League"; finalType = 'specialty_league'; }
-        
+
+        // ★★★ MULTIPLE LEAGUE SUPPORT: Show league picker for league tiles ★★★
+        let leaguePickerField = [];
+        if (tileData.type === 'league') {
+          const globalSettings = window.loadGlobalSettings?.() || {};
+          const leaguesByName = globalSettings.leaguesByName || {};
+          const leagueNames = Object.keys(leaguesByName).filter(ln => {
+            const l = leaguesByName[ln];
+            return l && l.enabled !== false;
+          });
+          if (leagueNames.length > 0) {
+            leaguePickerField = [{
+              name: 'leagueName',
+              label: 'Which League?',
+              type: 'select',
+              options: [{ value: '', label: '— Any League (auto) —' }].concat(
+                leagueNames.map(ln => ({ value: ln, label: ln }))
+              ),
+              default: ''
+            }];
+          }
+        }
+
         const result = await showModal({
           title: name,
           fields: [
