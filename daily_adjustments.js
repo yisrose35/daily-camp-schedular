@@ -3831,110 +3831,44 @@ function init() {
   container = document.getElementById("daily-adjustments-content");
   if (!container) { console.error("Daily Adjustments: container not found"); return; }
 
-  // 1. Read the Universal Builder Mode
+  // Read the builder mode — stored globally so renderGrid can check it
   var globalMode = window.getCampBuilderMode ? window.getCampBuilderMode() : 'manual';
-  var isAutoMode = (globalMode === 'auto');
+  window._daBuilderMode = globalMode;
+  console.log('[DailyAdj] Mode:', globalMode);
 
-  // 2. AUTO MODE — Embed Master Builder + DA feature tabs
-  if (isAutoMode) {
-      console.log('[DailyAdj] AUTO mode — embedding Master Builder with DA features.');
+  // Load settings (same for both modes)
+  masterSettings.global = window.loadGlobalSettings?.() || {};
+  masterSettings.app1 = masterSettings.global.app1 || {};
+  masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
+  masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
+  smartTileHistory = loadSmartTileHistory();
 
-      masterSettings.global = window.loadGlobalSettings?.() || {};
-      masterSettings.app1 = masterSettings.global.app1 || {};
-      masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
-      masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
-      smartTileHistory = loadSmartTileHistory();
-      loadCurrentOverrides();
+  loadCurrentOverrides();
 
-      var dailyData = window.loadCurrentDailyData?.() || {};
-      if (window.isRainyDay === undefined) {
-          window.isRainyDay = dailyData.isRainyDay === true || dailyData.rainyDayMode === true;
-      }
-
-      // Build the shell: subtabs + rainy day + master builder host + other panes
-      container.innerHTML = getStyles() + `
-        <div style="display:flex;flex-direction:column;height:calc(100vh - 120px);">
-          <div class="da-subtabs">
-            <button class="da-subtab active" data-tab="schedule">Schedule</button>
-            <button class="da-subtab" data-tab="trips">Trips</button>
-            <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
-            <button class="da-subtab" data-tab="resources">Resources</button>
-            <button class="da-subtab" data-tab="fluid">Fluid Mode</button>
-          </div>
-
-          <div id="da-pane-schedule" class="da-pane active" style="flex:1;overflow:hidden;display:flex;flex-direction:column;">
-            <div id="da-rainy-panel"></div>
-            <div id="da-displaced-tiles-panel" style="display:none;"></div>
-            <div id="da-master-builder-host" style="flex:1;overflow:hidden;"></div>
-          </div>
-
-          <div id="da-pane-trips" class="da-pane" style="display:none;overflow:auto;padding:16px;">
-            <div id="da-trips-container"></div>
-          </div>
-          <div id="da-pane-bunk-overrides" class="da-pane" style="display:none;overflow:auto;padding:16px;">
-            <div id="da-bunk-overrides-container"></div>
-          </div>
-          <div id="da-pane-resources" class="da-pane" style="display:none;overflow:auto;padding:16px;">
-            <div id="da-resources-container"></div>
-          </div>
-          <div id="da-pane-fluid" class="da-pane" style="display:none;overflow:auto;padding:16px;">
-            <div id="da-fluid-container"></div>
-          </div>
-        </div>
-      `;
-
-      // Wire subtabs
-      setupSubTabs();
-      setupKeyboardHandler();
-      setupVisibilityHandler();
-
-      // Render DA features
-      renderRainyDayPanel();
-      renderDisplacedTilesPanel();
-      renderTripsForm();
-      renderBunkOverridesUI();
-      renderResourceOverridesUI();
-
-      // Now inject the Master Builder into the host div
-      var host = container.querySelector('#da-master-builder-host');
-      if (host && typeof window.initMasterScheduler === 'function') {
-          // Temporarily hijack the master-scheduler-content ID
-          var origMsEl = document.getElementById('master-scheduler-content');
-          if (origMsEl) origMsEl.id = '_ms-content-parked';
-
-          host.id = 'master-scheduler-content';
-          window.initMasterScheduler();
-          host.id = 'da-master-builder-host';
-
-          if (origMsEl) origMsEl.id = 'master-scheduler-content';
-
-          // Load today's template
-          var assignments = masterSettings.app1?.skeletonAssignments || {};
-          var skeletons = masterSettings.app1?.savedSkeletons || {};
-          var dateStr = window.currentScheduleDate || '';
-          var parts = dateStr.split('-').map(Number);
-          var dow = 0;
-          if (parts[0] && parts[1] && parts[2]) dow = new Date(parts[0], parts[1] - 1, parts[2]).getDay();
-          var dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-          var tmplName = assignments[dayNames[dow]] || assignments['Default'];
-
-          if (tmplName && skeletons[tmplName] && window.MasterSchedulerInternal) {
-              window.MasterSchedulerInternal.setSkeleton(JSON.parse(JSON.stringify(skeletons[tmplName])));
-              window.MasterSchedulerInternal.renderGrid?.();
-              window.MasterSchedulerInternal.renderToolbar?.();
-              console.log('[DailyAdj] ✅ Loaded template "' + tmplName + '"');
-          }
-
-          // Auto-click the Auto mode toggle in the Master Builder
-          setTimeout(function() {
-              var autoBtn = host.querySelector('.ms-mode-btn[data-mode="auto"]');
-              if (autoBtn) autoBtn.click();
-          }, 150);
-      }
-
-      return;
+  var dailyData = window.loadCurrentDailyData?.() || {};
+  if (window.isRainyDay === undefined) {
+      window.isRainyDay = dailyData.isRainyDay === true || dailyData.rainyDayMode === true;
   }
+  console.log("[DailyAdj] Initialized window.isRainyDay =", window.isRainyDay);
 
+  // Render UI (same HTML for both modes)
+  container.innerHTML = getStyles() + getMainHTML();
+
+  setupSubTabs();
+  setupKeyboardHandler();
+  setupVisibilityHandler();
+
+  loadDailySkeleton();
+
+  renderPalette();
+  renderRainyDayPanel();
+  renderDisplacedTilesPanel();
+  renderToolbar();
+  renderGrid();
+  renderTripsForm();
+  renderBunkOverridesUI();
+  renderResourceOverridesUI();
+}
   // 3. MANUAL MODE — Standard Daily Adjustments
   console.log('[DailyAdj] MANUAL mode. Loading standard UI.');
 
