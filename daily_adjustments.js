@@ -3713,6 +3713,8 @@ function getStyles() {
     .ms-container #da-bunk-overrides-container { padding:16px; }
     .ms-container #da-resources-container { padding:16px; }
     .ms-container #da-fluid-container { padding:16px; }
+    #da-skeleton-grid .al-toolbar { display: none !important; }
+    #da-skeleton-grid .al-palette { display: none !important; }
   </style>`;
 }
 
