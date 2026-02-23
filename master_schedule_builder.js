@@ -1894,14 +1894,7 @@ function renderGrid() {
   addClickToSelectListeners();
 }
 
-// --- AUTO MODE: DAW Layer Timeline ---
-function renderDAWGrid() {
-  // ... the full function from patch 4
-}
 
-function msConvertSkeletonToLayers(skeleton) {
-  // ... the full function from patch 4
-}
 
 function addClickToSelectListeners() {
   grid.querySelectorAll('.grid-event').forEach(el => {
