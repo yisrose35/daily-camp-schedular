@@ -2532,6 +2532,11 @@ window.MasterSchedulerInternal = {
     return result;
   },
   // Mode (read from Setup & Config, no toggle needed)
-  get currentMode() { return builderMode; },
+ get currentMode() { return builderMode; },
+  // ★ Expose DAW grid for DA to reuse
+  renderDAWGridTo: function(el) { loadDAWLayers(); renderDAWGrid(el); },
+  get dawLayers() { return dawLayers; },
+  saveDAWLayers: typeof saveDAWLayers === 'function' ? saveDAWLayers : function(){},
+  loadDAWLayers: typeof loadDAWLayers === 'function' ? loadDAWLayers : function(){},
 };
 })();
