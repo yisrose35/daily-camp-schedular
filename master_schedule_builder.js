@@ -1153,9 +1153,14 @@ function renderEventTile(ev, top, height) {
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${ev.reservedFields.join(', ')}</div>`;
   }
   
-  if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
-    const actList = ev.electiveActivities.slice(0, 3).join(', ');
-    const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
+  
+// ★★★ MULTIPLE LEAGUE SUPPORT: Show league name badge ★★★
+if (ev.leagueName) {
+innerHtml += <div style="font-size:9px;opacity:0.85;margin-top:2px;">🏆 ${ev.leagueName}</div>;
+}
+if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
+const actList = ev.electiveActivities.slice(0, 3).join(', ');
+const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🎯 ${actList}${more}</div>`;
   }
   
