@@ -988,8 +988,17 @@
             await window.supabase.auth.signOut();
             window.location.href = 'index.html';
         } catch (e) {
-            console.error('Error logging out:', e);
-            window.location.href = 'index.html';
+            console.error('Auth check failed:', e);
+            // ★ v2.5 FIX: Don't redirect on transient errors if cached auth exists
+            const cachedUserId = localStorage.getItem('campistry_auth_user_id');
+            const cachedCampId = localStorage.getItem('campistry_camp_id');
+            if (cachedUserId && cachedCampId) {
+                console.warn('🔑 [Dashboard] Error during auth, but cached auth exists — staying on dashboard');
+                // Try to load dashboard with cached data
+                try { await loadDashboardData(); setupDashboardForRole(); } catch(e2) { console.warn('Dashboard load with cache failed:', e2); }
+            } else {
+                window.location.href = 'index.html';
+            }
         }
     };
     
