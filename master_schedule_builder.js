@@ -515,10 +515,13 @@ function init(targetElement = null){
   palette = document.getElementById("scheduler-palette");
   grid = document.getElementById("scheduler-grid");
     
+  builderMode = window.getCampBuilderMode ? window.getCampBuilderMode() : 'manual';
+  console.log('[MasterBuilder] Mode:', builderMode);
+
   renderToolbar();
   renderExpandSection();
- renderPalette();
-  renderGrid();
+  renderPalette();
+  renderGrid();
   
   // Force UI to match current universal mode immediately on load
   const manualEl = document.getElementById('ms-manual-container');
