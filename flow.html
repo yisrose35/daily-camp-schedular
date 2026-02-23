@@ -562,9 +562,17 @@
             await waitForCloudHydration();
             showApp();
             
-        } catch (e) {
+       } catch (e) {
             console.error("Auth check failed:", e);
-            redirectToLogin();
+            // ★ v7.2 FIX: Don't bounce to login on transient errors if cached auth exists
+            const cachedUserId = localStorage.getItem('campistry_auth_user_id');
+            const cachedCampId = localStorage.getItem('campistry_camp_id');
+            if (cachedUserId && cachedCampId) {
+                console.warn('🔑 [Auth] Error during auth check, but cached auth exists — proceeding anyway');
+                showApp();
+            } else {
+                redirectToLogin();
+            }
         }
     }
     
