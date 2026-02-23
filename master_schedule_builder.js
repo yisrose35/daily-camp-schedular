@@ -1155,12 +1155,13 @@ function renderEventTile(ev, top, height) {
   
   
 // ★★★ MULTIPLE LEAGUE SUPPORT: Show league name badge ★★★
-if (ev.leagueName) {
-innerHtml += <div style="font-size:9px;opacity:0.85;margin-top:2px;">🏆 ${ev.leagueName}</div>;
-}
-if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
-const actList = ev.electiveActivities.slice(0, 3).join(', ');
-const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
+  if (ev.leagueName) {
+    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🏆 ${ev.leagueName}</div>`;
+  }
+
+  if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
+    const actList = ev.electiveActivities.slice(0, 3).join(', ');
+    const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🎯 ${actList}${more}</div>`;
   }
   
@@ -1172,7 +1173,6 @@ const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.lengt
   if (ev.type === 'split' && ev.subEvents?.length === 2) {
     innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">↔ ${ev.subEvents[0].event} / ${ev.subEvents[1].event}</div>`;
   }
-
   const selectedClass = selectedTileId === ev.id ? ' selected' : '';
   return `<div class="grid-event${selectedClass}" data-id="${ev.id}" draggable="true" title="Click to select, Delete key to remove" 
           style="${style}; position:absolute; top:${top}px; height:${adjustedHeight}px; width:96%; left:2%; padding:5px 7px; font-size:11px; overflow:hidden; border-radius:5px; cursor:pointer; display:flex; flex-direction:column; box-sizing:border-box;">
