@@ -1446,6 +1446,12 @@ function addDropListeners(selector) {
           startTime: result.startTime,
           endTime: result.endTime
         };
+
+        // ★★★ MULTIPLE LEAGUE SUPPORT: Attach selected league name ★★★
+        if (finalType === 'league' && result.leagueName) {
+          newEvent.leagueName = result.leagueName;
+          newEvent.event = result.leagueName; // Show league name on tile
+        }
       }
 
       if (newEvent) {
