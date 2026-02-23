@@ -1082,8 +1082,8 @@ function renderDAWExpandSection() {
     renderDAWToolbar(); // Sync auto toolbar status
   };
 }
-function renderDAWGrid() {
-  const gridEl = document.getElementById('daw-grid');
+function renderDAWGrid(targetEl) {
+  const gridEl = targetEl || document.getElementById('daw-grid');
   if (!gridEl) return;
   
   const divisions = window.divisions || {};
