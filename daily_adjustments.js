@@ -1531,7 +1531,7 @@ function renderGrid() {
   const divisions = window.divisions || {};
   const availableDivisions = window.availableDivisions || [];
   if (availableDivisions.length === 0) {
-    gridEl.innerHTML = `<div class="da-empty-state">No divisions found.
+    gridEl.innerHTML = `<div class="da-empty-state">No divisions found.</div>`;
     return;
   }
   
