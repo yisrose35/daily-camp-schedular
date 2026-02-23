@@ -1619,6 +1619,80 @@ function renderGrid() {
   applyConflictHighlighting(gridEl);
 }
 
+// --- AUTO MODE: DAW Layer Timeline ---
+function renderDAWTimeline(gridEl) {
+  if (typeof window.AutoSchedulePlanner?.init !== 'function') {
+      gridEl.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;">Auto Schedule Planner not loaded.<br>Add <code>auto_schedule_planner.js</code> to flow.html.</div>';
+      return;
+  }
+
+  if (!gridEl.dataset.dawInit) {
+      gridEl.innerHTML = '';
+      gridEl.style.height = 'calc(100vh - 320px)';
+      gridEl.style.overflow = 'auto';
+
+      var currentLayers = window.AutoSchedulePlanner.getLayers();
+      if (currentLayers.length === 0 && dailyOverrideSkeleton.length > 0) {
+          var converted = daConvertSkeletonToLayers(dailyOverrideSkeleton);
+          if (converted.length > 0) {
+              window.AutoSchedulePlanner.setLayers(converted);
+              console.log('[DailyAdj] Converted', converted.length, 'skeleton blocks to DAW layers');
+          }
+      }
+
+      window.AutoSchedulePlanner.init(gridEl);
+      gridEl.dataset.dawInit = 'true';
+  } else {
+      window.AutoSchedulePlanner.render();
+  }
+}
+
+function daConvertSkeletonToLayers(skeleton) {
+  var layers = [];
+  var eventTypeMap = {
+      'swim': 'swim', 'lunch': 'lunch', 'snacks': 'snack', 'snack': 'snack',
+      'dismissal': 'dismissal', 'general activity slot': 'activity',
+      'sports slot': 'sports', 'special activity': 'special',
+      'league game': 'league', 'specialty league': 'specialty_league'
+  };
+  var blockTypeMap = {
+      'slot': 'activity', 'sports': 'sports', 'sport': 'sports',
+      'special': 'special', 'pinned': 'custom', 'league': 'league',
+      'smart': 'activity', 'split': 'split', 'elective': 'elective'
+  };
+
+  skeleton.forEach(function(block) {
+      if (!block || !block.startTime || !block.endTime || !block.division) return;
+      var startMin = parseTimeToMinutes(block.startTime);
+      var endMin = parseTimeToMinutes(block.endTime);
+      if (startMin == null || endMin == null || endMin <= startMin) return;
+
+      var layerType = 'activity';
+      var lowerEvent = (block.event || '').toLowerCase().trim();
+      if (eventTypeMap[lowerEvent]) layerType = eventTypeMap[lowerEvent];
+      else if (blockTypeMap[block.type]) layerType = blockTypeMap[block.type];
+
+      var isPinned = block.type === 'pinned' || ['swim','lunch','snack','snacks','dismissal'].indexOf(layerType) >= 0;
+
+      layers.push({
+          id: 'layer_' + Math.random().toString(36).slice(2, 9),
+          type: layerType,
+          event: block.event || layerType,
+          startMin: startMin,
+          endMin: endMin,
+          periodMin: endMin - startMin,
+          operator: isPinned ? '=' : '\u2265',
+          quantity: 1,
+          grade: block.division,
+          pinExact: isPinned
+      });
+  });
+
+  return layers;
+}
+
+
+
 function renderEventTile(ev, top, height) {
   let tile = TILES.find(t => t.name === ev.event);
   if (!tile && ev.type) tile = TILES.find(t => t.type === ev.type);
