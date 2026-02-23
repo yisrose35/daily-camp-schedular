@@ -3949,41 +3949,7 @@ function init() {
   renderBunkOverridesUI();
   renderResourceOverridesUI();
 }
-  // 3. MANUAL MODE — Standard Daily Adjustments
-  console.log('[DailyAdj] MANUAL mode. Loading standard UI.');
-
-  masterSettings.global = window.loadGlobalSettings?.() || {};
-  masterSettings.app1 = masterSettings.global.app1 || {};
-  masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
-  masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
-  smartTileHistory = loadSmartTileHistory();
-
-  loadCurrentOverrides();
-
-  var dailyData = window.loadCurrentDailyData?.() || {};
-  if (window.isRainyDay === undefined) {
-      window.isRainyDay = dailyData.isRainyDay === true || dailyData.rainyDayMode === true;
-  }
-  console.log("[DailyAdj] Initialized window.isRainyDay =", window.isRainyDay);
-
-  container.innerHTML = getStyles() + getMainHTML(false);
-
-  setupSubTabs();
-  setupKeyboardHandler();
-  setupVisibilityHandler();
-
-  loadDailySkeleton();
-
-  renderPalette();
-  renderRainyDayPanel();
-  renderDisplacedTilesPanel();
-  renderToolbar();
-  renderGrid();
-  renderTripsForm();
-  renderBunkOverridesUI();
-  renderResourceOverridesUI();
-}
-  
+    
 function cleanup() {
   if (_keyHandler) {
     document.removeEventListener('keydown', _keyHandler);
