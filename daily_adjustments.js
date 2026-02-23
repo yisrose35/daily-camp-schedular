@@ -2810,31 +2810,7 @@ async function runOptimizer() {
   // ★★★ POST-GENERATION CLEANUP ★★★
   window._preGenClearActive = false;
 
- if (success) {
-      // ★★★ AUTO MODE: Enrich bunk timelines with resolved activities ★★★
-      if (isAutoMode && window._autoBuildTimelines) {
-          const resolvedAssignments = window.scheduleAssignments || {};
-          
-          Object.keys(window._autoBuildTimelines).forEach(bunk => {
-              const timeline = window._autoBuildTimelines[bunk];
-              const bunkAssignments = resolvedAssignments[bunk];
-              if (!timeline || !bunkAssignments) return;
-              
-              // Timeline blocks and assignment slots are 1:1 — match by index
-              for (let i = 0; i < timeline.length && i < bunkAssignments.length; i++) {
-                  const entry = bunkAssignments[i];
-                  if (!entry || entry.continuation) continue;
-                  const resolved = entry._activity || entry.field || entry.activity;
-                  if (resolved) {
-                      timeline[i]._activity = resolved;
-                      if (entry.field) timeline[i]._field = entry.field;
-                      if (entry.sport) timeline[i]._sport = entry.sport;
-                  }
-              }
-          });
-          console.log('[Optimizer] ★ Enriched auto timelines with resolved activities');
-      }
-
+if (success) {
       // Force save the fresh schedule to ALL storage layers immediately
       try {
           const freshData = {
@@ -2864,6 +2840,10 @@ async function runOptimizer() {
       }
       await daShowAlert("✅ Schedule Generated!"); 
       window.showTab?.('schedule');
+      // Force full re-render with clean state
+      const schedEl = document.getElementById('scheduleTable');
+      if (schedEl) schedEl.innerHTML = '';
+      window.renderStaggeredView?.();
   } else { 
       await daShowAlert("❌ Error generating schedule. Check console."); 
   }
