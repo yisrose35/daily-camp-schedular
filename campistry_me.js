@@ -1156,103 +1156,232 @@
     }
 
     // =========================================================================
-    // CSV IMPORT / EXPORT
+    // FILE IMPORT / EXPORT (CSV + Excel) — v7.2
     // =========================================================================
 
-    const HEADER_ALIASES = {
-        name: ['name', 'camper name', 'camper', 'full name'],
-        firstName: ['first name', 'first', 'fname', 'given name'],
-        lastName: ['last name', 'last', 'lname', 'surname'],
-        division: ['division', 'div', 'program'],
-        grade: ['grade', 'entering grade', 'school grade', 'year'],
-        bunk: ['bunk', 'group', 'cabin', 'tent'],
-        team: ['team', 'color', 'league team']
-    };
-
-    let _sheetJSPromise = null;
+    // --- SheetJS (xlsx) lazy loader ---
+    let _sheetJSLoaded = false;
     function loadSheetJS() {
-        if (window.XLSX) return Promise.resolve(window.XLSX);
-        if (_sheetJSPromise) return _sheetJSPromise;
-        _sheetJSPromise = new Promise((resolve, reject) => {
-            const script = document.createElement('script');
-            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-            script.onload = () => resolve(window.XLSX);
-            script.onerror = () => { _sheetJSPromise = null; reject(new Error('Failed to load SheetJS')); };
-            document.head.appendChild(script);
+        return new Promise((resolve, reject) => {
+            if (_sheetJSLoaded || window.XLSX) { _sheetJSLoaded = true; resolve(); return; }
+            const s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+            s.onload = () => { _sheetJSLoaded = true; resolve(); };
+            s.onerror = () => reject(new Error('Failed to load SheetJS library'));
+            document.head.appendChild(s);
         });
-        return _sheetJSPromise;
     }
 
+    // --- Smart header mapping ---
+    const HEADER_ALIASES = {
+        'first name': 'firstName', 'firstname': 'firstName', 'first': 'firstName',
+        'last name': 'lastName', 'lastname': 'lastName', 'last': 'lastName',
+        'name': 'fullName', 'full name': 'fullName', 'fullname': 'fullName',
+        'camper name': 'fullName', 'camper': 'fullName',
+        'division': 'division', 'div': 'division',
+        'grade': 'grade', 'grade level': 'grade',
+        'bunk': 'bunk', 'cabin': 'bunk', 'bunk name': 'bunk',
+        'team': 'team', 'league team': 'team', 'league': 'team'
+    };
+
+    function mapHeaders(headerRow) {
+        const mapping = {};
+        headerRow.forEach((raw, idx) => {
+            const key = String(raw || '').toLowerCase().trim();
+            if (HEADER_ALIASES[key]) mapping[idx] = HEADER_ALIASES[key];
+        });
+        return mapping;
+    }
+
+    function rowToRecord(cols, headerMap) {
+        const rec = { firstName: '', lastName: '', fullName: '', division: '', grade: '', bunk: '', team: '' };
+        Object.entries(headerMap).forEach(([idx, field]) => {
+            rec[field] = (cols[+idx] || '').toString().trim().slice(0, MAX_NAME_LENGTH);
+        });
+        let name = '';
+        if (rec.firstName || rec.lastName) {
+            name = ((rec.firstName || '') + ' ' + (rec.lastName || '')).trim();
+        } else {
+            name = rec.fullName;
+        }
+        return { name, firstName: rec.firstName, lastName: rec.lastName,
+                 division: rec.division, grade: rec.grade, bunk: rec.bunk, team: rec.team };
+    }
+
+    // --- Intelligent value normalization for matching ---
+    function _normalizeImportValue(val) {
+        if (!val) return '';
+        return String(val).toLowerCase().trim().replace(/\s+/g, ' ');
+    }
+
+    function _extractNumber(str) {
+        if (!str) return null;
+        const s = String(str).trim();
+        const ordinal = s.match(/^(\d+)(st|nd|rd|th)?$/i);
+        if (ordinal) return parseInt(ordinal[1], 10);
+        const gradeN = s.match(/^grade\s*(\d+)$/i);
+        if (gradeN) return parseInt(gradeN[1], 10);
+        const bare = s.match(/^(\d+)$/);
+        if (bare) return parseInt(bare[1], 10);
+        const ordGrade = s.match(/^(\d+)(st|nd|rd|th)?\s+grade$/i);
+        if (ordGrade) return parseInt(ordGrade[1], 10);
+        return null;
+    }
+
+    function _importValueMatches(existingVal, importVal) {
+        if (!existingVal || !importVal) return false;
+        const a = _normalizeImportValue(existingVal);
+        const b = _normalizeImportValue(importVal);
+        if (a === b) return true;
+        const numA = _extractNumber(existingVal);
+        const numB = _extractNumber(importVal);
+        if (numA !== null && numB !== null && numA === numB) return true;
+        if (numA === null && numB === null) return a.includes(b) || b.includes(a);
+        return false;
+    }
+
+    function findMatchingKey(importVal, existingKeys) {
+        if (!importVal) return '';
+        if (existingKeys.includes(importVal)) return importVal;
+        for (const key of existingKeys) {
+            if (_importValueMatches(key, importVal)) return key;
+        }
+        return importVal;
+    }
+
+    // --- Template download (First Name / Last Name) ---
     function downloadTemplate() {
         const csv = '\uFEFFFirst Name,Last Name,Division,Grade,Bunk,Team\nJohn,Smith,Junior Boys,5th Grade,Bunk 1,Red Team\nJane,Doe,Junior Girls,6th Grade,Bunk 2,Blue Team\nMike,Johnson,Senior Boys,7th Grade,Bunk 3,Green Team';
         const blob = new Blob([csv], { type: 'text/csv' });
         const a = document.createElement('a');
         const url = URL.createObjectURL(blob);
-        a.href = url;
-        a.download = 'camper_import_template.csv';
-        a.click();
+        a.href = url; a.download = 'camper_import_template.csv'; a.click();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
         toast('Template downloaded');
     }
 
-    function _captureFieldSettings() {
-        const modeSelect = document.getElementById('csvImportMode');
-        return {
-            mode: modeSelect ? modeSelect.value : 'merge'
-        };
-    }
-
-    function _restoreFieldSettings(settings) {
-        const modeSelect = document.getElementById('csvImportMode');
-        if (modeSelect && settings.mode) modeSelect.value = settings.mode;
-    }
-
+    // --- Open import modal ---
     function openCsvModal() {
         pendingCsvData = [];
         document.getElementById('csvPreview').style.display = 'none';
         document.getElementById('csvImportBtn').disabled = true;
         const fi = document.getElementById('csvFileInput'); if (fi) fi.value = '';
+        const modeSelect = document.getElementById('importModeSelect');
+        if (modeSelect) modeSelect.value = 'merge';
         openModal('csvModal');
     }
 
+    // --- Handle file (CSV or Excel) ---
     async function handleCsvFile(file) {
         if (!file) return;
         if (file.size > MAX_CSV_FILE_SIZE) {
             toast('File too large (max ' + Math.round(MAX_CSV_FILE_SIZE / 1024 / 1024) + 'MB)', 'error');
             return;
         }
-
-        const isExcel = file.name.match(/\.(xlsx|xls)$/i);
-        
-        try {
-            if (isExcel) {
-                toast('Loading Excel parser...', 'success');
-                const XLSX = await loadSheetJS();
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    const data = new Uint8Array(e.target.result);
-                    const workbook = XLSX.read(data, {type: 'array'});
-                    const firstSheetName = workbook.SheetNames[0];
-                    const worksheet = workbook.Sheets[firstSheetName];
-                    const json = XLSX.utils.sheet_to_json(worksheet, {header: 1});
-                    parseSpreadsheetRows(json);
-                };
-                reader.readAsArrayBuffer(file);
-            } else {
+        const ext = (file.name || '').split('.').pop().toLowerCase();
+        if (ext === 'xlsx' || ext === 'xls') {
+            try {
+                await loadSheetJS();
                 const reader = new FileReader();
                 reader.onload = e => {
-                    let text = e.target.result;
-                    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
-                    const lines = text.split(/\r?\n/).filter(l => l.trim());
-                    const rows = lines.map(line => parseCsvLine(line));
-                    parseSpreadsheetRows(rows);
+                    try {
+                        const wb = XLSX.read(e.target.result, { type: 'array' });
+                        const ws = wb.Sheets[wb.SheetNames[0]];
+                        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+                        parseSpreadsheetRows(rows);
+                    } catch (err) {
+                        console.error('[Me] Excel parse error:', err);
+                        toast('Failed to read Excel file: ' + err.message, 'error');
+                    }
                 };
-                reader.readAsText(file);
+                reader.readAsArrayBuffer(file);
+            } catch (err) {
+                toast('Could not load Excel library. Try CSV instead.', 'error');
             }
-        } catch (err) {
-            console.error('[Me] Import error:', err);
-            toast('Error reading file', 'error');
+        } else {
+            const reader = new FileReader();
+            reader.onload = e => parseCsv(e.target.result);
+            reader.readAsText(file);
         }
+    }
+
+    function parseCsv(text) {
+        if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+        const lines = text.split(/\r?\n/).filter(l => l.trim());
+        if (!lines.length) { toast('File is empty', 'error'); return; }
+        const rows = lines.map(l => parseCsvLine(l));
+        parseSpreadsheetRows(rows);
+    }
+
+    // --- Unified parser for CSV rows and Excel rows ---
+    function parseSpreadsheetRows(rows) {
+        if (!rows || !rows.length) { toast('No data found', 'error'); return; }
+
+        const firstRow = rows[0].map(c => String(c || '').trim());
+        const firstRowLower = firstRow.map(c => c.toLowerCase());
+        const isHeader = firstRowLower.some(c =>
+            c.includes('name') || c.includes('first') || c.includes('last') ||
+            c.includes('division') || c.includes('grade') || c.includes('bunk') || c.includes('team')
+        );
+
+        let headerMap, dataStart;
+        if (isHeader) {
+            headerMap = mapHeaders(firstRow);
+            dataStart = 1;
+        } else {
+            headerMap = { 0: 'fullName', 1: 'division', 2: 'grade', 3: 'bunk', 4: 'team' };
+            dataStart = 0;
+        }
+
+        const hasNameCol = Object.values(headerMap).some(v => v === 'fullName' || v === 'firstName' || v === 'lastName');
+        if (!hasNameCol) {
+            toast('No name column found. Include "First Name"/"Last Name" or "Name" header.', 'error');
+            return;
+        }
+
+        pendingCsvData = [];
+        const maxRow = Math.min(rows.length, dataStart + MAX_CSV_ROWS);
+        const existingDivKeys = Object.keys(structure);
+
+        for (let i = dataStart; i < maxRow; i++) {
+            const cols = rows[i];
+            if (!cols || cols.length === 0) continue;
+            if (cols.every(c => !String(c || '').trim())) continue;
+
+            const rec = rowToRecord(cols, headerMap);
+            if (!rec.name) continue;
+
+            // Smart matching against existing structure
+            let matchedDiv = rec.division ? findMatchingKey(rec.division, existingDivKeys) : '';
+            let matchedGrade = rec.grade;
+            if (rec.grade && matchedDiv && structure[matchedDiv]) {
+                matchedGrade = findMatchingKey(rec.grade, Object.keys(structure[matchedDiv]?.grades || {}));
+            }
+            let matchedBunk = rec.bunk;
+            if (rec.bunk && matchedDiv && matchedGrade && structure[matchedDiv]?.grades?.[matchedGrade]) {
+                matchedBunk = findMatchingKey(rec.bunk, structure[matchedDiv].grades[matchedGrade].bunks || []);
+            }
+
+            pendingCsvData.push({
+                name: rec.name, firstName: rec.firstName, lastName: rec.lastName,
+                division: matchedDiv, grade: matchedGrade, bunk: matchedBunk, team: rec.team
+            });
+        }
+
+        if (rows.length - dataStart > MAX_CSV_ROWS) toast('Capped at ' + MAX_CSV_ROWS + ' rows', 'error');
+
+        if (pendingCsvData.length) {
+            const tbody = document.getElementById('csvPreviewBody');
+            if (tbody) {
+                tbody.innerHTML = pendingCsvData.slice(0, 10).map(r =>
+                    '<tr><td>' + esc(r.name) + '</td><td>' + (esc(r.division)||'—') + '</td><td>' + (esc(r.grade)||'—') + '</td><td>' + (esc(r.bunk)||'—') + '</td><td>' + (esc(r.team)||'—') + '</td></tr>'
+                ).join('');
+                if (pendingCsvData.length > 10) tbody.innerHTML += '<tr><td colspan="5" style="text-align:center;color:var(--slate-400)">...and ' + (pendingCsvData.length - 10) + ' more</td></tr>';
+            }
+            document.getElementById('csvPreview').style.display = 'block';
+            document.getElementById('csvImportBtn').disabled = false;
+            document.getElementById('csvPreviewCount').textContent = pendingCsvData.length;
+        } else { toast('No valid data found', 'error'); }
     }
 
     function parseCsvLine(line) {
@@ -1266,197 +1395,97 @@
         return result.map(s => s.replace(/""/g, '"'));
     }
 
-    function mapHeaders(headerRow) {
-        const map = {};
-        headerRow.forEach((h, idx) => {
-            if (!h) return;
-            const norm = String(h).toLowerCase().trim();
-            for (const [key, aliases] of Object.entries(HEADER_ALIASES)) {
-                if (aliases.includes(norm)) {
-                    map[key] = idx;
-                    break;
-                }
-            }
-        });
-        return map;
-    }
-
-    function rowToRecord(row, headerMap) {
-        const getVal = (key) => {
-            const idx = headerMap[key];
-            return idx !== undefined && row[idx] ? String(row[idx]).trim().slice(0, MAX_NAME_LENGTH) : '';
-        };
-
-        let name = getVal('name');
-        if (!name) {
-            const fname = getVal('firstName');
-            const lname = getVal('lastName');
-            if (fname || lname) name = `${fname} ${lname}`.trim();
-        }
-        
-        if (!name) return null;
-
-        return {
-            name,
-            division: getVal('division'),
-            grade: getVal('grade'),
-            bunk: getVal('bunk'),
-            team: getVal('team')
-        };
-    }
-
-    function _normalizeImportValue(val) {
-        return val ? String(val).toLowerCase().trim() : '';
-    }
-
-    function _extractNumber(str) {
-        if (!str) return null;
-        const s = _normalizeImportValue(str);
-        const match = s.match(/(\d+)/);
-        return match ? parseInt(match[1], 10) : null;
-    }
-
-    function _importValueMatches(campVal, importVal) {
-        const c = _normalizeImportValue(campVal);
-        const i = _normalizeImportValue(importVal);
-        if (c === i) return true;
-        
-        const numC = _extractNumber(c);
-        const numI = _extractNumber(i);
-        if (numC !== null && numI !== null && numC === numI) return true;
-        
-        if (c.includes(i) || i.includes(c)) return true;
-        
-        return false;
-    }
-
-    function findMatchingKey(dict, importVal) {
-        if (!importVal || !dict) return importVal; // default to raw if no dict
-        const keys = Object.keys(dict);
-        
-        // Exact match
-        const exact = keys.find(k => k === importVal);
-        if (exact) return exact;
-        
-        // Case-insensitive exact match
-        const normImport = _normalizeImportValue(importVal);
-        const caseMatch = keys.find(k => _normalizeImportValue(k) === normImport);
-        if (caseMatch) return caseMatch;
-        
-        // Smart match (numbers/substrings)
-        const smartMatch = keys.find(k => _importValueMatches(k, importVal));
-        if (smartMatch) return smartMatch;
-        
-        return importVal; // If no match found, keep original to create new
-    }
-
-    function parseSpreadsheetRows(rows) {
-        if (!rows || !rows.length) { toast('File is empty', 'error'); return; }
-        
-        const headerRow = rows[0];
-        const headerMap = mapHeaders(headerRow);
-        
-        if (headerMap.name === undefined && (headerMap.firstName === undefined && headerMap.lastName === undefined)) {
-            toast('Could not find Name columns', 'error');
-            return;
-        }
-
-        pendingCsvData = [];
-        const maxRow = Math.min(rows.length, 1 + MAX_CSV_ROWS);
-        
-        for (let i = 1; i < maxRow; i++) {
-            const row = rows[i];
-            if (!row || !row.length) continue;
-            
-            const record = rowToRecord(row, headerMap);
-            if (record) pendingCsvData.push(record);
-        }
-
-        if (rows.length > maxRow) toast(`Capped at ${MAX_CSV_ROWS} rows`, 'error');
-
-        if (pendingCsvData.length) {
-            const tbody = document.getElementById('csvPreviewBody');
-            if (tbody) {
-                tbody.innerHTML = pendingCsvData.slice(0, 10).map(r => '<tr><td>' + esc(r.name) + '</td><td>' + (esc(r.division)||'—') + '</td><td>' + (esc(r.grade)||'—') + '</td><td>' + (esc(r.bunk)||'—') + '</td><td>' + (esc(r.team)||'—') + '</td></tr>').join('');
-                if (pendingCsvData.length > 10) tbody.innerHTML += '<tr><td colspan="5" style="text-align:center;color:var(--slate-400)">...and ' + (pendingCsvData.length - 10) + ' more</td></tr>';
-            }
-            document.getElementById('csvPreview').style.display = 'block';
-            document.getElementById('csvImportBtn').disabled = false;
-            if(document.getElementById('csvPreviewCount')) document.getElementById('csvPreviewCount').textContent = pendingCsvData.length;
-        } else {
-            toast('No valid data found', 'error');
-        }
-    }
-
+    // --- Smart Import (create + update + optionally remove) ---
     function importCsv() {
         if (!pendingCsvData.length) return;
-        let added = 0, updated = 0, skipped = 0;
+
+        const mode = document.getElementById('importModeSelect')?.value || 'merge';
+        let added = 0, updated = 0, skipped = 0, removed = 0;
         let divsCreated = 0, gradesCreated = 0, bunksCreated = 0;
 
-        const settings = _captureFieldSettings();
-        if (settings.mode === 'replace') {
-            if (!confirm('This will delete all existing campers. Are you sure?')) return;
-            camperRoster = {};
-        }
-
         const existingDivCount = Object.keys(structure).length;
-        
+        const importedNames = new Set();
+
+        // Capture field settings before import for preservation
+        const capturedSettings = _captureFieldSettings();
+
         pendingCsvData.forEach(r => {
-            if (isUnsafeName(r.name)) { skipped++; return; }
+            const divName = r.division;
+            const gradeName = r.grade;
+            const bunkName = r.bunk;
 
-            // Intelligent matching
-            let divName = r.division;
-            let gradeName = r.grade;
-            let bunkName = r.bunk;
+            if (isUnsafeName(r.name) || isUnsafeName(divName) || isUnsafeName(gradeName) || isUnsafeName(bunkName)) {
+                skipped++;
+                return;
+            }
 
-            if (divName) {
-                divName = findMatchingKey(structure, divName);
-                if (isUnsafeName(divName)) { skipped++; return; }
-                
-                if (!structure[divName]) {
+            importedNames.add(r.name);
+
+            // Smart structure creation with fuzzy matching
+            if (divName && !structure[divName]) {
+                const existingDivKeys = Object.keys(structure);
+                const fuzzyDiv = existingDivKeys.find(k => _importValueMatches(k, divName));
+                if (fuzzyDiv) {
+                    r.division = fuzzyDiv;
+                } else {
                     const colorIdx = (existingDivCount + divsCreated) % COLOR_PRESETS.length;
                     structure[divName] = { color: COLOR_PRESETS[colorIdx], grades: {} };
                     expandedDivisions.add(divName);
                     divsCreated++;
                 }
+            }
 
-                if (gradeName) {
-                    gradeName = findMatchingKey(structure[divName].grades, gradeName);
-                    if (isUnsafeName(gradeName)) { skipped++; return; }
-                    
-                    if (!structure[divName].grades) structure[divName].grades = {};
-                    if (!structure[divName].grades[gradeName]) {
-                        structure[divName].grades[gradeName] = { bunks: [] };
-                        expandedGrades.add(divName + '||' + gradeName);
-                        gradesCreated++;
-                    }
+            const actualDiv = r.division;
 
-                    if (bunkName) {
-                        const bunks = structure[divName].grades[gradeName].bunks || [];
-                        const bMatch = bunks.find(b => _normalizeImportValue(b) === _normalizeImportValue(bunkName));
-                        bunkName = bMatch || bunkName; // keep original if no match
-                        
-                        if (isUnsafeName(bunkName)) { skipped++; return; }
+            if (actualDiv && gradeName && structure[actualDiv]) {
+                if (!structure[actualDiv].grades) structure[actualDiv].grades = {};
+                const existingGradeKeys = Object.keys(structure[actualDiv].grades);
+                const fuzzyGrade = existingGradeKeys.find(k => _importValueMatches(k, gradeName));
+                if (fuzzyGrade) {
+                    r.grade = fuzzyGrade;
+                } else if (!structure[actualDiv].grades[gradeName]) {
+                    structure[actualDiv].grades[gradeName] = { bunks: [] };
+                    expandedGrades.add(actualDiv + '||' + gradeName);
+                    gradesCreated++;
+                }
+            }
 
-                        if (!bunks.includes(bunkName)) {
-                            bunks.push(bunkName);
-                            structure[divName].grades[gradeName].bunks = bunks;
-                            bunksCreated++;
-                        }
-                    }
+            const actualGrade = r.grade;
+
+            if (actualDiv && actualGrade && bunkName && structure[actualDiv]?.grades?.[actualGrade]) {
+                const bunks = structure[actualDiv].grades[actualGrade].bunks;
+                const fuzzyBunk = bunks.find(b => _importValueMatches(b, bunkName));
+                if (fuzzyBunk) {
+                    r.bunk = fuzzyBunk;
+                } else if (!bunks.includes(bunkName)) {
+                    bunks.push(bunkName);
+                    bunksCreated++;
                 }
             }
 
             if (camperRoster[r.name]) updated++; else added++;
-            camperRoster[r.name] = { division: divName, grade: gradeName, bunk: bunkName, team: r.team };
+            camperRoster[r.name] = { division: r.division, grade: r.grade, bunk: r.bunk, team: r.team };
         });
+
+        // Full Replace mode: remove campers not in the upload
+        if (mode === 'replace') {
+            Object.keys(camperRoster).forEach(name => {
+                if (!importedNames.has(name)) {
+                    delete camperRoster[name];
+                    removed++;
+                }
+            });
+        }
+
+        // Restore field settings after potential name changes
+        _restoreFieldSettings(capturedSettings);
 
         saveData(); closeModal('csvModal'); renderAll();
 
         const parts = [];
-        if (settings.mode === 'replace') parts.push('Roster replaced');
         if (added) parts.push(added + ' added');
         if (updated) parts.push(updated + ' updated');
+        if (removed) parts.push(removed + ' removed');
         if (skipped) parts.push(skipped + ' skipped');
         if (divsCreated) parts.push(divsCreated + ' div' + (divsCreated !== 1 ? 's' : '') + ' created');
         if (gradesCreated) parts.push(gradesCreated + ' grade' + (gradesCreated !== 1 ? 's' : '') + ' created');
@@ -1464,26 +1493,62 @@
         toast(parts.join(', ') || 'Import complete');
     }
 
+    // --- Settings preservation helpers ---
+    function _captureFieldSettings() {
+        const settings = readLocalSettings();
+        const app1 = settings.app1 || {};
+        return { activityProps: JSON.parse(JSON.stringify(app1.activityProperties || {})) };
+    }
+
+    function _restoreFieldSettings(captured) {
+        if (!captured || !captured.activityProps) return;
+        const settings = readLocalSettings();
+        const app1 = settings.app1 || {};
+        const actProps = app1.activityProperties || {};
+        let changed = false;
+
+        Object.entries(actProps).forEach(([fieldName, props]) => {
+            if (!props?.limitUsage?.enabled || !props.limitUsage.divisions) return;
+            const newDivMap = {};
+            Object.entries(props.limitUsage.divisions).forEach(([dName, val]) => {
+                let found = false;
+                Object.entries(structure).forEach(([divName, divData]) => {
+                    Object.keys(divData.grades || {}).forEach(gName => {
+                        if (_importValueMatches(gName, dName)) {
+                            newDivMap[gName] = val;
+                            found = true;
+                        }
+                    });
+                });
+                if (!found) newDivMap[dName] = val;
+            });
+            if (JSON.stringify(newDivMap) !== JSON.stringify(props.limitUsage.divisions)) {
+                props.limitUsage.divisions = newDivMap;
+                changed = true;
+            }
+        });
+
+        if (changed) {
+            app1.activityProperties = actProps;
+            writeLocalSettings({ ...settings, app1 });
+        }
+    }
+
+    // --- Export (First Name / Last Name) ---
     function exportCsv() {
         const entries = Object.entries(camperRoster);
         if (!entries.length) { toast('No campers', 'error'); return; }
-        
-        // Use First Name, Last Name in export for v7.2 standard
         let csv = '\uFEFFFirst Name,Last Name,Division,Grade,Bunk,Team\n';
         const csvField = (v) => '"' + String(v || '').replace(/"/g, '""') + '"';
-        
         entries.forEach(([name, d]) => {
-            const parts = name.split(' ');
-            const firstName = parts[0];
-            const lastName = parts.slice(1).join(' ');
+            const parts = name.split(/\s+/);
+            const firstName = parts[0] || '';
+            const lastName = parts.slice(1).join(' ') || '';
             csv += csvField(firstName) + ',' + csvField(lastName) + ',' + csvField(d.division) + ',' + csvField(d.grade) + ',' + csvField(d.bunk) + ',' + csvField(d.team) + '\n';
         });
-        
         const a = document.createElement('a');
         const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-        a.href = url;
-        a.download = 'campers_' + new Date().toISOString().split('T')[0] + '.csv';
-        a.click();
+        a.href = url; a.download = 'campers_' + new Date().toISOString().split('T')[0] + '.csv'; a.click();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
         toast('Exported ' + entries.length + ' campers');
     }
