@@ -545,6 +545,9 @@
             if (hist + todayCount >= specialRule.maxUsage) return 999999;
         }
 
+        // ★ v3.5: Multi-Part gate — reject Part 2 if bunk hasn't done Part 1
+        if (window.isBunkEligibleForSpecial && !window.isBunkEligibleForSpecial(bunk, act)) return 999999;
+
         // ★★★ v15.0: RAINY DAY TIME-RULE CHECK ★★★
         // If it's a rainy day and this field has rainyDayAvailableAllDay, skip time rule rejection.
         // Otherwise, existing time-rule logic in domain building handles it.
