@@ -55,8 +55,11 @@ function initFieldsTab(){
               </div>
             </div>
 
-            <!-- SPORT PLAYER REQUIREMENTS SECTION -->
+           <!-- SPORT PLAYER REQUIREMENTS SECTION -->
             <div id="sport-rules-section"></div>
+
+            <!-- FIELD QUALITY GROUPS SECTION -->
+            <div id="field-quality-section"></div>
 
             <div style="display:flex; flex-wrap:wrap; gap:24px;">
               <!-- LEFT SIDE: MASTER LIST -->
@@ -91,7 +94,7 @@ function initFieldsTab(){
     document.getElementById("add-field-btn").onclick = addField;
     addFieldInput.onkeyup = e => { if(e.key === "Enter") addField(); };
 
-    renderSportRulesSection();
+   renderFieldQualitySection();
     renderMasterLists();
     renderDetailPane();
 }
@@ -969,7 +972,7 @@ function renderActivities(item, allSports){
                 if(summaryEl) summaryEl.textContent = summaryActivities(item);
 
                 // Re-render sport rules section to show updated sports
-                renderSportRulesSection();
+               renderFieldQualitySection();
             }, 300);
         };
 
