@@ -623,11 +623,12 @@ function buildLeagueCellHtml(eventBlock, bunks, divName) {
                     desc = m.display;
                 } else {
                     var tA = m.teamA || m.team1 || '', tB = m.teamB || m.team2 || '';
-                    if (tA && tB) {
-                        desc = tA + ' vs ' + tB;
-                        if (m.sport) desc += ' \u2013 ' + m.sport;
-                        if (m.field) desc += ' @ ' + m.field;
-                    } else if (m.matchup) desc = m.matchup;
+                   if (tA && tB) {
+    desc = tA + ' vs ' + tB;
+    if (m.sport || m.field) desc += ' - ';
+    if (m.sport) desc += m.sport.charAt(0).toUpperCase() + m.sport.slice(1);
+    if (m.field) desc += ' (' + m.field + ')';
+} else if (m.matchup) desc = m.matchup;
                 }
                 if (desc) matchups.push(desc);
             });
