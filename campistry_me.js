@@ -589,6 +589,24 @@
         return null;
     }
 
+    // ★ v7.2: Numeric-aware sort for divisions and grades
+    function _numericSort(a, b) {
+        const numA = _extractGradeNumber(a);
+        const numB = _extractGradeNumber(b);
+        if (numA !== null && numB !== null) return numA - numB;
+        if (numA !== null) return -1;
+        if (numB !== null) return 1;
+        return a.localeCompare(b, undefined, { numeric: true });
+    }
+    function _divisionSortOrder(divNameA, divNameB) {
+        const gradesA = Object.keys(structure[divNameA]?.grades || {});
+        const gradesB = Object.keys(structure[divNameB]?.grades || {});
+        const minA = Math.min(...gradesA.map(g => _extractGradeNumber(g) ?? 999));
+        const minB = Math.min(...gradesB.map(g => _extractGradeNumber(g) ?? 999));
+        if (minA !== minB) return minA - minB;
+        return divNameA.localeCompare(divNameB, undefined, { numeric: true });
+    }
+
     function _divisionMatches(leagueDiv, campValue) {
         if (!leagueDiv || !campValue) return false;
         const a = String(leagueDiv).toLowerCase().trim();
@@ -669,7 +687,7 @@
         _slugMap.clear();
         _slugCounter = 0;
 
-        const divNames = Object.keys(structure).sort();
+        const divNames = Object.keys(structure).sort(_divisionSortOrder);
         if (divNames.length === 0) { container.innerHTML = ''; if (empty) empty.style.display = 'block'; return; }
         if (empty) empty.style.display = 'none';
 
@@ -683,7 +701,7 @@
             if (!div || typeof div !== 'object') return '';
             const isExpanded = expandedDivisions.has(divName);
             const grades = div.grades || {};
-            const gradeNames = Object.keys(grades).sort();
+            const gradeNames = Object.keys(grades).sort(_numericSort);
             const camperCount = camperCountMap[divName] || 0;
             const divColor = sanitizeColor(div.color);
 
@@ -983,7 +1001,7 @@
         const countEl = document.getElementById('camperCount');
         if (countEl) countEl.textContent = filter ? campers.length + ' of ' + total : total + ' camper' + (total !== 1 ? 's' : '');
 
-        const divOptions = '<option value="">—</option>' + Object.keys(structure).sort().map(d => '<option value="' + esc(d) + '"' + (d === savedQA.div ? ' selected' : '') + '>' + esc(d) + '</option>').join('');
+        const divOptions = '<option value="">—</option>' + Object.keys(structure).sort(_divisionSortOrder).map(d => '<option value="' + esc(d) + '"' + (d === savedQA.div ? ' selected' : '') + '>' + esc(d) + '</option>').join('');
         const qaFilteredTeams = getTeamsForContext(savedQA.div, savedQA.grade);
         const teamOptions = '<option value="">—</option>' + qaFilteredTeams.map(t => '<option value="' + esc(t) + '"' + (t === savedQA.team ? ' selected' : '') + '>' + esc(t) + '</option>').join('');
 
@@ -1005,7 +1023,7 @@
         const bunkSelect = document.getElementById('qaBunk');
         if (gradeSelect && saved.div && structure[saved.div]) {
             gradeSelect.innerHTML = '<option value="">—</option>';
-            Object.keys(structure[saved.div].grades || {}).sort().forEach(g => {
+            Object.keys(structure[saved.div].grades || {}).sort(_numericSort).forEach(g => {
                 gradeSelect.innerHTML += '<option value="' + esc(g) + '"' + (g === saved.grade ? ' selected' : '') + '>' + esc(g) + '</option>';
             });
         }
@@ -1029,7 +1047,7 @@
         gradeSelect.innerHTML = '<option value="">—</option>';
         bunkSelect.innerHTML = '<option value="">—</option>';
         if (divName && structure[divName]) {
-            Object.keys(structure[divName].grades || {}).sort().forEach(g => { gradeSelect.innerHTML += '<option value="' + esc(g) + '">' + esc(g) + '</option>'; });
+            Object.keys(structure[divName].grades || {}).sort(_numericSort).forEach(g => { gradeSelect.innerHTML += '<option value="' + esc(g) + '">' + esc(g) + '</option>'; });
         }
         updateQATeams();
     }
@@ -1083,7 +1101,7 @@
         document.getElementById('camperModalTitle').textContent = 'Edit Camper';
         document.getElementById('editCamperName').value = name;
         const divSelect = document.getElementById('editCamperDivision');
-        divSelect.innerHTML = '<option value="">—</option>' + Object.keys(structure).sort().map(d => '<option value="' + esc(d) + '"' + (d === c.division ? ' selected' : '') + '>' + esc(d) + '</option>').join('');
+        divSelect.innerHTML = '<option value="">—</option>' + Object.keys(structure).sort(_divisionSortOrder).map(d => '<option value="' + esc(d) + '"' + (d === c.division ? ' selected' : '') + '>' + esc(d) + '</option>').join('');
         updateEditGrades(c.division, c.grade);
         updateEditBunks(c.division, c.grade, c.bunk);
         const teamSelect = document.getElementById('editCamperTeam');
@@ -1097,7 +1115,7 @@
         if (!gradeSelect) return;
         gradeSelect.innerHTML = '<option value="">—</option>';
         if (divName && structure[divName]) {
-            Object.keys(structure[divName].grades || {}).sort().forEach(g => { gradeSelect.innerHTML += '<option value="' + esc(g) + '"' + (g === selectedGrade ? ' selected' : '') + '>' + esc(g) + '</option>'; });
+            Object.keys(structure[divName].grades || {}).sort(_numericSort).forEach(g => { gradeSelect.innerHTML += '<option value="' + esc(g) + '"' + (g === selectedGrade ? ' selected' : '') + '>' + esc(g) + '</option>'; });
         }
     }
 
