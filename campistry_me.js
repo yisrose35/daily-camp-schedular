@@ -1233,11 +1233,17 @@
         const a = _normalizeImportValue(existingVal);
         const b = _normalizeImportValue(importVal);
         if (a === b) return true;
+        // Number-aware matching: "1" = "1st" = "1st Grade" = "Grade 1"
+        // but "1" ≠ "11", "2" ≠ "22" — only exact number extraction matches
         const numA = _extractNumber(existingVal);
         const numB = _extractNumber(importVal);
-        if (numA !== null && numB !== null && numA === numB) return true;
-        if (numA === null && numB === null) return a.includes(b) || b.includes(a);
-        return false;
+        if (numA !== null && numB !== null) return numA === numB;
+        // If either side has a number, don't allow substring matching
+        // (prevents "1" matching "11" or "Bunk 1" matching "Bunk 11")
+        if (numA !== null || numB !== null) return false;
+        // Pure text: allow substring match only for non-numeric values
+        // e.g. "Junior" matches "Junior Boys"
+        return a.includes(b) || b.includes(a);
     }
 
     function findMatchingKey(importVal, existingKeys) {
