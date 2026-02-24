@@ -452,7 +452,15 @@
             }
             
             // Grade cards within this parent division
-            group.grades.forEach(gradeName => {
+           const sortedGrades = [...group.grades].sort((a, b) => {
+                const numA = parseInt((a.match(/\d+/) || [])[0]);
+                const numB = parseInt((b.match(/\d+/) || [])[0]);
+                if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+                if (!isNaN(numA)) return -1;
+                if (!isNaN(numB)) return 1;
+                return a.localeCompare(b, undefined, { numeric: true });
+            });
+            sortedGrades.forEach(gradeName => {
                 const divObj = state.divisions[gradeName];
                 if (!divObj) return;
                 
