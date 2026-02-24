@@ -491,7 +491,7 @@ function saveData(){
             ...(f.preferences ? { preferences: f.preferences } : {}),
            ...(f.minDurationMin ? { minDurationMin: f.minDurationMin } : {}),
             ...(f.fieldGroup ? { fieldGroup: f.fieldGroup } : {}),
-            ...(f.qualityRank ? { qualityRank: parseInt(f.qualityRank) || 0 } : {})
+            ...(f.qualityRank !== undefined && f.qualityRank !== null ? { qualityRank: parseInt(f.qualityRank) || 0 } : {})
         }));
         
         const settings = window.loadGlobalSettings?.() || {};
