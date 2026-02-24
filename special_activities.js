@@ -155,8 +155,9 @@ function validateSpecialActivity(activity, activityName) {
         // ★ v3.7: Multi-Part Special support (simple N parts)
         multiPart: activity.multiPart && typeof activity.multiPart === 'object' ? {
             enabled: activity.multiPart.enabled === true,
-            totalParts: (function() { var tp = parseInt(activity.multiPart.totalParts, 10); return (!isNaN(tp) && tp >= 2 && tp <= 10) ? tp : 2; })()
-        } : { enabled: false, totalParts: 2 }
+            totalParts: (function() { var tp = parseInt(activity.multiPart.totalParts, 10); return (!isNaN(tp) && tp >= 2 && tp <= 10) ? tp : 2; })(),
+            daysBetween: (function() { var db = parseInt(activity.multiPart.daysBetween, 10); return (!isNaN(db) && db >= 1 && db <= 14) ? db : 3; })()
+        } : { enabled: false, totalParts: 2, daysBetween: 3 }
     };
 }
 
@@ -166,7 +167,7 @@ function createDefaultActivity(name) {
         maxUsage: null, maxUsagePeriod: 'half', frequencyWeeks: 0, rainyDayExclusive: false, prepDuration: 0,
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
         rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
-        multiPart: { enabled: false, totalParts: 2 } };
+        multiPart: { enabled: false, totalParts: 2, daysBetween: 3 } };
 }
 
 function validateAllActivities(activities) { if (!Array.isArray(activities)) return []; return activities.map(a => validateSpecialActivity(a, a?.name)); }
@@ -932,7 +933,7 @@ function renderMultiPartSettings(item) {
     var container = document.createElement("div");
     container.style.cssText = "padding:16px;";
 
-    var mp = item.multiPart || { enabled: false, totalParts: 2 };
+    var mp = item.multiPart || { enabled: false, totalParts: 2, daysBetween: 3 };
     var isEnabled = mp.enabled === true;
 
     // Description
@@ -983,6 +984,25 @@ function renderMultiPartSettings(item) {
         row.lastElementChild.insertAdjacentHTML('afterend', '<span style="font-size:0.8rem; color:#6B7280;">sessions across different days</span>');
         configPanel.appendChild(row);
 
+        // Days between parts input
+        var daysRow = document.createElement("div");
+        daysRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:16px;";
+        daysRow.innerHTML = '<label style="font-size:0.85rem; font-weight:500;">Days between parts:</label>';
+        var daysInp = document.createElement("input");
+        daysInp.type = "number"; daysInp.min = "1"; daysInp.max = "14"; daysInp.value = mp.daysBetween || 3;
+        daysInp.style.cssText = "width:60px; padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.9rem;";
+        daysInp.onchange = function() {
+            var v = Math.min(14, Math.max(1, parseInt(this.value) || 3));
+            this.value = v;
+            mp.daysBetween = v;
+            item.multiPart = mp;
+            saveData();
+            renderConfig();
+        };
+        daysRow.appendChild(daysInp);
+        daysRow.lastElementChild.insertAdjacentHTML('afterend', '<span style="font-size:0.8rem; color:#6B7280;">days before the scheduler starts pushing the next part</span>');
+        configPanel.appendChild(daysRow);
+
         // Preview
         var preview = document.createElement("div");
         preview.style.cssText = "border:1px solid #E5E7EB; border-radius:10px; padding:14px; background:#FAFAFA; margin-bottom:14px;";
@@ -1004,7 +1024,7 @@ function renderMultiPartSettings(item) {
             if (i < mp.totalParts) {
                 var arrow = document.createElement("div");
                 arrow.style.cssText = "text-align:center; color:#9CA3AF; font-size:0.75rem; margin:2px 0;";
-                arrow.textContent = "\u2193 next day";
+                arrow.textContent = "\u2193 " + (mp.daysBetween || 3) + " day" + ((mp.daysBetween || 3) > 1 ? "s" : "") + " gap";
                 preview.appendChild(arrow);
             }
         }
@@ -1015,7 +1035,8 @@ function renderMultiPartSettings(item) {
         info.style.cssText = "padding:10px 14px; border-radius:8px; font-size:0.8rem; line-height:1.5; background:#e6f4f7; border:1px solid #b2dce6; color:#0A4A56;";
         var cycles = item.maxUsage ? Math.ceil(item.maxUsage / mp.totalParts) : 1;
         var cycleText = cycles > 1 ? ' Bunks will complete <strong>' + cycles + ' full cycles</strong> (' + item.maxUsage + ' total sessions, set via Max Usage).' : ' Once a bunk completes all ' + mp.totalParts + ' parts, it won\u2019t be assigned again.';
-        info.innerHTML = '\uD83D\uDCCB Each bunk sees <strong>' + escapeHtml(item.name) + ' 1/' + mp.totalParts + '</strong>, then <strong>' + escapeHtml(item.name) + ' 2/' + mp.totalParts + '</strong>' + (mp.totalParts > 2 ? ', and so on' : '') + '.' + cycleText;
+        var daysText = ' After each part, the scheduler waits <strong>' + (mp.daysBetween || 3) + ' day' + ((mp.daysBetween || 3) > 1 ? 's' : '') + '</strong> then starts pushing the next part \u2014 getting more urgent each day it\u2019s not scheduled.';
+        info.innerHTML = '\uD83D\uDCCB Each bunk sees <strong>' + escapeHtml(item.name) + ' 1/' + mp.totalParts + '</strong>, then <strong>' + escapeHtml(item.name) + ' 2/' + mp.totalParts + '</strong>' + (mp.totalParts > 2 ? ', and so on' : '') + '.' + daysText + cycleText;
         configPanel.appendChild(info);
     }
 
