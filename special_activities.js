@@ -1013,7 +1013,9 @@ function renderMultiPartSettings(item) {
         // Info box
         var info = document.createElement("div");
         info.style.cssText = "padding:10px 14px; border-radius:8px; font-size:0.8rem; line-height:1.5; background:#e6f4f7; border:1px solid #b2dce6; color:#0A4A56;";
-        info.innerHTML = '\uD83D\uDCCB The scheduler tracks how many times each bunk has done <strong>' + escapeHtml(item.name) + '</strong>. Once a bunk completes all ' + mp.totalParts + ' parts, it won\u2019t be assigned again (enforced via <code>maxUsage</code>).';
+        var cycles = item.maxUsage ? Math.ceil(item.maxUsage / mp.totalParts) : 1;
+        var cycleText = cycles > 1 ? ' Bunks will complete <strong>' + cycles + ' full cycles</strong> (' + item.maxUsage + ' total sessions, set via Max Usage).' : ' Once a bunk completes all ' + mp.totalParts + ' parts, it won\u2019t be assigned again.';
+        info.innerHTML = '\uD83D\uDCCB Each bunk sees <strong>' + escapeHtml(item.name) + ' 1/' + mp.totalParts + '</strong>, then <strong>' + escapeHtml(item.name) + ' 2/' + mp.totalParts + '</strong>' + (mp.totalParts > 2 ? ', and so on' : '') + '.' + cycleText;
         configPanel.appendChild(info);
     }
 
@@ -1027,8 +1029,8 @@ function renderMultiPartSettings(item) {
         mp.enabled = isEnabled;
         if (!isEnabled) { mp.totalParts = 2; }
         item.multiPart = mp;
-        // Sync maxUsage with totalParts
-        if (isEnabled && (!item.maxUsage || item.maxUsage < mp.totalParts)) {
+        // If maxUsage isn't set at all, default to totalParts (one cycle)
+        if (isEnabled && !item.maxUsage) {
             item.maxUsage = mp.totalParts;
         }
         configPanel.style.display = isEnabled ? "block" : "none";
@@ -1235,27 +1237,32 @@ window.getMultiPartConfig = function(activityName) {
 
 /**
  * Check if a bunk is eligible for a special activity.
- * For multi-part: bunk must not have completed all parts yet.
- * The scheduler naturally won't double-assign on the same day (existing logic).
+ * For multi-part: bunk must not have exceeded maxUsage.
+ * maxUsage is set separately (e.g., 4 for 2-part × 2 cycles).
+ * The existing same-day duplicate logic prevents double-assign within a day.
  */
 window.isBunkEligibleForSpecial = function(bunkName, activityName) {
     var mp = window.getMultiPartConfig?.(activityName);
-    if (!mp) return true; // Not multi-part, always eligible
+    if (!mp) return true;
+    // maxUsage is the real cap (could be totalParts × number of cycles)
+    var special = window.getSpecialActivityByName?.(activityName);
+    var maxUsage = special?.maxUsage || mp.totalParts;
+    if (maxUsage <= 0) return true; // No limit
     var completed = window.getBunkCompletionCount(bunkName, activityName);
-    if (completed >= mp.totalParts) return false; // All parts done
-    return true;
+    return completed < maxUsage;
 };
 
 /**
  * Get the display label for a bunk's next session of a multi-part activity.
- * Returns "Woodworking 2/3" or null if not multi-part.
+ * Cycles through parts: if totalParts=2 and completed=3, next is "2/2" (second cycle, part 2).
+ * Returns "Woodworking 1/2" or null if not multi-part.
  */
 window.getMultiPartDisplayLabel = function(bunkName, activityName) {
     var mp = window.getMultiPartConfig?.(activityName);
     if (!mp) return null;
     var completed = window.getBunkCompletionCount(bunkName, activityName);
-    var nextPart = Math.min(completed + 1, mp.totalParts);
-    return activityName + ' ' + nextPart + '/' + mp.totalParts;
+    var partInCycle = (completed % mp.totalParts) + 1;
+    return activityName + ' ' + partInCycle + '/' + mp.totalParts;
 };
 
 console.log("[SPECIAL_ACTIVITIES] Module v3.7 loaded (multi-part: single activity, N parts)");
