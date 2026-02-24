@@ -1643,7 +1643,10 @@ function renderEventTile(ev, top, height) {
     content = `<strong>${eventName}</strong>`;
     if (isNight) content += ' 🌙';
     content += `<div style="font-size:10px;opacity:0.85;">${timeStr}</div>`;
-    
+    // ★★★ MULTIPLE LEAGUE SUPPORT: Show league name on tile ★★★
+    if (ev.leagueName) {
+      content += `<div style="font-size:9px;opacity:0.8;">🏆 ${ev.leagueName}</div>`;
+    }
     // Location display for larger tiles
     if (adjustedHeight > 50) {
       const locationDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
@@ -2145,10 +2148,31 @@ function addDropListeners(gridEl) {
         };
       }
       // ===== LEAGUE =====
-      else if (tileData.type === 'league') {
+     else if (tileData.type === 'league') {
+        // ★★★ MULTIPLE LEAGUE SUPPORT: Build league picker ★★★
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const leaguesByName = globalSettings.leaguesByName || {};
+        const leagueNames = Object.keys(leaguesByName).filter(ln => {
+          const l = leaguesByName[ln];
+          return l && l.enabled !== false;
+        });
+        let leaguePickerField = [];
+        if (leagueNames.length > 0) {
+          leaguePickerField = [{
+            name: 'leagueName',
+            label: 'Which League?',
+            type: 'select',
+            options: [{ value: '', label: '— Any League (auto) —' }].concat(
+              leagueNames.map(ln => ({ value: ln, label: ln }))
+            ),
+            default: ''
+          }];
+        }
+
         const result = await daShowModal({
           title: 'League Game for ' + divName,
           fields: [
+            ...leaguePickerField,
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr }
           ]
@@ -2159,9 +2183,17 @@ function addDropListeners(gridEl) {
         isNightActivity = times.isNight;
         newEvent = {
           id: 'evt_' + Math.random().toString(36).slice(2, 9),
-          type: 'league', event: 'League Game', division: divName,
-          startTime: result.startTime, endTime: result.endTime, isNightActivity
+          type: 'league',
+          event: result.leagueName || 'League Game',
+          division: divName,
+          startTime: result.startTime,
+          endTime: result.endTime,
+          isNightActivity
         };
+        // ★★★ Attach league name so scheduler knows which league to use ★★★
+        if (result.leagueName) {
+          newEvent.leagueName = result.leagueName;
+        }
       }
       // ===== SPECIALTY LEAGUE =====
       else if (tileData.type === 'specialty_league') {

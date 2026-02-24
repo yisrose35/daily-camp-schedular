@@ -690,12 +690,31 @@ for (const futureDate of Object.keys(allDailyData)) {
             const slots = sampleBlock?.slots || [];
 
             const processedLeagues = new Set();
+            // ★★★ MULTIPLE LEAGUE SUPPORT: Check if blocks at this time specify a league ★★★
+            const blocksAtTime = timeData.allBlocks;
+            const specifiedLeagueNames = new Set(
+                blocksAtTime
+                    .map(b => b.leagueName)
+                    .filter(Boolean)
+            );
+            
             const applicableLeagues = Object.values(masterLeagues).filter(l => {
                 if (!l.enabled) return false;
                 if (disabledLeagues?.includes(l.name)) return false;
                 if (!l.divisions || l.divisions.length === 0) return false;
+                
+                // ★★★ If blocks specify a league name, ONLY allow that league ★★★
+                if (specifiedLeagueNames.size > 0) {
+                    if (!specifiedLeagueNames.has(l.name)) return false;
+                }
+                
                 return divisionsAtTime.some(div => l.divisions.includes(div));
             });
+
+            console.log(`   Applicable leagues: [${applicableLeagues.map(l => l.name).join(', ')}]`);
+            if (specifiedLeagueNames.size > 0) {
+                console.log(`   ★ Filtered by block leagueName: [${[...specifiedLeagueNames].join(', ')}]`);
+            }
 
             for (const league of applicableLeagues) {
                 if (processedLeagues.has(league.name)) continue;
@@ -703,7 +722,19 @@ for (const futureDate of Object.keys(allDailyData)) {
 
                 const leagueDivisions = league.divisions.filter(div => divisionsAtTime.includes(div));
                 if (leagueDivisions.length === 0) continue;
-
+// ★★★ MULTIPLE LEAGUE SUPPORT: Only process divisions whose blocks match this league ★★★
+                const filteredLeagueDivisions = leagueDivisions.filter(div => {
+                    const divsBlocks = timeData.byDivision[div] || [];
+                    // If ANY block in this division specifies a different league, skip this division for this league
+                    const hasSpecific = divsBlocks.some(b => b.leagueName);
+                    if (!hasSpecific) return true; // No specific league = accept all
+                    return divsBlocks.some(b => b.leagueName === league.name);
+                });
+                
+                if (filteredLeagueDivisions.length === 0) {
+                    console.log(`   ⏭️ Skipping "${league.name}" — no matching divisions at this time`);
+                    continue;
+                }
                 console.log(`\n📋 League: "${league.name}"`);
                 console.log(`   Teams: [${(league.teams || []).join(", ")}]`);
                 console.log(`   Sports: [${(league.sports || []).join(", ")}]`);

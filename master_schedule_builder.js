@@ -1153,6 +1153,12 @@ function renderEventTile(ev, top, height) {
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${ev.reservedFields.join(', ')}</div>`;
   }
   
+  
+// ★★★ MULTIPLE LEAGUE SUPPORT: Show league name badge ★★★
+  if (ev.leagueName) {
+    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🏆 ${ev.leagueName}</div>`;
+  }
+
   if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
     const actList = ev.electiveActivities.slice(0, 3).join(', ');
     const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
@@ -1167,7 +1173,6 @@ function renderEventTile(ev, top, height) {
   if (ev.type === 'split' && ev.subEvents?.length === 2) {
     innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">↔ ${ev.subEvents[0].event} / ${ev.subEvents[1].event}</div>`;
   }
-
   const selectedClass = selectedTileId === ev.id ? ' selected' : '';
   return `<div class="grid-event${selectedClass}" data-id="${ev.id}" draggable="true" title="Click to select, Delete key to remove" 
           style="${style}; position:absolute; top:${top}px; height:${adjustedHeight}px; width:96%; left:2%; padding:5px 7px; font-size:11px; overflow:hidden; border-radius:5px; cursor:pointer; display:flex; flex-direction:column; box-sizing:border-box;">
@@ -1406,9 +1411,29 @@ function addDropListeners(selector) {
         else if (tileData.type === 'league') { name = "League Game"; finalType = 'league'; }
         else if (tileData.type === 'specialty_league') { name = "Specialty League"; finalType = 'specialty_league'; }
         
+        // ★★★ MULTIPLE LEAGUE SUPPORT: Build league picker for league tiles ★★★
+        let leaguePickerField = [];
+        if (tileData.type === 'league') {
+          const _gs = window.loadGlobalSettings?.() || {};
+          const _lbn = _gs.leaguesByName || {};
+          const _leagueNames = Object.keys(_lbn).filter(ln => _lbn[ln] && _lbn[ln].enabled !== false);
+          if (_leagueNames.length > 0) {
+            leaguePickerField = [{
+              name: 'leagueName',
+              label: 'Which League?',
+              type: 'select',
+              options: [{ value: '', label: '— Any League (auto) —' }].concat(
+                _leagueNames.map(ln => ({ value: ln, label: ln }))
+              ),
+              default: ''
+            }];
+          }
+        }
+
         const result = await showModal({
           title: name,
           fields: [
+            ...leaguePickerField,
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
           ]
@@ -1423,6 +1448,12 @@ function addDropListeners(selector) {
           startTime: result.startTime,
           endTime: result.endTime
         };
+
+        // ★★★ MULTIPLE LEAGUE SUPPORT: Store selected league name ★★★
+        if (finalType === 'league' && result.leagueName) {
+          newEvent.leagueName = result.leagueName;
+          newEvent.event = result.leagueName;
+        }
       }
 
       if (newEvent) {
