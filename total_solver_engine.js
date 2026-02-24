@@ -47,6 +47,10 @@
     // ========================================================================
     // SOLVER-WIDE CACHES
     // ========================================================================
+   // ★★★ FIELD GROUP SENIORITY CACHES ★★★
+    var _fieldGroupMap = {};
+    var _fieldGroups = {};
+    var _divisionSeniorityMap = {};
     var _normalizedNames = new Map();
     var _rotationScoreCache = new Map();
     var _todayCache = new Map();
@@ -90,8 +94,8 @@
         _activityPlan.clear(); _scarcityMap.clear(); _skeletonContext.clear();
         _isRainyDay = false; _rainyCapOverrides.clear(); _rainyTimeBypasses.clear();
         _perfCounters = { rotationCacheHits: 0, rotationCacheMisses: 0, timeIndexQueries: 0, domainPruned: 0, augmentingPathAttempts: 0, augmentingPathSuccesses: 0 };
+        _fieldGroupMap = {}; _fieldGroups = {}; _divisionSeniorityMap = {};
     }
-
     // ========================================================================
     // LOGGING
     // ========================================================================
@@ -230,6 +234,63 @@
                 else if (sw.capacity) { capacity = parseInt(sw.capacity); sharingType = 'same_division'; }
                 else { capacity = 2; sharingType = 'same_division'; }
             } else if (fieldProps.sharable) { capacity = 2; sharingType = 'same_division'; }
+            // ========================================================================
+    // FIELD GROUP + DIVISION SENIORITY CACHE
+    // ========================================================================
+    function buildFieldGroupCaches() {
+        _fieldGroupMap = {};
+        _fieldGroups = {};
+        _divisionSeniorityMap = {};
+
+        var settings = window.loadGlobalSettings?.() || {};
+        var allFields = (settings.app1?.fields) || [];
+        
+        for (var fi = 0; fi < allFields.length; fi++) {
+            var f = allFields[fi];
+            if (f.fieldGroup && f.qualityRank) {
+                _fieldGroupMap[f.name] = {
+                    groupName: f.fieldGroup,
+                    qualityRank: parseInt(f.qualityRank) || 999
+                };
+                if (!_fieldGroups[f.fieldGroup]) _fieldGroups[f.fieldGroup] = [];
+                _fieldGroups[f.fieldGroup].push({
+                    name: f.name,
+                    qualityRank: parseInt(f.qualityRank) || 999
+                });
+            }
+        }
+        for (var gk in _fieldGroups) {
+            _fieldGroups[gk].sort(function(a, b) { return a.qualityRank - b.qualityRank; });
+        }
+
+        var divisions = window.divisions || {};
+        var divNames = Object.keys(divisions);
+        var divWithNumbers = [];
+        for (var di = 0; di < divNames.length; di++) {
+            var dn = divNames[di];
+            var m = String(dn).toLowerCase().trim().match(/(\d+)/);
+            var gradeNum = m ? parseInt(m[1], 10) : null;
+            divWithNumbers.push({ name: dn, gradeNum: gradeNum });
+        }
+        divWithNumbers.sort(function(a, b) {
+            if (a.gradeNum !== null && b.gradeNum !== null) return b.gradeNum - a.gradeNum;
+            if (a.gradeNum !== null) return -1;
+            if (b.gradeNum !== null) return 1;
+            return a.name.localeCompare(b.name);
+        });
+        for (var si = 0; si < divWithNumbers.length; si++) {
+            _divisionSeniorityMap[divWithNumbers[si].name] = si;
+        }
+        
+        var groupCount = Object.keys(_fieldGroups).length;
+        if (groupCount > 0) {
+            console.log('[SOLVER] 🏟️ Field groups: ' + groupCount);
+            for (var gn in _fieldGroups) {
+                console.log('[SOLVER]   📋 "' + gn + '": ' + _fieldGroups[gn].map(function(f) { return '#' + f.qualityRank + ' ' + f.name; }).join(', '));
+            }
+            console.log('[SOLVER] 👑 Seniority: ' + divWithNumbers.map(function(d) { return d.name + '(#' + _divisionSeniorityMap[d.name] + ')'; }).join(' > '));
+        }
+    }
 
             // ★★★ v15.0: RAINY DAY CAPACITY OVERRIDE ★★★
             if (_isRainyDay && _rainyCapOverrides.has(fieldName)) {
@@ -591,6 +652,35 @@
         else { var actPrefProps2 = activityProperties[act]; if (actPrefProps2?.preferences?.enabled) { var prefIdx2 = (actPrefProps2.preferences.list || []).indexOf(blockDivName); if (prefIdx2 !== -1) penalty -= (50 - prefIdx2 * 5); else penalty += 8000; } }
 
         // Sharing incentive
+        // ★★★ FIELD GROUP SENIORITY PENALTY ★★★
+        if (fieldName && fieldName !== 'Free') {
+            var fgInfo = _fieldGroupMap[fieldName];
+            if (fgInfo) {
+                var groupMembers = _fieldGroups[fgInfo.groupName];
+                var divSeniority = _divisionSeniorityMap[blockDivName];
+                if (groupMembers && divSeniority !== undefined) {
+                    var fieldQR = fgInfo.qualityRank;
+                    var totalInGroup = groupMembers.length;
+                    var idealRank = divSeniority + 1;
+                    if (fieldQR === idealRank) {
+                        // Perfect match: this division's seniority = this field's quality
+                        penalty -= 8000;
+                    } else if (idealRank <= totalInGroup) {
+                        var rankDiff = Math.abs(fieldQR - idealRank);
+                        if (fieldQR < idealRank) {
+                            // Getting a BETTER field than seniority warrants — leave it for seniors
+                            penalty += 4000 + rankDiff * 2000;
+                        } else {
+                            // Getting a WORSE field — ok if better ones are taken
+                            penalty += 1000 + rankDiff * 500;
+                        }
+                    } else {
+                        // More divisions than fields in group — prefer lower-ranked fields
+                        penalty += (totalInGroup - fieldQR) * 1500;
+                    }
+                }
+            }
+        }
         if (fieldName && fieldName !== 'Free' && slots.length > 0 && blockStart !== undefined && blockEnd !== undefined) {
             var sharingEntries = _fieldTimeIndex.get(fieldNorm) || [];
             var fieldOccupied = false, sameActivityOnField = false;
@@ -960,6 +1050,7 @@ else penalty += 200;
         getFieldCapacity: getFieldCapacity,
         getSharingType: getSharingType,
         buildAllCandidateOptions: buildAllCandidateOptions,
+        buildFieldGroupCaches: buildFieldGroupCaches,
         setScratchPick: setScratchPick, clonePick: clonePick,
         calculatePenaltyCost: calculatePenaltyCost,
         precomputeResourceMaps: precomputeResourceMaps,
@@ -1514,6 +1605,7 @@ else penalty += 200;
         S.detectRainyDayMode(config);
 
         S.allCandidateOptions = S.buildAllCandidateOptions(S.globalConfig);
+        S.buildFieldGroupCaches();
         if (S.allCandidateOptions.length === 0) { console.error('[SOLVER] No candidate options!'); return; }
 
         // Ensure divName is set for all blocks
