@@ -1595,6 +1595,57 @@
         toast('Exported ' + entries.length + ' campers');
     }
 
+    // --- Import Warning Popup ---
+    // Shows a blocking popup before import if structure already has data
+    function showImportWarning() {
+        if (!pendingCsvData.length) return;
+
+        const hasExistingStructure = Object.keys(structure).length > 0;
+
+        // If no existing structure, just import directly — nothing to warn about
+        if (!hasExistingStructure) {
+            importCsv();
+            return;
+        }
+
+        const mode = document.getElementById('importModeSelect')?.value || 'update';
+        const warningModal = document.getElementById('importWarningModal');
+        const warningText = document.getElementById('importWarningText');
+        if (!warningModal || !warningText) { importCsv(); return; }
+
+        if (mode === 'replace') {
+            warningText.innerHTML =
+                'You already have <strong>divisions, grades, and bunks</strong> set up in your camp structure.' +
+                '<br><br>' +
+                '<strong>Replace</strong> will <strong>wipe everything</strong> &mdash; your entire roster, camp structure, field settings, master builder skeletons, league setups, and schedule configurations will be deleted and rebuilt from the file.' +
+                '<br><br>' +
+                'Make sure your file has all the data you need before proceeding.';
+        } else {
+            warningText.innerHTML =
+                'You already have <strong>divisions, grades, and bunks</strong> set up in your camp structure.' +
+                '<br><br>' +
+                'Make sure your import file uses the <strong>exact same names</strong> for divisions, grades, and bunks as your existing structure. ' +
+                'For example, if you set up <strong>"1st Grade"</strong>, use "1st Grade" in the file &mdash; not just "1". ' +
+                'If a division is called <strong>"Junior Boys"</strong>, don\'t shorten it to "Juniors".' +
+                '<br><br>' +
+                'Mismatched names may cause field settings, schedules, and leagues to need reconfiguring.';
+        }
+
+        warningModal.style.display = 'flex';
+
+        const cancelBtn = document.getElementById('importWarningCancel');
+        const proceedBtn = document.getElementById('importWarningProceed');
+
+        const cleanup = () => {
+            warningModal.style.display = 'none';
+            cancelBtn.replaceWith(cancelBtn.cloneNode(true));
+            proceedBtn.replaceWith(proceedBtn.cloneNode(true));
+        };
+
+        cancelBtn.onclick = () => { cleanup(); };
+        proceedBtn.onclick = () => { cleanup(); importCsv(); };
+    }
+
     // =========================================================================
     // UI HELPERS
     // =========================================================================
@@ -1640,7 +1691,7 @@
         on('downloadTemplateBtn', 'onclick', downloadTemplate);
         on('importCsvBtn', 'onclick', openCsvModal);
         on('exportCsvBtn', 'onclick', exportCsv);
-        on('csvImportBtn', 'onclick', importCsv);
+        on('csvImportBtn', 'onclick', showImportWarning);
         on('clearAllBtn', 'onclick', clearAllCampers);
         on('saveEditCamperBtn', 'onclick', saveCamper);
         on('editCamperDivision', 'onchange', e => { updateEditGrades(e.target.value, ''); updateEditBunks(e.target.value, '', ''); updateEditTeams(e.target.value, '', document.getElementById('editCamperTeam')?.value || ''); });
