@@ -792,7 +792,14 @@
                 state.divisionGroups = { "All": { color: "#6B7280", grades: Object.keys(state.divisions) } };
             }
             
-            state.availableDivisions = Object.keys(state.divisions);
+           state.availableDivisions = Object.keys(state.divisions).sort((a, b) => {
+                const numA = parseInt((a.match(/\d+/) || [])[0]);
+                const numB = parseInt((b.match(/\d+/) || [])[0]);
+                if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+                if (!isNaN(numA)) return -1;
+                if (!isNaN(numB)) return 1;
+                return a.localeCompare(b, undefined, { numeric: true });
+            });
             state.specialActivities = data.specialActivities || [];
             state.bunkMetaData = data.bunkMetaData || {};
             state.sportMetaData = data.sportMetaData || {};
