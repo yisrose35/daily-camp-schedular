@@ -28,6 +28,11 @@ let addFieldInput = null;
 // Sport metadata (min/max players) - synced with app1.js sportMetaData
 let sportMetaData = {};
 
+// ★★★ COMBINED FIELDS state ★★★
+let fieldCombos = {};
+let _comboLookup = { combinedToSubs: {}, subToCombined: {}, allComboFields: new Set() };
+
+
 //------------------------------------------------------------------
 // INIT
 //------------------------------------------------------------------
@@ -126,11 +131,10 @@ function loadData(){
         f.rainyDayAvailable = f.rainyDayAvailable ?? false;
     });
     
-    // ★★★ RUN DIVISION VALIDATION on load ★★★
+   // ★★★ RUN DIVISION VALIDATION on load ★★★
     const validation = validateFieldDivisions();
     if (validation.issuesFixed > 0) {
         console.log(`[Fields] Auto-fixed ${validation.issuesFixed} stale division references on load`);
-        // Save fixes silently (don't trigger RBAC since this is system cleanup)
         try {
             const settings = window.loadGlobalSettings?.() || {};
             settings.app1 = settings.app1 || {};
@@ -140,6 +144,17 @@ function loadData(){
             console.warn('[Fields] Could not save division validation fixes:', e);
         }
     }
+
+    // ★★★ LOAD COMBINED FIELD RELATIONSHIPS ★★★
+    fieldCombos = app1.fieldCombos || {};
+    for (const [id, combo] of Object.entries(fieldCombos)) {
+        if (!combo.id) combo.id = id;
+        if (!combo.combinedField) combo.combinedField = '';
+        if (!Array.isArray(combo.subFields)) combo.subFields = [];
+    }
+    rebuildComboLookups();
+}
+
 }
 
 //------------------------------------------------------------------
@@ -498,7 +513,10 @@ function saveData(){
         settings.app1 = settings.app1 || {};
         settings.app1.fields = normalizedFields;
         settings.app1.sportMetaData = sportMetaData;
+        settings.app1.fieldCombos = fieldCombos;    // ★★★ SAVE COMBINED FIELDS ★★★
         window.saveGlobalSettings?.("app1", settings.app1);
+
+
         
         // ⭐ Also save at root level for redundancy
         window.saveGlobalSettings?.("fields", normalizedFields);
@@ -1088,6 +1106,7 @@ function renderDetailPane(){
         
         // ★★★ PROPAGATE RENAME to all references ★★★
         propagateFieldRename(oldName, newName);
+        handleComboFieldRenamed(oldName, newName);   // ★★★ UPDATE COMBO REFS ★★★
         
         saveData();
         renderMasterLists();
@@ -1120,6 +1139,7 @@ function renderDetailPane(){
             
             // ★★★ CLEANUP before removing ★★★
             cleanupDeletedField(deletedFieldName);
+            handleComboFieldDeleted(deletedFieldName);  // ★★★ REMOVE FROM COMBOS ★★★
             
             fields = fields.filter(f => f !== item);
             saveData();
@@ -1166,9 +1186,13 @@ function renderDetailPane(){
     detailPaneEl.appendChild(section("Time Rules", summaryTime(item), 
         () => renderTimeRules(item)));
 
-    // Weather & Availability (Rainy Day)
+   // Weather & Availability (Rainy Day)
     detailPaneEl.appendChild(section("Weather & Availability", summaryWeather(item), 
         () => renderWeatherSettings(item)));
+
+    // ★★★ Combined Field (Mutual Exclusion) ★★★
+    detailPaneEl.appendChild(section("Combined Field", summaryCombo(item),
+        () => renderComboSettings(item)));
 }
 
 //------------------------------------------------------------------
@@ -1956,6 +1980,299 @@ function renderWeatherSettings(item) {
     return container;
 }
 
+//------------------------------------------------------------------
+// ★★★ COMBINED FIELDS — LOOKUPS, MANAGEMENT, UI ★★★
+//------------------------------------------------------------------
+function rebuildComboLookups() {
+    _comboLookup = { combinedToSubs: {}, subToCombined: {}, allComboFields: new Set() };
+    for (const combo of Object.values(fieldCombos)) {
+        if (!combo.combinedField || !Array.isArray(combo.subFields)) continue;
+        const cNorm = combo.combinedField.toLowerCase().trim();
+        _comboLookup.combinedToSubs[cNorm] = combo.subFields.map(s => s);
+        _comboLookup.allComboFields.add(cNorm);
+        for (const sub of combo.subFields) {
+            const sNorm = sub.toLowerCase().trim();
+            _comboLookup.subToCombined[sNorm] = combo.combinedField;
+            _comboLookup.allComboFields.add(sNorm);
+        }
+    }
+}
+
+function getComboExclusiveFields(fieldName) {
+    if (!fieldName) return [];
+    const norm = fieldName.toLowerCase().trim();
+    const result = [];
+    if (_comboLookup.combinedToSubs[norm]) result.push(..._comboLookup.combinedToSubs[norm]);
+    if (_comboLookup.subToCombined[norm]) result.push(_comboLookup.subToCombined[norm]);
+    return result;
+}
+
+function isFieldInCombo(fieldName) {
+    if (!fieldName) return false;
+    return _comboLookup.allComboFields.has(fieldName.toLowerCase().trim());
+}
+
+function getComboForField(fieldName) {
+    if (!fieldName) return null;
+    const norm = fieldName.toLowerCase().trim();
+    for (const combo of Object.values(fieldCombos)) {
+        if (combo.combinedField.toLowerCase().trim() === norm) return combo;
+        if (combo.subFields.some(s => s.toLowerCase().trim() === norm)) return combo;
+    }
+    return null;
+}
+
+function isBlockedByCombo(fieldName, startMin, endMin, excludeBunk) {
+    if (!fieldName || startMin == null || endMin == null) return { blocked: false, blocker: null };
+    const exclusive = getComboExclusiveFields(fieldName);
+    if (exclusive.length === 0) return { blocked: false, blocker: null };
+    const divisions = window.divisions || {};
+    const allDivTimes = window.divisionTimes || {};
+    const assignments = window.scheduleAssignments || {};
+    for (const exField of exclusive) {
+        const exLower = exField.toLowerCase().trim();
+        for (const [divName, divData] of Object.entries(divisions)) {
+            const divSlots = allDivTimes[divName] || [];
+            for (const bunk of (divData.bunks || [])) {
+                if (excludeBunk && String(bunk) === String(excludeBunk)) continue;
+                const ba = assignments[bunk] || [];
+                for (let idx = 0; idx < divSlots.length; idx++) {
+                    const slot = divSlots[idx];
+                    if (!slot || slot.startMin == null) continue;
+                    if (slot.startMin >= endMin || slot.endMin <= startMin) continue;
+                    const entry = ba[idx];
+                    if (!entry || entry.continuation) continue;
+                    const ef = (window.SchedulerCoreUtils?.fieldLabel?.(entry.field) ||
+                               (entry.field?.name || entry.field || '')).toLowerCase().trim();
+                    if (ef === exLower) {
+                        return { blocked: true, blocker: exField, bunk, division: divName };
+                    }
+                }
+            }
+        }
+    }
+    return { blocked: false, blocker: null };
+}
+
+function isBlockedByComboAtSlots(fieldName, slots, divName, excludeBunk) {
+    if (!fieldName || !slots || slots.length === 0) return false;
+    if (getComboExclusiveFields(fieldName).length === 0) return false;
+    const divSlots = (window.divisionTimes || {})[divName] || [];
+    if (!divSlots[slots[0]]) return false;
+    const startMin = divSlots[slots[0]].startMin;
+    const endMin = (divSlots[slots[slots.length - 1]] || {}).endMin || (startMin + 30);
+    return isBlockedByCombo(fieldName, startMin, endMin, excludeBunk).blocked;
+}
+
+function addFieldCombo(combinedField, subFields) {
+    if (!combinedField || !Array.isArray(subFields) || subFields.length < 1) return null;
+    const allFieldNames = fields.map(f => f.name.toLowerCase().trim());
+    if (!allFieldNames.includes(combinedField.toLowerCase().trim())) return null;
+    for (const sf of subFields) { if (!allFieldNames.includes(sf.toLowerCase().trim())) return null; }
+    const cNorm = combinedField.toLowerCase().trim();
+    if (_comboLookup.combinedToSubs[cNorm] || _comboLookup.subToCombined[cNorm]) return null;
+    for (const sf of subFields) {
+        const sfn = sf.toLowerCase().trim();
+        if (_comboLookup.subToCombined[sfn] || _comboLookup.combinedToSubs[sfn]) return null;
+    }
+    const id = 'combo_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 5);
+    fieldCombos[id] = { id, combinedField, subFields: [...subFields] };
+    saveData();
+    return id;
+}
+
+function removeFieldCombo(fieldName) {
+    if (!fieldName) return false;
+    const norm = fieldName.toLowerCase().trim();
+    for (const [id, combo] of Object.entries(fieldCombos)) {
+        if (combo.combinedField.toLowerCase().trim() === norm) { delete fieldCombos[id]; saveData(); return true; }
+        const idx = combo.subFields.findIndex(s => s.toLowerCase().trim() === norm);
+        if (idx !== -1) {
+            combo.subFields.splice(idx, 1);
+            if (combo.subFields.length === 0) delete fieldCombos[id];
+            saveData(); return true;
+        }
+    }
+    return false;
+}
+
+function handleComboFieldRenamed(oldName, newName) {
+    if (!oldName || !newName) return;
+    const oldNorm = oldName.toLowerCase().trim();
+    let changed = false;
+    for (const combo of Object.values(fieldCombos)) {
+        if (combo.combinedField.toLowerCase().trim() === oldNorm) { combo.combinedField = newName; changed = true; }
+        combo.subFields = combo.subFields.map(s => {
+            if (s.toLowerCase().trim() === oldNorm) { changed = true; return newName; }
+            return s;
+        });
+    }
+    if (changed) rebuildComboLookups();
+}
+
+function handleComboFieldDeleted(fieldName) { removeFieldCombo(fieldName); }
+
+function summaryCombo(fieldItem) {
+    const combo = getComboForField(fieldItem.name);
+    if (!combo) return 'Not configured';
+    const isCombined = combo.combinedField.toLowerCase().trim() === fieldItem.name.toLowerCase().trim();
+    if (isCombined) return '\u{1F3DF}\uFE0F Full field → blocks ' + combo.subFields.join(', ');
+    return '\u{1F9E9} Part of ' + combo.combinedField;
+}
+
+function renderComboSettings(fieldItem) {
+    const container = document.createElement('div');
+    if (!fieldItem?.name) return container;
+    const thisName = fieldItem.name;
+    const allOtherFields = fields.filter(f => f.name !== thisName);
+    const updateSummary = () => {
+        const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (s) s.textContent = summaryCombo(fieldItem);
+    };
+    const renderContent = () => {
+        container.innerHTML = '';
+        const currentCombo = getComboForField(thisName);
+        // Info box
+        const info = document.createElement('div');
+        info.style.cssText = 'color:#6B7280; font-size:0.85rem; line-height:1.5; margin-bottom:16px; padding:10px; background:#F9FAFB; border-radius:8px;';
+        info.innerHTML = 'Define a <strong>combined field</strong> relationship. Example: "Gym" is the full court, "Gym A"+"Gym B" are two halves. When the full court is in use, neither half can be scheduled — and vice versa.';
+        container.appendChild(info);
+
+        if (currentCombo) {
+            const isCombined = currentCombo.combinedField.toLowerCase().trim() === thisName.toLowerCase().trim();
+            const box = document.createElement('div');
+            box.style.cssText = 'background:#e6f4f7; border:1px solid #b2dce6; border-radius:10px; padding:14px; margin-bottom:12px;';
+            const role = document.createElement('div');
+            role.style.cssText = 'font-size:0.8rem; font-weight:600; color:#0A4A56; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.04em;';
+            if (isCombined) {
+                role.textContent = '\u{1F3DF}\uFE0F This is the COMBINED (full) field';
+                box.appendChild(role);
+                const sl = document.createElement('div');
+                sl.style.cssText = 'font-size:0.82rem; color:#0A4A56; margin-top:6px;';
+                sl.textContent = 'Sub-fields (blocked when this is in use):';
+                box.appendChild(sl);
+                const chips = document.createElement('div');
+                chips.style.cssText = 'display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;';
+                currentCombo.subFields.forEach(sf => {
+                    const c = document.createElement('span');
+                    c.style.cssText = 'background:white; border:1px solid #b2dce6; border-radius:6px; padding:4px 10px; font-size:0.85rem; color:#0A4A56;';
+                    c.textContent = sf; chips.appendChild(c);
+                });
+                box.appendChild(chips);
+            } else {
+                role.textContent = '\u{1F9E9} This is a SUB-FIELD (part of a larger field)';
+                box.appendChild(role);
+                const p = document.createElement('div');
+                p.style.cssText = 'font-size:0.85rem; color:#0A4A56; margin-top:4px;';
+                p.innerHTML = 'Combined field: <strong>' + escapeHtml(currentCombo.combinedField) + '</strong>';
+                box.appendChild(p);
+                const siblings = currentCombo.subFields.filter(s => s.toLowerCase().trim() !== thisName.toLowerCase().trim());
+                if (siblings.length > 0) {
+                    const sb = document.createElement('div');
+                    sb.style.cssText = 'font-size:0.82rem; color:#6B7280; margin-top:6px;';
+                    sb.textContent = 'Other sub-fields: ' + siblings.join(', '); box.appendChild(sb);
+                }
+            }
+            container.appendChild(box);
+            // Rule explanation
+            const ruleNote = document.createElement('div');
+            ruleNote.style.cssText = 'color:#92400E; font-size:0.82rem; padding:10px; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px; margin-bottom:12px; line-height:1.5;';
+            if (isCombined) {
+                ruleNote.innerHTML = '<strong>Rule:</strong> When "' + escapeHtml(thisName) + '" is scheduled, ' + currentCombo.subFields.map(s => '"' + escapeHtml(s) + '"').join(' and ') + ' become unavailable — and vice versa.';
+            } else {
+                ruleNote.innerHTML = '<strong>Rule:</strong> When "' + escapeHtml(thisName) + '" is scheduled, "' + escapeHtml(currentCombo.combinedField) + '" becomes unavailable — and vice versa.';
+            }
+            container.appendChild(ruleNote);
+            // Remove button
+            const removeBtn = document.createElement('button');
+            removeBtn.textContent = '\u2715 Remove from combined field';
+            removeBtn.style.cssText = 'background:#FEF2F2; color:#DC2626; border:1px solid #FECACA; border-radius:6px; padding:6px 14px; cursor:pointer; font-size:0.85rem;';
+            removeBtn.onclick = () => {
+                if (!window.AccessControl?.canEditSetup?.()) { window.AccessControl?.showPermissionDenied?.('edit field combos'); return; }
+                if (confirm('Remove "' + thisName + '" from this combined field relationship?')) {
+                    removeFieldCombo(thisName); renderContent(); updateSummary();
+                }
+            };
+            container.appendChild(removeBtn);
+        } else {
+            // CREATE NEW COMBO
+            const availableFields = allOtherFields.filter(f => !getComboForField(f.name));
+            if (availableFields.length === 0) {
+                const msg = document.createElement('div');
+                msg.style.cssText = 'color:#9CA3AF; font-size:0.85rem; padding:10px;';
+                msg.textContent = 'No other fields available to create a combo with.'; container.appendChild(msg); return;
+            }
+            let selectedRole = null;
+            let selectedPartners = new Set();
+            const roleQ = document.createElement('div');
+            roleQ.style.cssText = 'font-weight:500; font-size:0.9rem; margin-bottom:8px;';
+            roleQ.textContent = 'What role does "' + thisName + '" play?';
+            container.appendChild(roleQ);
+            const btnRow = document.createElement('div');
+            btnRow.style.cssText = 'display:flex; gap:10px; margin-bottom:14px;';
+            const btnCombined = document.createElement('button');
+            btnCombined.textContent = '\u{1F3DF}\uFE0F Full / Combined field';
+            btnCombined.style.cssText = 'flex:1; padding:10px; border-radius:8px; border:1px solid #E5E7EB; cursor:pointer; background:#fff; font-size:0.85rem;';
+            const btnSub = document.createElement('button');
+            btnSub.textContent = '\u{1F9E9} Part of a larger field';
+            btnSub.style.cssText = 'flex:1; padding:10px; border-radius:8px; border:1px solid #E5E7EB; cursor:pointer; background:#fff; font-size:0.85rem;';
+            btnRow.appendChild(btnCombined); btnRow.appendChild(btnSub);
+            container.appendChild(btnRow);
+            const partnerArea = document.createElement('div');
+            container.appendChild(partnerArea);
+            function renderPartnerPicker() {
+                partnerArea.innerHTML = ''; selectedPartners.clear();
+                if (!selectedRole) return;
+                btnCombined.style.background = selectedRole === 'combined' ? '#e6f4f7' : '#fff';
+                btnCombined.style.borderColor = selectedRole === 'combined' ? '#147D91' : '#E5E7EB';
+                btnSub.style.background = selectedRole === 'sub' ? '#e6f4f7' : '#fff';
+                btnSub.style.borderColor = selectedRole === 'sub' ? '#147D91' : '#E5E7EB';
+                const lbl = document.createElement('div');
+                lbl.style.cssText = 'font-weight:500; font-size:0.85rem; margin-bottom:8px;';
+                lbl.textContent = selectedRole === 'combined' ? 'Select the sub-fields that make up "' + thisName + '":' : 'Select the combined field that "' + thisName + '" is part of:';
+                partnerArea.appendChild(lbl);
+                const chipWrap = document.createElement('div');
+                chipWrap.style.cssText = 'display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px;';
+                availableFields.forEach(f => {
+                    const chip = document.createElement('button');
+                    chip.textContent = f.name;
+                    chip.style.cssText = 'padding:6px 12px; border-radius:6px; border:1px solid #D1D5DB; background:#fff; cursor:pointer; font-size:0.85rem;';
+                    chip.onclick = () => {
+                        if (selectedRole === 'sub') {
+                            selectedPartners.clear(); selectedPartners.add(f.name);
+                            chipWrap.querySelectorAll('button').forEach(b => { b.style.background = '#fff'; b.style.borderColor = '#D1D5DB'; });
+                            chip.style.background = '#e6f4f7'; chip.style.borderColor = '#147D91';
+                        } else {
+                            if (selectedPartners.has(f.name)) { selectedPartners.delete(f.name); chip.style.background = '#fff'; chip.style.borderColor = '#D1D5DB'; }
+                            else { selectedPartners.add(f.name); chip.style.background = '#e6f4f7'; chip.style.borderColor = '#147D91'; }
+                        }
+                        saveBtn.style.display = selectedPartners.size > 0 ? '' : 'none';
+                    };
+                    chipWrap.appendChild(chip);
+                });
+                partnerArea.appendChild(chipWrap);
+                const saveBtn = document.createElement('button');
+                saveBtn.textContent = '\u2713 Create Combined Field Relationship';
+                saveBtn.style.cssText = 'background:#147D91; color:white; border:none; border-radius:8px; padding:10px 18px; cursor:pointer; font-size:0.9rem; font-weight:500; display:none;';
+                saveBtn.onclick = () => {
+                    if (!window.AccessControl?.canEditSetup?.()) { window.AccessControl?.showPermissionDenied?.('edit field combos'); return; }
+                    const partners = [...selectedPartners]; if (partners.length === 0) return;
+                    let cField, sFields;
+                    if (selectedRole === 'combined') { cField = thisName; sFields = partners; }
+                    else { cField = partners[0]; sFields = [thisName]; }
+                    const result = addFieldCombo(cField, sFields);
+                    if (result) { renderContent(); updateSummary(); if (window.showToast) window.showToast('Combined field relationship created', 'success'); }
+                    else { alert('Could not create relationship. Fields may already be in another combo.'); }
+                };
+                partnerArea.appendChild(saveBtn);
+            }
+            btnCombined.onclick = () => { selectedRole = 'combined'; renderPartnerPicker(); };
+            btnSub.onclick = () => { selectedRole = 'sub'; renderPartnerPicker(); };
+        }
+    };
+    renderContent();
+    return container;
+}
 
 //------------------------------------------------------------------
 // HELPERS
@@ -2052,6 +2369,21 @@ function addField(){
 //------------------------------------------------------------------
 // EXPORTS
 //------------------------------------------------------------------
+// ★★★ Combined Fields exports ★★★
+window.FieldCombos = {
+    getExclusiveFields: getComboExclusiveFields,
+    isInCombo: isFieldInCombo,
+    getComboForField: getComboForField,
+    isBlockedByCombo: isBlockedByCombo,
+    isBlockedByComboAtSlots: isBlockedByComboAtSlots,
+    getAllCombos: () => ({ ...fieldCombos }),
+    addCombo: addFieldCombo,
+    removeCombo: removeFieldCombo,
+    handleRenamed: handleComboFieldRenamed,
+    handleDeleted: handleComboFieldDeleted,
+    reload: () => { loadData(); },
+    _debug: () => ({ combos: fieldCombos, lookup: _comboLookup })
+};
 window.initFieldsTab = initFieldsTab;
 window.fields = fields;
 //------------------------------------------------------------------
