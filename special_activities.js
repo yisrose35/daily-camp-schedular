@@ -1,7 +1,7 @@
 // ============================================================================
-// special_activities.js — PRODUCTION-READY v3.5
+// special_activities.js — PRODUCTION-READY v3.7
 // ============================================================================
-// v3.5: 2-Part Special support — multi-session activities across days
+// v3.7: Multi-Part Specials — single activity with N parts, auto-tracked
 // v3.4: Nested accordion layout
 // v3.2: Visual parity with fields.js — setup-card layout, SVG accordions,
 //       availability strip, scoped list/switch styles, toggle sharing pattern
@@ -152,14 +152,11 @@ function validateSpecialActivity(activity, activityName) {
        ...(activity.rainyDayCapacity > 0 ? { rainyDayCapacity: parseInt(activity.rainyDayCapacity, 10) } : {}),
         ...(activity.rainyDayAvailableAllDay === true ? { rainyDayAvailableAllDay: true } : {}),
         fullGrade: activity.fullGrade === true,
-        // ★ v3.5: Multi-Part Special support (N parts)
+        // ★ v3.7: Multi-Part Special support (simple N parts)
         multiPart: activity.multiPart && typeof activity.multiPart === 'object' ? {
             enabled: activity.multiPart.enabled === true,
-            totalParts: (function() { var tp = parseInt(activity.multiPart.totalParts, 10); return (!isNaN(tp) && tp >= 2 && tp <= 10) ? tp : 2; })(),
-            partNumber: (function() { var pn = parseInt(activity.multiPart.partNumber, 10); return (!isNaN(pn) && pn >= 1 && pn <= 10) ? pn : 1; })(),
-            partActivities: Array.isArray(activity.multiPart.partActivities) ? activity.multiPart.partActivities.filter(function(n) { return typeof n === 'string'; }) : [],
-            partLabels: Array.isArray(activity.multiPart.partLabels) ? activity.multiPart.partLabels.filter(function(n) { return typeof n === 'string'; }) : []
-        } : { enabled: false, totalParts: 2, partNumber: 1, partActivities: [], partLabels: [] }
+            totalParts: (function() { var tp = parseInt(activity.multiPart.totalParts, 10); return (!isNaN(tp) && tp >= 2 && tp <= 10) ? tp : 2; })()
+        } : { enabled: false, totalParts: 2 }
     };
 }
 
@@ -169,7 +166,7 @@ function createDefaultActivity(name) {
         maxUsage: null, maxUsagePeriod: 'half', frequencyWeeks: 0, rainyDayExclusive: false, prepDuration: 0,
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
         rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
-        multiPart: { enabled: false, totalParts: 2, partNumber: 1, partActivities: [], partLabels: [] } };
+        multiPart: { enabled: false, totalParts: 2 } };
 }
 
 function validateAllActivities(activities) { if (!Array.isArray(activities)) return []; return activities.map(a => validateSpecialActivity(a, a?.name)); }
@@ -333,7 +330,7 @@ function createMasterListItem(item, isRainyDay) {
     if (item.multiPart?.enabled) {
         const mpBadge = document.createElement("span");
         mpBadge.style.cssText = "display:inline-flex; align-items:center; gap:3px; font-size:0.65rem; padding:2px 6px; border-radius:999px; margin-left:6px; color:#6b21a8; background:#f3e8ff;";
-        mpBadge.textContent = "Part " + (item.multiPart.partNumber || 1) + "/" + (item.multiPart.totalParts || 2);
+        mpBadge.textContent = item.multiPart.totalParts + "-part";
         nameEl.appendChild(mpBadge);
     }
     if (isRainyDay) { const b = document.createElement("span"); b.className = "rainy-badge"; b.textContent = "Rainy Only"; nameEl.appendChild(b); }
@@ -490,13 +487,10 @@ function summaryWeather(item) {
 }
 function summaryLocation(item) { return item.location || "No field assigned"; }
 
-// ★ v3.5: Multi-Part summary
+// ★ v3.7: Multi-Part summary
 function summaryMultiPart(item) {
     if (!item.multiPart?.enabled) return 'Single session';
-    var pn = item.multiPart.partNumber || 1;
-    var total = item.multiPart.totalParts || 2;
-    var label = (item.multiPart.partLabels && item.multiPart.partLabels[pn - 1]) ? item.multiPart.partLabels[pn - 1] : ('Part ' + pn);
-    return label + ' (' + pn + ' of ' + total + ')';
+    return item.multiPart.totalParts + '-part activity';
 }
 
 // =========================================================================
@@ -938,15 +932,13 @@ function renderMultiPartSettings(item) {
     var container = document.createElement("div");
     container.style.cssText = "padding:16px;";
 
-    var mp = item.multiPart || { enabled: false, totalParts: 2, partNumber: 1, partActivities: [], partLabels: [] };
-    if (!mp.partActivities) mp.partActivities = [];
-    if (!mp.partLabels) mp.partLabels = [];
+    var mp = item.multiPart || { enabled: false, totalParts: 2 };
     var isEnabled = mp.enabled === true;
 
     // Description
     var desc = document.createElement("p");
     desc.style.cssText = "font-size:0.8rem; color:#6B7280; margin:0 0 14px 0; line-height:1.5;";
-    desc.innerHTML = 'A <strong>multi-part special</strong> has multiple sessions across different days. Example: <strong>Woodworking</strong> = Part 1 (Cutting) \u2192 Part 2 (Sanding) \u2192 Part 3 (Painting). The scheduler will only assign Part N to bunks that have completed Part N\u20111.';
+    desc.innerHTML = 'A <strong>multi-part special</strong> must be completed over multiple days. Example: <strong>Woodworking</strong> with 3 parts \u2014 bunks see "Woodworking 1/3" the first time, "Woodworking 2/3" next, then "Woodworking 3/3". A bunk cannot skip ahead.';
     container.appendChild(desc);
 
     // Toggle
@@ -971,227 +963,78 @@ function renderMultiPartSettings(item) {
         configPanel.innerHTML = '';
 
         // Total parts input
-        var totalRow = document.createElement("div");
-        totalRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:14px;";
-        totalRow.innerHTML = '<label style="font-size:0.85rem; font-weight:500;">Total parts:</label>';
-        var totalInput = document.createElement("input");
-        totalInput.type = "number"; totalInput.min = "2"; totalInput.max = "10"; totalInput.value = mp.totalParts || 2;
-        totalInput.style.cssText = "width:60px; padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.9rem;";
-        totalInput.onchange = function() {
+        var row = document.createElement("div");
+        row.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:16px;";
+        row.innerHTML = '<label style="font-size:0.85rem; font-weight:500;">Number of parts:</label>';
+        var inp = document.createElement("input");
+        inp.type = "number"; inp.min = "2"; inp.max = "10"; inp.value = mp.totalParts || 2;
+        inp.style.cssText = "width:60px; padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.9rem;";
+        inp.onchange = function() {
             var v = Math.min(10, Math.max(2, parseInt(this.value) || 2));
             this.value = v;
             mp.totalParts = v;
-            if (mp.partNumber > v) mp.partNumber = v;
-            // Trim arrays if shrunk
-            while (mp.partActivities.length > v) mp.partActivities.pop();
-            while (mp.partLabels.length > v) mp.partLabels.pop();
             item.multiPart = mp;
             saveData();
             renderConfig();
-            updateSummaryText();
+            updateSummary();
             renderMasterList(); renderRainyDayList();
         };
-        totalRow.appendChild(totalInput);
-        totalRow.innerHTML += '<span style="font-size:0.8rem; color:#6B7280;">sessions across different days</span>';
-        totalRow.insertBefore(totalInput, totalRow.children[1]);
-        configPanel.appendChild(totalRow);
+        row.appendChild(inp);
+        row.lastElementChild.insertAdjacentHTML('afterend', '<span style="font-size:0.8rem; color:#6B7280;">sessions across different days</span>');
+        configPanel.appendChild(row);
 
-        // This activity's part number
-        var partRow = document.createElement("div");
-        partRow.style.cssText = "margin-bottom:14px;";
-        partRow.innerHTML = '<label style="font-size:0.85rem; font-weight:500; display:block; margin-bottom:6px;">This activity is:</label>';
-        var partChips = document.createElement("div");
-        partChips.style.cssText = "display:flex; gap:8px; flex-wrap:wrap;";
-        for (var p = 1; p <= mp.totalParts; p++) {
-            (function(num) {
-                var chip = document.createElement("button");
-                var isActive = mp.partNumber === num;
-                chip.textContent = "Part " + num;
-                chip.style.cssText = "padding:6px 16px; border-radius:8px; border:2px solid " + (isActive ? "#147D91" : "#E5E7EB") + "; background:" + (isActive ? "#e6f4f7" : "#fff") + "; color:" + (isActive ? "#0F5F6E" : "#333") + "; font-weight:" + (isActive ? "600" : "400") + "; cursor:pointer; font-size:0.85rem; transition:all 0.15s;";
-                chip.onclick = function() {
-                    mp.partNumber = num;
-                    item.multiPart = mp;
-                    saveData();
-                    renderConfig();
-                    updateSummaryText();
-                    renderMasterList(); renderRainyDayList();
-                };
-                partChips.appendChild(chip);
-            })(p);
+        // Preview
+        var preview = document.createElement("div");
+        preview.style.cssText = "border:1px solid #E5E7EB; border-radius:10px; padding:14px; background:#FAFAFA; margin-bottom:14px;";
+        preview.innerHTML = '<div style="font-weight:600; font-size:0.85rem; margin-bottom:10px;">Schedule Preview</div>';
+        for (var i = 1; i <= mp.totalParts; i++) {
+            var step = document.createElement("div");
+            step.style.cssText = "display:flex; align-items:center; gap:10px; padding:8px 12px; margin-bottom:" + (i < mp.totalParts ? "4px" : "0") + "; border-radius:8px; background:#fff; border:1px solid #E5E7EB;";
+            var badge = document.createElement("span");
+            badge.style.cssText = "width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.75rem; flex-shrink:0; color:#fff; background:#147D91;";
+            badge.textContent = i;
+            step.appendChild(badge);
+            var label = document.createElement("span");
+            label.style.cssText = "font-size:0.85rem; color:#374151;";
+            label.textContent = escapeHtml(item.name) + " " + i + "/" + mp.totalParts;
+            step.appendChild(label);
+            if (i === 1) { step.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.7rem; color:#6B7280;">No prerequisite</span>'); }
+            else { step.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.7rem; color:#92400e;">Requires ' + (i-1) + '/' + mp.totalParts + ' done</span>'); }
+            preview.appendChild(step);
+            if (i < mp.totalParts) {
+                var arrow = document.createElement("div");
+                arrow.style.cssText = "text-align:center; color:#9CA3AF; font-size:0.75rem; margin:2px 0;";
+                arrow.textContent = "\u2193 next day";
+                preview.appendChild(arrow);
+            }
         }
-        partRow.appendChild(partChips);
-        configPanel.appendChild(partRow);
-
-        // Part labels + linked activities
-        var linksSection = document.createElement("div");
-        linksSection.style.cssText = "border:1px solid #E5E7EB; border-radius:10px; padding:14px; background:#FAFAFA; margin-bottom:14px;";
-        linksSection.innerHTML = '<div style="font-weight:600; font-size:0.9rem; margin-bottom:10px;">Part Chain</div>';
-
-        var allSpecials = [...specialActivities, ...rainyDayActivities].filter(function(s) { return s.name !== item.name; });
-
-        for (var i = 0; i < mp.totalParts; i++) {
-            (function(idx) {
-                var isThis = (idx + 1) === mp.partNumber;
-                var row = document.createElement("div");
-                row.style.cssText = "display:flex; align-items:center; gap:8px; padding:8px 10px; margin-bottom:6px; border-radius:8px; background:" + (isThis ? "#e6f4f7" : "#fff") + "; border:1px solid " + (isThis ? "#b2dce6" : "#E5E7EB") + ";";
-
-                // Part number badge
-                var badge = document.createElement("span");
-                badge.style.cssText = "width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.8rem; flex-shrink:0; color:" + (isThis ? "#fff" : "#6B7280") + "; background:" + (isThis ? "#147D91" : "#E5E7EB") + ";";
-                badge.textContent = idx + 1;
-                row.appendChild(badge);
-
-                if (isThis) {
-                    // This activity — show label input + "This Activity" badge
-                    var thisWrap = document.createElement("div"); thisWrap.style.cssText = "flex:1; display:flex; align-items:center; gap:8px;";
-                    var labelInp = document.createElement("input");
-                    labelInp.type = "text"; labelInp.placeholder = "Label (e.g., Cutting)";
-                    labelInp.value = mp.partLabels[idx] || '';
-                    labelInp.style.cssText = "flex:1; padding:6px 10px; border:1px solid #b2dce6; border-radius:6px; font-size:0.85rem; background:#fff;";
-                    labelInp.onchange = function() {
-                        mp.partLabels[idx] = this.value.trim();
-                        item.multiPart = mp;
-                        syncAllPartners();
-                        saveData();
-                        updateSummaryText();
-                    };
-                    thisWrap.appendChild(labelInp);
-                    var thisBadge = document.createElement("span");
-                    thisBadge.style.cssText = "padding:4px 10px; background:#147D91; color:white; border-radius:999px; font-size:0.7rem; font-weight:600; white-space:nowrap;";
-                    thisBadge.textContent = "\u2190 This";
-                    thisWrap.appendChild(thisBadge);
-                    row.appendChild(thisWrap);
-                } else {
-                    // Other part — label input + activity dropdown
-                    var otherWrap = document.createElement("div"); otherWrap.style.cssText = "flex:1; display:flex; gap:6px;";
-                    var labelInp2 = document.createElement("input");
-                    labelInp2.type = "text"; labelInp2.placeholder = "Label";
-                    labelInp2.value = mp.partLabels[idx] || '';
-                    labelInp2.style.cssText = "width:100px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem;";
-                    labelInp2.onchange = function() {
-                        mp.partLabels[idx] = this.value.trim();
-                        item.multiPart = mp;
-                        syncAllPartners();
-                        saveData();
-                    };
-                    otherWrap.appendChild(labelInp2);
-
-                    var select = document.createElement("select");
-                    select.style.cssText = "flex:1; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; background:#fff;";
-                    var opt0 = document.createElement("option"); opt0.value = ""; opt0.textContent = "\u2014 Link activity \u2014"; select.appendChild(opt0);
-                    allSpecials.forEach(function(s) {
-                        var opt = document.createElement("option");
-                        opt.value = s.name; opt.textContent = s.name;
-                        if (mp.partActivities[idx] === s.name) opt.selected = true;
-                        select.appendChild(opt);
-                    });
-                    select.onchange = function() {
-                        var oldAct = mp.partActivities[idx];
-                        mp.partActivities[idx] = this.value;
-                        item.multiPart = mp;
-                        // Auto-link the partner
-                        if (this.value) {
-                            autoLinkPartner(this.value, idx + 1);
-                        }
-                        // Unlink old partner
-                        if (oldAct && oldAct !== this.value) {
-                            unlinkPartner(oldAct);
-                        }
-                        saveData();
-                        renderConfig();
-                    };
-                    otherWrap.appendChild(select);
-                    row.appendChild(otherWrap);
-                }
-
-                // Arrow between rows (except last)
-                linksSection.appendChild(row);
-                if (idx < mp.totalParts - 1) {
-                    var arrow = document.createElement("div");
-                    arrow.style.cssText = "text-align:center; color:#9CA3AF; font-size:0.8rem; margin:2px 0;";
-                    arrow.textContent = "\u2193";
-                    linksSection.appendChild(arrow);
-                }
-            })(i);
-        }
-        configPanel.appendChild(linksSection);
+        configPanel.appendChild(preview);
 
         // Info box
         var info = document.createElement("div");
-        info.style.cssText = "padding:10px 14px; border-radius:8px; font-size:0.8rem; line-height:1.5;";
-        if (mp.partNumber === 1) {
-            info.style.background = "#e6f4f7"; info.style.border = "1px solid #b2dce6"; info.style.color = "#0A4A56";
-            info.innerHTML = '\uD83D\uDCCB <strong>Part 1</strong> \u2014 Scheduled normally. Once a bunk completes it, they become eligible for Part 2.';
-        } else {
-            info.style.background = "#fef3c7"; info.style.border = "1px solid #fcd34d"; info.style.color = "#92400e";
-            var prevPart = mp.partActivities[mp.partNumber - 2] || '(not linked)';
-            info.innerHTML = '\u26A0\uFE0F <strong>Part ' + mp.partNumber + '</strong> \u2014 The scheduler will <strong>only</strong> assign this to bunks that have completed <strong>' + escapeHtml(prevPart) + '</strong> (Part ' + (mp.partNumber - 1) + ').';
-        }
+        info.style.cssText = "padding:10px 14px; border-radius:8px; font-size:0.8rem; line-height:1.5; background:#e6f4f7; border:1px solid #b2dce6; color:#0A4A56;";
+        info.innerHTML = '\uD83D\uDCCB The scheduler tracks how many times each bunk has done <strong>' + escapeHtml(item.name) + '</strong>. Once a bunk completes all ' + mp.totalParts + ' parts, it won\u2019t be assigned again (enforced via <code>maxUsage</code>).';
         configPanel.appendChild(info);
     }
 
-    function autoLinkPartner(partnerName, partnerPartNumber) {
-        var partner = specialActivities.find(function(s) { return s.name === partnerName; })
-            || rainyDayActivities.find(function(s) { return s.name === partnerName; });
-        if (!partner) return;
-        if (!partner.multiPart || typeof partner.multiPart !== 'object') {
-            partner.multiPart = { enabled: false, totalParts: 2, partNumber: 1, partActivities: [], partLabels: [] };
-        }
-        partner.multiPart.enabled = true;
-        partner.multiPart.totalParts = mp.totalParts;
-        partner.multiPart.partNumber = partnerPartNumber;
-        partner.multiPart.partLabels = mp.partLabels.slice();
-        // Build partner's partActivities — point back to us and to all other parts
-        partner.multiPart.partActivities = mp.partActivities.slice();
-        partner.multiPart.partActivities[mp.partNumber - 1] = item.name;
-        console.log('[MultiPart] Auto-linked ' + partner.name + ' as Part ' + partnerPartNumber + ' of ' + mp.totalParts);
-    }
-
-    function unlinkPartner(partnerName) {
-        var partner = specialActivities.find(function(s) { return s.name === partnerName; })
-            || rainyDayActivities.find(function(s) { return s.name === partnerName; });
-        if (partner && partner.multiPart?.partActivities) {
-            // Only unlink if they still point to us
-            var pointsToUs = partner.multiPart.partActivities.indexOf(item.name) !== -1;
-            if (pointsToUs) {
-                partner.multiPart.enabled = false;
-                partner.multiPart.partActivities = [];
-                console.log('[MultiPart] Unlinked: ' + partnerName);
-            }
-        }
-    }
-
-    function syncAllPartners() {
-        mp.partActivities.forEach(function(pName, idx) {
-            if (!pName || (idx + 1) === mp.partNumber) return;
-            var partner = specialActivities.find(function(s) { return s.name === pName; })
-                || rainyDayActivities.find(function(s) { return s.name === pName; });
-            if (partner && partner.multiPart) {
-                partner.multiPart.partLabels = mp.partLabels.slice();
-                partner.multiPart.totalParts = mp.totalParts;
-            }
-        });
-    }
-
-    function updateSummaryText() {
+    function updateSummary() {
         var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
         if (s) s.textContent = summaryMultiPart(item);
     }
 
-    // Toggle handler
     cb.onchange = function() {
         isEnabled = this.checked;
         mp.enabled = isEnabled;
-        if (!isEnabled) {
-            // Unlink all partners
-            mp.partActivities.forEach(function(pName) { if (pName) unlinkPartner(pName); });
-            mp.partNumber = 1; mp.partActivities = []; mp.partLabels = [];
-        }
+        if (!isEnabled) { mp.totalParts = 2; }
         item.multiPart = mp;
+        // Sync maxUsage with totalParts
+        if (isEnabled && (!item.maxUsage || item.maxUsage < mp.totalParts)) {
+            item.maxUsage = mp.totalParts;
+        }
         configPanel.style.display = isEnabled ? "block" : "none";
         if (isEnabled) renderConfig();
         saveData();
-        updateSummaryText();
+        updateSummary();
         renderMasterList(); renderRainyDayList();
     };
 
@@ -1203,31 +1046,13 @@ function renderMultiPartSettings(item) {
 // ★ v3.5: Multi-Part Helper Functions
 // =========================================================================
 function cleanupMultiPartLink(item) {
-    if (!item.multiPart?.partActivities?.length) return;
-    item.multiPart.partActivities.forEach(function(pName) {
-        if (!pName) return;
-        var partner = specialActivities.find(function(s) { return s.name === pName; })
-            || rainyDayActivities.find(function(s) { return s.name === pName; });
-        if (partner && partner.multiPart?.partActivities?.indexOf(item.name) !== -1) {
-            partner.multiPart.enabled = false;
-            partner.multiPart.partActivities = [];
-            console.log('[MultiPart] Cleaned up partner link on: ' + partner.name);
-        }
-    });
+    // v3.7: No partner links — multiPart is self-contained on each activity
+    return;
 }
 
 function propagateMultiPartRename(oldName, newName) {
-    if (!oldName || !newName || oldName === newName) return;
-    [...specialActivities, ...rainyDayActivities].forEach(function(s) {
-        if (s.multiPart?.partActivities) {
-            for (var i = 0; i < s.multiPart.partActivities.length; i++) {
-                if (s.multiPart.partActivities[i] === oldName) {
-                    s.multiPart.partActivities[i] = newName;
-                    console.log('[MultiPart] Updated part reference on ' + s.name + '[' + i + ']: ' + oldName + ' -> ' + newName);
-                }
-            }
-        }
-    });
+    // v3.7: No partner references to update — single activity model
+    return;
 }
 
 // =========================================================================
@@ -1327,16 +1152,10 @@ window.diagnoseSpecialActivities = function() {
         if (!Array.isArray(a.timeRules)) { actIssues.push('timeRules not array'); }
         else { a.timeRules.forEach(function(rule, rIdx) { if (rule.startMin === undefined) actIssues.push('timeRules[' + rIdx + '].startMin missing'); if (rule.endMin === undefined) actIssues.push('timeRules[' + rIdx + '].endMin missing'); }); }
         if (a.isIndoor === undefined && !a.rainyDayExclusive && !a.rainyDayOnly) actIssues.push('isIndoor property missing (will default to true)');
-        // ★ v3.6: Check multi-part consistency (N parts)
+        // ★ v3.7: Check multi-part consistency
         if (a.multiPart?.enabled) {
-            if (!a.multiPart.totalParts || a.multiPart.totalParts < 2) actIssues.push('Multi-part enabled but totalParts invalid');
-            if (!a.multiPart.partNumber || a.multiPart.partNumber < 1) actIssues.push('Multi-part partNumber invalid');
-            var linked = (a.multiPart.partActivities || []).filter(Boolean);
-            if (linked.length === 0 && a.multiPart.partNumber > 1) actIssues.push('Part ' + a.multiPart.partNumber + ' has no linked prerequisite');
-            linked.forEach(function(pName) {
-                var pExists = storedActivities.some(function(p) { return p.name === pName; });
-                if (!pExists) actIssues.push('Multi-part linked activity "' + pName + '" not found');
-            });
+            if (!a.multiPart.totalParts || a.multiPart.totalParts < 2) actIssues.push('Multi-part enabled but totalParts < 2');
+            if (a.maxUsage && a.maxUsage < a.multiPart.totalParts) actIssues.push('maxUsage (' + a.maxUsage + ') < totalParts (' + a.multiPart.totalParts + ') — bunks will max out before completing all parts');
         }
         if (actIssues.length > 0) issues.push({ activity: a.name || '[index ' + idx + ']', issues: actIssues });
     });
@@ -1349,16 +1168,34 @@ window.diagnoseSpecialActivities = function() {
 };
 
 // =========================================================================
-// ★ v3.6: Multi-Part Special — Global Helpers for Scheduler Integration
+// ★ v3.7: Multi-Part Special — Global Helpers for Scheduler Integration
+// =========================================================================
+// Simple model: one activity, N parts. The system counts how many times
+// a bunk has done it. Part X = the Xth time. Can't do part X+1 before X.
+// Display: "Woodworking 2/3" means bunk's 2nd session out of 3 total.
 // =========================================================================
 
 /**
- * Check if a bunk has completed a specific activity on a previous day.
- * Used to verify prerequisite completion for multi-part chains.
+ * Count how many times a bunk has completed this activity on previous days.
  */
-window.hasBunkCompletedActivity = function(bunkName, activityName) {
-    if (!bunkName || !activityName) return false;
+window.getBunkCompletionCount = function(bunkName, activityName) {
+    if (!bunkName || !activityName) return 0;
+    var count = 0;
     try {
+        // Source 1: Historical counts (most reliable)
+        var global = window.loadGlobalSettings?.() || {};
+        var histCounts = global.historicalCounts || {};
+        if (histCounts[bunkName]?.[activityName] > 0) return histCounts[bunkName][activityName];
+
+        // Source 2: Rotation history
+        var rotHist = window.loadRotationHistory?.() || {};
+        var bunkHist = rotHist.bunks?.[bunkName];
+        if (bunkHist) {
+            var actHist = bunkHist.activities?.[activityName] || bunkHist[activityName];
+            if (actHist?.count > 0) return actHist.count;
+        }
+
+        // Source 3: Scan all past daily schedules
         var allDaily = window.loadAllDailyData?.() || {};
         var currentDate = window.currentScheduleDate || window.currentDate || '';
         var sortedDates = Object.keys(allDaily).sort();
@@ -1370,27 +1207,22 @@ window.hasBunkCompletedActivity = function(bunkName, activityName) {
             for (var j = 0; j < sched.length; j++) {
                 var entry = sched[j];
                 if (entry && !entry.continuation && (entry._activity === activityName || entry.field === activityName)) {
-                    return true;
+                    count++;
+                    break; // One per day max
                 }
             }
         }
-        var rotHist = window.loadRotationHistory?.() || {};
-        var bunkHist = rotHist.bunks?.[bunkName];
-        if (bunkHist) {
-            var actHist = bunkHist.activities?.[activityName] || bunkHist[activityName];
-            if (actHist && (actHist.count > 0 || actHist.lastDone)) return true;
-        }
-        var global = window.loadGlobalSettings?.() || {};
-        var histCounts = global.historicalCounts || {};
-        if (histCounts[bunkName]?.[activityName] > 0) return true;
     } catch (e) {
-        console.warn('[MultiPart] Error checking completion for ' + bunkName + ' / ' + activityName + ':', e);
+        console.warn('[MultiPart] Error counting completions for ' + bunkName + ':', e);
     }
-    return false;
+    return count;
 };
 
 // Backward compat alias
-window.hasBunkCompletedPart1 = window.hasBunkCompletedActivity;
+window.hasBunkCompletedPart1 = function(bunkName, activityName) {
+    return window.getBunkCompletionCount(bunkName, activityName) > 0;
+};
+window.hasBunkCompletedActivity = window.hasBunkCompletedPart1;
 
 /**
  * Get multi-part config for an activity (returns null if not multi-part).
@@ -1402,19 +1234,29 @@ window.getMultiPartConfig = function(activityName) {
 };
 
 /**
- * Check if a bunk is eligible for a special activity (respects multi-part prerequisites).
- * Part 1 → always eligible.
- * Part N (N>1) → must have completed Part N-1's linked activity.
+ * Check if a bunk is eligible for a special activity.
+ * For multi-part: bunk must not have completed all parts yet.
+ * The scheduler naturally won't double-assign on the same day (existing logic).
  */
 window.isBunkEligibleForSpecial = function(bunkName, activityName) {
     var mp = window.getMultiPartConfig?.(activityName);
-    if (!mp) return true;
-    if (mp.partNumber <= 1) return true;
-    // Need the activity linked as the previous part
-    var prevPartActivity = mp.partActivities?.[mp.partNumber - 2];
-    if (!prevPartActivity) return true; // Not linked yet, allow
-    return window.hasBunkCompletedActivity?.(bunkName, prevPartActivity) || false;
+    if (!mp) return true; // Not multi-part, always eligible
+    var completed = window.getBunkCompletionCount(bunkName, activityName);
+    if (completed >= mp.totalParts) return false; // All parts done
+    return true;
 };
 
-console.log("[SPECIAL_ACTIVITIES] Module v3.6 loaded (N-part multi-part support)");
+/**
+ * Get the display label for a bunk's next session of a multi-part activity.
+ * Returns "Woodworking 2/3" or null if not multi-part.
+ */
+window.getMultiPartDisplayLabel = function(bunkName, activityName) {
+    var mp = window.getMultiPartConfig?.(activityName);
+    if (!mp) return null;
+    var completed = window.getBunkCompletionCount(bunkName, activityName);
+    var nextPart = Math.min(completed + 1, mp.totalParts);
+    return activityName + ' ' + nextPart + '/' + mp.totalParts;
+};
+
+console.log("[SPECIAL_ACTIVITIES] Module v3.7 loaded (multi-part: single activity, N parts)");
 })();
