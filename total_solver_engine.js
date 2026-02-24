@@ -545,9 +545,25 @@
             if (hist + todayCount >= specialRule.maxUsage) return 999999;
         }
 
-        // ★ v3.5: Multi-Part gate — reject Part 2 if bunk hasn't done Part 1
+        // ★ v3.7: Multi-Part gate + follow-up urgency
         if (window.isBunkEligibleForSpecial && !window.isBunkEligibleForSpecial(bunk, act)) return 999999;
-
+        if (window.getMultiPartConfig && window.getBunkCompletionCount) {
+            var _mp = window.getMultiPartConfig(act);
+            if (_mp) {
+                var _done = window.getBunkCompletionCount(bunk, act);
+                var _total = _mp.totalParts || 2;
+                if (_done > 0 && _done % _total !== 0) {
+                    // Mid-cycle: bunk needs the next part
+                    var _gap = _mp.daysBetween || 3;
+                    var _daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, act, 0) ?? 0;
+                    if (_daysSince >= _gap) {
+                        // Past the gap — bonus + escalating penalty per overdue day
+                        var _overdue = _daysSince - _gap;
+                        penalty -= 15000 + (_overdue * 5000);
+                    }
+                }
+            }
+        }
         // ★★★ v15.0: RAINY DAY TIME-RULE CHECK ★★★
         // If it's a rainy day and this field has rainyDayAvailableAllDay, skip time rule rejection.
         // Otherwise, existing time-rule logic in domain building handles it.
