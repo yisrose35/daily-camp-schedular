@@ -1010,7 +1010,7 @@
         if (campers.length === 0 && total === 0) { tbody.innerHTML = html; if (empty) empty.style.display = 'block'; _restoreQAState(savedQA); return; }
         if (empty) empty.style.display = 'none';
 
-        html += campers.map(c => '<tr><td><span class="clickable" onclick="CampistryMe.editCamper(\'' + jsEsc(c.name) + '\')">' + esc(c.name) + '</span></td><td>' + (esc(c.division) || '—') + '</td><td>' + (esc(c.grade) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (esc(c.team) || '—') + '</td><td><button class="icon-btn danger" onclick="CampistryMe.deleteCamper(\'' + jsEsc(c.name) + '\')" aria-label="Delete camper"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2-2v2"/></svg></button></td></tr>').join('');
+        html += campers.map(c => '<tr><td><span class="clickable" onclick="CampistryMe.editCamper(\'' + jsEsc(c.name) + '\')">' + esc(c.name) + '</span></td><td>' + (esc(c.division) || '—') + '</td><td>' + (esc(c.grade) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (esc(c.team) || '—') + '</td><td><button class="icon-btn danger" onclick="CampistryMe.deleteCamper(\'' + jsEsc(c.name) + '\')" aria-label="Delete camper"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></td></tr>').join('');
         tbody.innerHTML = html;
         _restoreQAState(savedQA);
     }
@@ -1600,10 +1600,19 @@
     function showImportWarning() {
         if (!pendingCsvData.length) return;
 
-        const hasExistingStructure = Object.keys(structure).length > 0;
+        // Check if user has any real configuration that could be affected
+        const settings = readLocalSettings();
+        const app1 = settings.app1 || {};
+        const hasGrades = Object.keys(structure).some(d => Object.keys(structure[d]?.grades || {}).length > 0);
+        const hasFields = (app1.fields || []).length > 0;
+        const hasSkeletons = Object.keys(app1.savedSkeletons || {}).length > 0;
+        const hasLeagues = Object.keys(settings.leaguesByName || {}).length > 0;
+        const hasSpecialtyLeagues = Object.keys(settings.specialtyLeagues || {}).length > 0;
+        const hasCampers = Object.keys(camperRoster).length > 0;
+        const hasConfig = hasGrades || hasFields || hasSkeletons || hasLeagues || hasSpecialtyLeagues || hasCampers;
 
-        // If no existing structure, just import directly — nothing to warn about
-        if (!hasExistingStructure) {
+        // If nothing configured, just import directly — nothing to warn about
+        if (!hasConfig) {
             importCsv();
             return;
         }
@@ -1615,20 +1624,32 @@
 
         if (mode === 'replace') {
             warningText.innerHTML =
-                'You already have <strong>divisions, grades, and bunks</strong> set up in your camp structure.' +
+                'You already have <strong>divisions, grades, and bunks</strong> set up.' +
                 '<br><br>' +
-                '<strong>Replace</strong> will <strong>wipe everything</strong> &mdash; your entire roster, camp structure, field settings, master builder skeletons, league setups, and schedule configurations will be deleted and rebuilt from the file.' +
+                '<strong>Replace</strong> will wipe your entire camp structure and roster and rebuild it from the file.' +
                 '<br><br>' +
-                'Make sure your file has all the data you need before proceeding.';
+                'If the names in your file don\'t exactly match what you had before (for example, <strong>"1st Grade"</strong> vs <strong>"1"</strong>, or <strong>"Junior Boys"</strong> vs <strong>"Juniors"</strong>), ' +
+                'the following will need to be reconfigured:' +
+                '<ul style="margin: 0.5rem 0 0 1.25rem; padding: 0;">' +
+                '<li>Field access &amp; priority settings</li>' +
+                '<li>Master builder skeletons</li>' +
+                '<li>League &amp; specialty league setups</li>' +
+                '<li>Schedule configurations</li>' +
+                '</ul>';
         } else {
             warningText.innerHTML =
-                'You already have <strong>divisions, grades, and bunks</strong> set up in your camp structure.' +
+                'You already have <strong>divisions, grades, and bunks</strong> set up.' +
                 '<br><br>' +
-                'Make sure your import file uses the <strong>exact same names</strong> for divisions, grades, and bunks as your existing structure. ' +
-                'For example, if you set up <strong>"1st Grade"</strong>, use "1st Grade" in the file &mdash; not just "1". ' +
-                'If a division is called <strong>"Junior Boys"</strong>, don\'t shorten it to "Juniors".' +
+                '<strong>Update</strong> will add new campers and update existing ones. Your structure stays intact.' +
                 '<br><br>' +
-                'Mismatched names may cause field settings, schedules, and leagues to need reconfiguring.';
+                'However, if the names in your file don\'t exactly match your existing structure (for example, <strong>"1st Grade"</strong> vs <strong>"1"</strong>, or <strong>"Junior Boys"</strong> vs <strong>"Juniors"</strong>), ' +
+                'new divisions or grades may be created and the following may need to be reconfigured:' +
+                '<ul style="margin: 0.5rem 0 0 1.25rem; padding: 0;">' +
+                '<li>Field access &amp; priority settings</li>' +
+                '<li>Master builder skeletons</li>' +
+                '<li>League &amp; specialty league setups</li>' +
+                '<li>Schedule configurations</li>' +
+                '</ul>';
         }
 
         warningModal.style.display = 'flex';
