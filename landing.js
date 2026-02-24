@@ -166,6 +166,15 @@ function updateUIForLoggedInState(user) {
     const navActionsLoggedIn = document.getElementById('navActionsLoggedIn');
     if (navActions) navActions.style.display = 'none';
     if (navActionsLoggedIn) navActionsLoggedIn.style.display = 'flex';
+
+    // ★ v3.2 FIX: Auto-redirect authenticated users to dashboard
+    // If user has a camp, they should NEVER sit on the landing page
+    const cachedCampId = localStorage.getItem('campistry_camp_id');
+    if (cachedCampId) {
+        console.log('[Landing] Authenticated user with camp detected — redirecting to dashboard');
+        window.location.href = 'dashboard.html';
+        return;
+    }
 }
 
 function updateUIForLoggedOutState() {
@@ -676,6 +685,16 @@ if (authMode === 'signup' && data?.user && !data?.session) {
     }
 
     async function checkSession() {
+        // ★ v3.2 FIX: Fast-check localStorage BEFORE waiting for Supabase
+        // If user has cached auth + camp, redirect immediately to dashboard
+        const cachedUserId = localStorage.getItem('campistry_auth_user_id');
+        const cachedCampId = localStorage.getItem('campistry_camp_id');
+        if (cachedUserId && cachedCampId) {
+            console.log('[Landing] checkSession: cached auth found — redirecting to dashboard');
+            window.location.href = 'dashboard.html';
+            return;
+        }
+
         const supabase = getSupabase();
         if (!supabase) { updateUIForLoggedOutState(); return; }
         try {
@@ -689,7 +708,14 @@ if (authMode === 'signup' && data?.user && !data?.session) {
         const supabase = getSupabase();
         if (!supabase) { setTimeout(setupAuthListener, 500); return; }
         supabase.auth.onAuthStateChange((event, session) => {
-            if (event === 'SIGNED_IN' && session?.user) {
+           if (event === 'SIGNED_IN' && session?.user) {
+                // ★ v3.2: If user already has a camp, go straight to dashboard
+                const cachedCampId = localStorage.getItem('campistry_camp_id');
+                if (cachedCampId) {
+                    console.log('[Landing] Auth listener: signed-in user has camp — redirecting to dashboard');
+                    window.location.href = 'dashboard.html';
+                    return;
+                }
                 updateUIForLoggedInState(session.user);
             } else if (event === 'SIGNED_OUT') {
                 updateUIForLoggedOutState();
