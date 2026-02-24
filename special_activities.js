@@ -1,7 +1,8 @@
-
 // ============================================================================
-// special_activities.js — PRODUCTION-READY v3.4
+// special_activities.js — PRODUCTION-READY v3.5
 // ============================================================================
+// v3.5: 2-Part Special support — multi-session activities across days
+// v3.4: Nested accordion layout
 // v3.2: Visual parity with fields.js — setup-card layout, SVG accordions,
 //       availability strip, scoped list/switch styles, toggle sharing pattern
 // v3.1: Teal theme unification, prep duration, field loading fix
@@ -16,7 +17,7 @@
 (function() {
 'use strict';
 
-console.log("[SPECIAL_ACTIVITIES] Module v3.4 loading...");
+console.log("[SPECIAL_ACTIVITIES] Module v3.5 loading...");
 
 let specialActivities = [];
 let rainyDayActivities = [];
@@ -150,7 +151,15 @@ function validateSpecialActivity(activity, activityName) {
         location: activity.location || null, isIndoor, rainyDayAvailable: isIndoor, availableOnRainyDay: isIndoor,
        ...(activity.rainyDayCapacity > 0 ? { rainyDayCapacity: parseInt(activity.rainyDayCapacity, 10) } : {}),
         ...(activity.rainyDayAvailableAllDay === true ? { rainyDayAvailableAllDay: true } : {}),
-        fullGrade: activity.fullGrade === true
+        fullGrade: activity.fullGrade === true,
+        // ★ v3.5: Multi-Part Special support
+        multiPart: activity.multiPart && typeof activity.multiPart === 'object' ? {
+            enabled: activity.multiPart.enabled === true,
+            partNumber: [1,2].includes(activity.multiPart.partNumber) ? activity.multiPart.partNumber : 1,
+            partnerActivity: typeof activity.multiPart.partnerActivity === 'string' ? activity.multiPart.partnerActivity : '',
+            part1Label: typeof activity.multiPart.part1Label === 'string' ? activity.multiPart.part1Label : '',
+            part2Label: typeof activity.multiPart.part2Label === 'string' ? activity.multiPart.part2Label : ''
+        } : { enabled: false, partNumber: 1, partnerActivity: '', part1Label: '', part2Label: '' }
     };
 }
 
@@ -159,7 +168,8 @@ function createDefaultActivity(name) {
         limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
         maxUsage: null, maxUsagePeriod: 'half', frequencyWeeks: 0, rainyDayExclusive: false, prepDuration: 0,
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
-        rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false };
+        rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
+        multiPart: { enabled: false, partNumber: 1, partnerActivity: '', part1Label: '', part2Label: '' } };
 }
 
 function validateAllActivities(activities) { if (!Array.isArray(activities)) return []; return activities.map(a => validateSpecialActivity(a, a?.name)); }
@@ -319,6 +329,13 @@ function createMasterListItem(item, isRainyDay) {
     el.onclick = () => { selectedItemId = id; renderMasterList(); renderRainyDayList(); renderDetailPane(); };
     const infoDiv = document.createElement("div");
     const nameEl = document.createElement("div"); nameEl.className = "list-item-name"; nameEl.textContent = item.name;
+    // ★ v3.5: Show multi-part badge in master list
+    if (item.multiPart?.enabled) {
+        const mpBadge = document.createElement("span");
+        mpBadge.style.cssText = "display:inline-flex; align-items:center; gap:3px; font-size:0.65rem; padding:2px 6px; border-radius:999px; margin-left:6px; color:#6b21a8; background:#f3e8ff;";
+        mpBadge.textContent = "Part " + (item.multiPart.partNumber || 1);
+        nameEl.appendChild(mpBadge);
+    }
     if (isRainyDay) { const b = document.createElement("span"); b.className = "rainy-badge"; b.textContent = "Rainy Only"; nameEl.appendChild(b); }
     infoDiv.appendChild(nameEl); el.appendChild(infoDiv);
     const tog = document.createElement("label"); tog.className = "switch list-item-toggle"; tog.onclick = e => e.stopPropagation();
@@ -393,6 +410,8 @@ function renderDetailPane() {
         if (specialActivities.some(s => s !== item && s.name.toLowerCase() === newName.toLowerCase()) || rainyDayActivities.some(s => s !== item && s.name.toLowerCase() === newName.toLowerCase())) { alert('Already exists.'); return; }
         item.name = newName; selectedItemId = 'special-' + newName;
         propagateSpecialActivityRename(oldName, newName);
+        // ★ v3.5: Also update partner activity references when renaming
+        propagateMultiPartRename(oldName, newName);
         saveData(); renderMasterList(); renderRainyDayList(); renderDetailPane();
     });
     titleContainer.appendChild(title);
@@ -408,6 +427,8 @@ function renderDetailPane() {
         if (window.AccessControl?.canEraseData && !window.AccessControl.canEraseData()) { window.AccessControl?.showPermissionDenied?.('delete special activities'); return; }
         if (!window.AccessControl?.checkSetupAccess?.('delete special activities')) return;
         if (confirm('Delete "' + item.name + '"?\n\nThis will also remove references from all schedules.')) {
+            // ★ v3.5: Unlink partner before deleting
+            cleanupMultiPartLink(item);
             cleanupDeletedSpecialActivity(item.name);
             if (isRainyDayItem) rainyDayActivities = rainyDayActivities.filter(s => s.name !== item.name);
             else specialActivities = specialActivities.filter(s => s.name !== item.name);
@@ -436,11 +457,12 @@ function renderDetailPane() {
     if (!isRainyDayItem) timeWeatherSections.push(section("Weather & Availability", summaryWeather(item), () => renderWeatherSettings(item)));
     detailPaneEl.appendChild(sectionGroup("Time & Weather", "When this special can be scheduled", timeWeatherSections));
 
-    // Group 3: Rotation Rules — usage limit + full grade + prep duration
-    detailPaneEl.appendChild(sectionGroup("Rotation Rules", "Limits, full-grade mode & prep time", [
+    // Group 3: Rotation Rules — usage limit + full grade + prep duration + multi-part
+    detailPaneEl.appendChild(sectionGroup("Rotation Rules", "Limits, timing & scheduling mode", [
         section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
         section("Full Grade", summaryFullGrade(item), () => renderFullGradeSettings(item)),
-        section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item))
+        section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)),
+        section("2-Part Special", summaryMultiPart(item), () => renderMultiPartSettings(item))
     ]));
 }
 
@@ -467,6 +489,15 @@ function summaryWeather(item) {
     return s;
 }
 function summaryLocation(item) { return item.location || "No field assigned"; }
+
+// ★ v3.5: Multi-Part summary
+function summaryMultiPart(item) {
+    if (!item.multiPart?.enabled) return 'Single session';
+    var pn = item.multiPart.partNumber || 1;
+    var label = pn === 1 ? (item.multiPart.part1Label || 'Part 1') : (item.multiPart.part2Label || 'Part 2');
+    var partner = item.multiPart.partnerActivity;
+    return label + (partner ? ' \u2192 ' + partner : '');
+}
 
 // =========================================================================
 // RENDER: Full Grade Settings
@@ -805,7 +836,6 @@ function renderWeatherSettings(item) {
     const container = document.createElement("div");
     const isIndoor = item.isIndoor === true;
     const updateSummary = () => { const s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if(s) s.textContent = summaryWeather(item); };
-    // Indoor/Outdoor toggle section
     const indoorHtml = '<div style="margin-bottom:16px;">'
         + '<p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Mark as indoor to keep available during Rainy Day Mode.</p>'
         + '<div style="display:flex; align-items:center; gap:12px; padding:14px; background:' + (isIndoor ? '#e6f4f7' : '#fef3c7') + '; border:1px solid ' + (isIndoor ? '#b2dce6' : '#fcd34d') + '; border-radius:10px;">'
@@ -816,7 +846,6 @@ function renderWeatherSettings(item) {
         + '</div>'
         + '<label class="switch"><input type="checkbox" id="weather-toggle" ' + (isIndoor ? 'checked' : '') + '><span class="slider"></span></label>'
         + '</div></div>';
-    // Rainy Day Overrides section (capacity + time bypass) — matches fields.js
     const regularCapacity = parseInt(item.sharableWith?.capacity) || 1;
     const hasTimeRules = (item.timeRules || []).length > 0;
     const overridesHtml = '<div style="margin-top:20px; padding-top:16px; border-top:1px solid #e5e7eb;">'
@@ -824,7 +853,6 @@ function renderWeatherSettings(item) {
         + '<span style="font-size:1.1rem;">\uD83C\uDF27\uFE0F</span>'
         + '<div style="font-weight:600; font-size:0.95rem; color:#1e293b;">Rainy Day Overrides</div>'
         + '</div>'
-        // Capacity Override
         + '<div style="background:#f0f9ff; border:1px solid #bae6fd; border-radius:10px; padding:14px; margin-bottom:12px;">'
         + '<div style="font-weight:600; font-size:0.9rem; color:#0c4a6e; margin-bottom:8px;">'
         + '\uD83D\uDCCA Capacity Override'
@@ -837,7 +865,6 @@ function renderWeatherSettings(item) {
         + '</div>'
         + '<div style="font-size:0.75rem; color:#64748b; margin-top:6px;">Leave empty = use regular capacity.</div>'
         + '</div>'
-        // Ignore Time Restrictions
         + '<div style="background:#fefce8; border:1px solid #fde68a; border-radius:10px; padding:14px;">'
         + '<div style="display:flex; align-items:center; justify-content:space-between;">'
         + '<div>'
@@ -848,7 +875,6 @@ function renderWeatherSettings(item) {
         + '</div></div>'
         + '</div>';
     container.innerHTML = indoorHtml + overridesHtml;
-    // Bind indoor toggle
     const tog = container.querySelector('#weather-toggle');
     if (tog) {
         tog.onchange = function() {
@@ -862,7 +888,6 @@ function renderWeatherSettings(item) {
             renderMasterList();
         };
     }
-    // Bind capacity override
     const capInput = container.querySelector('#rainy-day-capacity-input');
     if (capInput) {
         capInput.addEventListener('change', function() {
@@ -884,7 +909,6 @@ function renderWeatherSettings(item) {
             updateSummary();
         });
     }
-    // Bind all-day toggle
     const allDayTog = container.querySelector('#rainy-day-all-day-toggle');
     if (allDayTog) {
         allDayTog.addEventListener('change', function() {
@@ -907,6 +931,243 @@ function renderPrepDurationSettings(item) {
     return container;
 }
 
+// =========================================================================
+// ★ v3.5: RENDER Multi-Part Special Settings
+// =========================================================================
+function renderMultiPartSettings(item) {
+    var container = document.createElement("div");
+    container.style.cssText = "padding:16px;";
+
+    var mp = item.multiPart || { enabled: false, partNumber: 1, partnerActivity: '', part1Label: '', part2Label: '' };
+    var isEnabled = mp.enabled === true;
+
+    // Description
+    var desc = document.createElement("p");
+    desc.style.cssText = "font-size:0.8rem; color:#6B7280; margin:0 0 14px 0; line-height:1.5;";
+    desc.innerHTML = 'A <strong>2-part special</strong> has two sessions across different days. Example: <strong>Woodworking</strong> = Part 1 (Cutting) then Part 2 (Painting). The scheduler will only assign Part 2 to bunks that have already completed Part 1.';
+    container.appendChild(desc);
+
+    // Toggle
+    var toggleRow = document.createElement("div");
+    toggleRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:14px;";
+    var tog = document.createElement("label"); tog.className = "switch";
+    var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = isEnabled; cb.id = "multipart-toggle";
+    var sl = document.createElement("span"); sl.className = "slider";
+    tog.appendChild(cb); tog.appendChild(sl);
+    var toggleLabel = document.createElement("span");
+    toggleLabel.style.cssText = "font-weight:500; font-size:0.9rem;";
+    toggleLabel.textContent = "Enable 2-Part Special";
+    toggleRow.appendChild(tog); toggleRow.appendChild(toggleLabel);
+    container.appendChild(toggleRow);
+
+    // Config panel (shown when enabled)
+    var configPanel = document.createElement("div");
+    configPanel.id = "multipart-config";
+    configPanel.style.display = isEnabled ? "block" : "none";
+
+    // Part number radio
+    var partRow = document.createElement("div");
+    partRow.style.cssText = "display:flex; gap:12px; margin-bottom:14px;";
+    [1, 2].forEach(function(num) {
+        var label = document.createElement("label");
+        label.style.cssText = "display:flex; align-items:center; gap:6px; padding:10px 16px; border-radius:8px; cursor:pointer; border:2px solid " + (mp.partNumber === num ? "#147D91" : "#E5E7EB") + "; background:" + (mp.partNumber === num ? "#e6f4f7" : "#fff") + "; flex:1; transition:all 0.15s;";
+        var radio = document.createElement("input");
+        radio.type = "radio"; radio.name = "multipart-num-" + item.name; radio.value = num; radio.checked = (mp.partNumber === num);
+        radio.style.accentColor = "#147D91";
+        radio.onchange = function() {
+            mp.partNumber = num;
+            item.multiPart = mp;
+            saveData();
+            renderMultiPartInner();
+            updatePartStyles();
+            var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+            if (s) s.textContent = summaryMultiPart(item);
+        };
+        var txt = document.createElement("div");
+        txt.innerHTML = '<div style="font-weight:600; font-size:0.9rem;">This is Part ' + num + '</div><div style="font-size:0.75rem; color:#6B7280;">' + (num === 1 ? 'Scheduled first (e.g., Cutting)' : 'Requires Part 1 completion') + '</div>';
+        label.appendChild(radio); label.appendChild(txt);
+        label.dataset.partNum = num;
+        partRow.appendChild(label);
+    });
+    configPanel.appendChild(partRow);
+
+    function updatePartStyles() {
+        partRow.querySelectorAll('label').forEach(function(lbl) {
+            var n = parseInt(lbl.dataset.partNum);
+            lbl.style.borderColor = (mp.partNumber === n) ? "#147D91" : "#E5E7EB";
+            lbl.style.background = (mp.partNumber === n) ? "#e6f4f7" : "#fff";
+        });
+    }
+
+    // Inner config (labels + partner)
+    var innerConfig = document.createElement("div");
+    innerConfig.id = "multipart-inner";
+    configPanel.appendChild(innerConfig);
+    container.appendChild(configPanel);
+
+    function renderMultiPartInner() {
+        innerConfig.innerHTML = '';
+
+        // Part labels
+        var labelsGrid = document.createElement("div");
+        labelsGrid.style.cssText = "display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px;";
+
+        var label1Wrap = document.createElement("div");
+        label1Wrap.innerHTML = '<label style="font-size:0.8rem; font-weight:500; color:#374151; display:block; margin-bottom:4px;">Part 1 Label</label>';
+        var inp1 = document.createElement("input");
+        inp1.type = "text"; inp1.placeholder = "e.g., Cutting"; inp1.value = mp.part1Label || '';
+        inp1.style.cssText = "width:100%; box-sizing:border-box; padding:8px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem;";
+        inp1.onchange = function() { mp.part1Label = this.value.trim(); item.multiPart = mp; syncLabelsToPartner(); saveData(); updateSummaryText(); };
+        label1Wrap.appendChild(inp1);
+
+        var label2Wrap = document.createElement("div");
+        label2Wrap.innerHTML = '<label style="font-size:0.8rem; font-weight:500; color:#374151; display:block; margin-bottom:4px;">Part 2 Label</label>';
+        var inp2 = document.createElement("input");
+        inp2.type = "text"; inp2.placeholder = "e.g., Painting"; inp2.value = mp.part2Label || '';
+        inp2.style.cssText = "width:100%; box-sizing:border-box; padding:8px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem;";
+        inp2.onchange = function() { mp.part2Label = this.value.trim(); item.multiPart = mp; syncLabelsToPartner(); saveData(); updateSummaryText(); };
+        label2Wrap.appendChild(inp2);
+
+        labelsGrid.appendChild(label1Wrap); labelsGrid.appendChild(label2Wrap);
+        innerConfig.appendChild(labelsGrid);
+
+        // Partner activity dropdown
+        var partnerWrap = document.createElement("div");
+        partnerWrap.style.cssText = "margin-bottom:14px;";
+        partnerWrap.innerHTML = '<label style="font-size:0.8rem; font-weight:500; color:#374151; display:block; margin-bottom:4px;">' + (mp.partNumber === 1 ? 'Linked Part 2 Activity' : 'Linked Part 1 Activity (prerequisite)') + '</label>';
+
+        var select = document.createElement("select");
+        select.style.cssText = "width:100%; padding:8px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; background:#fff;";
+
+        var opt0 = document.createElement("option"); opt0.value = ""; opt0.textContent = "\u2014 Select partner activity \u2014"; select.appendChild(opt0);
+
+        // List all other specials as candidates
+        var allSpecials = [...specialActivities, ...rainyDayActivities].filter(function(s) { return s.name !== item.name; });
+        allSpecials.forEach(function(s) {
+            var opt = document.createElement("option");
+            opt.value = s.name; opt.textContent = s.name;
+            if (mp.partnerActivity === s.name) opt.selected = true;
+            select.appendChild(opt);
+        });
+
+        select.onchange = function() {
+            var oldPartner = mp.partnerActivity;
+            mp.partnerActivity = this.value;
+            item.multiPart = mp;
+
+            // ★ Auto-link: update the partner activity to point back
+            if (this.value) {
+                var partner = specialActivities.find(function(s) { return s.name === mp.partnerActivity; })
+                    || rainyDayActivities.find(function(s) { return s.name === mp.partnerActivity; });
+                if (partner) {
+                    if (!partner.multiPart || typeof partner.multiPart !== 'object') {
+                        partner.multiPart = { enabled: false, partNumber: 1, partnerActivity: '', part1Label: '', part2Label: '' };
+                    }
+                    partner.multiPart.enabled = true;
+                    partner.multiPart.partNumber = mp.partNumber === 1 ? 2 : 1;
+                    partner.multiPart.partnerActivity = item.name;
+                    partner.multiPart.part1Label = mp.part1Label;
+                    partner.multiPart.part2Label = mp.part2Label;
+                    console.log('[MultiPart] Auto-linked ' + partner.name + ' as Part ' + partner.multiPart.partNumber);
+                }
+            }
+
+            // Clear old partner's link if it pointed to us
+            if (oldPartner && oldPartner !== mp.partnerActivity) {
+                var oldP = specialActivities.find(function(s) { return s.name === oldPartner; })
+                    || rainyDayActivities.find(function(s) { return s.name === oldPartner; });
+                if (oldP && oldP.multiPart?.partnerActivity === item.name) {
+                    oldP.multiPart.enabled = false;
+                    oldP.multiPart.partnerActivity = '';
+                    console.log('[MultiPart] Unlinked old partner: ' + oldPartner);
+                }
+            }
+
+            saveData();
+            renderMultiPartInner();
+            updateSummaryText();
+        };
+
+        partnerWrap.appendChild(select);
+        innerConfig.appendChild(partnerWrap);
+
+        // Info box
+        var info = document.createElement("div");
+        info.style.cssText = "padding:10px 14px; border-radius:8px; font-size:0.8rem; line-height:1.5;";
+        if (mp.partNumber === 1) {
+            info.style.background = "#e6f4f7"; info.style.border = "1px solid #b2dce6"; info.style.color = "#0A4A56";
+            info.innerHTML = '\uD83D\uDCCB <strong>Part 1</strong> \u2014 This activity will be scheduled normally. Once a bunk completes it, they become eligible for the linked Part 2.' + (mp.partnerActivity ? '<br>Linked to: <strong>' + escapeHtml(mp.partnerActivity) + '</strong>' : '');
+        } else {
+            info.style.background = "#fef3c7"; info.style.border = "1px solid #fcd34d"; info.style.color = "#92400e";
+            info.innerHTML = '\u26A0\uFE0F <strong>Part 2</strong> \u2014 The scheduler will <strong>only</strong> assign this to bunks that have already done <strong>' + escapeHtml(mp.partnerActivity || '(select Part 1)') + '</strong> on a previous day.';
+        }
+        innerConfig.appendChild(info);
+    }
+
+    function syncLabelsToPartner() {
+        if (!mp.partnerActivity) return;
+        var partner = specialActivities.find(function(s) { return s.name === mp.partnerActivity; })
+            || rainyDayActivities.find(function(s) { return s.name === mp.partnerActivity; });
+        if (partner && partner.multiPart) {
+            partner.multiPart.part1Label = mp.part1Label;
+            partner.multiPart.part2Label = mp.part2Label;
+        }
+    }
+
+    function updateSummaryText() {
+        var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (s) s.textContent = summaryMultiPart(item);
+    }
+
+    // Toggle handler
+    cb.onchange = function() {
+        isEnabled = this.checked;
+        mp.enabled = isEnabled;
+        if (!isEnabled) {
+            // Clear partner link
+            cleanupMultiPartLink(item);
+            mp.partNumber = 1; mp.partnerActivity = ''; mp.part1Label = ''; mp.part2Label = '';
+        }
+        item.multiPart = mp;
+        configPanel.style.display = isEnabled ? "block" : "none";
+        if (isEnabled) renderMultiPartInner();
+        saveData();
+        updateSummaryText();
+        renderMasterList(); renderRainyDayList();
+    };
+
+    if (isEnabled) renderMultiPartInner();
+    return container;
+}
+
+// =========================================================================
+// ★ v3.5: Multi-Part Helper Functions
+// =========================================================================
+function cleanupMultiPartLink(item) {
+    if (!item.multiPart?.partnerActivity) return;
+    var oldPartner = specialActivities.find(function(s) { return s.name === item.multiPart.partnerActivity; })
+        || rainyDayActivities.find(function(s) { return s.name === item.multiPart.partnerActivity; });
+    if (oldPartner && oldPartner.multiPart?.partnerActivity === item.name) {
+        oldPartner.multiPart.enabled = false;
+        oldPartner.multiPart.partnerActivity = '';
+        console.log('[MultiPart] Cleaned up partner link on: ' + oldPartner.name);
+    }
+}
+
+function propagateMultiPartRename(oldName, newName) {
+    if (!oldName || !newName || oldName === newName) return;
+    // Update any activity that has us as a partner
+    [...specialActivities, ...rainyDayActivities].forEach(function(s) {
+        if (s.multiPart?.partnerActivity === oldName) {
+            s.multiPart.partnerActivity = newName;
+            console.log('[MultiPart] Updated partner reference on ' + s.name + ': ' + oldName + ' -> ' + newName);
+        }
+    });
+}
+
+// =========================================================================
+// Add/Delete, Cleanup, Helpers
+// =========================================================================
 function addSpecial() { if(!window.AccessControl?.checkSetupAccess?.('add special activities'))return; if(!addSpecialInput)return; const n=addSpecialInput.value.trim(); if(!n)return; if(specialActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())||rainyDayActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())){alert("Already exists.");return;} specialActivities.push(createDefaultActivity(n)); addSpecialInput.value=""; saveData(); selectedItemId='special-'+n; renderMasterList(); renderRainyDayList(); renderDetailPane(); }
 function addRainyDayActivity() { if(!window.AccessControl?.checkSetupAccess?.('add rainy day activities'))return; if(!addRainyDayInput)return; const n=addRainyDayInput.value.trim(); if(!n)return; if(specialActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())||rainyDayActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())){alert("Already exists.");return;} const a=createDefaultActivity(n); a.rainyDayExclusive=true; a.rainyDayOnly=true; a.isIndoor=true; rainyDayActivities.push(a); addRainyDayInput.value=""; saveData(); selectedItemId='special-'+n; renderMasterList(); renderRainyDayList(); renderDetailPane(); }
 
@@ -1001,6 +1262,14 @@ window.diagnoseSpecialActivities = function() {
         if (!Array.isArray(a.timeRules)) { actIssues.push('timeRules not array'); }
         else { a.timeRules.forEach(function(rule, rIdx) { if (rule.startMin === undefined) actIssues.push('timeRules[' + rIdx + '].startMin missing'); if (rule.endMin === undefined) actIssues.push('timeRules[' + rIdx + '].endMin missing'); }); }
         if (a.isIndoor === undefined && !a.rainyDayExclusive && !a.rainyDayOnly) actIssues.push('isIndoor property missing (will default to true)');
+        // ★ v3.5: Check multi-part consistency
+        if (a.multiPart?.enabled) {
+            if (!a.multiPart.partnerActivity) actIssues.push('Multi-part enabled but no partner activity linked');
+            else {
+                var partnerExists = storedActivities.some(function(p) { return p.name === a.multiPart.partnerActivity; });
+                if (!partnerExists) actIssues.push('Multi-part partner "' + a.multiPart.partnerActivity + '" not found');
+            }
+        }
         if (actIssues.length > 0) issues.push({ activity: a.name || '[index ' + idx + ']', issues: actIssues });
     });
     if (issues.length === 0) { console.log('\nAll special activities have valid structure!'); }
@@ -1011,5 +1280,69 @@ window.diagnoseSpecialActivities = function() {
     return { activities: storedActivities.length, issues: issues.length };
 };
 
-console.log("[SPECIAL_ACTIVITIES] Module v3.4 loaded");
+// =========================================================================
+// ★ v3.5: Multi-Part Special — Global Helpers for Scheduler Integration
+// =========================================================================
+
+/**
+ * Check if a bunk has completed Part 1 of a multi-part special on a previous day.
+ * Used by the solver and smart_logic_adapter to gate Part 2 assignments.
+ */
+window.hasBunkCompletedPart1 = function(bunkName, part1ActivityName) {
+    if (!bunkName || !part1ActivityName) return false;
+    try {
+        var allDaily = window.loadAllDailyData?.() || {};
+        var currentDate = window.currentScheduleDate || window.currentDate || '';
+        var sortedDates = Object.keys(allDaily).sort();
+        for (var i = 0; i < sortedDates.length; i++) {
+            var dateKey = sortedDates[i];
+            if (currentDate && dateKey >= currentDate) continue; // Only past days
+            var sched = allDaily[dateKey]?.scheduleAssignments?.[bunkName];
+            if (!Array.isArray(sched)) continue;
+            for (var j = 0; j < sched.length; j++) {
+                var entry = sched[j];
+                if (entry && !entry.continuation && (entry._activity === part1ActivityName || entry.field === part1ActivityName)) {
+                    return true;
+                }
+            }
+        }
+        // Also check rotation history
+        var rotHist = window.loadRotationHistory?.() || {};
+        var bunkHist = rotHist.bunks?.[bunkName];
+        if (bunkHist) {
+            var actHist = bunkHist.activities?.[part1ActivityName] || bunkHist[part1ActivityName];
+            if (actHist && (actHist.count > 0 || actHist.lastDone)) return true;
+        }
+        // Check historical counts
+        var global = window.loadGlobalSettings?.() || {};
+        var histCounts = global.historicalCounts || {};
+        if (histCounts[bunkName]?.[part1ActivityName] > 0) return true;
+    } catch (e) {
+        console.warn('[MultiPart] Error checking Part 1 completion for ' + bunkName + ':', e);
+    }
+    return false;
+};
+
+/**
+ * Get multi-part config for an activity (returns null if not multi-part).
+ */
+window.getMultiPartConfig = function(activityName) {
+    var special = window.getSpecialActivityByName?.(activityName);
+    if (!special?.multiPart?.enabled) return null;
+    return special.multiPart;
+};
+
+/**
+ * Check if a bunk is eligible for a special activity (respects multi-part prerequisites).
+ * Returns true if not multi-part, or if Part 1, or if Part 2 and bunk has done Part 1.
+ */
+window.isBunkEligibleForSpecial = function(bunkName, activityName) {
+    var mp = window.getMultiPartConfig?.(activityName);
+    if (!mp) return true;
+    if (mp.partNumber !== 2) return true;
+    if (!mp.partnerActivity) return true;
+    return window.hasBunkCompletedPart1?.(bunkName, mp.partnerActivity) || false;
+};
+
+console.log("[SPECIAL_ACTIVITIES] Module v3.5 loaded");
 })();
