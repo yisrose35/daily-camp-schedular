@@ -685,6 +685,17 @@ function renderSportRulesSection() {
         };
     }
 }
+    function renderFieldQualitySection() {
+    // ... the whole function
+}
+
+function renderFieldGroupsList() {
+    // ... the whole function
+}
+
+function renderGroupEditor(groupName, existingMembers) {
+    // ... the whole function
+}
 
 //------------------------------------------------------------------
 // LEFT LIST
