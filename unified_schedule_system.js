@@ -2095,7 +2095,7 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
         if (leagueInfo.matchups?.length > 0) {
             html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
             leagueInfo.matchups.forEach(m => {
-                let matchText = typeof m === 'string' ? m : m.display || (m.teamA && m.teamB ? `${m.teamA} vs ${m.teamB}${m.field ? ` @ ${m.field}` : ''}` : (m.team1 && m.team2 ? `${m.team1} vs ${m.team2}` : (m.matchup || JSON.stringify(m))));
+               let matchText = typeof m === 'string' ? m : (m.teamA && m.teamB ? `${m.teamA} vs ${m.teamB}${m.sport || m.field ? ' - ' : ''}${m.sport ? m.sport.charAt(0).toUpperCase() + m.sport.slice(1) : ''}${m.field ? ' (' + m.field + ')' : ''}` : m.display || (m.team1 && m.team2 ? `${m.team1} vs ${m.team2}` : (m.matchup || JSON.stringify(m))));
                 html += `<div style="background: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #1e3a5f; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">${escapeHtml(matchText)}</div>`;
             });
             html += '</div>';
