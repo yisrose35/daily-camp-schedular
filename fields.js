@@ -94,7 +94,7 @@ function initFieldsTab(){
 
     document.getElementById("add-field-btn").onclick = addField;
     addFieldInput.onkeyup = e => { if(e.key === "Enter") addField(); };
-
+renderSportRulesSection();
    renderFieldQualitySection();
     renderMasterLists();
     renderDetailPane();
