@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -921,11 +920,24 @@
         </div>
 
         <!-- ===================== STRUCTURE TAB ===================== -->
+        <!-- ★ UPDATED: Template/Import/Export buttons moved here from Campers tab -->
         <div id="tab-structure" class="tab-content active" role="tabpanel">
             <div class="action-bar">
                 <button class="btn btn-primary" id="addDivisionBtn">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                     Add Division
+                </button>
+                <button class="btn btn-secondary" id="downloadTemplateBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg>
+                    Template
+                </button>
+                <button class="btn btn-secondary" id="importCsvBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Import
+                </button>
+                <button class="btn btn-secondary" id="exportCsvBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    Export
                 </button>
                 <div class="action-spacer"></div>
                 <button class="btn btn-ghost btn-sm" id="expandAllBtn">Expand All</button>
@@ -942,20 +954,9 @@
         </div>
 
         <!-- ===================== CAMPERS TAB ===================== -->
+        <!-- ★ UPDATED: Buttons removed (moved to Structure tab), just search + clear -->
         <div id="tab-campers" class="tab-content" role="tabpanel">
             <div class="action-bar">
-                <button class="btn btn-secondary" id="downloadTemplateBtn">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg>
-                    Template
-                </button>
-                <button class="btn btn-secondary" id="importCsvBtn">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                    Import CSV
-                </button>
-                <button class="btn btn-secondary" id="exportCsvBtn">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                    Export CSV
-                </button>
                 <input type="text" class="search-input" id="searchInput" placeholder="Search campers..." aria-label="Search campers">
                 <div class="action-spacer"></div>
                 <button class="btn btn-danger btn-sm" id="clearAllBtn">Clear All</button>
@@ -981,7 +982,7 @@
                 <div class="empty-state" id="campersEmptyState" style="display:none;">
                     <div class="empty-state-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div>
                     <h3>No campers yet</h3>
-                    <p>Add campers using the row above or import from CSV</p>
+                    <p>Add campers using the row above or import a file</p>
                 </div>
             </div>
         </div>
@@ -1053,28 +1054,35 @@
     </div>
 </div>
 
-<!-- CSV Modal -->
+<!-- ★ UPDATED: Import Modal — now supports CSV + Excel, has import mode selector -->
 <div class="modal-overlay" id="csvModal" role="dialog" aria-modal="true">
-    <div class="modal" style="max-width: 520px;">
+    <div class="modal" style="max-width: 560px;">
         <div class="modal-header">
-            <h3>Import from CSV</h3>
+            <h3>Import Camper Data</h3>
             <button class="modal-close" onclick="CampistryMe.closeModal('csvModal')" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div class="modal-body">
-            <div class="csv-dropzone" id="csvDropzone" tabindex="0" role="button" aria-label="Drop CSV file here or click to browse">
+            <div class="csv-dropzone" id="csvDropzone" tabindex="0" role="button" aria-label="Drop file here or click to browse">
                 <div class="csv-dropzone-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></div>
-                <p>Drop CSV here or click to browse</p>
-                <small>Format: Name, Division, Grade, Bunk, Team</small>
+                <p>Drop CSV or Excel file here, or click to browse</p>
+                <small>Supports .csv and .xlsx &mdash; Headers are auto-detected</small>
             </div>
-            <input type="file" id="csvFileInput" accept=".csv,.txt">
+            <input type="file" id="csvFileInput" accept=".csv,.txt,.xlsx,.xls">
             <div id="csvPreview" class="csv-preview" style="display:none;">
                 <div class="csv-preview-header"><h4>Preview (<span id="csvPreviewCount">0</span> rows)</h4></div>
                 <div class="csv-preview-table"><table class="data-table"><thead><tr><th>Name</th><th>Division</th><th>Grade</th><th>Bunk</th><th>Team</th></tr></thead><tbody id="csvPreviewBody"></tbody></table></div>
             </div>
+            <div class="form-group" style="margin-top: 1rem;">
+                <label for="importModeSelect" style="font-size: 0.8125rem; font-weight: 500; margin-bottom: 0.375rem; display: block;">Import Mode</label>
+                <select id="importModeSelect">
+                    <option value="merge">Merge &mdash; Add new, update existing, keep unlisted campers</option>
+                    <option value="replace">Full Replace &mdash; Sync roster to match file exactly</option>
+                </select>
+            </div>
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="CampistryMe.closeModal('csvModal')">Cancel</button>
-            <button class="btn btn-primary" id="csvImportBtn" disabled>Import Campers</button>
+            <button class="btn btn-primary" id="csvImportBtn" disabled>Import Data</button>
         </div>
     </div>
 </div>
