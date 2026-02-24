@@ -559,7 +559,7 @@
                     if (_daysSince >= _gap) {
                         // Past the gap — bonus + escalating penalty per overdue day
                         var _overdue = _daysSince - _gap;
-                        penalty -= 15000 + (_overdue * 5000);
+                        penalty -= 25000 + (_overdue * 5000);
                     }
                 }
             }
