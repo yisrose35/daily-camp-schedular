@@ -425,7 +425,16 @@
         
         const fragment = document.createDocumentFragment();
         
-        const groupOrder = Object.keys(state.divisionGroups);
+      const groupOrder = Object.keys(state.divisionGroups).sort((a, b) => {
+            if (a === "All") return -1;
+            if (b === "All") return 1;
+            const group_a = state.divisionGroups[a];
+            const group_b = state.divisionGroups[b];
+            const minA = Math.min(...(group_a?.grades || []).map(g => parseInt((g.match(/\d+/) || [])[0]) || 999));
+            const minB = Math.min(...(group_b?.grades || []).map(g => parseInt((g.match(/\d+/) || [])[0]) || 999));
+            if (minA !== minB) return minA - minB;
+            return a.localeCompare(b, undefined, { numeric: true });
+        });
         
         groupOrder.forEach(parentDivName => {
             const group = state.divisionGroups[parentDivName];
