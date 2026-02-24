@@ -57,6 +57,7 @@ function initFieldsTab(){
 
            <!-- SPORT PLAYER REQUIREMENTS SECTION -->
             <div id="sport-rules-section"></div>
+            
 
             <!-- FIELD QUALITY GROUPS SECTION -->
             <div id="field-quality-section"></div>
