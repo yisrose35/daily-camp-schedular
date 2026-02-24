@@ -485,7 +485,9 @@ function saveData(){
             // Preserve any additional properties
             ...(f.transition ? { transition: f.transition } : {}),
             ...(f.preferences ? { preferences: f.preferences } : {}),
-            ...(f.minDurationMin ? { minDurationMin: f.minDurationMin } : {})
+           ...(f.minDurationMin ? { minDurationMin: f.minDurationMin } : {}),
+            ...(f.fieldGroup ? { fieldGroup: f.fieldGroup } : {}),
+            ...(f.qualityRank ? { qualityRank: parseInt(f.qualityRank) || 0 } : {})
         }));
         
         const settings = window.loadGlobalSettings?.() || {};
@@ -1350,6 +1352,169 @@ function renderAccess(item){
 
             container.appendChild(prioritySection);
         }
+
+        // ── STEP 4: Field Group (Seniority-Based Quality Ranking) ──
+        const fieldGroupSection = document.createElement("div");
+        fieldGroupSection.style.cssText = "border:1px solid #E5E7EB; border-radius:10px; padding:14px; background:#FAFAFA; margin-top:16px;";
+
+        // Header row with toggle-like feel
+        const fgHeaderRow = document.createElement("div");
+        fgHeaderRow.style.cssText = "display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;";
+        
+        const fgLabel = document.createElement("span");
+        fgLabel.style.cssText = "font-weight:600; font-size:0.9rem;";
+        fgLabel.textContent = "Field Quality Group";
+        fgHeaderRow.appendChild(fgLabel);
+
+        // Show current group as badge if set
+        if (item.fieldGroup) {
+            const fgBadge = document.createElement("span");
+            fgBadge.style.cssText = "font-size:0.78rem; color:#059669; background:#ECFDF5; padding:2px 10px; border-radius:99px; font-weight:500;";
+            fgBadge.textContent = `${escapeHtml(item.fieldGroup)} · #${item.qualityRank || '?'}`;
+            fgHeaderRow.appendChild(fgBadge);
+        }
+        fieldGroupSection.appendChild(fgHeaderRow);
+
+        const fgDesc = document.createElement("div");
+        fgDesc.style.cssText = "font-size:0.8rem; color:#6B7280; margin-bottom:12px; line-height:1.5;";
+        fgDesc.textContent = "Group related fields together and rank by quality. The scheduler gives the best-ranked field (#1) to the most senior grade automatically.";
+        fieldGroupSection.appendChild(fgDesc);
+
+        // Existing groups for autocomplete
+        const existingGroups = getExistingFieldGroups();
+        const groupNames = [...existingGroups.keys()];
+
+        // Datalist for autocomplete
+        const datalist = document.createElement("datalist");
+        datalist.id = "fg-datalist-" + (item.name || '').replace(/\s/g, '-');
+        groupNames.forEach(g => {
+            const opt = document.createElement("option");
+            opt.value = g;
+            datalist.appendChild(opt);
+        });
+        fieldGroupSection.appendChild(datalist);
+
+        // Input row
+        const fgInputRow = document.createElement("div");
+        fgInputRow.style.cssText = "display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;";
+
+        // Group name input
+        const fgNameWrap = document.createElement("div");
+        fgNameWrap.style.cssText = "flex:2; min-width:150px;";
+        fgNameWrap.innerHTML = `<div style="font-size:0.78rem; font-weight:600; color:#374151; margin-bottom:4px;">Group Name</div>`;
+        const fgNameInput = document.createElement("input");
+        fgNameInput.type = "text";
+        fgNameInput.setAttribute("list", datalist.id);
+        fgNameInput.value = item.fieldGroup || '';
+        fgNameInput.placeholder = "e.g., Baseball Fields";
+        fgNameInput.style.cssText = "width:100%; padding:7px 10px; border:1px solid #D1D5DB; border-radius:8px; font-size:0.88rem; outline:none; box-sizing:border-box;";
+        fgNameWrap.appendChild(fgNameInput);
+        fgInputRow.appendChild(fgNameWrap);
+
+        // Quality rank input
+        const fgRankWrap = document.createElement("div");
+        fgRankWrap.style.cssText = "flex:1; min-width:90px; max-width:120px;";
+        fgRankWrap.innerHTML = `<div style="font-size:0.78rem; font-weight:600; color:#374151; margin-bottom:4px;">Quality Rank</div>`;
+        const fgRankInput = document.createElement("input");
+        fgRankInput.type = "number";
+        fgRankInput.min = "1";
+        fgRankInput.value = item.qualityRank || '';
+        fgRankInput.placeholder = "#";
+        fgRankInput.style.cssText = "width:100%; padding:7px 10px; border:1px solid #D1D5DB; border-radius:8px; font-size:0.88rem; outline:none; text-align:center; box-sizing:border-box;";
+        fgRankWrap.appendChild(fgRankInput);
+        fgInputRow.appendChild(fgRankWrap);
+
+        fieldGroupSection.appendChild(fgInputRow);
+
+        // Hint
+        const fgHint = document.createElement("div");
+        fgHint.style.cssText = "font-size:0.73rem; color:#9CA3AF; margin-top:6px;";
+        fgHint.textContent = "#1 = best field in the group → goes to the most senior grade.";
+        fieldGroupSection.appendChild(fgHint);
+
+        // Show other group members
+        const currentGroup = item.fieldGroup || '';
+        if (currentGroup && existingGroups.has(currentGroup)) {
+            const members = existingGroups.get(currentGroup).filter(m => m.name !== item.name);
+            if (members.length > 0) {
+                const membersBox = document.createElement("div");
+                membersBox.style.cssText = "margin-top:10px; padding:10px; background:#F0FDF4; border-radius:8px; border:1px solid #BBF7D0;";
+                
+                const membersLabel = document.createElement("div");
+                membersLabel.style.cssText = "font-size:0.78rem; font-weight:600; color:#166534; margin-bottom:6px;";
+                membersLabel.textContent = `Other fields in "${currentGroup}":`;
+                membersBox.appendChild(membersLabel);
+
+                members.forEach(m => {
+                    const memberRow = document.createElement("div");
+                    memberRow.style.cssText = "font-size:0.82rem; color:#15803D; padding:2px 0; display:flex; align-items:center; gap:6px;";
+                    
+                    const rankBadge = document.createElement("span");
+                    rankBadge.style.cssText = "display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; border-radius:50%; background:#DCFCE7; font-weight:700; font-size:0.75rem; color:#166534;";
+                    rankBadge.textContent = m.qualityRank || '?';
+                    
+                    const memberName = document.createElement("span");
+                    memberName.textContent = m.name;
+                    
+                    memberRow.appendChild(rankBadge);
+                    memberRow.appendChild(memberName);
+                    membersBox.appendChild(memberRow);
+                });
+
+                fieldGroupSection.appendChild(membersBox);
+            }
+        }
+
+        // Auto-save on change (debounced)
+        let fgSaveTimeout = null;
+        const autoSaveGroup = () => {
+            if (fgSaveTimeout) clearTimeout(fgSaveTimeout);
+            fgSaveTimeout = setTimeout(() => {
+                item.fieldGroup = (fgNameInput.value || '').trim();
+                item.qualityRank = parseInt(fgRankInput.value) || 0;
+                if (!item.fieldGroup) item.qualityRank = 0;
+                saveData();
+                updateSummary();
+                // Re-render to refresh group members display
+                renderContent();
+            }, 600);
+        };
+        fgNameInput.addEventListener('change', autoSaveGroup);
+        fgRankInput.addEventListener('change', autoSaveGroup);
+
+        // Also save on blur for quicker feedback
+        fgNameInput.addEventListener('blur', () => {
+            item.fieldGroup = (fgNameInput.value || '').trim();
+            item.qualityRank = parseInt(fgRankInput.value) || 0;
+            if (!item.fieldGroup) item.qualityRank = 0;
+            saveData();
+            updateSummary();
+        });
+        fgRankInput.addEventListener('blur', () => {
+            item.qualityRank = parseInt(fgRankInput.value) || 0;
+            saveData();
+            updateSummary();
+        });
+
+        // Clear button (if group is set)
+        if (item.fieldGroup) {
+            const clearRow = document.createElement("div");
+            clearRow.style.cssText = "margin-top:10px; text-align:right;";
+            const clearBtn = document.createElement("button");
+            clearBtn.textContent = "Remove from Group";
+            clearBtn.style.cssText = "background:none; border:1px solid #FECACA; color:#DC2626; padding:5px 14px; border-radius:99px; cursor:pointer; font-size:0.8rem; font-weight:500;";
+            clearBtn.onclick = () => {
+                item.fieldGroup = '';
+                item.qualityRank = 0;
+                saveData();
+                updateSummary();
+                renderContent();
+            };
+            clearRow.appendChild(clearBtn);
+            fieldGroupSection.appendChild(clearRow);
+        }
+
+        container.appendChild(fieldGroupSection);
     };
 
     renderContent(); 
@@ -1747,7 +1912,41 @@ function addField(){
 //------------------------------------------------------------------
 window.initFieldsTab = initFieldsTab;
 window.fields = fields;
+//------------------------------------------------------------------
+// FIELD GROUP HELPERS
+//------------------------------------------------------------------
+function getExistingFieldGroups() {
+    const groups = new Map();
+    for (const f of fields) {
+        if (f.fieldGroup) {
+            if (!groups.has(f.fieldGroup)) groups.set(f.fieldGroup, []);
+            groups.get(f.fieldGroup).push({
+                name: f.name,
+                qualityRank: f.qualityRank || 0
+            });
+        }
+    }
+    for (const [, members] of groups) {
+        members.sort((a, b) => (a.qualityRank || 999) - (b.qualityRank || 999));
+    }
+    return groups;
+}
 
+window.getFieldGroups = function() {
+    const settings = window.loadGlobalSettings?.() || {};
+    const allFields = settings.app1?.fields || [];
+    const groups = {};
+    for (const f of allFields) {
+        if (f.fieldGroup && f.qualityRank) {
+            if (!groups[f.fieldGroup]) groups[f.fieldGroup] = [];
+            groups[f.fieldGroup].push({ name: f.name, qualityRank: f.qualityRank || 0 });
+        }
+    }
+    for (const key of Object.keys(groups)) {
+        groups[key].sort((a, b) => (a.qualityRank || 999) - (b.qualityRank || 999));
+    }
+    return groups;
+};
 // Export sport metadata getter for scheduler
 // Reads directly from global settings so it works before Fields tab is opened
 window.getSportMetaData = function() {
