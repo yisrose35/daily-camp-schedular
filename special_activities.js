@@ -152,14 +152,14 @@ function validateSpecialActivity(activity, activityName) {
        ...(activity.rainyDayCapacity > 0 ? { rainyDayCapacity: parseInt(activity.rainyDayCapacity, 10) } : {}),
         ...(activity.rainyDayAvailableAllDay === true ? { rainyDayAvailableAllDay: true } : {}),
         fullGrade: activity.fullGrade === true,
-        // ★ v3.5: Multi-Part Special support
+        // ★ v3.5: Multi-Part Special support (N parts)
         multiPart: activity.multiPart && typeof activity.multiPart === 'object' ? {
             enabled: activity.multiPart.enabled === true,
-            partNumber: [1,2].includes(activity.multiPart.partNumber) ? activity.multiPart.partNumber : 1,
-            partnerActivity: typeof activity.multiPart.partnerActivity === 'string' ? activity.multiPart.partnerActivity : '',
-            part1Label: typeof activity.multiPart.part1Label === 'string' ? activity.multiPart.part1Label : '',
-            part2Label: typeof activity.multiPart.part2Label === 'string' ? activity.multiPart.part2Label : ''
-        } : { enabled: false, partNumber: 1, partnerActivity: '', part1Label: '', part2Label: '' }
+            totalParts: (function() { var tp = parseInt(activity.multiPart.totalParts, 10); return (!isNaN(tp) && tp >= 2 && tp <= 10) ? tp : 2; })(),
+            partNumber: (function() { var pn = parseInt(activity.multiPart.partNumber, 10); return (!isNaN(pn) && pn >= 1 && pn <= 10) ? pn : 1; })(),
+            partActivities: Array.isArray(activity.multiPart.partActivities) ? activity.multiPart.partActivities.filter(function(n) { return typeof n === 'string'; }) : [],
+            partLabels: Array.isArray(activity.multiPart.partLabels) ? activity.multiPart.partLabels.filter(function(n) { return typeof n === 'string'; }) : []
+        } : { enabled: false, totalParts: 2, partNumber: 1, partActivities: [], partLabels: [] }
     };
 }
 
@@ -169,7 +169,7 @@ function createDefaultActivity(name) {
         maxUsage: null, maxUsagePeriod: 'half', frequencyWeeks: 0, rainyDayExclusive: false, prepDuration: 0,
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
         rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
-        multiPart: { enabled: false, partNumber: 1, partnerActivity: '', part1Label: '', part2Label: '' } };
+        multiPart: { enabled: false, totalParts: 2, partNumber: 1, partActivities: [], partLabels: [] } };
 }
 
 function validateAllActivities(activities) { if (!Array.isArray(activities)) return []; return activities.map(a => validateSpecialActivity(a, a?.name)); }
@@ -333,7 +333,7 @@ function createMasterListItem(item, isRainyDay) {
     if (item.multiPart?.enabled) {
         const mpBadge = document.createElement("span");
         mpBadge.style.cssText = "display:inline-flex; align-items:center; gap:3px; font-size:0.65rem; padding:2px 6px; border-radius:999px; margin-left:6px; color:#6b21a8; background:#f3e8ff;";
-        mpBadge.textContent = "Part " + (item.multiPart.partNumber || 1);
+        mpBadge.textContent = "Part " + (item.multiPart.partNumber || 1) + "/" + (item.multiPart.totalParts || 2);
         nameEl.appendChild(mpBadge);
     }
     if (isRainyDay) { const b = document.createElement("span"); b.className = "rainy-badge"; b.textContent = "Rainy Only"; nameEl.appendChild(b); }
@@ -494,9 +494,9 @@ function summaryLocation(item) { return item.location || "No field assigned"; }
 function summaryMultiPart(item) {
     if (!item.multiPart?.enabled) return 'Single session';
     var pn = item.multiPart.partNumber || 1;
-    var label = pn === 1 ? (item.multiPart.part1Label || 'Part 1') : (item.multiPart.part2Label || 'Part 2');
-    var partner = item.multiPart.partnerActivity;
-    return label + (partner ? ' \u2192 ' + partner : '');
+    var total = item.multiPart.totalParts || 2;
+    var label = (item.multiPart.partLabels && item.multiPart.partLabels[pn - 1]) ? item.multiPart.partLabels[pn - 1] : ('Part ' + pn);
+    return label + ' (' + pn + ' of ' + total + ')';
 }
 
 // =========================================================================
@@ -938,180 +938,239 @@ function renderMultiPartSettings(item) {
     var container = document.createElement("div");
     container.style.cssText = "padding:16px;";
 
-    var mp = item.multiPart || { enabled: false, partNumber: 1, partnerActivity: '', part1Label: '', part2Label: '' };
+    var mp = item.multiPart || { enabled: false, totalParts: 2, partNumber: 1, partActivities: [], partLabels: [] };
+    if (!mp.partActivities) mp.partActivities = [];
+    if (!mp.partLabels) mp.partLabels = [];
     var isEnabled = mp.enabled === true;
 
     // Description
     var desc = document.createElement("p");
     desc.style.cssText = "font-size:0.8rem; color:#6B7280; margin:0 0 14px 0; line-height:1.5;";
-    desc.innerHTML = 'A <strong>2-part special</strong> has two sessions across different days. Example: <strong>Woodworking</strong> = Part 1 (Cutting) then Part 2 (Painting). The scheduler will only assign Part 2 to bunks that have already completed Part 1.';
+    desc.innerHTML = 'A <strong>multi-part special</strong> has multiple sessions across different days. Example: <strong>Woodworking</strong> = Part 1 (Cutting) \u2192 Part 2 (Sanding) \u2192 Part 3 (Painting). The scheduler will only assign Part N to bunks that have completed Part N\u20111.';
     container.appendChild(desc);
 
     // Toggle
     var toggleRow = document.createElement("div");
     toggleRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:14px;";
     var tog = document.createElement("label"); tog.className = "switch";
-    var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = isEnabled; cb.id = "multipart-toggle";
+    var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = isEnabled;
     var sl = document.createElement("span"); sl.className = "slider";
     tog.appendChild(cb); tog.appendChild(sl);
     var toggleLabel = document.createElement("span");
     toggleLabel.style.cssText = "font-weight:500; font-size:0.9rem;";
-    toggleLabel.textContent = "Enable 2-Part Special";
+    toggleLabel.textContent = "Enable Multi-Part Special";
     toggleRow.appendChild(tog); toggleRow.appendChild(toggleLabel);
     container.appendChild(toggleRow);
 
-    // Config panel (shown when enabled)
+    // Config panel
     var configPanel = document.createElement("div");
-    configPanel.id = "multipart-config";
     configPanel.style.display = isEnabled ? "block" : "none";
-
-    // Part number radio
-    var partRow = document.createElement("div");
-    partRow.style.cssText = "display:flex; gap:12px; margin-bottom:14px;";
-    [1, 2].forEach(function(num) {
-        var label = document.createElement("label");
-        label.style.cssText = "display:flex; align-items:center; gap:6px; padding:10px 16px; border-radius:8px; cursor:pointer; border:2px solid " + (mp.partNumber === num ? "#147D91" : "#E5E7EB") + "; background:" + (mp.partNumber === num ? "#e6f4f7" : "#fff") + "; flex:1; transition:all 0.15s;";
-        var radio = document.createElement("input");
-        radio.type = "radio"; radio.name = "multipart-num-" + item.name; radio.value = num; radio.checked = (mp.partNumber === num);
-        radio.style.accentColor = "#147D91";
-        radio.onchange = function() {
-            mp.partNumber = num;
-            item.multiPart = mp;
-            saveData();
-            renderMultiPartInner();
-            updatePartStyles();
-            var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
-            if (s) s.textContent = summaryMultiPart(item);
-        };
-        var txt = document.createElement("div");
-        txt.innerHTML = '<div style="font-weight:600; font-size:0.9rem;">This is Part ' + num + '</div><div style="font-size:0.75rem; color:#6B7280;">' + (num === 1 ? 'Scheduled first (e.g., Cutting)' : 'Requires Part 1 completion') + '</div>';
-        label.appendChild(radio); label.appendChild(txt);
-        label.dataset.partNum = num;
-        partRow.appendChild(label);
-    });
-    configPanel.appendChild(partRow);
-
-    function updatePartStyles() {
-        partRow.querySelectorAll('label').forEach(function(lbl) {
-            var n = parseInt(lbl.dataset.partNum);
-            lbl.style.borderColor = (mp.partNumber === n) ? "#147D91" : "#E5E7EB";
-            lbl.style.background = (mp.partNumber === n) ? "#e6f4f7" : "#fff";
-        });
-    }
-
-    // Inner config (labels + partner)
-    var innerConfig = document.createElement("div");
-    innerConfig.id = "multipart-inner";
-    configPanel.appendChild(innerConfig);
     container.appendChild(configPanel);
 
-    function renderMultiPartInner() {
-        innerConfig.innerHTML = '';
+    function renderConfig() {
+        configPanel.innerHTML = '';
 
-        // Part labels
-        var labelsGrid = document.createElement("div");
-        labelsGrid.style.cssText = "display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px;";
-
-        var label1Wrap = document.createElement("div");
-        label1Wrap.innerHTML = '<label style="font-size:0.8rem; font-weight:500; color:#374151; display:block; margin-bottom:4px;">Part 1 Label</label>';
-        var inp1 = document.createElement("input");
-        inp1.type = "text"; inp1.placeholder = "e.g., Cutting"; inp1.value = mp.part1Label || '';
-        inp1.style.cssText = "width:100%; box-sizing:border-box; padding:8px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem;";
-        inp1.onchange = function() { mp.part1Label = this.value.trim(); item.multiPart = mp; syncLabelsToPartner(); saveData(); updateSummaryText(); };
-        label1Wrap.appendChild(inp1);
-
-        var label2Wrap = document.createElement("div");
-        label2Wrap.innerHTML = '<label style="font-size:0.8rem; font-weight:500; color:#374151; display:block; margin-bottom:4px;">Part 2 Label</label>';
-        var inp2 = document.createElement("input");
-        inp2.type = "text"; inp2.placeholder = "e.g., Painting"; inp2.value = mp.part2Label || '';
-        inp2.style.cssText = "width:100%; box-sizing:border-box; padding:8px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem;";
-        inp2.onchange = function() { mp.part2Label = this.value.trim(); item.multiPart = mp; syncLabelsToPartner(); saveData(); updateSummaryText(); };
-        label2Wrap.appendChild(inp2);
-
-        labelsGrid.appendChild(label1Wrap); labelsGrid.appendChild(label2Wrap);
-        innerConfig.appendChild(labelsGrid);
-
-        // Partner activity dropdown
-        var partnerWrap = document.createElement("div");
-        partnerWrap.style.cssText = "margin-bottom:14px;";
-        partnerWrap.innerHTML = '<label style="font-size:0.8rem; font-weight:500; color:#374151; display:block; margin-bottom:4px;">' + (mp.partNumber === 1 ? 'Linked Part 2 Activity' : 'Linked Part 1 Activity (prerequisite)') + '</label>';
-
-        var select = document.createElement("select");
-        select.style.cssText = "width:100%; padding:8px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; background:#fff;";
-
-        var opt0 = document.createElement("option"); opt0.value = ""; opt0.textContent = "\u2014 Select partner activity \u2014"; select.appendChild(opt0);
-
-        // List all other specials as candidates
-        var allSpecials = [...specialActivities, ...rainyDayActivities].filter(function(s) { return s.name !== item.name; });
-        allSpecials.forEach(function(s) {
-            var opt = document.createElement("option");
-            opt.value = s.name; opt.textContent = s.name;
-            if (mp.partnerActivity === s.name) opt.selected = true;
-            select.appendChild(opt);
-        });
-
-        select.onchange = function() {
-            var oldPartner = mp.partnerActivity;
-            mp.partnerActivity = this.value;
+        // Total parts input
+        var totalRow = document.createElement("div");
+        totalRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:14px;";
+        totalRow.innerHTML = '<label style="font-size:0.85rem; font-weight:500;">Total parts:</label>';
+        var totalInput = document.createElement("input");
+        totalInput.type = "number"; totalInput.min = "2"; totalInput.max = "10"; totalInput.value = mp.totalParts || 2;
+        totalInput.style.cssText = "width:60px; padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.9rem;";
+        totalInput.onchange = function() {
+            var v = Math.min(10, Math.max(2, parseInt(this.value) || 2));
+            this.value = v;
+            mp.totalParts = v;
+            if (mp.partNumber > v) mp.partNumber = v;
+            // Trim arrays if shrunk
+            while (mp.partActivities.length > v) mp.partActivities.pop();
+            while (mp.partLabels.length > v) mp.partLabels.pop();
             item.multiPart = mp;
-
-            // ★ Auto-link: update the partner activity to point back
-            if (this.value) {
-                var partner = specialActivities.find(function(s) { return s.name === mp.partnerActivity; })
-                    || rainyDayActivities.find(function(s) { return s.name === mp.partnerActivity; });
-                if (partner) {
-                    if (!partner.multiPart || typeof partner.multiPart !== 'object') {
-                        partner.multiPart = { enabled: false, partNumber: 1, partnerActivity: '', part1Label: '', part2Label: '' };
-                    }
-                    partner.multiPart.enabled = true;
-                    partner.multiPart.partNumber = mp.partNumber === 1 ? 2 : 1;
-                    partner.multiPart.partnerActivity = item.name;
-                    partner.multiPart.part1Label = mp.part1Label;
-                    partner.multiPart.part2Label = mp.part2Label;
-                    console.log('[MultiPart] Auto-linked ' + partner.name + ' as Part ' + partner.multiPart.partNumber);
-                }
-            }
-
-            // Clear old partner's link if it pointed to us
-            if (oldPartner && oldPartner !== mp.partnerActivity) {
-                var oldP = specialActivities.find(function(s) { return s.name === oldPartner; })
-                    || rainyDayActivities.find(function(s) { return s.name === oldPartner; });
-                if (oldP && oldP.multiPart?.partnerActivity === item.name) {
-                    oldP.multiPart.enabled = false;
-                    oldP.multiPart.partnerActivity = '';
-                    console.log('[MultiPart] Unlinked old partner: ' + oldPartner);
-                }
-            }
-
             saveData();
-            renderMultiPartInner();
+            renderConfig();
             updateSummaryText();
+            renderMasterList(); renderRainyDayList();
         };
+        totalRow.appendChild(totalInput);
+        totalRow.innerHTML += '<span style="font-size:0.8rem; color:#6B7280;">sessions across different days</span>';
+        totalRow.insertBefore(totalInput, totalRow.children[1]);
+        configPanel.appendChild(totalRow);
 
-        partnerWrap.appendChild(select);
-        innerConfig.appendChild(partnerWrap);
+        // This activity's part number
+        var partRow = document.createElement("div");
+        partRow.style.cssText = "margin-bottom:14px;";
+        partRow.innerHTML = '<label style="font-size:0.85rem; font-weight:500; display:block; margin-bottom:6px;">This activity is:</label>';
+        var partChips = document.createElement("div");
+        partChips.style.cssText = "display:flex; gap:8px; flex-wrap:wrap;";
+        for (var p = 1; p <= mp.totalParts; p++) {
+            (function(num) {
+                var chip = document.createElement("button");
+                var isActive = mp.partNumber === num;
+                chip.textContent = "Part " + num;
+                chip.style.cssText = "padding:6px 16px; border-radius:8px; border:2px solid " + (isActive ? "#147D91" : "#E5E7EB") + "; background:" + (isActive ? "#e6f4f7" : "#fff") + "; color:" + (isActive ? "#0F5F6E" : "#333") + "; font-weight:" + (isActive ? "600" : "400") + "; cursor:pointer; font-size:0.85rem; transition:all 0.15s;";
+                chip.onclick = function() {
+                    mp.partNumber = num;
+                    item.multiPart = mp;
+                    saveData();
+                    renderConfig();
+                    updateSummaryText();
+                    renderMasterList(); renderRainyDayList();
+                };
+                partChips.appendChild(chip);
+            })(p);
+        }
+        partRow.appendChild(partChips);
+        configPanel.appendChild(partRow);
+
+        // Part labels + linked activities
+        var linksSection = document.createElement("div");
+        linksSection.style.cssText = "border:1px solid #E5E7EB; border-radius:10px; padding:14px; background:#FAFAFA; margin-bottom:14px;";
+        linksSection.innerHTML = '<div style="font-weight:600; font-size:0.9rem; margin-bottom:10px;">Part Chain</div>';
+
+        var allSpecials = [...specialActivities, ...rainyDayActivities].filter(function(s) { return s.name !== item.name; });
+
+        for (var i = 0; i < mp.totalParts; i++) {
+            (function(idx) {
+                var isThis = (idx + 1) === mp.partNumber;
+                var row = document.createElement("div");
+                row.style.cssText = "display:flex; align-items:center; gap:8px; padding:8px 10px; margin-bottom:6px; border-radius:8px; background:" + (isThis ? "#e6f4f7" : "#fff") + "; border:1px solid " + (isThis ? "#b2dce6" : "#E5E7EB") + ";";
+
+                // Part number badge
+                var badge = document.createElement("span");
+                badge.style.cssText = "width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.8rem; flex-shrink:0; color:" + (isThis ? "#fff" : "#6B7280") + "; background:" + (isThis ? "#147D91" : "#E5E7EB") + ";";
+                badge.textContent = idx + 1;
+                row.appendChild(badge);
+
+                if (isThis) {
+                    // This activity — show label input + "This Activity" badge
+                    var thisWrap = document.createElement("div"); thisWrap.style.cssText = "flex:1; display:flex; align-items:center; gap:8px;";
+                    var labelInp = document.createElement("input");
+                    labelInp.type = "text"; labelInp.placeholder = "Label (e.g., Cutting)";
+                    labelInp.value = mp.partLabels[idx] || '';
+                    labelInp.style.cssText = "flex:1; padding:6px 10px; border:1px solid #b2dce6; border-radius:6px; font-size:0.85rem; background:#fff;";
+                    labelInp.onchange = function() {
+                        mp.partLabels[idx] = this.value.trim();
+                        item.multiPart = mp;
+                        syncAllPartners();
+                        saveData();
+                        updateSummaryText();
+                    };
+                    thisWrap.appendChild(labelInp);
+                    var thisBadge = document.createElement("span");
+                    thisBadge.style.cssText = "padding:4px 10px; background:#147D91; color:white; border-radius:999px; font-size:0.7rem; font-weight:600; white-space:nowrap;";
+                    thisBadge.textContent = "\u2190 This";
+                    thisWrap.appendChild(thisBadge);
+                    row.appendChild(thisWrap);
+                } else {
+                    // Other part — label input + activity dropdown
+                    var otherWrap = document.createElement("div"); otherWrap.style.cssText = "flex:1; display:flex; gap:6px;";
+                    var labelInp2 = document.createElement("input");
+                    labelInp2.type = "text"; labelInp2.placeholder = "Label";
+                    labelInp2.value = mp.partLabels[idx] || '';
+                    labelInp2.style.cssText = "width:100px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem;";
+                    labelInp2.onchange = function() {
+                        mp.partLabels[idx] = this.value.trim();
+                        item.multiPart = mp;
+                        syncAllPartners();
+                        saveData();
+                    };
+                    otherWrap.appendChild(labelInp2);
+
+                    var select = document.createElement("select");
+                    select.style.cssText = "flex:1; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; background:#fff;";
+                    var opt0 = document.createElement("option"); opt0.value = ""; opt0.textContent = "\u2014 Link activity \u2014"; select.appendChild(opt0);
+                    allSpecials.forEach(function(s) {
+                        var opt = document.createElement("option");
+                        opt.value = s.name; opt.textContent = s.name;
+                        if (mp.partActivities[idx] === s.name) opt.selected = true;
+                        select.appendChild(opt);
+                    });
+                    select.onchange = function() {
+                        var oldAct = mp.partActivities[idx];
+                        mp.partActivities[idx] = this.value;
+                        item.multiPart = mp;
+                        // Auto-link the partner
+                        if (this.value) {
+                            autoLinkPartner(this.value, idx + 1);
+                        }
+                        // Unlink old partner
+                        if (oldAct && oldAct !== this.value) {
+                            unlinkPartner(oldAct);
+                        }
+                        saveData();
+                        renderConfig();
+                    };
+                    otherWrap.appendChild(select);
+                    row.appendChild(otherWrap);
+                }
+
+                // Arrow between rows (except last)
+                linksSection.appendChild(row);
+                if (idx < mp.totalParts - 1) {
+                    var arrow = document.createElement("div");
+                    arrow.style.cssText = "text-align:center; color:#9CA3AF; font-size:0.8rem; margin:2px 0;";
+                    arrow.textContent = "\u2193";
+                    linksSection.appendChild(arrow);
+                }
+            })(i);
+        }
+        configPanel.appendChild(linksSection);
 
         // Info box
         var info = document.createElement("div");
         info.style.cssText = "padding:10px 14px; border-radius:8px; font-size:0.8rem; line-height:1.5;";
         if (mp.partNumber === 1) {
             info.style.background = "#e6f4f7"; info.style.border = "1px solid #b2dce6"; info.style.color = "#0A4A56";
-            info.innerHTML = '\uD83D\uDCCB <strong>Part 1</strong> \u2014 This activity will be scheduled normally. Once a bunk completes it, they become eligible for the linked Part 2.' + (mp.partnerActivity ? '<br>Linked to: <strong>' + escapeHtml(mp.partnerActivity) + '</strong>' : '');
+            info.innerHTML = '\uD83D\uDCCB <strong>Part 1</strong> \u2014 Scheduled normally. Once a bunk completes it, they become eligible for Part 2.';
         } else {
             info.style.background = "#fef3c7"; info.style.border = "1px solid #fcd34d"; info.style.color = "#92400e";
-            info.innerHTML = '\u26A0\uFE0F <strong>Part 2</strong> \u2014 The scheduler will <strong>only</strong> assign this to bunks that have already done <strong>' + escapeHtml(mp.partnerActivity || '(select Part 1)') + '</strong> on a previous day.';
+            var prevPart = mp.partActivities[mp.partNumber - 2] || '(not linked)';
+            info.innerHTML = '\u26A0\uFE0F <strong>Part ' + mp.partNumber + '</strong> \u2014 The scheduler will <strong>only</strong> assign this to bunks that have completed <strong>' + escapeHtml(prevPart) + '</strong> (Part ' + (mp.partNumber - 1) + ').';
         }
-        innerConfig.appendChild(info);
+        configPanel.appendChild(info);
     }
 
-    function syncLabelsToPartner() {
-        if (!mp.partnerActivity) return;
-        var partner = specialActivities.find(function(s) { return s.name === mp.partnerActivity; })
-            || rainyDayActivities.find(function(s) { return s.name === mp.partnerActivity; });
-        if (partner && partner.multiPart) {
-            partner.multiPart.part1Label = mp.part1Label;
-            partner.multiPart.part2Label = mp.part2Label;
+    function autoLinkPartner(partnerName, partnerPartNumber) {
+        var partner = specialActivities.find(function(s) { return s.name === partnerName; })
+            || rainyDayActivities.find(function(s) { return s.name === partnerName; });
+        if (!partner) return;
+        if (!partner.multiPart || typeof partner.multiPart !== 'object') {
+            partner.multiPart = { enabled: false, totalParts: 2, partNumber: 1, partActivities: [], partLabels: [] };
         }
+        partner.multiPart.enabled = true;
+        partner.multiPart.totalParts = mp.totalParts;
+        partner.multiPart.partNumber = partnerPartNumber;
+        partner.multiPart.partLabels = mp.partLabels.slice();
+        // Build partner's partActivities — point back to us and to all other parts
+        partner.multiPart.partActivities = mp.partActivities.slice();
+        partner.multiPart.partActivities[mp.partNumber - 1] = item.name;
+        console.log('[MultiPart] Auto-linked ' + partner.name + ' as Part ' + partnerPartNumber + ' of ' + mp.totalParts);
+    }
+
+    function unlinkPartner(partnerName) {
+        var partner = specialActivities.find(function(s) { return s.name === partnerName; })
+            || rainyDayActivities.find(function(s) { return s.name === partnerName; });
+        if (partner && partner.multiPart?.partActivities) {
+            // Only unlink if they still point to us
+            var pointsToUs = partner.multiPart.partActivities.indexOf(item.name) !== -1;
+            if (pointsToUs) {
+                partner.multiPart.enabled = false;
+                partner.multiPart.partActivities = [];
+                console.log('[MultiPart] Unlinked: ' + partnerName);
+            }
+        }
+    }
+
+    function syncAllPartners() {
+        mp.partActivities.forEach(function(pName, idx) {
+            if (!pName || (idx + 1) === mp.partNumber) return;
+            var partner = specialActivities.find(function(s) { return s.name === pName; })
+                || rainyDayActivities.find(function(s) { return s.name === pName; });
+            if (partner && partner.multiPart) {
+                partner.multiPart.partLabels = mp.partLabels.slice();
+                partner.multiPart.totalParts = mp.totalParts;
+            }
+        });
     }
 
     function updateSummaryText() {
@@ -1124,19 +1183,19 @@ function renderMultiPartSettings(item) {
         isEnabled = this.checked;
         mp.enabled = isEnabled;
         if (!isEnabled) {
-            // Clear partner link
-            cleanupMultiPartLink(item);
-            mp.partNumber = 1; mp.partnerActivity = ''; mp.part1Label = ''; mp.part2Label = '';
+            // Unlink all partners
+            mp.partActivities.forEach(function(pName) { if (pName) unlinkPartner(pName); });
+            mp.partNumber = 1; mp.partActivities = []; mp.partLabels = [];
         }
         item.multiPart = mp;
         configPanel.style.display = isEnabled ? "block" : "none";
-        if (isEnabled) renderMultiPartInner();
+        if (isEnabled) renderConfig();
         saveData();
         updateSummaryText();
         renderMasterList(); renderRainyDayList();
     };
 
-    if (isEnabled) renderMultiPartInner();
+    if (isEnabled) renderConfig();
     return container;
 }
 
@@ -1144,23 +1203,29 @@ function renderMultiPartSettings(item) {
 // ★ v3.5: Multi-Part Helper Functions
 // =========================================================================
 function cleanupMultiPartLink(item) {
-    if (!item.multiPart?.partnerActivity) return;
-    var oldPartner = specialActivities.find(function(s) { return s.name === item.multiPart.partnerActivity; })
-        || rainyDayActivities.find(function(s) { return s.name === item.multiPart.partnerActivity; });
-    if (oldPartner && oldPartner.multiPart?.partnerActivity === item.name) {
-        oldPartner.multiPart.enabled = false;
-        oldPartner.multiPart.partnerActivity = '';
-        console.log('[MultiPart] Cleaned up partner link on: ' + oldPartner.name);
-    }
+    if (!item.multiPart?.partActivities?.length) return;
+    item.multiPart.partActivities.forEach(function(pName) {
+        if (!pName) return;
+        var partner = specialActivities.find(function(s) { return s.name === pName; })
+            || rainyDayActivities.find(function(s) { return s.name === pName; });
+        if (partner && partner.multiPart?.partActivities?.indexOf(item.name) !== -1) {
+            partner.multiPart.enabled = false;
+            partner.multiPart.partActivities = [];
+            console.log('[MultiPart] Cleaned up partner link on: ' + partner.name);
+        }
+    });
 }
 
 function propagateMultiPartRename(oldName, newName) {
     if (!oldName || !newName || oldName === newName) return;
-    // Update any activity that has us as a partner
     [...specialActivities, ...rainyDayActivities].forEach(function(s) {
-        if (s.multiPart?.partnerActivity === oldName) {
-            s.multiPart.partnerActivity = newName;
-            console.log('[MultiPart] Updated partner reference on ' + s.name + ': ' + oldName + ' -> ' + newName);
+        if (s.multiPart?.partActivities) {
+            for (var i = 0; i < s.multiPart.partActivities.length; i++) {
+                if (s.multiPart.partActivities[i] === oldName) {
+                    s.multiPart.partActivities[i] = newName;
+                    console.log('[MultiPart] Updated part reference on ' + s.name + '[' + i + ']: ' + oldName + ' -> ' + newName);
+                }
+            }
         }
     });
 }
@@ -1262,13 +1327,16 @@ window.diagnoseSpecialActivities = function() {
         if (!Array.isArray(a.timeRules)) { actIssues.push('timeRules not array'); }
         else { a.timeRules.forEach(function(rule, rIdx) { if (rule.startMin === undefined) actIssues.push('timeRules[' + rIdx + '].startMin missing'); if (rule.endMin === undefined) actIssues.push('timeRules[' + rIdx + '].endMin missing'); }); }
         if (a.isIndoor === undefined && !a.rainyDayExclusive && !a.rainyDayOnly) actIssues.push('isIndoor property missing (will default to true)');
-        // ★ v3.5: Check multi-part consistency
+        // ★ v3.6: Check multi-part consistency (N parts)
         if (a.multiPart?.enabled) {
-            if (!a.multiPart.partnerActivity) actIssues.push('Multi-part enabled but no partner activity linked');
-            else {
-                var partnerExists = storedActivities.some(function(p) { return p.name === a.multiPart.partnerActivity; });
-                if (!partnerExists) actIssues.push('Multi-part partner "' + a.multiPart.partnerActivity + '" not found');
-            }
+            if (!a.multiPart.totalParts || a.multiPart.totalParts < 2) actIssues.push('Multi-part enabled but totalParts invalid');
+            if (!a.multiPart.partNumber || a.multiPart.partNumber < 1) actIssues.push('Multi-part partNumber invalid');
+            var linked = (a.multiPart.partActivities || []).filter(Boolean);
+            if (linked.length === 0 && a.multiPart.partNumber > 1) actIssues.push('Part ' + a.multiPart.partNumber + ' has no linked prerequisite');
+            linked.forEach(function(pName) {
+                var pExists = storedActivities.some(function(p) { return p.name === pName; });
+                if (!pExists) actIssues.push('Multi-part linked activity "' + pName + '" not found');
+            });
         }
         if (actIssues.length > 0) issues.push({ activity: a.name || '[index ' + idx + ']', issues: actIssues });
     });
@@ -1281,47 +1349,48 @@ window.diagnoseSpecialActivities = function() {
 };
 
 // =========================================================================
-// ★ v3.5: Multi-Part Special — Global Helpers for Scheduler Integration
+// ★ v3.6: Multi-Part Special — Global Helpers for Scheduler Integration
 // =========================================================================
 
 /**
- * Check if a bunk has completed Part 1 of a multi-part special on a previous day.
- * Used by the solver and smart_logic_adapter to gate Part 2 assignments.
+ * Check if a bunk has completed a specific activity on a previous day.
+ * Used to verify prerequisite completion for multi-part chains.
  */
-window.hasBunkCompletedPart1 = function(bunkName, part1ActivityName) {
-    if (!bunkName || !part1ActivityName) return false;
+window.hasBunkCompletedActivity = function(bunkName, activityName) {
+    if (!bunkName || !activityName) return false;
     try {
         var allDaily = window.loadAllDailyData?.() || {};
         var currentDate = window.currentScheduleDate || window.currentDate || '';
         var sortedDates = Object.keys(allDaily).sort();
         for (var i = 0; i < sortedDates.length; i++) {
             var dateKey = sortedDates[i];
-            if (currentDate && dateKey >= currentDate) continue; // Only past days
+            if (currentDate && dateKey >= currentDate) continue;
             var sched = allDaily[dateKey]?.scheduleAssignments?.[bunkName];
             if (!Array.isArray(sched)) continue;
             for (var j = 0; j < sched.length; j++) {
                 var entry = sched[j];
-                if (entry && !entry.continuation && (entry._activity === part1ActivityName || entry.field === part1ActivityName)) {
+                if (entry && !entry.continuation && (entry._activity === activityName || entry.field === activityName)) {
                     return true;
                 }
             }
         }
-        // Also check rotation history
         var rotHist = window.loadRotationHistory?.() || {};
         var bunkHist = rotHist.bunks?.[bunkName];
         if (bunkHist) {
-            var actHist = bunkHist.activities?.[part1ActivityName] || bunkHist[part1ActivityName];
+            var actHist = bunkHist.activities?.[activityName] || bunkHist[activityName];
             if (actHist && (actHist.count > 0 || actHist.lastDone)) return true;
         }
-        // Check historical counts
         var global = window.loadGlobalSettings?.() || {};
         var histCounts = global.historicalCounts || {};
-        if (histCounts[bunkName]?.[part1ActivityName] > 0) return true;
+        if (histCounts[bunkName]?.[activityName] > 0) return true;
     } catch (e) {
-        console.warn('[MultiPart] Error checking Part 1 completion for ' + bunkName + ':', e);
+        console.warn('[MultiPart] Error checking completion for ' + bunkName + ' / ' + activityName + ':', e);
     }
     return false;
 };
+
+// Backward compat alias
+window.hasBunkCompletedPart1 = window.hasBunkCompletedActivity;
 
 /**
  * Get multi-part config for an activity (returns null if not multi-part).
@@ -1334,15 +1403,18 @@ window.getMultiPartConfig = function(activityName) {
 
 /**
  * Check if a bunk is eligible for a special activity (respects multi-part prerequisites).
- * Returns true if not multi-part, or if Part 1, or if Part 2 and bunk has done Part 1.
+ * Part 1 → always eligible.
+ * Part N (N>1) → must have completed Part N-1's linked activity.
  */
 window.isBunkEligibleForSpecial = function(bunkName, activityName) {
     var mp = window.getMultiPartConfig?.(activityName);
     if (!mp) return true;
-    if (mp.partNumber !== 2) return true;
-    if (!mp.partnerActivity) return true;
-    return window.hasBunkCompletedPart1?.(bunkName, mp.partnerActivity) || false;
+    if (mp.partNumber <= 1) return true;
+    // Need the activity linked as the previous part
+    var prevPartActivity = mp.partActivities?.[mp.partNumber - 2];
+    if (!prevPartActivity) return true; // Not linked yet, allow
+    return window.hasBunkCompletedActivity?.(bunkName, prevPartActivity) || false;
 };
 
-console.log("[SPECIAL_ACTIVITIES] Module v3.5 loaded");
+console.log("[SPECIAL_ACTIVITIES] Module v3.6 loaded (N-part multi-part support)");
 })();
