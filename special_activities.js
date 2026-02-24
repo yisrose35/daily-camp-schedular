@@ -1,7 +1,8 @@
-
 // ============================================================================
-// special_activities.js — PRODUCTION-READY v3.4
+// special_activities.js — PRODUCTION-READY v3.7
 // ============================================================================
+// v3.7: Multi-Part Specials — single activity with N parts, auto-tracked
+// v3.4: Nested accordion layout
 // v3.2: Visual parity with fields.js — setup-card layout, SVG accordions,
 //       availability strip, scoped list/switch styles, toggle sharing pattern
 // v3.1: Teal theme unification, prep duration, field loading fix
@@ -16,7 +17,7 @@
 (function() {
 'use strict';
 
-console.log("[SPECIAL_ACTIVITIES] Module v3.4 loading...");
+console.log("[SPECIAL_ACTIVITIES] Module v3.5 loading...");
 
 let specialActivities = [];
 let rainyDayActivities = [];
@@ -150,7 +151,13 @@ function validateSpecialActivity(activity, activityName) {
         location: activity.location || null, isIndoor, rainyDayAvailable: isIndoor, availableOnRainyDay: isIndoor,
        ...(activity.rainyDayCapacity > 0 ? { rainyDayCapacity: parseInt(activity.rainyDayCapacity, 10) } : {}),
         ...(activity.rainyDayAvailableAllDay === true ? { rainyDayAvailableAllDay: true } : {}),
-        fullGrade: activity.fullGrade === true
+        fullGrade: activity.fullGrade === true,
+        // ★ v3.7: Multi-Part Special support (simple N parts)
+        multiPart: activity.multiPart && typeof activity.multiPart === 'object' ? {
+            enabled: activity.multiPart.enabled === true,
+            totalParts: (function() { var tp = parseInt(activity.multiPart.totalParts, 10); return (!isNaN(tp) && tp >= 2 && tp <= 10) ? tp : 2; })(),
+            daysBetween: (function() { var db = parseInt(activity.multiPart.daysBetween, 10); return (!isNaN(db) && db >= 1 && db <= 14) ? db : 3; })()
+        } : { enabled: false, totalParts: 2, daysBetween: 3 }
     };
 }
 
@@ -159,7 +166,8 @@ function createDefaultActivity(name) {
         limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
         maxUsage: null, maxUsagePeriod: 'half', frequencyWeeks: 0, rainyDayExclusive: false, prepDuration: 0,
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
-        rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false };
+        rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
+        multiPart: { enabled: false, totalParts: 2, daysBetween: 3 } };
 }
 
 function validateAllActivities(activities) { if (!Array.isArray(activities)) return []; return activities.map(a => validateSpecialActivity(a, a?.name)); }
@@ -319,6 +327,13 @@ function createMasterListItem(item, isRainyDay) {
     el.onclick = () => { selectedItemId = id; renderMasterList(); renderRainyDayList(); renderDetailPane(); };
     const infoDiv = document.createElement("div");
     const nameEl = document.createElement("div"); nameEl.className = "list-item-name"; nameEl.textContent = item.name;
+    // ★ v3.5: Show multi-part badge in master list
+    if (item.multiPart?.enabled) {
+        const mpBadge = document.createElement("span");
+        mpBadge.style.cssText = "display:inline-flex; align-items:center; gap:3px; font-size:0.65rem; padding:2px 6px; border-radius:999px; margin-left:6px; color:#6b21a8; background:#f3e8ff;";
+        mpBadge.textContent = item.multiPart.totalParts + "-part";
+        nameEl.appendChild(mpBadge);
+    }
     if (isRainyDay) { const b = document.createElement("span"); b.className = "rainy-badge"; b.textContent = "Rainy Only"; nameEl.appendChild(b); }
     infoDiv.appendChild(nameEl); el.appendChild(infoDiv);
     const tog = document.createElement("label"); tog.className = "switch list-item-toggle"; tog.onclick = e => e.stopPropagation();
@@ -393,6 +408,8 @@ function renderDetailPane() {
         if (specialActivities.some(s => s !== item && s.name.toLowerCase() === newName.toLowerCase()) || rainyDayActivities.some(s => s !== item && s.name.toLowerCase() === newName.toLowerCase())) { alert('Already exists.'); return; }
         item.name = newName; selectedItemId = 'special-' + newName;
         propagateSpecialActivityRename(oldName, newName);
+        // ★ v3.5: Also update partner activity references when renaming
+        propagateMultiPartRename(oldName, newName);
         saveData(); renderMasterList(); renderRainyDayList(); renderDetailPane();
     });
     titleContainer.appendChild(title);
@@ -408,6 +425,8 @@ function renderDetailPane() {
         if (window.AccessControl?.canEraseData && !window.AccessControl.canEraseData()) { window.AccessControl?.showPermissionDenied?.('delete special activities'); return; }
         if (!window.AccessControl?.checkSetupAccess?.('delete special activities')) return;
         if (confirm('Delete "' + item.name + '"?\n\nThis will also remove references from all schedules.')) {
+            // ★ v3.5: Unlink partner before deleting
+            cleanupMultiPartLink(item);
             cleanupDeletedSpecialActivity(item.name);
             if (isRainyDayItem) rainyDayActivities = rainyDayActivities.filter(s => s.name !== item.name);
             else specialActivities = specialActivities.filter(s => s.name !== item.name);
@@ -436,11 +455,12 @@ function renderDetailPane() {
     if (!isRainyDayItem) timeWeatherSections.push(section("Weather & Availability", summaryWeather(item), () => renderWeatherSettings(item)));
     detailPaneEl.appendChild(sectionGroup("Time & Weather", "When this special can be scheduled", timeWeatherSections));
 
-    // Group 3: Rotation Rules — usage limit + full grade + prep duration
-    detailPaneEl.appendChild(sectionGroup("Rotation Rules", "Limits, full-grade mode & prep time", [
+    // Group 3: Rotation Rules — usage limit + full grade + prep duration + multi-part
+    detailPaneEl.appendChild(sectionGroup("Rotation Rules", "Limits, timing & scheduling mode", [
         section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
         section("Full Grade", summaryFullGrade(item), () => renderFullGradeSettings(item)),
-        section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item))
+        section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)),
+        section("Multi-Parts", summaryMultiPart(item), () => renderMultiPartSettings(item))
     ]));
 }
 
@@ -467,6 +487,12 @@ function summaryWeather(item) {
     return s;
 }
 function summaryLocation(item) { return item.location || "No field assigned"; }
+
+// ★ v3.7: Multi-Part summary
+function summaryMultiPart(item) {
+    if (!item.multiPart?.enabled) return 'Single session';
+    return item.multiPart.totalParts + '-part activity';
+}
 
 // =========================================================================
 // RENDER: Full Grade Settings
@@ -805,7 +831,6 @@ function renderWeatherSettings(item) {
     const container = document.createElement("div");
     const isIndoor = item.isIndoor === true;
     const updateSummary = () => { const s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if(s) s.textContent = summaryWeather(item); };
-    // Indoor/Outdoor toggle section
     const indoorHtml = '<div style="margin-bottom:16px;">'
         + '<p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Mark as indoor to keep available during Rainy Day Mode.</p>'
         + '<div style="display:flex; align-items:center; gap:12px; padding:14px; background:' + (isIndoor ? '#e6f4f7' : '#fef3c7') + '; border:1px solid ' + (isIndoor ? '#b2dce6' : '#fcd34d') + '; border-radius:10px;">'
@@ -816,7 +841,6 @@ function renderWeatherSettings(item) {
         + '</div>'
         + '<label class="switch"><input type="checkbox" id="weather-toggle" ' + (isIndoor ? 'checked' : '') + '><span class="slider"></span></label>'
         + '</div></div>';
-    // Rainy Day Overrides section (capacity + time bypass) — matches fields.js
     const regularCapacity = parseInt(item.sharableWith?.capacity) || 1;
     const hasTimeRules = (item.timeRules || []).length > 0;
     const overridesHtml = '<div style="margin-top:20px; padding-top:16px; border-top:1px solid #e5e7eb;">'
@@ -824,7 +848,6 @@ function renderWeatherSettings(item) {
         + '<span style="font-size:1.1rem;">\uD83C\uDF27\uFE0F</span>'
         + '<div style="font-weight:600; font-size:0.95rem; color:#1e293b;">Rainy Day Overrides</div>'
         + '</div>'
-        // Capacity Override
         + '<div style="background:#f0f9ff; border:1px solid #bae6fd; border-radius:10px; padding:14px; margin-bottom:12px;">'
         + '<div style="font-weight:600; font-size:0.9rem; color:#0c4a6e; margin-bottom:8px;">'
         + '\uD83D\uDCCA Capacity Override'
@@ -837,7 +860,6 @@ function renderWeatherSettings(item) {
         + '</div>'
         + '<div style="font-size:0.75rem; color:#64748b; margin-top:6px;">Leave empty = use regular capacity.</div>'
         + '</div>'
-        // Ignore Time Restrictions
         + '<div style="background:#fefce8; border:1px solid #fde68a; border-radius:10px; padding:14px;">'
         + '<div style="display:flex; align-items:center; justify-content:space-between;">'
         + '<div>'
@@ -848,7 +870,6 @@ function renderWeatherSettings(item) {
         + '</div></div>'
         + '</div>';
     container.innerHTML = indoorHtml + overridesHtml;
-    // Bind indoor toggle
     const tog = container.querySelector('#weather-toggle');
     if (tog) {
         tog.onchange = function() {
@@ -862,7 +883,6 @@ function renderWeatherSettings(item) {
             renderMasterList();
         };
     }
-    // Bind capacity override
     const capInput = container.querySelector('#rainy-day-capacity-input');
     if (capInput) {
         capInput.addEventListener('change', function() {
@@ -884,7 +904,6 @@ function renderWeatherSettings(item) {
             updateSummary();
         });
     }
-    // Bind all-day toggle
     const allDayTog = container.querySelector('#rainy-day-all-day-toggle');
     if (allDayTog) {
         allDayTog.addEventListener('change', function() {
@@ -907,6 +926,161 @@ function renderPrepDurationSettings(item) {
     return container;
 }
 
+// =========================================================================
+// ★ v3.5: RENDER Multi-Part Special Settings
+// =========================================================================
+function renderMultiPartSettings(item) {
+    var container = document.createElement("div");
+    container.style.cssText = "padding:16px;";
+
+    var mp = item.multiPart || { enabled: false, totalParts: 2, daysBetween: 3 };
+    var isEnabled = mp.enabled === true;
+
+    // Description
+    var desc = document.createElement("p");
+    desc.style.cssText = "font-size:0.8rem; color:#6B7280; margin:0 0 14px 0; line-height:1.5;";
+    desc.innerHTML = 'A <strong>multi-part special</strong> must be completed over multiple days. Example: <strong>Woodworking</strong> with 3 parts \u2014 bunks see "Woodworking 1/3" the first time, "Woodworking 2/3" next, then "Woodworking 3/3". A bunk cannot skip ahead.';
+    container.appendChild(desc);
+
+    // Toggle
+    var toggleRow = document.createElement("div");
+    toggleRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:14px;";
+    var tog = document.createElement("label"); tog.className = "switch";
+    var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = isEnabled;
+    var sl = document.createElement("span"); sl.className = "slider";
+    tog.appendChild(cb); tog.appendChild(sl);
+    var toggleLabel = document.createElement("span");
+    toggleLabel.style.cssText = "font-weight:500; font-size:0.9rem;";
+    toggleLabel.textContent = "Enable Multi-Part Special";
+    toggleRow.appendChild(tog); toggleRow.appendChild(toggleLabel);
+    container.appendChild(toggleRow);
+
+    // Config panel
+    var configPanel = document.createElement("div");
+    configPanel.style.display = isEnabled ? "block" : "none";
+    container.appendChild(configPanel);
+
+    function renderConfig() {
+        configPanel.innerHTML = '';
+
+        // Total parts input
+        var row = document.createElement("div");
+        row.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:16px;";
+        row.innerHTML = '<label style="font-size:0.85rem; font-weight:500;">Number of parts:</label>';
+        var inp = document.createElement("input");
+        inp.type = "number"; inp.min = "2"; inp.max = "10"; inp.value = mp.totalParts || 2;
+        inp.style.cssText = "width:60px; padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.9rem;";
+        inp.onchange = function() {
+            var v = Math.min(10, Math.max(2, parseInt(this.value) || 2));
+            this.value = v;
+            mp.totalParts = v;
+            item.multiPart = mp;
+            saveData();
+            renderConfig();
+            updateSummary();
+            renderMasterList(); renderRainyDayList();
+        };
+        row.appendChild(inp);
+        row.lastElementChild.insertAdjacentHTML('afterend', '<span style="font-size:0.8rem; color:#6B7280;">sessions across different days</span>');
+        configPanel.appendChild(row);
+
+        // Days between parts input
+        var daysRow = document.createElement("div");
+        daysRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:16px;";
+        daysRow.innerHTML = '<label style="font-size:0.85rem; font-weight:500;">Days between parts:</label>';
+        var daysInp = document.createElement("input");
+        daysInp.type = "number"; daysInp.min = "1"; daysInp.max = "14"; daysInp.value = mp.daysBetween || 3;
+        daysInp.style.cssText = "width:60px; padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.9rem;";
+        daysInp.onchange = function() {
+            var v = Math.min(14, Math.max(1, parseInt(this.value) || 3));
+            this.value = v;
+            mp.daysBetween = v;
+            item.multiPart = mp;
+            saveData();
+            renderConfig();
+        };
+        daysRow.appendChild(daysInp);
+        daysRow.lastElementChild.insertAdjacentHTML('afterend', '<span style="font-size:0.8rem; color:#6B7280;">days before the scheduler starts pushing the next part</span>');
+        configPanel.appendChild(daysRow);
+
+        // Preview
+        var preview = document.createElement("div");
+        preview.style.cssText = "border:1px solid #E5E7EB; border-radius:10px; padding:14px; background:#FAFAFA; margin-bottom:14px;";
+        preview.innerHTML = '<div style="font-weight:600; font-size:0.85rem; margin-bottom:10px;">Schedule Preview</div>';
+        for (var i = 1; i <= mp.totalParts; i++) {
+            var step = document.createElement("div");
+            step.style.cssText = "display:flex; align-items:center; gap:10px; padding:8px 12px; margin-bottom:" + (i < mp.totalParts ? "4px" : "0") + "; border-radius:8px; background:#fff; border:1px solid #E5E7EB;";
+            var badge = document.createElement("span");
+            badge.style.cssText = "width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.75rem; flex-shrink:0; color:#fff; background:#147D91;";
+            badge.textContent = i;
+            step.appendChild(badge);
+            var label = document.createElement("span");
+            label.style.cssText = "font-size:0.85rem; color:#374151;";
+            label.textContent = escapeHtml(item.name) + " " + i + "/" + mp.totalParts;
+            step.appendChild(label);
+            if (i === 1) { step.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.7rem; color:#6B7280;">No prerequisite</span>'); }
+            else { step.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.7rem; color:#92400e;">Requires ' + (i-1) + '/' + mp.totalParts + ' done</span>'); }
+            preview.appendChild(step);
+            if (i < mp.totalParts) {
+                var arrow = document.createElement("div");
+                arrow.style.cssText = "text-align:center; color:#9CA3AF; font-size:0.75rem; margin:2px 0;";
+                arrow.textContent = "\u2193 " + (mp.daysBetween || 3) + " day" + ((mp.daysBetween || 3) > 1 ? "s" : "") + " gap";
+                preview.appendChild(arrow);
+            }
+        }
+        configPanel.appendChild(preview);
+
+        // Info box
+        var info = document.createElement("div");
+        info.style.cssText = "padding:10px 14px; border-radius:8px; font-size:0.8rem; line-height:1.5; background:#e6f4f7; border:1px solid #b2dce6; color:#0A4A56;";
+        var cycles = item.maxUsage ? Math.ceil(item.maxUsage / mp.totalParts) : 1;
+        var cycleText = cycles > 1 ? ' Bunks will complete <strong>' + cycles + ' full cycles</strong> (' + item.maxUsage + ' total sessions, set via Max Usage).' : ' Once a bunk completes all ' + mp.totalParts + ' parts, it won\u2019t be assigned again.';
+        var daysText = ' After each part, the scheduler waits <strong>' + (mp.daysBetween || 3) + ' day' + ((mp.daysBetween || 3) > 1 ? 's' : '') + '</strong> then starts pushing the next part \u2014 getting more urgent each day it\u2019s not scheduled.';
+        info.innerHTML = '\uD83D\uDCCB Each bunk sees <strong>' + escapeHtml(item.name) + ' 1/' + mp.totalParts + '</strong>, then <strong>' + escapeHtml(item.name) + ' 2/' + mp.totalParts + '</strong>' + (mp.totalParts > 2 ? ', and so on' : '') + '.' + daysText + cycleText;
+        configPanel.appendChild(info);
+    }
+
+    function updateSummary() {
+        var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (s) s.textContent = summaryMultiPart(item);
+    }
+
+    cb.onchange = function() {
+        isEnabled = this.checked;
+        mp.enabled = isEnabled;
+        if (!isEnabled) { mp.totalParts = 2; }
+        item.multiPart = mp;
+        // If maxUsage isn't set at all, default to totalParts (one cycle)
+        if (isEnabled && !item.maxUsage) {
+            item.maxUsage = mp.totalParts;
+        }
+        configPanel.style.display = isEnabled ? "block" : "none";
+        if (isEnabled) renderConfig();
+        saveData();
+        updateSummary();
+        renderMasterList(); renderRainyDayList();
+    };
+
+    if (isEnabled) renderConfig();
+    return container;
+}
+
+// =========================================================================
+// ★ v3.5: Multi-Part Helper Functions
+// =========================================================================
+function cleanupMultiPartLink(item) {
+    // v3.7: No partner links — multiPart is self-contained on each activity
+    return;
+}
+
+function propagateMultiPartRename(oldName, newName) {
+    // v3.7: No partner references to update — single activity model
+    return;
+}
+
+// =========================================================================
+// Add/Delete, Cleanup, Helpers
+// =========================================================================
 function addSpecial() { if(!window.AccessControl?.checkSetupAccess?.('add special activities'))return; if(!addSpecialInput)return; const n=addSpecialInput.value.trim(); if(!n)return; if(specialActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())||rainyDayActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())){alert("Already exists.");return;} specialActivities.push(createDefaultActivity(n)); addSpecialInput.value=""; saveData(); selectedItemId='special-'+n; renderMasterList(); renderRainyDayList(); renderDetailPane(); }
 function addRainyDayActivity() { if(!window.AccessControl?.checkSetupAccess?.('add rainy day activities'))return; if(!addRainyDayInput)return; const n=addRainyDayInput.value.trim(); if(!n)return; if(specialActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())||rainyDayActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())){alert("Already exists.");return;} const a=createDefaultActivity(n); a.rainyDayExclusive=true; a.rainyDayOnly=true; a.isIndoor=true; rainyDayActivities.push(a); addRainyDayInput.value=""; saveData(); selectedItemId='special-'+n; renderMasterList(); renderRainyDayList(); renderDetailPane(); }
 
@@ -1001,6 +1175,11 @@ window.diagnoseSpecialActivities = function() {
         if (!Array.isArray(a.timeRules)) { actIssues.push('timeRules not array'); }
         else { a.timeRules.forEach(function(rule, rIdx) { if (rule.startMin === undefined) actIssues.push('timeRules[' + rIdx + '].startMin missing'); if (rule.endMin === undefined) actIssues.push('timeRules[' + rIdx + '].endMin missing'); }); }
         if (a.isIndoor === undefined && !a.rainyDayExclusive && !a.rainyDayOnly) actIssues.push('isIndoor property missing (will default to true)');
+        // ★ v3.7: Check multi-part consistency
+        if (a.multiPart?.enabled) {
+            if (!a.multiPart.totalParts || a.multiPart.totalParts < 2) actIssues.push('Multi-part enabled but totalParts < 2');
+            if (a.maxUsage && a.maxUsage < a.multiPart.totalParts) actIssues.push('maxUsage (' + a.maxUsage + ') < totalParts (' + a.multiPart.totalParts + ') — bunks will max out before completing all parts');
+        }
         if (actIssues.length > 0) issues.push({ activity: a.name || '[index ' + idx + ']', issues: actIssues });
     });
     if (issues.length === 0) { console.log('\nAll special activities have valid structure!'); }
@@ -1011,5 +1190,101 @@ window.diagnoseSpecialActivities = function() {
     return { activities: storedActivities.length, issues: issues.length };
 };
 
-console.log("[SPECIAL_ACTIVITIES] Module v3.4 loaded");
+// =========================================================================
+// ★ v3.7: Multi-Part Special — Global Helpers for Scheduler Integration
+// =========================================================================
+// Simple model: one activity, N parts. The system counts how many times
+// a bunk has done it. Part X = the Xth time. Can't do part X+1 before X.
+// Display: "Woodworking 2/3" means bunk's 2nd session out of 3 total.
+// =========================================================================
+
+/**
+ * Count how many times a bunk has completed this activity on previous days.
+ */
+window.getBunkCompletionCount = function(bunkName, activityName) {
+    if (!bunkName || !activityName) return 0;
+    var count = 0;
+    try {
+        // Source 1: Historical counts (most reliable)
+        var global = window.loadGlobalSettings?.() || {};
+        var histCounts = global.historicalCounts || {};
+        if (histCounts[bunkName]?.[activityName] > 0) return histCounts[bunkName][activityName];
+
+        // Source 2: Rotation history
+        var rotHist = window.loadRotationHistory?.() || {};
+        var bunkHist = rotHist.bunks?.[bunkName];
+        if (bunkHist) {
+            var actHist = bunkHist.activities?.[activityName] || bunkHist[activityName];
+            if (actHist?.count > 0) return actHist.count;
+        }
+
+        // Source 3: Scan all past daily schedules
+        var allDaily = window.loadAllDailyData?.() || {};
+        var currentDate = window.currentScheduleDate || window.currentDate || '';
+        var sortedDates = Object.keys(allDaily).sort();
+        for (var i = 0; i < sortedDates.length; i++) {
+            var dateKey = sortedDates[i];
+            if (currentDate && dateKey >= currentDate) continue;
+            var sched = allDaily[dateKey]?.scheduleAssignments?.[bunkName];
+            if (!Array.isArray(sched)) continue;
+            for (var j = 0; j < sched.length; j++) {
+                var entry = sched[j];
+                if (entry && !entry.continuation && (entry._activity === activityName || entry.field === activityName)) {
+                    count++;
+                    break; // One per day max
+                }
+            }
+        }
+    } catch (e) {
+        console.warn('[MultiPart] Error counting completions for ' + bunkName + ':', e);
+    }
+    return count;
+};
+
+// Backward compat alias
+window.hasBunkCompletedPart1 = function(bunkName, activityName) {
+    return window.getBunkCompletionCount(bunkName, activityName) > 0;
+};
+window.hasBunkCompletedActivity = window.hasBunkCompletedPart1;
+
+/**
+ * Get multi-part config for an activity (returns null if not multi-part).
+ */
+window.getMultiPartConfig = function(activityName) {
+    var special = window.getSpecialActivityByName?.(activityName);
+    if (!special?.multiPart?.enabled) return null;
+    return special.multiPart;
+};
+
+/**
+ * Check if a bunk is eligible for a special activity.
+ * For multi-part: bunk must not have exceeded maxUsage.
+ * maxUsage is set separately (e.g., 4 for 2-part × 2 cycles).
+ * The existing same-day duplicate logic prevents double-assign within a day.
+ */
+window.isBunkEligibleForSpecial = function(bunkName, activityName) {
+    var mp = window.getMultiPartConfig?.(activityName);
+    if (!mp) return true;
+    // maxUsage is the real cap (could be totalParts × number of cycles)
+    var special = window.getSpecialActivityByName?.(activityName);
+    var maxUsage = special?.maxUsage || mp.totalParts;
+    if (maxUsage <= 0) return true; // No limit
+    var completed = window.getBunkCompletionCount(bunkName, activityName);
+    return completed < maxUsage;
+};
+
+/**
+ * Get the display label for a bunk's next session of a multi-part activity.
+ * Cycles through parts: if totalParts=2 and completed=3, next is "2/2" (second cycle, part 2).
+ * Returns "Woodworking 1/2" or null if not multi-part.
+ */
+window.getMultiPartDisplayLabel = function(bunkName, activityName) {
+    var mp = window.getMultiPartConfig?.(activityName);
+    if (!mp) return null;
+    var completed = window.getBunkCompletionCount(bunkName, activityName);
+    var partInCycle = (completed % mp.totalParts) + 1;
+    return activityName + ' ' + partInCycle + '/' + mp.totalParts;
+};
+
+console.log("[SPECIAL_ACTIVITIES] Module v3.7 loaded (multi-part: single activity, N parts)");
 })();

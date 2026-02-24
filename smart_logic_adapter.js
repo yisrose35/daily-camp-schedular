@@ -425,6 +425,12 @@
             return false;
         }
         
+        // ★ v3.5: Multi-Part check — Part 2 requires Part 1 completion
+        if (window.isBunkEligibleForSpecial && !window.isBunkEligibleForSpecial(bunk, special.name)) {
+            log(`      ${bunk}: blocked from ${special.name} (hasn't completed Part 1)`);
+            return false;
+        }
+        
         return true;
     }
 
