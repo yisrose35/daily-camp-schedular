@@ -459,7 +459,7 @@ function renderDetailPane() {
         section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
         section("Full Grade", summaryFullGrade(item), () => renderFullGradeSettings(item)),
         section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)),
-        section("2-Part Special", summaryMultiPart(item), () => renderMultiPartSettings(item))
+        section("Multi-Parts", summaryMultiPart(item), () => renderMultiPartSettings(item))
     ]));
 }
 
