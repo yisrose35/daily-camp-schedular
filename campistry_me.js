@@ -755,7 +755,7 @@
                         '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' +
                         '</button>' +
                         '<button class="icon-btn danger" onclick="CampistryMe.deleteDivision(\'' + jsDiv + '\')" title="Delete division" aria-label="Delete ' + escDiv + '">' +
-                        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
+                        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2-2v2"/></svg>' +
                         '</button>' +
                         '<svg class="expand-icon ' + (isExpanded ? '' : 'collapsed') + '" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>' +
                     '</div>' +
@@ -987,7 +987,7 @@
         if (campers.length === 0 && total === 0) { tbody.innerHTML = html; if (empty) empty.style.display = 'block'; _restoreQAState(savedQA); return; }
         if (empty) empty.style.display = 'none';
 
-        html += campers.map(c => '<tr><td><span class="clickable" onclick="CampistryMe.editCamper(\'' + jsEsc(c.name) + '\')">' + esc(c.name) + '</span></td><td>' + (esc(c.division) || '—') + '</td><td>' + (esc(c.grade) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (esc(c.team) || '—') + '</td><td><button class="icon-btn danger" onclick="CampistryMe.deleteCamper(\'' + jsEsc(c.name) + '\')" aria-label="Delete camper"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></td></tr>').join('');
+        html += campers.map(c => '<tr><td><span class="clickable" onclick="CampistryMe.editCamper(\'' + jsEsc(c.name) + '\')">' + esc(c.name) + '</span></td><td>' + (esc(c.division) || '—') + '</td><td>' + (esc(c.grade) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (esc(c.team) || '—') + '</td><td><button class="icon-btn danger" onclick="CampistryMe.deleteCamper(\'' + jsEsc(c.name) + '\')" aria-label="Delete camper"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2-2v2"/></svg></button></td></tr>').join('');
         tbody.innerHTML = html;
         _restoreQAState(savedQA);
     }
@@ -1357,20 +1357,23 @@
             const rec = rowToRecord(cols, headerMap);
             if (!rec.name) continue;
 
-            // Smart matching against existing structure
-            let matchedDiv = rec.division ? findMatchingKey(rec.division, existingDivKeys) : '';
-            let matchedGrade = rec.grade;
-            if (rec.grade && matchedDiv && structure[matchedDiv]) {
-                matchedGrade = findMatchingKey(rec.grade, Object.keys(structure[matchedDiv]?.grades || {}));
+            // Smart matching — resolve to existing structure keys for LOOKUP only
+            // The camper record keeps the ORIGINAL values from the file
+            let structDiv = rec.division ? findMatchingKey(rec.division, existingDivKeys) : '';
+            let structGrade = rec.grade;
+            if (rec.grade && structDiv && structure[structDiv]) {
+                structGrade = findMatchingKey(rec.grade, Object.keys(structure[structDiv]?.grades || {}));
             }
-            let matchedBunk = rec.bunk;
-            if (rec.bunk && matchedDiv && matchedGrade && structure[matchedDiv]?.grades?.[matchedGrade]) {
-                matchedBunk = findMatchingKey(rec.bunk, structure[matchedDiv].grades[matchedGrade].bunks || []);
+            let structBunk = rec.bunk;
+            if (rec.bunk && structDiv && structGrade && structure[structDiv]?.grades?.[structGrade]) {
+                structBunk = findMatchingKey(rec.bunk, structure[structDiv].grades[structGrade].bunks || []);
             }
 
             pendingCsvData.push({
                 name: rec.name, firstName: rec.firstName, lastName: rec.lastName,
-                division: matchedDiv, grade: matchedGrade, bunk: matchedBunk, team: rec.team
+                division: rec.division, grade: rec.grade, bunk: rec.bunk, team: rec.team,
+                // _struct* keys used internally by importCsv for structure placement
+                _structDiv: structDiv, _structGrade: structGrade, _structBunk: structBunk
             });
         }
 
@@ -1401,89 +1404,97 @@
         return result.map(s => s.replace(/""/g, '"'));
     }
 
-    // --- Smart Import (create + update + optionally remove) ---
+    // --- Import: Update or Replace ---
+    // Update: add new campers, update existing, name starting with - removes camper
+    // Replace: wipe all structure + roster, rebuild entirely from file
     function importCsv() {
         if (!pendingCsvData.length) return;
 
-        const mode = document.getElementById('importModeSelect')?.value || 'merge';
+        const mode = document.getElementById('importModeSelect')?.value || 'update';
         let added = 0, updated = 0, skipped = 0, removed = 0;
         let divsCreated = 0, gradesCreated = 0, bunksCreated = 0;
-
-        const existingDivCount = Object.keys(structure).length;
-        const importedNames = new Set();
 
         // Capture field settings before import for preservation
         const capturedSettings = _captureFieldSettings();
 
+        // ── Replace mode: wipe everything first ──
+        if (mode === 'replace') {
+            const oldCamperCount = Object.keys(camperRoster).length;
+            structure = {};
+            camperRoster = {};
+            expandedDivisions.clear();
+            expandedGrades.clear();
+            removed = oldCamperCount;
+        }
+
+        const existingDivCount = Object.keys(structure).length;
+
         pendingCsvData.forEach(r => {
-            const divName = r.division;
-            const gradeName = r.grade;
-            const bunkName = r.bunk;
+            const divName = r.division;       // original from file
+            const gradeName = r.grade;        // original from file
+            const bunkName = r.bunk;          // original from file
+
+            // ── Update mode: handle DELETE rows ──
+            // Name starting with "-" or any column value of DELETE/REMOVE → remove camper
+            if (mode === 'update') {
+                const nameForDelete = r.name.trim();
+                const anyColDelete = [r.division, r.grade, r.bunk, r.team].some(
+                    v => v && /^(delete|remove)$/i.test(v.trim())
+                );
+                if (nameForDelete.startsWith('-') || anyColDelete) {
+                    // Strip the "-" prefix to find the actual camper name
+                    const actualName = nameForDelete.startsWith('-') ? nameForDelete.slice(1).trim() : nameForDelete;
+                    if (actualName && camperRoster[actualName]) {
+                        delete camperRoster[actualName];
+                        removed++;
+                    }
+                    return;
+                }
+            }
 
             if (isUnsafeName(r.name) || isUnsafeName(divName) || isUnsafeName(gradeName) || isUnsafeName(bunkName)) {
                 skipped++;
                 return;
             }
 
-            importedNames.add(r.name);
+            // For Replace mode, _struct* keys won't have matches (structure was wiped)
+            // so we use original values directly for structure creation
+            const structDiv = (mode === 'replace') ? divName : (r._structDiv || divName);
+            const structGrade = (mode === 'replace') ? gradeName : (r._structGrade || gradeName);
+            const structBunk = (mode === 'replace') ? bunkName : (r._structBunk || bunkName);
 
-            // Smart structure creation with fuzzy matching
-            if (divName && !structure[divName]) {
-                const existingDivKeys = Object.keys(structure);
-                const fuzzyDiv = existingDivKeys.find(k => _importValueMatches(k, divName));
-                if (fuzzyDiv) {
-                    r.division = fuzzyDiv;
-                } else {
-                    const colorIdx = (existingDivCount + divsCreated) % COLOR_PRESETS.length;
-                    structure[divName] = { color: COLOR_PRESETS[colorIdx], grades: {} };
-                    expandedDivisions.add(divName);
-                    divsCreated++;
-                }
+            // Ensure structure exists
+            if (structDiv && !structure[structDiv]) {
+                const colorIdx = (existingDivCount + divsCreated) % COLOR_PRESETS.length;
+                structure[structDiv] = { color: COLOR_PRESETS[colorIdx], grades: {} };
+                expandedDivisions.add(structDiv);
+                divsCreated++;
             }
 
-            const actualDiv = r.division;
-
-            if (actualDiv && gradeName && structure[actualDiv]) {
-                if (!structure[actualDiv].grades) structure[actualDiv].grades = {};
-                const existingGradeKeys = Object.keys(structure[actualDiv].grades);
-                const fuzzyGrade = existingGradeKeys.find(k => _importValueMatches(k, gradeName));
-                if (fuzzyGrade) {
-                    r.grade = fuzzyGrade;
-                } else if (!structure[actualDiv].grades[gradeName]) {
-                    structure[actualDiv].grades[gradeName] = { bunks: [] };
-                    expandedGrades.add(actualDiv + '||' + gradeName);
+            if (structDiv && structGrade && structure[structDiv]) {
+                if (!structure[structDiv].grades) structure[structDiv].grades = {};
+                if (!structure[structDiv].grades[structGrade]) {
+                    structure[structDiv].grades[structGrade] = { bunks: [] };
+                    expandedGrades.add(structDiv + '||' + structGrade);
                     gradesCreated++;
                 }
             }
 
-            const actualGrade = r.grade;
-
-            if (actualDiv && actualGrade && bunkName && structure[actualDiv]?.grades?.[actualGrade]) {
-                const bunks = structure[actualDiv].grades[actualGrade].bunks;
-                const fuzzyBunk = bunks.find(b => _importValueMatches(b, bunkName));
-                if (fuzzyBunk) {
-                    r.bunk = fuzzyBunk;
-                } else if (!bunks.includes(bunkName)) {
-                    bunks.push(bunkName);
+            if (structDiv && structGrade && structBunk && structure[structDiv]?.grades?.[structGrade]) {
+                const bunks = structure[structDiv].grades[structGrade].bunks;
+                if (!bunks.includes(structBunk)) {
+                    bunks.push(structBunk);
                     bunksCreated++;
                 }
             }
 
+            // Store the MATCHED structure key so fields/master builder/scheduler stay consistent
+            // e.g. file says "1" but structure has "1st Grade" → camper gets "1st Grade"
             if (camperRoster[r.name]) updated++; else added++;
-            camperRoster[r.name] = { division: r.division, grade: r.grade, bunk: r.bunk, team: r.team };
+            camperRoster[r.name] = { division: structDiv, grade: structGrade, bunk: structBunk, team: r.team };
         });
 
-        // Full Replace mode: remove campers not in the upload
-        if (mode === 'replace') {
-            Object.keys(camperRoster).forEach(name => {
-                if (!importedNames.has(name)) {
-                    delete camperRoster[name];
-                    removed++;
-                }
-            });
-        }
-
-        // Restore field settings after potential name changes
+        // Restore field settings after potential structure changes
         _restoreFieldSettings(capturedSettings);
 
         saveData(); closeModal('csvModal'); renderAll();
