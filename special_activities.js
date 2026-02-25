@@ -442,23 +442,26 @@ function renderDetailPane() {
     avail.innerHTML = '<span>Special is <strong>' + (item.available ? 'AVAILABLE' : 'UNAVAILABLE') + '</strong></span><span style="font-size:0.8rem; opacity:0.8;">Toggle in master list</span>';
     detailPaneEl.appendChild(avail);
 
-    // v3.4: NESTED ACCORDIONS — outer group expands to reveal inner sub-sections
-    // Group 1: Scheduling Rules — location + sharing + access
-    detailPaneEl.appendChild(sectionGroup("Scheduling Rules", "Location, sharing & grade access", [
-        section("Field / Location", summaryLocation(item), () => renderLocationSettings(item)),
-        section("Sharing", summarySharing(item), () => renderSharing(item)),
-        section("Division Access", summaryAccess(item), () => renderAccess(item))
+    // v4.0: REDESIGNED SECTION LAYOUT — clearer grouping
+    // Group 1: WHERE — physical location
+    detailPaneEl.appendChild(sectionGroup("Where", "Physical location for this activity", [
+        section("Field / Location", summaryLocation(item), () => renderLocationSettings(item))
     ]));
 
-    // Group 2: Time & Weather — time rules + weather (weather only for non-rainy-day items)
-    const timeWeatherSections = [section("Time Availability", summaryTime(item), () => renderTimeRules(item))];
-    if (!isRainyDayItem) timeWeatherSections.push(section("Weather & Availability", summaryWeather(item), () => renderWeatherSettings(item)));
-    detailPaneEl.appendChild(sectionGroup("Time & Weather", "When this special can be scheduled", timeWeatherSections));
+    // Group 2: WHO & HOW — scheduling mode (full grade vs individual) + grade access
+    detailPaneEl.appendChild(sectionGroup("Who & How", summarySchedulingMode(item), [
+        section("Scheduling Mode", summarySchedulingMode(item), () => renderSchedulingMode(item)),
+        section("Grade Access", summaryAccess(item), () => renderAccess(item))
+    ]));
 
-    // Group 3: Rotation Rules — usage limit + full grade + prep duration + multi-part
-    detailPaneEl.appendChild(sectionGroup("Rotation Rules", "Limits, timing & scheduling mode", [
+    // Group 3: WHEN — time rules + weather
+    const whenSections = [section("Time Availability", summaryTime(item), () => renderTimeRules(item))];
+    if (!isRainyDayItem) whenSections.push(section("Weather & Rainy Day", summaryWeather(item), () => renderWeatherSettings(item)));
+    detailPaneEl.appendChild(sectionGroup("When", "Time rules & availability", whenSections));
+
+   // Group 4: ADVANCED — usage caps + duration + multi-part
+    detailPaneEl.appendChild(sectionGroup("Advanced", "Usage limits, prep time & multi-part", [
         section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
-        section("Full Grade", summaryFullGrade(item), () => renderFullGradeSettings(item)),
         section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)),
         section("Multi-Parts", summaryMultiPart(item), () => renderMultiPartSettings(item))
     ]));
@@ -474,16 +477,20 @@ function summaryMaxUsage(item) {
     var periodLabels = { 'half': 'per half', '1week': 'per week', '2weeks': 'per 2 weeks', '3weeks': 'per 3 weeks', '4weeks': 'per 4 weeks' };
     return 'Max ' + m + ' time' + (m > 1 ? 's' : '') + ' ' + (periodLabels[period] || 'per half');
 }
-function summaryFullGrade(item) { return item.fullGrade ? 'Entire grade does it together' : 'Off (normal rotation)'; }
-function summarySharing(item) { if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "No sharing (1 bunk only)"; return 'Up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks (same grade)'; }
-function summaryAccess(item) { if (!item.limitUsage?.enabled) return "Open to all grades"; const c = Object.keys(item.limitUsage.divisions||{}).length; if (c===0) return "\u26A0 Restricted (none selected)"; return c + ' grade' + (c!==1?'s':'') + ' allowed' + (item.limitUsage.usePriority?" \u00B7 prioritized":""); }
+function summaryFullGrade(item) { return item.fullGrade ? 'Full grade together' : 'Individual bunks'; }
+function summarySharing(item) { if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "1 bunk at a time"; return 'Up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks at once'; }
+function summarySchedulingMode(item) {
+    if (item.fullGrade) return 'Full grade — all bunks together';
+    if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return 'Individual — 1 bunk at a time';
+    return 'Individual — up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks at once';
+}function summaryAccess(item) { if (!item.limitUsage?.enabled) return "Open to all grades"; const c = Object.keys(item.limitUsage.divisions||{}).length; if (c===0) return "\u26A0 Restricted (none selected)"; return c + ' grade' + (c!==1?'s':'') + ' allowed' + (item.limitUsage.usePriority?" \u00B7 prioritized":""); }
 function summaryTime(item) { const c = (item.timeRules||[]).length; return c ? c + ' rule(s) active' : "Available all day"; }
 function summaryWeather(item) {
     let s = item.isIndoor ? 'Indoor · Rainy day available' : 'Outdoor · Disabled on rain';
     const overrides = [];
     if (item.rainyDayCapacity > 0) overrides.push('cap:' + item.rainyDayCapacity);
     if (item.rainyDayAvailableAllDay && (item.timeRules||[]).length > 0) overrides.push('bypass time rules');
-    if (overrides.length > 0) s += ' · 🌧️ ' + overrides.join(', ');
+    if (overrides.length > 0) s += ' · Rainy: ' + overrides.join(', ');
     return s;
 }
 function summaryLocation(item) { return item.location || "No field assigned"; }
@@ -515,6 +522,174 @@ function renderFullGradeSettings(item) {
         note.innerHTML = '<strong>Normal mode:</strong> Bunks are assigned this activity individually through the regular rotation.';
     }
     container.appendChild(note);
+    return container;
+}
+
+// =========================================================================
+// RENDER: Scheduling Mode — v4.0 unified Full Grade + Sharing
+// =========================================================================
+function renderSchedulingMode(item) {
+    const container = document.createElement("div");
+    const updateSummary = () => {
+        const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (s) s.textContent = summarySchedulingMode(item);
+        const groupHint = container.closest('.outer-accordion-body')?.previousElementSibling?.querySelector('.oa-hint');
+        if (groupHint) groupHint.textContent = summarySchedulingMode(item);
+    };
+    const renderContent = () => {
+        container.innerHTML = "";
+
+        // ── TOP-LEVEL TOGGLE: Full Grade vs Individual Bunks ──
+        const modeWrap = document.createElement("div");
+        modeWrap.style.cssText = "display:flex; gap:0; margin-bottom:16px; border-radius:10px; overflow:hidden; border:1px solid #E5E7EB;";
+
+        const btnFull = document.createElement("button");
+        btnFull.innerHTML = '<strong>Full Grade</strong><span style="display:block;font-size:0.75rem;font-weight:400;margin-top:2px;opacity:0.8;">Entire grade together</span>';
+        btnFull.style.cssText = 'flex:1; padding:12px 8px; border:none; cursor:pointer; text-align:center; font-size:0.85rem; transition:all 0.15s; line-height:1.3; '
+            + (item.fullGrade
+                ? 'background:#0F5F6E; color:white;'
+                : 'background:#fff; color:#6B7280;');
+
+        const btnIndiv = document.createElement("button");
+        btnIndiv.innerHTML = '<strong>Individual Bunks</strong><span style="display:block;font-size:0.75rem;font-weight:400;margin-top:2px;opacity:0.8;">Assigned per bunk</span>';
+        btnIndiv.style.cssText = 'flex:1; padding:12px 8px; border:none; cursor:pointer; text-align:center; font-size:0.85rem; transition:all 0.15s; line-height:1.3; border-left:1px solid #E5E7EB; '
+            + (!item.fullGrade
+                ? 'background:#0F5F6E; color:white;'
+                : 'background:#fff; color:#6B7280;');
+
+        btnFull.onclick = () => {
+            item.fullGrade = true;
+            saveData();
+            renderContent();
+            updateSummary();
+        };
+        btnIndiv.onclick = () => {
+            item.fullGrade = false;
+            saveData();
+            renderContent();
+            updateSummary();
+        };
+
+        modeWrap.appendChild(btnFull);
+        modeWrap.appendChild(btnIndiv);
+        container.appendChild(modeWrap);
+
+        // ── MODE-SPECIFIC CONTENT ──
+        if (item.fullGrade) {
+            // FULL GRADE MODE — simple explanation, no sharing needed
+            const infoBox = document.createElement("div");
+            infoBox.style.cssText = "padding:14px; background:linear-gradient(135deg, #f0f9fb, #e6f4f7); border:1px solid #b2dce6; border-radius:8px; line-height:1.6;";
+            infoBox.innerHTML =
+                '<div style="font-weight:600; color:#0A4A56; margin-bottom:6px; font-size:0.9rem;">How it works</div>' +
+                '<div style="color:#0F5F6E; font-size:0.84rem;">' +
+                    'When the scheduler assigns this activity, <strong>every bunk in the grade</strong> will do it in the same time slot. ' +
+                    'No sharing rules are needed — the entire grade participates together.' +
+                '</div>';
+            container.appendChild(infoBox);
+
+        } else {
+            // INDIVIDUAL BUNK MODE — show sharing / capacity controls
+            const rules = item.sharableWith || { type: 'not_sharable', divisions: [], capacity: 2 };
+            const isSharable = rules.type !== 'not_sharable';
+
+            // ── Can multiple bunks do this at the same time? ──
+            const sharingLabel = document.createElement("div");
+            sharingLabel.style.cssText = "font-size:0.85rem; font-weight:500; color:#374151; margin-bottom:10px;";
+            sharingLabel.textContent = "Can multiple bunks do this at the same time?";
+            container.appendChild(sharingLabel);
+
+            const toggleRow = document.createElement("div");
+            toggleRow.style.cssText = "display:flex; gap:0; margin-bottom:16px; border-radius:8px; overflow:hidden; border:1px solid #E5E7EB;";
+
+            const btnNo = document.createElement("button");
+            btnNo.textContent = "No — 1 bunk only";
+            btnNo.style.cssText = 'flex:1; padding:10px 8px; border:none; cursor:pointer; font-size:0.84rem; transition:all 0.15s; '
+                + (!isSharable
+                    ? 'background:#0F5F6E; color:white; font-weight:600;'
+                    : 'background:#fff; color:#6B7280;');
+
+            const btnYes = document.createElement("button");
+            btnYes.textContent = "Yes — multiple bunks";
+            btnYes.style.cssText = 'flex:1; padding:10px 8px; border:none; cursor:pointer; font-size:0.84rem; transition:all 0.15s; border-left:1px solid #E5E7EB; '
+                + (isSharable
+                    ? 'background:#0F5F6E; color:white; font-weight:600;'
+                    : 'background:#fff; color:#6B7280;');
+
+            btnNo.onclick = () => {
+                rules.type = 'not_sharable';
+                rules.capacity = 1;
+                rules.divisions = [];
+                item.sharableWith = rules;
+                saveData();
+                renderContent();
+                updateSummary();
+            };
+            btnYes.onclick = () => {
+                rules.type = 'same_division';
+                rules.capacity = Math.max(2, rules.capacity || 2);
+                item.sharableWith = rules;
+                saveData();
+                renderContent();
+                updateSummary();
+            };
+
+            toggleRow.appendChild(btnNo);
+            toggleRow.appendChild(btnYes);
+            container.appendChild(toggleRow);
+
+            if (isSharable) {
+                // ── Capacity selector ──
+                const capBox = document.createElement("div");
+                capBox.style.cssText = "padding:14px; background:#F9FAFB; border:1px solid #E5E7EB; border-radius:8px;";
+
+                const capLabel = document.createElement("div");
+                capLabel.style.cssText = "font-size:0.84rem; font-weight:500; color:#374151; margin-bottom:10px;";
+                capLabel.textContent = "How many bunks can do this at the same time?";
+                capBox.appendChild(capLabel);
+
+                const capRow = document.createElement("div");
+                capRow.style.cssText = "display:flex; align-items:center; gap:12px; margin-bottom:10px;";
+
+                const capIn = document.createElement("input");
+                capIn.type = "number"; capIn.min = "2"; capIn.max = "20";
+                capIn.value = rules.capacity || 2;
+                capIn.style.cssText = "width:64px; padding:8px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:1rem; font-weight:600;";
+                capIn.onchange = () => {
+                    rules.capacity = Math.min(20, Math.max(2, parseInt(capIn.value) || 2));
+                    capIn.value = rules.capacity;
+                    item.sharableWith = rules;
+                    saveData();
+                    updateSummary();
+                    const noteEl = capBox.querySelector('.cap-note');
+                    if (noteEl) noteEl.innerHTML = 'Up to <strong>' + rules.capacity + '</strong> bunks from the <strong>same grade</strong> can be scheduled here at the same time. Bunks from different grades cannot share.';
+                };
+
+                const capSuffix = document.createElement("span");
+                capSuffix.style.cssText = "font-size:0.85rem; color:#6B7280;";
+                capSuffix.textContent = "bunks at once";
+
+                capRow.appendChild(capIn);
+                capRow.appendChild(capSuffix);
+                capBox.appendChild(capRow);
+
+                const capNote = document.createElement("div");
+                capNote.className = "cap-note";
+                capNote.style.cssText = "color:#6B7280; font-size:0.8rem; line-height:1.5;";
+                capNote.innerHTML = 'Up to <strong>' + (rules.capacity || 2) + '</strong> bunks from the <strong>same grade</strong> can be scheduled here at the same time. Bunks from different grades cannot share.';
+                capBox.appendChild(capNote);
+
+                container.appendChild(capBox);
+            } else {
+                // Not sharable — brief explanation
+                const noteBox = document.createElement("div");
+                noteBox.style.cssText = "color:#6B7280; font-size:0.8rem; padding:12px; background:#F9FAFB; border-radius:8px; border:1px solid #E5E7EB; line-height:1.5;";
+                noteBox.textContent = "Only 1 bunk can be assigned to this activity at a time. Other bunks will be scheduled for something else.";
+                container.appendChild(noteBox);
+            }
+        }
+    };
+
+    renderContent();
     return container;
 }
 
@@ -831,45 +1006,73 @@ function renderWeatherSettings(item) {
     const container = document.createElement("div");
     const isIndoor = item.isIndoor === true;
     const updateSummary = () => { const s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if(s) s.textContent = summaryWeather(item); };
-    const indoorHtml = '<div style="margin-bottom:16px;">'
-        + '<p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Mark as indoor to keep available during Rainy Day Mode.</p>'
-        + '<div style="display:flex; align-items:center; gap:12px; padding:14px; background:' + (isIndoor ? '#e6f4f7' : '#fef3c7') + '; border:1px solid ' + (isIndoor ? '#b2dce6' : '#fcd34d') + '; border-radius:10px;">'
-        + '<span style="font-size:28px;">' + (isIndoor ? '\uD83C\uDFE0' : '\uD83C\uDF33') + '</span>'
-        + '<div style="flex:1;">'
-        + '<div style="font-weight:600; color:' + (isIndoor ? '#0A4A56' : '#92400e') + ';">' + (isIndoor ? 'Indoor' : 'Outdoor') + '</div>'
-        + '<div style="font-size:0.85rem; color:' + (isIndoor ? '#0F5F6E' : '#b45309') + ';">' + (isIndoor ? 'Available on rainy days' : 'Disabled during rainy days') + '</div>'
+
+    // ── INDOOR / OUTDOOR TOGGLE ──
+    const topDesc = document.createElement("p");
+    topDesc.style.cssText = "font-size:0.84rem; color:#6b7280; margin:0 0 14px 0; line-height:1.5;";
+    topDesc.textContent = "Does this activity happen indoors or outdoors? Indoor activities stay available when you turn on Rainy Day Mode. Outdoor activities are automatically disabled.";
+    container.appendChild(topDesc);
+
+    const indoorCard = document.createElement("div");
+    indoorCard.style.cssText = "display:flex; align-items:center; gap:12px; padding:14px; background:" + (isIndoor ? '#e6f4f7' : '#fef3c7') + "; border:1px solid " + (isIndoor ? '#b2dce6' : '#fcd34d') + "; border-radius:10px; margin-bottom:20px;";
+    indoorCard.innerHTML =
+        '<div style="flex:1;">'
+        + '<div style="font-weight:600; color:' + (isIndoor ? '#0A4A56' : '#92400e') + ';">' + (isIndoor ? 'Indoor Activity' : 'Outdoor Activity') + '</div>'
+        + '<div style="font-size:0.84rem; color:' + (isIndoor ? '#0F5F6E' : '#b45309') + ';">' + (isIndoor ? 'Stays available on rainy days' : 'Turned off during rainy days') + '</div>'
         + '</div>'
-        + '<label class="switch"><input type="checkbox" id="weather-toggle" ' + (isIndoor ? 'checked' : '') + '><span class="slider"></span></label>'
-        + '</div></div>';
+        + '<label class="switch"><input type="checkbox" id="weather-toggle" ' + (isIndoor ? 'checked' : '') + '><span class="slider"></span></label>';
+    container.appendChild(indoorCard);
+
+    // ── RAINY DAY OVERRIDES ──
+    const overrideSection = document.createElement("div");
+    overrideSection.style.cssText = "padding-top:16px; border-top:1px solid #e5e7eb;";
+
+    const overrideTitle = document.createElement("div");
+    overrideTitle.style.cssText = "font-weight:600; font-size:0.95rem; color:#1e293b; margin-bottom:4px;";
+    overrideTitle.textContent = "Rainy Day Overrides";
+    overrideSection.appendChild(overrideTitle);
+
+    const overrideDesc = document.createElement("div");
+    overrideDesc.style.cssText = "font-size:0.8rem; color:#6B7280; margin-bottom:14px; line-height:1.5;";
+    overrideDesc.textContent = "Optionally change how this activity behaves when Rainy Day Mode is on. These only apply on rainy days.";
+    overrideSection.appendChild(overrideDesc);
+
+    // Capacity override
     const regularCapacity = parseInt(item.sharableWith?.capacity) || 1;
-    const hasTimeRules = (item.timeRules || []).length > 0;
-    const overridesHtml = '<div style="margin-top:20px; padding-top:16px; border-top:1px solid #e5e7eb;">'
-        + '<div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">'
-        + '<span style="font-size:1.1rem;">\uD83C\uDF27\uFE0F</span>'
-        + '<div style="font-weight:600; font-size:0.95rem; color:#1e293b;">Rainy Day Overrides</div>'
-        + '</div>'
-        + '<div style="background:#f0f9ff; border:1px solid #bae6fd; border-radius:10px; padding:14px; margin-bottom:12px;">'
-        + '<div style="font-weight:600; font-size:0.9rem; color:#0c4a6e; margin-bottom:8px;">'
-        + '\uD83D\uDCCA Capacity Override'
-        + '<span style="font-weight:400; font-size:0.8rem; color:#0369a1;"> (regular: ' + regularCapacity + ')</span>'
-        + '</div>'
+    const capCard = document.createElement("div");
+    capCard.style.cssText = "background:#f0f9ff; border:1px solid #bae6fd; border-radius:10px; padding:14px; margin-bottom:12px;";
+    capCard.innerHTML =
+        '<div style="font-weight:600; font-size:0.9rem; color:#0c4a6e; margin-bottom:4px;">Capacity Override</div>'
+        + '<div style="font-size:0.8rem; color:#0369a1; margin-bottom:10px;">Normal capacity is ' + regularCapacity + ' bunk' + (regularCapacity !== 1 ? 's' : '') + '. Set a different number here if more bunks should be able to use this on rainy days.</div>'
         + '<div style="display:flex; align-items:center; gap:10px;">'
         + '<label style="font-size:0.85rem; color:#334155;">Rainy day capacity:</label>'
-        + '<input type="number" id="rainy-day-capacity-input" min="1" max="20" placeholder="Same" value="' + (item.rainyDayCapacity || '') + '" style="width:70px; padding:6px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:0.9rem;">'
+        + '<input type="number" id="rainy-day-capacity-input" min="1" max="20" placeholder="Same as normal" value="' + (item.rainyDayCapacity || '') + '" style="width:80px; padding:6px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:0.9rem;">'
         + '<span style="font-size:0.8rem; color:#64748b;">bunks</span>'
         + '</div>'
-        + '<div style="font-size:0.75rem; color:#64748b; margin-top:6px;">Leave empty = use regular capacity.</div>'
-        + '</div>'
-        + '<div style="background:#fefce8; border:1px solid #fde68a; border-radius:10px; padding:14px;">'
-        + '<div style="display:flex; align-items:center; justify-content:space-between;">'
+        + '<div style="font-size:0.75rem; color:#64748b; margin-top:6px;">Leave empty to keep the normal capacity on rainy days.</div>';
+    overrideSection.appendChild(capCard);
+
+    // Time bypass
+    const hasTimeRules = (item.timeRules || []).length > 0;
+    const timeCard = document.createElement("div");
+    timeCard.style.cssText = "background:#fefce8; border:1px solid #fde68a; border-radius:10px; padding:14px;";
+    timeCard.innerHTML =
+        '<div style="display:flex; align-items:center; justify-content:space-between;">'
         + '<div>'
-        + '<div style="font-weight:600; font-size:0.9rem; color:#713f12;">\u23F0 Ignore Time Restrictions on Rain Days</div>'
-        + '<div style="font-size:0.8rem; color:#a16207;">' + (hasTimeRules ? (item.timeRules.length + ' time rule(s) can be bypassed') : 'No time restrictions configured') + '</div>'
+        + '<div style="font-weight:600; font-size:0.9rem; color:#713f12;">Available All Day on Rain Days</div>'
+        + '<div style="font-size:0.8rem; color:#a16207; line-height:1.4;">'
+        + (hasTimeRules
+            ? 'When on, the ' + item.timeRules.length + ' time rule' + (item.timeRules.length !== 1 ? 's' : '') + ' you set will be ignored on rainy days, making this available all day.'
+            : 'No time rules configured yet. Add time rules in the Time Availability section first.')
         + '</div>'
-        + '<label class="switch"><input type="checkbox" id="rainy-day-all-day-toggle" ' + (item.rainyDayAvailableAllDay ? 'checked' : '') + ' ' + (!hasTimeRules ? 'disabled' : '') + '><span class="slider"></span></label>'
-        + '</div></div>'
+        + '</div>'
+        + '<label class="switch" style="margin-left:12px;"><input type="checkbox" id="rainy-day-all-day-toggle" ' + (item.rainyDayAvailableAllDay ? 'checked' : '') + ' ' + (!hasTimeRules ? 'disabled' : '') + '><span class="slider"></span></label>'
         + '</div>';
-    container.innerHTML = indoorHtml + overridesHtml;
+    overrideSection.appendChild(timeCard);
+
+    container.appendChild(overrideSection);
+
+    // ── EVENT HANDLERS ──
     const tog = container.querySelector('#weather-toggle');
     if (tog) {
         tog.onchange = function() {
@@ -914,7 +1117,6 @@ function renderWeatherSettings(item) {
     }
     return container;
 }
-
 function renderPrepDurationSettings(item) {
     const container = document.createElement("div");
     const hp = (item.prepDuration||0) > 0;

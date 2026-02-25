@@ -233,8 +233,28 @@
                 else if (sw.type === 'custom') { capacity = parseInt(sw.capacity) || 2; sharingType = 'custom'; }
                 else if (sw.capacity) { capacity = parseInt(sw.capacity); sharingType = 'same_division'; }
                 else { capacity = 2; sharingType = 'same_division'; }
-            } else if (fieldProps.sharable) { capacity = 2; sharingType = 'same_division'; }
-            // ========================================================================
+           } else if (fieldProps.sharable) { capacity = 2; sharingType = 'same_division'; }
+
+            // ★★★ v15.0: RAINY DAY CAPACITY OVERRIDE ★★★
+            if (_isRainyDay && _rainyCapOverrides.has(fieldName)) {
+                var rainCap = _rainyCapOverrides.get(fieldName);
+                if (rainCap > capacity) {
+                    v12Log('🌧️ Capacity override: ' + fieldName + ' ' + capacity + ' → ' + rainCap);
+                    capacity = rainCap;
+                    if (sharingType === 'not_sharable' && capacity > 1) sharingType = 'same_division';
+                }
+            }
+
+            var prefProps = fieldProps;
+            if (!prefProps?.preferences?.enabled) { var actProps = props[cand.activityName]; if (actProps?.preferences?.enabled) prefProps = actProps; }
+            if (prefProps?.preferences?.enabled) { prefList = prefProps.preferences.list || []; prefExclusive = !!prefProps.preferences.exclusive; }
+
+            _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, prefList: prefList, prefExclusive: prefExclusive, hasProps: true });
+        }
+        v12Log('Field properties pre-computed: ' + _fieldPropertyMap.size + ' fields' + (_isRainyDay ? ' (🌧️ rainy overrides applied)' : ''));
+    }
+
+    // ========================================================================
     // FIELD GROUP + DIVISION SENIORITY CACHE
     // ========================================================================
     function buildFieldGroupCaches() {
@@ -292,25 +312,7 @@
         }
     }
 
-            // ★★★ v15.0: RAINY DAY CAPACITY OVERRIDE ★★★
-            if (_isRainyDay && _rainyCapOverrides.has(fieldName)) {
-                var rainCap = _rainyCapOverrides.get(fieldName);
-                if (rainCap > capacity) {
-                    v12Log('🌧️ Capacity override: ' + fieldName + ' ' + capacity + ' → ' + rainCap);
-                    capacity = rainCap;
-                    // If field was not_sharable but now has higher capacity, upgrade sharing
-                    if (sharingType === 'not_sharable' && capacity > 1) sharingType = 'same_division';
-                }
-            }
-
-            var prefProps = fieldProps;
-            if (!prefProps?.preferences?.enabled) { var actProps = props[cand.activityName]; if (actProps?.preferences?.enabled) prefProps = actProps; }
-            if (prefProps?.preferences?.enabled) { prefList = prefProps.preferences.list || []; prefExclusive = !!prefProps.preferences.exclusive; }
-
-            _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, prefList: prefList, prefExclusive: prefExclusive, hasProps: true });
-        }
-        v12Log('Field properties pre-computed: ' + _fieldPropertyMap.size + ' fields' + (_isRainyDay ? ' (🌧️ rainy overrides applied)' : ''));
-    }
+           
 
     function getFieldCapacity(fieldName) {
         var cached = _fieldPropertyMap.get(fieldName);
@@ -385,6 +387,19 @@
         for (var i = 0; i < upperBound; i++) { var e = entries[i]; if (e.bunk === excludeBunk) continue; if (e.endMin > startMin) count++; }
         return count;
     }
+
+    // ★★★ v15.3: Get raw time index entries for fullGrade capacity bypass ★★★
+    Solver.getFieldTimeIndexEntries = function(fieldNorm, startMin, endMin) {
+        var entries = _fieldTimeIndex.get(fieldNorm) || [];
+        var result = [];
+        for (var i = 0; i < entries.length; i++) {
+            var e = entries[i];
+            if (e.endMin <= startMin || e.startMin >= endMin) continue;
+            result.push(e);
+        }
+        return result;
+    };
+
     function checkCrossDivisionTimeConflict(fieldName, blockDivName, startMin, endMin, excludeBunk) {
         if (startMin === undefined || endMin === undefined) return null;
         var fieldNorm = normName(fieldName);
@@ -442,7 +457,7 @@
         }
         return false;
     }
-    }
+    
 
     // ========================================================================
     // BATCHED ROTATION SCORING
@@ -945,8 +960,29 @@ else penalty += 200;
                 }
                 if (allocated[aBunk] && wishes2.length > 0 && allocated[aBunk] !== wishes2[0].activity) { var dk2 = aBunk + '|' + wishes2[0].activity; _activityDebt.set(dk2, (_activityDebt.get(dk2) || 0) - 2000); }
             }
-            for (var pi = 0; pi < blockIndices.length; pi++) { var bIdx = blockIndices[pi]; var pBunk2 = activityBlocks[bIdx].bunk; if (allocated[pBunk2]) _activityPlan.set(bIdx, { activity: allocated[pBunk2], steering: -8000 }); }
-            for (var scAct in activityUsed) { var demand = 0; for (var scBunk in wishLists) { if (wishLists[scBunk]?.some(function(w) { return w.activity === scAct; })) demand++; } var scSupply = activitySupply[scAct] || 1; if (demand > scSupply) _scarcityMap.set(scAct + '|' + startMin, demand / scSupply); }
+          // ★★★ v15.3: fullGrade coordination — if any bunk got a fullGrade activity,
+            // force ALL bunks in this group to be planned for it ★★★
+            var fgActivity = null;
+            for (var fgBunk in allocated) {
+                var fgAct = allocated[fgBunk];
+               if (fgAct && (activityProperties[fgAct]?.fullGrade || activityProperties[fgAct]?._fullGrade)) {
+                    fgActivity = fgAct;
+                    console.log('[PLANNER] fullGrade activity found: ' + fgAct + ' for grade group at ' + startMin);
+                    break;
+                }
+            }
+            if (fgActivity) {
+                for (var fgBi = 0; fgBi < blockIndices.length; fgBi++) {
+                    var fgBIdx = blockIndices[fgBi];
+                    var fgBunk2 = activityBlocks[fgBIdx].bunk;
+                    var fgDoneCheck = getActivitiesDoneToday(fgBunk2, activityBlocks[fgBIdx].slots?.[0] ?? 999);
+                    if (!fgDoneCheck.has(normName(fgActivity))) {
+                        allocated[fgBunk2] = fgActivity;
+                    }
+                }
+                console.log('[PLANNER] fullGrade override: ALL bunks → ' + fgActivity);
+            }
+            for (var pi = 0; pi < blockIndices.length; pi++) { var bIdx = blockIndices[pi]; var pBunk2 = activityBlocks[bIdx].bunk; if (allocated[pBunk2]) _activityPlan.set(bIdx, { activity: allocated[pBunk2], steering: -8000 }); }            for (var scAct in activityUsed) { var demand = 0; for (var scBunk in wishLists) { if (wishLists[scBunk]?.some(function(w) { return w.activity === scAct; })) demand++; } var scSupply = activitySupply[scAct] || 1; if (demand > scSupply) _scarcityMap.set(scAct + '|' + startMin, demand / scSupply); }
         }
         console.log('[SOLVER-v13] 🧠 Activity-First Planner: ' + _activityPlan.size + ' planned, ' + _scarcityMap.size + ' scarce, ' + _activityDebt.size + ' debt');
     }
@@ -1043,7 +1079,8 @@ else penalty += 200;
         buildFieldTimeIndex: buildFieldTimeIndex,
         addToFieldTimeIndex: addToFieldTimeIndex,
         removeFromFieldTimeIndex: removeFromFieldTimeIndex,
-        getFieldUsageFromTimeIndex: getFieldUsageFromTimeIndex,
+       getFieldUsageFromTimeIndex: getFieldUsageFromTimeIndex,
+        getFieldTimeIndexEntries: Solver.getFieldTimeIndexEntries,
         checkCrossDivisionTimeConflict: checkCrossDivisionTimeConflict,
         countSameDivisionUsage: countSameDivisionUsage,
         checkSameFieldActivityMismatch: checkSameFieldActivityMismatch,
@@ -1208,6 +1245,8 @@ else penalty += 200;
         var allCands = S.allCandidateOptions, actProps = S.activityProperties;
         var groupsSolved = 0, blocksAssigned = 0;
         var globalBunkActs = new Map();
+        // ★★★ v15.3: Global fullGrade map persists across slot groups ★★★
+        var globalFullGradeMap = new Map();
         var allBunks = Object.keys(window.scheduleAssignments || {});
         for (var gbi=0;gbi<allBunks.length;gbi++) { var gb=allBunks[gbi],gbs=window.scheduleAssignments[gb]||[]; for (var gsi=0;gsi<gbs.length;gsi++) { var ge=gbs[gsi]; if (!ge||ge.continuation||ge._isTransition) continue; var ga=normName(ge._activity||ge.sport||ge.field); if (ga&&ga!=='free'&&ga!=='free play'&&ga!=='transition/buffer') { if (!globalBunkActs.has(gb)) globalBunkActs.set(gb,new Set()); globalBunkActs.get(gb).add(ga); } } }
         var sorted = Array.from(S._slotGroups.entries()).sort(function(a,b){return a[1].length-b[1].length;});
@@ -1215,7 +1254,7 @@ else penalty += 200;
             S._todayCache.clear();
             var unassigned = blockIndices.filter(function(bi){return !S._assignedBlocks.has(bi);});
             if (unassigned.length===0) continue;
-            var grpResults = solveGroupAugmented(activityBlocks, unassigned, globalBunkActs);
+            var grpResults = solveGroupAugmented(activityBlocks, unassigned, globalBunkActs, globalFullGradeMap);
             for (var ga2 of grpResults) {
                 if (S._assignedBlocks.has(ga2.blockIdx)) continue;
                 var blk = activityBlocks[ga2.blockIdx];
@@ -1234,9 +1273,10 @@ else penalty += 200;
         return blocksAssigned;
     }
 
-    function solveGroupAugmented(activityBlocks, unassigned, globalBunkActs) {
+    function solveGroupAugmented(activityBlocks, unassigned, globalBunkActs, globalFullGradeMap) {
         var allCands = S.allCandidateOptions, actProps = S.activityProperties;
         globalBunkActs = globalBunkActs || new Map();
+        globalFullGradeMap = globalFullGradeMap || new Map();
         var results = [], blockOpts = [];
         for (var bi of unassigned) {
             var dom = S._domains.get(bi);
@@ -1260,8 +1300,8 @@ else penalty += 200;
             return a.domainSize - b.domainSize;
         });
         var fieldUsageGrp = new Map(), fieldDivsGrp = new Map(), bunkActsGrp = new Map();
-        // ★★★ v15.0: fullGrade per GRADE — key = "gradeName|start|end" ★★★
-        var fullGradeMap = new Map();
+        // ★★★ v15.3: fullGrade uses global cross-group map ★★★
+        var fullGradeMap = globalFullGradeMap;
 
         for (var bo of blockOpts) {
             if (S._assignedBlocks.has(bo.bi)) continue;
@@ -1270,13 +1310,18 @@ else penalty += 200;
             var fgKey = (b2.divName||'')+'|'+(b2.startTime??'')+'|'+(b2.endTime??'');
             var fgExist = fullGradeMap.get(fgKey);
             if (fgExist) {
-                var fgPk = fgExist.pick, fgAn = normName(fgPk._activity||fgPk.field);
+                var fgAn = normName(fgExist.pick._activity||fgExist.pick.field);
                 var fgDone1 = bunkActsGrp.get(b2.bunk), fgDone2 = globalBunkActs.get(b2.bunk);
                 var fgDup = (fgDone1&&fgDone1.has(fgAn))||(fgDone2&&fgDone2.has(fgAn));
                 if (!fgDup) { var fgLive = S.getActivitiesDoneToday(b2.bunk,b2.slots?.[0]??999); if (!fgLive.has(fgAn)) {
-                    results.push({blockIdx:bo.bi,candIdx:fgExist.candIdx,pick:fgPk,cost:fgExist.cost});
+                    // ★★★ v15.3: Clone pick properly + update ALL tracking maps ★★★
+                    var fgClone = { field: fgExist.pick.field, sport: fgExist.pick.sport, _activity: fgExist.pick._activity, _type: fgExist.pick._type, _fullGrade: true };
+                    results.push({blockIdx:bo.bi,candIdx:fgExist.candIdx,pick:fgClone,cost:fgExist.cost});
                     if (!bunkActsGrp.has(b2.bunk)) bunkActsGrp.set(b2.bunk,new Set()); bunkActsGrp.get(b2.bunk).add(fgAn);
-                    assigned = true; console.log('[FULL_GRADE] Forced '+b2.bunk+' → '+fgPk._activity+' (grade: '+b2.divName+')');
+                    var fgFn = normName(fgClone.field);
+                    fieldUsageGrp.set(fgFn, (fieldUsageGrp.get(fgFn)||0)+1);
+                    if (!fieldDivsGrp.has(fgFn)) fieldDivsGrp.set(fgFn,new Set()); fieldDivsGrp.get(fgFn).add(b2.divName||'');
+                    assigned = true; console.log('[FULL_GRADE] Forced '+b2.bunk+' → '+fgClone._activity+' (grade: '+b2.divName+')');
                 } }
             }
             if (assigned) continue;
@@ -1304,6 +1349,24 @@ else penalty += 200;
                     if (!xca&&b2.divName) { for (var ria=0;ria<results.length;ria++) { var ra2=results[ria]; if (ra2.candIdx===-1||normName(ra2.pick.field)!==fn2) continue; var rba=activityBlocks[ra2.blockIdx]; if (rba.divName&&rba.divName!==b2.divName&&rba.startTime<b2.endTime&&rba.endTime>b2.startTime) { xca=true; break; } } }
                     canFit=!xca&&(existUse+grpUse<cap);
                 }
+               // ★★★ v15.3: fullGrade capacity bypass — same grade bypasses capacity ★★★
+                if (!canFit && (c2._fullGrade || actProps[c2.activityName]?.fullGrade)) {
+                    var fgSameGrade = true;
+                    var fgDivSet = fieldDivsGrp.get(fn2);
+                    if (fgDivSet && fgDivSet.size > 0) {
+                        for (var fgd of fgDivSet) { if (fgd && fgd !== (b2.divName||'')) { fgSameGrade = false; break; } }
+                    }
+                    if (fgSameGrade && b2.startTime !== undefined && b2.endTime !== undefined) {
+                        var fgIdxEntries = S.getFieldTimeIndexEntries ? S.getFieldTimeIndexEntries(fn2, b2.startTime, b2.endTime) : [];
+                        for (var fge = 0; fge < fgIdxEntries.length; fge++) {
+                            if (fgIdxEntries[fge].bunk !== b2.bunk && fgIdxEntries[fge].divName !== (b2.divName||'')) { fgSameGrade = false; break; }
+                        }
+                    }
+                    if (fgSameGrade) {
+                        canFit = true;
+                        console.log('[FULL_GRADE] Capacity bypass: ' + b2.bunk + ' → ' + c2.activityName + ' (grade: ' + b2.divName + ')');
+                    }
+                }
                 if (canFit) {
                     var newPk = S.clonePick(c2);
                     results.push({blockIdx:bo.bi,candIdx:opt.ci,pick:newPk,cost:opt.cost});
@@ -1311,7 +1374,7 @@ else penalty += 200;
                     if (!fieldDivsGrp.has(fn2)) fieldDivsGrp.set(fn2,new Set()); fieldDivsGrp.get(fn2).add(b2.divName||'');
                     if (!bunkActsGrp.has(b2.bunk)) bunkActsGrp.set(b2.bunk,new Set());
                     var aAn=normName(c2.activityName); if (aAn&&aAn!=='free') bunkActsGrp.get(b2.bunk).add(aAn);
-                    // ★ v15.0: Record fullGrade if activity has _fullGrade
+                    // ★ v15.3: Record fullGrade — check both property names
                     if (newPk._fullGrade||actProps[c2.activityName]?.fullGrade||actProps[c2.activityName]?._fullGrade) { fullGradeMap.set(fgKey,{pick:newPk,candIdx:opt.ci,cost:opt.cost}); }
                     assigned=true; break;
                 }

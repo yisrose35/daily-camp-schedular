@@ -425,7 +425,13 @@
         
         const fragment = document.createDocumentFragment();
         
-        const groupOrder = Object.keys(state.divisionGroups);
+       const groupOrder = Object.keys(state.divisionGroups).sort((a, b) => {
+            const gradesA = state.divisionGroups[a]?.grades || [];
+            const gradesB = state.divisionGroups[b]?.grades || [];
+            const numA = parseInt(String(gradesA[0] || '').match(/(\d+)/)?.[1]) || 999;
+            const numB = parseInt(String(gradesB[0] || '').match(/(\d+)/)?.[1]) || 999;
+            return numA - numB;
+        });
         
         groupOrder.forEach(parentDivName => {
             const group = state.divisionGroups[parentDivName];
@@ -442,8 +448,14 @@
                 fragment.appendChild(groupHeader);
             }
             
-            // Grade cards within this parent division
-            group.grades.forEach(gradeName => {
+           // Grade cards within this parent division (sorted numerically)
+            const sortedGrades = [...group.grades].sort((a, b) => {
+                const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
+                const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
+                if (numA !== numB) return numA - numB;
+                return String(a).localeCompare(String(b));
+            });
+            sortedGrades.forEach(gradeName => {
                 const divObj = state.divisions[gradeName];
                 if (!divObj) return;
                 
@@ -753,6 +765,17 @@
                 
                 state.divisions = gradeBasedDivisions;
                 state.bunks = allBunks;
+                // Sort grades numerically within each group so rendering is always consistent
+                for (const groupName in divGroups) {
+                    if (divGroups[groupName].grades) {
+                        divGroups[groupName].grades.sort((a, b) => {
+                            const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
+                            const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
+                            if (numA !== numB) return numA - numB;
+                            return String(a).localeCompare(String(b));
+                        });
+                    }
+                }
                 state.divisionGroups = divGroups;
                 
             } else {
@@ -792,9 +815,19 @@
                 state.divisionGroups = { "All": { color: "#6B7280", grades: Object.keys(state.divisions) } };
             }
             
-            state.availableDivisions = Object.keys(state.divisions);
-            state.specialActivities = data.specialActivities || [];
-            state.bunkMetaData = data.bunkMetaData || {};
+           // Rebuild divisions object with numerically sorted keys
+            const sortedDivKeys = Object.keys(state.divisions).sort((a, b) => {
+                const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
+                const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
+                if (numA !== numB) return numA - numB;
+                return String(a).localeCompare(String(b));
+            });
+            const sortedDivisions = {};
+            sortedDivKeys.forEach(k => { sortedDivisions[k] = state.divisions[k]; });
+            state.divisions = sortedDivisions;
+
+            state.availableDivisions = sortedDivKeys;
+            state.specialActivities = data.specialActivities || [];            state.bunkMetaData = data.bunkMetaData || {};
             state.sportMetaData = data.sportMetaData || {};
             state.selectedDivision = data.selectedDivision || state.availableDivisions[0] || null;
             state.allSports = Array.isArray(data.allSports) ? data.allSports : [...DEFAULT_SPORTS];
