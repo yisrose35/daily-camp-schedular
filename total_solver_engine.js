@@ -233,8 +233,28 @@
                 else if (sw.type === 'custom') { capacity = parseInt(sw.capacity) || 2; sharingType = 'custom'; }
                 else if (sw.capacity) { capacity = parseInt(sw.capacity); sharingType = 'same_division'; }
                 else { capacity = 2; sharingType = 'same_division'; }
-            } else if (fieldProps.sharable) { capacity = 2; sharingType = 'same_division'; }
-            // ========================================================================
+           } else if (fieldProps.sharable) { capacity = 2; sharingType = 'same_division'; }
+
+            // ★★★ v15.0: RAINY DAY CAPACITY OVERRIDE ★★★
+            if (_isRainyDay && _rainyCapOverrides.has(fieldName)) {
+                var rainCap = _rainyCapOverrides.get(fieldName);
+                if (rainCap > capacity) {
+                    v12Log('🌧️ Capacity override: ' + fieldName + ' ' + capacity + ' → ' + rainCap);
+                    capacity = rainCap;
+                    if (sharingType === 'not_sharable' && capacity > 1) sharingType = 'same_division';
+                }
+            }
+
+            var prefProps = fieldProps;
+            if (!prefProps?.preferences?.enabled) { var actProps = props[cand.activityName]; if (actProps?.preferences?.enabled) prefProps = actProps; }
+            if (prefProps?.preferences?.enabled) { prefList = prefProps.preferences.list || []; prefExclusive = !!prefProps.preferences.exclusive; }
+
+            _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, prefList: prefList, prefExclusive: prefExclusive, hasProps: true });
+        }
+        v12Log('Field properties pre-computed: ' + _fieldPropertyMap.size + ' fields' + (_isRainyDay ? ' (🌧️ rainy overrides applied)' : ''));
+    }
+
+    // ========================================================================
     // FIELD GROUP + DIVISION SENIORITY CACHE
     // ========================================================================
     function buildFieldGroupCaches() {
@@ -292,25 +312,7 @@
         }
     }
 
-            // ★★★ v15.0: RAINY DAY CAPACITY OVERRIDE ★★★
-            if (_isRainyDay && _rainyCapOverrides.has(fieldName)) {
-                var rainCap = _rainyCapOverrides.get(fieldName);
-                if (rainCap > capacity) {
-                    v12Log('🌧️ Capacity override: ' + fieldName + ' ' + capacity + ' → ' + rainCap);
-                    capacity = rainCap;
-                    // If field was not_sharable but now has higher capacity, upgrade sharing
-                    if (sharingType === 'not_sharable' && capacity > 1) sharingType = 'same_division';
-                }
-            }
-
-            var prefProps = fieldProps;
-            if (!prefProps?.preferences?.enabled) { var actProps = props[cand.activityName]; if (actProps?.preferences?.enabled) prefProps = actProps; }
-            if (prefProps?.preferences?.enabled) { prefList = prefProps.preferences.list || []; prefExclusive = !!prefProps.preferences.exclusive; }
-
-            _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, prefList: prefList, prefExclusive: prefExclusive, hasProps: true });
-        }
-        v12Log('Field properties pre-computed: ' + _fieldPropertyMap.size + ' fields' + (_isRainyDay ? ' (🌧️ rainy overrides applied)' : ''));
-    }
+           
 
     function getFieldCapacity(fieldName) {
         var cached = _fieldPropertyMap.get(fieldName);
@@ -963,7 +965,7 @@ else penalty += 200;
             var fgActivity = null;
             for (var fgBunk in allocated) {
                 var fgAct = allocated[fgBunk];
-                if (fgAct && (actProps[fgAct]?.fullGrade || actProps[fgAct]?._fullGrade)) {
+               if (fgAct && (activityProperties[fgAct]?.fullGrade || activityProperties[fgAct]?._fullGrade)) {
                     fgActivity = fgAct;
                     console.log('[PLANNER] fullGrade activity found: ' + fgAct + ' for grade group at ' + startMin);
                     break;
@@ -973,7 +975,7 @@ else penalty += 200;
                 for (var fgBi = 0; fgBi < blockIndices.length; fgBi++) {
                     var fgBIdx = blockIndices[fgBi];
                     var fgBunk2 = activityBlocks[fgBIdx].bunk;
-                    var fgDoneCheck = S.getActivitiesDoneToday(fgBunk2, activityBlocks[fgBIdx].slots?.[0] ?? 999);
+                    var fgDoneCheck = getActivitiesDoneToday(fgBunk2, activityBlocks[fgBIdx].slots?.[0] ?? 999);
                     if (!fgDoneCheck.has(normName(fgActivity))) {
                         allocated[fgBunk2] = fgActivity;
                     }
