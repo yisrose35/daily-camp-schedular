@@ -759,6 +759,17 @@
                 
                 state.divisions = gradeBasedDivisions;
                 state.bunks = allBunks;
+                // Sort grades numerically within each group so rendering is always consistent
+                for (const groupName in divGroups) {
+                    if (divGroups[groupName].grades) {
+                        divGroups[groupName].grades.sort((a, b) => {
+                            const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
+                            const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
+                            if (numA !== numB) return numA - numB;
+                            return String(a).localeCompare(String(b));
+                        });
+                    }
+                }
                 state.divisionGroups = divGroups;
                 
             } else {
