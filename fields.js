@@ -60,12 +60,11 @@ function initFieldsTab(){
               </div>
             </div>
 
-           <!-- SPORT PLAYER REQUIREMENTS SECTION -->
-            <div id="sport-rules-section"></div>
-            
-
-            <!-- FIELD QUALITY GROUPS SECTION -->
-            <div id="field-quality-section"></div>
+          <!-- SPORT RULES + FIELD QUALITY — SIDE BY SIDE -->
+            <div style="display:flex; gap:16px; flex-wrap:wrap;">
+              <div id="sport-rules-section" style="flex:1; min-width:280px;"></div>
+              <div id="field-quality-section" style="flex:1; min-width:280px;"></div>
+            </div>
 
             <div style="display:flex; flex-wrap:wrap; gap:24px;">
               <!-- LEFT SIDE: MASTER LIST -->
