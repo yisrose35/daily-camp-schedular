@@ -459,8 +459,8 @@ function renderDetailPane() {
     if (!isRainyDayItem) whenSections.push(section("Weather & Rainy Day", summaryWeather(item), () => renderWeatherSettings(item)));
     detailPaneEl.appendChild(sectionGroup("When", "Time rules & availability", whenSections));
 
-    // Group 4: LIMITS — usage caps + duration + multi-part
-    detailPaneEl.appendChild(sectionGroup("Limits", "Usage caps & timing", [
+   // Group 4: ADVANCED — usage caps + duration + multi-part
+    detailPaneEl.appendChild(sectionGroup("Advanced", "Usage limits, prep time & multi-part", [
         section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
         section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)),
         section("Multi-Parts", summaryMultiPart(item), () => renderMultiPartSettings(item))
@@ -490,7 +490,7 @@ function summaryWeather(item) {
     const overrides = [];
     if (item.rainyDayCapacity > 0) overrides.push('cap:' + item.rainyDayCapacity);
     if (item.rainyDayAvailableAllDay && (item.timeRules||[]).length > 0) overrides.push('bypass time rules');
-    if (overrides.length > 0) s += ' · 🌧️ ' + overrides.join(', ');
+    if (overrides.length > 0) s += ' · Rainy: ' + overrides.join(', ');
     return s;
 }
 function summaryLocation(item) { return item.location || "No field assigned"; }
@@ -1006,45 +1006,73 @@ function renderWeatherSettings(item) {
     const container = document.createElement("div");
     const isIndoor = item.isIndoor === true;
     const updateSummary = () => { const s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if(s) s.textContent = summaryWeather(item); };
-    const indoorHtml = '<div style="margin-bottom:16px;">'
-        + '<p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Mark as indoor to keep available during Rainy Day Mode.</p>'
-        + '<div style="display:flex; align-items:center; gap:12px; padding:14px; background:' + (isIndoor ? '#e6f4f7' : '#fef3c7') + '; border:1px solid ' + (isIndoor ? '#b2dce6' : '#fcd34d') + '; border-radius:10px;">'
-        + '<span style="font-size:28px;">' + (isIndoor ? '\uD83C\uDFE0' : '\uD83C\uDF33') + '</span>'
-        + '<div style="flex:1;">'
-        + '<div style="font-weight:600; color:' + (isIndoor ? '#0A4A56' : '#92400e') + ';">' + (isIndoor ? 'Indoor' : 'Outdoor') + '</div>'
-        + '<div style="font-size:0.85rem; color:' + (isIndoor ? '#0F5F6E' : '#b45309') + ';">' + (isIndoor ? 'Available on rainy days' : 'Disabled during rainy days') + '</div>'
+
+    // ── INDOOR / OUTDOOR TOGGLE ──
+    const topDesc = document.createElement("p");
+    topDesc.style.cssText = "font-size:0.84rem; color:#6b7280; margin:0 0 14px 0; line-height:1.5;";
+    topDesc.textContent = "Does this activity happen indoors or outdoors? Indoor activities stay available when you turn on Rainy Day Mode. Outdoor activities are automatically disabled.";
+    container.appendChild(topDesc);
+
+    const indoorCard = document.createElement("div");
+    indoorCard.style.cssText = "display:flex; align-items:center; gap:12px; padding:14px; background:" + (isIndoor ? '#e6f4f7' : '#fef3c7') + "; border:1px solid " + (isIndoor ? '#b2dce6' : '#fcd34d') + "; border-radius:10px; margin-bottom:20px;";
+    indoorCard.innerHTML =
+        '<div style="flex:1;">'
+        + '<div style="font-weight:600; color:' + (isIndoor ? '#0A4A56' : '#92400e') + ';">' + (isIndoor ? 'Indoor Activity' : 'Outdoor Activity') + '</div>'
+        + '<div style="font-size:0.84rem; color:' + (isIndoor ? '#0F5F6E' : '#b45309') + ';">' + (isIndoor ? 'Stays available on rainy days' : 'Turned off during rainy days') + '</div>'
         + '</div>'
-        + '<label class="switch"><input type="checkbox" id="weather-toggle" ' + (isIndoor ? 'checked' : '') + '><span class="slider"></span></label>'
-        + '</div></div>';
+        + '<label class="switch"><input type="checkbox" id="weather-toggle" ' + (isIndoor ? 'checked' : '') + '><span class="slider"></span></label>';
+    container.appendChild(indoorCard);
+
+    // ── RAINY DAY OVERRIDES ──
+    const overrideSection = document.createElement("div");
+    overrideSection.style.cssText = "padding-top:16px; border-top:1px solid #e5e7eb;";
+
+    const overrideTitle = document.createElement("div");
+    overrideTitle.style.cssText = "font-weight:600; font-size:0.95rem; color:#1e293b; margin-bottom:4px;";
+    overrideTitle.textContent = "Rainy Day Overrides";
+    overrideSection.appendChild(overrideTitle);
+
+    const overrideDesc = document.createElement("div");
+    overrideDesc.style.cssText = "font-size:0.8rem; color:#6B7280; margin-bottom:14px; line-height:1.5;";
+    overrideDesc.textContent = "Optionally change how this activity behaves when Rainy Day Mode is on. These only apply on rainy days.";
+    overrideSection.appendChild(overrideDesc);
+
+    // Capacity override
     const regularCapacity = parseInt(item.sharableWith?.capacity) || 1;
-    const hasTimeRules = (item.timeRules || []).length > 0;
-    const overridesHtml = '<div style="margin-top:20px; padding-top:16px; border-top:1px solid #e5e7eb;">'
-        + '<div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">'
-        + '<span style="font-size:1.1rem;">\uD83C\uDF27\uFE0F</span>'
-        + '<div style="font-weight:600; font-size:0.95rem; color:#1e293b;">Rainy Day Overrides</div>'
-        + '</div>'
-        + '<div style="background:#f0f9ff; border:1px solid #bae6fd; border-radius:10px; padding:14px; margin-bottom:12px;">'
-        + '<div style="font-weight:600; font-size:0.9rem; color:#0c4a6e; margin-bottom:8px;">'
-        + '\uD83D\uDCCA Capacity Override'
-        + '<span style="font-weight:400; font-size:0.8rem; color:#0369a1;"> (regular: ' + regularCapacity + ')</span>'
-        + '</div>'
+    const capCard = document.createElement("div");
+    capCard.style.cssText = "background:#f0f9ff; border:1px solid #bae6fd; border-radius:10px; padding:14px; margin-bottom:12px;";
+    capCard.innerHTML =
+        '<div style="font-weight:600; font-size:0.9rem; color:#0c4a6e; margin-bottom:4px;">Capacity Override</div>'
+        + '<div style="font-size:0.8rem; color:#0369a1; margin-bottom:10px;">Normal capacity is ' + regularCapacity + ' bunk' + (regularCapacity !== 1 ? 's' : '') + '. Set a different number here if more bunks should be able to use this on rainy days.</div>'
         + '<div style="display:flex; align-items:center; gap:10px;">'
         + '<label style="font-size:0.85rem; color:#334155;">Rainy day capacity:</label>'
-        + '<input type="number" id="rainy-day-capacity-input" min="1" max="20" placeholder="Same" value="' + (item.rainyDayCapacity || '') + '" style="width:70px; padding:6px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:0.9rem;">'
+        + '<input type="number" id="rainy-day-capacity-input" min="1" max="20" placeholder="Same as normal" value="' + (item.rainyDayCapacity || '') + '" style="width:80px; padding:6px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:0.9rem;">'
         + '<span style="font-size:0.8rem; color:#64748b;">bunks</span>'
         + '</div>'
-        + '<div style="font-size:0.75rem; color:#64748b; margin-top:6px;">Leave empty = use regular capacity.</div>'
-        + '</div>'
-        + '<div style="background:#fefce8; border:1px solid #fde68a; border-radius:10px; padding:14px;">'
-        + '<div style="display:flex; align-items:center; justify-content:space-between;">'
+        + '<div style="font-size:0.75rem; color:#64748b; margin-top:6px;">Leave empty to keep the normal capacity on rainy days.</div>';
+    overrideSection.appendChild(capCard);
+
+    // Time bypass
+    const hasTimeRules = (item.timeRules || []).length > 0;
+    const timeCard = document.createElement("div");
+    timeCard.style.cssText = "background:#fefce8; border:1px solid #fde68a; border-radius:10px; padding:14px;";
+    timeCard.innerHTML =
+        '<div style="display:flex; align-items:center; justify-content:space-between;">'
         + '<div>'
-        + '<div style="font-weight:600; font-size:0.9rem; color:#713f12;">\u23F0 Ignore Time Restrictions on Rain Days</div>'
-        + '<div style="font-size:0.8rem; color:#a16207;">' + (hasTimeRules ? (item.timeRules.length + ' time rule(s) can be bypassed') : 'No time restrictions configured') + '</div>'
+        + '<div style="font-weight:600; font-size:0.9rem; color:#713f12;">Available All Day on Rain Days</div>'
+        + '<div style="font-size:0.8rem; color:#a16207; line-height:1.4;">'
+        + (hasTimeRules
+            ? 'When on, the ' + item.timeRules.length + ' time rule' + (item.timeRules.length !== 1 ? 's' : '') + ' you set will be ignored on rainy days, making this available all day.'
+            : 'No time rules configured yet. Add time rules in the Time Availability section first.')
         + '</div>'
-        + '<label class="switch"><input type="checkbox" id="rainy-day-all-day-toggle" ' + (item.rainyDayAvailableAllDay ? 'checked' : '') + ' ' + (!hasTimeRules ? 'disabled' : '') + '><span class="slider"></span></label>'
-        + '</div></div>'
+        + '</div>'
+        + '<label class="switch" style="margin-left:12px;"><input type="checkbox" id="rainy-day-all-day-toggle" ' + (item.rainyDayAvailableAllDay ? 'checked' : '') + ' ' + (!hasTimeRules ? 'disabled' : '') + '><span class="slider"></span></label>'
         + '</div>';
-    container.innerHTML = indoorHtml + overridesHtml;
+    overrideSection.appendChild(timeCard);
+
+    container.appendChild(overrideSection);
+
+    // ── EVENT HANDLERS ──
     const tog = container.querySelector('#weather-toggle');
     if (tog) {
         tog.onchange = function() {
@@ -1089,7 +1117,6 @@ function renderWeatherSettings(item) {
     }
     return container;
 }
-
 function renderPrepDurationSettings(item) {
     const container = document.createElement("div");
     const hp = (item.prepDuration||0) > 0;
