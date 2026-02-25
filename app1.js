@@ -442,8 +442,14 @@
                 fragment.appendChild(groupHeader);
             }
             
-            // Grade cards within this parent division
-            group.grades.forEach(gradeName => {
+           // Grade cards within this parent division (sorted numerically)
+            const sortedGrades = [...group.grades].sort((a, b) => {
+                const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
+                const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
+                if (numA !== numB) return numA - numB;
+                return String(a).localeCompare(String(b));
+            });
+            sortedGrades.forEach(gradeName => {
                 const divObj = state.divisions[gradeName];
                 if (!divObj) return;
                 
