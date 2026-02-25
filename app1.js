@@ -827,13 +827,7 @@
             state.divisions = sortedDivisions;
 
             state.availableDivisions = sortedDivKeys;
-                const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
-                const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
-                if (numA !== numB) return numA - numB;
-                return String(a).localeCompare(String(b));
-            });
-            state.specialActivities = data.specialActivities || [];
-            state.bunkMetaData = data.bunkMetaData || {};
+            state.specialActivities = data.specialActivities || [];            state.bunkMetaData = data.bunkMetaData || {};
             state.sportMetaData = data.sportMetaData || {};
             state.selectedDivision = data.selectedDivision || state.availableDivisions[0] || null;
             state.allSports = Array.isArray(data.allSports) ? data.allSports : [...DEFAULT_SPORTS];
