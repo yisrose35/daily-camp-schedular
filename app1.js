@@ -425,7 +425,13 @@
         
         const fragment = document.createDocumentFragment();
         
-        const groupOrder = Object.keys(state.divisionGroups);
+       const groupOrder = Object.keys(state.divisionGroups).sort((a, b) => {
+            const gradesA = state.divisionGroups[a]?.grades || [];
+            const gradesB = state.divisionGroups[b]?.grades || [];
+            const numA = parseInt(String(gradesA[0] || '').match(/(\d+)/)?.[1]) || 999;
+            const numB = parseInt(String(gradesB[0] || '').match(/(\d+)/)?.[1]) || 999;
+            return numA - numB;
+        });
         
         groupOrder.forEach(parentDivName => {
             const group = state.divisionGroups[parentDivName];
