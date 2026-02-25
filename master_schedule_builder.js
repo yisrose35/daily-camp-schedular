@@ -1360,7 +1360,7 @@ function addDropListeners(selector) {
           location: reservedFields.length === 1 ? reservedFields[0] : null
         };
       }
-      // OTHER PINNED (swim, lunch, snacks, dismissal)
+     // OTHER PINNED (swim, lunch, snacks, dismissal)
       else if (['lunch', 'snacks', 'dismissal', 'swim'].includes(tileData.type)) {
         let name = tileData.name;
         let reservedFields = [];
@@ -1380,14 +1380,46 @@ function addDropListeners(selector) {
           }
         }
         
+        // Build modal fields — swim gets optional pre/post change
+        const modalFields = [
+          { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
+          { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
+        ];
+        if (tileData.type === 'swim') {
+          modalFields.push(
+            { name: 'preChangeMin', label: 'Pre-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 10' },
+            { name: 'postChangeMin', label: 'Post-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 10' }
+          );
+        }
+        
         const result = await showModal({
           title: name,
-          fields: [
-            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
-            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
-          ]
+          description: tileData.type === 'swim' ? 'Optionally add changing time before and/or after swim.' : undefined,
+          fields: modalFields
         });
         if (!result) return;
+        
+        // Parse pre/post change durations
+        const preChangeMin = parseInt(result.preChangeMin) || 0;
+        const postChangeMin = parseInt(result.postChangeMin) || 0;
+        const swimStartMin = parseTimeToMinutes(result.startTime);
+        const swimEndMin = parseTimeToMinutes(result.endTime);
+        
+        // If pre-change: create a "Change" tile before swim, adjust swim start
+        if (tileData.type === 'swim' && preChangeMin > 0 && swimStartMin !== null) {
+          const changeStart = swimStartMin - preChangeMin;
+          dailySkeleton.push({
+            id: Date.now().toString() + '_prechange',
+            type: 'pinned',
+            event: 'Change',
+            division: divName,
+            startTime: minutesToTime(changeStart),
+            endTime: result.startTime,
+            reservedFields: [],
+            location: null,
+            _swimChange: 'pre'
+          });
+        }
         
         newEvent = {
           id: Date.now().toString(),
@@ -1397,8 +1429,26 @@ function addDropListeners(selector) {
           startTime: result.startTime,
           endTime: result.endTime,
           reservedFields: reservedFields,
-          location: location
+          location: location,
+          _preChangeMin: preChangeMin || undefined,
+          _postChangeMin: postChangeMin || undefined
         };
+        
+        // If post-change: create a "Change" tile after swim
+        if (tileData.type === 'swim' && postChangeMin > 0 && swimEndMin !== null) {
+          const changeEnd = swimEndMin + postChangeMin;
+          dailySkeleton.push({
+            id: Date.now().toString() + '_postchange',
+            type: 'pinned',
+            event: 'Change',
+            division: divName,
+            startTime: result.endTime,
+            endTime: minutesToTime(changeEnd),
+            reservedFields: [],
+            location: null,
+            _swimChange: 'post'
+          });
+        }
       }
       // STANDARD SLOTS & LEAGUES
       else {
