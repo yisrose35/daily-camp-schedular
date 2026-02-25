@@ -1009,6 +1009,22 @@ function renderGroupEditor(groupName, existingMembers) {
 //------------------------------------------------------------------
 // LEFT LIST
 //------------------------------------------------------------------
+// Color palette for combo group glows — each combo gets a unique color
+const _comboColors = [
+    { glow: 'rgba(20,125,145,0.25)', border: '#147D91' },   // teal
+    { glow: 'rgba(168,85,247,0.25)', border: '#A855F7' },    // purple
+    { glow: 'rgba(234,88,12,0.25)',  border: '#EA580C' },    // orange
+    { glow: 'rgba(22,163,74,0.25)',  border: '#16A34A' },    // green
+    { glow: 'rgba(220,38,38,0.25)',  border: '#DC2626' },    // red
+    { glow: 'rgba(37,99,235,0.25)',  border: '#2563EB' },    // blue
+];
+function _getComboColor(comboId) {
+    if (!comboId) return null;
+    const ids = Object.keys(fieldCombos).sort();
+    const idx = ids.indexOf(comboId);
+    return _comboColors[idx % _comboColors.length];
+}
+
 function renderMasterLists(){
     fieldsListEl.innerHTML = "";
 
@@ -1017,7 +1033,25 @@ function renderMasterLists(){
         return;
     }
 
-    fields.forEach(f => fieldsListEl.appendChild(masterListItem(f)));
+    // Sort: combo fields grouped together, non-combo fields keep original order
+    const sorted = [...fields].sort((a, b) => {
+        const ca = getComboForField(a.name);
+        const cb = getComboForField(b.name);
+        if (ca && cb && ca.id === cb.id) {
+            // Sub-fields first, combined field last
+            const aIsCombined = ca.combinedField.toLowerCase().trim() === a.name.toLowerCase().trim();
+            const bIsCombined = cb.combinedField.toLowerCase().trim() === b.name.toLowerCase().trim();
+            if (aIsCombined && !bIsCombined) return 1;
+            if (!aIsCombined && bIsCombined) return -1;
+            return a.name.localeCompare(b.name);
+        }
+        if (ca && !cb) return -1;
+        if (!ca && cb) return 1;
+        if (ca && cb) return ca.id.localeCompare(cb.id);
+        return fields.indexOf(a) - fields.indexOf(b);
+    });
+
+    sorted.forEach(f => fieldsListEl.appendChild(masterListItem(f)));
 }
 
 function masterListItem(item){
@@ -1026,15 +1060,34 @@ function masterListItem(item){
     el.className = "list-item" + (id === selectedItemId ? " selected" : "");
     el.onclick = ()=>{ selectedItemId = id; renderMasterLists(); renderDetailPane(); };
 
+    // Combo glow effect
+    const combo = getComboForField(item.name);
+    if (combo) {
+        const color = _getComboColor(combo.id);
+        if (color) {
+            el.style.boxShadow = 'inset 3px 0 0 ' + color.border + ', 0 0 8px ' + color.glow;
+            el.style.borderLeft = 'none';
+        }
+    }
+
     const infoDiv = document.createElement("div");
     
     const name = document.createElement("div");
     name.className = "list-item-name";
     name.textContent = item.name;
+
+    // Subtle combo badge
+    if (combo) {
+        const badge = document.createElement('span');
+        const isCombined = combo.combinedField.toLowerCase().trim() === item.name.toLowerCase().trim();
+        const color = _getComboColor(combo.id);
+        badge.style.cssText = 'font-size:0.6rem; color:' + (color ? color.border : '#0F5F6E') + '; background:' + (color ? color.glow : 'rgba(20,125,145,0.15)') + '; border-radius:3px; padding:1px 5px; margin-left:6px; vertical-align:middle; font-weight:500;';
+        badge.textContent = isCombined ? '= ' + combo.subFields.join(' + ') : 'part of ' + combo.combinedField;
+        name.appendChild(badge);
+    }
     
     infoDiv.appendChild(name);
     el.appendChild(infoDiv);
-
     // Toggle Switch
     const tog = document.createElement("label");
     tog.className = "switch list-item-toggle";
