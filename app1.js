@@ -815,7 +815,18 @@
                 state.divisionGroups = { "All": { color: "#6B7280", grades: Object.keys(state.divisions) } };
             }
             
-           state.availableDivisions = Object.keys(state.divisions).sort((a, b) => {
+           // Rebuild divisions object with numerically sorted keys
+            const sortedDivKeys = Object.keys(state.divisions).sort((a, b) => {
+                const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
+                const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
+                if (numA !== numB) return numA - numB;
+                return String(a).localeCompare(String(b));
+            });
+            const sortedDivisions = {};
+            sortedDivKeys.forEach(k => { sortedDivisions[k] = state.divisions[k]; });
+            state.divisions = sortedDivisions;
+
+            state.availableDivisions = sortedDivKeys;
                 const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
                 const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
                 if (numA !== numB) return numA - numB;
