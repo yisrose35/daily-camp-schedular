@@ -2176,8 +2176,7 @@ function renderComboSettings(fieldItem) {
             removeBtn.textContent = 'Remove relationship';
             removeBtn.style.cssText = 'background:#FEF2F2; color:#DC2626; border:1px solid #FECACA; border-radius:6px; padding:6px 14px; cursor:pointer; font-size:0.85rem;';
             removeBtn.onclick = () => {
-                if (!window.AccessControl?.canEditSetup?.()) { window.AccessControl?.showPermissionDenied?.('edit field combos'); return; }
-                if (confirm('Remove the combined field relationship for "' + currentCombo.combinedField + '"?')) {
+    if (confirm('Remove the combined field relationship for "' + currentCombo.combinedField + '"?')) {
                     // Remove the entire combo, not just this field
                     const comboId = currentCombo.id;
                     if (comboId && fieldCombos[comboId]) {
@@ -2245,8 +2244,7 @@ function renderComboSettings(fieldItem) {
             saveBtn.textContent = 'Save Relationship';
             saveBtn.style.cssText = 'background:#147D91; color:white; border:none; border-radius:8px; padding:10px 18px; cursor:pointer; font-size:0.9rem; font-weight:500; display:none;';
             saveBtn.onclick = () => {
-                if (!window.AccessControl?.canEditSetup?.()) { window.AccessControl?.showPermissionDenied?.('edit field combos'); return; }
-                const subs = [...selectedPartners];
+    const subs = [...selectedPartners];
                 if (subs.length === 0) return;
                 const result = addFieldCombo(thisName, subs);
                 if (result) {
