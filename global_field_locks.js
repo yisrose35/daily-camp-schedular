@@ -170,9 +170,37 @@
                 return lock;
             }
         }
-        
+
+        // ★★★ COMBINED FIELD MUTUAL EXCLUSION CHECK ★★★
+        if (window.FieldCombos?.isInCombo?.(fieldName)) {
+            const divTimes = window.divisionTimes || {};
+            let cStartMin = null, cEndMin = null;
+            for (const dn of Object.keys(divTimes)) {
+                const ds = divTimes[dn] || [];
+                for (const si of slots) {
+                    if (ds[si]) {
+                        if (cStartMin === null || ds[si].startMin < cStartMin) cStartMin = ds[si].startMin;
+                        if (cEndMin === null || ds[si].endMin > cEndMin) cEndMin = ds[si].endMin;
+                    }
+                }
+                if (cStartMin !== null) break;
+            }
+            if (cStartMin !== null && cEndMin !== null) {
+                const comboCheck = window.FieldCombos.isBlockedByCombo(fieldName, cStartMin, cEndMin, null);
+                if (comboCheck.blocked) {
+                    return {
+                        lockedBy: 'combined_field', lockType: 'global', fieldName: fieldName,
+                        blockedBy: comboCheck.blocker,
+                        reason: '"' + fieldName + '" blocked because "' + comboCheck.blocker + '" is in use (combined field)',
+                        timestamp: Date.now()
+                    };
+                }
+            }
+        }
+
         return null;
     };
+
 // =========================================================================
 // ★★★ TIME-BASED LOCK CHECK (Cross-Division Safe) ★★★
 // =========================================================================
@@ -233,6 +261,19 @@ GlobalFieldLocks.isFieldLockedByTime = function(fieldName, queryStartMin, queryE
         if (lockStartMin < queryEndMin && lockEndMin > queryStartMin) {
             console.log(`[GLOBAL_LOCKS] ⏰ TIME-BASED LOCK HIT: "${fieldName}" locked ${lockStartMin}-${lockEndMin} overlaps query ${queryStartMin}-${queryEndMin} (by ${lock.lockedBy}: ${lock.leagueName || lock.activity})`);
             return lock;
+        }
+    }
+
+   // ★★★ COMBINED FIELD MUTUAL EXCLUSION CHECK ★★★
+    if (window.FieldCombos?.isInCombo?.(fieldName)) {
+        const comboCheck = window.FieldCombos.isBlockedByCombo(fieldName, queryStartMin, queryEndMin, null);
+        if (comboCheck.blocked) {
+            return {
+                lockedBy: 'combined_field', lockType: 'global', fieldName: fieldName,
+                blockedBy: comboCheck.blocker,
+                reason: '"' + fieldName + '" blocked because "' + comboCheck.blocker + '" is in use (combined field)',
+                timestamp: Date.now()
+            };
         }
     }
 
@@ -336,6 +377,18 @@ GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, 
     GlobalFieldLocks.filterAvailableFields = function(fieldNames, slots, divisionContext) {
         if (!fieldNames || fieldNames.length === 0) return [];
         return fieldNames.filter(fieldName => this.isFieldAvailable(fieldName, slots, divisionContext));
+    };
+    // ★★★ Lock combo partners when a field is explicitly locked ★★★
+    GlobalFieldLocks.lockComboPartners = function(fieldName, slots, lockInfo) {
+        if (!window.FieldCombos?.isInCombo?.(fieldName)) return;
+        const exclusive = window.FieldCombos.getExclusiveFields(fieldName);
+        for (const partner of exclusive) {
+            this.lockField(partner, slots, {
+                ...lockInfo,
+                lockedBy: 'combined_field',
+                reason: '"' + partner + '" blocked because "' + fieldName + '" is locked (combined field)'
+            });
+        }
     };
 
     // =========================================================================

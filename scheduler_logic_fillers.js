@@ -141,7 +141,15 @@
                 return true;
             }
         }
-
+// 2.5 ★★★ COMBINED FIELD MUTUAL EXCLUSION ★★★
+        if (window.FieldCombos?.isInCombo?.(fieldName)) {
+            const cStart = block.startTime ?? block.startMin;
+            const cEnd = block.endTime ?? block.endMin;
+            if (cStart != null && cEnd != null) {
+                const comboCheck = window.FieldCombos.isBlockedByCombo(fieldName, cStart, cEnd, block.bunk);
+                if (comboCheck.blocked) return true;
+            }
+        }
         // 3. Check global field locks
         if (!window.GlobalFieldLocks) return false;
         const slots = block.slots || [];

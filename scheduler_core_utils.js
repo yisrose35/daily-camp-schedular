@@ -883,6 +883,25 @@
             }
         }
 
+        // ★★★ COMBINED FIELD MUTUAL EXCLUSION CHECK ★★★
+        if (window.FieldCombos?.isInCombo?.(fieldName)) {
+            const cStartMin = block.startTime ?? block.startMin;
+            const cEndMin = block.endTime ?? block.endMin;
+            if (cStartMin != null && cEndMin != null) {
+                const comboCheck = window.FieldCombos.isBlockedByCombo(fieldName, cStartMin, cEndMin, block.bunk);
+                if (comboCheck.blocked) {
+                    if (DEBUG_FITS) console.log('[FIT] ' + block.bunk + ' - ' + fieldName + ': REJECTED - COMBO blocked by "' + comboCheck.blocker + '"');
+                    return false;
+                }
+            } else if (uniqueSlots.length > 0) {
+                const divCtx = block.divName || block.division;
+                if (window.FieldCombos.isBlockedByComboAtSlots(fieldName, uniqueSlots, divCtx, block.bunk)) {
+                    if (DEBUG_FITS) console.log('[FIT] ' + block.bunk + ' - ' + fieldName + ': REJECTED - COMBO blocked (slot-based)');
+                    return false;
+                }
+            }
+        }
+
         if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: ALLOWED`);
         return true;
     };

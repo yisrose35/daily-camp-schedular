@@ -434,7 +434,14 @@
             if (lockStartMin == null || lockEndMin == null) continue;
             if (lockStartMin < endMin && lockEndMin > startMin) return true;
         }
+        
+        // ★★★ COMBINED FIELD CHECK ★★★
+        if (window.FieldCombos?.isBlockedByCombo) {
+            var comboCheck = window.FieldCombos.isBlockedByCombo(fieldName, startMin, endMin, null);
+            if (comboCheck.blocked) return true;
+        }
         return false;
+    }
     }
 
     // ========================================================================
@@ -1170,7 +1177,21 @@ else penalty += 200;
     }
     function wouldConflict(aBlock,aPick,oBlock,oCand) {
         var afn = normName(aPick.field), ofn = oCand._fieldNorm || normName(oCand.field);
-        if (afn !== ofn) return false;
+        if (afn !== ofn) {
+            // ★★★ COMBINED FIELD: check if these are combo partners ★★★
+            if (window.FieldCombos?.isInCombo) {
+                var exclusive = window.FieldCombos.getExclusiveFields(aPick.field || '');
+                var isPartner = false;
+                for (var _ei = 0; _ei < exclusive.length; _ei++) {
+                    if (exclusive[_ei].toLowerCase().trim() === ofn) { isPartner = true; break; }
+                }
+                var aS=aBlock.startTime,aE=aBlock.endTime,oS=oBlock.startTime,oE=oBlock.endTime;
+                if (isPartner && aS !== undefined && oS !== undefined && !(aS >= oE || aE <= oS)) {
+                    return true; // Mutually exclusive combo partners at overlapping times
+                }
+            }
+            return false;
+        }
         var aS=aBlock.startTime,aE=aBlock.endTime,oS=oBlock.startTime,oE=oBlock.endTime;
         if (aS===undefined||oS===undefined) return false; if (aS>=oE||aE<=oS) return false;
         var fp = S._fieldPropertyMap.get(aPick.field); var cap = fp?fp.capacity:S.getFieldCapacity(aPick.field); var st = fp?fp.sharingType:S.getSharingType(aPick.field);

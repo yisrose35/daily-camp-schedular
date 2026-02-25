@@ -99,10 +99,59 @@
         const unassignedWarnings = checkUnassignedBunks(assignments, divisions, divisionTimes);
         unassignedWarnings.forEach(w => warnings.push(w));
         
+        // =====================================================================
+        // 7. ★★★ COMBINED FIELD (MUTUAL EXCLUSION) CONFLICTS ★★★
+        // =====================================================================
+        if (window.FieldCombos?.isInCombo) {
+            const comboSeen = new Set();
+            Object.entries(assignments).forEach(([bunk, slots]) => {
+                const divName = bunkDivMap[String(bunk)];
+                if (!divName) return;
+                const divSlots = divisionTimes[divName] || [];
+                (slots || []).forEach((entry, idx) => {
+                    if (!entry || entry.continuation) return;
+                    if (isLeagueEntry(entry)) return;
+                    if (isTransitionEntry(entry)) return;
+                    const fn = normalizeFieldName(entry.field) || normalizeFieldName(entry._activity);
+                    if (!fn || IGNORED_FIELDS.includes(fn)) return;
+                    if (!window.FieldCombos.isInCombo(fn)) return;
+                    const slot = divSlots[idx];
+                    if (!slot || slot.startMin == null) return;
+                    const exclusive = window.FieldCombos.getExclusiveFields(fn);
+                    exclusive.forEach(exField => {
+                        const exLow = exField.toLowerCase().trim();
+                        Object.entries(divisions).forEach(([od, odd]) => {
+                            const os = divisionTimes[od] || [];
+                            (odd.bunks || []).forEach(ob => {
+                                if (ob === bunk) return;
+                                const oba = assignments[ob] || [];
+                                (oba || []).forEach((oe, oi) => {
+                                    if (!oe || oe.continuation) return;
+                                    const ofn = normalizeFieldName(oe.field) || normalizeFieldName(oe._activity);
+                                    if (!ofn || ofn !== exLow) return;
+                                    const oSlot = os[oi];
+                                    if (!oSlot || oSlot.startMin == null) return;
+                                    if (oSlot.startMin >= slot.endMin || oSlot.endMin <= slot.startMin) return;
+                                    const key = [fn, exField, bunk, ob].sort().join('|') + '|' + slot.startMin;
+                                    if (comboSeen.has(key)) return;
+                                    comboSeen.add(key);
+                                    const timeLabel = formatTime(slot.startMin) + ' - ' + formatTime(slot.endMin);
+                                    errors.push(
+                                        `<strong>Combined Field Conflict:</strong> <u>${fn}</u> (${bunk}) and ` +
+                                        `<u>${exField}</u> (${ob}) share the same physical space and cannot be ` +
+                                        `used simultaneously at ${timeLabel}`
+                                    );
+                                });
+                            });
+                        });
+                    });
+                });
+            });
+        }
+
         // Show results
         console.log(`🛡️ Validation complete: ${errors.length} errors, ${warnings.length} warnings`);
-        showValidationModal(errors, warnings);
-        
+        showValidationModal(errors, warnings);        
         return { errors, warnings };
     }
 
@@ -765,8 +814,10 @@
                 const crossDivErrors = errors.filter(e => e.includes('Cross-Division'));
                 const capacityErrors = errors.filter(e => e.includes('Capacity Exceeded'));
                 const repetitionErrors = errors.filter(e => e.includes('Same-Day Repetition'));
+                const comboErrors = errors.filter(e => e.includes('Combined Field Conflict'));
                 const otherErrors = errors.filter(e => 
-                    !e.includes('Cross-Division') && !e.includes('Capacity Exceeded') && !e.includes('Same-Day Repetition')
+                    !e.includes('Cross-Division') && !e.includes('Capacity Exceeded') && 
+                    !e.includes('Same-Day Repetition') && !e.includes('Combined Field Conflict')
                 );
 
                 content += `<div style="margin-bottom:15px;">
@@ -782,6 +833,9 @@
                 }
                 if (repetitionErrors.length > 0) {
                     content += buildCategorySection('Same-Day Repetitions', repetitionErrors, '#FFCDD2', '#C62828', '#EF5350');
+                }
+                if (comboErrors.length > 0) {
+                    content += buildCategorySection('Combined Field Conflicts', comboErrors, '#FFCDD2', '#C62828', '#EF5350');
                 }
                 if (otherErrors.length > 0) {
                     content += buildCategorySection('Other Errors', otherErrors, '#FFCDD2', '#C62828', '#EF5350');

@@ -1088,12 +1088,21 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
         const props = activityProps[fName] || {};
         const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
         
-        const availability = window.TimeBasedFieldUsage.checkAvailability(
+       const availability = window.TimeBasedFieldUsage.checkAvailability(
             fName, startMin, endMin, maxCapacity, bunk
         );
         
-        return availability.available;
+        if (!availability.available) return false;
+
+        // ★★★ COMBINED FIELD MUTUAL EXCLUSION CHECK ★★★
+        if (window.FieldCombos?.isInCombo?.(fName)) {
+            const comboCheck = window.FieldCombos.isBlockedByCombo(fName, startMin, endMin, bunk);
+            if (comboCheck.blocked) return false;
+        }
+
+        return true;
     }
+
 
     function calculatePenaltyCost(bunk, slots, pick, fieldUsageBySlot, activityProps) {
         let penalty = 0;
@@ -1663,7 +1672,11 @@ function checkFieldAvailableByTime(fieldName, startMin, endMin, excludeBunk, act
             }
         }
     }
-    
+     // ★★★ COMBINED FIELD MUTUAL EXCLUSION CHECK ★★★
+    if (window.FieldCombos?.isInCombo?.(fieldName)) {
+        const comboCheck = window.FieldCombos.isBlockedByCombo(fieldName, startMin, endMin, excludeBunk);
+        if (comboCheck.blocked) return false;
+    }
     return true;
 }
 
