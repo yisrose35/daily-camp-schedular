@@ -659,7 +659,22 @@
                     console.log(`[SmartTile] ${bunk} has bunk override, skipping`);
                     return;
                 }
-
+// ★★★ FULL GRADE: Fill ALL bunks in division ★★★
+                const _isFG = activityProperties[activityLabel]?.fullGrade || activityProperties[activityLabel]?._fullGrade;
+                if (_isFG && !needsGeneration(activityLabel)) {
+                    console.log(`[SmartTile] ★ FULL GRADE: "${activityLabel}" → filling ALL bunks in ${divName}`);
+                    bunkList.forEach(fgBunk => {
+                        const fgEx = window.scheduleAssignments[fgBunk]?.[slots[0]];
+                        if (fgEx && fgEx._bunkOverride) return;
+                        window.fillBlock({
+                            divName, bunk: fgBunk, startTime: startMin, endTime: endMin, slots
+                        }, {
+                            field: activityLabel, sport: null, _fixed: true,
+                            _activity: activityLabel, _fullGrade: true
+                        }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                    });
+                    return; // Already filled all bunks
+                }
                 if (window.GlobalFieldLocks?.isFieldLocked(activityLabel, slots, divName)) {
                     console.log(`[SmartTile] ${bunk} - ${activityLabel} is LOCKED for ${divName}, trying alternatives`);
                     
