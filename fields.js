@@ -153,7 +153,7 @@ function loadData(){
         if (!Array.isArray(combo.subFields)) combo.subFields = [];
     }
     rebuildComboLookups();
-}
+
 
 }
 
