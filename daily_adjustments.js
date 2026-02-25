@@ -2113,7 +2113,7 @@ function addDropListeners(gridEl) {
           isNightActivity
         };
       }
-      // ===== OTHER PINNED (lunch, snacks, dismissal, swim) =====
+     // ===== OTHER PINNED (lunch, snacks, dismissal, swim) =====
       else if (['lunch', 'snacks', 'dismissal', 'swim'].includes(tileData.type)) {
         let name = tileData.name;
         let reservedFields = [];
@@ -2128,17 +2128,49 @@ function addDropListeners(gridEl) {
           );
           if (swimField) reservedFields = [swimField.name];
         }
+        // Build modal fields — swim gets optional pre/post change
+        const daSwimFields = [
+          { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+          { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr }
+        ];
+        if (tileData.type === 'swim') {
+          daSwimFields.push(
+            { name: 'preChangeMin', label: 'Pre-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 10' },
+            { name: 'postChangeMin', label: 'Post-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 10' }
+          );
+        }
         const result = await daShowModal({
           title: name + ' for ' + divName,
-          fields: [
-            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
-            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr }
-          ]
+          description: tileData.type === 'swim' ? 'Optionally add changing time before and/or after swim.' : undefined,
+          fields: daSwimFields
         });
         if (!result || !result.startTime || !result.endTime) return;
         const times = await validateStartEnd(result.startTime, result.endTime);
         if (!times) return;
         isNightActivity = times.isNight;
+        
+        // Parse pre/post change durations
+        const preChangeMin = parseInt(result.preChangeMin) || 0;
+        const postChangeMin = parseInt(result.postChangeMin) || 0;
+        const swimStartVal = parseTimeToMinutes(result.startTime);
+        const swimEndVal = parseTimeToMinutes(result.endTime);
+        
+        // If pre-change: create a "Change" tile before swim
+        if (tileData.type === 'swim' && preChangeMin > 0 && swimStartVal !== null) {
+          const changeStart = swimStartVal - preChangeMin;
+          dailyOverrideSkeleton.push({
+            id: Date.now().toString() + '_prechange',
+            type: 'pinned',
+            event: 'Change',
+            division: divName,
+            startTime: minutesToTimeDA(changeStart),
+            endTime: result.startTime,
+            reservedFields: [],
+            location: null,
+            _swimChange: 'pre'
+          });
+        }
+        
         newEvent = {
           id: Date.now().toString(), type: 'pinned', event: name, division: divName,
           startTime: result.startTime, endTime: result.endTime,
@@ -2146,6 +2178,21 @@ function addDropListeners(gridEl) {
           location: defaultLocation || (reservedFields.length > 0 ? reservedFields[0] : null),
           isNightActivity
         };
+        // If post-change: create a "Change" tile after swim
+        if (tileData.type === 'swim' && postChangeMin > 0 && swimEndVal !== null) {
+          const changeEnd = swimEndVal + postChangeMin;
+          dailyOverrideSkeleton.push({
+            id: Date.now().toString() + '_postchange',
+            type: 'pinned',
+            event: 'Change',
+            division: divName,
+            startTime: result.endTime,
+            endTime: minutesToTimeDA(changeEnd),
+            reservedFields: [],
+            location: null,
+            _swimChange: 'post'
+          });
+        }
       }
       // ===== LEAGUE =====
      else if (tileData.type === 'league') {
