@@ -2563,4 +2563,27 @@ window.MasterSchedulerInternal = {
   DAW_LAYER_TYPES: DAW_LAYER_TYPES,
   DAW_PIXELS_PER_MINUTE: DAW_PIXELS_PER_MINUTE,
 };
+  // Listen for mode changes from Setup & Config
+  window.addEventListener('campistry-builder-mode-changed', (e) => {
+    const newMode = e.detail?.mode;
+    if (newMode) {
+      console.log('[MasterBuilder] Mode changed to:', newMode, '— refreshing');
+      currentBuilderMode = newMode;
+      builderMode = newMode;
+      const manualEl = document.getElementById('ms-manual-container');
+      const autoEl = document.getElementById('ms-auto-container');
+      if (newMode === 'manual') {
+        if (manualEl) manualEl.style.display = 'flex';
+        if (autoEl) autoEl.style.display = 'none';
+        loadDailySkeleton();
+        renderGrid();
+        renderToolbar();
+      } else {
+        if (manualEl) manualEl.style.display = 'none';
+        if (autoEl) autoEl.style.display = 'flex';
+        dailySkeleton = [];
+        if (typeof renderDAW === 'function') renderDAW();
+      }
+    }
+  });
 })();
