@@ -4133,10 +4133,23 @@ window.DailyAdjustmentsInternal = {
 };
  
 
-// Hook into daily adjustments render to check for auto mode
+
+  // Hook into daily adjustments render to check for auto mode
 const _origRenderDA = window.renderDailyAdjustments || window.initDailyAdjustments;
 if (_origRenderDA) {
-  // Will be integrated in auto_schedule_planner.js init
   window._checkAutoModeForDay = checkAutoModeForDay;
 }
+
+// ★ Listen for mode changes from Setup & Config
+window.addEventListener('campistry-builder-mode-changed', (e) => {
+  const newMode = e.detail?.mode;
+  if (newMode && newMode !== window._daBuilderMode) {
+    console.log('[DailyAdj] Mode changed to:', newMode, '— re-initializing');
+    window._daBuilderMode = newMode;
+    cleanup();
+    init();
+  }
+});
+
+})();
 })();
