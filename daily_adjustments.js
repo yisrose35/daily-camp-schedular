@@ -1330,6 +1330,8 @@ function clearDisplacedTiles() {
 function renderDisplacedTilesPanel() {
   const panel = document.getElementById('da-displaced-tiles-panel');
   if (!panel) return;
+  // Auto mode: displaced tiles don't apply (auto uses layers, not individual tiles)
+  if (window._daBuilderMode === 'auto') { panel.style.display = 'none'; return; }
   if (displacedTiles.length === 0) { panel.style.display = 'none'; return; }
   
   panel.style.display = 'block';
@@ -1447,6 +1449,12 @@ function mapEventNameForOptimizer(name) {
 // RENDER PALETTE
 // =================================================================
 function renderPalette() {
+  // AUTO MODE: don't show manual tile palette — auto uses DAW layer palette
+  if (window._daBuilderMode === 'auto') {
+    const paletteEl = document.getElementById('da-palette');
+    if (paletteEl) paletteEl.innerHTML = '<div style="padding:16px;text-align:center;color:#94a3b8;font-size:13px;">Auto mode active.<br>Use the timeline to manage layers.</div>';
+    return;
+  }
   const paletteEl = document.getElementById('da-palette');
   if (!paletteEl) return;
   
@@ -2699,7 +2707,7 @@ async function runOptimizer() {
         
         // Save skeleton + bunk overrides
         if (window.saveCurrentDailyData) {
-            window.saveCurrentDailyData('manualSkeleton', result.skeleton);
+            window.saveCurrentDailyData('autoSkeleton', result.skeleton);
             if (result.bunkOverrides && result.bunkOverrides.length > 0) {
                 window.saveCurrentDailyData('bunkActivityOverrides', result.bunkOverrides);
             }
@@ -2712,18 +2720,19 @@ async function runOptimizer() {
             currentOverrides.bunkActivityOverrides = result.bunkOverrides;
         }
         
-        // Update Master Builder skeleton too
-        if (window.MasterSchedulerInternal) {
-            if (window.MasterSchedulerInternal.setSkeleton) window.MasterSchedulerInternal.setSkeleton(result.skeleton);
-            if (window.MasterSchedulerInternal.markUnsavedChanges) window.MasterSchedulerInternal.markUnsavedChanges();
-            if (window.MasterSchedulerInternal.saveDraftToLocalStorage) window.MasterSchedulerInternal.saveDraftToLocalStorage();
-        }
+       // ★ Don't contaminate the manual Master Builder with auto-generated skeletons.
+        // Auto mode manages its own pipeline; pushing here would create a false
+        // "unsaved draft" in the manual builder and risk overwriting manual templates.
     } else {
         // Manual mode: original check
         if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
     }
     
-    saveDailySkeleton();
+   // Only persist to manual skeleton storage paths in manual mode.
+    // In auto mode the skeleton was already saved via saveCurrentDailyData above.
+    if (window._daBuilderMode !== 'auto') {
+        saveDailySkeleton();
+    }
     if (window.SchedulerCoreUtils?.hydrateLocalStorageFromCloud) {
         await window.SchedulerCoreUtils.hydrateLocalStorageFromCloud();
     }
@@ -3858,18 +3867,21 @@ function getMainHTML(useMS) {
           <div id="da-pane-skeleton" class="da-pane active">
             <div id="da-rainy-panel"></div>
             <div id="da-displaced-tiles-panel" style="display:none;"></div>
-            <div style="display:flex;gap:0;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
-              <button class="da-view-toggle active" data-view="skeleton" style="padding:8px 16px;border:none;background:none;cursor:pointer;font-size:12px;font-weight:600;color:#475569;border-bottom:2px solid transparent;">✋ Skeleton</button>
-              <button class="da-view-toggle" data-view="auto-layers" style="padding:8px 16px;border:none;background:none;cursor:pointer;font-size:12px;font-weight:600;color:#475569;border-bottom:2px solid transparent;">⚡ Auto Layers</button>
-            </div>
-            <div id="da-view-skeleton">
-              <div id="da-skeleton-toolbar" class="ms-toolbar"></div>
-              <div class="ms-grid-wrapper">
-                <div id="da-skeleton-grid"></div>
-              </div>
-            </div>
-            <div id="da-view-auto-layers" style="display:none;height:calc(100vh - 300px);overflow:auto;"></div>
-          </div>
+            ${window._daBuilderMode === 'auto' ? `
+  <div id="da-skeleton-toolbar" class="ms-toolbar"></div>
+  <div id="da-view-auto-layers" style="height:calc(100vh - 300px);overflow:auto;">
+    <div class="ms-grid-wrapper">
+      <div id="da-skeleton-grid"></div>
+    </div>
+  </div>
+` : `
+  <div id="da-view-skeleton">
+    <div id="da-skeleton-toolbar" class="ms-toolbar"></div>
+    <div class="ms-grid-wrapper">
+      <div id="da-skeleton-grid"></div>
+    </div>
+  </div>
+`}          </div>
           
           <div id="da-pane-trips" class="da-pane">
             <div id="da-trips-container"></div>
@@ -3961,11 +3973,13 @@ function setupSubTabs() {
 function setupKeyboardHandler() {
   if (_keyHandler) document.removeEventListener('keydown', _keyHandler);
   
-  _keyHandler = (e) => {
+ _keyHandler = (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
     
-    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedTileId) {
-      e.preventDefault();
+    // Auto mode: don't allow manual skeleton tile deletion via keyboard
+    if (window._daBuilderMode === 'auto') return;
+    
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedTileId) {      e.preventDefault();
       (async () => {
         const ok = await daShowConfirm("Delete this block?", { danger: true, confirmText: 'Delete' });
         if (ok) {
@@ -4004,7 +4018,14 @@ function refreshFromCloud() {
   masterSettings.app1 = masterSettings.global.app1 || {};
   masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
   masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
-  loadDailySkeleton();
+  
+  // Mode-specific data reload — same isolation as init()
+  if (window._daBuilderMode === 'auto') {
+    loadDAAutoLayers();
+  } else {
+    loadDailySkeleton();
+  }
+  
   loadCurrentOverrides();
   renderGrid();
   renderResourceOverridesUI();
@@ -4056,11 +4077,16 @@ function init() {
   setupKeyboardHandler();
   setupVisibilityHandler();
 
-  loadDailySkeleton();
-  
-  // ★ Auto mode: load layer template for today
+ // ★ Mode-specific data loading — keep auto and manual completely separate
   if (window._daBuilderMode === 'auto') {
+    // Auto mode: load layer templates, clear manual skeleton to prevent bleed
     loadDAAutoLayers();
+    dailyOverrideSkeleton = [];
+    window.dailyOverrideSkeleton = [];
+  } else {
+    // Manual mode: load skeleton, clear auto layers to prevent bleed
+    loadDailySkeleton();
+    daAutoLayers = {};
   }
 
   renderPalette();
