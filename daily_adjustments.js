@@ -1674,8 +1674,9 @@ function renderDAWTimeline(gridEl) {
   gridEl.style.overflow = 'auto';
   
   window.MasterSchedulerInternal.renderDAWGridWith(gridEl, daAutoLayers, {
-    onLayersChanged: function(updatedLayers) {
+   onLayersChanged: function(updatedLayers) {
       daAutoLayers = updatedLayers;
+      saveDAAutoLayers();
     }
   });
 }
@@ -2509,8 +2510,26 @@ let tmpl = assignments[today] || assignments['Default'];
     });
   }
   
-  console.log('[DailyAdj] Auto layers loaded:', Object.keys(daAutoLayers).length, 'grades');
+ console.log('[DailyAdj] Auto layers loaded:', Object.keys(daAutoLayers).length, 'grades');
 }
+
+function saveDAAutoLayers() {
+  if (!window.AccessControl?.canEdit?.()) {
+    console.warn('[DailyAdj] Save blocked - insufficient permissions');
+    return;
+  }
+  const dateKey = window.currentScheduleDate;
+  try {
+    localStorage.setItem(`campAutoLayers_${dateKey}`, JSON.stringify(daAutoLayers));
+  } catch (e) { console.error('[DailyAdj] Failed to save auto layers to localStorage:', e); }
+  try {
+    if (!masterSettings.app1.dailyAutoLayers) masterSettings.app1.dailyAutoLayers = {};
+    masterSettings.app1.dailyAutoLayers[dateKey] = JSON.parse(JSON.stringify(daAutoLayers));
+    window.saveGlobalSettings?.('app1', masterSettings.app1);
+    window.forceSyncToCloud?.();
+  } catch (e) { console.error('[DailyAdj] Failed to save auto layers to cloud:', e); }
+}
+
   function loadDailySkeleton() {
   const dateKey = window.currentScheduleDate;
   console.log('[DailyAdj] loadDailySkeleton called for date:', dateKey);
@@ -2684,6 +2703,7 @@ function renderToolbar() {
         const ok = await daShowConfirm('Load auto template "' + name + '"?');
         if (ok) {
           daAutoLayers = JSON.parse(JSON.stringify(autoTemplates[name]));
+          saveDAAutoLayers();
           console.log('[DailyAdj] Loaded auto template:', name);
           renderGrid();
         }
@@ -2710,6 +2730,7 @@ function renderToolbar() {
     if (ok) {
       if (isAutoMode) {
         Object.keys(daAutoLayers).forEach(k => { daAutoLayers[k] = []; });
+        saveDAAutoLayers();
         renderGrid();
       } else {
         dailyOverrideSkeleton = [];
