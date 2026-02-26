@@ -430,8 +430,12 @@ function shouldHighlightBunk(bunkName) {
     function getSkeleton(dateKey) {
         const dailyData = loadDailyData();
         const dateData = dailyData[dateKey || getDateKey()] || {};
-        return dateData.manualSkeleton || dateData.skeleton || 
-               window.dailyOverrideSkeleton || window.manualSkeleton || window.skeleton || [];
+        return (dateData.manualSkeleton?.length ? dateData.manualSkeleton : null)
+            || (dateData.skeleton?.length ? dateData.skeleton : null)
+            || (window.dailyOverrideSkeleton?.length ? window.dailyOverrideSkeleton : null)
+            || (window.manualSkeleton?.length ? window.manualSkeleton : null)
+            || window.skeleton
+            || [];
     }
 
     /**
