@@ -1238,7 +1238,7 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
       
       if (dawSelectedBand) {
         const layer = (layerSource[grade] || []).find(l => l.id === id);
-        if (layer) showDAWPopover(band, layer, grade, { onSave, onRender });
+        if (layer) showDAWPopover(band, layer, grade, { onSave, onRender, layerSource });
       }
       
       // Update selection styling
@@ -1534,8 +1534,9 @@ function showDAWPopover(bandEl, layer, grade, opts) {
   };
   
   // Delete
-  popover.querySelector('.ms-daw-pop-btn-del').onclick = () => {
-    dawLayers[grade] = (dawLayers[grade] || []).filter(l => l.id !== layer.id);
+ popover.querySelector('.ms-daw-pop-btn-del').onclick = () => {
+    const src = opts?.layerSource || dawLayers;
+    src[grade] = (src[grade] || []).filter(l => l.id !== layer.id);
     dawSelectedBand = null;
     onSave();
     onRender();
