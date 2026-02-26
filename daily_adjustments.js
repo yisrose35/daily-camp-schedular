@@ -1449,10 +1449,44 @@ function mapEventNameForOptimizer(name) {
 // RENDER PALETTE
 // =================================================================
 function renderPalette() {
-  // AUTO MODE: don't show manual tile palette — auto uses DAW layer palette
+  // AUTO MODE: render DAW layer palette (same layer types as Master Builder)
   if (window._daBuilderMode === 'auto') {
     const paletteEl = document.getElementById('da-palette');
-    if (paletteEl) paletteEl.innerHTML = '<div style="padding:16px;text-align:center;color:#94a3b8;font-size:13px;">Auto mode active.<br>Use the timeline to manage layers.</div>';
+    if (!paletteEl) return;
+    
+    const DAW_TYPES = window.MasterSchedulerInternal?.DAW_LAYER_TYPES || [
+      { type:'sport', name:'Sport', style:'background:#86efac;color:#14532d;' },
+      { type:'special', name:'Special Activity', style:'background:#c4b5fd;color:#3b1f6b;' },
+      { type:'activity', name:'Activity', style:'background:#93c5fd;color:#1e3a5f;' },
+      { type:'swim', name:'Swim', style:'background:#67e8f9;color:#155e75;', anchor:true },
+      { type:'lunch', name:'Lunch', style:'background:#fca5a5;color:#7f1d1d;', anchor:true },
+      { type:'snacks', name:'Snacks', style:'background:#fde047;color:#713f12;', anchor:true },
+      { type:'dismissal', name:'Dismissal', style:'background:#f87171;color:#fff;', anchor:true },
+      { type:'custom', name:'Custom Pinned', style:'background:#d1d5db;color:#374151;', anchor:true },
+      { type:'league', name:'League Game', style:'background:#a5b4fc;color:#312e81;' },
+      { type:'elective', name:'Elective', style:'background:#f0abfc;color:#701a75;' },
+    ];
+    
+    let html = '';
+    html += '<div class="da-tile-label">Floaters</div>';
+    DAW_TYPES.filter(t => !t.anchor).forEach(t => {
+      html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}" style="${t.style}">${t.name}</div>`;
+    });
+    html += '<div class="da-tile-divider"></div>';
+    html += '<div class="da-tile-label">Anchors</div>';
+    DAW_TYPES.filter(t => t.anchor).forEach(t => {
+      html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}" style="${t.style}">${t.name}</div>`;
+    });
+    
+    paletteEl.innerHTML = html;
+    
+    // Wire up drag from palette — uses same data format the DAW grid expects
+    paletteEl.querySelectorAll('.ms-daw-tile').forEach(tile => {
+      tile.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/daw-layer', tile.dataset.type);
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+    });
     return;
   }
   const paletteEl = document.getElementById('da-palette');
