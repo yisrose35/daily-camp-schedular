@@ -1675,7 +1675,9 @@ function renderDAWTimeline(gridEl) {
   
   window.MasterSchedulerInternal.renderDAWGridWith(gridEl, daAutoLayers, {
    onLayersChanged: function(updatedLayers) {
-      daAutoLayers = updatedLayers;
+      if (updatedLayers && typeof updatedLayers === 'object') {
+        daAutoLayers = updatedLayers;
+      }
       saveDAAutoLayers();
     }
   });
@@ -2518,13 +2520,15 @@ function saveDAAutoLayers() {
     console.warn('[DailyAdj] Save blocked - insufficient permissions');
     return;
   }
+  if (!daAutoLayers || typeof daAutoLayers !== 'object') return;
   const dateKey = window.currentScheduleDate;
   try {
     localStorage.setItem(`campAutoLayers_${dateKey}`, JSON.stringify(daAutoLayers));
   } catch (e) { console.error('[DailyAdj] Failed to save auto layers to localStorage:', e); }
   try {
+    if (!masterSettings.app1) masterSettings.app1 = {};
     if (!masterSettings.app1.dailyAutoLayers) masterSettings.app1.dailyAutoLayers = {};
-    masterSettings.app1.dailyAutoLayers[dateKey] = JSON.parse(JSON.stringify(daAutoLayers));
+    masterSettings.app1.dailyAutoLayers[dateKey] = JSON.parse(JSON.stringify(daAutoLayers || {}));
     window.saveGlobalSettings?.('app1', masterSettings.app1);
     window.forceSyncToCloud?.();
   } catch (e) { console.error('[DailyAdj] Failed to save auto layers to cloud:', e); }
