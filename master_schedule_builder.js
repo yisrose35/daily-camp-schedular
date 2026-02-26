@@ -1380,13 +1380,12 @@ function addDropListeners(selector) {
           }
         }
         
-        // Build modal fields — swim gets optional pre/post change
-        const modalFields = [
+        const swimModalFields = [
           { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
           { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
         ];
         if (tileData.type === 'swim') {
-          modalFields.push(
+          swimModalFields.push(
             { name: 'preChangeMin', label: 'Pre-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 10' },
             { name: 'postChangeMin', label: 'Post-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 10' }
           );
@@ -1394,56 +1393,62 @@ function addDropListeners(selector) {
         
         const result = await showModal({
           title: name,
-          description: tileData.type === 'swim' ? 'Optionally add changing time before and/or after swim.' : undefined,
-          fields: modalFields
+          description: tileData.type === 'swim' ? 'Change time is carved from the total block. e.g. 3–4 with 10min changes → Change 3:00–3:10, Swim 3:10–3:50, Change 3:50–4:00' : undefined,
+          fields: swimModalFields
         });
         if (!result) return;
         
-        // Parse pre/post change durations
-        const preChangeMin = parseInt(result.preChangeMin) || 0;
-        const postChangeMin = parseInt(result.postChangeMin) || 0;
-        const swimStartMin = parseTimeToMinutes(result.startTime);
-        const swimEndMin = parseTimeToMinutes(result.endTime);
+        const msTotalStart = parseTimeToMinutes(result.startTime);
+        const msTotalEnd = parseTimeToMinutes(result.endTime);
+        const msPreChange = (tileData.type === 'swim') ? (parseInt(result.preChangeMin) || 0) : 0;
+        const msPostChange = (tileData.type === 'swim') ? (parseInt(result.postChangeMin) || 0) : 0;
         
-        // If pre-change: create a "Change" tile before swim, adjust swim start
-        if (tileData.type === 'swim' && preChangeMin > 0 && swimStartMin !== null) {
-          const changeStart = swimStartMin - preChangeMin;
+        if (msPreChange + msPostChange >= (msTotalEnd - msTotalStart)) {
+          await showAlert('Change time (' + (msPreChange + msPostChange) + ' min) must be less than the total block (' + (msTotalEnd - msTotalStart) + ' min).');
+          return;
+        }
+        
+        const msSwimStart = msTotalStart + msPreChange;
+        const msSwimEnd = msTotalEnd - msPostChange;
+        
+        // Pre-Change carved from start of block
+        if (msPreChange > 0) {
           dailySkeleton.push({
             id: Date.now().toString() + '_prechange',
             type: 'pinned',
             event: 'Change',
             division: divName,
-            startTime: minutesToTime(changeStart),
-            endTime: result.startTime,
+            startTime: result.startTime,
+            endTime: minutesToTime(msSwimStart),
             reservedFields: [],
             location: null,
             _swimChange: 'pre'
           });
         }
         
+        // Swim tile — narrowed to exclude change time
         newEvent = {
           id: Date.now().toString(),
           type: 'pinned',
           event: name,
           division: divName,
-          startTime: result.startTime,
-          endTime: result.endTime,
+          startTime: minutesToTime(msSwimStart),
+          endTime: minutesToTime(msSwimEnd),
           reservedFields: reservedFields,
           location: location,
-          _preChangeMin: preChangeMin || undefined,
-          _postChangeMin: postChangeMin || undefined
+          _preChangeMin: msPreChange || undefined,
+          _postChangeMin: msPostChange || undefined
         };
         
-        // If post-change: create a "Change" tile after swim
-        if (tileData.type === 'swim' && postChangeMin > 0 && swimEndMin !== null) {
-          const changeEnd = swimEndMin + postChangeMin;
+        // Post-Change carved from end of block
+        if (msPostChange > 0) {
           dailySkeleton.push({
             id: Date.now().toString() + '_postchange',
             type: 'pinned',
             event: 'Change',
             division: divName,
-            startTime: result.endTime,
-            endTime: minutesToTime(changeEnd),
+            startTime: minutesToTime(msSwimEnd),
+            endTime: result.endTime,
             reservedFields: [],
             location: null,
             _swimChange: 'post'
