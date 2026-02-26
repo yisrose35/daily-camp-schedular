@@ -841,9 +841,13 @@ for (const futureDate of Object.keys(allDailyData)) {
                     matchups = fullSchedule[roundIndex] || [];
                 }
 
-                console.log(`   Game #${gameNumber} (Round Index: ${roundIndex}, Today's Game: ${todayGameIndex + 1})`);
+               console.log(`   Game #${gameNumber} (Today's Game: ${todayGameIndex + 1})`);
                 console.log(`   Matchups: ${matchups.length}`);
-                matchups.forEach(([t1, t2]) => console.log(`      • ${t1} vs ${t2}`));
+                matchups.forEach(m => {
+                    var t1 = Array.isArray(m) ? m[0] : m;
+                    var t2 = Array.isArray(m) ? m[1] : m;
+                    console.log(`      • ${t1} vs ${t2}`);
+                });
 
                 if (matchups.length === 0) continue;
 
