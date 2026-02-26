@@ -981,6 +981,39 @@ function renderDurationSettings(item) {
     
     return container;
 }
+    function renderDurationSettings(item) {
+    const container = document.createElement("div");
+    if (!item.duration) { item.duration = 30; saveData(); }
+    
+    container.innerHTML = '<div style="margin-bottom:16px;">'
+        + '<p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">How long this activity takes when scheduled. The auto builder uses this to size blocks in the timeline.</p>'
+        + '<div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding:14px;">'
+        + '<div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">'
+        + '<div style="flex:1;">'
+        + '<div style="font-weight:600; color:#1e40af;">' + item.duration + ' minutes</div>'
+        + '<div style="font-size:0.8rem; color:#3b82f6;">Scheduler will use this duration</div>'
+        + '</div></div>'
+        + '<div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #bfdbfe;">'
+        + '<label style="font-size:0.85rem;">Duration:</label>'
+        + '<input type="number" id="duration-input" min="5" max="180" step="5" value="' + (item.duration || 30) + '" style="width:70px; padding:6px 10px; border:1px solid #bfdbfe; border-radius:6px; text-align:center;">'
+        + '<span style="font-size:0.85rem; color:#64748b;">minutes</span>'
+        + '</div></div></div>';
+    
+    const di = container.querySelector("#duration-input");
+    if (di) {
+        di.addEventListener("change", function() {
+            const v = parseInt(this.value, 10);
+            if (!isNaN(v) && v >= 5 && v <= 180) {
+                item.duration = v;
+                saveData();
+                const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+                if (s) s.textContent = summaryDuration(item);
+            }
+        });
+    }
+    
+    return container;
+}
 function renderPrepDurationSettings(item) {
     const container = document.createElement("div");
     const hp = (item.prepDuration||0) > 0;
