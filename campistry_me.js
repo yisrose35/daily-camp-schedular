@@ -498,19 +498,31 @@
     // ★ v7.1 FIX: SAFE MERGE for app1.divisions — preserves Flow's time data
     // =========================================================================
 
-    function convertToOldFormat(struct) {
+   function convertToOldFormat(struct) {
         // ★ v7.1: Read EXISTING app1.divisions first so we preserve Flow's
         // time-related keys (start, stop, increments, lunchAfter, etc.)
         const existing = readLocalSettings();
         const existingDivs = (existing.app1 && existing.app1.divisions) || {};
+        const existingDivKeys = Object.keys(existingDivs);
 
         const merged = {};
         Object.entries(struct).forEach(([divName, divData]) => {
             const allBunks = [];
             Object.values(divData.grades || {}).forEach(g => (g.bunks || []).forEach(b => allBunks.push(b)));
 
-            // ★ Start with whatever Flow already stored for this division
-            const base = existingDivs[divName] || {};
+            // ★ v7.3: Fuzzy-match against old division names to preserve time data
+            // Handles: CSV "1" → existing "1st Grade", CSV "Grade 1" → existing "1st", etc.
+            let base = existingDivs[divName];
+            if (!base) {
+                for (const oldKey of existingDivKeys) {
+                    if (_importValueMatches(oldKey, divName)) {
+                        base = existingDivs[oldKey];
+                        console.log('[Me] convertToOldFormat: Matched "' + divName + '" → old "' + oldKey + '" (preserving time data)');
+                        break;
+                    }
+                }
+            }
+            base = base || {};
 
             // ★ Only overwrite the keys Me owns: color and bunks
             merged[divName] = {
@@ -535,7 +547,6 @@
 
         return merged;
     }
-
     // =========================================================================
     // ★ SAVE DATA (localStorage + cloud)
     // =========================================================================
@@ -1535,44 +1546,245 @@
         toast(parts.join(', ') || 'Import complete');
     }
 
-    // --- Settings preservation helpers ---
+   // --- Settings preservation helpers ---
+    // ★ v7.3: Capture ALL Flow settings that reference division/grade names
     function _captureFieldSettings() {
         const settings = readLocalSettings();
         const app1 = settings.app1 || {};
-        return { activityProps: JSON.parse(JSON.stringify(app1.activityProperties || {})) };
+        const snapshot = {};
+        // Deep-clone all app1 keys that reference division/grade/bunk names
+        const app1Keys = [
+            'activityProperties', 'fields', 'savedSkeletons', 'skeletonAssignments',
+            'specialActivities', 'sportMetaData', 'bunkMetaData', 'divisionTimes',
+            'allSports', 'dailySkeletons'
+        ];
+        app1Keys.forEach(key => {
+            if (app1[key] !== undefined) snapshot['app1_' + key] = JSON.parse(JSON.stringify(app1[key]));
+        });
+        // Deep-clone root-level settings
+        const rootKeys = [
+            'leaguesByName', 'specialtyLeagues', 'locationZones', 'pinnedTileDefaults',
+            'divisionTimes', 'historicalCounts', 'historicalCountedDates',
+            'leagueRoundState', 'leagueHistory', 'specialtyLeagueHistory',
+            'smartTileHistory', 'rainyDaySpecials', 'printTemplates',
+            'manualUsageOffsets', 'rotationHistory'
+        ];
+        rootKeys.forEach(key => {
+            if (settings[key] !== undefined) snapshot['root_' + key] = JSON.parse(JSON.stringify(settings[key]));
+        });
+        // Store old names for remap building
+        snapshot._oldDivisionNames = Object.keys(app1.divisions || {});
+        return snapshot;
     }
 
+    // ★ v7.3: Comprehensive restore — preserves ALL Flow settings after CSV import
     function _restoreFieldSettings(captured) {
-        if (!captured || !captured.activityProps) return;
+        if (!captured) return;
         const settings = readLocalSettings();
-        const app1 = settings.app1 || {};
-        const actProps = app1.activityProperties || {};
+        if (!settings.app1) settings.app1 = {};
+        const app1 = settings.app1;
         let changed = false;
 
-        Object.entries(actProps).forEach(([fieldName, props]) => {
-            if (!props?.limitUsage?.enabled || !props.limitUsage.divisions) return;
-            const newDivMap = {};
-            Object.entries(props.limitUsage.divisions).forEach(([dName, val]) => {
-                let found = false;
-                Object.entries(structure).forEach(([divName, divData]) => {
-                    Object.keys(divData.grades || {}).forEach(gName => {
-                        if (_importValueMatches(gName, dName)) {
-                            newDivMap[gName] = val;
-                            found = true;
-                        }
-                    });
-                });
-                if (!found) newDivMap[dName] = val;
+        // Build lookup of ALL current division/grade names (post-import structure)
+        const currentNames = new Set();
+        Object.entries(structure).forEach(([divName, divData]) => {
+            currentNames.add(divName);
+            Object.keys(divData.grades || {}).forEach(gName => currentNames.add(gName));
+        });
+        Object.keys(app1.divisions || {}).forEach(k => currentNames.add(k));
+        const currentNameArr = Array.from(currentNames);
+
+        // Build old→new name cache using fuzzy matching
+        const _nameCache = {};
+        function remapName(oldName) {
+            if (!oldName) return oldName;
+            if (_nameCache[oldName] !== undefined) return _nameCache[oldName];
+            if (currentNames.has(oldName)) { _nameCache[oldName] = oldName; return oldName; }
+            for (const newName of currentNameArr) {
+                if (_importValueMatches(newName, oldName)) { _nameCache[oldName] = newName; return newName; }
+            }
+            _nameCache[oldName] = oldName;
+            return oldName;
+        }
+        function remapDivMap(oldMap) {
+            if (!oldMap || typeof oldMap !== 'object') return oldMap;
+            const out = {};
+            Object.entries(oldMap).forEach(([k, v]) => { out[remapName(k)] = v; });
+            return out;
+        }
+        function remapDivArray(oldArr) {
+            if (!Array.isArray(oldArr)) return oldArr;
+            return oldArr.map(d => remapName(d));
+        }
+        // Restore helper: only restore if the current value is empty/missing
+        function restoreIfEmpty(currentVal, capturedVal) {
+            if (capturedVal === undefined) return false;
+            if (Array.isArray(capturedVal)) return !currentVal || !Array.isArray(currentVal) || currentVal.length === 0;
+            if (typeof capturedVal === 'object' && capturedVal !== null) return !currentVal || Object.keys(currentVal).length === 0;
+            return !currentVal;
+        }
+
+        // ── 1. activityProperties — remap limitUsage.divisions ──
+        if (captured.app1_activityProperties) {
+            const actProps = app1.activityProperties || {};
+            Object.entries(actProps).forEach(([fieldName, props]) => {
+                if (!props?.limitUsage?.enabled || !props.limitUsage.divisions) return;
+                const remapped = remapDivMap(props.limitUsage.divisions);
+                if (JSON.stringify(remapped) !== JSON.stringify(props.limitUsage.divisions)) {
+                    props.limitUsage.divisions = remapped;
+                    changed = true;
+                }
             });
-            if (JSON.stringify(newDivMap) !== JSON.stringify(props.limitUsage.divisions)) {
-                props.limitUsage.divisions = newDivMap;
+            app1.activityProperties = actProps;
+        }
+
+        // ── 2. fields — remap division refs in limitUsage, sharableWith, timeRules ──
+        // ★ CRITICAL: This prevents fields.js validateFieldDivisions() from stripping them later
+        if (captured.app1_fields && captured.app1_fields.length > 0) {
+            if (restoreIfEmpty(app1.fields, captured.app1_fields)) {
+                app1.fields = captured.app1_fields.map(f => ({
+                    ...f,
+                    limitUsage: f.limitUsage ? {
+                        ...f.limitUsage,
+                        divisions: remapDivMap(f.limitUsage.divisions),
+                        priorityList: remapDivArray(f.limitUsage.priorityList)
+                    } : f.limitUsage,
+                    sharableWith: f.sharableWith ? {
+                        ...f.sharableWith,
+                        divisions: remapDivArray(f.sharableWith.divisions)
+                    } : f.sharableWith,
+                    timeRules: Array.isArray(f.timeRules) ? f.timeRules.map(r => ({
+                        ...r,
+                        divisions: r.divisions ? remapDivArray(r.divisions) : r.divisions
+                    })) : f.timeRules
+                }));
                 changed = true;
+                console.log('[Me] ★ Restored', app1.fields.length, 'fields with division remapping');
+            }
+        }
+
+        // ── 3. savedSkeletons (no division-name refs in tile data) ──
+        if (captured.app1_savedSkeletons) {
+            if (restoreIfEmpty(app1.savedSkeletons, captured.app1_savedSkeletons)) {
+                app1.savedSkeletons = captured.app1_savedSkeletons;
+                changed = true;
+                console.log('[Me] ★ Restored', Object.keys(app1.savedSkeletons).length, 'saved skeletons');
+            }
+        }
+
+        // ── 4. skeletonAssignments ──
+        if (captured.app1_skeletonAssignments) {
+            if (restoreIfEmpty(app1.skeletonAssignments, captured.app1_skeletonAssignments)) {
+                app1.skeletonAssignments = captured.app1_skeletonAssignments;
+                changed = true;
+            }
+        }
+
+        // ── 5. specialActivities — remap division refs ──
+        if (captured.app1_specialActivities && captured.app1_specialActivities.length > 0) {
+            if (restoreIfEmpty(app1.specialActivities, captured.app1_specialActivities)) {
+                app1.specialActivities = captured.app1_specialActivities.map(sa => ({
+                    ...sa,
+                    divisions: sa.divisions ? remapDivArray(sa.divisions) : sa.divisions,
+                    limitUsage: sa.limitUsage ? {
+                        ...sa.limitUsage,
+                        divisions: remapDivMap(sa.limitUsage.divisions)
+                    } : sa.limitUsage
+                }));
+                changed = true;
+                console.log('[Me] ★ Restored', app1.specialActivities.length, 'special activities');
+            }
+        }
+
+        // ── 6. sportMetaData ──
+        if (captured.app1_sportMetaData) {
+            if (restoreIfEmpty(app1.sportMetaData, captured.app1_sportMetaData)) {
+                app1.sportMetaData = captured.app1_sportMetaData;
+                changed = true;
+            }
+        }
+
+        // ── 7. bunkMetaData — merge (keep new, fill in missing) ──
+        if (captured.app1_bunkMetaData && Object.keys(captured.app1_bunkMetaData).length > 0) {
+            app1.bunkMetaData = { ...(captured.app1_bunkMetaData), ...(app1.bunkMetaData || {}) };
+            changed = true;
+        }
+
+        // ── 8. allSports ──
+        if (captured.app1_allSports && captured.app1_allSports.length > 0) {
+            if (restoreIfEmpty(app1.allSports, captured.app1_allSports)) {
+                app1.allSports = captured.app1_allSports;
+                changed = true;
+            }
+        }
+
+        // ── 9. divisionTimes — remap division keys ──
+        if (captured.app1_divisionTimes && Object.keys(captured.app1_divisionTimes).length > 0) {
+            const remapped = {};
+            Object.entries(captured.app1_divisionTimes).forEach(([k, v]) => { remapped[remapName(k)] = v; });
+            app1.divisionTimes = { ...(app1.divisionTimes || {}), ...remapped };
+            changed = true;
+            console.log('[Me] ★ Restored divisionTimes for', Object.keys(remapped).length, 'divisions');
+        }
+        if (captured.root_divisionTimes && Object.keys(captured.root_divisionTimes).length > 0) {
+            const remapped = {};
+            Object.entries(captured.root_divisionTimes).forEach(([k, v]) => { remapped[remapName(k)] = v; });
+            settings.divisionTimes = { ...(settings.divisionTimes || {}), ...remapped };
+            changed = true;
+        }
+
+        // ── 10. dailySkeletons ──
+        if (captured.app1_dailySkeletons) {
+            if (restoreIfEmpty(app1.dailySkeletons, captured.app1_dailySkeletons)) {
+                app1.dailySkeletons = captured.app1_dailySkeletons;
+                changed = true;
+            }
+        }
+
+        // ── 11. Root-level settings: leagues, zones, history ──
+        const rootRestoreMap = {
+            'leaguesByName': (val) => {
+                const out = {};
+                Object.entries(val).forEach(([name, lg]) => {
+                    out[name] = { ...lg, divisions: lg.divisions ? remapDivArray(lg.divisions) : lg.divisions };
+                });
+                return out;
+            },
+            'specialtyLeagues': (val) => {
+                const out = {};
+                Object.entries(val).forEach(([name, lg]) => {
+                    out[name] = { ...lg, divisions: lg.divisions ? remapDivArray(lg.divisions) : lg.divisions };
+                });
+                return out;
+            },
+            'locationZones': null,
+            'pinnedTileDefaults': null,
+            'historicalCounts': null,
+            'historicalCountedDates': null,
+            'leagueRoundState': null,
+            'leagueHistory': null,
+            'specialtyLeagueHistory': null,
+            'smartTileHistory': null,
+            'rainyDaySpecials': null,
+            'printTemplates': null,
+            'manualUsageOffsets': null,
+            'rotationHistory': null
+        };
+
+        Object.entries(rootRestoreMap).forEach(([key, transformFn]) => {
+            const capturedKey = 'root_' + key;
+            if (!captured[capturedKey]) return;
+            if (restoreIfEmpty(settings[key], captured[capturedKey])) {
+                settings[key] = transformFn ? transformFn(captured[capturedKey]) : captured[capturedKey];
+                changed = true;
+                console.log('[Me] ★ Restored root setting:', key);
             }
         });
 
         if (changed) {
-            app1.activityProperties = actProps;
-            writeLocalSettings({ ...settings, app1 });
+            settings.app1 = app1;
+            writeLocalSettings(settings);
+            console.log('[Me] ★ Flow settings preserved after import (' + Object.keys(_nameCache).length + ' names mapped)');
         }
     }
 
