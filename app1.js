@@ -478,12 +478,18 @@
                 wrapper.querySelectorAll('.builder-mode-option').forEach(o => o.classList.remove('active'));
                 e.currentTarget.classList.add('active');
 
-                // Save setting globally
+               // Save setting globally
                 const g = window.loadGlobalSettings?.() || {};
                 if (!g.app1) g.app1 = {};
                 g.app1.builderMode = targetMode;
                 window.saveGlobalSettings?.('app1', g.app1);
                 window.forceSyncToCloud?.();
+                
+                // ★ Notify loaded modules so they re-init with the new mode
+                // This clears stale window._daBuilderMode and forces proper data loading
+                window.dispatchEvent(new CustomEvent('campistry-builder-mode-changed', { 
+                    detail: { mode: targetMode } 
+                }));
             });
         });
 
