@@ -448,22 +448,30 @@ function init(targetElement = null){
   // 2. CLEAR MEMORY: Reset the locked template so Day Assignments trigger correctly
   currentLoadedTemplate = null;
     
-  loadDailySkeleton();
+  // Only load manual skeleton in manual mode
+  if (currentBuilderMode !== 'auto') {
+    loadDailySkeleton();
+  } else {
+    dailySkeleton = []; // Clean slate for auto mode
+  }
   
   // Reset unsaved changes since we just loaded fresh
   hasUnsavedChanges = false;
 
-  // Silently restore draft without prompting
-  const savedDraft = localStorage.getItem(SKELETON_DRAFT_KEY);
-  const savedDraftName = localStorage.getItem(SKELETON_DRAFT_NAME_KEY);
-  if (savedDraft) {
-    try {
-      dailySkeleton = JSON.parse(savedDraft);
-      if(savedDraftName) currentLoadedTemplate = savedDraftName;
-      // Draft means there might be unsaved changes
-      hasUnsavedChanges = true;
-    } catch(e) {
-      clearDraftFromLocalStorage();
+  // Only restore manual draft in manual mode — don't contaminate auto mode
+  if (currentBuilderMode !== 'auto') {
+    // Silently restore draft without prompting
+    const savedDraft = localStorage.getItem(SKELETON_DRAFT_KEY);
+    const savedDraftName = localStorage.getItem(SKELETON_DRAFT_NAME_KEY);
+    if (savedDraft) {
+      try {
+        dailySkeleton = JSON.parse(savedDraft);
+        if(savedDraftName) currentLoadedTemplate = savedDraftName;
+        // Draft means there might be unsaved changes
+        hasUnsavedChanges = true;
+      } catch(e) {
+        clearDraftFromLocalStorage();
+      }
     }
   }
 
