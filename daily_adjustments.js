@@ -2737,16 +2737,7 @@ async function runOptimizer() {
         await window.SchedulerCoreUtils.hydrateLocalStorageFromCloud();
     }
 
-    if (window.FluidScheduler?.isFluidMode?.()) {
-        console.log('[Optimizer] FLUID MODE — delegating to FluidScheduler');
-        const fluidSuccess = window.FluidScheduler.runFluidScheduler();
-        if (fluidSuccess) {
-            window.updateTable?.();
-            console.log('[Optimizer] Fluid schedule applied successfully');
-            return;
-        } else {
-            console.warn('[Optimizer] Fluid scheduler failed, falling back to standard mode');
-        }
+   
     }
 
     // ★★★ PRE-GENERATION CLEAR (v4 — FULL WIPE) ★★★
@@ -3861,7 +3852,7 @@ function getMainHTML(useMS) {
             <button class="da-subtab" data-tab="trips">Trips</button>
             <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
             <button class="da-subtab" data-tab="resources">Resources</button>
-            <button class="da-subtab" data-tab="fluid">Fluid Mode</button>
+           
           </div>
           
           <div id="da-pane-skeleton" class="da-pane active">
@@ -3894,9 +3885,7 @@ function getMainHTML(useMS) {
           <div id="da-pane-resources" class="da-pane">
             <div id="da-resources-container"></div>
           </div>
-          <div id="da-pane-fluid" class="da-pane">
-            <div id="da-fluid-container"></div>
-          </div>
+          
         </div>
       </div>
     `;
@@ -3960,9 +3949,7 @@ function setupSubTabs() {
       if (pane) pane.classList.add('active');
       
       activeSubTab = tabId;
-      if (tabId === 'fluid') {
-          window.initFluidConfigPanel?.(container.querySelector('#da-fluid-container'));
-      }
+      
     };
   });
 }
@@ -3979,7 +3966,8 @@ function setupKeyboardHandler() {
     // Auto mode: don't allow manual skeleton tile deletion via keyboard
     if (window._daBuilderMode === 'auto') return;
     
-    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedTileId) {      e.preventDefault();
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedTileId) {
+      e.preventDefault();      e.preventDefault();
       (async () => {
         const ok = await daShowConfirm("Delete this block?", { danger: true, confirmText: 'Delete' });
         if (ok) {
