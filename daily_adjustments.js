@@ -2113,7 +2113,7 @@ function addDropListeners(gridEl) {
           isNightActivity
         };
       }
-     // ===== OTHER PINNED (lunch, snacks, dismissal, swim) =====
+    // ===== OTHER PINNED (lunch, snacks, dismissal, swim) =====
       else if (['lunch', 'snacks', 'dismissal', 'swim'].includes(tileData.type)) {
         let name = tileData.name;
         let reservedFields = [];
@@ -2128,7 +2128,6 @@ function addDropListeners(gridEl) {
           );
           if (swimField) reservedFields = [swimField.name];
         }
-        // Build modal fields — swim gets optional pre/post change
         const daSwimFields = [
           { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
           { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr }
@@ -2141,7 +2140,7 @@ function addDropListeners(gridEl) {
         }
         const result = await daShowModal({
           title: name + ' for ' + divName,
-          description: tileData.type === 'swim' ? 'Optionally add changing time before and/or after swim.' : undefined,
+          description: tileData.type === 'swim' ? 'Change time is carved from the total block. e.g. 3–4 with 10min changes → Change 3:00–3:10, Swim 3:10–3:50, Change 3:50–4:00' : undefined,
           fields: daSwimFields
         });
         if (!result || !result.startTime || !result.endTime) return;
@@ -2149,45 +2148,54 @@ function addDropListeners(gridEl) {
         if (!times) return;
         isNightActivity = times.isNight;
         
-        // Parse pre/post change durations
-        const preChangeMin = parseInt(result.preChangeMin) || 0;
-        const postChangeMin = parseInt(result.postChangeMin) || 0;
-        const swimStartVal = parseTimeToMinutes(result.startTime);
-        const swimEndVal = parseTimeToMinutes(result.endTime);
+        const daTotalStart = parseTimeToMinutes(result.startTime);
+        const daTotalEnd = parseTimeToMinutes(result.endTime);
+        const daPreChange = (tileData.type === 'swim') ? (parseInt(result.preChangeMin) || 0) : 0;
+        const daPostChange = (tileData.type === 'swim') ? (parseInt(result.postChangeMin) || 0) : 0;
         
-        // If pre-change: create a "Change" tile before swim
-        if (tileData.type === 'swim' && preChangeMin > 0 && swimStartVal !== null) {
-          const changeStart = swimStartVal - preChangeMin;
+        if (daPreChange + daPostChange >= (daTotalEnd - daTotalStart)) {
+          await daShowAlert('Change time (' + (daPreChange + daPostChange) + ' min) must be less than the total block (' + (daTotalEnd - daTotalStart) + ' min).');
+          return;
+        }
+        
+        const daSwimStart = daTotalStart + daPreChange;
+        const daSwimEnd = daTotalEnd - daPostChange;
+        
+        // Pre-Change carved from start of block
+        if (daPreChange > 0) {
           dailyOverrideSkeleton.push({
             id: Date.now().toString() + '_prechange',
             type: 'pinned',
             event: 'Change',
             division: divName,
-            startTime: minutesToTimeDA(changeStart),
-            endTime: result.startTime,
+            startTime: result.startTime,
+            endTime: minutesToTime(daSwimStart),
             reservedFields: [],
             location: null,
             _swimChange: 'pre'
           });
         }
         
+        // Swim tile — narrowed to exclude change time
         newEvent = {
           id: Date.now().toString(), type: 'pinned', event: name, division: divName,
-          startTime: result.startTime, endTime: result.endTime,
+          startTime: minutesToTime(daSwimStart), endTime: minutesToTime(daSwimEnd),
           reservedFields,
           location: defaultLocation || (reservedFields.length > 0 ? reservedFields[0] : null),
+          _preChangeMin: daPreChange || undefined,
+          _postChangeMin: daPostChange || undefined,
           isNightActivity
         };
-        // If post-change: create a "Change" tile after swim
-        if (tileData.type === 'swim' && postChangeMin > 0 && swimEndVal !== null) {
-          const changeEnd = swimEndVal + postChangeMin;
+        
+        // Post-Change carved from end of block
+        if (daPostChange > 0) {
           dailyOverrideSkeleton.push({
             id: Date.now().toString() + '_postchange',
             type: 'pinned',
             event: 'Change',
             division: divName,
-            startTime: result.endTime,
-            endTime: minutesToTimeDA(changeEnd),
+            startTime: minutesToTime(daSwimEnd),
+            endTime: result.endTime,
             reservedFields: [],
             location: null,
             _swimChange: 'post'
