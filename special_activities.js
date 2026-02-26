@@ -440,14 +440,16 @@ function renderDetailPane() {
     detailPaneEl.appendChild(sectionGroup("Time & Weather", "When this special can be scheduled", timeWeatherSections));
 
     // Group 3: Rotation Rules — usage limit + full grade + prep duration
-    detailPaneEl.appendChild(sectionGroup("Rotation Rules", "Limits, timing & scheduling mode", [
+   const rotationSections = [
         section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
         section("Full Grade", summaryFullGrade(item), () => renderFullGradeSettings(item)),
-        section("Activity Duration", summaryDuration(item), () => renderDurationSettings(item)),
-        section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)),
-        section("Fluid Scheduling", summaryFluidMode(item), () => renderFluidModeSettings(item))
-    ]));
-}
+    ];
+    if (window.getCampBuilderMode?.() === 'auto' || window._daBuilderMode === 'auto') {
+        rotationSections.push(section("Activity Duration", summaryDuration(item), () => renderDurationSettings(item)));
+    }
+    rotationSections.push(section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)));
+    rotationSections.push(section("Fluid Scheduling", summaryFluidMode(item), () => renderFluidModeSettings(item)));
+    detailPaneEl.appendChild(sectionGroup("Rotation Rules", "Limits, timing & scheduling mode", rotationSections));}
 
 // =========================================================================
 // SUMMARY HELPERS
@@ -926,7 +928,59 @@ function renderWeatherSettings(item) {
     }
     return container;
 }
-
+function renderDurationSettings(item) {
+    const container = document.createElement("div");
+    const hasDur = (parseInt(item.duration) || 0) > 0;
+    
+    container.innerHTML = '<div style="margin-bottom:16px;">'
+        + '<p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Set how long this activity takes when scheduled. The scheduler will use this duration instead of the skeleton block\'s default time.</p>'
+        + '<div style="background:' + (hasDur ? '#eff6ff' : '#f9fafb') + '; border:1px solid ' + (hasDur ? '#bfdbfe' : '#e5e7eb') + '; border-radius:10px; padding:14px;">'
+        + '<div style="display:flex; align-items:center; gap:12px; margin-bottom:' + (hasDur ? '12px' : '0') + ';">'
+        + '<div style="flex:1;">'
+        + '<div style="font-weight:600; color:' + (hasDur ? '#1e40af' : '#374151') + ';">' + (hasDur ? item.duration + ' minutes' : 'Not Set') + '</div>'
+        + '<div style="font-size:0.8rem; color:' + (hasDur ? '#3b82f6' : '#6b7280') + ';">' + (hasDur ? 'Scheduler will use this duration' : 'Uses skeleton block duration') + '</div>'
+        + '</div>'
+        + '<label class="switch"><input type="checkbox" id="duration-toggle" ' + (hasDur ? 'checked' : '') + '><span class="slider"></span></label>'
+        + '</div>'
+        + '<div id="duration-config" style="display:' + (hasDur ? 'block' : 'none') + ';">'
+        + '<div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #bfdbfe; margin-top:8px;">'
+        + '<label style="font-size:0.85rem;">Duration:</label>'
+        + '<input type="number" id="duration-input" min="5" max="180" step="5" value="' + (item.duration || 30) + '" style="width:70px; padding:6px 10px; border:1px solid #bfdbfe; border-radius:6px; text-align:center;">'
+        + '<span style="font-size:0.85rem; color:#64748b;">minutes</span>'
+        + '</div></div></div></div>';
+    
+    const tog = container.querySelector("#duration-toggle");
+    if (tog) {
+        tog.addEventListener("change", function() {
+            const cfg = container.querySelector("#duration-config");
+            if (this.checked) {
+                cfg.style.display = "block";
+                item.duration = parseInt(container.querySelector("#duration-input").value, 10) || 30;
+            } else {
+                cfg.style.display = "none";
+                item.duration = null;
+            }
+            saveData();
+            const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+            if (s) s.textContent = summaryDuration(item);
+        });
+    }
+    
+    const di = container.querySelector("#duration-input");
+    if (di) {
+        di.addEventListener("change", function() {
+            const v = parseInt(this.value, 10);
+            if (!isNaN(v) && v >= 5 && v <= 180) {
+                item.duration = v;
+                saveData();
+                const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+                if (s) s.textContent = summaryDuration(item);
+            }
+        });
+    }
+    
+    return container;
+}
 function renderPrepDurationSettings(item) {
     const container = document.createElement("div");
     const hp = (item.prepDuration||0) > 0;
