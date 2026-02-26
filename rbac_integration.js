@@ -387,8 +387,11 @@
     /**
      * Get role-based UI configuration
      */
-    function getUIConfig() {
-        const role = window.AccessControl?.getCurrentRole() || 'viewer';
+   function getUIConfig() {
+        // ★★★ v3.12: Fallback chain — never default to viewer if role is known ★★★
+        const role = window.AccessControl?.getCurrentRole() || 
+                     localStorage.getItem('campistry_role') || 
+                     'viewer';
         
         return {
             showGenerateButton: role !== 'viewer',

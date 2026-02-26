@@ -1360,7 +1360,7 @@ function addDropListeners(selector) {
           location: reservedFields.length === 1 ? reservedFields[0] : null
         };
       }
-      // OTHER PINNED (swim, lunch, snacks, dismissal)
+     // OTHER PINNED (swim, lunch, snacks, dismissal)
       else if (['lunch', 'snacks', 'dismissal', 'swim'].includes(tileData.type)) {
         let name = tileData.name;
         let reservedFields = [];
@@ -1380,25 +1380,80 @@ function addDropListeners(selector) {
           }
         }
         
+        const swimModalFields = [
+          { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
+          { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
+        ];
+        if (tileData.type === 'swim') {
+          swimModalFields.push(
+            { name: 'preChangeMin', label: 'Pre-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 10' },
+            { name: 'postChangeMin', label: 'Post-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 10' }
+          );
+        }
+        
         const result = await showModal({
           title: name,
-          fields: [
-            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
-            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
-          ]
+          description: tileData.type === 'swim' ? 'Change time is carved from the total block. e.g. 3–4 with 10min changes → Change 3:00–3:10, Swim 3:10–3:50, Change 3:50–4:00' : undefined,
+          fields: swimModalFields
         });
         if (!result) return;
         
+        const msTotalStart = parseTimeToMinutes(result.startTime);
+        const msTotalEnd = parseTimeToMinutes(result.endTime);
+        const msPreChange = (tileData.type === 'swim') ? (parseInt(result.preChangeMin) || 0) : 0;
+        const msPostChange = (tileData.type === 'swim') ? (parseInt(result.postChangeMin) || 0) : 0;
+        
+        if (msPreChange + msPostChange >= (msTotalEnd - msTotalStart)) {
+          await showAlert('Change time (' + (msPreChange + msPostChange) + ' min) must be less than the total block (' + (msTotalEnd - msTotalStart) + ' min).');
+          return;
+        }
+        
+        const msSwimStart = msTotalStart + msPreChange;
+        const msSwimEnd = msTotalEnd - msPostChange;
+        
+        // Pre-Change carved from start of block
+        if (msPreChange > 0) {
+          dailySkeleton.push({
+            id: Date.now().toString() + '_prechange',
+            type: 'pinned',
+            event: 'Change',
+            division: divName,
+            startTime: result.startTime,
+            endTime: minutesToTime(msSwimStart),
+            reservedFields: [],
+            location: null,
+            _swimChange: 'pre'
+          });
+        }
+        
+        // Swim tile — narrowed to exclude change time
         newEvent = {
           id: Date.now().toString(),
           type: 'pinned',
           event: name,
           division: divName,
-          startTime: result.startTime,
-          endTime: result.endTime,
+          startTime: minutesToTime(msSwimStart),
+          endTime: minutesToTime(msSwimEnd),
           reservedFields: reservedFields,
-          location: location
+          location: location,
+          _preChangeMin: msPreChange || undefined,
+          _postChangeMin: msPostChange || undefined
         };
+        
+        // Post-Change carved from end of block
+        if (msPostChange > 0) {
+          dailySkeleton.push({
+            id: Date.now().toString() + '_postchange',
+            type: 'pinned',
+            event: 'Change',
+            division: divName,
+            startTime: minutesToTime(msSwimEnd),
+            endTime: result.endTime,
+            reservedFields: [],
+            location: null,
+            _swimChange: 'post'
+          });
+        }
       }
       // STANDARD SLOTS & LEAGUES
       else {

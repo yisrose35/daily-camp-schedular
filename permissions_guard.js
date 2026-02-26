@@ -139,7 +139,18 @@
      * Check if user has FULL access (Owner or Admin)
      */
     function hasFullAccess() {
-        return _userRole === 'owner' || _userRole === 'admin';
+        // ★★★ v1.1 FIX: Check multiple sources — don't rely on single init ★★★
+        if (_userRole === 'owner' || _userRole === 'admin') return true;
+        
+        // Fallback: check AccessControl directly (may be initialized before PermissionsGuard)
+        const acRole = window.AccessControl?.getCurrentRole?.();
+        if (acRole === 'owner' || acRole === 'admin') return true;
+        
+        // Last resort: localStorage
+        const lsRole = localStorage.getItem('campistry_role');
+        if (lsRole === 'owner' || lsRole === 'admin') return true;
+        
+        return false;
     }
 
     /**

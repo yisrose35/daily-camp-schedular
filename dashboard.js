@@ -287,7 +287,7 @@
     // instantly without re-querying Supabase (eliminates white screen).
     // ========================================
     
-    function cacheRBACContext() {
+   function cacheRBACContext() {
         try {
             const rbacCache = {
                 userId: currentUser?.id,
@@ -303,7 +303,16 @@
                 cachedAt: Date.now()
             };
             sessionStorage.setItem('campistry_rbac_cache', JSON.stringify(rbacCache));
-            console.log('📊 ⚡ RBAC context cached to sessionStorage:', rbacCache.role);
+            
+            // ★★★ v2.5: Also write to localStorage as durable fallback ★★★
+            // sessionStorage is cleared on tab close. localStorage persists.
+            // access_control.js reads localStorage as last-resort fallback.
+            localStorage.setItem('campistry_role', userRole);
+            localStorage.setItem('campistry_user_id', rbacCache.campId);
+            localStorage.setItem('campistry_auth_user_id', currentUser?.id);
+            localStorage.setItem('campistry_is_team_member', String(isTeamMember));
+            
+            console.log('📊 ⚡ RBAC context cached to sessionStorage + localStorage:', rbacCache.role);
         } catch (e) {
             console.warn('📊 Failed to cache RBAC context:', e);
         }
