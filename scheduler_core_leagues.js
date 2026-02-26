@@ -64,7 +64,8 @@
             return {
                 teamSports: {},
                 matchupHistory: {},
-                gamesPerDate: {}
+                gamesPerDate: {},
+                _awayState: {}
             };
         }
     }
@@ -372,7 +373,69 @@ for (const futureDate of Object.keys(allDailyData)) {
     // =========================================================================
     // ROUND-ROBIN MATCHUP GENERATION
     // =========================================================================
+// =========================================================================
+    // ★★★ AWAY DOUBLEHEADER ENGINE ★★★
+    // =========================================================================
+    function getAwayDoubleheaderMatchups(league, gameNumber, history) {
+        var teams = league.teams || [];
+        var config = league.awayDoubleheader || {};
+        var groupSize = config.groupSize || 4;
+        var gamesPerVisit = config.gamesPerVisit || 2;
 
+        if (teams.length < 4) return null;
+
+        // Build stable groups
+        var groups = [];
+        for (var i = 0; i < teams.length; i += groupSize) {
+            var group = teams.slice(i, i + groupSize);
+            if (group.length >= 2) groups.push(group);
+        }
+        if (groups.length < 2) return null;
+
+        // Which group travels today
+        var visitIndex = Math.floor((gameNumber - 1) / gamesPerVisit);
+        var gameWithinVisit = (gameNumber - 1) % gamesPerVisit;
+        var groupIndex = visitIndex % groups.length;
+        var groupTeams = groups[groupIndex];
+
+        // Group's own round-robin
+        var groupRR = generateRoundRobinSchedule(groupTeams);
+        var totalRounds = groupRR.length;
+        if (totalRounds === 0) return null;
+
+        // Track each group's pointer independently
+        if (!history._awayState) history._awayState = {};
+        var stateKey = league.name + '_group' + groupIndex;
+        if (history._awayState[stateKey] === undefined) {
+            history._awayState[stateKey] = 0;
+        }
+
+        var roundPointer = history._awayState[stateKey];
+        var roundIdx = (roundPointer + gameWithinVisit) % totalRounds;
+        var matchups = groupRR[roundIdx];
+
+        console.log('[AwayDoubleheader] Game #' + gameNumber + ': Visit ' + (visitIndex + 1) + ', Group ' + (groupIndex + 1) + '/' + groups.length);
+        console.log('[AwayDoubleheader]   Teams: [' + groupTeams.join(', ') + ']');
+        console.log('[AwayDoubleheader]   Game ' + (gameWithinVisit + 1) + '/' + gamesPerVisit + ' | Round ' + (roundIdx + 1) + '/' + totalRounds + ' (pointer=' + roundPointer + ')');
+        matchups.forEach(function(m) { console.log('   \uD83C\uDFDF\uFE0F ' + m[0] + ' vs ' + m[1]); });
+
+        // Advance pointer after LAST game of this visit
+        if (gameWithinVisit === gamesPerVisit - 1) {
+            history._awayState[stateKey] = (roundPointer + gamesPerVisit) % totalRounds;
+            console.log('[AwayDoubleheader]   \u2705 Pointer advanced \u2192 ' + history._awayState[stateKey]);
+        }
+
+        return {
+            groupIndex: groupIndex,
+            groupTeams: groupTeams,
+            matchups: matchups,
+            gameWithinVisit: gameWithinVisit,
+            gamesPerVisit: gamesPerVisit,
+            isAwayDoubleheader: true,
+            roundIndex: roundIdx,
+            totalRounds: totalRounds
+        };
+    }
     function generateRoundRobinSchedule(teams) {
         if (teams.length < 2) return [];
 
@@ -758,10 +821,25 @@ for (const futureDate of Object.keys(allDailyData)) {
                 const todayGameIndex = leagueGameCounters[league.name];
                 const gameNumber = baseGameNumber + todayGameIndex + 1;
                 
-                // Get matchups using round robin
-                const fullSchedule = generateRoundRobinSchedule(leagueTeams);
-                const roundIndex = (gameNumber - 1) % fullSchedule.length;
-                const matchups = fullSchedule[roundIndex] || [];
+                // ★★★ Get matchups — check for Away Doubleheader mode ★★★
+                let matchups;
+                let awayInfo = null;
+                
+                if (league.awayDoubleheader?.enabled) {
+                    awayInfo = getAwayDoubleheaderMatchups(league, gameNumber, history);
+                    if (awayInfo) {
+                        matchups = awayInfo.matchups;
+                        console.log('   \uD83D\uDE8C Away DH: Group ' + (awayInfo.groupIndex + 1) + ' [' + awayInfo.groupTeams.join(', ') + ']');
+                        console.log('   \uD83C\uDFAE Game ' + (awayInfo.gameWithinVisit + 1) + '/' + awayInfo.gamesPerVisit + ' (Round ' + (awayInfo.roundIndex + 1) + '/' + awayInfo.totalRounds + ')');
+                    } else {
+                        console.log('   \u26A0\uFE0F Away doubleheader: no matchups generated');
+                        matchups = [];
+                    }
+                } else {
+                    const fullSchedule = generateRoundRobinSchedule(leagueTeams);
+                    const roundIndex = (gameNumber - 1) % fullSchedule.length;
+                    matchups = fullSchedule[roundIndex] || [];
+                }
 
                 console.log(`   Game #${gameNumber} (Round Index: ${roundIndex}, Today's Game: ${todayGameIndex + 1})`);
                 console.log(`   Matchups: ${matchups.length}`);
