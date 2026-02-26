@@ -1193,14 +1193,16 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
       const width = (layer.endMin - layer.startMin) * DAW_PIXELS_PER_MINUTE;
       const top = 6 + idx * 26;
       const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
-      
+      const durLabel = layer.durationMin && layer.durationMax && layer.durationMin !== layer.durationMax
+        ? `${layer.durationMin}-${layer.durationMax}m`
+        : `${layer.durationMin || layer.periodMin || (layer.endMin - layer.startMin)}m`;
       html += `<div class="ms-daw-band ${dawSelectedBand === layer.id ? 'selected' : ''}" 
         data-id="${layer.id}" data-type="${layer.type}" data-grade="${gradeKey}"
         style="left:${left}px; width:${width}px; top:${top}px;"
         draggable="true">
         <div class="band-resize band-resize-left"></div>
         <span class="band-label">${DAW_LAYER_TYPES.find(t => t.type === layer.type)?.name || layer.type}</span>
-        <span class="band-qty">${opSymbol}${layer.qty}</span>
+        <span class="band-qty">${opSymbol}${layer.qty} · ${durLabel}</span>
         <div class="band-resize band-resize-right"></div>
       </div>`;
     });
@@ -1369,6 +1371,9 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
           endMin,
           qty: 1,
           op: layerDef.anchor ? '=' : '>=',
+          durationMin: layerDef.anchor ? (endMin - startMin) : 30,
+          durationMax: layerDef.anchor ? (endMin - startMin) : 50,
+          periodMin: layerDef.anchor ? (endMin - startMin) : 30,
         });
         
         onSave();
@@ -1473,6 +1478,13 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       <span style="color:#8888aa;">→</span>
       <input type="text" id="daw-pop-end" value="${minutesToTime(layer.endMin)}" style="width:45%;">
     </div>
+   <label>Activity Duration (min)</label>
+    <div class="ms-daw-pop-row">
+      <input type="number" id="daw-pop-dur-min" value="${layer.durationMin || layer.periodMin || 30}" min="5" max="180" step="5" style="width:60px;" placeholder="Min">
+      <span style="color:#8888aa;">to</span>
+      <input type="number" id="daw-pop-dur-max" value="${layer.durationMax || layer.periodMin || 50}" min="5" max="180" step="5" style="width:60px;" placeholder="Max">
+      <span style="color:#94a3b8;font-size:10px;">min</span>
+    </div>
     <label>Quantity</label>
     <div class="ms-daw-pop-row">
       <button class="ms-daw-pop-op ${layer.op === '>=' ? 'active' : ''}" data-op=">=">≥</button>
@@ -1480,8 +1492,7 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       <button class="ms-daw-pop-op ${layer.op === '<=' ? 'active' : ''}" data-op="<=">≤</button>
       <input type="number" id="daw-pop-qty" value="${layer.qty}" min="1" max="10" style="width:50px;">
     </div>
-    <div class="ms-daw-pop-actions">
-      <button class="ms-daw-pop-btn ms-daw-pop-btn-save">Save</button>
+    <div class="ms-daw-pop-actions">      <button class="ms-daw-pop-btn ms-daw-pop-btn-save">Save</button>
       <button class="ms-daw-pop-btn ms-daw-pop-btn-del">Delete</button>
       <button class="ms-daw-pop-btn ms-daw-pop-btn-cancel">Close</button>
     </div>
@@ -1511,6 +1522,9 @@ function showDAWPopover(bandEl, layer, grade, opts) {
     const e2 = parseTimeToMinutes(endStr);
     if (s != null) layer.startMin = s;
     if (e2 != null) layer.endMin = e2;
+    layer.durationMin = parseInt(popover.querySelector('#daw-pop-dur-min').value) || 30;
+    layer.durationMax = parseInt(popover.querySelector('#daw-pop-dur-max').value) || 50;
+    layer.periodMin = layer.durationMin; // backward compat
     layer.qty = parseInt(popover.querySelector('#daw-pop-qty').value) || 1;
     const activeOp = popover.querySelector('.ms-daw-pop-op.active');
     if (activeOp) layer.op = activeOp.dataset.op;
@@ -1560,13 +1574,16 @@ async function dawAddLayerDialog(grade) {
   if (!dawLayers[grade]) dawLayers[grade] = [];
   const layerDef = DAW_LAYER_TYPES.find(t => t.type === result.type);
   
-  dawLayers[grade].push({
+ dawLayers[grade].push({
     id: 'daw_' + Math.random().toString(36).slice(2, 9),
     type: result.type,
     startMin: Math.max(divStart, startMin),
     endMin: Math.min(divEnd, endMin),
     qty: 1,
     op: layerDef?.anchor ? '=' : '>=',
+    durationMin: layerDef?.anchor ? (endMin - startMin) : 30,
+    durationMax: layerDef?.anchor ? (endMin - startMin) : 50,
+    periodMin: layerDef?.anchor ? (endMin - startMin) : 30,
   });
   
   saveDAWLayers();
