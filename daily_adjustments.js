@@ -2738,7 +2738,7 @@ async function runOptimizer() {
     }
 
    
-    }
+    
 
     // ★★★ PRE-GENERATION CLEAR (v4 — FULL WIPE) ★★★
   const dateKey = window.currentScheduleDate;
