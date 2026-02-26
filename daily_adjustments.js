@@ -2455,15 +2455,48 @@ function loadDAAutoLayers() {
   const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
   const today = dayNames[dow];
   
-  let tmpl = assignments[today] || assignments['Default'];
+let tmpl = assignments[today] || assignments['Default'];
   console.log('[DailyAdj] Auto mode: loading layer template for', today, '→', tmpl || '(none)');
   
-  if (tmpl && autoTemplates[tmpl]) {
-    daAutoLayers = JSON.parse(JSON.stringify(autoTemplates[tmpl]));
-  } else if (autoTemplates['_current']) {
-    daAutoLayers = JSON.parse(JSON.stringify(autoTemplates['_current']));
-  } else {
-    daAutoLayers = {};
+  // Priority 1: Day-specific saved layers (localStorage)
+  const dateKey = window.currentScheduleDate || '';
+  const dayLayerKey = `campAutoLayers_${dateKey}`;
+  let loaded = false;
+  try {
+    const stored = localStorage.getItem(dayLayerKey);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && Object.keys(parsed).length > 0) {
+        daAutoLayers = parsed;
+        loaded = true;
+        console.log('[DailyAdj] ✅ Loaded daily auto layers from localStorage for', dateKey);
+      }
+    }
+  } catch (e) { console.warn('[DailyAdj] Failed to load daily auto layers from localStorage:', e); }
+  
+  // Priority 2: Day-specific saved layers (cloud)
+  if (!loaded) {
+    try {
+      const cloudLayers = g.app1?.dailyAutoLayers?.[dateKey];
+      if (cloudLayers && Object.keys(cloudLayers).length > 0) {
+        daAutoLayers = JSON.parse(JSON.stringify(cloudLayers));
+        localStorage.setItem(dayLayerKey, JSON.stringify(daAutoLayers));
+        loaded = true;
+        console.log('[DailyAdj] ✅ Loaded daily auto layers from CLOUD for', dateKey);
+      }
+    } catch (e) { console.warn('[DailyAdj] Failed to load daily auto layers from cloud:', e); }
+  }
+  
+  // Priority 3: Template fallback
+  if (!loaded) {
+    if (tmpl && autoTemplates[tmpl]) {
+      daAutoLayers = JSON.parse(JSON.stringify(autoTemplates[tmpl]));
+    } else if (autoTemplates['_current']) {
+      daAutoLayers = JSON.parse(JSON.stringify(autoTemplates['_current']));
+    } else {
+      daAutoLayers = {};
+    }
+    console.log('[DailyAdj] Loaded auto layers from template:', tmpl || '_current');
   }
   
   // If empty, seed with division keys
