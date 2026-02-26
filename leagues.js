@@ -245,9 +245,10 @@
             standings: (league.standings && typeof league.standings === 'object') ? league.standings : {},
             games: Array.isArray(league.games) ? league.games : [],
             enabled: league.enabled !== false,
-            schedulingPriority: ['sport_variety', 'matchup_variety'].includes(league.schedulingPriority) 
+           schedulingPriority: ['sport_variety', 'matchup_variety'].includes(league.schedulingPriority) 
                 ? league.schedulingPriority 
-                : 'sport_variety'
+                : 'sport_variety',
+            awayDoubleheader: league.awayDoubleheader || null
         };
 
         // ★ ORPHAN CLEANUP: Remove references to deleted divisions
@@ -1064,8 +1065,138 @@
                 }
             }
         };
-        teamCard.appendChild(teamInput);
+       teamCard.appendChild(teamInput);
         container.appendChild(teamCard);
+
+        // ═════════════════════════════════════════════════════════
+        // ADVANCED SETTINGS (collapsed accordion — niche features)
+        // ═════════════════════════════════════════════════════════
+        var advancedWrap = document.createElement('div');
+        advancedWrap.style.cssText = 'margin-top:4px; border:1px dashed #E5E7EB; border-radius:12px; overflow:hidden;';
+
+        var advancedHeader = document.createElement('div');
+        advancedHeader.style.cssText = 'padding:10px 14px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; user-select:none;';
+        advancedHeader.innerHTML =
+            '<span style="font-size:0.8rem; color:#9CA3AF; font-weight:500;">Advanced Settings</span>' +
+            '<svg class="adv-caret" width="16" height="16" fill="none" stroke="#9CA3AF" stroke-width="2" viewBox="0 0 24 24" style="transition:transform 0.2s;"><path d="M9 5l7 7-7 7"></path></svg>';
+
+        var advancedBody = document.createElement('div');
+        advancedBody.style.cssText = 'display:none; padding:0 14px 14px;';
+
+        advancedHeader.onclick = function () {
+            var isOpen = advancedBody.style.display === 'block';
+            advancedBody.style.display = isOpen ? 'none' : 'block';
+            advancedHeader.querySelector('.adv-caret').style.transform = isOpen ? '' : 'rotate(90deg)';
+        };
+
+        // --- AWAY DOUBLEHEADER CARD (inside advanced) ---
+        var awayCard = document.createElement('div');
+        awayCard.className = 'league-section-card';
+        awayCard.style.marginBottom = '0';
+        awayCard.innerHTML =
+            '<div class="league-section-header">' +
+            '<span class="league-section-title">Away Doubleheader</span>' +
+            '<span style="font-size:0.75rem; color:#9CA3AF;">Off-campus back-to-back</span>' +
+            '</div>';
+
+        var awayDesc = document.createElement('p');
+        awayDesc.className = 'league-priority-desc';
+        awayDesc.textContent = 'Teams travel in groups to an off-campus facility and play back-to-back games. Groups rotate daily.';
+        awayCard.appendChild(awayDesc);
+
+        var awayToggleRow = document.createElement('div');
+        awayToggleRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:10px;';
+        var awayTogLabel = document.createElement('label');
+        awayTogLabel.className = 'switch';
+        var awayCb = document.createElement('input');
+        awayCb.type = 'checkbox';
+        awayCb.checked = !!league.awayDoubleheader?.enabled;
+        var awaySlider = document.createElement('span');
+        awaySlider.className = 'slider';
+        awayTogLabel.append(awayCb, awaySlider);
+        var awayTogText = document.createElement('span');
+        awayTogText.style.cssText = 'font-size:0.85rem; color:#374151;';
+        awayTogText.textContent = league.awayDoubleheader?.enabled ? 'Enabled' : 'Disabled';
+        awayToggleRow.append(awayTogLabel, awayTogText);
+        awayCard.appendChild(awayToggleRow);
+
+        awayCb.onchange = function () {
+            if (!league.awayDoubleheader) league.awayDoubleheader = { enabled: false, groupSize: 4, gamesPerVisit: 2 };
+            league.awayDoubleheader.enabled = awayCb.checked;
+            saveLeaguesData();
+            renderConfigSections(league, container);
+        };
+
+        if (league.awayDoubleheader?.enabled) {
+            var awaySettingsDiv = document.createElement('div');
+            awaySettingsDiv.style.cssText = 'display:flex; flex-wrap:wrap; gap:16px; margin-top:6px;';
+
+            var groupSizeDiv = document.createElement('div');
+            groupSizeDiv.style.cssText = 'flex:1; min-width:130px;';
+            var gsLabel = document.createElement('label');
+            gsLabel.style.cssText = 'font-size:0.78rem; color:#6B7280; display:block; margin-bottom:4px;';
+            gsLabel.textContent = 'Teams per trip';
+            var gsInput = document.createElement('input');
+            gsInput.type = 'number';
+            gsInput.min = '2';
+            gsInput.max = String(league.teams?.length || 20);
+            gsInput.value = league.awayDoubleheader.groupSize || 4;
+            gsInput.className = 'league-team-input';
+            gsInput.onchange = function () {
+                var val = parseInt(gsInput.value) || 4;
+                if (val < 2) val = 2;
+                if (val % 2 !== 0) val += 1;
+                league.awayDoubleheader.groupSize = val;
+                gsInput.value = val;
+                saveLeaguesData();
+                renderConfigSections(league, container);
+            };
+            groupSizeDiv.append(gsLabel, gsInput);
+
+            var gpvDiv = document.createElement('div');
+            gpvDiv.style.cssText = 'flex:1; min-width:130px;';
+            var gpvLabel = document.createElement('label');
+            gpvLabel.style.cssText = 'font-size:0.78rem; color:#6B7280; display:block; margin-bottom:4px;';
+            gpvLabel.textContent = 'Games per visit';
+            var gpvInput = document.createElement('input');
+            gpvInput.type = 'number';
+            gpvInput.min = '1';
+            gpvInput.max = '4';
+            gpvInput.value = league.awayDoubleheader.gamesPerVisit || 2;
+            gpvInput.className = 'league-team-input';
+            gpvInput.onchange = function () {
+                league.awayDoubleheader.gamesPerVisit = parseInt(gpvInput.value) || 2;
+                saveLeaguesData();
+                renderConfigSections(league, container);
+            };
+            gpvDiv.append(gpvLabel, gpvInput);
+
+            awaySettingsDiv.append(groupSizeDiv, gpvDiv);
+            awayCard.appendChild(awaySettingsDiv);
+
+            var numTeams = league.teams?.length || 0;
+            var gs = league.awayDoubleheader.groupSize || 4;
+            var gpv = league.awayDoubleheader.gamesPerVisit || 2;
+            var numGroups = Math.ceil(numTeams / gs);
+            var groupRounds = gs - 1 + (gs % 2 === 1 ? 1 : 0);
+            var infoNote = document.createElement('p');
+            infoNote.className = 'league-priority-note';
+            if (numTeams > 0) {
+                infoNote.textContent = numTeams + ' teams \u2192 ' + numGroups + ' group' + (numGroups !== 1 ? 's' : '') + ' of ' + gs + '. ' +
+                    'Each group plays ' + gpv + ' game' + (gpv !== 1 ? 's' : '') + ' per visit. ' +
+                    groupRounds + ' unique rounds per group before repeating.';
+            } else {
+                infoNote.textContent = 'Add teams to see group breakdown.';
+            }
+            awayCard.appendChild(infoNote);
+
+            advancedBody.style.display = 'block';
+            advancedHeader.querySelector('.adv-caret').style.transform = 'rotate(90deg)';
+        }
+
+        advancedBody.appendChild(awayCard);
+        advancedWrap.append(advancedHeader, advancedBody);
+        container.appendChild(advancedWrap);
     }
 
     // =========================================================================
