@@ -309,6 +309,7 @@
             // access_control.js reads localStorage as last-resort fallback.
             localStorage.setItem('campistry_role', userRole);
             localStorage.setItem('campistry_user_id', rbacCache.campId);
+            localStorage.setItem('campistry_camp_id', rbacCache.campId);
             localStorage.setItem('campistry_auth_user_id', currentUser?.id);
             localStorage.setItem('campistry_is_team_member', String(isTeamMember));
             
