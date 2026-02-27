@@ -516,7 +516,7 @@
             attempts++;
         }
         
-        if (!window.supabase) {
+        if (!window.supabase || !window.supabase.auth) {
             if (hasLocalAuth) {
                 console.warn('🔑 [Auth] Supabase SDK not loaded, but cached auth exists — proceeding');
                 // Still show the app; supabase will init eventually
