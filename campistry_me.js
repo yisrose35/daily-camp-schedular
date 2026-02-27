@@ -344,8 +344,8 @@
 
         try {
             let attempts = 0;
-            while (!window.supabase && attempts < 20) { await new Promise(r => setTimeout(r, 100)); attempts++; }
-            if (!window.supabase) {
+            while ((!window.supabase || !window.supabase.auth) && attempts < 20) {{ await new Promise(r => setTimeout(r, 100)); attempts++; }
+            if (!window.supabase || !window.supabase.auth) {
                 if (hasLocalAuth) {
                     console.warn('[Me] Supabase not loaded but cached auth exists — proceeding');
                     _cachedCampId = cachedCampId;
