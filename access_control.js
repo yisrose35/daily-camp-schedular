@@ -330,7 +330,7 @@
             attempts++;
         }
         
-        if (!window.supabase) {
+        if (!window.supabase || !window.supabase.auth) {
             console.error("🔐 Supabase not available");
             return;
         }
