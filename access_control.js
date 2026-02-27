@@ -325,12 +325,12 @@
         console.log("🔐 Initializing access control...");
         
         let attempts = 0;
-        while (!window.supabase && attempts < 50) {
+        while ((!window.supabase || !window.supabase.auth) && attempts < 50) {
             await new Promise(r => setTimeout(r, 100));
             attempts++;
         }
         
-        if (!window.supabase) {
+        if (!window.supabase || !window.supabase.auth) {
             console.error("🔐 Supabase not available");
             return;
         }
@@ -347,51 +347,33 @@
         if (tryRestoreFromCache(user.id) || tryRestoreFromLocalStorage(user.id)) {
             console.log("🔐 ⚡ Restored from session cache/local storage — skipping Supabase queries");
             
-            // ★★★ v3.11 FIX: Set _initialized immediately for owner/admin on cache hit ★★★
-            // Owner/admin don't need subdivision data for permission checks.
-            // Without this, all permission checks fail-closed during async loads
-            // (loadSubdivisions, loadUserSubdivisionDetails) causing intermittent
-            // "locked out of post-edit" for the camp owner.
-            if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
-                _initialized = true;
-                calculateEditableDivisions();
-                console.log("🔐 ⚡ Owner/Admin instant-init from cache — permissions active immediately");
-            }
+           // ★★★ v3.13: Instant-init for ALL roles from cache ★★★
+            // Cache already has role, subdivisionIds, and assignedDivisions.
+            // Calculate permissions immediately — no network calls needed.
+            // Subdivision details load in background for UI enrichment only.
+            calculateEditableDivisions();
+            _initialized = true;
+            console.log("🔐 ⚡ Instant-init from cache —", _currentRole, "with", _editableDivisions.length, "divisions");
             
             // ★★★ v3.9: Background-verify the cached role (non-blocking) ★★★
-            // UI loads instantly from cache, but before any WRITE is allowed,
-            // verifyBeforeWrite() will block until this completes.
             verifyRoleFromDB().then(() => {
                 debugLog("Background role verification complete:", _currentRole);
             });
         } else {
             // Full Supabase resolution (first load / cache miss / cache expired)
             await determineUserContext();
-            _roleVerifiedFromDB = true;  // ★★★ v3.9: DB-verified via full path ★★★
-            
-            // ★★★ v3.12 FIX: Set _initialized immediately for owner/admin on FULL path too ★★★
-            // Same logic as the cache-hit path. Owner/admin don't need subdivision data
-            // for permission checks. Without this, the owner is locked out during the
-            // entire loadSubdivisions() + calculateEditableDivisions() async window.
-            if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
-                _initialized = true;
-                calculateEditableDivisions();
-                console.log("🔐 ⚡ Owner/Admin instant-init from DB — permissions active immediately");
-            }
+            _roleVerifiedFromDB = true;
+
+            // ★★★ v3.13: Instant-init for ALL roles from DB too ★★★
+            calculateEditableDivisions();
+            _initialized = true;
+            console.log("🔐 ⚡ Instant-init from DB —", _currentRole, "with", _editableDivisions.length, "divisions");
         }
         
-        await loadSubdivisions();
-        
-        if (_currentRole === ROLES.SCHEDULER && _userSubdivisionIds.length > 0) {
-            await loadUserSubdivisionDetails();
-        }
-        
-        calculateEditableDivisions();
-        
-        _initialized = true;
-        
-        // ★★★ v3.11: Recalculate in case window.divisions loaded during async work ★★★
-        calculateEditableDivisions();
+        // ★★★ v3.13: Subdivision loading is now NON-BLOCKING ★★★
+        // Loads in background for UI enrichment (colors, names, "Managed by X" labels).
+        // Does NOT gate _initialized or permission checks.
+        _loadSubdivisionsInBackground();
         
         setupDivisionChangeObserver();
         setupMembershipSubscription();  // ★★★ v3.7: Real-time membership updates ★★★
@@ -684,7 +666,41 @@
             _userSubdivisionDetails = [];
         }
     }
+// =========================================================================
+    // ★★★ v3.13: NON-BLOCKING SUBDIVISION LOADING ★★★
+    // Subdivision data is needed for UI labels and colors, not for permission
+    // checks. Loading it in background prevents slow internet from blocking
+    // any user role from using the app.
+    // =========================================================================
 
+    function _loadSubdivisionsInBackground() {
+        (async () => {
+            try {
+                await loadSubdivisions();
+                
+                if (_currentRole === ROLES.SCHEDULER && _userSubdivisionIds.length > 0) {
+                    await loadUserSubdivisionDetails();
+                }
+                
+                // Recalculate with full subdivision data (may refine scheduler permissions)
+                const prevCount = _editableDivisions.length;
+                calculateEditableDivisions();
+                
+                if (_editableDivisions.length !== prevCount) {
+                    console.log("🔐 Subdivision data refined permissions:", prevCount, "→", _editableDivisions.length, "divisions");
+                    window.VisualRestrictions?.refresh?.();
+                }
+                
+                // Dispatch event so UI modules can update subdivision labels/colors
+                window.dispatchEvent(new CustomEvent('campistry-subdivisions-loaded', {
+                    detail: { subdivisions: _subdivisions }
+                }));
+                
+            } catch (e) {
+                console.warn("🔐 Background subdivision load failed (non-fatal):", e);
+            }
+        })();
+    }
     function calculateEditableDivisions() {
         const allDivisions = Object.keys(window.divisions || {});
         

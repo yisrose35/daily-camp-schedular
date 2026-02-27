@@ -511,12 +511,12 @@
         }
         
         let attempts = 0;
-        while (!window.supabase && attempts < 20) {
-            await new Promise(r => setTimeout(r, 100));
+      while ((!window.supabase || !window.supabase.auth) && attempts < 20) {           
+          await new Promise(r => setTimeout(r, 100));
             attempts++;
         }
         
-        if (!window.supabase) {
+        if (!window.supabase || !window.supabase.auth) {
             if (hasLocalAuth) {
                 console.warn('🔑 [Auth] Supabase SDK not loaded, but cached auth exists — proceeding');
                 // Still show the app; supabase will init eventually

@@ -32,12 +32,25 @@
     let _initialized = false;
     let _editableDivisions = [];
     let _currentRole = null;
-    let _observer = null;
+   let _observer = null;
+
+    // =========================================================================
+    // ★★★ v2.2: OWNER/ADMIN LIVE CHECK ★★★
+    // Checks 3 sources so owners are NEVER blocked, even during init races.
+    // =========================================================================
+
+    function _isOwnerOrAdmin() {
+        if (_currentRole === 'owner' || _currentRole === 'admin') return true;
+        const acRole = window.AccessControl?.getCurrentRole?.();
+        if (acRole === 'owner' || acRole === 'admin') return true;
+        const lsRole = localStorage.getItem('campistry_role');
+        if (lsRole === 'owner' || lsRole === 'admin') return true;
+        return false;
+    }
 
     // =========================================================================
     // INITIALIZATION
     // =========================================================================
-
     async function initialize() {
         if (_initialized) return;
 
@@ -89,11 +102,13 @@
     // APPLY RESTRICTIONS
     // =========================================================================
 
-    function applyRestrictions() {
+   function applyRestrictions() {
         if (!_initialized) return;
 
-        console.log("🚫 Applying restrictions for role:", _currentRole);
+        // ★★★ v2.2: Owner/Admin NEVER gets restrictions ★★★
+        if (_isOwnerOrAdmin()) return;
 
+        console.log("🚫 Applying restrictions for role:", _currentRole);
         // Inject styles
         injectStyles();
 
@@ -120,11 +135,11 @@
 
     function canEditDivision(divisionName) {
         if (!divisionName) return false;
-        if (_currentRole === 'owner' || _currentRole === 'admin') return true;
+        // ★★★ v2.2: Use live check, not just cached _currentRole ★★★
+        if (_isOwnerOrAdmin()) return true;
         if (_currentRole === 'viewer') return false;
         return _editableDivisions.includes(divisionName);
     }
-
     function canViewOnly() {
         return _currentRole === 'viewer';
     }
@@ -751,9 +766,11 @@
     // EVENT INTERCEPTORS
     // =========================================================================
 
-    function setupEditInterceptors() {
+   function setupEditInterceptors() {
         // Intercept drag start
         document.addEventListener('dragstart', (e) => {
+            // ★★★ v2.2: Owner/Admin is NEVER blocked ★★★
+            if (_isOwnerOrAdmin()) return;
             const divisionName = getDivisionFromElement(e.target);
             if (divisionName && !canEditDivision(divisionName)) {
                 e.preventDefault();
@@ -763,6 +780,8 @@
 
         // Intercept click on edit/delete buttons
         document.addEventListener('click', (e) => {
+            // ★★★ v2.2: Owner/Admin is NEVER blocked ★★★
+            if (_isOwnerOrAdmin()) return;
             const editBtn = e.target.closest('[data-action="edit"], [data-action="delete"], .edit-btn, .delete-btn');
             if (!editBtn) return;
             

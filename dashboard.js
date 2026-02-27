@@ -84,21 +84,21 @@
         
         // Wait for Supabase
         let attempts = 0;
-        while (!window.supabase && attempts < 50) {
+        while ((!window.supabase || !window.supabase.auth) && attempts < 50) {
             await new Promise(r => setTimeout(r, 100));
             attempts++;
         }
         
-        if (!window.supabase) {
+        if (!window.supabase || !window.supabase.auth) {
             if (hasLocalAuth) {
                 console.warn('🔑 [Dashboard] Supabase not loaded but cached auth exists — waiting longer');
                 // Give it more time since we know user was authenticated
                 let extraAttempts = 0;
-                while (!window.supabase && extraAttempts < 50) {
+               while ((!window.supabase || !window.supabase.auth) && extraAttempts < 50) {
                     await new Promise(r => setTimeout(r, 100));
                     extraAttempts++;
                 }
-                if (!window.supabase) {
+                if (!window.supabase || !window.supabase.auth) {
                     console.error('Supabase still not available after extended wait');
                     window.location.href = 'index.html';
                     return;
@@ -309,6 +309,7 @@
             // access_control.js reads localStorage as last-resort fallback.
             localStorage.setItem('campistry_role', userRole);
             localStorage.setItem('campistry_user_id', rbacCache.campId);
+            localStorage.setItem('campistry_camp_id', rbacCache.campId);
             localStorage.setItem('campistry_auth_user_id', currentUser?.id);
             localStorage.setItem('campistry_is_team_member', String(isTeamMember));
             
