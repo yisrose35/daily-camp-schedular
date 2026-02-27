@@ -73,7 +73,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     // Wait for Supabase
     let attempts = 0;
-    while (!window.supabase && attempts < 30) {
+    while ((!window.supabase || !window.supabase.auth) && attempts < 30) {
         await new Promise(r => setTimeout(r, 100));
         attempts++;
     }
