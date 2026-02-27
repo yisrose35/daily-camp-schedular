@@ -325,7 +325,7 @@
         console.log("🔐 Initializing access control...");
         
         let attempts = 0;
-        while (!window.supabase && attempts < 50) {
+        while ((!window.supabase || !window.supabase.auth) && attempts < 50) {
             await new Promise(r => setTimeout(r, 100));
             attempts++;
         }
