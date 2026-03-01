@@ -2069,30 +2069,102 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
         table.appendChild(thead);
         
         const tbody = document.createElement('tbody');
-        divBlocks.forEach((block, blockIdx) => {
-            const timeLabel = `${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(block.endMin)}`;
-            const tr = document.createElement('tr');
-            tr.style.background = blockIdx % 2 === 0 ? '#fff' : '#fafafa';
-            if (block._isSplitTile) tr.style.background = block._splitHalf === 1 ? (blockIdx % 2 === 0 ? '#f0fdf4' : '#ecfdf5') : (blockIdx % 2 === 0 ? '#fef3c7' : '#fef9c3');
+        // ★★★ v3.2: Pre-compute rowspan map for continuation merging ★★★
+// For each bunk, determine which rows should merge (rowspan > 1)
+// and which rows should be skipped (continuation cells)
+const rowspanMap = {}; // { bunkName: { rowIdx: spanCount } }
+const skipMap = {};    // { bunkName: Set<rowIdx> }
+
+bunks.forEach(bunk => {
+    rowspanMap[bunk] = {};
+    skipMap[bunk] = new Set();
+    
+    for (let ri = 0; ri < divBlocks.length; ri++) {
+        if (skipMap[bunk].has(ri)) continue;
+        
+        const slotIdx = divBlocks[ri].slotIndex !== undefined 
+            ? divBlocks[ri].slotIndex 
+            : ri;
+        const entry = (window.scheduleAssignments?.[bunk] || [])[slotIdx];
+        
+        if (!entry || entry.continuation) continue;
+        
+        // Look ahead: how many continuation rows follow for this bunk?
+        let span = 1;
+        for (let ni = ri + 1; ni < divBlocks.length; ni++) {
+            const nextSlotIdx = divBlocks[ni].slotIndex !== undefined
+                ? divBlocks[ni].slotIndex
+                : ni;
+            const nextEntry = (window.scheduleAssignments?.[bunk] || [])[nextSlotIdx];
             
-            const tdTime = document.createElement('td'); 
-            tdTime.textContent = timeLabel;
-            tdTime.style.cssText = 'padding: 10px 12px; font-weight: 500; color: #4b5563; border-right: 1px solid #e5e7eb; white-space: nowrap;';
-            if (block._isSplitTile) { 
-                const halfLabel = block._splitHalf === 1 ? '①' : '②'; 
-                tdTime.innerHTML = `${escapeHtml(timeLabel)} <span style="color: #6b7280; font-size: 0.8rem;">${halfLabel}</span>`; 
+            if (nextEntry && nextEntry.continuation) {
+                span++;
+                skipMap[bunk].add(ni);
+            } else {
+                break;
             }
-            tr.appendChild(tdTime);
-            
-            if (isLeagueBlockType(block.event)) { 
-                tr.appendChild(renderLeagueCell(block, bunks, divName, isEditable)); 
-                tbody.appendChild(tr); 
-                return; 
+        }
+        
+        if (span > 1) {
+            rowspanMap[bunk][ri] = span;
+        }
+    }
+});
+
+divBlocks.forEach((block, blockIdx) => {
+    const timeLabel = `${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(block.endMin)}`;
+    const tr = document.createElement('tr');
+    tr.style.background = blockIdx % 2 === 0 ? '#fff' : '#fafafa';
+    if (block._isSplitTile) tr.style.background = block._splitHalf === 1 
+        ? (blockIdx % 2 === 0 ? '#f0fdf4' : '#ecfdf5') 
+        : (blockIdx % 2 === 0 ? '#fef3c7' : '#fef9c3');
+    
+    const tdTime = document.createElement('td'); 
+    tdTime.textContent = timeLabel;
+    tdTime.style.cssText = 'padding: 10px 12px; font-weight: 500; color: #4b5563; border-right: 1px solid #e5e7eb; white-space: nowrap;';
+    if (block._isSplitTile) { 
+        const halfLabel = block._splitHalf === 1 ? '①' : '②'; 
+        tdTime.innerHTML = `${escapeHtml(timeLabel)} <span style="color: #6b7280; font-size: 0.8rem;">${halfLabel}</span>`; 
+    }
+    tr.appendChild(tdTime);
+    
+    if (isLeagueBlockType(block.event)) { 
+        tr.appendChild(renderLeagueCell(block, bunks, divName, isEditable)); 
+        tbody.appendChild(tr); 
+        return; 
+    }
+    
+    bunks.forEach(bunk => {
+        // ★★★ v3.2: Handle continuation merging ★★★
+        if (skipMap[bunk].has(blockIdx)) {
+            // This row is a continuation for this bunk — cell already covered by rowspan
+            return;
+        }
+        
+        const td = renderBunkCell(block, bunk, divName, isEditable);
+        
+        // Apply rowspan if this cell spans multiple rows
+        const span = rowspanMap[bunk]?.[blockIdx];
+        if (span && span > 1) {
+            td.rowSpan = span;
+            td.style.verticalAlign = 'middle';
+            // Show the merged time range duration
+            const endBlockIdx = blockIdx + span - 1;
+            if (endBlockIdx < divBlocks.length) {
+                const duration = divBlocks[endBlockIdx].endMin - divBlocks[blockIdx].startMin;
+                if (duration > 0) {
+                    const small = document.createElement('div');
+                    small.style.cssText = 'font-size: 0.7rem; color: #9ca3af; margin-top: 2px;';
+                    small.textContent = `${duration}min`;
+                    td.appendChild(small);
+                }
             }
-            
-            bunks.forEach(bunk => tr.appendChild(renderBunkCell(block, bunk, divName, isEditable)));
-            tbody.appendChild(tr);
-        });
+        }
+        
+        tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+});
         table.appendChild(tbody);
         return table;
     }
@@ -2164,9 +2236,12 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
             }
             
             let blocks = [];
-            if (bunkTimelines[bunk] && bunkTimelines[bunk].length > 0) {
-                blocks = bunkTimelines[bunk];
-            } else if (assignments[bunk] && divSlots.length > 0) {
+            const hasSolvedData = assignments[bunk] && 
+                Array.isArray(assignments[bunk]) && 
+                assignments[bunk].some(e => e && !e.continuation && (e._activity || e.field));
+
+            // ★★★ v3.2: ALWAYS prefer solved assignments over pre-build timelines ★★★
+            if (hasSolvedData && divSlots.length > 0) {
                 for (let si = 0; si < divSlots.length; si++) {
                     const entry = assignments[bunk]?.[si];
                     if (!entry || entry.continuation || entry._isTransition) continue;
@@ -2180,6 +2255,9 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
                         type: entry._pinned ? 'pinned' : (slot.type || 'slot')
                     });
                 }
+            } else if (bunkTimelines[bunk] && bunkTimelines[bunk].length > 0) {
+                // Pre-generation preview: use build engine timelines
+                blocks = bunkTimelines[bunk];
             }
             
             blocks.forEach(block => {
