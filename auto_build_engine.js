@@ -39,7 +39,7 @@
 (function() {
 'use strict';
 
-const VERSION = '3.2.1';
+const VERSION = '3.2.2';
 const DEBUG = true;
 
 function log(...args) { if (DEBUG) console.log('[AutoBuild]', ...args); }
@@ -222,11 +222,20 @@ function build({ layers, dateStr }) {
     log(`Day: ${dayName}`);
     
     const allSpecials = getSpecialActivities();
-    const todaysSpecials = allSpecials.filter(s => isSpecialAvailableOnDay(s, dayName));
+    const isRainy = !!window.isRainyDay;
+    
+    // ★★★ v3.2.2 FIX: Filter out rainy-day-only specials on normal days ★★★
+    // The solver (scheduler_core_loader) excludes rainy-day-only activities in normal mode,
+    // so the auto engine must also exclude them to avoid assigning specials the solver can't use.
+    const todaysSpecials = allSpecials.filter(s => {
+        if (!isSpecialAvailableOnDay(s, dayName)) return false;
+        if (!isRainy && s.rainyDayOnly) return false;
+        return true;
+    });
     const scarceSpecials = todaysSpecials.filter(s => isScarceSpecial(s, dayName));
     const regularSpecials = todaysSpecials.filter(s => !isScarceSpecial(s, dayName));
     
-    log(`Specials — total: ${allSpecials.length}, today: ${todaysSpecials.length}, scarce: ${scarceSpecials.length}, regular: ${regularSpecials.length}`);
+    log(`Specials — total: ${allSpecials.length}, today: ${todaysSpecials.length} (rainy: ${isRainy}), scarce: ${scarceSpecials.length}, regular: ${regularSpecials.length}`);
     
     const layersByGrade = {};
     layers.forEach(l => {
