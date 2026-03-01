@@ -256,9 +256,42 @@ supersetBlocks.push({
     _supersetSlot: true
 });
                 }
-                byDivision[divName] = supersetBlocks;
-                log(`    Created ${supersetBlocks.length} superset slots from ${blocks.length} blocks`);
-            }
+               // ★★★ v1.3.2 FIX: Merge undersized superset slots ★★★
+                // Per-bunk blocks create boundaries at different times (e.g., bunk1 ends at 11:30,
+                // bunk3 ends at 11:50). Collecting ALL boundaries creates 20min and 10min slots.
+                // Merge any slot shorter than 25min with the next slot to maintain minimum durations.
+                const MIN_SLOT_DUR = 25;
+                const merged = [];
+                for (let mi = 0; mi < supersetBlocks.length; mi++) {
+                    const curr = supersetBlocks[mi];
+                    const currStart = parseTimeToMinutes(curr.startTime);
+                    const currEnd = parseTimeToMinutes(curr.endTime);
+                    const currDur = currEnd - currStart;
+                    
+                    if (currDur < MIN_SLOT_DUR && mi + 1 < supersetBlocks.length) {
+                        const next = supersetBlocks[mi + 1];
+                        const nextEnd = parseTimeToMinutes(next.endTime);
+                        const mergedDur = nextEnd - currStart;
+                        log(`    ★ Merging undersized slot ${curr.startTime}-${curr.endTime} (${currDur}min) with next → ${curr.startTime}-${next.endTime} (${mergedDur}min)`);
+                        merged.push({
+                            ...next,
+                            startTime: curr.startTime,
+                            endTime: next.endTime,
+                            _supersetSlot: true,
+                            _merged: true
+                        });
+                        mi++;
+                    } else if (currDur < MIN_SLOT_DUR && merged.length > 0) {
+                        const prev = merged[merged.length - 1];
+                        log(`    ★ Merging trailing undersized slot ${curr.startTime}-${curr.endTime} (${currDur}min) into prev → ${prev.startTime}-${curr.endTime}`);
+                        prev.endTime = curr.endTime;
+                        prev._merged = true;
+                    } else {
+                        merged.push(curr);
+                    }
+                }
+                byDivision[divName] = merged;
+                log(`    Created ${merged.length} superset slots (merged from ${supersetBlocks.length}) from ${blocks.length} blocks`);            }
         }
 
         // Build slot array for each division
