@@ -1771,12 +1771,14 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             const eMin = Utils.parseTimeToMinutes(item.endTime);
 
             // ★★★ v17.5 FIX: Process PINNED events FIRST (before overlap check) ★★★
-            const isPinnedType = item.type === 'pinned' || 
-                                 item.pinned === true ||
-                                 ['lunch', 'snacks', 'dismissal', 'regroup', 'swim'].some(
-                                     pt => (item.type || '').toLowerCase() === pt ||
-                                           (item.event || '').toLowerCase().includes(pt)
-                                 );
+           const isPinnedType = item.type === 'pinned' || 
+                     item.pinned === true ||
+                     ['lunch', 'snacks', 'dismissal', 'regroup', 'swim', 'change'].some(
+                         pt => (item.type || '').toLowerCase() === pt ||
+                               (item.event || '').toLowerCase().includes(pt)
+                     ) ||
+                     // ★ v3.2: Custom persistent tiles are always pinned
+                     window.CustomPersistentTiles?.isCustomPinnedEvent?.(item);
             
             if (isPinnedType && item.type !== 'split' && item.type !== 'smart') {
                 // ★★★ v17.9 FIX: Use exact slot matching for pinned events too ★★★
