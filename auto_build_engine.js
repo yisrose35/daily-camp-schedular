@@ -1,5 +1,5 @@
 // =================================================================
-// auto_build_engine.js — Campistry Auto Build Engine v3.2
+// auto_build_engine.js — Campistry Auto Build Engine v3.2.3
 // =================================================================
 // Converts user-defined LAYERS + special activity config into:
 //   1. A skeleton array (per-division time structure)
@@ -34,12 +34,15 @@
 //          DAW qty/op fields, added Phase 3.5 leagues, operator enforcement
 //   v3.2 — Custom persistent tile classifier, auto change buffer insertion,
 //          knapsack group packer (Phase 4 rewrite)
+//   v3.2.3 — FIX #1: Sport score bias (median-based scoring for fair competition)
+//            FIX #2: League force-placement (leagues no longer silently dropped)
+//            FIX #3: Minimum duration enforcement (no more 25min sports when range is 30-50)
 // =================================================================
 
 (function() {
 'use strict';
 
-const VERSION = '3.2.2';
+const VERSION = '3.2.3';
 const DEBUG = true;
 
 function log(...args) { if (DEBUG) console.log('[AutoBuild]', ...args); }
@@ -885,16 +888,25 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         const qty = getLayerQty(layer);
         const op = getLayerOp(layer);
         
-        // How many league blocks to place
-        const count = (op === '<=' || op === '≤') ? Math.min(qty, 1) : qty;
+        // ★★★ v3.2.3 FIX: Always place at least 1 league block ★★★
+        // Previously ≤ operator set count to Math.min(qty, 1) but if qty was 0
+        // or the operator logic in computeRequirements left minRequired=0, 
+        // leagues were silently dropped. Now we always place qty (at least 1).
+        const count = Math.max(qty, 1);
         
         for (let i = 0; i < count; i++) {
             // Find placement within window that doesn't conflict
-            const placement = findBestPlacement(
+            let placement = findBestPlacement(
                 windowStart, windowEnd, duration,
                 getSharedOccupied(bunkState, bunks),
                 divTimes
             );
+            
+            // ★★★ v3.2.3: Force-place leagues — they're non-negotiable ★★★
+            if (!placement) {
+                warn(`Could not find gap for league ${i + 1}/${count} — force-placing at window start ${fmtTime(windowStart)}`);
+                placement = { startMin: windowStart, endMin: windowStart + duration };
+            }
             
             if (!placement) {
                 warn(`Could not place league ${i + 1}/${count} within ${fmtTime(windowStart)}-${fmtTime(windowEnd)}`);
@@ -957,7 +969,7 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     //
     // ═════════════════════════════════════════════════════════════════
     
-    log(`  [Phase 4] Knapsack group packer (v3.2.2)...`);
+    log(`  [Phase 4] Knapsack group packer (v3.2.3)...`);
     log(`    Special rules: op=${specialReq.hasExact ? '=' : '>='} min=${specialReq.min} max=${specialReq.max}`);
     log(`    Sport rules: op=${sportReq.hasExact ? '=' : '>='} min=${sportReq.min} max=${sportReq.max}`);
     
@@ -1038,13 +1050,21 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         if (sportDurIdeal !== sportDurMin) sportDurations.push(sportDurIdeal);
         if (sportDurMax !== sportDurIdeal && sportDurMax !== sportDurMin) sportDurations.push(sportDurMax);
         
+        // ★★★ v3.2.3 FIX: Score sports at the MEDIAN of specials, not 0 ★★★
+        // Previously sports got score 0 which ALWAYS beat specials (whose rotation
+        // scores are typically 20-200+). This caused sports to dominate every slot.
+        // Now sports sit at the median so they compete fairly with specials.
+        const specialScores = pool.filter(p => p.type === 'special').map(p => p.score);
+        const medianSpecialScore = specialScores.length > 0
+            ? specialScores.sort((a, b) => a - b)[Math.floor(specialScores.length / 2)]
+            : 50;
+        
         sportDurations.forEach((dur, idx) => {
             pool.push({
                 name: `Sport_${dur}min`,
                 duration: dur,
-                // Sports get a baseline rotation score — slightly worse than specials
-                // so specials are preferred when scores are close
-                score: 0 + idx,
+                // Sports score at the MEDIAN of available specials — fair competition
+                score: medianSpecialScore + idx,
                 type: 'sport',
                 _fromPool: true,
                 _sportDuration: dur
@@ -1241,12 +1261,21 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             // Place the packed activities sequentially in the gap
             let cursor = gap.startMin;
             
+            // ★★★ v3.2.3: Minimum activity duration from layer config ★★★
+            const minActivityDur = Math.min(sportDurMin, specialDur, 30);
+            
             for (const act of packed) {
                 const blockStart = cursor;
                 const blockEnd = Math.min(cursor + act.duration, gap.endMin);
                 const blockDur = blockEnd - blockStart;
                 
-                if (blockDur < 5) break; // safety
+                // ★★★ v3.2.3 FIX: Enforce minimum duration from layers ★★★
+                // Previously used `< 5` which allowed 25min sports when layers
+                // specify 30-50min range. Now respects the configured minimum.
+                if (blockDur < minActivityDur) {
+                    log(`      ${bunk}: Skipping ${blockDur}min leftover at ${fmtTime(blockStart)} (below ${minActivityDur}min minimum)`);
+                    break;
+                }
                 
                 const isSpecial = act.type === 'special';
                 const eventLabel = isSpecial ? 'Special Activity' : 'Sports Slot';
@@ -1260,6 +1289,7 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                     endTime: fmtTime(blockEnd),
                     _autoGenerated: true,
                     _durationStrict: true,
+                    _minDuration: isSpecial ? specialDur : sportDurMin,
                     _bunk: bunk,
                     _targetDuration: blockDur,
                     _hintActivity: isSpecial ? act.name : null,
@@ -1271,6 +1301,7 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                     event: eventLabel,
                     type: isSpecial ? 'special_slot' : 'sport_slot',
                     _durationStrict: true,
+                    _minDuration: isSpecial ? specialDur : sportDurMin,
                     _targetDuration: blockDur,
                     _hintActivity: isSpecial ? act.name : null,
                     _autoGenerated: true,
@@ -1315,8 +1346,9 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             }
             
             // If leftover time after packing, create a small GA slot
+            // ★★★ v3.2.3: Leftover must meet minimum duration, otherwise absorb into previous block ★★★
             const leftover = gap.endMin - cursor;
-            if (leftover >= 5) {
+            if (leftover >= minActivityDur) {
                 skeleton.push({
                     id: 'auto_ga_' + Math.random().toString(36).slice(2, 9),
                     type: 'slot',
@@ -1341,6 +1373,20 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 });
                 
                 log(`      ${bunk}: GA leftover ${fmtTime(cursor)}-${fmtTime(gap.endMin)} (${leftover}min)`);
+            } else if (leftover > 0) {
+                // ★★★ v3.2.3: Absorb small leftover — extend the last placed block ★★★
+                const lastSkelBlock = skeleton[skeleton.length - 1];
+                if (lastSkelBlock && lastSkelBlock._bunk === bunk && lastSkelBlock._activityGroup === gap.startMin) {
+                    lastSkelBlock.endTime = fmtTime(gap.endMin);
+                    lastSkelBlock._targetDuration = (lastSkelBlock._targetDuration || 0) + leftover;
+                    log(`      ${bunk}: Absorbed ${leftover}min leftover into previous block (now ends ${fmtTime(gap.endMin)})`);
+                    
+                    // Also update the timeline and occupied entries
+                    const lastTimeline = bunkTimelines[bunk][bunkTimelines[bunk].length - 1];
+                    if (lastTimeline) lastTimeline.endMin = gap.endMin;
+                    const lastOccupied = state.occupied[state.occupied.length - 1];
+                    if (lastOccupied) lastOccupied.endMin = gap.endMin;
+                }
             }
         }
         
