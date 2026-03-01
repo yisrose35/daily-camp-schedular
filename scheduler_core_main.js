@@ -1512,8 +1512,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         // =========================================================================
 
         console.log("\n[STEP 2] Processing bunk overrides...");
-        const bunkOverrides = window.loadCurrentDailyData?.().bunkActivityOverrides || [];
-
+        // ★★★ v17.12 FIX: Read from externalOverrides (passed from daily_adjustments) ★★★
+        // Previously read from loadCurrentDailyData() which was wiped by Step 0.
+        const bunkOverrides = externalOverrides?.bunkActivityOverrides?.length > 0
+            ? externalOverrides.bunkActivityOverrides
+            : window._autoBunkOverrides?.length > 0
+                ? window._autoBunkOverrides
+                : window.loadCurrentDailyData?.()?.bunkActivityOverrides || [];
+        if (bunkOverrides.length > 0) {
+            console.log(`[STEP 2] Found ${bunkOverrides.length} overrides (source: ${externalOverrides?.bunkActivityOverrides?.length > 0 ? 'externalOverrides' : window._autoBunkOverrides?.length > 0 ? 'window._autoBunkOverrides' : 'localStorage'})`);
+        }
         bunkOverrides.forEach(override => {
             const activityName = override.activity;
             const overrideType = override.type;
@@ -2581,6 +2589,6 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
     // ★★★ FIX v17.11: Expose core optimizer for division_times_integration.js ★★★
     window._coreRunSkeletonOptimizer = window.runSkeletonOptimizer;
 
-    console.log('⚙️ Scheduler Core Main v17.11 loaded (RBAC + CAPACITY FIX)');
+    console.log('⚙️ Scheduler Core Main v17.12 loaded (RBAC + CAPACITY FIX)');
 
 })();
