@@ -45,7 +45,7 @@
 (function() {
 'use strict';
 
-const VERSION = '3.2.6';
+const VERSION = '3.2.7';
 const DEBUG = true;
 
 function log(...args) { if (DEBUG) console.log('[AutoBuild]', ...args); }
@@ -1022,6 +1022,10 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     const sportDurMax = sportLayers.length > 0 ? getLayerDurationMax(sportLayers[0]) : sportDurMin;
     const sportDurIdeal = Math.round((sportDurMin + sportDurMax) / 2);
     
+    // ★★★ v3.2.7: Duration bounds used by template builder and gap processing ★★★
+    const minActivityDur = Math.min(sportDurMin, specialDur, 30);
+    const maxActivityDur = Math.max(sportDurMax, specialDur, 50);
+    
     // ─────────────────────────────────────────────────────────
     // Build the unified pool of all assignable activities
     // ─────────────────────────────────────────────────────────
@@ -1216,7 +1220,72 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     }
     
     // ─────────────────────────────────────────────────────────
-    // Process each bunk
+    // ★★★ v3.2.7: Pre-compute UNIFORM gap templates ★★★
+    // All bunks must use the SAME time boundaries within each gap.
+    // Otherwise DivisionTimesSystem creates a superset timeline with
+    // mismatched boundaries (e.g., bunk1 splits at 11:30, bunk3 at 11:50)
+    // producing 20min and 10min slots in the grid.
+    // ─────────────────────────────────────────────────────────
+    
+    // Get the shared gaps (between pinned/fixed events — same for all bunks)
+    const sharedOccupied = getSharedOccupied(bunkState, bunks);
+    const sharedGaps = findGaps(sharedOccupied, divTimes);
+    
+    // For each shared gap, compute a standard block template
+    const gapTemplates = {};
+    sharedGaps.forEach(gap => {
+        const gapDur = gap.endMin - gap.startMin;
+        if (gapDur < minActivityDur) return;
+        
+        const template = [];
+        let cursor = gap.startMin;
+        
+        // Alternate between special and sport durations
+        let useSpecial = true;
+        while (cursor + minActivityDur <= gap.endMin) {
+            const remaining = gap.endMin - cursor;
+            let blockDur;
+            
+            if (useSpecial) {
+                blockDur = Math.min(specialDur, remaining, maxActivityDur);
+            } else {
+                blockDur = Math.min(sportDurMin, remaining, maxActivityDur);
+            }
+            
+            // If remaining is less than 2 blocks, give it all to one block (capped at max)
+            if (remaining < minActivityDur * 2 && remaining <= maxActivityDur) {
+                blockDur = remaining;
+            }
+            
+            if (blockDur < minActivityDur) break;
+            
+            template.push({
+                startMin: cursor,
+                endMin: cursor + blockDur,
+                duration: blockDur,
+                preferredType: useSpecial ? 'special' : 'sport'
+            });
+            
+            cursor += blockDur;
+            useSpecial = !useSpecial;
+        }
+        
+        // If there's a small remainder, extend the last block
+        if (cursor < gap.endMin && template.length > 0) {
+            const last = template[template.length - 1];
+            const extended = last.duration + (gap.endMin - cursor);
+            if (extended <= maxActivityDur) {
+                last.endMin = gap.endMin;
+                last.duration = extended;
+            }
+        }
+        
+        gapTemplates[gap.startMin] = template;
+        log(`    Gap template ${fmtTime(gap.startMin)}-${fmtTime(gap.endMin)}: ${template.map(t => `${t.duration}min ${t.preferredType}`).join(' + ')}`);
+    });
+    
+    // ─────────────────────────────────────────────────────────
+    // Process each bunk USING the shared templates
     // ─────────────────────────────────────────────────────────
     
     bunks.forEach(bunk => {
@@ -1259,136 +1328,68 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             const groupDuration = gap.endMin - gap.startMin;
             if (groupDuration < 5) continue;
             
-            // ★★★ v3.2.2: Rebuild pool per gap with capacity-aware filtering ★★★
-            const pool = buildActivityPool(bunk, gap.startMin);
+            // ★★★ v3.2.7: Use shared gap template for uniform boundaries ★★★
+            let template = gapTemplates[gap.startMin];
             
-            // Run the knapsack packer on this gap
-            const packed = packGap(pool, groupDuration, {
-                maxSpecials: Math.max(0, specialMaxCap - placedSpecials),
-                maxSports: Math.max(0, sportMaxCap - placedSports),
-                usedToday: usedToday,
-                needSpecials: specialsStillNeeded,
-                needSports: sportsStillNeeded
-            });
-            
-            if (packed.length === 0) {
-                // ★★★ v3.2.5 FIX: Don't create one giant GA — split into typed blocks ★★★
-                // When the knapsack returns empty (capacity exhausted, no fitting combo),
-                // manually slice the gap into alternating special/sport blocks using
-                // layer durations. This prevents 60min GA slots and ensures balance.
-                log(`      ${bunk}: Knapsack empty for ${groupDuration}min gap — splitting manually`);
-                
-                let fallbackCursor = gap.startMin;
-                let fbSpecials = 0;
-                let fbSports = 0;
-                
-                while (fallbackCursor + minActivityDur <= gap.endMin) {
-                    const remaining = gap.endMin - fallbackCursor;
-                    
-                    // Alternate types based on what's still needed
-                    let fbType, fbDur, fbEvent;
-                    if (specialsStillNeeded > 0 && (sportsStillNeeded <= 0 || fbSpecials <= fbSports)) {
-                        fbType = 'special';
-                        fbDur = Math.min(specialDur, remaining, maxActivityDur);
-                        fbEvent = 'Special Activity';
-                    } else {
-                        fbType = 'sport';
-                        fbDur = Math.min(sportDurMin, remaining, maxActivityDur);
-                        fbEvent = 'Sports Slot';
-                    }
-                    
-                    // Don't create undersized blocks
-                    if (fbDur < minActivityDur) break;
-                    
-                    const fbStart = fallbackCursor;
-                    const fbEnd = fallbackCursor + fbDur;
-                    
-                    skeleton.push({
-                        id: 'auto_fb_' + Math.random().toString(36).slice(2, 9),
-                        type: 'slot',
-                        event: fbEvent,
-                        division: divName,
-                        startTime: fmtTime(fbStart),
-                        endTime: fmtTime(fbEnd),
-                        _autoGenerated: true,
-                        _durationStrict: true,
-                        _bunk: bunk,
-                        _targetDuration: fbDur,
-                        _activityGroup: gap.startMin
-                    });
-                    
-                    bunkTimelines[bunk].push({
-                        startMin: fbStart, endMin: fbEnd,
-                        event: fbEvent,
-                        type: fbType === 'special' ? 'special_slot' : 'sport_slot',
-                        _autoGenerated: true, _activityGroup: gap.startMin
-                    });
-                    
-                    state.occupied.push({
-                        startMin: fbStart, endMin: fbEnd,
-                        event: fbEvent, type: fbType === 'special' ? 'special_slot' : 'sport_slot'
-                    });
-                    
-                    if (fbType === 'special') {
-                        fbSpecials++;
-                        placedSpecials++;
-                        state.specialCount++;
-                        specialsStillNeeded = Math.max(0, specialsStillNeeded - 1);
-                    } else {
-                        fbSports++;
-                        placedSports++;
-                        state.sportCount++;
-                        sportsStillNeeded = Math.max(0, sportsStillNeeded - 1);
-                    }
-                    
-                    fallbackCursor = fbEnd;
-                    log(`      ${bunk}: [fallback] ${fbEvent} ${fmtTime(fbStart)}-${fmtTime(fbEnd)} (${fbDur}min)`);
-                }
-                
-                // Any tiny remainder becomes a GA slot
-                if (gap.endMin - fallbackCursor >= 5) {
-                    skeleton.push({
-                        id: 'auto_ga_' + Math.random().toString(36).slice(2, 9),
-                        type: 'slot',
-                        event: 'General Activity Slot',
-                        division: divName,
-                        startTime: fmtTime(fallbackCursor),
-                        endTime: fmtTime(gap.endMin),
-                        _autoGenerated: true,
-                        _bunk: bunk,
-                        _activityGroup: gap.startMin
-                    });
-                }
-                
-                continue;
+            // Fallback: if bunk-specific occupied shifted the gap, find closest template
+            if (!template) {
+                const templateKeys = Object.keys(gapTemplates).map(Number);
+                const closest = templateKeys.find(k => Math.abs(k - gap.startMin) <= 5);
+                if (closest !== undefined) template = gapTemplates[closest];
             }
             
-            // Place the packed activities sequentially in the gap
-            let cursor = gap.startMin;
+            if (!template || template.length === 0) {
+                // No template at all — create uniform blocks manually
+                log(`      ${bunk}: No template for gap ${fmtTime(gap.startMin)}-${fmtTime(gap.endMin)}, creating uniform blocks`);
+                template = [];
+                let tc = gap.startMin;
+                let tUseSpec = specialsStillNeeded > 0;
+                while (tc + minActivityDur <= gap.endMin) {
+                    const tRemaining = gap.endMin - tc;
+                    let tDur = tUseSpec ? Math.min(specialDur, tRemaining, maxActivityDur) : Math.min(sportDurMin, tRemaining, maxActivityDur);
+                    if (tRemaining < minActivityDur * 2 && tRemaining <= maxActivityDur) tDur = tRemaining;
+                    if (tDur < minActivityDur) break;
+                    template.push({ startMin: tc, endMin: tc + tDur, duration: tDur, preferredType: tUseSpec ? 'special' : 'sport' });
+                    tc += tDur;
+                    tUseSpec = !tUseSpec;
+                }
+                if (template.length === 0) continue;
+            }
             
-            // ★★★ v3.2.4: Duration bounds from layer config ★★★
-            const minActivityDur = Math.min(sportDurMin, specialDur, 30);
-            const maxActivityDur = Math.max(sportDurMax, specialDur, 50);
+            // Build the activity pool for this bunk/gap
+            const pool = buildActivityPool(bunk, gap.startMin);
             
-            for (const act of packed) {
-                const blockStart = cursor;
-                // ★★★ v3.2.4 FIX: Cap block at the configured MAX duration ★★★
-                // Previously blocks could extend to fill the entire gap (60min+)
-                // when layers specify 30-50 range. Now respects the ceiling.
-                const actMaxDur = act.type === 'special' 
-                    ? (act.duration || specialDur) 
-                    : Math.min(act.duration, maxActivityDur);
-                const blockEnd = Math.min(cursor + actMaxDur, gap.endMin);
-                const blockDur = blockEnd - blockStart;
+            // For each template slot, pick the best activity from the pool
+            for (const tmpl of template) {
+                const blockStart = tmpl.startMin;
+                const blockEnd = tmpl.endMin;
+                const blockDur = tmpl.duration;
                 
-                // Enforce minimum duration from layers
-                if (blockDur < minActivityDur) {
-                    log(`      ${bunk}: Skipping ${blockDur}min leftover at ${fmtTime(blockStart)} (below ${minActivityDur}min minimum)`);
-                    break;
+                // Determine type: use template preference, but respect remaining needs
+                let pickType = tmpl.preferredType;
+                if (pickType === 'special' && specialsStillNeeded <= 0 && sportsStillNeeded > 0) {
+                    pickType = 'sport';
+                } else if (pickType === 'sport' && sportsStillNeeded <= 0 && specialsStillNeeded > 0) {
+                    pickType = 'special';
                 }
                 
-                const isSpecial = act.type === 'special';
+                // Check capacity — if no specials available, fall back to sport
+                if (pickType === 'special') {
+                    const availableSpecials = pool.filter(p => p.type === 'special' && !usedToday.includes(p.name.toLowerCase()));
+                    if (availableSpecials.length === 0) pickType = 'sport';
+                }
+                
+                const isSpecial = pickType === 'special';
                 const eventLabel = isSpecial ? 'Special Activity' : 'Sports Slot';
+                
+                // Pick a specific activity from pool for hints/overrides
+                let hintActivity = null;
+                if (isSpecial) {
+                    const specCandidates = pool.filter(p => p.type === 'special' && !usedToday.map(u => u.toLowerCase()).includes(p.name.toLowerCase()));
+                    if (specCandidates.length > 0) {
+                        hintActivity = specCandidates[0].name;
+                    }
+                }
                 
                 skeleton.push({
                     id: 'auto_' + (isSpecial ? 'spec' : 'sport') + '_' + Math.random().toString(36).slice(2, 9),
@@ -1402,7 +1403,7 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                     _minDuration: isSpecial ? specialDur : sportDurMin,
                     _bunk: bunk,
                     _targetDuration: blockDur,
-                    _hintActivity: isSpecial ? act.name : null,
+                    _hintActivity: hintActivity,
                     _activityGroup: gap.startMin
                 });
                 
@@ -1413,7 +1414,7 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                     _durationStrict: true,
                     _minDuration: isSpecial ? specialDur : sportDurMin,
                     _targetDuration: blockDur,
-                    _hintActivity: isSpecial ? act.name : null,
+                    _hintActivity: hintActivity,
                     _autoGenerated: true,
                     _activityGroup: gap.startMin
                 });
@@ -1423,164 +1424,34 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                     event: eventLabel, type: isSpecial ? 'special_slot' : 'sport_slot'
                 });
                 
-                // Track
                 if (isSpecial) {
                     placedSpecials++;
                     state.specialCount++;
                     specialsStillNeeded = Math.max(0, specialsStillNeeded - 1);
                     
-                    // ★★★ v3.2.2: Record usage for capacity tracking across bunks ★★★
-                    recordSpecialUsage(act.name, gap.startMin);
-                    
-                    // ★★★ v3.2.1 FIX: Emit bunkOverride so solver pre-assigns this special ★★★
-                    bunkOverrides.push({
-                        bunk,
-                        division: divName,
-                        activity: act.name,
-                        type: 'special',
-                        startTime: fmtTime(blockStart),
-                        endTime: fmtTime(blockEnd),
-                        _autoGenerated: true,
-                        _knapsack: true
-                    });
-                } else {
-                    placedSports++;
-                    state.sportCount++;
-                    sportsStillNeeded = Math.max(0, sportsStillNeeded - 1);
-                }
-                usedToday.push(act.name);
-                
-                cursor = blockEnd;
-                
-                log(`      ${bunk}: ${isSpecial ? act.name : 'Sport'} (${act.type}, ${blockDur}min) → ${fmtTime(blockStart)}-${fmtTime(blockEnd)}`);
-            }
-            
-            // If leftover time after packing, create typed blocks (not GA)
-            // ★★★ v3.2.5 FIX: Leftover gets typed blocks to maintain balance ★★★
-            const leftover = gap.endMin - cursor;
-            if (leftover >= minActivityDur) {
-                // Determine type for leftover based on balance needs
-                // If we just placed a sport, leftover should be a special (and vice versa)
-                const lastPlacedType = packed.length > 0 ? packed[packed.length - 1].type : null;
-                let leftoverType, leftoverEvent;
-                
-                if (specialsStillNeeded > 0 && lastPlacedType !== 'special') {
-                    leftoverType = 'special';
-                    leftoverEvent = 'Special Activity';
-                } else if (sportsStillNeeded > 0 && lastPlacedType !== 'sport') {
-                    leftoverType = 'sport';
-                    leftoverEvent = 'Sports Slot';
-                } else if (specialsStillNeeded > 0) {
-                    leftoverType = 'special';
-                    leftoverEvent = 'Special Activity';
-                } else {
-                    leftoverType = 'sport';
-                    leftoverEvent = 'Sports Slot';
-                }
-                
-                // Cap leftover block at maxActivityDur
-                const leftoverDur = Math.min(leftover, maxActivityDur);
-                const leftoverEnd = cursor + leftoverDur;
-                
-                skeleton.push({
-                    id: 'auto_lo_' + Math.random().toString(36).slice(2, 9),
-                    type: 'slot',
-                    event: leftoverEvent,
-                    division: divName,
-                    startTime: fmtTime(cursor),
-                    endTime: fmtTime(leftoverEnd),
-                    _autoGenerated: true,
-                    _durationStrict: true,
-                    _bunk: bunk,
-                    _targetDuration: leftoverDur,
-                    _activityGroup: gap.startMin
-                });
-                
-                bunkTimelines[bunk].push({
-                    startMin: cursor, endMin: leftoverEnd,
-                    event: leftoverEvent,
-                    type: leftoverType === 'special' ? 'special_slot' : 'sport_slot',
-                    _autoGenerated: true, _activityGroup: gap.startMin
-                });
-                
-                state.occupied.push({
-                    startMin: cursor, endMin: leftoverEnd,
-                    event: leftoverEvent,
-                    type: leftoverType === 'special' ? 'special_slot' : 'sport_slot'
-                });
-                
-                if (leftoverType === 'special') {
-                    placedSpecials++;
-                    state.specialCount++;
-                    specialsStillNeeded = Math.max(0, specialsStillNeeded - 1);
-                } else {
-                    placedSports++;
-                    state.sportCount++;
-                    sportsStillNeeded = Math.max(0, sportsStillNeeded - 1);
-                }
-                
-                log(`      ${bunk}: [leftover] ${leftoverEvent} ${fmtTime(cursor)}-${fmtTime(leftoverEnd)} (${leftoverDur}min)`);
-                
-                // If there's STILL more time after the capped leftover, make another block
-                if (leftoverEnd < gap.endMin) {
-                    const extraLeft = gap.endMin - leftoverEnd;
-                    if (extraLeft >= minActivityDur) {
-                        const extraType = leftoverType === 'special' ? 'sport' : 'special';
-                        const extraEvent = extraType === 'special' ? 'Special Activity' : 'Sports Slot';
-                        skeleton.push({
-                            id: 'auto_lo2_' + Math.random().toString(36).slice(2, 9),
-                            type: 'slot',
-                            event: extraEvent,
-                            division: divName,
-                            startTime: fmtTime(leftoverEnd),
-                            endTime: fmtTime(gap.endMin),
-                            _autoGenerated: true,
-                            _durationStrict: true,
-                            _bunk: bunk,
-                            _targetDuration: extraLeft,
-                            _activityGroup: gap.startMin
-                        });
-                        bunkTimelines[bunk].push({
-                            startMin: leftoverEnd, endMin: gap.endMin,
-                            event: extraEvent,
-                            type: extraType === 'special' ? 'special_slot' : 'sport_slot',
-                            _autoGenerated: true, _activityGroup: gap.startMin
-                        });
-                        state.occupied.push({
-                            startMin: leftoverEnd, endMin: gap.endMin,
-                            event: extraEvent,
-                            type: extraType === 'special' ? 'special_slot' : 'sport_slot'
-                        });
-                        if (extraType === 'special') {
-                            placedSpecials++; state.specialCount++;
-                            specialsStillNeeded = Math.max(0, specialsStillNeeded - 1);
-                        } else {
-                            placedSports++; state.sportCount++;
-                            sportsStillNeeded = Math.max(0, sportsStillNeeded - 1);
-                        }
-                        log(`      ${bunk}: [leftover2] ${extraEvent} ${fmtTime(leftoverEnd)}-${fmtTime(gap.endMin)} (${extraLeft}min)`);
-                    }
-                }
-            } else if (leftover > 0) {
-                // ★★★ v3.2.4: Small leftover — only absorb if it doesn't exceed max duration ★★★
-                const lastSkelBlock = skeleton[skeleton.length - 1];
-                if (lastSkelBlock && lastSkelBlock._bunk === bunk && lastSkelBlock._activityGroup === gap.startMin) {
-                    const currentDur = lastSkelBlock._targetDuration || 0;
-                    const newDur = currentDur + leftover;
-                    if (newDur <= maxActivityDur) {
-                        lastSkelBlock.endTime = fmtTime(gap.endMin);
-                        lastSkelBlock._targetDuration = newDur;
-                        log(`      ${bunk}: Absorbed ${leftover}min into previous block (now ${newDur}min, max=${maxActivityDur})`);
+                    if (hintActivity) {
+                        recordSpecialUsage(hintActivity, gap.startMin);
+                        usedToday.push(hintActivity);
                         
-                        const lastTimeline = bunkTimelines[bunk][bunkTimelines[bunk].length - 1];
-                        if (lastTimeline) lastTimeline.endMin = gap.endMin;
-                        const lastOccupied = state.occupied[state.occupied.length - 1];
-                        if (lastOccupied) lastOccupied.endMin = gap.endMin;
-                    } else {
-                        // Would exceed max — just let it be dead time
-                        log(`      ${bunk}: ${leftover}min leftover dropped (absorb would exceed ${maxActivityDur}min max)`);
+                        bunkOverrides.push({
+                            bunk,
+                            division: divName,
+                            activity: hintActivity,
+                            type: 'special',
+                            startTime: fmtTime(blockStart),
+                            endTime: fmtTime(blockEnd),
+                            _autoGenerated: true,
+                            _knapsack: true
+                        });
                     }
+                } else {
+                    placedSports++;
+                    state.sportCount++;
+                    sportsStillNeeded = Math.max(0, sportsStillNeeded - 1);
+                    usedToday.push(`Sport_${blockDur}min`);
                 }
+                
+                log(`      ${bunk}: ${isSpecial ? (hintActivity || 'Special') : 'Sport'} (${pickType}, ${blockDur}min) → ${fmtTime(blockStart)}-${fmtTime(blockEnd)}`);
             }
         }
         
