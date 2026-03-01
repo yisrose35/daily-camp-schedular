@@ -143,6 +143,13 @@ function getSpecialDuration(name) {
 
 function isSpecialAvailableOnDay(specialConfig, dayName) {
     if (!specialConfig) return true;
+    
+    // Check availableDays array (from special_activities UI)
+    if (Array.isArray(specialConfig.availableDays) && specialConfig.availableDays.length > 0) {
+        return specialConfig.availableDays.map(d => d.toLowerCase()).includes(dayName.toLowerCase());
+    }
+    
+    // Legacy: check dayAvailability object or array
     if (!specialConfig.dayAvailability) return true;
     
     const avail = specialConfig.dayAvailability;
@@ -173,8 +180,21 @@ function getSpecialTimeWindow(specialConfig) {
 function isScarceSpecial(specialConfig, dayName) {
     if (!specialConfig) return false;
     
+    // ★★★ v3.2.7: availableDays from UI makes it scarce ★★★
+    if (Array.isArray(specialConfig.availableDays) && specialConfig.availableDays.length > 0) {
+        // Has day restrictions — it's scarce. Check if available today.
+        if (!isSpecialAvailableOnDay(specialConfig, dayName)) return false;
+        return true;
+    }
+    
+    // Legacy dayAvailability check
     if (specialConfig.dayAvailability) {
         if (!isSpecialAvailableOnDay(specialConfig, dayName)) return false;
+        return true;
+    }
+    
+    // mustScheduleWhenAvailable flag also makes it scarce
+    if (specialConfig.mustScheduleWhenAvailable) {
         return true;
     }
     
