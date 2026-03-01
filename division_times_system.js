@@ -237,12 +237,24 @@
                         const be = parseTimeToMinutes(b.endTime);
                         return bs !== null && be !== null && bs <= sMin && be >= eMin;
                     });
-                    supersetBlocks.push({
-                        ...(covering || {}),
-                        startTime: minutesToTimeLabel(sMin),
-                        endTime: minutesToTimeLabel(eMin),
-                        _supersetSlot: true
-                    });
+                    // ★ v1.3.1 FIX: Strip per-bunk metadata from superset slots.
+// Superset slots represent the division-wide time grid, NOT
+// per-bunk assignments. Copying _bunk from the covering block
+// causes scheduler_core_main.js to treat the superset slot as
+// a single-bunk block, breaking all other bunks.
+const supersetBase = covering ? { ...covering } : {};
+delete supersetBase._bunk;
+delete supersetBase._durationStrict;
+delete supersetBase._targetDuration;
+delete supersetBase._hintActivity;
+delete supersetBase._scarceEvent;
+
+supersetBlocks.push({
+    ...supersetBase,
+    startTime: minutesToTimeLabel(sMin),
+    endTime: minutesToTimeLabel(eMin),
+    _supersetSlot: true
+});
                 }
                 byDivision[divName] = supersetBlocks;
                 log(`    Created ${supersetBlocks.length} superset slots from ${blocks.length} blocks`);
