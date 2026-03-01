@@ -178,6 +178,29 @@ function isScarceSpecial(specialConfig, dayName) {
     return false;
 }
 
+// ★★★ v3.2.2: Division/grade access check ★★★
+// Returns true if the special is allowed for the given division.
+// Uses limitUsage from the special_activities config:
+//   - limitUsage.enabled=false → open to all
+//   - limitUsage.enabled=true → only divisions listed in limitUsage.divisions
+function isSpecialAvailableForDivision(specialName, divName) {
+    const config = getSpecialConfig(specialName);
+    if (!config) return true; // unknown special — allow
+    
+    const rules = config.limitUsage;
+    if (!rules || !rules.enabled) return true; // open to all
+    
+    // Check if this division is in the allowed list
+    const allowedDivs = rules.divisions;
+    if (!allowedDivs || typeof allowedDivs !== 'object') return true;
+    
+    // divisions is an object like { "4th": [], "5th": [], "6th": [] }
+    if (Array.isArray(allowedDivs)) {
+        return allowedDivs.includes(divName);
+    }
+    return divName in allowedDivs;
+}
+
 // =================================================================
 // ROTATION HISTORY ACCESS
 // =================================================================
@@ -316,6 +339,15 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     const skeleton = [];
     const bunkOverrides = [];
     const bunkTimelines = {};
+    
+    // ★★★ v3.2.2: Log which specials are available for this division ★★★
+    const divAvailableSpecials = regularSpecials.filter(s => isSpecialAvailableForDivision(s.name, divName));
+    const divAvailableScarce = scarceSpecials.filter(s => isSpecialAvailableForDivision(s.name, divName));
+    if (divAvailableSpecials.length < regularSpecials.length || divAvailableScarce.length < scarceSpecials.length) {
+        log(`  [Division Access] ${divName}: ${divAvailableSpecials.length}/${regularSpecials.length} regular specials, ${divAvailableScarce.length}/${scarceSpecials.length} scarce specials available`);
+        const blocked = regularSpecials.filter(s => !isSpecialAvailableForDivision(s.name, divName)).map(s => s.name);
+        if (blocked.length > 0) log(`  [Division Access] Blocked for ${divName}: ${blocked.join(', ')}`);
+    }
     
     // Initialize per-bunk state
     const bunkState = {};
@@ -645,6 +677,13 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     
     scarceSpecials.forEach(specialConfig => {
         const name = specialConfig.name;
+        
+        // ★★★ v3.2.2: Skip scarce specials not available for this division ★★★
+        if (!isSpecialAvailableForDivision(name, divName)) {
+            log(`    ${name}: skipped — not available for division "${divName}"`);
+            return;
+        }
+        
         const duration = specialConfig.defaultDuration || specialConfig.duration || 30;
         const timeWindow = getSpecialTimeWindow(specialConfig);
         
@@ -929,21 +968,16 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     function getSpecialCapacity(specialName) {
         const config = getSpecialConfig(specialName);
         if (!config) return 2; // default
-        // Check sharableWith config (matches scheduler_core_main's getFieldCapacityLocal)
+        // ★★★ v3.2.2 FIX: sharableWith.capacity is always the max concurrent bunks ★★★
+        // The 'type' field (all/custom/not_sharable/same_division) controls which 
+        // divisions can share, NOT the count. Always use the explicit capacity.
         if (config.sharableWith) {
-            if (config.sharableWith.type === 'all') return 999;
+            if (config.sharableWith.capacity !== undefined) {
+                const cap = parseInt(config.sharableWith.capacity);
+                if (!isNaN(cap) && cap > 0) return cap;
+            }
+            // Only if no explicit capacity, fall back to type-based defaults
             if (config.sharableWith.type === 'not_sharable') return 1;
-            if (config.sharableWith.type === 'custom') return parseInt(config.sharableWith.capacity) || 2;
-            if (config.sharableWith.capacity) return parseInt(config.sharableWith.capacity);
-        }
-        // Also check activityProperties from global settings
-        const g = getGlobalSettings();
-        const props = g.app1?.activityProperties?.[specialName];
-        if (props?.sharableWith) {
-            if (props.sharableWith.type === 'all') return 999;
-            if (props.sharableWith.type === 'not_sharable') return 1;
-            if (props.sharableWith.type === 'custom') return parseInt(props.sharableWith.capacity) || 2;
-            if (props.sharableWith.capacity) return parseInt(props.sharableWith.capacity);
         }
         // Check capacity directly on special config
         if (config.capacity) return parseInt(config.capacity);
@@ -980,6 +1014,10 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         const availableSpecialNames = regularSpecials.map(s => s.name);
         const rankedSpecials = getRankedSpecials(bunk, availableSpecialNames);
         rankedSpecials.forEach(s => {
+            // ★★★ v3.2.2: Skip specials restricted to other divisions ★★★
+            if (!isSpecialAvailableForDivision(s.name, divName)) {
+                return; // this special is not allowed for this grade/division
+            }
             // ★★★ v3.2.2: Skip specials that have hit capacity for this time slot ★★★
             if (gapStartMin !== undefined && isSpecialAtCapacity(s.name, gapStartMin)) {
                 log(`      [CAPACITY] ${s.name} at capacity for gap ${gapStartMin} (${specialSlotUsage[s.name + '|' + gapStartMin]}/${getSpecialCapacity(s.name)})`);
