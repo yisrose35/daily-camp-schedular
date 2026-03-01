@@ -4624,11 +4624,94 @@ window.clearMyBypassHighlights = clearMyBypassHighlights;
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initScheduleSystem);
     else setTimeout(initScheduleSystem, 100);
 
+    // =========================================================================
+    // PRINT CENTER: ROWSPAN MERGING FOR CONTINUATION CELLS
+    // =========================================================================
+    // When the print center renders per-bunk schedules, activities that
+    // span multiple sub-slots show as repeated or empty cells. This
+    // post-processes the print preview to merge those cells with rowspan.
+    // =========================================================================
+
+    function patchPrintCenter() {
+        const originalLiveRefresh = window.pcLiveRefresh;
+        if (!originalLiveRefresh) return;
+
+        window.pcLiveRefresh = function() {
+            originalLiveRefresh.call(this);
+            setTimeout(() => {
+                const preview = document.getElementById('pc-preview-content');
+                if (!preview) return;
+                preview.querySelectorAll('table').forEach(postProcessPrintTable);
+            }, 100);
+        };
+        console.log('[UnifiedSchedule] Print center rowspan patch applied');
+    }
+
+    function postProcessPrintTable(table) {
+        const tbody = table.querySelector('tbody');
+        if (!tbody) return;
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        if (rows.length === 0) return;
+        const headerRow = table.querySelector('thead tr:last-child');
+        if (!headerRow) return;
+        const headers = Array.from(headerRow.querySelectorAll('th'));
+
+        for (let colIdx = 1; colIdx < headers.length; colIdx++) {
+            let mergeStart = -1, mergeContent = '', mergeCount = 0;
+
+            for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+                const cells = Array.from(rows[rowIdx].querySelectorAll('td'));
+                if (cells.length <= colIdx) continue;
+                const text = cells[colIdx].textContent.trim();
+
+                if (mergeStart >= 0 && (text === '' || text === '—' || text === mergeContent)) {
+                    mergeCount++;
+                } else {
+                    if (mergeStart >= 0 && mergeCount > 1) {
+                        applyPrintRowMerge(rows, mergeStart, mergeCount, colIdx);
+                    }
+                    mergeStart = rowIdx;
+                    mergeContent = text;
+                    mergeCount = 1;
+                }
+            }
+            if (mergeStart >= 0 && mergeCount > 1) {
+                applyPrintRowMerge(rows, mergeStart, mergeCount, colIdx);
+            }
+        }
+    }
+
+    function applyPrintRowMerge(rows, startRow, count, colIdx) {
+        if (startRow < 0 || startRow >= rows.length) return;
+        const cells = Array.from(rows[startRow].querySelectorAll('td'));
+        if (cells.length <= colIdx) return;
+        cells[colIdx].rowSpan = count;
+        cells[colIdx].style.verticalAlign = 'middle';
+        for (let i = 1; i < count; i++) {
+            const nextRow = rows[startRow + i];
+            if (!nextRow) continue;
+            const nextCells = Array.from(nextRow.querySelectorAll('td'));
+            if (nextCells.length > colIdx) nextCells[colIdx].style.display = 'none';
+        }
+    }
+
+    // Initialize print center patch when ready
+    if (window.pcLiveRefresh) {
+        patchPrintCenter();
+    } else {
+        const pcObserver = new MutationObserver(() => {
+            if (window.pcLiveRefresh) { patchPrintCenter(); pcObserver.disconnect(); }
+        });
+        pcObserver.observe(document.body, { childList: true, subtree: true });
+        setTimeout(() => pcObserver.disconnect(), 30000);
+    }
+
     console.log('📅 Unified Schedule System v4.1.0 loaded successfully');
     console.log('   ★★★ FULL DIVISIONTIMES INTEGRATION ★★★');
     console.log('   ✅ Division-aware time slot management');
     console.log('   ✅ TimeBasedFieldUsage for cross-division conflicts');
     console.log('   ✅ Removed unifiedTimes dependency');
     console.log('   ✅ Data persistence uses divisionTimes');
+    console.log('   ✅ Print center rowspan merging');
 
 })();
