@@ -1261,7 +1261,8 @@ function expandPrepBlocks(activityQueue) {
             // The skeleton block's duration IS the main activity duration.
             // We add a separate prep block before it.
             
-            // Prep block
+           // Prep block
+            const prepLocation = specialConfig?.prepLocation || null;
             expanded.push({
                 ...item,
                 event: `${activityName} (Prep)`,
@@ -1269,6 +1270,7 @@ function expandPrepBlocks(activityQueue) {
                 flex: getFlexRange(prepDuration),
                 _isPrepBlock: true,
                 _mainActivity: activityName,
+                _prepLocation: prepLocation,
                 _queueType: 'activity'
             });
             
@@ -1283,7 +1285,7 @@ function expandPrepBlocks(activityQueue) {
                 _queueType: 'activity'
             });
             
-            console.log(`[RainStacker] Expanded ${activityName}: ${prepDuration}min prep + ${item.duration}min main`);
+            console.log(`[RainStacker] Expanded ${activityName}: ${prepDuration}min prep` + (prepLocation ? ` @ ${prepLocation}` : '') + ` + ${item.duration}min main`);
         } else {
             expanded.push(item);
         }
