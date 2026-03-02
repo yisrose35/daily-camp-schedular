@@ -1404,36 +1404,49 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     const sharedOccupied = getSharedOccupied(bunkState, bunks);
     const sharedGaps = findGaps(sharedOccupied, divTimes);
     
-    const gapTemplates = {};
+   const gapTemplates = {};
     sharedGaps.forEach(gap => {
         const gapDur = gap.endMin - gap.startMin;
         if (gapDur < minActivityDur) return;
         
+        // ★★★ v3.2.9: Smart gap templating — split only when beneficial ★★★
+        // PRINCIPLE: Only split a gap into multiple blocks when:
+        //   1. Both pieces are ≥ minActivityDur (no runts that become Free)
+        //   2. The split is needed to meet special+sport quotas
+        // Otherwise keep the gap as one longer block — the solver handles
+        // varied durations fine, and fewer bigger blocks = fewer Frees.
+        
         const template = [];
         let cursor = gap.startMin;
-        
         let useSpecial = true;
+        
         while (cursor + minActivityDur <= gap.endMin) {
             const remaining = gap.endMin - cursor;
+            let blockDur;
             
-            // ★★★ v3.2.9 FIX #5: Use TYPE-SPECIFIC max durations ★★★
-            // Special blocks capped at maxSpecialBlockDur, sport blocks at maxSportBlockDur.
-            // This prevents Gameroom (special, max 60min) from getting 70min blocks
-            // just because the sport layer allows 70min.
-            const typeMaxDur = useSpecial ? maxSpecialBlockDur : maxSportBlockDur;
-            const typePrefDur = useSpecial ? specialDur : sportDurMin;
-            
-            let blockDur = Math.min(typePrefDur, remaining, typeMaxDur);
-            
-            // If only enough room for one more block, give it all (but cap at type max)
-            if (remaining < minActivityDur * 2 && remaining <= typeMaxDur) {
-                blockDur = remaining;
+            if (useSpecial) {
+                blockDur = Math.min(specialDur, remaining, maxActivityDur);
+            } else {
+                blockDur = Math.min(sportDurMax, remaining, maxActivityDur);
             }
             
-            // Hard cap at the type-specific maximum
-            blockDur = Math.min(blockDur, typeMaxDur);
+            // ★★★ KEY FIX: If splitting would leave a runt, absorb it ★★★
+            // "Runt" = leftover < minActivityDur that can't become its own activity
+            const afterThis = remaining - blockDur;
+            if (afterThis > 0 && afterThis < minActivityDur) {
+                // Splitting would create a runt — extend this block to take it all
+                if (remaining <= maxActivityDur) {
+                    blockDur = remaining;
+                } else {
+                    // Can't fit all remaining in one block — split more evenly
+                    // so both halves are ≥ minActivityDur
+                    const half = Math.ceil(remaining / 2);
+                    blockDur = Math.min(half, maxActivityDur);
+                }
+            }
             
             if (blockDur < minActivityDur) break;
+            blockDur = Math.min(blockDur, maxActivityDur);
             
             template.push({
                 startMin: cursor,
@@ -1446,34 +1459,17 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             useSpecial = !useSpecial;
         }
         
-        // If there's a small remainder, try to extend the last block
+        // Safety: absorb any trailing sub-minActivityDur remainder
         if (cursor < gap.endMin && template.length > 0) {
             const last = template[template.length - 1];
-            const lastTypeMax = last.preferredType === 'special' ? maxSpecialBlockDur : maxSportBlockDur;
-            const extended = last.duration + (gap.endMin - cursor);
-            
-            if (extended <= lastTypeMax) {
-                // Remainder fits within the last block's type cap
+            const leftover = gap.endMin - cursor;
+            const extended = last.duration + leftover;
+            if (extended <= maxActivityDur) {
                 last.endMin = gap.endMin;
                 last.duration = extended;
-            } else {
-                // Remainder too large for last block — add another block
-                const remainderDur = gap.endMin - cursor;
-                if (remainderDur >= minActivityDur) {
-                    const nextType = useSpecial ? 'special' : 'sport';
-                    const nextTypeMax = useSpecial ? maxSpecialBlockDur : maxSportBlockDur;
-                    template.push({
-                        startMin: cursor,
-                        endMin: cursor + Math.min(remainderDur, nextTypeMax),
-                        duration: Math.min(remainderDur, nextTypeMax),
-                        preferredType: nextType
-                    });
-                } else if (remainderDur > 0 && last.duration + remainderDur <= lastTypeMax) {
-                    // Small remainder — absorb into last block if it still fits
-                    last.endMin = gap.endMin;
-                    last.duration += remainderDur;
-                }
             }
+            // If even that doesn't fit, the leftover is truly unschedulable
+            // and will naturally become transition/buffer time
         }
         
         gapTemplates[gap.startMin] = template;
@@ -1568,18 +1564,23 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             }
             
             if (!template || template.length === 0) {
-                log(`      ${bunk}: No template for gap ${fmtTime(gap.startMin)}-${fmtTime(gap.endMin)}, creating uniform blocks`);
+                log(`      ${bunk}: No template for gap ${fmtTime(gap.startMin)}-${fmtTime(gap.endMin)}, creating smart blocks`);
                 template = [];
                 let tc = gap.startMin;
                 let tUseSpec = specialsStillNeeded > 0;
                 while (tc + minActivityDur <= gap.endMin) {
                     const tRemaining = gap.endMin - tc;
-                    // ★★★ v3.2.9: Use type-specific max in fallback template too ★★★
-                    const tTypeMax = tUseSpec ? maxSpecialBlockDur : maxSportBlockDur;
-                    const tTypePref = tUseSpec ? specialDur : sportDurMin;
-                    let tDur = Math.min(tTypePref, tRemaining, tTypeMax);
-                    if (tRemaining < minActivityDur * 2 && tRemaining <= tTypeMax) tDur = tRemaining;
-                    tDur = Math.min(tDur, tTypeMax);
+                    let tDur = tUseSpec ? Math.min(specialDur, tRemaining, maxActivityDur) : Math.min(sportDurMax, tRemaining, maxActivityDur);
+                    // ★★★ v3.2.9: No runts — if leftover would be too small, absorb it ★★★
+                    const afterThis = tRemaining - tDur;
+                    if (afterThis > 0 && afterThis < minActivityDur) {
+                        if (tRemaining <= maxActivityDur) {
+                            tDur = tRemaining;
+                        } else {
+                            tDur = Math.min(Math.ceil(tRemaining / 2), maxActivityDur);
+                        }
+                    }
+                    tDur = Math.min(tDur, maxActivityDur);
                     if (tDur < minActivityDur) break;
                     template.push({ startMin: tc, endMin: tc + tDur, duration: tDur, preferredType: tUseSpec ? 'special' : 'sport' });
                     tc += tDur;
