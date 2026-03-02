@@ -665,10 +665,34 @@
             return false;
         }
 
+       // =================================================================
+        // ★★★ LOCATION COOLDOWN CHECK ★★★
+        // =================================================================
+        if (window.isLocationInCooldown) {
+            const cooldownResult = window.isLocationInCooldown(fieldName, uniqueSlots[0], block.bunk, block.divName);
+            if (cooldownResult?.blocked) {
+                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - ${cooldownResult.reason}`);
+                return false;
+            }
+        }
+
+        // =================================================================
+        // ★★★ ACTIVITY SEQUENCE RULE CHECK ★★★
+        // =================================================================
+        if (window.checkSequenceViolation) {
+            const seqActivityName = block.event || block._activity || '';
+            const seqViolation = window.checkSequenceViolation(block.bunk, seqActivityName, uniqueSlots[0], block.divName);
+            if (seqViolation?.violated) {
+                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${seqActivityName}: REJECTED - ${seqViolation.reason}`);
+                return false;
+            }
+        }
+
         // =================================================================
         // ★★★ ENHANCED CAPACITY CALCULATION (v7.5) ★★★
         // =================================================================
         let maxCapacity = Utils.getFieldCapacity(fieldName, activityProperties);
+
         
         // Basic availability checks
         if (effectiveProps.available === false) {
