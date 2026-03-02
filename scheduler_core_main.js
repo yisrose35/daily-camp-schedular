@@ -399,11 +399,16 @@
             }
         }
         
-       const fName = Utils.fieldLabel(pick.field);
+     const fName = Utils.fieldLabel(pick.field);
         // ★ PREP LOCATION OVERRIDE: use different location for prep blocks
-        const effectiveLocation = block._isPrepBlock && block._prepLocation ? block._prepLocation : fName;
+        let effectiveLocation = block._isPrepBlock && block._prepLocation ? block._prepLocation : fName;
+        // ★ MULTI-PART LOCATION OVERRIDE: each part can have its own location
+        const mpPartCfg = window.getMultiPartPartConfig?.(block.bunk, block._activity || block.event || pick._activity || fName);
+        if (mpPartCfg && mpPartCfg.location) {
+            effectiveLocation = mpPartCfg.location;
+            console.log('[fillBlock] Multi-part ' + mpPartCfg.partNumber + '/' + mpPartCfg.totalParts + ' for ' + block.bunk + ' -> location: ' + effectiveLocation);
+        }
         const trans = Utils.getTransitionRules(effectiveLocation, activityProperties);
-
         const {
             blockStartMin,
             blockEndMin,
