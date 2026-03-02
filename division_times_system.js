@@ -226,7 +226,12 @@
                     if (s !== null) timePoints.add(s);
                     if (e !== null) timePoints.add(e);
                 });
-                const sorted = [...timePoints].sort((a, b) => a - b);
+               // ★★★ v1.3.4: Snap time points to 5-min boundaries ★★★
+                // Per-bunk blocks can create non-round times (e.g., 3:38 from a 33min sport).
+                // Snapping prevents ugly time slots from bleeding across the whole division.
+                const SNAP_TO = 5;
+                const snapped = [...timePoints].map(t => Math.round(t / SNAP_TO) * SNAP_TO);
+                const sorted = [...new Set(snapped)].sort((a, b) => a - b);
                 const supersetBlocks = [];
                 for (let i = 0; i < sorted.length - 1; i++) {
                     const sMin = sorted[i];
