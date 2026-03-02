@@ -1100,8 +1100,25 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
             if (comboCheck.blocked) return false;
         }
 
+        // ★★★ LOCATION COOLDOWN CHECK ★★★
+        if (window.isLocationInCooldown) {
+            const divSlots = window.divisionTimes?.[getDivisionForBunk(bunk)] || [];
+            let slotIdx = divSlots.findIndex(s => s.startMin >= startMin);
+            if (slotIdx < 0) slotIdx = 0;
+            const cooldown = window.isLocationInCooldown(fName, slotIdx, bunk, getDivisionForBunk(bunk));
+            if (cooldown?.blocked) return false;
+        }
+
+        // ★★★ SEQUENCE RULE CHECK ★★★
+        if (window.checkSequenceViolation) {
+            const divSlots = window.divisionTimes?.[getDivisionForBunk(bunk)] || [];
+            let slotIdx = divSlots.findIndex(s => s.startMin >= startMin);
+            if (slotIdx < 0) slotIdx = 0;
+            const seqViolation = window.checkSequenceViolation(bunk, pick?.activityName || pick?._activity || pick?.sport || '', slotIdx, getDivisionForBunk(bunk));
+            if (seqViolation?.violated) return false;
+        }
+
         return true;
-    }
 
 
     function calculatePenaltyCost(bunk, slots, pick, fieldUsageBySlot, activityProps) {
@@ -2634,7 +2651,7 @@ if (bypassStatus.highlight) {
     // APPLY EDIT
     // =========================================================================
 
-   async function applyEdit(bunk, editData) {
+  async function applyEdit(bunk, editData) {
         const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
         const divName = getDivisionForBunk(bunk);
 
@@ -2648,7 +2665,17 @@ if (bypassStatus.highlight) {
        const isClear = !activity || activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
         const slots = findSlotsForRange(startMin, endMin, divName);
         if (slots.length === 0) { alert('Error: Could not find time slots.'); return; }
-        window._postEditInProgress = true; 
+
+        // ★ Sequence rule warning
+        if (!isClear && window.checkSequenceViolation && slots.length > 0) {
+            const _seqCheck = window.checkSequenceViolation(bunk, activity, slots[0], divName);
+            if (_seqCheck?.violated) { if (!confirm('⚠️ Sequence Warning:\n\n' + _seqCheck.reason + '\n\nPlace anyway?')) return; }
+        }
+        // ★ Location cooldown warning
+        if (!isClear && window.isLocationInCooldown && location && slots.length > 0) {
+            const _coolCheck = window.isLocationInCooldown(location, slots[0], bunk, divName);
+            if (_coolCheck?.blocked) { if (!confirm('⚠️ Location Cooldown:\n\n' + _coolCheck.reason + '\n\nPlace anyway?')) return; }
+        }        window._postEditInProgress = true; 
         window._postEditTimestamp = Date.now();
         const divSlots = window.divisionTimes?.[divName] || [];
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
