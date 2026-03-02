@@ -44,12 +44,18 @@
 //            FIX #2: Phase 4 respects activity configured duration (no more 120min blocks)
 //            FIX #3: Per-bunk lunch rescheduling when displaced by scarce overrides
 //            FIX #4: getSpecialTimeWindow falls back to timeRules from UI
+//   v3.2.9 — FIX #5: Gap template uses type-specific max durations (special vs sport)
+//            Prevents 70min Gameroom blocks when special layer max is 60min
+//            FIX #6: Cross-division scarce capacity tracking — when Grade 1 fills
+//            all Bubble Lady slots, Grade 2 knows she's fully booked and skips her
+//            FIX #7: Prevent double lunch — displaced bunks get per-bunk skeleton
+//            blocks so the division-wide lunch doesn't also apply to them
 // =================================================================
 
 (function() {
 'use strict';
 
-const VERSION = '3.2.8';
+const VERSION = '3.2.9';
 const DEBUG = true;
 
 function log(...args) { if (DEBUG) console.log('[AutoBuild]', ...args); }
@@ -328,6 +334,44 @@ function build({ layers, dateStr }) {
     const allBunkOverrides = [];
     const bunkTimelines = {};
     
+    // ★★★ v3.2.9 FIX #6: Cross-division scarce capacity tracker ★★★
+    // Scarce specials (like Bubble Lady) have a fixed time window and limited slots.
+    // When Grade 1 fills all slots, Grade 2 should know she's fully booked.
+    // Key: "specialName|slotStartMin" → count of bunks assigned across ALL divisions
+    const globalScarceUsage = {};
+    
+    function getGlobalScarceCapacity(specialConfig) {
+        return parseInt(specialConfig.sharableWith?.capacity)
+            || parseInt(specialConfig.capacity)
+            || 1;
+    }
+    
+    function getGlobalScarceSlotUsage(name, slotStartMin) {
+        return globalScarceUsage[name + '|' + slotStartMin] || 0;
+    }
+    
+    function recordGlobalScarceUsage(name, slotStartMin, count) {
+        const key = name + '|' + slotStartMin;
+        globalScarceUsage[key] = (globalScarceUsage[key] || 0) + count;
+    }
+    
+    function getRemainingGlobalScarceSlots(specialConfig) {
+        const name = specialConfig.name;
+        const duration = specialConfig.defaultDuration || specialConfig.duration || 30;
+        const timeWindow = getSpecialTimeWindow(specialConfig);
+        if (!timeWindow) return 0;
+        
+        const capacity = getGlobalScarceCapacity(specialConfig);
+        let remaining = 0;
+        
+        for (let cursor = timeWindow.startMin; cursor + duration <= timeWindow.endMin; cursor += duration) {
+            const used = getGlobalScarceSlotUsage(name, cursor);
+            remaining += Math.max(0, capacity - used);
+        }
+        
+        return remaining;
+    }
+    
     const baseLayersForAll = layersByGrade['_all'] || [];
     delete layersByGrade['_all'];
     
@@ -369,7 +413,8 @@ function build({ layers, dateStr }) {
             scarceSpecials,
             regularSpecials,
             todaysSpecials,
-            warnings
+            warnings,
+            globalScarceUsage: { getUsage: getGlobalScarceSlotUsage, record: recordGlobalScarceUsage, getRemaining: getRemainingGlobalScarceSlots, getCapacity: getGlobalScarceCapacity }
         });
         
         allSkeleton.push(...result.skeleton);
@@ -392,7 +437,7 @@ function build({ layers, dateStr }) {
     };
 }
 
-function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, divTimes, scarceSpecials, regularSpecials, todaysSpecials, warnings }) {
+function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, divTimes, scarceSpecials, regularSpecials, todaysSpecials, warnings, globalScarceUsage }) {
     const skeleton = [];
     const bunkOverrides = [];
     const bunkTimelines = {};
@@ -693,11 +738,21 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         const windowEnd = timeWindow.endMin;
         
         // ★★★ v3.2.8 FIX #1: Read capacity from sharableWith (where UI stores it) ★★★
-        // Previously read specialConfig.capacity which was undefined, falling back to 1.
-        // The actual capacity is in sharableWith.capacity.
         const capacity = parseInt(specialConfig.sharableWith?.capacity)
             || parseInt(specialConfig.capacity)
             || 1;
+        
+        // ★★★ v3.2.9 FIX #6: Check global cross-division capacity ★★★
+        // If previous grades already filled all of this scarce special's slots,
+        // skip it entirely for this grade.
+        if (globalScarceUsage) {
+            const remaining = globalScarceUsage.getRemaining(specialConfig);
+            if (remaining <= 0) {
+                log(`    ${name}: skipped — all slots filled by other grades (global capacity exhausted)`);
+                return;
+            }
+            log(`    ${name}: ${remaining} global slots remaining across all grades`);
+        }
         
         // Rank bunks by rotation (most overdue first)
         const rankedBunks = bunks.map(bunk => ({
@@ -705,18 +760,30 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             score: getRotationScore(bunk, name)
         })).sort((a, b) => a.score - b.score);
         
-        // Calculate how many bunks can be served
+        // Calculate how many bunks can be served (considering global usage)
         const slotsAvailable = Math.floor((windowEnd - windowStart) / duration);
         const totalCapacity = slotsAvailable * capacity;
-        const bunksToServe = Math.min(bunks.length, totalCapacity);
+        
+        // ★★★ v3.2.9: Subtract global usage from total capacity ★★★
+        let globalUsed = 0;
+        if (globalScarceUsage) {
+            for (let c = windowStart; c + duration <= windowEnd; c += duration) {
+                globalUsed += globalScarceUsage.getUsage(name, c);
+            }
+        }
+        const remainingCapacity = totalCapacity - globalUsed;
+        const bunksToServe = Math.min(bunks.length, Math.max(0, remainingCapacity));
+        
+        if (bunksToServe <= 0) {
+            log(`    ${name}: no remaining capacity after other grades used ${globalUsed}/${totalCapacity}`);
+            return;
+        }
         
         log(`    ${name}: window ${fmtTime(windowStart)}-${fmtTime(windowEnd)}, ` +
             `duration ${duration}min, capacity ${capacity}, ${slotsAvailable} time slots, ` +
-            `serving ${bunksToServe}/${bunks.length} bunks`);
+            `global used ${globalUsed}, serving ${bunksToServe}/${bunks.length} bunks`);
         
         // ★★★ v3.2.8: Check for conflicts with already-occupied time ★★★
-        // Scarce overrides should avoid placing bunks at times they already have
-        // pinned events (like swim). Skip conflicting times, try next slot.
         let slotCursor = windowStart;
         let served = 0;
         
@@ -724,8 +791,22 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             const slotStart = slotCursor;
             const slotEnd = slotCursor + duration;
             
-            // Assign up to `capacity` bunks to this slot
-            for (let c = 0; c < capacity && served < bunksToServe; c++) {
+            // ★★★ v3.2.9: Check global capacity for this specific time slot ★★★
+            let slotGlobalUsed = 0;
+            if (globalScarceUsage) {
+                slotGlobalUsed = globalScarceUsage.getUsage(name, slotStart);
+            }
+            const slotRemainingCapacity = capacity - slotGlobalUsed;
+            
+            if (slotRemainingCapacity <= 0) {
+                // This time slot is fully booked by other grades
+                slotCursor = slotEnd;
+                continue;
+            }
+            
+            // Assign up to remaining capacity bunks to this slot
+            let assignedThisSlot = 0;
+            for (let c = 0; c < slotRemainingCapacity && served < bunksToServe; c++) {
                 const bunkInfo = rankedBunks[served];
                 const bunk = bunkInfo.bunk;
                 
@@ -765,6 +846,12 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 });
                 
                 served++;
+                assignedThisSlot++;
+            }
+            
+            // ★★★ v3.2.9: Record global usage for this time slot ★★★
+            if (assignedThisSlot > 0 && globalScarceUsage) {
+                globalScarceUsage.record(name, slotStart, assignedThisSlot);
             }
             
             slotCursor = slotEnd;
@@ -817,16 +904,8 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         
         // If window === duration, it's effectively pinned (exact time)
         if (windowEnd - windowStart <= duration) {
-            skeleton.push({
-                id: 'auto_fixed_' + Math.random().toString(36).slice(2, 9),
-                type: 'pinned',
-                event: eventName,
-                division: divName,
-                startTime: fmtTime(windowStart),
-                endTime: fmtTime(windowStart + duration),
-                pinned: true,
-                _autoGenerated: true
-            });
+            const isLunchOrSnackExact = /lunch|snack/i.test(eventName);
+            const displacedBunksExact = new Set();
             
             bunks.forEach(bunk => {
                 // ★★★ v3.2.8: Check if bunk has scarce conflict at exact time ★★★
@@ -836,12 +915,12 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 );
                 
                 if (hasConflict) {
-                    // Find alternative time for this bunk within a wider window
                     const altPlacement = findPerBunkFixedPlacement(
                         bunk, bunkState[bunk].occupied, eventName, duration,
                         windowStart, windowEnd, divTimes
                     );
                     if (altPlacement) {
+                        displacedBunksExact.add(bunk);
                         bunkState[bunk].occupied.push({
                             startMin: altPlacement.startMin, endMin: altPlacement.endMin,
                             event: eventName, type: 'fixed'
@@ -872,7 +951,38 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 }
             });
             
-            log(`    ${eventName}: ${fmtTime(windowStart)}-${fmtTime(windowStart + duration)} (exact fixed)`);
+            // ★★★ v3.2.9 FIX #7: Per-bunk skeleton for exact-time path too ★★★
+            if (displacedBunksExact.size > 0 && isLunchOrSnackExact) {
+                // Create per-bunk skeleton blocks only for non-displaced bunks
+                bunks.forEach(bunk => {
+                    if (displacedBunksExact.has(bunk)) return;
+                    skeleton.push({
+                        id: 'auto_fixed_' + Math.random().toString(36).slice(2, 9),
+                        type: 'pinned',
+                        event: eventName,
+                        division: divName,
+                        startTime: fmtTime(windowStart),
+                        endTime: fmtTime(windowStart + duration),
+                        pinned: true,
+                        _autoGenerated: true,
+                        _bunk: bunk
+                    });
+                });
+                log(`    ${eventName}: ${fmtTime(windowStart)}-${fmtTime(windowStart + duration)} (exact, ${bunks.length - displacedBunksExact.size} normal, ${displacedBunksExact.size} displaced)`);
+            } else {
+                // No displacements — use standard division-wide skeleton block
+                skeleton.push({
+                    id: 'auto_fixed_' + Math.random().toString(36).slice(2, 9),
+                    type: 'pinned',
+                    event: eventName,
+                    division: divName,
+                    startTime: fmtTime(windowStart),
+                    endTime: fmtTime(windowStart + duration),
+                    pinned: true,
+                    _autoGenerated: true
+                });
+                log(`    ${eventName}: ${fmtTime(windowStart)}-${fmtTime(windowStart + duration)} (exact fixed)`);
+            }
             return;
         }
         
@@ -917,6 +1027,7 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         
         // ★★★ v3.2.8: Per-bunk placement — check each bunk for scarce conflicts ★★★
         const isLunchOrSnack = /lunch|snack/i.test(eventName);
+        const displacedBunks = new Set();
         
         bunks.forEach(bunk => {
             const hasConflict = bunkState[bunk].occupied.some(o =>
@@ -932,6 +1043,7 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 );
                 
                 if (altPlacement) {
+                    displacedBunks.add(bunk);
                     bunkState[bunk].occupied.push({
                         startMin: altPlacement.startMin, endMin: altPlacement.endMin,
                         event: eventName, type: 'fixed'
@@ -973,7 +1085,42 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             }
         });
         
-        log(`    ${eventName}: ${fmtTime(placement.startMin)}-${fmtTime(placement.endMin)}`);
+        // ★★★ v3.2.9 FIX #7: Prevent double lunch — per-bunk skeleton blocks ★★★
+        // If some bunks were displaced, we can't use a division-wide skeleton block
+        // because scheduler_core_main Step 3 would apply it to ALL bunks including
+        // displaced ones (who already have a bunk override at a different time).
+        // Instead, remove the division-wide skeleton block we added above and create
+        // per-bunk skeleton blocks for non-displaced bunks only.
+        if (displacedBunks.size > 0 && isLunchOrSnack) {
+            // Remove the division-wide skeleton block we already pushed
+            const divWideIdx = skeleton.findIndex(s => 
+                s.event === eventName && s.division === divName &&
+                s.startTime === fmtTime(placement.startMin) && !s._bunk
+            );
+            if (divWideIdx !== -1) {
+                skeleton.splice(divWideIdx, 1);
+            }
+            
+            // Create per-bunk skeleton blocks for non-displaced bunks
+            bunks.forEach(bunk => {
+                if (displacedBunks.has(bunk)) return; // displaced bunks use bunk overrides instead
+                skeleton.push({
+                    id: 'auto_fixed_' + Math.random().toString(36).slice(2, 9),
+                    type: 'pinned',
+                    event: eventName,
+                    division: divName,
+                    startTime: fmtTime(placement.startMin),
+                    endTime: fmtTime(placement.endMin),
+                    pinned: true,
+                    _autoGenerated: true,
+                    _bunk: bunk
+                });
+            });
+            
+            log(`    ${eventName}: ${fmtTime(placement.startMin)}-${fmtTime(placement.endMin)} (${bunks.length - displacedBunks.size} bunks normal, ${displacedBunks.size} displaced)`);
+        } else {
+            log(`    ${eventName}: ${fmtTime(placement.startMin)}-${fmtTime(placement.endMin)}`);
+        }
     });
     
     
@@ -1075,12 +1222,23 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     
     // Duration hints from layers
     const specialDur = specialLayers.length > 0 ? getLayerDuration(specialLayers[0]) : 30;
+    const specialDurMax = specialLayers.length > 0 ? getLayerDurationMax(specialLayers[0]) : specialDur;
     const sportDurMin = sportLayers.length > 0 ? getLayerDuration(sportLayers[0]) : 30;
     const sportDurMax = sportLayers.length > 0 ? getLayerDurationMax(sportLayers[0]) : sportDurMin;
     const sportDurIdeal = Math.round((sportDurMin + sportDurMax) / 2);
     
     const minActivityDur = Math.min(sportDurMin, specialDur, 30);
-    const maxActivityDur = Math.max(sportDurMax, specialDur, 50);
+    // ★★★ v3.2.9 FIX #5: maxActivityDur must respect BOTH sport and special layer limits ★★★
+    // Previously used Math.max(sportDurMax, specialDur, 50) which could yield 70 when
+    // the sport layer has durationMax=70 but specials are capped at 60. Now uses the
+    // actual configured maxes from both layer types.
+    const maxActivityDur = Math.max(sportDurMax, specialDurMax, 50);
+    
+    // ★★★ v3.2.9: Per-type max durations for gap template builder ★★★
+    // The gap template uses type-specific caps so a "special" block can't exceed
+    // the special layer's max, and a "sport" block can't exceed the sport layer's max.
+    const maxSpecialBlockDur = specialDurMax;
+    const maxSportBlockDur = sportDurMax;
     
     // ─────────────────────────────────────────────────────────
     // Build the unified pool of all assignable activities
@@ -1261,23 +1419,25 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         let useSpecial = true;
         while (cursor + minActivityDur <= gap.endMin) {
             const remaining = gap.endMin - cursor;
-            let blockDur;
             
-            if (useSpecial) {
-                blockDur = Math.min(specialDur, remaining, maxActivityDur);
-            } else {
-                blockDur = Math.min(sportDurMin, remaining, maxActivityDur);
-            }
+            // ★★★ v3.2.9 FIX #5: Use TYPE-SPECIFIC max durations ★★★
+            // Special blocks capped at maxSpecialBlockDur, sport blocks at maxSportBlockDur.
+            // This prevents Gameroom (special, max 60min) from getting 70min blocks
+            // just because the sport layer allows 70min.
+            const typeMaxDur = useSpecial ? maxSpecialBlockDur : maxSportBlockDur;
+            const typePrefDur = useSpecial ? specialDur : sportDurMin;
             
-            if (remaining < minActivityDur * 2 && remaining <= maxActivityDur) {
+            let blockDur = Math.min(typePrefDur, remaining, typeMaxDur);
+            
+            // If only enough room for one more block, give it all (but cap at type max)
+            if (remaining < minActivityDur * 2 && remaining <= typeMaxDur) {
                 blockDur = remaining;
             }
             
-            if (blockDur < minActivityDur) break;
+            // Hard cap at the type-specific maximum
+            blockDur = Math.min(blockDur, typeMaxDur);
             
-            // ★★★ v3.2.8 FIX #2: Cap block duration at maxActivityDur ★★★
-            // Prevents creating oversized blocks (e.g., 120min) when gap is large.
-            blockDur = Math.min(blockDur, maxActivityDur);
+            if (blockDur < minActivityDur) break;
             
             template.push({
                 startMin: cursor,
@@ -1290,23 +1450,32 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             useSpecial = !useSpecial;
         }
         
-        // If there's a small remainder, extend the last block (but not beyond max)
+        // If there's a small remainder, try to extend the last block
         if (cursor < gap.endMin && template.length > 0) {
             const last = template[template.length - 1];
+            const lastTypeMax = last.preferredType === 'special' ? maxSpecialBlockDur : maxSportBlockDur;
             const extended = last.duration + (gap.endMin - cursor);
-            if (extended <= maxActivityDur) {
+            
+            if (extended <= lastTypeMax) {
+                // Remainder fits within the last block's type cap
                 last.endMin = gap.endMin;
                 last.duration = extended;
             } else {
-                // ★★★ v3.2.8: Remainder too large to absorb — add another block ★★★
+                // Remainder too large for last block — add another block
                 const remainderDur = gap.endMin - cursor;
                 if (remainderDur >= minActivityDur) {
+                    const nextType = useSpecial ? 'special' : 'sport';
+                    const nextTypeMax = useSpecial ? maxSpecialBlockDur : maxSportBlockDur;
                     template.push({
                         startMin: cursor,
-                        endMin: gap.endMin,
-                        duration: remainderDur,
-                        preferredType: useSpecial ? 'special' : 'sport'
+                        endMin: cursor + Math.min(remainderDur, nextTypeMax),
+                        duration: Math.min(remainderDur, nextTypeMax),
+                        preferredType: nextType
                     });
+                } else if (remainderDur > 0 && last.duration + remainderDur <= lastTypeMax) {
+                    // Small remainder — absorb into last block if it still fits
+                    last.endMin = gap.endMin;
+                    last.duration += remainderDur;
                 }
             }
         }
@@ -1367,10 +1536,12 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 let tUseSpec = specialsStillNeeded > 0;
                 while (tc + minActivityDur <= gap.endMin) {
                     const tRemaining = gap.endMin - tc;
-                    let tDur = tUseSpec ? Math.min(specialDur, tRemaining, maxActivityDur) : Math.min(sportDurMin, tRemaining, maxActivityDur);
-                    if (tRemaining < minActivityDur * 2 && tRemaining <= maxActivityDur) tDur = tRemaining;
-                    // ★★★ v3.2.8: Cap at maxActivityDur ★★★
-                    tDur = Math.min(tDur, maxActivityDur);
+                    // ★★★ v3.2.9: Use type-specific max in fallback template too ★★★
+                    const tTypeMax = tUseSpec ? maxSpecialBlockDur : maxSportBlockDur;
+                    const tTypePref = tUseSpec ? specialDur : sportDurMin;
+                    let tDur = Math.min(tTypePref, tRemaining, tTypeMax);
+                    if (tRemaining < minActivityDur * 2 && tRemaining <= tTypeMax) tDur = tRemaining;
+                    tDur = Math.min(tDur, tTypeMax);
                     if (tDur < minActivityDur) break;
                     template.push({ startMin: tc, endMin: tc + tDur, duration: tDur, preferredType: tUseSpec ? 'special' : 'sport' });
                     tc += tDur;
