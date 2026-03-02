@@ -763,7 +763,9 @@ else penalty += 200;
         // ★★★ v15.0: fullGrade steering — if this activity has _fullGrade, bonus ★★★
         // This makes the solver PREFER fullGrade picks, used in conjunction with
         // the fullGrade forcing logic in Part 2's solveGroupMatchingAugmented
-        if (pick._fullGrade || activityProperties[act]?.fullGrade || activityProperties[act]?._fullGrade) penalty -= 15000;
+         var _isFGPenalty = pick._fullGrade || (window.isFullGradeForDivision ? window.isFullGradeForDivision(act, pick._divName || '') : (activityProperties[act]?.fullGrade || activityProperties[act]?._fullGrade));
+        if (_isFGPenalty) penalty -= 15000;
+
 
         // Tie-breaker
         penalty += Math.random() * (ROTATION_CONFIG.TIE_BREAKER_RANDOMNESS || 300);
@@ -965,9 +967,13 @@ else penalty += 200;
             var fgActivity = null;
             for (var fgBunk in allocated) {
                 var fgAct = allocated[fgBunk];
-               if (fgAct && (activityProperties[fgAct]?.fullGrade || activityProperties[fgAct]?._fullGrade)) {
+               var _fgCheckDiv = activityBlocks[fgBIdx]?.divName || '';
+               var _isFGPlanner = window.isFullGradeForDivision ? window.isFullGradeForDivision(fgAct, _fgCheckDiv) : (activityProperties[fgAct]?.fullGrade || activityProperties[fgAct]?._fullGrade);
+               if (fgAct && _isFGPlanner) {
                     fgActivity = fgAct;
                     console.log('[PLANNER] fullGrade activity found: ' + fgAct + ' for grade group at ' + startMin);
+
+
                     break;
                 }
             }
@@ -1350,7 +1356,8 @@ else penalty += 200;
                     canFit=!xca&&(existUse+grpUse<cap);
                 }
                // ★★★ v15.3: fullGrade capacity bypass — same grade bypasses capacity ★★★
-                if (!canFit && (c2._fullGrade || actProps[c2.activityName]?.fullGrade)) {
+               var _isFGCapBypass = c2._fullGrade || (window.isFullGradeForDivision ? window.isFullGradeForDivision(c2.activityName, b2.divName || '') : actProps[c2.activityName]?.fullGrade);
+               if (!canFit && _isFGCapBypass) {
                     var fgSameGrade = true;
                     var fgDivSet = fieldDivsGrp.get(fn2);
                     if (fgDivSet && fgDivSet.size > 0) {
@@ -1375,7 +1382,8 @@ else penalty += 200;
                     if (!bunkActsGrp.has(b2.bunk)) bunkActsGrp.set(b2.bunk,new Set());
                     var aAn=normName(c2.activityName); if (aAn&&aAn!=='free') bunkActsGrp.get(b2.bunk).add(aAn);
                     // ★ v15.3: Record fullGrade — check both property names
-                    if (newPk._fullGrade||actProps[c2.activityName]?.fullGrade||actProps[c2.activityName]?._fullGrade) { fullGradeMap.set(fgKey,{pick:newPk,candIdx:opt.ci,cost:opt.cost}); }
+                    var _isFGRecord = newPk._fullGrade || (window.isFullGradeForDivision ? window.isFullGradeForDivision(c2.activityName, b2.divName || '') : (actProps[c2.activityName]?.fullGrade || actProps[c2.activityName]?._fullGrade));
+                    if (_isFGRecord) { fullGradeMap.set(fgKey,{pick:newPk,candIdx:opt.ci,cost:opt.cost}); }
                     assigned=true; break;
                 }
                 // Augmenting path

@@ -660,7 +660,8 @@
                     return;
                 }
 // ★★★ FULL GRADE: Fill ALL bunks in division ★★★
-                const _isFG = activityProperties[activityLabel]?.fullGrade || activityProperties[activityLabel]?._fullGrade;
+               const _isFG = window.isFullGradeForDivision ? window.isFullGradeForDivision(activityLabel, divName) : (activityProperties[activityLabel]?.fullGrade || activityProperties[activityLabel]?._fullGrade);
+
                 if (_isFG && !needsGeneration(activityLabel)) {
                     console.log(`[SmartTile] ★ FULL GRADE: "${activityLabel}" → filling ALL bunks in ${divName}`);
                     bunkList.forEach(fgBunk => {
