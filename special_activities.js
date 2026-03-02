@@ -159,8 +159,12 @@ function validateSpecialActivity(activity, activityName) {
         multiPart: activity.multiPart && typeof activity.multiPart === 'object' ? {
             enabled: activity.multiPart.enabled === true,
             totalParts: (function() { var tp = parseInt(activity.multiPart.totalParts, 10); return (!isNaN(tp) && tp >= 2 && tp <= 10) ? tp : 2; })(),
-            daysBetween: (function() { var db = parseInt(activity.multiPart.daysBetween, 10); return (!isNaN(db) && db >= 1 && db <= 14) ? db : 3; })()
-        } : { enabled: false, totalParts: 2, daysBetween: 3 }
+            daysBetween: (function() { var db = parseInt(activity.multiPart.daysBetween, 10); return (!isNaN(db) && db >= 1 && db <= 14) ? db : 3; })(),
+            parts: Array.isArray(activity.multiPart.parts) ? activity.multiPart.parts.map(function(p) {
+                if (!p || typeof p !== 'object') return { location: null, duration: null };
+                return { location: p.location || null, duration: (parseInt(p.duration, 10) > 0) ? parseInt(p.duration, 10) : null };
+            }) : []
+        } : { enabled: false, totalParts: 2, daysBetween: 3, parts: [] }
     };
 }
 
@@ -170,7 +174,7 @@ function createDefaultActivity(name) {
         maxUsage: null, maxUsagePeriod: 'half', frequencyWeeks: 0, rainyDayExclusive: false, prepDuration: 0,
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
         rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
-        multiPart: { enabled: false, totalParts: 2, daysBetween: 3 } };
+        multiPart: { enabled: false, totalParts: 2, daysBetween: 3, parts: [] } };
 }
 
 function validateAllActivities(activities) { if (!Array.isArray(activities)) return []; return activities.map(a => validateSpecialActivity(a, a?.name)); }
@@ -1340,33 +1344,105 @@ function renderMultiPartSettings(item) {
         daysRow.lastElementChild.insertAdjacentHTML('afterend', '<span style="font-size:0.8rem; color:#6B7280;">days before the scheduler starts pushing the next part</span>');
         configPanel.appendChild(daysRow);
 
-        // Preview
-        var preview = document.createElement("div");
-        preview.style.cssText = "border:1px solid #E5E7EB; border-radius:10px; padding:14px; background:#FAFAFA; margin-bottom:14px;";
-        preview.innerHTML = '<div style="font-weight:600; font-size:0.85rem; margin-bottom:10px;">Schedule Preview</div>';
-        for (var i = 1; i <= mp.totalParts; i++) {
-            var step = document.createElement("div");
-            step.style.cssText = "display:flex; align-items:center; gap:10px; padding:8px 12px; margin-bottom:" + (i < mp.totalParts ? "4px" : "0") + "; border-radius:8px; background:#fff; border:1px solid #E5E7EB;";
-            var badge = document.createElement("span");
-            badge.style.cssText = "width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.75rem; flex-shrink:0; color:#fff; background:#147D91;";
-            badge.textContent = i;
-            step.appendChild(badge);
-            var label = document.createElement("span");
-            label.style.cssText = "font-size:0.85rem; color:#374151;";
-            label.textContent = escapeHtml(item.name) + " " + i + "/" + mp.totalParts;
-            step.appendChild(label);
-            if (i === 1) { step.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.7rem; color:#6B7280;">No prerequisite</span>'); }
-            else { step.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.7rem; color:#92400e;">Requires ' + (i-1) + '/' + mp.totalParts + ' done</span>'); }
-            preview.appendChild(step);
-            if (i < mp.totalParts) {
-                var arrow = document.createElement("div");
-                arrow.style.cssText = "text-align:center; color:#9CA3AF; font-size:0.75rem; margin:2px 0;";
-                arrow.textContent = "\u2193 " + (mp.daysBetween || 3) + " day" + ((mp.daysBetween || 3) > 1 ? "s" : "") + " gap";
-                preview.appendChild(arrow);
-            }
-        }
-        configPanel.appendChild(preview);
+        // Ensure parts array matches totalParts
+        if (!Array.isArray(mp.parts)) mp.parts = [];
+        while (mp.parts.length < mp.totalParts) mp.parts.push({ location: null, duration: null });
+        if (mp.parts.length > mp.totalParts) mp.parts.length = mp.totalParts;
 
+        // Per-part configuration
+        var partsSection = document.createElement("div");
+        partsSection.style.cssText = "border:1px solid #E5E7EB; border-radius:10px; padding:14px; background:#FAFAFA; margin-bottom:14px;";
+        partsSection.innerHTML = '<div style="font-weight:600; font-size:0.85rem; margin-bottom:4px;">Part Configuration</div><div style="font-size:0.75rem; color:#6B7280; margin-bottom:12px;">Set a different location or duration for each part. Leave blank to use the activity defaults.</div>';
+
+        var sf = window.loadGlobalSettings?.() || {};
+        var allFields = sf.app1?.fields || [];
+        var fieldOptions = '<option value="">-- Same as main --</option>';
+        allFields.sort(function(a, b) { return (a.name || '').localeCompare(b.name || ''); }).forEach(function(f) {
+            if (f.name) fieldOptions += '<option value="' + escapeHtml(f.name) + '">' + escapeHtml(f.name) + '</option>';
+        });
+
+        for (var i = 0; i < mp.totalParts; i++) {
+            (function(partIdx) {
+                var part = mp.parts[partIdx] || { location: null, duration: null };
+                var partRow = document.createElement("div");
+                partRow.style.cssText = "display:flex; align-items:center; gap:10px; padding:10px 12px; margin-bottom:" + (partIdx < mp.totalParts - 1 ? "6px" : "0") + "; border-radius:8px; background:#fff; border:1px solid #E5E7EB; flex-wrap:wrap;";
+
+                var badge = document.createElement("span");
+                badge.style.cssText = "width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.75rem; flex-shrink:0; color:#fff; background:#147D91;";
+                badge.textContent = partIdx + 1;
+                partRow.appendChild(badge);
+
+                var nameLabel = document.createElement("span");
+                nameLabel.style.cssText = "font-size:0.85rem; color:#374151; font-weight:500; min-width:80px;";
+                nameLabel.textContent = escapeHtml(item.name) + " " + (partIdx + 1) + "/" + mp.totalParts;
+                partRow.appendChild(nameLabel);
+
+                // Location dropdown
+                var locWrap = document.createElement("div");
+                locWrap.style.cssText = "display:flex; align-items:center; gap:4px;";
+                locWrap.innerHTML = '<span style="font-size:0.75rem; color:#6B7280;">📍</span>';
+                var locSel = document.createElement("select");
+                locSel.style.cssText = "padding:4px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.8rem; background:white; max-width:140px;";
+                locSel.innerHTML = fieldOptions;
+                if (part.location) locSel.value = part.location;
+                locSel.onchange = function() {
+                    mp.parts[partIdx].location = this.value || null;
+                    item.multiPart = mp;
+                    saveData();
+                    updateSummary();
+                };
+                locWrap.appendChild(locSel);
+                partRow.appendChild(locWrap);
+
+                // Duration input
+                var durWrap = document.createElement("div");
+                durWrap.style.cssText = "display:flex; align-items:center; gap:4px;";
+                durWrap.innerHTML = '<span style="font-size:0.75rem; color:#6B7280;">⏱</span>';
+                var durInp = document.createElement("input");
+                durInp.type = "number";
+                durInp.min = "5";
+                durInp.max = "240";
+                durInp.step = "5";
+                durInp.placeholder = "default";
+                durInp.value = part.duration || "";
+                durInp.style.cssText = "width:60px; padding:4px 6px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.8rem; text-align:center;";
+                durInp.onchange = function() {
+                    var v = parseInt(this.value, 10);
+                    if (this.value === "" || isNaN(v) || v <= 0) {
+                        mp.parts[partIdx].duration = null;
+                        this.value = "";
+                    } else {
+                        mp.parts[partIdx].duration = Math.min(240, Math.max(5, v));
+                        this.value = mp.parts[partIdx].duration;
+                    }
+                    item.multiPart = mp;
+                    saveData();
+                };
+                durWrap.appendChild(durInp);
+                var minLabel = document.createElement("span");
+                minLabel.style.cssText = "font-size:0.75rem; color:#6B7280;";
+                minLabel.textContent = "min";
+                durWrap.appendChild(minLabel);
+                partRow.appendChild(durWrap);
+
+                // Prerequisite hint
+                if (partIdx === 0) {
+                    partRow.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.65rem; color:#6B7280;">No prereq</span>');
+                } else {
+                    partRow.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.65rem; color:#92400e;">After part ' + partIdx + '</span>');
+                }
+
+                partsSection.appendChild(partRow);
+
+                if (partIdx < mp.totalParts - 1) {
+                    var arrow = document.createElement("div");
+                    arrow.style.cssText = "text-align:center; color:#9CA3AF; font-size:0.7rem; margin:2px 0;";
+                    arrow.textContent = "\u2193 " + (mp.daysBetween || 3) + " day" + ((mp.daysBetween || 3) > 1 ? "s" : "") + " gap";
+                    partsSection.appendChild(arrow);
+                }
+            })(i);
+        }
+        configPanel.appendChild(partsSection);
         // Info box
         var info = document.createElement("div");
         info.style.cssText = "padding:10px 14px; border-radius:8px; font-size:0.8rem; line-height:1.5; background:#e6f4f7; border:1px solid #b2dce6; color:#0A4A56;";
@@ -1637,6 +1713,21 @@ window.getMultiPartDisplayLabel = function(bunkName, activityName) {
     var completed = window.getBunkCompletionCount(bunkName, activityName);
     var partInCycle = (completed % mp.totalParts) + 1;
     return activityName + ' ' + partInCycle + '/' + mp.totalParts;
+};
+
+window.getMultiPartPartConfig = function(bunkName, activityName) {
+    var mp = window.getMultiPartConfig?.(activityName);
+    if (!mp || !Array.isArray(mp.parts) || mp.parts.length === 0) return null;
+    var completed = window.getBunkCompletionCount(bunkName, activityName);
+    var partIdx = completed % mp.totalParts;
+    var partCfg = mp.parts[partIdx];
+    if (!partCfg) return null;
+    return {
+        partNumber: partIdx + 1,
+        totalParts: mp.totalParts,
+        location: partCfg.location || null,
+        duration: partCfg.duration || null
+    };
 };
 
 console.log("[SPECIAL_ACTIVITIES] Module v3.7 loaded (multi-part: single activity, N parts)");
