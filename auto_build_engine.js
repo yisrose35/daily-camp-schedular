@@ -40,12 +40,16 @@
 //   v3.2.4 — FIX #1: Balance enforcement in knapsack solver (sports/specials mix evenly)
 //            FIX #2: Duration ceiling enforcement (blocks capped at durationMax, no 60min blocks)
 //            FIX #3: League pinned:true removed (was causing Step 3 to skip league classification)
+//   v3.2.8 — FIX #1: Scarce capacity reads sharableWith.capacity (was only serving 1 bunk)
+//            FIX #2: Phase 4 respects activity configured duration (no more 120min blocks)
+//            FIX #3: Per-bunk lunch rescheduling when displaced by scarce overrides
+//            FIX #4: getSpecialTimeWindow falls back to timeRules from UI
 // =================================================================
 
 (function() {
 'use strict';
 
-const VERSION = '3.2.7';
+const VERSION = '3.2.8';
 const DEBUG = true;
 
 function log(...args) { if (DEBUG) console.log('[AutoBuild]', ...args); }
@@ -175,7 +179,7 @@ function getSpecialTimeWindow(specialConfig) {
         };
     }
     
-    // ★★★ v3.2.8 FIX: Fall back to timeRules from Special Activities UI ★★★
+    // ★★★ v3.2.8 FIX #4: Fall back to timeRules from Special Activities UI ★★★
     // The UI stores time restrictions as timeRules array, not as direct properties.
     // Extract the tightest "Available" window from timeRules.
     if (Array.isArray(specialConfig.timeRules) && specialConfig.timeRules.length > 0) {
@@ -431,43 +435,17 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     const sportLayers = [];           // sports >=N whole day
     const customLayers = [];          // anything else
     
-    // Helper: determine if a layer is "pinned" (exact time, immovable)
-    // The DAW UI uses `anchor:true` on the layer TYPE definition (swim, custom, 
-    // lunch, snacks, dismissal). When dropped, anchor layers get op='=' and
-    // durationMin === window size. But the layer object itself does NOT carry
-    // a `pinned` or `pinExact` flag from the DAW path.
-    //
-    // Pinned detection rules:
-    //   1. layer.pinned === true  (from planner/import path)
-    //   2. layer.pinExact === true (from planner path)
-    //   3. layer.type is 'swim' or 'custom' (anchor types that aren't fixed events)
-    //   4. layer.op === '=' AND the time window equals the duration
-    //      (meaning the user set an exact window with no flex)
-    //
-    // Note: lunch/snack/dismissal are ALSO anchors but they go to fixedLayers,
-    //       not pinnedLayers, so they are checked BEFORE this.
-    
     function isLayerPinned(layer) {
         const lType = (layer.type || '').toLowerCase();
-        
-        // Explicit pinned flags (planner/import path)
         if (layer.pinned || layer.pinExact) return true;
-        
-        // Anchor types that are NOT fixed events (swim, custom)
         if (lType === 'swim' || lType === 'custom') return true;
-        
-        // ★ v3.2: Custom persistent tiles are always pinned
         if (window.CustomPersistentTiles?.isCustomType?.(lType)) return true;
-        
-        // DAW anchor detection: op='=' and window size === duration
-        // This means the user set an exact time with no flexibility
         const op = layer.op || layer.operator || '>=';
         if (op === '=') {
             const windowSize = (layer.endMin || 0) - (layer.startMin || 0);
             const dur = layer.durationMin || layer.periodMin || layer.duration || 0;
             if (dur > 0 && windowSize > 0 && windowSize <= dur) return true;
         }
-        
         return false;
     }
     
@@ -475,37 +453,28 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         layer._idx = idx;
         const lType = (layer.type || '').toLowerCase();
         
-        // ★ v3.1 FIX (Bug B): Check fixed event types FIRST
-        // This prevents snack/lunch/dismissal from being captured by the
-        // pinned check below, even if they have pinned=true or are anchor types
         if (['lunch', 'snack', 'snacks', 'dismissal'].includes(lType)) {
             fixedLayers.push(layer);
         }
-        // ★ v3.1 FIX (Bug A): League types get their own handling
         else if (lType === 'league') {
             leagueLayers.push(layer);
         }
         else if (lType === 'specialty_league') {
             specialtyLeagueLayers.push(layer);
         }
-        // ★ v3.2: Custom persistent tiles → pinned (like swim)
         else if (window.CustomPersistentTiles?.isCustomType?.(lType)) {
             pinnedLayers.push(layer);
             log(`    Layer "${layer.event || lType}" → pinned (custom persistent tile)`);
         }
-        // Pinned/exact-time events (swim, custom, or anything marked pinned)
         else if (isLayerPinned(layer)) {
             pinnedLayers.push(layer);
         }
-        // Flexible specials
         else if (lType === 'special') {
             specialLayers.push(layer);
         }
-        // Flexible sports
         else if (lType === 'sport' || lType === 'sports') {
             sportLayers.push(layer);
         }
-        // Catch-all
         else {
             customLayers.push(layer);
         }
@@ -516,10 +485,7 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         `${specialLayers.length} special, ${sportLayers.length} sport, ${customLayers.length} custom`);
     
     // =================================================================
-    // HELPER: Read quantity from a layer (handles both DAW and Planner formats)
-    // =================================================================
-    // DAW layers use:  { qty: 1, op: '>=' }
-    // Planner layers:  { quantity: 1, operator: '>=' } or { quantity: { val: 1, op: '>=' } }
+    // HELPER: Read quantity from a layer
     // =================================================================
     
     function getLayerQty(layer) {
@@ -547,16 +513,12 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     }
     
     // =================================================================
-    // Compute required quantities per type using ALL layers of that type
-    // =================================================================
-    // For >= : at least N (can give more if slots allow)
-    // For =  : exactly N (hard cap)
-    // For <= : at most N (can give fewer)
+    // Compute required quantities per type
     // =================================================================
     
     function computeRequirements(typeLayers) {
-        let minRequired = 0;    // minimum that MUST be given
-        let maxAllowed = Infinity; // maximum that CAN be given
+        let minRequired = 0;
+        let maxAllowed = Infinity;
         let hasExact = false;
         
         typeLayers.forEach(layer => {
@@ -564,21 +526,16 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             const op = getLayerOp(layer);
             
             if (op === '=' || op === '==') {
-                // Exactly this many
                 minRequired = qty;
                 maxAllowed = qty;
                 hasExact = true;
             } else if (op === '>=' || op === '≥') {
-                // At least this many
                 minRequired = Math.max(minRequired, qty);
             } else if (op === '<=' || op === '≤') {
-                // At most this many
                 maxAllowed = Math.min(maxAllowed, qty);
             }
         });
         
-        // If only >= was given, maxAllowed stays Infinity (fill as many as possible)
-        // If only <= was given, minRequired stays 0 (can give zero)
         return { min: minRequired, max: maxAllowed, hasExact };
     }
     
@@ -594,8 +551,6 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     
     // ═════════════════════════════════════════════════════════════════
     // PHASE 1: Place PINNED events (exact time, all bunks)
-    // ═════════════════════════════════════════════════════════════════
-    // These have a fixed time (e.g., Swim = 2:00-2:40 exactly)
     // ═════════════════════════════════════════════════════════════════
     
     log(`  [Phase 1] Pinned events: ${pinnedLayers.length}`);
@@ -617,18 +572,14 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             _autoGenerated: true
         });
         
-        // ★ v3.2: Determine change buffer duration
-        // Swim always needs a change; custom persistent tiles may need one too
         let changeDur = 0;
         if (lType === 'swim') {
-            // Get configurable change duration (from global settings or default 10)
             const gs = getGlobalSettings();
             changeDur = parseInt(gs.app1?.changeBufferDuration) || parseInt(gs.changeBufferDuration) || 10;
         } else if (window.CustomPersistentTiles?.getChangeDuration) {
             changeDur = window.CustomPersistentTiles.getChangeDuration(lType) || 0;
         }
         
-        // Mark occupied for all bunks + insert change buffer
         bunks.forEach(bunk => {
             bunkState[bunk].occupied.push({
                 startMin, endMin, event: eventName, type: 'pinned'
@@ -638,7 +589,6 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 _autoGenerated: true
             });
             
-            // ★ v3.2: Auto-insert change buffer AFTER the pinned event
             if (changeDur > 0 && endMin + changeDur <= divTimes.end) {
                 const changeStart = endMin;
                 const changeEnd = endMin + changeDur;
@@ -653,7 +603,6 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                     _autoGenerated: true, _changeFor: eventName
                 });
                 
-                // Also create a per-bunk skeleton block for the change
                 skeleton.push({
                     id: 'auto_change_' + Math.random().toString(36).slice(2, 9),
                     type: 'pinned',
@@ -668,19 +617,14 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 });
             }
             
-            // ★ v3.2: Also insert change buffer BEFORE if swim isn't first thing
             if (changeDur > 0 && startMin - changeDur >= divTimes.start) {
-                // Check if there's already something right before this
                 const hasBlockBefore = bunkState[bunk].occupied.some(o =>
                     o.endMin > startMin - changeDur && o.endMin <= startMin && o.type !== 'change_buffer'
                 );
-                // Only insert pre-change if the bunk is coming from another activity
-                // (not at the very start of the day)
                 if (hasBlockBefore || startMin > divTimes.start + 30) {
                     const preChangeStart = startMin - changeDur;
                     const preChangeEnd = startMin;
                     
-                    // Check no overlap with existing
                     const overlaps = bunkState[bunk].occupied.some(o =>
                         preChangeStart < o.endMin && preChangeEnd > o.startMin
                     );
@@ -721,8 +665,8 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     // ═════════════════════════════════════════════════════════════════
     // PHASE 2: Place SCARCE specials (limited availability)
     // ═════════════════════════════════════════════════════════════════
-    // E.g., Bubble Lady: Mon/Thu only, 1:00-2:00, capacity 4, 30min each.
-    // 8 bunks → bunks 1-4 at 1:00-1:30, bunks 5-8 at 1:30-2:00
+    // E.g., Bubble Lady: Mon/Thu only, 1:00-2:00, capacity 3, 30min each.
+    // 8 bunks → bunks 1-3 at 1:00-1:30, bunks 4-6 at 1:30-2:00, bunks 7-8 skip
     // These get bunk overrides so the solver assigns them specifically.
     // ═════════════════════════════════════════════════════════════════
     
@@ -747,7 +691,13 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         
         const windowStart = timeWindow.startMin;
         const windowEnd = timeWindow.endMin;
-        const capacity = specialConfig.capacity || 1; // how many bunks at once
+        
+        // ★★★ v3.2.8 FIX #1: Read capacity from sharableWith (where UI stores it) ★★★
+        // Previously read specialConfig.capacity which was undefined, falling back to 1.
+        // The actual capacity is in sharableWith.capacity.
+        const capacity = parseInt(specialConfig.sharableWith?.capacity)
+            || parseInt(specialConfig.capacity)
+            || 1;
         
         // Rank bunks by rotation (most overdue first)
         const rankedBunks = bunks.map(bunk => ({
@@ -761,9 +711,12 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         const bunksToServe = Math.min(bunks.length, totalCapacity);
         
         log(`    ${name}: window ${fmtTime(windowStart)}-${fmtTime(windowEnd)}, ` +
-            `capacity ${capacity}, ${slotsAvailable} slots, serving ${bunksToServe}/${bunks.length} bunks`);
+            `duration ${duration}min, capacity ${capacity}, ${slotsAvailable} time slots, ` +
+            `serving ${bunksToServe}/${bunks.length} bunks`);
         
-        // Assign bunks to time slots
+        // ★★★ v3.2.8: Check for conflicts with already-occupied time ★★★
+        // Scarce overrides should avoid placing bunks at times they already have
+        // pinned events (like swim). Skip conflicting times, try next slot.
         let slotCursor = windowStart;
         let served = 0;
         
@@ -773,7 +726,20 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             
             // Assign up to `capacity` bunks to this slot
             for (let c = 0; c < capacity && served < bunksToServe; c++) {
-                const bunk = rankedBunks[served].bunk;
+                const bunkInfo = rankedBunks[served];
+                const bunk = bunkInfo.bunk;
+                
+                // ★★★ v3.2.8: Check if this bunk has a conflict at this time ★★★
+                const hasConflict = bunkState[bunk].occupied.some(o =>
+                    slotStart < o.endMin && slotEnd > o.startMin
+                );
+                
+                if (hasConflict) {
+                    log(`      ${bunk}: conflict at ${fmtTime(slotStart)}-${fmtTime(slotEnd)}, deferring`);
+                    // Move this bunk to end of queue to try a later slot
+                    rankedBunks.push(rankedBunks.splice(served, 1)[0]);
+                    continue; // don't increment served, try next bunk in queue
+                }
                 
                 bunkOverrides.push({
                     bunk,
@@ -804,31 +770,39 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             slotCursor = slotEnd;
         }
         
+        if (served < bunksToServe) {
+            log(`    ${name}: Could only serve ${served}/${bunksToServe} bunks (time/conflict constraints)`);
+            warnings.push(`${name}: Only ${served}/${bunksToServe} bunks could be scheduled`);
+        }
+        
         // Also add a skeleton block so the optimizer knows this time range exists
-        skeleton.push({
-            id: 'auto_scarce_' + Math.random().toString(36).slice(2, 9),
-            type: 'slot',
-            event: 'Special Activity',
-            division: divName,
-            startTime: fmtTime(windowStart),
-            endTime: fmtTime(Math.min(windowEnd, windowStart + duration * Math.ceil(bunksToServe / capacity))),
-            _autoGenerated: true,
-            _scarceEvent: name
-        });
+        if (served > 0) {
+            skeleton.push({
+                id: 'auto_scarce_' + Math.random().toString(36).slice(2, 9),
+                type: 'slot',
+                event: 'Special Activity',
+                division: divName,
+                startTime: fmtTime(windowStart),
+                endTime: fmtTime(Math.min(windowEnd, windowStart + duration * Math.ceil(served / capacity))),
+                _autoGenerated: true,
+                _scarceEvent: name
+            });
+        }
     });
     
     
     // ═════════════════════════════════════════════════════════════════
     // PHASE 3: Place FIXED/WINDOWED events (lunch, snacks, dismissal)
     // ═════════════════════════════════════════════════════════════════
-    // These have a time WINDOW but must happen for all bunks.
-    // E.g., Lunch can go 12:00-1:00, duration=20min. Find best slot.
-    // Sort by window tightness (tightest first = hardest to place).
+    // ★★★ v3.2.8 FIX #3: Per-bunk placement when scarce overrides conflict.
+    // Previously Phase 3 placed lunch at ONE time for ALL bunks. When a
+    // scarce override occupied lunch time for some bunks, lunch was either
+    // skipped or moved for everyone. Now bunks with scarce conflicts get
+    // individual lunch times via bunk overrides.
     // ═════════════════════════════════════════════════════════════════
     
     log(`  [Phase 3] Fixed events: ${fixedLayers.length}`);
     
-    // Sort by window tightness (tightest first for better placement)
     const sortedFixed = [...fixedLayers].sort((a, b) => {
         const aSpan = (a.endMin || a.startMin + 60) - a.startMin;
         const bSpan = (b.endMin || b.startMin + 60) - b.startMin;
@@ -839,14 +813,14 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         const duration = getLayerDuration(layer);
         const windowStart = layer.startMin;
         const windowEnd = layer.endMin || (windowStart + duration);
+        const eventName = layer.event || layer.type;
         
         // If window === duration, it's effectively pinned (exact time)
         if (windowEnd - windowStart <= duration) {
-            // Exact placement
             skeleton.push({
                 id: 'auto_fixed_' + Math.random().toString(36).slice(2, 9),
                 type: 'pinned',
-                event: layer.event || layer.type,
+                event: eventName,
                 division: divName,
                 startTime: fmtTime(windowStart),
                 endTime: fmtTime(windowStart + duration),
@@ -855,42 +829,85 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             });
             
             bunks.forEach(bunk => {
-                bunkState[bunk].occupied.push({
-                    startMin: windowStart,
-                    endMin: windowStart + duration,
-                    event: layer.event || layer.type,
-                    type: 'fixed'
-                });
-                bunkTimelines[bunk].push({
-                    startMin: windowStart,
-                    endMin: windowStart + duration,
-                    event: layer.event || layer.type,
-                    type: 'fixed',
-                    _autoGenerated: true
-                });
+                // ★★★ v3.2.8: Check if bunk has scarce conflict at exact time ★★★
+                const hasConflict = bunkState[bunk].occupied.some(o =>
+                    o.type === 'scarce_special' &&
+                    windowStart < o.endMin && (windowStart + duration) > o.startMin
+                );
+                
+                if (hasConflict) {
+                    // Find alternative time for this bunk within a wider window
+                    const altPlacement = findPerBunkFixedPlacement(
+                        bunk, bunkState[bunk].occupied, eventName, duration,
+                        windowStart, windowEnd, divTimes
+                    );
+                    if (altPlacement) {
+                        bunkState[bunk].occupied.push({
+                            startMin: altPlacement.startMin, endMin: altPlacement.endMin,
+                            event: eventName, type: 'fixed'
+                        });
+                        bunkTimelines[bunk].push({
+                            startMin: altPlacement.startMin, endMin: altPlacement.endMin,
+                            event: eventName, type: 'fixed', _autoGenerated: true
+                        });
+                        bunkOverrides.push({
+                            bunk, division: divName, activity: eventName, type: 'pinned',
+                            startTime: fmtTime(altPlacement.startMin),
+                            endTime: fmtTime(altPlacement.endMin),
+                            _autoGenerated: true, _displacedBy: 'scarce_special', _perBunkFixed: true
+                        });
+                        log(`      ${bunk}: ${eventName} displaced by scarce → moved to ${fmtTime(altPlacement.startMin)}-${fmtTime(altPlacement.endMin)}`);
+                    } else {
+                        warn(`${bunk}: Could not place ${eventName} — scarce conflict unresolvable at exact time`);
+                    }
+                } else {
+                    bunkState[bunk].occupied.push({
+                        startMin: windowStart, endMin: windowStart + duration,
+                        event: eventName, type: 'fixed'
+                    });
+                    bunkTimelines[bunk].push({
+                        startMin: windowStart, endMin: windowStart + duration,
+                        event: eventName, type: 'fixed', _autoGenerated: true
+                    });
+                }
             });
             
-            log(`    ${layer.event}: ${fmtTime(windowStart)}-${fmtTime(windowStart + duration)} (exact fixed)`);
+            log(`    ${eventName}: ${fmtTime(windowStart)}-${fmtTime(windowStart + duration)} (exact fixed)`);
             return;
         }
         
-        // Windowed: find best placement avoiding conflicts
-        const placement = findBestPlacement(
+        // ★★★ v3.2.8 FIX #3: Windowed placement with per-bunk scarce awareness ★★★
+        // First: find best placement ignoring scarce conflicts (since scarce is per-bunk)
+        const sharedOccupied = getSharedOccupied(bunkState, bunks);
+        const nonScarceOccupied = sharedOccupied.filter(o => o.type !== 'scarce_special');
+        
+        // Try placement avoiding only non-scarce conflicts
+        let placement = findBestPlacement(
             windowStart, windowEnd, duration,
-            getSharedOccupied(bunkState, bunks),
+            nonScarceOccupied,
             divTimes
         );
         
         if (!placement) {
-            warn(`Could not place ${layer.event} within ${fmtTime(windowStart)}-${fmtTime(windowEnd)}`);
-            warnings.push(`Could not place ${layer.event || layer.type} within its time window`);
+            // Fall back to checking ALL conflicts
+            placement = findBestPlacement(
+                windowStart, windowEnd, duration,
+                sharedOccupied,
+                divTimes
+            );
+        }
+        
+        if (!placement) {
+            warn(`Could not place ${eventName} within ${fmtTime(windowStart)}-${fmtTime(windowEnd)}`);
+            warnings.push(`Could not place ${eventName} within its time window`);
             return;
         }
         
+        // Add the skeleton block at the main placement time
         skeleton.push({
             id: 'auto_fixed_' + Math.random().toString(36).slice(2, 9),
             type: 'pinned',
-            event: layer.event || layer.type,
+            event: eventName,
             division: divName,
             startTime: fmtTime(placement.startMin),
             endTime: fmtTime(placement.endMin),
@@ -898,32 +915,70 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             _autoGenerated: true
         });
         
+        // ★★★ v3.2.8: Per-bunk placement — check each bunk for scarce conflicts ★★★
+        const isLunchOrSnack = /lunch|snack/i.test(eventName);
+        
         bunks.forEach(bunk => {
-            bunkState[bunk].occupied.push({
-                startMin: placement.startMin,
-                endMin: placement.endMin,
-                event: layer.event || layer.type,
-                type: 'fixed'
-            });
-            bunkTimelines[bunk].push({
-                startMin: placement.startMin,
-                endMin: placement.endMin,
-                event: layer.event || layer.type,
-                type: 'fixed',
-                _autoGenerated: true
-            });
+            const hasConflict = bunkState[bunk].occupied.some(o =>
+                o.type === 'scarce_special' &&
+                placement.startMin < o.endMin && placement.endMin > o.startMin
+            );
+            
+            if (hasConflict && isLunchOrSnack) {
+                // This bunk has Bubble Lady (or similar) during lunch — find alternative
+                const altPlacement = findPerBunkFixedPlacement(
+                    bunk, bunkState[bunk].occupied, eventName, duration,
+                    windowStart, windowEnd, divTimes
+                );
+                
+                if (altPlacement) {
+                    bunkState[bunk].occupied.push({
+                        startMin: altPlacement.startMin, endMin: altPlacement.endMin,
+                        event: eventName, type: 'fixed'
+                    });
+                    bunkTimelines[bunk].push({
+                        startMin: altPlacement.startMin, endMin: altPlacement.endMin,
+                        event: eventName, type: 'fixed', _autoGenerated: true
+                    });
+                    bunkOverrides.push({
+                        bunk, division: divName, activity: eventName, type: 'pinned',
+                        startTime: fmtTime(altPlacement.startMin),
+                        endTime: fmtTime(altPlacement.endMin),
+                        _autoGenerated: true, _displacedBy: 'scarce_special', _perBunkFixed: true
+                    });
+                    log(`      ${bunk}: ${eventName} moved to ${fmtTime(altPlacement.startMin)}-${fmtTime(altPlacement.endMin)} (scarce conflict)`);
+                } else {
+                    warn(`${bunk}: Could not place ${eventName} — scarce conflict unresolvable`);
+                    warnings.push(`${bunk}: ${eventName} could not be placed (scarce conflict)`);
+                    // Still mark the standard time as occupied so Phase 4 doesn't fill it
+                    bunkState[bunk].occupied.push({
+                        startMin: placement.startMin, endMin: placement.endMin,
+                        event: eventName, type: 'fixed'
+                    });
+                    bunkTimelines[bunk].push({
+                        startMin: placement.startMin, endMin: placement.endMin,
+                        event: eventName, type: 'fixed', _autoGenerated: true
+                    });
+                }
+            } else {
+                // No conflict — standard placement
+                bunkState[bunk].occupied.push({
+                    startMin: placement.startMin, endMin: placement.endMin,
+                    event: eventName, type: 'fixed'
+                });
+                bunkTimelines[bunk].push({
+                    startMin: placement.startMin, endMin: placement.endMin,
+                    event: eventName, type: 'fixed', _autoGenerated: true
+                });
+            }
         });
         
-        log(`    ${layer.event}: ${fmtTime(placement.startMin)}-${fmtTime(placement.endMin)}`);
+        log(`    ${eventName}: ${fmtTime(placement.startMin)}-${fmtTime(placement.endMin)}`);
     });
     
     
     // ═════════════════════════════════════════════════════════════════
     // ★ PHASE 3.5: Place LEAGUE skeleton blocks (v3.1 — NEW)
-    // ═════════════════════════════════════════════════════════════════
-    // Leagues are division-wide: the entire grade plays at once.
-    // They get placed like fixed events within their time window.
-    // If =1, exactly one league block. If >=1, at least one.
     // ═════════════════════════════════════════════════════════════════
     
     log(`  [Phase 3.5] Leagues: ${leagueLayers.length} regular, ${specialtyLeagueLayers.length} specialty`);
@@ -936,39 +991,21 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         const windowStart = layer.startMin;
         const windowEnd = layer.endMin || (windowStart + duration);
         const qty = getLayerQty(layer);
-        const op = getLayerOp(layer);
         
-        // ★★★ v3.2.3 FIX: Always place at least 1 league block ★★★
-        // Previously ≤ operator set count to Math.min(qty, 1) but if qty was 0
-        // or the operator logic in computeRequirements left minRequired=0, 
-        // leagues were silently dropped. Now we always place qty (at least 1).
         const count = Math.max(qty, 1);
         
         for (let i = 0; i < count; i++) {
-            // Find placement within window that doesn't conflict
             let placement = findBestPlacement(
                 windowStart, windowEnd, duration,
                 getSharedOccupied(bunkState, bunks),
                 divTimes
             );
             
-            // ★★★ v3.2.3: Force-place leagues — they're non-negotiable ★★★
             if (!placement) {
                 warn(`Could not find gap for league ${i + 1}/${count} — force-placing at window start ${fmtTime(windowStart)}`);
                 placement = { startMin: windowStart, endMin: windowStart + duration };
             }
             
-            if (!placement) {
-                warn(`Could not place league ${i + 1}/${count} within ${fmtTime(windowStart)}-${fmtTime(windowEnd)}`);
-                warnings.push(`Could not place ${isSpecialty ? 'Specialty League' : 'League'} within its time window`);
-                continue;
-            }
-            
-            // ★★★ v3.2.4 FIX: League blocks must NOT have pinned:true ★★★
-            // scheduler_core_main Step 3 checks isPinnedType BEFORE league classification.
-            // If pinned:true is set, the block gets treated as a pinned event and never
-            // reaches leagueBlocks/specialtyLeagueBlocks — so no matchups are generated.
-            // The type field ('league'/'specialty_league') is sufficient for classification.
             skeleton.push({
                 id: 'auto_league_' + Math.random().toString(36).slice(2, 9),
                 type: isSpecialty ? 'specialty_league' : 'league',
@@ -979,17 +1016,14 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 _autoGenerated: true
             });
             
-            // Mark occupied for ALL bunks (leagues are division-wide)
             bunks.forEach(bunk => {
                 bunkState[bunk].occupied.push({
-                    startMin: placement.startMin,
-                    endMin: placement.endMin,
+                    startMin: placement.startMin, endMin: placement.endMin,
                     event: isSpecialty ? 'Specialty League' : 'League Game',
                     type: isSpecialty ? 'specialty_league' : 'league'
                 });
                 bunkTimelines[bunk].push({
-                    startMin: placement.startMin,
-                    endMin: placement.endMin,
+                    startMin: placement.startMin, endMin: placement.endMin,
                     event: isSpecialty ? 'Specialty League' : 'League Game',
                     type: isSpecialty ? 'specialty_league' : 'league',
                     _autoGenerated: true
@@ -1005,50 +1039,26 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     // ═════════════════════════════════════════════════════════════════
     // PHASE 4: KNAPSACK GROUP PACKER (v3.2)
     // ═════════════════════════════════════════════════════════════════
-    //
-    // NEW APPROACH (replaces v3.1 interleaved filling):
-    //   1. Identify "activity groups" — the gaps between pinned/fixed events
-    //      (these correspond to "Activity #1", "Activity #2", etc.)
-    //   2. For EACH bunk, for EACH gap/group:
-    //      a) Check what's already placed (swim + change = done)
-    //      b) Pack the gap with activities from the rotation pool
-    //         using a knapsack solver that respects durations
-    //      c) Each packed activity gets its own sub-slot skeleton block
-    //   3. Result: different bunks can have different numbers of
-    //      sub-activities within the same activity group.
-    //
-    // The packer considers ALL activities (specials + sports) in one
-    // unified pool ranked by rotation score, then picks the combination
-    // whose durations sum to the gap size with the best total score.
-    //
-    // ═════════════════════════════════════════════════════════════════
     
-    log(`  [Phase 4] Knapsack group packer (v3.2.3)...`);
+    log(`  [Phase 4] Knapsack group packer (v3.2.8)...`);
     log(`    Special rules: op=${specialReq.hasExact ? '=' : '>='} min=${specialReq.min} max=${specialReq.max}`);
     log(`    Sport rules: op=${sportReq.hasExact ? '=' : '>='} min=${sportReq.min} max=${sportReq.max}`);
     
-    // ★★★ v3.2.2: Capacity tracking — prevent over-assigning specials ★★★
-    // Key: "specialName|gapStartMin" → count of bunks assigned
     const specialSlotUsage = {};
     
     function getSpecialCapacity(specialName) {
         const config = getSpecialConfig(specialName);
-        if (!config) return 2; // default
-        // ★★★ v3.2.2 FIX: sharableWith.capacity is always the max concurrent bunks ★★★
-        // The 'type' field (all/custom/not_sharable/same_division) controls which 
-        // divisions can share, NOT the count. Always use the explicit capacity.
+        if (!config) return 2;
         if (config.sharableWith) {
             if (config.sharableWith.capacity !== undefined) {
                 const cap = parseInt(config.sharableWith.capacity);
                 if (!isNaN(cap) && cap > 0) return cap;
             }
-            // Only if no explicit capacity, fall back to type-based defaults
             if (config.sharableWith.type === 'not_sharable') return 1;
         }
-        // Check capacity directly on special config
         if (config.capacity) return parseInt(config.capacity);
         if (config.maxBunks) return parseInt(config.maxBunks);
-        return 2; // default capacity
+        return 2;
     }
     
     function isSpecialAtCapacity(specialName, gapStartMin) {
@@ -1069,7 +1079,6 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     const sportDurMax = sportLayers.length > 0 ? getLayerDurationMax(sportLayers[0]) : sportDurMin;
     const sportDurIdeal = Math.round((sportDurMin + sportDurMax) / 2);
     
-    // ★★★ v3.2.7: Duration bounds used by template builder and gap processing ★★★
     const minActivityDur = Math.min(sportDurMin, specialDur, 30);
     const maxActivityDur = Math.max(sportDurMax, specialDur, 50);
     
@@ -1080,38 +1089,34 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     function buildActivityPool(bunk, gapStartMin) {
         const pool = [];
         
-        // Add all regular specials with their configured durations
         const availableSpecialNames = regularSpecials.map(s => s.name);
         const rankedSpecials = getRankedSpecials(bunk, availableSpecialNames);
         rankedSpecials.forEach(s => {
-            // ★★★ v3.2.2: Skip specials restricted to other divisions ★★★
-            if (!isSpecialAvailableForDivision(s.name, divName)) {
-                return; // this special is not allowed for this grade/division
-            }
-            // ★★★ v3.2.2: Skip specials that have hit capacity for this time slot ★★★
-            if (gapStartMin !== undefined && isSpecialAtCapacity(s.name, gapStartMin)) {
-                log(`      [CAPACITY] ${s.name} at capacity for gap ${gapStartMin} (${specialSlotUsage[s.name + '|' + gapStartMin]}/${getSpecialCapacity(s.name)})`);
-                return; // skip — too many bunks already have this special at this time
-            }
+            if (!isSpecialAvailableForDivision(s.name, divName)) return;
+            if (gapStartMin !== undefined && isSpecialAtCapacity(s.name, gapStartMin)) return;
+            
+            // ★★★ v3.2.8 FIX #2: Use configured duration from special config ★★★
+            // Previously used the generic specialDur from the layer, which could
+            // allow a 30min activity to get a 120min block. Now reads the actual
+            // configured duration for each specific special.
+            const configuredDuration = getSpecialDuration(s.name) || s.duration || specialDur;
+            
             pool.push({
                 name: s.name,
-                duration: s.duration || specialDur,
+                duration: configuredDuration,
                 score: s.score,
                 type: 'special',
-                _fromPool: true
+                _fromPool: true,
+                _configuredDuration: configuredDuration
             });
         });
         
-        // Add sports as generic slots (solver will pick the actual sport)
-        // We create a few sport entries with different duration options
-        const sportDurations = [sportDurMin];
-        if (sportDurIdeal !== sportDurMin) sportDurations.push(sportDurIdeal);
-        if (sportDurMax !== sportDurIdeal && sportDurMax !== sportDurMin) sportDurations.push(sportDurMax);
+        // Add sports with duration options (filtered by layer constraints)
+        const sportDurations = [];
+        if (sportDurMin <= maxActivityDur) sportDurations.push(sportDurMin);
+        if (sportDurIdeal !== sportDurMin && sportDurIdeal <= maxActivityDur) sportDurations.push(sportDurIdeal);
+        if (sportDurMax !== sportDurIdeal && sportDurMax !== sportDurMin && sportDurMax <= maxActivityDur) sportDurations.push(sportDurMax);
         
-        // ★★★ v3.2.3 FIX: Score sports at the MEDIAN of specials, not 0 ★★★
-        // Previously sports got score 0 which ALWAYS beat specials (whose rotation
-        // scores are typically 20-200+). This caused sports to dominate every slot.
-        // Now sports sit at the median so they compete fairly with specials.
         const specialScores = pool.filter(p => p.type === 'special').map(p => p.score);
         const medianSpecialScore = specialScores.length > 0
             ? specialScores.sort((a, b) => a - b)[Math.floor(specialScores.length / 2)]
@@ -1121,7 +1126,6 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             pool.push({
                 name: `Sport_${dur}min`,
                 duration: dur,
-                // Sports score at the MEDIAN of available specials — fair competition
                 score: medianSpecialScore + idx,
                 type: 'sport',
                 _fromPool: true,
@@ -1129,49 +1133,40 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             });
         });
         
-        // Sort entire pool by rotation score (lowest = most overdue = best)
         pool.sort((a, b) => a.score - b.score);
         return pool;
     }
     
     // ─────────────────────────────────────────────────────────
-    // Knapsack solver: find best combo of activities that fills
-    // a time window exactly (or as close as possible)
+    // Knapsack solver
     // ─────────────────────────────────────────────────────────
     
     function packGap(pool, timeAvailable, constraints) {
         const { maxSpecials, maxSports, usedToday, needSpecials, needSports } = constraints;
         const usedSet = new Set((usedToday || []).map(n => n.toLowerCase()));
         
-        // Filter pool: remove same-day repeats (but keep sport slots, they're generic)
         const available = pool.filter(a => {
-            if (a.type === 'sport') return true; // sports are generic, solver picks
+            if (a.type === 'sport') return true;
             return !usedSet.has(a.name.toLowerCase());
         });
         
         if (available.length === 0) return [];
         
-        // Limit search depth based on gap size
         const maxItems = Math.min(6, Math.ceil(timeAvailable / 10));
         
         let bestCombo = null;
         let bestScore = Infinity;
         let bestRemainder = Infinity;
         
-        // ★★★ v3.2.4 FIX: Balance bonus — reward combos that mix types ★★★
-        // When both sports and specials are needed, combos containing both
-        // get a significant score reduction so the solver prefers balanced mixes.
         const bothNeeded = (needSpecials > 0 && needSports > 0);
         
         function getBalancedScore(totalScore, specCount, sportCount) {
             if (!bothNeeded) return totalScore;
-            // Combos with BOTH types get a big bonus (lower score = better)
             if (specCount > 0 && sportCount > 0) return totalScore - 500;
             return totalScore;
         }
         
         function search(idx, remaining, combo, totalScore, specCount, sportCount) {
-            // Perfect or near-perfect fit (within one activity duration of full)
             const fitThreshold = Math.min(sportDurMin, specialDur, 30);
             if (remaining >= 0 && remaining <= fitThreshold) {
                 const balancedScore = getBalancedScore(totalScore, specCount, sportCount);
@@ -1181,24 +1176,19 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                     bestScore = balancedScore;
                     bestRemainder = remaining;
                 }
-                // If perfect fit, done
                 if (remaining === 0 && (!bothNeeded || (specCount > 0 && sportCount > 0))) return;
             }
             
-            // Too deep or no time left
             if (remaining <= 0 || combo.length >= maxItems) return;
             
             for (let i = idx; i < available.length; i++) {
                 const act = available[i];
                 if (act.duration > remaining) continue;
                 
-                // Enforce type caps
                 if (act.type === 'special' && maxSpecials !== undefined && specCount >= maxSpecials) continue;
                 if (act.type === 'sport' && maxSports !== undefined && sportCount >= maxSports) continue;
                 
-                // No duplicate names in same combo (specials only; sports are generic)
                 if (act.type === 'special' && combo.some(c => c.name === act.name)) continue;
-                // Only 1 sport entry per duration in combo
                 if (act.type === 'sport' && combo.some(c => c.type === 'sport' && c.duration === act.duration)) continue;
                 
                 combo.push(act);
@@ -1212,53 +1202,40 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 );
                 combo.pop();
                 
-                // Early exit on perfect balanced fit
                 if (bestRemainder === 0 && (!bothNeeded || bestScore < 0)) return;
             }
         }
         
         search(0, timeAvailable, [], 0, 0, 0);
         
-        // If knapsack found nothing, fall back to greedy single pick
         if (!bestCombo || bestCombo.length === 0) {
-            // Just pick the first thing that fits
             const fits = available.filter(a => a.duration <= timeAvailable);
             if (fits.length > 0) {
                 bestCombo = [fits[0]];
             }
         }
         
-        // ★★★ v3.2.4: Enforce balance — if we need both but got only one type, force swap ★★★
+        // Balance enforcement
         if (bestCombo && bestCombo.length >= 2 && bothNeeded) {
             const specInCombo = bestCombo.filter(c => c.type === 'special').length;
             const sportInCombo = bestCombo.filter(c => c.type === 'sport').length;
             
             if (specInCombo === 0) {
-                // All sports — swap the last sport for the best-fitting special
                 const specCand = available.find(a => a.type === 'special' && a.duration <= (bestCombo[bestCombo.length - 1]?.duration || timeAvailable));
-                if (specCand) {
-                    bestCombo[bestCombo.length - 1] = specCand;
-                }
+                if (specCand) bestCombo[bestCombo.length - 1] = specCand;
             } else if (sportInCombo === 0) {
-                // All specials — swap the last special for the best-fitting sport
                 const sportCand = available.find(a => a.type === 'sport' && a.duration <= (bestCombo[bestCombo.length - 1]?.duration || timeAvailable));
-                if (sportCand) {
-                    bestCombo[bestCombo.length - 1] = sportCand;
-                }
+                if (sportCand) bestCombo[bestCombo.length - 1] = sportCand;
             }
         }
         
-        // Ensure minimums are met: if we need specials but got none, swap a sport
         if (bestCombo && needSpecials > 0) {
             const specInCombo = bestCombo.filter(c => c.type === 'special').length;
             if (specInCombo === 0) {
-                // Try to replace a sport with a special
                 const specCand = available.find(a => a.type === 'special' && a.duration <= timeAvailable);
                 if (specCand) {
                     const sportIdx = bestCombo.findIndex(c => c.type === 'sport');
-                    if (sportIdx >= 0) {
-                        bestCombo[sportIdx] = specCand;
-                    }
+                    if (sportIdx >= 0) bestCombo[sportIdx] = specCand;
                 }
             }
         }
@@ -1268,17 +1245,11 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     
     // ─────────────────────────────────────────────────────────
     // ★★★ v3.2.7: Pre-compute UNIFORM gap templates ★★★
-    // All bunks must use the SAME time boundaries within each gap.
-    // Otherwise DivisionTimesSystem creates a superset timeline with
-    // mismatched boundaries (e.g., bunk1 splits at 11:30, bunk3 at 11:50)
-    // producing 20min and 10min slots in the grid.
     // ─────────────────────────────────────────────────────────
     
-    // Get the shared gaps (between pinned/fixed events — same for all bunks)
     const sharedOccupied = getSharedOccupied(bunkState, bunks);
     const sharedGaps = findGaps(sharedOccupied, divTimes);
     
-    // For each shared gap, compute a standard block template
     const gapTemplates = {};
     sharedGaps.forEach(gap => {
         const gapDur = gap.endMin - gap.startMin;
@@ -1287,7 +1258,6 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         const template = [];
         let cursor = gap.startMin;
         
-        // Alternate between special and sport durations
         let useSpecial = true;
         while (cursor + minActivityDur <= gap.endMin) {
             const remaining = gap.endMin - cursor;
@@ -1299,12 +1269,15 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 blockDur = Math.min(sportDurMin, remaining, maxActivityDur);
             }
             
-            // If remaining is less than 2 blocks, give it all to one block (capped at max)
             if (remaining < minActivityDur * 2 && remaining <= maxActivityDur) {
                 blockDur = remaining;
             }
             
             if (blockDur < minActivityDur) break;
+            
+            // ★★★ v3.2.8 FIX #2: Cap block duration at maxActivityDur ★★★
+            // Prevents creating oversized blocks (e.g., 120min) when gap is large.
+            blockDur = Math.min(blockDur, maxActivityDur);
             
             template.push({
                 startMin: cursor,
@@ -1317,13 +1290,24 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             useSpecial = !useSpecial;
         }
         
-        // If there's a small remainder, extend the last block
+        // If there's a small remainder, extend the last block (but not beyond max)
         if (cursor < gap.endMin && template.length > 0) {
             const last = template[template.length - 1];
             const extended = last.duration + (gap.endMin - cursor);
             if (extended <= maxActivityDur) {
                 last.endMin = gap.endMin;
                 last.duration = extended;
+            } else {
+                // ★★★ v3.2.8: Remainder too large to absorb — add another block ★★★
+                const remainderDur = gap.endMin - cursor;
+                if (remainderDur >= minActivityDur) {
+                    template.push({
+                        startMin: cursor,
+                        endMin: gap.endMin,
+                        duration: remainderDur,
+                        preferredType: useSpecial ? 'special' : 'sport'
+                    });
+                }
             }
         }
         
@@ -1350,35 +1334,26 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         
         log(`    ${bunk}: ${gapsCopy.length} gaps (${totalGapMinutes}min total), already ${state.specialCount} specials`);
         
-        // Track what's been used today (for no same-day repeats)
         const usedToday = [];
         bunkTimelines[bunk].forEach(t => {
             if (t.event && t.event !== 'Change') usedToday.push(t.event);
             if (t._hintActivity) usedToday.push(t._hintActivity);
         });
         
-        // Track layer fulfillment
         let placedSpecials = state.specialCount;
         let placedSports = state.sportCount;
         
-        // Calculate remaining needs
         const specialMaxCap = specialReq.max < Infinity ? specialReq.max : 999;
         const sportMaxCap = sportReq.max < Infinity ? sportReq.max : 999;
         let specialsStillNeeded = Math.max(0, specialReq.min - placedSpecials);
         let sportsStillNeeded = Math.max(0, sportReq.min - placedSports);
         
-        // ─────────────────────────────────────────────────────
-        // For each gap (= activity group), run the packer
-        // ─────────────────────────────────────────────────────
-        
         for (const gap of gapsCopy) {
             const groupDuration = gap.endMin - gap.startMin;
             if (groupDuration < 5) continue;
             
-            // ★★★ v3.2.7: Use shared gap template for uniform boundaries ★★★
             let template = gapTemplates[gap.startMin];
             
-            // Fallback: if bunk-specific occupied shifted the gap, find closest template
             if (!template) {
                 const templateKeys = Object.keys(gapTemplates).map(Number);
                 const closest = templateKeys.find(k => Math.abs(k - gap.startMin) <= 5);
@@ -1386,7 +1361,6 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             }
             
             if (!template || template.length === 0) {
-                // No template at all — create uniform blocks manually
                 log(`      ${bunk}: No template for gap ${fmtTime(gap.startMin)}-${fmtTime(gap.endMin)}, creating uniform blocks`);
                 template = [];
                 let tc = gap.startMin;
@@ -1395,6 +1369,8 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                     const tRemaining = gap.endMin - tc;
                     let tDur = tUseSpec ? Math.min(specialDur, tRemaining, maxActivityDur) : Math.min(sportDurMin, tRemaining, maxActivityDur);
                     if (tRemaining < minActivityDur * 2 && tRemaining <= maxActivityDur) tDur = tRemaining;
+                    // ★★★ v3.2.8: Cap at maxActivityDur ★★★
+                    tDur = Math.min(tDur, maxActivityDur);
                     if (tDur < minActivityDur) break;
                     template.push({ startMin: tc, endMin: tc + tDur, duration: tDur, preferredType: tUseSpec ? 'special' : 'sport' });
                     tc += tDur;
@@ -1403,16 +1379,13 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 if (template.length === 0) continue;
             }
             
-            // Build the activity pool for this bunk/gap
             const pool = buildActivityPool(bunk, gap.startMin);
             
-            // For each template slot, pick the best activity from the pool
             for (const tmpl of template) {
                 const blockStart = tmpl.startMin;
                 const blockEnd = tmpl.endMin;
                 const blockDur = tmpl.duration;
                 
-                // Determine type: use template preference, but respect remaining needs
                 let pickType = tmpl.preferredType;
                 if (pickType === 'special' && specialsStillNeeded <= 0 && sportsStillNeeded > 0) {
                     pickType = 'sport';
@@ -1420,7 +1393,6 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                     pickType = 'special';
                 }
                 
-                // Check capacity — if no specials available, fall back to sport
                 if (pickType === 'special') {
                     const availableSpecials = pool.filter(p => p.type === 'special' && !usedToday.includes(p.name.toLowerCase()));
                     if (availableSpecials.length === 0) pickType = 'sport';
@@ -1429,7 +1401,6 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 const isSpecial = pickType === 'special';
                 const eventLabel = isSpecial ? 'Special Activity' : 'Sports Slot';
                 
-                // Pick a specific activity from pool for hints/overrides
                 let hintActivity = null;
                 if (isSpecial) {
                     const specCandidates = pool.filter(p => p.type === 'special' && !usedToday.map(u => u.toLowerCase()).includes(p.name.toLowerCase()));
@@ -1502,9 +1473,6 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             }
         }
         
-        // ─────────────────────────────────────────────────────
-        // Verify layer rules are satisfied
-        // ─────────────────────────────────────────────────────
         if (specialReq.min > 0 && placedSpecials < specialReq.min) {
             warnings.push(`${bunk}: Only ${placedSpecials}/${specialReq.min} specials placed`);
         }
@@ -1588,6 +1556,57 @@ function findBestPlacement(windowStart, windowEnd, duration, occupied, divTimes)
 }
 
 /**
+ * ★★★ v3.2.8 NEW: Find alternative placement for a specific bunk's fixed event
+ * when a scarce override creates a conflict. Searches:
+ * 1. Within the original window (different time than main placement)
+ * 2. Right after the scarce activity ends
+ * 3. Right before the scarce activity starts
+ */
+function findPerBunkFixedPlacement(bunk, bunkOccupied, eventName, duration, windowStart, windowEnd, divTimes) {
+    // Strategy 1: Find a gap within the original window
+    for (let start = windowStart; start + duration <= windowEnd; start += 5) {
+        const end = start + duration;
+        const hasConflict = bunkOccupied.some(o =>
+            start < o.endMin && end > o.startMin
+        );
+        if (!hasConflict) {
+            return { startMin: start, endMin: end };
+        }
+    }
+    
+    // Strategy 2: Place right after the conflicting scarce activity
+    const scarceBlocks = bunkOccupied.filter(o => o.type === 'scarce_special');
+    for (const scarce of scarceBlocks) {
+        const afterStart = scarce.endMin;
+        const afterEnd = afterStart + duration;
+        if (afterEnd <= divTimes.end) {
+            const hasConflict = bunkOccupied.some(o =>
+                afterStart < o.endMin && afterEnd > o.startMin
+            );
+            if (!hasConflict) {
+                return { startMin: afterStart, endMin: afterEnd };
+            }
+        }
+    }
+    
+    // Strategy 3: Place right before the conflicting scarce activity
+    for (const scarce of scarceBlocks) {
+        const beforeEnd = scarce.startMin;
+        const beforeStart = beforeEnd - duration;
+        if (beforeStart >= divTimes.start) {
+            const hasConflict = bunkOccupied.some(o =>
+                beforeStart < o.endMin && beforeEnd > o.startMin
+            );
+            if (!hasConflict) {
+                return { startMin: beforeStart, endMin: beforeEnd };
+            }
+        }
+    }
+    
+    return null;
+}
+
+/**
  * Find free gaps in a bunk's timeline
  */
 function findGaps(occupied, divTimes) {
@@ -1620,7 +1639,6 @@ function findGaps(occupied, divTimes) {
 
 /**
  * Get total required quantity from layers
- * ★ v3.1: Handle both DAW format (qty) and Planner format (quantity)
  */
 function getRequiredQuantity(layers) {
     if (layers.length === 0) return 0;
