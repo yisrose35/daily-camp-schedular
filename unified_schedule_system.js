@@ -1119,6 +1119,7 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
         }
 
         return true;
+    }
 
 
     function calculatePenaltyCost(bunk, slots, pick, fieldUsageBySlot, activityProps) {
