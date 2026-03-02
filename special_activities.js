@@ -497,7 +497,7 @@ function summarySchedulingMode(item) {
     if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return 'Individual — 1 bunk at a time';
     return 'Individual — up to ' + (parseInt(item.sharableWith.capacity, 10) || 2) + ' bunks at once';
 }
-}function summaryAccess(item) { if (!item.limitUsage?.enabled) return "Open to all grades"; const c = Object.keys(item.limitUsage.divisions||{}).length; if (c===0) return "\u26A0 Restricted (none selected)"; return c + ' grade' + (c!==1?'s':'') + ' allowed' + (item.limitUsage.usePriority?" \u00B7 prioritized":""); }
+function summaryAccess(item) { if (!item.limitUsage?.enabled) return "Open to all grades"; const c = Object.keys(item.limitUsage.divisions||{}).length; if (c===0) return "\u26A0 Restricted (none selected)"; return c + ' grade' + (c!==1?'s':'') + ' allowed' + (item.limitUsage.usePriority?" \u00B7 prioritized":""); }
 function summaryTime(item) { const c = (item.timeRules||[]).length; return c ? c + ' rule(s) active' : "Available all day"; }
 function summaryWeather(item) {
     let s = item.isIndoor ? 'Indoor · Rainy day available' : 'Outdoor · Disabled on rain';
