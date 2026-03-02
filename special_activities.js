@@ -281,6 +281,7 @@ function loadData() {
 }
 
 function refreshFromStorage() {
+    if (_isSaving) return;
     const pS = JSON.stringify(specialActivities), pR = JSON.stringify(rainyDayActivities), pSel = selectedItemId;
     loadData();
     if (selectedItemId) { const [, n] = selectedItemId.split(/-(.+)/); if (!specialActivities.some(s=>s.name===n) && !rainyDayActivities.some(s=>s.name===n)) selectedItemId = null; }
@@ -289,8 +290,10 @@ function refreshFromStorage() {
     }
 }
 
+let _isSaving = false;
 function saveData() {
     if (window.AccessControl?.canEditSetup && !window.AccessControl.canEditSetup()) return;
+    _isSaving = true;
     try {
         specialActivities = validateAllActivities(specialActivities);
         rainyDayActivities = validateAllActivities(rainyDayActivities);
@@ -300,6 +303,7 @@ function saveData() {
             window._specialActivitiesSyncTimeout = setTimeout(() => { window.forceSyncToCloud(); window._specialActivitiesSyncTimeout = null; }, 500);
         }
     } catch (e) { console.error("[SPECIAL_ACTIVITIES] Error saving data:", e); }
+    finally { setTimeout(() => { _isSaving = false; }, 300); }
 }
 
 function renderMasterList() {
@@ -449,8 +453,7 @@ function renderDetailPane() {
         rotationSections.push(section("Activity Duration", summaryDuration(item), () => renderDurationSettings(item)));
     }
     rotationSections.push(section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)));
-    rotationSections.push(section("Fluid Scheduling", summaryFluidMode(item), () => renderFluidModeSettings(item)));
-    detailPaneEl.appendChild(sectionGroup("Rotation Rules", "Limits, timing & scheduling mode", rotationSections));}
+   detailPaneEl.appendChild(sectionGroup("Rotation Rules", "Limits, timing & scheduling mode", rotationSections));
 
 // =========================================================================
 // SUMMARY HELPERS
@@ -469,24 +472,12 @@ function summaryMaxUsage(item) {
     if (item.prepDuration > 0) return d + 'min (+' + item.prepDuration + 'min prep = ' + total + 'min total)';
     return d + ' minutes';
 }
-function summaryFluidMode(item) {
-    var parts = [];
-    if (item.mustScheduleWhenAvailable) parts.push('Must schedule');
-    if (item.availableDays && item.availableDays.length > 0) parts.push(item.availableDays.map(function(d){return d.charAt(0).toUpperCase()+d.slice(0,3);}).join(', '));
-    return parts.length > 0 ? parts.join(' \u00b7 ') : 'Standard rotation';
-}
-    function summaryDuration(item) {
+function summaryDuration(item) {
     var d = parseInt(item.duration) || 0;
     if (d <= 0) return 'Not set';
     var total = d + (parseInt(item.prepDuration) || 0);
     if (item.prepDuration > 0) return d + 'min (+' + item.prepDuration + 'min prep = ' + total + 'min total)';
     return d + ' minutes';
-}
-function summaryFluidMode(item) {
-    var parts = [];
-    if (item.mustScheduleWhenAvailable) parts.push('Must schedule');
-    if (item.availableDays && item.availableDays.length > 0) parts.push(item.availableDays.map(function(d){return d.charAt(0).toUpperCase()+d.slice(0,3);}).join(', '));
-    return parts.length > 0 ? parts.join(' · ') : 'Standard rotation';
 }
 function summaryFullGrade(item) { return item.fullGrade ? 'Entire grade does it together' : 'Off (normal rotation)'; }
 function summarySharing(item) { if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "No sharing (1 bunk only)"; return 'Up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks (same grade)'; }
