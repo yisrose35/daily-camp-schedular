@@ -256,11 +256,14 @@ supersetBlocks.push({
     _supersetSlot: true
 });
                 }
-               // ★★★ v1.3.2 FIX: Merge undersized superset slots ★★★
+               // ★★★ v1.3.3 FIX: Merge undersized superset slots, but NEVER pinned events ★★★
                 // Per-bunk blocks create boundaries at different times (e.g., bunk1 ends at 11:30,
                 // bunk3 ends at 11:50). Collecting ALL boundaries creates 20min and 10min slots.
                 // Merge any slot shorter than 25min with the next slot to maintain minimum durations.
+                // EXCEPTION: Pinned events (snacks, lunch, dismissal, etc.) must NEVER be merged,
+                // even if undersized — they need their own slot so the scheduler assigns them to all bunks.
                 const MIN_SLOT_DUR = 25;
+                const NEVER_MERGE_EVENTS = ['lunch', 'snack', 'snacks', 'dismissal', 'arrival', 'davening', 'tefillah', 'mincha', 'regroup', 'lineup', 'swim', 'free play'];
                 const merged = [];
                 for (let mi = 0; mi < supersetBlocks.length; mi++) {
                     const curr = supersetBlocks[mi];
@@ -268,7 +271,11 @@ supersetBlocks.push({
                     const currEnd = parseTimeToMinutes(curr.endTime);
                     const currDur = currEnd - currStart;
                     
-                    if (currDur < MIN_SLOT_DUR && mi + 1 < supersetBlocks.length) {
+                    // ★★★ v1.3.3: Never merge pinned events — they must keep their own slot ★★★
+                    const currIsPinned = curr.type === 'pinned' || 
+                        NEVER_MERGE_EVENTS.some(p => (curr.event || '').toLowerCase().includes(p));
+                    
+                    if (currDur < MIN_SLOT_DUR && !currIsPinned && mi + 1 < supersetBlocks.length) {
                         const next = supersetBlocks[mi + 1];
                         const nextEnd = parseTimeToMinutes(next.endTime);
                         const mergedDur = nextEnd - currStart;
@@ -281,12 +288,15 @@ supersetBlocks.push({
                             _merged: true
                         });
                         mi++;
-                    } else if (currDur < MIN_SLOT_DUR && merged.length > 0) {
+                    } else if (currDur < MIN_SLOT_DUR && !currIsPinned && merged.length > 0) {
                         const prev = merged[merged.length - 1];
                         log(`    ★ Merging trailing undersized slot ${curr.startTime}-${curr.endTime} (${currDur}min) into prev → ${prev.startTime}-${curr.endTime}`);
                         prev.endTime = curr.endTime;
                         prev._merged = true;
                     } else {
+                        if (currIsPinned && currDur < MIN_SLOT_DUR) {
+                            log(`    🛡️ Preserving pinned event "${curr.event}" ${curr.startTime}-${curr.endTime} (${currDur}min) — not merging`);
+                        }
                         merged.push(curr);
                     }
                 }
