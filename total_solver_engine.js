@@ -1207,7 +1207,11 @@ else penalty += 200;
                 var blocked = false;
                 if (blk.startTime!==undefined && blk.endTime!==undefined && blk.divName) { if (S.checkCrossDivisionTimeConflict(c3.field,blk.divName,blk.startTime,blk.endTime,blk.bunk)) blocked = true; }
                 if (blocked) { pk = {field:"Free",sport:null,_activity:"Free"}; S._assignedBlocks.add(bi3); S._assignments.set(bi3,{candIdx:-1,pick:pk,cost:100000}); S.applyPickToSchedule(blk,pk); }
-                else { var cost = S.calculatePenaltyCost(blk,pk); S._assignedBlocks.add(bi3); S._assignments.set(bi3,{candIdx:ci3,pick:pk,cost:cost}); S.applyPickToSchedule(blk,pk); var fn = normName(pk.field); if (blk.startTime!==undefined && blk.endTime!==undefined) { var pan = normName(pk._activity); S.addToFieldTimeIndex(fn,blk.startTime,blk.endTime,blk.bunk,blk.divName,pan); if (pan && pan!==fn) S.addToFieldTimeIndex(pan,blk.startTime,blk.endTime,blk.bunk,blk.divName,pan); } S.invalidateRotationCacheForBunk(blk.bunk); }
+                else { var cost = S.calculatePenaltyCost(blk,pk);
+                // ★ Scheduling constraint penalties
+                if (window.getSequenceConstraintPenalty) { var seqPen = window.getSequenceConstraintPenalty(blk.bunk, normName(pk._activity || pk.field), blk.slots?.[0], blk.divName); if (seqPen >= 50000) cost += seqPen; }
+                if (window.getLocationCooldownPenalty && pk.field) { var coolPen = window.getLocationCooldownPenalty(normName(pk.field), blk.slots?.[0], blk.bunk, blk.divName); if (coolPen >= 50000) cost += coolPen; }
+ S._assignedBlocks.add(bi3); S._assignments.set(bi3,{candIdx:ci3,pick:pk,cost:cost}); S.applyPickToSchedule(blk,pk); var fn = normName(pk.field); if (blk.startTime!==undefined && blk.endTime!==undefined) { var pan = normName(pk._activity); S.addToFieldTimeIndex(fn,blk.startTime,blk.endTime,blk.bunk,blk.divName,pan); if (pan && pan!==fn) S.addToFieldTimeIndex(pan,blk.startTime,blk.endTime,blk.bunk,blk.divName,pan); } S.invalidateRotationCacheForBunk(blk.bunk); }
                 autoAssigned++;
                 var nb = overlaps.get(bi3) || new Set();
                 for (var ni of nb) { if (S._assignedBlocks.has(ni)) continue; var nd = S._domains.get(ni); if (!nd) continue; var chg=false; for (var nci of Array.from(nd)) { if (wouldConflict(blk,pk,activityBlocks[ni],allCands[nci])) { nd.delete(nci); chg=true; propagated++; } } if (chg) queue.add(ni); }
