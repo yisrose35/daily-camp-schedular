@@ -399,8 +399,11 @@
             }
         }
         
-        const fName = Utils.fieldLabel(pick.field);
-        const trans = Utils.getTransitionRules(fName, activityProperties);
+       const fName = Utils.fieldLabel(pick.field);
+        // ★ PREP LOCATION OVERRIDE: use different location for prep blocks
+        const effectiveLocation = block._isPrepBlock && block._prepLocation ? block._prepLocation : fName;
+        const trans = Utils.getTransitionRules(effectiveLocation, activityProperties);
+
         const {
             blockStartMin,
             blockEndMin,
