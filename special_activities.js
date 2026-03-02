@@ -476,7 +476,7 @@ function renderDetailPane() {
 function summaryPrepDuration(item) {
     if (!item.prepDuration || item.prepDuration <= 0) return 'None';
     var txt = item.prepDuration + 'min prep';
-    if (item.prepLocation) txt += ' @ ' + item.prepLocation;
+    if (item.prepLocation) txt += ' - ' + item.prepLocation;
     return txt;
 }
 function summaryMaxUsage(item) {
