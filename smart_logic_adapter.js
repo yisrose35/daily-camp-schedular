@@ -801,7 +801,10 @@
             }
 // ★★★ FULL GRADE CHECK FOR BLOCK A ★★★
             if (!effectiveA.allFallback) {
-                const fullGradeActA = Object.values(block1).find(act => act && (activityProps[act]?.fullGrade || activityProps[act]?._fullGrade));
+                const fullGradeActA = Object.values(block1).find(act => {
+                    if (!act) return false;
+                    return window.isFullGradeForDivision ? window.isFullGradeForDivision(act, job.division || '') : (activityProps[act]?.fullGrade || activityProps[act]?._fullGrade);
+                });
                 if (fullGradeActA) {
                     log(`\n  ★ FULL GRADE OVERRIDE (Block A): "${fullGradeActA}" → ALL ${bunks.length} bunks`);
                     bunks.forEach(bunk => { block1[bunk] = fullGradeActA; });
