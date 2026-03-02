@@ -174,6 +174,33 @@ function getSpecialTimeWindow(specialConfig) {
             endMin: typeof end === 'number' ? end : parseTime(end)
         };
     }
+    
+    // ★★★ v3.2.8 FIX: Fall back to timeRules from Special Activities UI ★★★
+    // The UI stores time restrictions as timeRules array, not as direct properties.
+    // Extract the tightest "Available" window from timeRules.
+    if (Array.isArray(specialConfig.timeRules) && specialConfig.timeRules.length > 0) {
+        const availableRules = specialConfig.timeRules.filter(r => 
+            r.type === 'Available' || !r.type
+        );
+        
+        if (availableRules.length > 0) {
+            // Use the broadest available window (earliest start, latest end)
+            let earliest = Infinity, latest = -Infinity;
+            
+            for (const rule of availableRules) {
+                const rStart = rule.startMin ?? (rule.start ? parseTime(rule.start) : null);
+                const rEnd = rule.endMin ?? (rule.end ? parseTime(rule.end) : null);
+                
+                if (rStart != null && rStart < earliest) earliest = rStart;
+                if (rEnd != null && rEnd > latest) latest = rEnd;
+            }
+            
+            if (earliest < Infinity && latest > -Infinity) {
+                return { startMin: earliest, endMin: latest };
+            }
+        }
+    }
+    
     return null;
 }
 
