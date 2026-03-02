@@ -1,11 +1,10 @@
 // ============================================================================
-// scheduling_rules.js — CAMPISTRY RULES TAB (v2.0)
+// scheduling_rules.js — CAMPISTRY RULES TAB (v2.1)
 // ============================================================================
-// Renders the "Rules" tab with expandable sections for all constraint types.
-// Sections:
+// Renders the "Rules" tab with expandable sections:
 //   1. Activity Sequence Rules
 //   2. Pinned Tile Location Cooldowns
-//   3. Sports Rules (min/max players — moved from fields.js)
+//   3. Sports Player Requirements (moved from fields.js)
 //
 // Data storage:
 //   - Sequence rules → globalSettings.schedulingConstraints.sequenceRules
@@ -20,8 +19,6 @@
 'use strict';
 
 console.log('[SchedulingRules] Loading Rules tab...');
-
-let _isInitialized = false;
 
 // =========================================================================
 // DATA ACCESS
@@ -38,19 +35,19 @@ function saveSettings(key, value) {
 }
 
 function getSequenceRules() {
-    const settings = loadSettings();
-    return settings.schedulingConstraints?.sequenceRules || [];
+    var settings = loadSettings();
+    return (settings.schedulingConstraints && settings.schedulingConstraints.sequenceRules) ? settings.schedulingConstraints.sequenceRules : [];
 }
 
 function saveSequenceRules(rules) {
-    const settings = loadSettings();
+    var settings = loadSettings();
     if (!settings.schedulingConstraints) settings.schedulingConstraints = {};
     settings.schedulingConstraints.sequenceRules = rules;
     saveSettings('schedulingConstraints', settings.schedulingConstraints);
 }
 
 function getPinnedTileDefaults() {
-    const settings = loadSettings();
+    var settings = loadSettings();
     return settings.pinnedTileDefaults || {};
 }
 
@@ -59,12 +56,12 @@ function savePinnedTileDefaults(defaults) {
 }
 
 function getSportMetaData() {
-    const settings = loadSettings();
-    return settings.app1?.sportMetaData || {};
+    var settings = loadSettings();
+    return (settings.app1 && settings.app1.sportMetaData) ? settings.app1.sportMetaData : {};
 }
 
 function saveSportMetaData(meta) {
-    const settings = loadSettings();
+    var settings = loadSettings();
     if (!settings.app1) settings.app1 = {};
     settings.app1.sportMetaData = meta;
     saveSettings('app1', settings.app1);
@@ -74,35 +71,35 @@ function saveSportMetaData(meta) {
 }
 
 function getAllActivityNames() {
-    const settings = loadSettings();
-    const app1 = settings.app1 || {};
-    const names = new Set();
+    var settings = loadSettings();
+    var app1 = settings.app1 || {};
+    var names = new Set();
 
-    (app1.fields || []).forEach(f => {
+    (app1.fields || []).forEach(function(f) {
         if (f.name) names.add(f.name);
-        (f.activities || []).forEach(a => names.add(a));
+        (f.activities || []).forEach(function(a) { names.add(a); });
     });
 
-    (app1.specialActivities || []).forEach(s => {
+    (app1.specialActivities || []).forEach(function(s) {
         if (s.name) names.add(s.name);
     });
 
-    Object.keys(getPinnedTileDefaults()).forEach(k => names.add(k));
+    Object.keys(getPinnedTileDefaults()).forEach(function(k) { names.add(k); });
 
-    return [...names].sort((a, b) => a.localeCompare(b));
+    return Array.from(names).sort(function(a, b) { return a.localeCompare(b); });
 }
 
 function getAllSportsFromFields() {
     if (window.getAllGlobalSports) {
         return window.getAllGlobalSports();
     }
-    const settings = loadSettings();
-    const fields = settings.app1?.fields || [];
-    const sports = new Set();
-    fields.forEach(f => {
-        (f.activities || []).forEach(a => sports.add(a));
+    var settings = loadSettings();
+    var fields = (settings.app1 && settings.app1.fields) ? settings.app1.fields : [];
+    var sports = new Set();
+    fields.forEach(function(f) {
+        (f.activities || []).forEach(function(a) { sports.add(a); });
     });
-    return [...sports].sort();
+    return Array.from(sports).sort();
 }
 
 // =========================================================================
@@ -121,7 +118,6 @@ function esc(str) {
 function renderRulesTab(container) {
     container.innerHTML = '';
 
-    // Wrapper matching setup-grid pattern
     var wrapper = document.createElement('div');
     wrapper.className = 'setup-grid';
 
@@ -129,12 +125,11 @@ function renderRulesTab(container) {
     card.className = 'setup-card setup-card-wide';
     card.style.cssText = 'border:none; box-shadow:none; background:transparent;';
 
-    // Header — matches fields.js / special_activities.js pattern
     card.innerHTML = '<div class="setup-card-header" style="margin-bottom:20px;">' +
         '<span class="setup-step-pill">Rules</span>' +
         '<div class="setup-card-text">' +
         '<h3>Scheduling Rules</h3>' +
-        '<p>Configure constraints the scheduler enforces during generation and manual edits.</p>' +
+        '<p>Set constraints the scheduler follows when building and editing the daily schedule.</p>' +
         '</div></div>';
 
     card.appendChild(renderSequenceRulesSection());
@@ -163,7 +158,7 @@ function createSection(title, description) {
         '<div class="detail-section-summary" style="margin-top:2px;">' + description + '</div>';
 
     var caret = document.createElement('span');
-    caret.style.cssText = 'transition:transform 0.2s; color:var(--slate-400, #94A3B8);';
+    caret.style.cssText = 'transition:transform 0.2s; color:var(--slate-400, #94A3B8); transform:rotate(-90deg);';
     caret.innerHTML = '<svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>';
 
     header.appendChild(titleEl);
@@ -171,7 +166,7 @@ function createSection(title, description) {
 
     var body = document.createElement('div');
     body.className = 'detail-section-body';
-    body.style.display = 'block';
+    body.style.display = 'none';
 
     header.onclick = function() {
         var isOpen = body.style.display !== 'none';
@@ -191,7 +186,7 @@ function createSection(title, description) {
 function renderSequenceRulesSection() {
     var section = createSection(
         'Activity Sequence Rules',
-        'Prevent activities from being scheduled immediately before or after each other.'
+        'Control which activities can or can\'t be scheduled back-to-back.'
     );
 
     var body = section.querySelector('.detail-section-body');
@@ -286,9 +281,7 @@ function renderSequenceRulesSection() {
 
     var hint = document.createElement('div');
     hint.style.cssText = 'margin-top:12px; font-size:0.8rem; color:var(--slate-500, #6B7280); padding:12px; background:var(--slate-50, #F9FAFB); border-radius:var(--radius-sm, 8px); border-left:3px solid var(--teal-primary, #147D91); line-height:1.5;';
-    hint.innerHTML = '<strong>Example:</strong> If you add "Swim cannot be right before Art", ' +
-        'the scheduler will never place Art in the slot immediately after Swim for any bunk. ' +
-        'During manual edits, a warning dialog will appear with an option to override.';
+    hint.innerHTML = '<strong>Example:</strong> "Swim cannot be right before Art" means no bunk will ever have Art scheduled in the slot right after Swim.';
     body.appendChild(hint);
 
     return section;
@@ -301,7 +294,7 @@ function renderSequenceRulesSection() {
 function renderCooldownSection() {
     var section = createSection(
         'Location Cooldowns',
-        'Block a location for extra time slots after a pinned tile ends.'
+        'Keep a location empty for a set number of slots after Lunch, Snack, etc.'
     );
 
     var body = section.querySelector('.detail-section-body');
@@ -379,16 +372,14 @@ function renderCooldownSection() {
 
     var infoBox = document.createElement('div');
     infoBox.style.cssText = 'margin-top:12px; font-size:0.8rem; color:var(--slate-500, #6B7280); padding:12px; background:var(--slate-50, #F9FAFB); border-radius:var(--radius-sm, 8px); border-left:3px solid var(--teal-primary, #147D91); line-height:1.5;';
-    infoBox.innerHTML = '<strong>How it works:</strong> If "Lunch" occupies "Gym" with cooldown = 1, ' +
-        'the scheduler won\'t place any activity in the Gym for 1 additional slot after Lunch. ' +
-        'Enforced during both auto-generate and manual edits. Set to 0 for no cooldown.';
+    infoBox.innerHTML = '<strong>Example:</strong> Lunch in the Gym with cooldown = 1 means the Gym stays empty for 1 extra slot after Lunch ends. Set to 0 for no cooldown.';
     body.appendChild(infoBox);
 
     return section;
 }
 
 // =========================================================================
-// SECTION 3: SPORTS RULES (moved from fields.js)
+// SECTION 3: SPORTS PLAYER REQUIREMENTS (moved from fields.js)
 // =========================================================================
 
 function renderSportRulesSection() {
@@ -398,7 +389,7 @@ function renderSportRulesSection() {
     var section = createSection(
         'Sports Player Requirements',
         allSports.length > 0
-            ? allSports.length + ' sport' + (allSports.length !== 1 ? 's' : '') + ' configured'
+            ? 'Set how many players each sport needs so the scheduler picks the right matchups.'
             : 'No sports configured yet.'
     );
 
@@ -414,10 +405,7 @@ function renderSportRulesSection() {
 
     var hintBox = document.createElement('div');
     hintBox.style.cssText = 'font-size:0.8rem; color:var(--slate-500, #6B7280); padding:12px; background:var(--slate-50, #F9FAFB); border-radius:var(--radius-sm, 8px); border-left:3px solid var(--teal-primary, #147D91); line-height:1.5; margin-bottom:16px;';
-    hintBox.innerHTML = '<strong>How this works:</strong> Set minimum and maximum players for each sport. ' +
-        'The scheduler will try to match bunks appropriately based on their sizes. ' +
-        'If a bunk is too small, it may be paired with another bunk. ' +
-        'If combined bunks are slightly over the max, the scheduler will still prefer a valid sport over "Free".';
+    hintBox.innerHTML = '<strong>How this works:</strong> Set min and max players per sport. The scheduler uses these to pair bunks by size and pick appropriate matchups.';
     body.appendChild(hintBox);
 
     var list = document.createElement('div');
@@ -529,7 +517,6 @@ function initRulesTab() {
     }
 
     renderRulesTab(container);
-    _isInitialized = true;
     console.log('[SchedulingRules] Rules tab initialized');
 }
 
