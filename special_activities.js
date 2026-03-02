@@ -151,8 +151,11 @@ function validateSpecialActivity(activity, activityName) {
         location: activity.location || null, isIndoor, rainyDayAvailable: isIndoor, availableOnRainyDay: isIndoor,
        ...(activity.rainyDayCapacity > 0 ? { rainyDayCapacity: parseInt(activity.rainyDayCapacity, 10) } : {}),
         ...(activity.rainyDayAvailableAllDay === true ? { rainyDayAvailableAllDay: true } : {}),
-        fullGrade: activity.fullGrade === true,
+       fullGrade: activity.fullGrade === true,
+        fullGradePerGrade: (activity.fullGradePerGrade && typeof activity.fullGradePerGrade === 'object') ? activity.fullGradePerGrade : undefined,
         // ★ v3.7: Multi-Part Special support (simple N parts)
+
+
         multiPart: activity.multiPart && typeof activity.multiPart === 'object' ? {
             enabled: activity.multiPart.enabled === true,
             totalParts: (function() { var tp = parseInt(activity.multiPart.totalParts, 10); return (!isNaN(tp) && tp >= 2 && tp <= 10) ? tp : 2; })(),
@@ -480,9 +483,20 @@ function summaryMaxUsage(item) {
 function summaryFullGrade(item) { return item.fullGrade ? 'Full grade together' : 'Individual bunks'; }
 function summarySharing(item) { if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "1 bunk at a time"; return 'Up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks at once'; }
 function summarySchedulingMode(item) {
+    if (item.fullGradePerGrade && typeof item.fullGradePerGrade === 'object'
+        && Object.keys(item.fullGradePerGrade).length > 0) {
+        var fullCount = 0, indivCount = 0;
+        var allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+        allDivs.forEach(function(div) {
+            if (window.isFullGradeForDivision?.(item.name, div)) fullCount++; else indivCount++;
+        });
+        if (fullCount > 0 && indivCount > 0) return 'Mixed — ' + fullCount + ' full grade, ' + indivCount + ' individual';
+        if (fullCount === allDivs.length) return 'Full grade — all bunks together';
+    }
     if (item.fullGrade) return 'Full grade — all bunks together';
     if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return 'Individual — 1 bunk at a time';
-    return 'Individual — up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks at once';
+    return 'Individual — up to ' + (parseInt(item.sharableWith.capacity, 10) || 2) + ' bunks at once';
+}
 }function summaryAccess(item) { if (!item.limitUsage?.enabled) return "Open to all grades"; const c = Object.keys(item.limitUsage.divisions||{}).length; if (c===0) return "\u26A0 Restricted (none selected)"; return c + ' grade' + (c!==1?'s':'') + ' allowed' + (item.limitUsage.usePriority?" \u00B7 prioritized":""); }
 function summaryTime(item) { const c = (item.timeRules||[]).length; return c ? c + ' rule(s) active' : "Available all day"; }
 function summaryWeather(item) {
@@ -526,7 +540,7 @@ function renderFullGradeSettings(item) {
 }
 
 // =========================================================================
-// RENDER: Scheduling Mode — v4.0 unified Full Grade + Sharing
+// RENDER: Scheduling Mode — v4.1 Full Grade + Per Grade + Sharing
 // =========================================================================
 function renderSchedulingMode(item) {
     const container = document.createElement("div");
@@ -536,47 +550,58 @@ function renderSchedulingMode(item) {
         const groupHint = container.closest('.outer-accordion-body')?.previousElementSibling?.querySelector('.oa-hint');
         if (groupHint) groupHint.textContent = summarySchedulingMode(item);
     };
+
+    const getMode = () => {
+        if (item.fullGradePerGrade && typeof item.fullGradePerGrade === 'object'
+            && Object.keys(item.fullGradePerGrade).length > 0) return 'per_grade';
+        return item.fullGrade ? 'full' : 'individual';
+    };
+
     const renderContent = () => {
         container.innerHTML = "";
+        const mode = getMode();
 
-        // ── TOP-LEVEL TOGGLE: Full Grade vs Individual Bunks ──
+        // ── TOP-LEVEL 3-WAY TOGGLE ──
         const modeWrap = document.createElement("div");
         modeWrap.style.cssText = "display:flex; gap:0; margin-bottom:16px; border-radius:10px; overflow:hidden; border:1px solid #E5E7EB;";
 
-        const btnFull = document.createElement("button");
-        btnFull.innerHTML = '<strong>Full Grade</strong><span style="display:block;font-size:0.75rem;font-weight:400;margin-top:2px;opacity:0.8;">Entire grade together</span>';
-        btnFull.style.cssText = 'flex:1; padding:12px 8px; border:none; cursor:pointer; text-align:center; font-size:0.85rem; transition:all 0.15s; line-height:1.3; '
-            + (item.fullGrade
-                ? 'background:#0F5F6E; color:white;'
-                : 'background:#fff; color:#6B7280;');
+        const makeBtn = (label, sublabel, isActive, isFirst) => {
+            const btn = document.createElement("button");
+            btn.innerHTML = '<strong>' + label + '</strong><span style="display:block;font-size:0.7rem;font-weight:400;margin-top:2px;opacity:0.8;">' + sublabel + '</span>';
+            btn.style.cssText = 'flex:1; padding:10px 6px; border:none; cursor:pointer; text-align:center; font-size:0.82rem; transition:all 0.15s; line-height:1.3; '
+                + (isActive ? 'background:#0F5F6E; color:white;' : 'background:#fff; color:#6B7280;')
+                + (!isFirst ? ' border-left:1px solid #E5E7EB;' : '');
+            return btn;
+        };
 
-        const btnIndiv = document.createElement("button");
-        btnIndiv.innerHTML = '<strong>Individual Bunks</strong><span style="display:block;font-size:0.75rem;font-weight:400;margin-top:2px;opacity:0.8;">Assigned per bunk</span>';
-        btnIndiv.style.cssText = 'flex:1; padding:12px 8px; border:none; cursor:pointer; text-align:center; font-size:0.85rem; transition:all 0.15s; line-height:1.3; border-left:1px solid #E5E7EB; '
-            + (!item.fullGrade
-                ? 'background:#0F5F6E; color:white;'
-                : 'background:#fff; color:#6B7280;');
+        const btnFull = makeBtn('Full Grade', 'All grades together', mode === 'full', true);
+        const btnPerGrade = makeBtn('Per Grade', 'Customize per grade', mode === 'per_grade', false);
+        const btnIndiv = makeBtn('Individual', 'Assigned per bunk', mode === 'individual', false);
 
         btnFull.onclick = () => {
             item.fullGrade = true;
-            saveData();
-            renderContent();
-            updateSummary();
+            delete item.fullGradePerGrade;
+            saveData(); renderContent(); updateSummary();
+        };
+        btnPerGrade.onclick = () => {
+            const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            if (!item.fullGradePerGrade || typeof item.fullGradePerGrade !== 'object') item.fullGradePerGrade = {};
+            allDivs.forEach(div => { if (!(div in item.fullGradePerGrade)) item.fullGradePerGrade[div] = !!item.fullGrade; });
+            saveData(); renderContent(); updateSummary();
         };
         btnIndiv.onclick = () => {
             item.fullGrade = false;
-            saveData();
-            renderContent();
-            updateSummary();
+            delete item.fullGradePerGrade;
+            saveData(); renderContent(); updateSummary();
         };
 
         modeWrap.appendChild(btnFull);
+        modeWrap.appendChild(btnPerGrade);
         modeWrap.appendChild(btnIndiv);
         container.appendChild(modeWrap);
 
         // ── MODE-SPECIFIC CONTENT ──
-        if (item.fullGrade) {
-            // FULL GRADE MODE — simple explanation, no sharing needed
+        if (mode === 'full') {
             const infoBox = document.createElement("div");
             infoBox.style.cssText = "padding:14px; background:linear-gradient(135deg, #f0f9fb, #e6f4f7); border:1px solid #b2dce6; border-radius:8px; line-height:1.6;";
             infoBox.innerHTML =
@@ -587,104 +612,164 @@ function renderSchedulingMode(item) {
                 '</div>';
             container.appendChild(infoBox);
 
+        } else if (mode === 'per_grade') {
+            // ── PER GRADE MODE ──
+            const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            const perGrade = item.fullGradePerGrade || {};
+
+            const infoBox = document.createElement("div");
+            infoBox.style.cssText = "padding:12px; background:linear-gradient(135deg, #FFF7ED, #FEF3C7); border:1px solid #FCD34D; border-radius:8px; line-height:1.5; margin-bottom:14px;";
+            infoBox.innerHTML =
+                '<div style="font-weight:600; color:#92400E; margin-bottom:4px; font-size:0.88rem;">Per-Grade Mode</div>' +
+                '<div style="color:#A16207; font-size:0.82rem;">' +
+                    'Choose which grades do this as <strong>full grade</strong> (all bunks together) ' +
+                    'vs <strong>individual bunks</strong> (assigned per bunk).' +
+                '</div>';
+            container.appendChild(infoBox);
+
+            const gradeList = document.createElement("div");
+            gradeList.style.cssText = "display:flex; flex-direction:column; gap:6px;";
+
+            allDivs.forEach(divName => {
+                const isFullGrade = !!perGrade[divName];
+                const row = document.createElement("div");
+                row.style.cssText = "display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-radius:8px; border:1px solid "
+                    + (isFullGrade ? "#b2dce6" : "#E5E7EB") + "; background:"
+                    + (isFullGrade ? "#f0f9fb" : "#FAFAFA") + "; transition:all 0.15s;";
+
+                const nameSpan = document.createElement("span");
+                nameSpan.style.cssText = "font-weight:500; font-size:0.88rem; color:#1F2937;";
+                nameSpan.textContent = divName;
+
+                const btnRow = document.createElement("div");
+                btnRow.style.cssText = "display:flex; gap:0; border-radius:6px; overflow:hidden; border:1px solid #D1D5DB;";
+
+                const btnGradeFull = document.createElement("button");
+                btnGradeFull.textContent = "Full Grade";
+                btnGradeFull.style.cssText = "padding:4px 10px; border:none; cursor:pointer; font-size:0.78rem; font-weight:500; transition:all 0.15s; "
+                    + (isFullGrade ? "background:#0F5F6E; color:white;" : "background:#fff; color:#6B7280;");
+
+                const btnGradeIndiv = document.createElement("button");
+                btnGradeIndiv.textContent = "Individual";
+                btnGradeIndiv.style.cssText = "padding:4px 10px; border:none; cursor:pointer; font-size:0.78rem; font-weight:500; border-left:1px solid #D1D5DB; transition:all 0.15s; "
+                    + (!isFullGrade ? "background:#0F5F6E; color:white;" : "background:#fff; color:#6B7280;");
+
+                btnGradeFull.onclick = () => { item.fullGradePerGrade[divName] = true; saveData(); renderContent(); updateSummary(); };
+                btnGradeIndiv.onclick = () => { item.fullGradePerGrade[divName] = false; saveData(); renderContent(); updateSummary(); };
+
+                btnRow.appendChild(btnGradeFull);
+                btnRow.appendChild(btnGradeIndiv);
+                row.appendChild(nameSpan);
+                row.appendChild(btnRow);
+                gradeList.appendChild(row);
+            });
+            container.appendChild(gradeList);
+
+            // Sharing controls for individual-mode grades
+            const hasAnyIndividual = allDivs.some(d => !perGrade[d]);
+            if (hasAnyIndividual) {
+                const divider = document.createElement("div");
+                divider.style.cssText = "margin:16px 0 12px; border-top:1px solid #E5E7EB;";
+                container.appendChild(divider);
+
+                const sharingHeader = document.createElement("div");
+                sharingHeader.style.cssText = "font-size:0.85rem; font-weight:500; color:#374151; margin-bottom:10px;";
+                sharingHeader.textContent = "Sharing rules (for Individual grades):";
+                container.appendChild(sharingHeader);
+
+                const rules = item.sharableWith || { type: 'not_sharable', divisions: [], capacity: 2 };
+                const isSharable = rules.type !== 'not_sharable';
+
+                const toggleRow = document.createElement("div");
+                toggleRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:12px;";
+                const tog = document.createElement("label"); tog.className = "switch";
+                const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = isSharable;
+                cb.onchange = () => {
+                    if (cb.checked) { rules.type = 'same_division'; rules.capacity = rules.capacity > 1 ? rules.capacity : 2; }
+                    else { rules.type = 'not_sharable'; rules.capacity = 1; }
+                    rules.divisions = []; item.sharableWith = rules; saveData(); renderContent(); updateSummary();
+                };
+                const sl = document.createElement("span"); sl.className = "slider"; tog.appendChild(cb); tog.appendChild(sl);
+                const label = document.createElement("span"); label.style.cssText = "font-weight:500; font-size:0.9rem;"; label.textContent = "Allow Sharing";
+                toggleRow.appendChild(tog); toggleRow.appendChild(label); container.appendChild(toggleRow);
+
+                if (isSharable) {
+                    const capRow = document.createElement("div");
+                    capRow.style.cssText = "display:flex; align-items:center; gap:12px; padding:12px; background:#F9FAFB; border-radius:8px; border:1px solid #E5E7EB;";
+                    const capIn = document.createElement("input");
+                    capIn.type = "number"; capIn.min = "2"; capIn.max = "20"; capIn.value = rules.capacity || 2;
+                    capIn.style.cssText = "width:64px; padding:8px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:1rem; font-weight:600;";
+                    capIn.onchange = () => { rules.capacity = Math.min(20, Math.max(2, parseInt(capIn.value) || 2)); capIn.value = rules.capacity; item.sharableWith = rules; saveData(); updateSummary(); };
+                    const capSuffix = document.createElement("span"); capSuffix.style.cssText = "font-size:0.85rem; color:#6B7280;"; capSuffix.textContent = "bunks at once";
+                    capRow.appendChild(capIn); capRow.appendChild(capSuffix); container.appendChild(capRow);
+                } else {
+                    const noteBox = document.createElement("div");
+                    noteBox.style.cssText = "color:#6B7280; font-size:0.8rem; padding:12px; background:#F9FAFB; border-radius:8px; border:1px solid #E5E7EB;";
+                    noteBox.textContent = "Only 1 bunk at a time (for Individual grades).";
+                    container.appendChild(noteBox);
+                }
+            }
+
         } else {
-            // INDIVIDUAL BUNK MODE — show sharing / capacity controls
+            // ── INDIVIDUAL BUNK MODE (unchanged) ──
             const rules = item.sharableWith || { type: 'not_sharable', divisions: [], capacity: 2 };
             const isSharable = rules.type !== 'not_sharable';
 
-            // ── Can multiple bunks do this at the same time? ──
             const sharingLabel = document.createElement("div");
             sharingLabel.style.cssText = "font-size:0.85rem; font-weight:500; color:#374151; margin-bottom:10px;";
             sharingLabel.textContent = "Can multiple bunks do this at the same time?";
             container.appendChild(sharingLabel);
 
             const toggleRow = document.createElement("div");
-            toggleRow.style.cssText = "display:flex; gap:0; margin-bottom:16px; border-radius:8px; overflow:hidden; border:1px solid #E5E7EB;";
-
-            const btnNo = document.createElement("button");
-            btnNo.textContent = "No — 1 bunk only";
-            btnNo.style.cssText = 'flex:1; padding:10px 8px; border:none; cursor:pointer; font-size:0.84rem; transition:all 0.15s; '
-                + (!isSharable
-                    ? 'background:#0F5F6E; color:white; font-weight:600;'
-                    : 'background:#fff; color:#6B7280;');
-
-            const btnYes = document.createElement("button");
-            btnYes.textContent = "Yes — multiple bunks";
-            btnYes.style.cssText = 'flex:1; padding:10px 8px; border:none; cursor:pointer; font-size:0.84rem; transition:all 0.15s; border-left:1px solid #E5E7EB; '
-                + (isSharable
-                    ? 'background:#0F5F6E; color:white; font-weight:600;'
-                    : 'background:#fff; color:#6B7280;');
-
-            btnNo.onclick = () => {
-                rules.type = 'not_sharable';
-                rules.capacity = 1;
-                rules.divisions = [];
-                item.sharableWith = rules;
-                saveData();
-                renderContent();
-                updateSummary();
+            toggleRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:12px;";
+            const tog = document.createElement("label"); tog.className = "switch";
+            const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = isSharable;
+            cb.onchange = () => {
+                if (cb.checked) { rules.type = 'same_division'; rules.capacity = rules.capacity > 1 ? rules.capacity : 2; }
+                else { rules.type = 'not_sharable'; rules.capacity = 1; }
+                rules.divisions = []; item.sharableWith = rules; saveData(); renderContent(); updateSummary();
             };
-            btnYes.onclick = () => {
-                rules.type = 'same_division';
-                rules.capacity = Math.max(2, rules.capacity || 2);
-                item.sharableWith = rules;
-                saveData();
-                renderContent();
-                updateSummary();
-            };
+            const sl = document.createElement("span"); sl.className = "slider"; tog.appendChild(cb); tog.appendChild(sl);
+            const label = document.createElement("span"); label.style.cssText = "font-weight:500; font-size:0.9rem;"; label.textContent = "Allow Sharing";
+            toggleRow.appendChild(tog); toggleRow.appendChild(label); container.appendChild(toggleRow);
 
-            toggleRow.appendChild(btnNo);
-            toggleRow.appendChild(btnYes);
-            container.appendChild(toggleRow);
-
-            if (isSharable) {
-                // ── Capacity selector ──
+            if (!isSharable) {
+                const n = document.createElement("div");
+                n.style.cssText = "color:#6B7280; font-size:0.85rem; padding:10px; background:#F9FAFB; border-radius:8px;";
+                n.textContent = "Only 1 bunk can use this activity at a time.";
+                container.appendChild(n);
+            } else {
                 const capBox = document.createElement("div");
-                capBox.style.cssText = "padding:14px; background:#F9FAFB; border:1px solid #E5E7EB; border-radius:8px;";
+                capBox.style.cssText = "padding:14px; background:#F9FAFB; border-radius:8px; border:1px solid #E5E7EB;";
 
                 const capLabel = document.createElement("div");
-                capLabel.style.cssText = "font-size:0.84rem; font-weight:500; color:#374151; margin-bottom:10px;";
-                capLabel.textContent = "How many bunks can do this at the same time?";
+                capLabel.style.cssText = "font-size:0.85rem; font-weight:500; color:#374151; margin-bottom:10px;";
+                capLabel.textContent = "How many bunks at once?";
                 capBox.appendChild(capLabel);
 
                 const capRow = document.createElement("div");
                 capRow.style.cssText = "display:flex; align-items:center; gap:12px; margin-bottom:10px;";
-
                 const capIn = document.createElement("input");
-                capIn.type = "number"; capIn.min = "2"; capIn.max = "20";
-                capIn.value = rules.capacity || 2;
+                capIn.type = "number"; capIn.min = "2"; capIn.max = "20"; capIn.value = rules.capacity || 2;
                 capIn.style.cssText = "width:64px; padding:8px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:1rem; font-weight:600;";
                 capIn.onchange = () => {
                     rules.capacity = Math.min(20, Math.max(2, parseInt(capIn.value) || 2));
                     capIn.value = rules.capacity;
-                    item.sharableWith = rules;
-                    saveData();
-                    updateSummary();
+                    item.sharableWith = rules; saveData(); updateSummary();
                     const noteEl = capBox.querySelector('.cap-note');
-                    if (noteEl) noteEl.innerHTML = 'Up to <strong>' + rules.capacity + '</strong> bunks from the <strong>same grade</strong> can be scheduled here at the same time. Bunks from different grades cannot share.';
+                    if (noteEl) noteEl.innerHTML = 'Up to <strong>' + rules.capacity + '</strong> bunks from the <strong>same grade</strong> can be scheduled here at the same time.';
                 };
-
                 const capSuffix = document.createElement("span");
                 capSuffix.style.cssText = "font-size:0.85rem; color:#6B7280;";
                 capSuffix.textContent = "bunks at once";
-
-                capRow.appendChild(capIn);
-                capRow.appendChild(capSuffix);
-                capBox.appendChild(capRow);
+                capRow.appendChild(capIn); capRow.appendChild(capSuffix); capBox.appendChild(capRow);
 
                 const capNote = document.createElement("div");
                 capNote.className = "cap-note";
                 capNote.style.cssText = "color:#6B7280; font-size:0.8rem; line-height:1.5;";
                 capNote.innerHTML = 'Up to <strong>' + (rules.capacity || 2) + '</strong> bunks from the <strong>same grade</strong> can be scheduled here at the same time. Bunks from different grades cannot share.';
                 capBox.appendChild(capNote);
-
                 container.appendChild(capBox);
-            } else {
-                // Not sharable — brief explanation
-                const noteBox = document.createElement("div");
-                noteBox.style.cssText = "color:#6B7280; font-size:0.8rem; padding:12px; background:#F9FAFB; border-radius:8px; border:1px solid #E5E7EB; line-height:1.5;";
-                noteBox.textContent = "Only 1 bunk can be assigned to this activity at a time. Other bunks will be scheduled for something else.";
-                container.appendChild(noteBox);
             }
         }
     };
