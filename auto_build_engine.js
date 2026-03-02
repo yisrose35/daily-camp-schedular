@@ -1448,6 +1448,14 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             if (blockDur < minActivityDur) break;
             blockDur = Math.min(blockDur, maxActivityDur);
             
+            // ★★★ v3.2.9: Snap to 5-minute boundaries for clean time slots ★★★
+            // Prevents ugly times like 3:38 from bleeding into the superset timeline
+            const snappedEnd = Math.round((cursor + blockDur) / 5) * 5;
+            const snappedDur = snappedEnd - cursor;
+            if (snappedDur >= minActivityDur && snappedDur <= maxActivityDur) {
+                blockDur = snappedDur;
+            }
+            
             template.push({
                 startMin: cursor,
                 endMin: cursor + blockDur,
@@ -1580,10 +1588,13 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                             tDur = Math.min(Math.ceil(tRemaining / 2), maxActivityDur);
                         }
                     }
-                    tDur = Math.min(tDur, maxActivityDur);
+                   tDur = Math.min(tDur, maxActivityDur);
                     if (tDur < minActivityDur) break;
-                    template.push({ startMin: tc, endMin: tc + tDur, duration: tDur, preferredType: tUseSpec ? 'special' : 'sport' });
-                    tc += tDur;
+                    // ★★★ v3.2.9: Snap to 5-min boundaries ★★★
+                    const snEnd = Math.round((tc + tDur) / 5) * 5;
+                    const snDur = snEnd - tc;
+                    if (snDur >= minActivityDur && snDur <= maxActivityDur) tDur = snDur;
+                    template.push({ startMin: tc, endMin: tc + tDur, duration: tDur, preferredType: tUseSpec ? 'special' : 'sport' });                    tc += tDur;
                     tUseSpec = !tUseSpec;
                 }
                 if (template.length === 0) continue;
