@@ -465,7 +465,7 @@ function renderDetailPane() {
    // Group 4: ADVANCED — usage caps + duration + multi-part
     detailPaneEl.appendChild(sectionGroup("Advanced", "Usage limits, prep time & multi-part", [
         section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
-        section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)),
+        section("Prep Duration", summaryPrepDuration(item), () => renderPrepDurationSettings(item)),
         section("Multi-Parts", summaryMultiPart(item), () => renderMultiPartSettings(item))
     ]));
 }
@@ -473,6 +473,12 @@ function renderDetailPane() {
 // =========================================================================
 // SUMMARY HELPERS
 // =========================================================================
+function summaryPrepDuration(item) {
+    if (!item.prepDuration || item.prepDuration <= 0) return 'None';
+    var txt = item.prepDuration + 'min prep';
+    if (item.prepLocation) txt += ' @ ' + item.prepLocation;
+    return txt;
+}
 function summaryMaxUsage(item) {
     var m = parseInt(item.maxUsage) || 0;
     if (m <= 0) return 'No limit';
@@ -1204,14 +1210,58 @@ function renderWeatherSettings(item) {
 }
 function renderPrepDurationSettings(item) {
     const container = document.createElement("div");
-    const hp = (item.prepDuration||0) > 0;
-    container.innerHTML = '<div style="margin-bottom:16px;"><p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Some activities need prep time. Example: <strong>Skits</strong> = 30min practice + 60min performance.</p><div style="background:' + (hp?'#faf5ff':'#f9fafb') + '; border:1px solid ' + (hp?'#d8b4fe':'#e5e7eb') + '; border-radius:10px; padding:14px;"><div style="display:flex; align-items:center; gap:12px; margin-bottom:' + (hp?'12px':'0') + ';"><div style="flex:1;"><div style="font-weight:600; color:' + (hp?'#6b21a8':'#374151') + ';">' + (hp?'Has Prep Phase':'Single Phase') + '</div><div style="font-size:0.8rem; color:' + (hp?'#7c3aed':'#6b7280') + ';">' + (hp?item.prepDuration+' min prep + main':'No prep needed') + '</div></div><label class="switch"><input type="checkbox" id="prep-duration-toggle" ' + (hp?'checked':'') + '><span class="slider"></span></label></div><div id="prep-duration-config" style="display:' + (hp?'block':'none') + ';"><div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #e9d5ff;"><label style="font-size:0.85rem;">Prep time:</label><input type="number" id="prep-duration-input" min="5" max="120" step="5" value="' + (item.prepDuration||30) + '" style="width:70px; padding:6px 10px; border:1px solid #d8b4fe; border-radius:6px; text-align:center;"><span style="font-size:0.85rem; color:#64748b;">minutes</span></div></div></div></div>';
+    const hp = (item.prepDuration || 0) > 0;
+    container.innerHTML =
+        '<div style="margin-bottom:16px;">' +
+        '<p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Some activities need prep time. Example: <strong>Skits</strong> = 30 min practice in the Gym + 60 min performance in the Lunchroom.</p>' +
+        '<div style="background:' + (hp ? '#faf5ff' : '#f9fafb') + '; border:1px solid ' + (hp ? '#d8b4fe' : '#e5e7eb') + '; border-radius:10px; padding:14px;">' +
+        '<div style="display:flex; align-items:center; gap:12px; margin-bottom:' + (hp ? '12px' : '0') + ';">' +
+        '<div style="flex:1;"><div style="font-weight:600; color:' + (hp ? '#6b21a8' : '#374151') + ';">' + (hp ? 'Has Prep Phase' : 'Single Phase') + '</div>' +
+        '<div style="font-size:0.8rem; color:' + (hp ? '#7c3aed' : '#6b7280') + ';">' + (hp ? item.prepDuration + ' min prep + main' : 'No prep needed') + '</div></div>' +
+        '<label class="switch"><input type="checkbox" id="prep-duration-toggle" ' + (hp ? 'checked' : '') + '><span class="slider"></span></label></div>' +
+        '<div id="prep-duration-config" style="display:' + (hp ? 'block' : 'none') + ';">' +
+        '<div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #e9d5ff; margin-bottom:10px;">' +
+        '<label style="font-size:0.85rem;">Prep time:</label>' +
+        '<input type="number" id="prep-duration-input" min="5" max="120" step="5" value="' + (item.prepDuration || 30) + '" style="width:70px; padding:6px 10px; border:1px solid #d8b4fe; border-radius:6px; text-align:center;">' +
+        '<span style="font-size:0.85rem; color:#64748b;">minutes</span></div>' +
+        '<div style="padding:10px; background:white; border-radius:8px; border:1px solid #e9d5ff;">' +
+        '<div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><span style="font-size:1rem;">📍</span>' +
+        '<label style="font-size:0.85rem; font-weight:600; color:#6b21a8;">Prep Location</label></div>' +
+        '<p style="font-size:0.8rem; color:#7c3aed; margin:0 0 8px 0;">Where does the prep phase happen? If different from the main location (' + escapeHtml(item.location || 'none set') + '), select it here.</p>' +
+        '<select id="prep-location-select" style="width:100%; padding:8px 10px; border:1px solid #d8b4fe; border-radius:8px; font-size:0.9rem; background:white; cursor:pointer;"><option value="">-- Same as main location --</option></select>' +
+        (item.prepLocation ? '<div style="margin-top:8px; padding:8px 12px; background:#faf5ff; border:1px solid #d8b4fe; border-radius:8px; font-size:0.8rem; color:#6b21a8;">⚡ Prep in <strong>' + escapeHtml(item.prepLocation) + '</strong>, then main in <strong>' + escapeHtml(item.location || 'assigned field') + '</strong></div>' : '') +
+        '</div></div></div></div>';
+    // Populate prep location dropdown
+    const sel = container.querySelector("#prep-location-select");
+    if (sel) {
+        const sf = window.loadGlobalSettings?.() || {};
+        const allFields = sf.app1?.fields || sf.fields || window.getFields?.() || [];
+        if (allFields.length > 0) {
+            const fg = document.createElement("optgroup"); fg.label = "Fields";
+            allFields.sort((a, b) => (a.name || '').localeCompare(b.name || '')).forEach(f => {
+                if (!f.name) return;
+                const o = document.createElement("option"); o.value = f.name;
+                o.textContent = f.name + (f.rainyDayAvailable ? ' 🌧' : '');
+                if (item.prepLocation === f.name) o.selected = true;
+                fg.appendChild(o);
+            });
+            sel.appendChild(fg);
+        }
+        sel.addEventListener("change", function () {
+            item.prepLocation = this.value || null; saveData();
+            const parent = container.parentElement;
+            if (parent) { parent.innerHTML = ''; parent.appendChild(renderPrepDurationSettings(item)); }
+            updateSummary();
+        });
+    }
+    const updateSummary = () => { const s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if (s) s.textContent = summaryPrepDuration(item); };
     const pt = container.querySelector("#prep-duration-toggle");
-    if (pt) { pt.addEventListener("change", function() { const c = container.querySelector("#prep-duration-config"); if(this.checked){c.style.display="block";item.prepDuration=parseInt(container.querySelector("#prep-duration-input").value,10)||30;}else{c.style.display="none";item.prepDuration=0;} saveData(); const s=container.closest('.detail-section')?.querySelector('.detail-section-summary'); if(s)s.textContent=(item.prepDuration>0)?item.prepDuration+'min prep':'None'; }); }
+    if (pt) { pt.addEventListener("change", function () { const c = container.querySelector("#prep-duration-config"); if (this.checked) { c.style.display = "block"; item.prepDuration = parseInt(container.querySelector("#prep-duration-input").value, 10) || 30; } else { c.style.display = "none"; item.prepDuration = 0; item.prepLocation = null; } saveData(); updateSummary(); }); }
     const di = container.querySelector("#prep-duration-input");
-    if (di) { di.addEventListener("change", function() { const v=parseInt(this.value,10); if(!isNaN(v)&&v>=5&&v<=120){item.prepDuration=v;saveData();const s=container.closest('.detail-section')?.querySelector('.detail-section-summary');if(s)s.textContent=v+'min prep';} }); }
+    if (di) { di.addEventListener("change", function () { const v = parseInt(this.value, 10); if (!isNaN(v) && v >= 5 && v <= 120) { item.prepDuration = v; saveData(); updateSummary(); } }); }
     return container;
 }
+
 
 // =========================================================================
 // ★ v3.5: RENDER Multi-Part Special Settings
