@@ -436,6 +436,7 @@ function renderDetailPane() {
 
     // Group 2: Time & Weather — time rules + weather (weather only for non-rainy-day items)
     const timeWeatherSections = [section("Time Availability", summaryTime(item), () => renderTimeRules(item))];
+    timeWeatherSections.push(section("Day Availability", summaryDays(item), () => renderDayAvailability(item)));
     if (!isRainyDayItem) timeWeatherSections.push(section("Weather & Availability", summaryWeather(item), () => renderWeatherSettings(item)));
     detailPaneEl.appendChild(sectionGroup("Time & Weather", "When this special can be scheduled", timeWeatherSections));
 
@@ -500,6 +501,12 @@ function summaryWeather(item) {
     return s;
 }
 function summaryLocation(item) { return item.location || "No field assigned"; }
+function summaryDays(item) {
+    if (!Array.isArray(item.availableDays) || item.availableDays.length === 0) return 'Every day';
+    if (item.availableDays.length === 7) return 'Every day';
+    var dayMap = { 'Sunday':'Sun', 'Monday':'Mon', 'Tuesday':'Tue', 'Wednesday':'Wed', 'Thursday':'Thu', 'Friday':'Fri', 'Saturday':'Sat' };
+    return item.availableDays.map(function(d) { return dayMap[d] || d; }).join(', ');
+}
 
 // =========================================================================
 // RENDER: Full Grade Settings
@@ -1018,6 +1025,41 @@ function renderPrepDurationSettings(item) {
     if (pt) { pt.addEventListener("change", function() { const c = container.querySelector("#prep-duration-config"); if(this.checked){c.style.display="block";item.prepDuration=parseInt(container.querySelector("#prep-duration-input").value,10)||30;}else{c.style.display="none";item.prepDuration=0;} saveData(); const s=container.closest('.detail-section')?.querySelector('.detail-section-summary'); if(s)s.textContent=(item.prepDuration>0)?item.prepDuration+'min prep':'None'; }); }
     const di = container.querySelector("#prep-duration-input");
     if (di) { di.addEventListener("change", function() { const v=parseInt(this.value,10); if(!isNaN(v)&&v>=5&&v<=120){item.prepDuration=v;saveData();const s=container.closest('.detail-section')?.querySelector('.detail-section-summary');if(s)s.textContent=v+'min prep';} }); }
+    return container;
+}
+
+function renderDayAvailability(item) {
+    var container = document.createElement("div");
+    var updateSummary = function() { var s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if (s) s.textContent = summaryDays(item); };
+    var desc = document.createElement("p"); desc.style.cssText = "font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;";
+    desc.textContent = "Select which days this activity is available. Leave all unchecked for every day. When specific days are set, the auto builder treats this as a scarce activity and prioritizes scheduling it.";
+    container.appendChild(desc);
+    var allDays = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    var grid = document.createElement("div"); grid.style.cssText = "display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:8px; margin-bottom:12px;";
+    function renderChips() {
+        grid.innerHTML = "";
+        var sel = Array.isArray(item.availableDays) ? item.availableDays : [];
+        allDays.forEach(function(day) {
+            var active = sel.map(function(d){return d.toLowerCase();}).includes(day.toLowerCase());
+            var chip = document.createElement("button"); chip.type = "button"; chip.textContent = day;
+            chip.style.cssText = "padding:10px 14px; border-radius:10px; font-size:0.85rem; font-weight:500; cursor:pointer; transition:all 0.15s; text-align:center; border:1.5px solid " + (active ? "#0891b2" : "#E5E7EB") + "; background:" + (active ? "linear-gradient(135deg, #e0f7fa, #e6f4f7)" : "#fff") + "; color:" + (active ? "#0A4A56" : "#6b7280") + ";";
+            chip.onmouseenter = function() { chip.style.borderColor = '#0891b2'; chip.style.transform = 'translateY(-1px)'; };
+            chip.onmouseleave = function() { var a2 = Array.isArray(item.availableDays) && item.availableDays.map(function(d){return d.toLowerCase();}).includes(day.toLowerCase()); chip.style.borderColor = a2 ? '#0891b2' : '#E5E7EB'; chip.style.transform = 'translateY(0)'; };
+            chip.onclick = function() {
+                if (!item.availableDays) item.availableDays = [];
+                var idx = item.availableDays.findIndex(function(d){return d.toLowerCase() === day.toLowerCase();});
+                if (idx >= 0) item.availableDays.splice(idx, 1); else item.availableDays.push(day);
+                if (item.availableDays.length === 0 || item.availableDays.length === 7) item.availableDays = null;
+                saveData(); renderChips(); updateSummary();
+            };
+            grid.appendChild(chip);
+        });
+    }
+    renderChips();
+    container.appendChild(grid);
+    var info = document.createElement("div"); info.style.cssText = "padding:10px 14px; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; font-size:0.8rem; color:#92400e;";
+    info.innerHTML = '<strong>\uD83D\uDCA1 Tip:</strong> Activities with specific day restrictions are treated as <em>scarce</em> by the auto builder \u2014 they get priority scheduling with bunk rotation to ensure fair access.';
+    container.appendChild(info);
     return container;
 }
 
