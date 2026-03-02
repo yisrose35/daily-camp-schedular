@@ -915,6 +915,9 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         const windowEnd = layer.endMin || (windowStart + duration);
         const eventName = layer.event || layer.type;
         
+        // ★★★ DIAGNOSTIC: Log full layer details for fixed events ★★★
+        console.log(`[AUTO-BUILD DIAG] Fixed layer "${eventName}": duration=${duration}, window=${fmtTime(windowStart)}-${fmtTime(windowEnd)} (${windowEnd - windowStart}min), layer keys:`, Object.keys(layer).join(','), 'layer.duration=', layer.duration, 'layer.durationMin=', layer.durationMin, 'layer.periodMin=', layer.periodMin);
+        
         // If window === duration, it's effectively pinned (exact time)
         if (windowEnd - windowStart <= duration) {
             const isLunchOrSnackExact = /lunch|snack/i.test(eventName);
@@ -1718,6 +1721,24 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     
     Object.values(bunkTimelines).forEach(timeline => {
         timeline.sort((a, b) => a.startMin - b.startMin);
+    });
+    
+    // ★★★ DIAGNOSTIC: Log skeleton blocks and bunk overrides that involve snacks/lunch ★★★
+    console.log('[AUTO-BUILD DIAG] === SKELETON BLOCKS (fixed events) ===');
+    skeleton.filter(s => /lunch|snack|dismissal/i.test(s.event)).forEach(s => {
+        console.log(`  [SKELETON] "${s.event}" ${s.startTime}-${s.endTime} div=${s.division} type=${s.type} _bunk=${s._bunk || 'ALL'}`);
+    });
+    console.log('[AUTO-BUILD DIAG] === BUNK OVERRIDES (fixed events) ===');
+    bunkOverrides.filter(o => /lunch|snack|dismissal/i.test(o.activity)).forEach(o => {
+        console.log(`  [OVERRIDE] "${o.activity}" bunk=${o.bunk} ${o.startTime}-${o.endTime} type=${o.type}`);
+    });
+    console.log('[AUTO-BUILD DIAG] === BUNK OCCUPIED — snacks check ===');
+    bunks.forEach(bunk => {
+        const hasSnack = bunkState[bunk].occupied.some(o => /snack/i.test(o.event));
+        if (!hasSnack) {
+            console.log(`  [MISSING] ${bunk}: NO snacks in occupied! Occupied:`, 
+                bunkState[bunk].occupied.map(o => `${o.event}@${fmtTime(o.startMin)}-${fmtTime(o.endMin)}`).join(', '));
+        }
     });
     
     // ═════════════════════════════════════════════════════════════════
