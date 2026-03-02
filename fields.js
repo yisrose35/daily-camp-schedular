@@ -60,9 +60,7 @@ function initFieldsTab(){
               </div>
             </div>
 
-          <!-- SPORT RULES + FIELD QUALITY — SIDE BY SIDE -->
-            <div style="display:flex; gap:16px; flex-wrap:wrap;">
-              <div id="sport-rules-section" style="flex:1; min-width:280px;"></div>
+        <div style="display:flex; gap:16px; flex-wrap:wrap;">
               <div id="field-quality-section" style="flex:1; min-width:280px;"></div>
             </div>
 
@@ -98,8 +96,7 @@ function initFieldsTab(){
 
     document.getElementById("add-field-btn").onclick = addField;
     addFieldInput.onkeyup = e => { if(e.key === "Enter") addField(); };
-renderSportRulesSection();
-   renderFieldQualitySection();
+renderFieldQualitySection();
     renderMasterLists();
     renderDetailPane();
 }
