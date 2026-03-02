@@ -1397,7 +1397,23 @@ window.getAllSpecialActivities = function() {
     return[...specialActivities,...rainyDayActivities];
 };
 window.getSpecialActivityByName = function(name) { if(!name)return null; const n=String(name); let i=specialActivities.find(s=>s.name===n); if(!i)i=rainyDayActivities.find(s=>s.name===n); return i?{...i}:null; };
-window.isRainyDayModeActive = function() { try{const d=window.loadCurrentDailyData?.()||{};return d.rainyDayMode===true||d.isRainyDay===true||window.isRainyDay===true;}catch(e){return window.isRainyDay===true;} };
+// ★★★ v4.1: Per-Grade fullGrade helper ★★★
+window.isFullGradeForDivision = function(activityName, divName) {
+    var special = window.getSpecialActivityByName?.(activityName);
+    if (!special) {
+        var props = window.activityProperties?.[activityName];
+        if (!props) return false;
+        var fg = props._fullGrade ?? props.fullGrade;
+        if (fg && typeof fg === 'object') return !!fg[divName];
+        return !!fg;
+    }
+    if (special.fullGradePerGrade && typeof special.fullGradePerGrade === 'object'
+        && Object.keys(special.fullGradePerGrade).length > 0) {
+        if (divName in special.fullGradePerGrade) return !!special.fullGradePerGrade[divName];
+        return !!special.fullGrade;
+    }
+    return !!special.fullGrade;
+};window.isRainyDayModeActive = function() { try{const d=window.loadCurrentDailyData?.()||{};return d.rainyDayMode===true||d.isRainyDay===true||window.isRainyDay===true;}catch(e){return window.isRainyDay===true;} };
 window.getAvailableSpecialActivities = function() { const r=window.isRainyDayModeActive?.()||false; if(r){return[...specialActivities.filter(s=>s.available&&s.isIndoor===true),...rainyDayActivities.filter(s=>s.available)];} return specialActivities.filter(s=>s.available); };
 window.getGlobalSpecialActivities = function(respectRainyDay=true) {
     const allActivities=[...specialActivities,...rainyDayActivities];
