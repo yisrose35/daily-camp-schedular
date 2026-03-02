@@ -225,16 +225,17 @@ function getSpecialTimeWindow(specialConfig) {
 function isScarceSpecial(specialConfig, dayName) {
     if (!specialConfig) return false;
     
+    // ★★★ v3.2.9: ALWAYS check day availability first ★★★
+    // Even if scarce due to time window, must not schedule on wrong days.
+    if (!isSpecialAvailableOnDay(specialConfig, dayName)) return false;
+    
     // ★★★ v3.2.7: availableDays from UI makes it scarce ★★★
     if (Array.isArray(specialConfig.availableDays) && specialConfig.availableDays.length > 0) {
-        // Has day restrictions — it's scarce. Check if available today.
-        if (!isSpecialAvailableOnDay(specialConfig, dayName)) return false;
         return true;
     }
     
     // Legacy dayAvailability check
     if (specialConfig.dayAvailability) {
-        if (!isSpecialAvailableOnDay(specialConfig, dayName)) return false;
         return true;
     }
     
@@ -248,7 +249,6 @@ function isScarceSpecial(specialConfig, dayName) {
     
     return false;
 }
-
 // ★★★ v3.2.2: Division/grade access check ★★★
 // Returns true if the special is allowed for the given division.
 // Uses limitUsage from the special_activities config:
@@ -725,8 +725,14 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     
     log(`  [Phase 2] Scarce specials: ${scarceSpecials.length}`);
     
-    scarceSpecials.forEach(specialConfig => {
+   scarceSpecials.forEach(specialConfig => {
         const name = specialConfig.name;
+        
+        // ★★★ v3.2.9: Double-check day availability (defense in depth) ★★★
+        if (!isSpecialAvailableOnDay(specialConfig, dayName)) {
+            log(`    ${name}: skipped — not available on ${dayName}`);
+            return;
+        }
         
         // ★★★ v3.2.2: Skip scarce specials not available for this division ★★★
         if (!isSpecialAvailableForDivision(name, divName)) {
@@ -1404,18 +1410,12 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     const sharedOccupied = getSharedOccupied(bunkState, bunks);
     const sharedGaps = findGaps(sharedOccupied, divTimes);
     
-   const gapTemplates = {};
+  const gapTemplates = {};
     sharedGaps.forEach(gap => {
         const gapDur = gap.endMin - gap.startMin;
         if (gapDur < minActivityDur) return;
         
-        // ★★★ v3.2.9: Smart gap templating — split only when beneficial ★★★
-        // PRINCIPLE: Only split a gap into multiple blocks when:
-        //   1. Both pieces are ≥ minActivityDur (no runts that become Free)
-        //   2. The split is needed to meet special+sport quotas
-        // Otherwise keep the gap as one longer block — the solver handles
-        // varied durations fine, and fewer bigger blocks = fewer Frees.
-        
+        // ★★★ v3.2.9: Smart gap templating — no runts, snap to 5min ★★★
         const template = [];
         let cursor = gap.startMin;
         let useSpecial = true;
@@ -1430,26 +1430,20 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 blockDur = Math.min(sportDurMax, remaining, maxActivityDur);
             }
             
-            // ★★★ KEY FIX: If splitting would leave a runt, absorb it ★★★
-            // "Runt" = leftover < minActivityDur that can't become its own activity
+            // ★★★ No runts: if leftover would be too small, absorb it ★★★
             const afterThis = remaining - blockDur;
             if (afterThis > 0 && afterThis < minActivityDur) {
-                // Splitting would create a runt — extend this block to take it all
                 if (remaining <= maxActivityDur) {
                     blockDur = remaining;
                 } else {
-                    // Can't fit all remaining in one block — split more evenly
-                    // so both halves are ≥ minActivityDur
-                    const half = Math.ceil(remaining / 2);
-                    blockDur = Math.min(half, maxActivityDur);
+                    blockDur = Math.min(Math.ceil(remaining / 2), maxActivityDur);
                 }
             }
             
             if (blockDur < minActivityDur) break;
             blockDur = Math.min(blockDur, maxActivityDur);
             
-            // ★★★ v3.2.9: Snap to 5-minute boundaries for clean time slots ★★★
-            // Prevents ugly times like 3:38 from bleeding into the superset timeline
+            // ★★★ Snap to 5-min boundaries ★★★
             const snappedEnd = Math.round((cursor + blockDur) / 5) * 5;
             const snappedDur = snappedEnd - cursor;
             if (snappedDur >= minActivityDur && snappedDur <= maxActivityDur) {
@@ -1467,7 +1461,7 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             useSpecial = !useSpecial;
         }
         
-        // Safety: absorb any trailing sub-minActivityDur remainder
+        // Absorb any trailing remainder
         if (cursor < gap.endMin && template.length > 0) {
             const last = template[template.length - 1];
             const leftover = gap.endMin - cursor;
@@ -1475,9 +1469,14 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             if (extended <= maxActivityDur) {
                 last.endMin = gap.endMin;
                 last.duration = extended;
+            } else if (leftover >= minActivityDur) {
+                template.push({
+                    startMin: cursor,
+                    endMin: gap.endMin,
+                    duration: leftover,
+                    preferredType: useSpecial ? 'special' : 'sport'
+                });
             }
-            // If even that doesn't fit, the leftover is truly unschedulable
-            // and will naturally become transition/buffer time
         }
         
         gapTemplates[gap.startMin] = template;
