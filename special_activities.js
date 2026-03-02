@@ -303,7 +303,7 @@ function saveData() {
             window._specialActivitiesSyncTimeout = setTimeout(() => { window.forceSyncToCloud(); window._specialActivitiesSyncTimeout = null; }, 500);
         }
     } catch (e) { console.error("[SPECIAL_ACTIVITIES] Error saving data:", e); }
-    finally { setTimeout(() => { _isSaving = false; }, 300); }
+    finally { setTimeout(function() { _isSaving = false; }, 300); }
 }
 
 function renderMasterList() {
