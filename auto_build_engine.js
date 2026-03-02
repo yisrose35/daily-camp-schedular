@@ -50,6 +50,8 @@
 //            all Bubble Lady slots, Grade 2 knows she's fully booked and skips her
 //            FIX #7: Prevent double lunch — displaced bunks get per-bunk skeleton
 //            blocks so the division-wide lunch doesn't also apply to them
+//            FIX #8: Phase 4 skips template blocks that overlap bunk's occupied time
+//            (fixes snacks missing for some bunks when shared template spans larger gap)
 // =================================================================
 
 (function() {
@@ -1556,6 +1558,23 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 const blockStart = tmpl.startMin;
                 const blockEnd = tmpl.endMin;
                 const blockDur = tmpl.duration;
+                
+                // ★★★ v3.2.9 FIX #8: Skip template blocks outside this bunk's actual gap ★★★
+                // The shared template may span a larger gap than this bunk actually has.
+                // For example, the shared gap is 2:00-3:05 but this bunk has snacks at 2:25,
+                // so its actual gap is only 2:00-2:25. Template blocks at 2:25+ must be skipped.
+                if (blockStart >= gap.endMin || blockEnd <= gap.startMin) {
+                    continue; // template block is entirely outside this bunk's gap
+                }
+                
+                // Also check if template block overlaps with any of this bunk's occupied time
+                const overlapsOccupied = state.occupied.some(o =>
+                    blockStart < o.endMin && blockEnd > o.startMin
+                );
+                if (overlapsOccupied) {
+                    log(`      ${bunk}: Skipping template block ${fmtTime(blockStart)}-${fmtTime(blockEnd)} — overlaps occupied`);
+                    continue;
+                }
                 
                 let pickType = tmpl.preferredType;
                 if (pickType === 'special' && specialsStillNeeded <= 0 && sportsStillNeeded > 0) {
