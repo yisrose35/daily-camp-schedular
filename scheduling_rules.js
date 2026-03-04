@@ -1,18 +1,17 @@
 // ============================================================================
-// scheduling_rules.js — CAMPISTRY RULES TAB (v2.1)
+// scheduling_rules.js — CAMPISTRY RULES TAB (v3.0)
 // ============================================================================
-// Renders the "Rules" tab with expandable sections:
-//   1. Activity Sequence Rules
-//   2. Pinned Tile Location Cooldowns
+// Sections:
+//   1. Activity Sequence Rules (grouped dropdowns, no "adjacent" option)
+//   2. Location Cooldowns (minutes-based, not slots)
 //   3. Sports Player Requirements (moved from fields.js)
 //
 // Data storage:
 //   - Sequence rules → globalSettings.schedulingConstraints.sequenceRules
-//   - Cooldowns → globalSettings.pinnedTileDefaults[name].cooldownSlots
+//     Each rule: { activityA, activityB, direction: 'a_before_b'|'b_before_a' }
+//     activityA/B can be: "Basketball", "Swim", "__ALL_SPORTS__", "__ALL_SPECIALS__"
+//   - Cooldowns → globalSettings.pinnedTileDefaults[name].cooldownMinutes
 //   - Sport meta → globalSettings.app1.sportMetaData
-//
-// Runtime enforcement: scheduling_constraints.js (separate file).
-// This file is purely the UI/configuration layer.
 // ============================================================================
 
 (function() {
@@ -70,28 +69,16 @@ function saveSportMetaData(meta) {
     }
 }
 
-function getAllActivityNames() {
-    var settings = loadSettings();
-    var app1 = settings.app1 || {};
-    var names = new Set();
+// =========================================================================
+// ACTIVITY HELPERS
+// =========================================================================
 
-    (app1.fields || []).forEach(function(f) {
-        if (f.name) names.add(f.name);
-        (f.activities || []).forEach(function(a) { names.add(a); });
-    });
+var GROUP_ALL_SPORTS = '__ALL_SPORTS__';
+var GROUP_ALL_SPECIALS = '__ALL_SPECIALS__';
 
-    (app1.specialActivities || []).forEach(function(s) {
-        if (s.name) names.add(s.name);
-    });
-
-    Object.keys(getPinnedTileDefaults()).forEach(function(k) { names.add(k); });
-
-    return Array.from(names).sort(function(a, b) { return a.localeCompare(b); });
-}
-
-function getAllSportsFromFields() {
+function getSportsList() {
     if (window.getAllGlobalSports) {
-        return window.getAllGlobalSports();
+        return window.getAllGlobalSports().slice().sort();
     }
     var settings = loadSettings();
     var fields = (settings.app1 && settings.app1.fields) ? settings.app1.fields : [];
@@ -100,6 +87,69 @@ function getAllSportsFromFields() {
         (f.activities || []).forEach(function(a) { sports.add(a); });
     });
     return Array.from(sports).sort();
+}
+
+function getSpecialsList() {
+    var settings = loadSettings();
+    var specials = (settings.app1 && settings.app1.specialActivities) ? settings.app1.specialActivities : [];
+    return specials.map(function(s) { return s.name; }).filter(Boolean).sort();
+}
+
+function getDisplayName(value) {
+    if (value === GROUP_ALL_SPORTS) return 'All Sports';
+    if (value === GROUP_ALL_SPECIALS) return 'All Specials';
+    return value;
+}
+
+function isGroupValue(value) {
+    return value === GROUP_ALL_SPORTS || value === GROUP_ALL_SPECIALS;
+}
+
+function buildActivitySelect(id) {
+    var sports = getSportsList();
+    var specials = getSpecialsList();
+
+    var html = '<option value="">-- Select --</option>';
+
+    // Group options at top
+    html += '<optgroup label="Groups">';
+    html += '<option value="' + GROUP_ALL_SPORTS + '">All Sports</option>';
+    html += '<option value="' + GROUP_ALL_SPECIALS + '">All Specials</option>';
+    html += '</optgroup>';
+
+    // Individual sports
+    if (sports.length > 0) {
+        html += '<optgroup label="Sports">';
+        sports.forEach(function(s) {
+            html += '<option value="' + esc(s) + '">' + esc(s) + '</option>';
+        });
+        html += '</optgroup>';
+    }
+
+    // Individual specials
+    if (specials.length > 0) {
+        html += '<optgroup label="Special Activities">';
+        specials.forEach(function(s) {
+            html += '<option value="' + esc(s) + '">' + esc(s) + '</option>';
+        });
+        html += '</optgroup>';
+    }
+
+    // Pinned tiles
+    var pinnedNames = Object.keys(getPinnedTileDefaults());
+    if (pinnedNames.length > 0) {
+        html += '<optgroup label="Pinned Tiles">';
+        pinnedNames.sort().forEach(function(p) {
+            html += '<option value="' + esc(p) + '">' + esc(p) + '</option>';
+        });
+        html += '</optgroup>';
+    }
+
+    return '<select id="' + id + '" style="' + selectStyle() + '">' + html + '</select>';
+}
+
+function selectStyle() {
+    return 'padding:8px 10px; border:1px solid var(--slate-300, #D1D5DB); border-radius:var(--radius-xs, 6px); font-size:0.85rem; min-width:160px; background:white; font-family:var(--font-body);';
 }
 
 // =========================================================================
@@ -141,7 +191,7 @@ function renderRulesTab(container) {
 }
 
 // =========================================================================
-// SECTION BUILDER (matches detail-section pattern from fields.js)
+// SECTION BUILDER
 // =========================================================================
 
 function createSection(title, description) {
@@ -200,18 +250,24 @@ function renderSequenceRulesSection() {
             var row = document.createElement('div');
             row.style.cssText = 'display:flex; align-items:center; gap:10px; padding:10px 14px; background:var(--slate-50, #F8FAFC); border:1px solid var(--slate-200, #E5E7EB); border-radius:var(--radius-sm, 8px); flex-wrap:wrap;';
 
-            var dirLabels = {
-                'a_before_b': 'cannot be right before',
-                'b_before_a': 'cannot be right after',
-                'either': 'cannot be adjacent to'
-            };
+            var dirLabel = rule.direction === 'b_before_a' ? 'cannot be right after' : 'cannot be right before';
 
-            var pillStyle = 'font-weight:600; color:var(--teal-dark, #0F5F6E); background:var(--teal-tint, #e6f4f7); padding:4px 10px; border-radius:var(--radius-xs, 6px); font-size:0.85rem;';
+            var pillStyle = 'font-weight:600; padding:4px 10px; border-radius:var(--radius-xs, 6px); font-size:0.85rem;';
+            var pillA = pillStyle + ' color:var(--teal-dark, #0F5F6E); background:var(--teal-tint, #e6f4f7);';
+            var pillB = pillStyle + ' color:var(--teal-dark, #0F5F6E); background:var(--teal-tint, #e6f4f7);';
+
+            // Use different styling for group rules
+            if (isGroupValue(rule.activityA)) {
+                pillA = pillStyle + ' color:#7c2d12; background:#fed7aa;';
+            }
+            if (isGroupValue(rule.activityB)) {
+                pillB = pillStyle + ' color:#7c2d12; background:#fed7aa;';
+            }
 
             row.innerHTML =
-                '<span style="' + pillStyle + '">' + esc(rule.activityA) + '</span>' +
-                '<span style="color:var(--slate-500, #6B7280); font-size:0.8rem; flex-shrink:0;">' + (dirLabels[rule.direction] || rule.direction) + '</span>' +
-                '<span style="' + pillStyle + '">' + esc(rule.activityB) + '</span>' +
+                '<span style="' + pillA + '">' + esc(getDisplayName(rule.activityA)) + '</span>' +
+                '<span style="color:var(--slate-500, #6B7280); font-size:0.8rem; flex-shrink:0;">' + dirLabel + '</span>' +
+                '<span style="' + pillB + '">' + esc(getDisplayName(rule.activityB)) + '</span>' +
                 '<span style="flex:1;"></span>';
 
             var delBtn = document.createElement('button');
@@ -242,20 +298,13 @@ function renderSequenceRulesSection() {
     var form = document.createElement('div');
     form.style.cssText = 'display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:14px; background:var(--teal-tint-bg, #f0f9fb); border:1px solid var(--teal-border, #b2dce6); border-radius:var(--radius-sm, 8px);';
 
-    var activities = getAllActivityNames();
-    var optionsHtml = '<option value="">-- Select Activity --</option>' +
-        activities.map(function(a) { return '<option value="' + esc(a) + '">' + esc(a) + '</option>'; }).join('');
-
-    var selectStyle = 'padding:8px 10px; border:1px solid var(--slate-300, #D1D5DB); border-radius:var(--radius-xs, 6px); font-size:0.85rem; min-width:150px; background:white; font-family:var(--font-body);';
-
     form.innerHTML =
-        '<select id="seq-rule-a" style="' + selectStyle + '">' + optionsHtml + '</select>' +
-        '<select id="seq-rule-dir" style="' + selectStyle + '">' +
+        buildActivitySelect('seq-rule-a') +
+        '<select id="seq-rule-dir" style="' + selectStyle() + '">' +
         '<option value="a_before_b">cannot be right before</option>' +
         '<option value="b_before_a">cannot be right after</option>' +
-        '<option value="either">cannot be adjacent to</option>' +
         '</select>' +
-        '<select id="seq-rule-b" style="' + selectStyle + '">' + optionsHtml + '</select>';
+        buildActivitySelect('seq-rule-b');
 
     var addBtn = document.createElement('button');
     addBtn.textContent = '+ Add Rule';
@@ -265,7 +314,7 @@ function renderSequenceRulesSection() {
         var b = document.getElementById('seq-rule-b').value;
         var dir = document.getElementById('seq-rule-dir').value;
         if (!a || !b) { alert('Please select both activities.'); return; }
-        if (a === b) { alert('The two activities must be different.'); return; }
+        if (a === b) { alert('The two selections must be different.'); return; }
         var existing = getSequenceRules();
         var dup = existing.some(function(r) {
             return (r.activityA === a && r.activityB === b && r.direction === dir) ||
@@ -281,20 +330,20 @@ function renderSequenceRulesSection() {
 
     var hint = document.createElement('div');
     hint.style.cssText = 'margin-top:12px; font-size:0.8rem; color:var(--slate-500, #6B7280); padding:12px; background:var(--slate-50, #F9FAFB); border-radius:var(--radius-sm, 8px); border-left:3px solid var(--teal-primary, #147D91); line-height:1.5;';
-    hint.innerHTML = '<strong>Example:</strong> "Swim cannot be right before Art" means no bunk will ever have Art scheduled in the slot right after Swim.';
+    hint.innerHTML = '<strong>Example:</strong> "All Sports cannot be right after Swim" means no sport will be scheduled in the slot right after Swim for any bunk. You can also get specific, like "Basketball cannot be right before Art".';
     body.appendChild(hint);
 
     return section;
 }
 
 // =========================================================================
-// SECTION 2: PINNED TILE COOLDOWNS
+// SECTION 2: LOCATION COOLDOWNS (minutes-based)
 // =========================================================================
 
 function renderCooldownSection() {
     var section = createSection(
         'Location Cooldowns',
-        'Keep a location empty for a set number of slots after Lunch, Snack, etc.'
+        'Keep a location empty for a set amount of time after Lunch, Snack, etc.'
     );
 
     var body = section.querySelector('.detail-section-body');
@@ -309,7 +358,7 @@ function renderCooldownSection() {
             var tileName = entry[0];
             var val = entry[1];
             var location = typeof val === 'string' ? val : (val ? val.location || '' : '');
-            var cooldown = (typeof val === 'object' && val) ? (val.cooldownSlots || 0) : 0;
+            var cooldownMin = (typeof val === 'object' && val) ? (val.cooldownMinutes || 0) : 0;
 
             var row = document.createElement('div');
             row.style.cssText = 'display:flex; align-items:center; gap:10px; padding:10px 14px; background:var(--slate-50, #F8FAFC); border:1px solid var(--slate-200, #E5E7EB); border-radius:var(--radius-sm, 8px); flex-wrap:wrap;';
@@ -326,24 +375,26 @@ function renderCooldownSection() {
 
             var coolLabel = document.createElement('span');
             coolLabel.style.cssText = 'font-size:0.8rem; color:var(--slate-500, #6B7280);';
-            coolLabel.textContent = 'Cooldown:';
+            coolLabel.textContent = 'Block for:';
             coolWrap.appendChild(coolLabel);
 
             var coolInput = document.createElement('input');
             coolInput.type = 'number';
             coolInput.min = '0';
-            coolInput.max = '5';
-            coolInput.value = cooldown;
-            coolInput.style.cssText = 'width:50px; padding:6px 8px; border:1px solid var(--slate-300, #D1D5DB); border-radius:var(--radius-xs, 6px); text-align:center; font-size:0.85rem; background:white;';
+            coolInput.max = '120';
+            coolInput.step = '5';
+            coolInput.value = cooldownMin;
+            coolInput.placeholder = '0';
+            coolInput.style.cssText = 'width:60px; padding:6px 8px; border:1px solid var(--slate-300, #D1D5DB); border-radius:var(--radius-xs, 6px); text-align:center; font-size:0.85rem; background:white;';
             coolInput.onchange = (function(name) {
                 return function() {
-                    var v = Math.min(5, Math.max(0, parseInt(this.value) || 0));
+                    var v = Math.min(120, Math.max(0, parseInt(this.value) || 0));
                     this.value = v;
                     var updated = getPinnedTileDefaults();
                     if (typeof updated[name] === 'string') {
-                        updated[name] = { location: updated[name], cooldownSlots: v };
+                        updated[name] = { location: updated[name], cooldownMinutes: v };
                     } else {
-                        updated[name] = Object.assign({}, updated[name] || {}, { cooldownSlots: v });
+                        updated[name] = Object.assign({}, updated[name] || {}, { cooldownMinutes: v });
                     }
                     savePinnedTileDefaults(updated);
                     var inp = this;
@@ -353,10 +404,10 @@ function renderCooldownSection() {
             })(tileName);
             coolWrap.appendChild(coolInput);
 
-            var slotsLabel = document.createElement('span');
-            slotsLabel.style.cssText = 'font-size:0.8rem; color:var(--slate-500, #6B7280);';
-            slotsLabel.textContent = 'slot(s) after';
-            coolWrap.appendChild(slotsLabel);
+            var minLabel = document.createElement('span');
+            minLabel.style.cssText = 'font-size:0.8rem; color:var(--slate-500, #6B7280);';
+            minLabel.textContent = 'min after';
+            coolWrap.appendChild(minLabel);
 
             row.appendChild(coolWrap);
             list.appendChild(row);
@@ -372,18 +423,18 @@ function renderCooldownSection() {
 
     var infoBox = document.createElement('div');
     infoBox.style.cssText = 'margin-top:12px; font-size:0.8rem; color:var(--slate-500, #6B7280); padding:12px; background:var(--slate-50, #F9FAFB); border-radius:var(--radius-sm, 8px); border-left:3px solid var(--teal-primary, #147D91); line-height:1.5;';
-    infoBox.innerHTML = '<strong>Example:</strong> Lunch in the Gym with cooldown = 1 means the Gym stays empty for 1 extra slot after Lunch ends. Set to 0 for no cooldown.';
+    infoBox.innerHTML = '<strong>Example:</strong> Lunch in the Gym with 45 min means the Gym stays empty for 45 minutes after Lunch ends. Set to 0 for no cooldown.';
     body.appendChild(infoBox);
 
     return section;
 }
 
 // =========================================================================
-// SECTION 3: SPORTS PLAYER REQUIREMENTS (moved from fields.js)
+// SECTION 3: SPORTS PLAYER REQUIREMENTS
 // =========================================================================
 
 function renderSportRulesSection() {
-    var allSports = getAllSportsFromFields();
+    var allSports = getSportsList();
     var sportMeta = getSportMetaData();
 
     var section = createSection(
@@ -525,6 +576,10 @@ function initRulesTab() {
 // =========================================================================
 
 window.initRulesTab = initRulesTab;
+
+// Expose group constants for use by scheduling_constraints.js
+window.SEQUENCE_RULE_ALL_SPORTS = GROUP_ALL_SPORTS;
+window.SEQUENCE_RULE_ALL_SPECIALS = GROUP_ALL_SPECIALS;
 
 console.log('[SchedulingRules] Module loaded');
 
