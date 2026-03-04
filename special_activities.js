@@ -165,6 +165,10 @@ function validateSpecialActivity(activity, activityName) {
                 return { location: p.location || null, duration: (parseInt(p.duration, 10) > 0) ? parseInt(p.duration, 10) : null };
             }) : []
         } : { enabled: false, totalParts: 2, daysBetween: 3, parts: [] }
+        fullGrade: activity.fullGrade === true,
+        duration: (activity.duration != null && parseInt(activity.duration, 10) > 0) ? parseInt(activity.duration, 10) : null,
+        availableDays: Array.isArray(activity.availableDays) ? activity.availableDays : null,
+        mustScheduleWhenAvailable: activity.mustScheduleWhenAvailable === true
     };
 }
 
@@ -172,6 +176,7 @@ function createDefaultActivity(name) {
     return { name, type: 'Special', available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
         maxUsage: null, maxUsagePeriod: 'half', frequencyWeeks: 0, rainyDayExclusive: false, prepDuration: 0,
+        duration: null, availableDays: null, mustScheduleWhenAvailable: false,
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
         rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
         multiPart: { enabled: false, totalParts: 2, daysBetween: 3, parts: [] } };
@@ -293,6 +298,7 @@ function loadData() {
 }
 
 function refreshFromStorage() {
+    if (_isSaving) return;
     const pS = JSON.stringify(specialActivities), pR = JSON.stringify(rainyDayActivities), pSel = selectedItemId;
     loadData();
     if (selectedItemId) { const [, n] = selectedItemId.split(/-(.+)/); if (!specialActivities.some(s=>s.name===n) && !rainyDayActivities.some(s=>s.name===n)) selectedItemId = null; }
@@ -301,8 +307,10 @@ function refreshFromStorage() {
     }
 }
 
+let _isSaving = false;
 function saveData() {
     if (window.AccessControl?.canEditSetup && !window.AccessControl.canEditSetup()) return;
+    _isSaving = true;
     try {
         specialActivities = validateAllActivities(specialActivities);
         rainyDayActivities = validateAllActivities(rainyDayActivities);
@@ -312,6 +320,7 @@ function saveData() {
             window._specialActivitiesSyncTimeout = setTimeout(() => { window.forceSyncToCloud(); window._specialActivitiesSyncTimeout = null; }, 500);
         }
     } catch (e) { console.error("[SPECIAL_ACTIVITIES] Error saving data:", e); }
+    finally { setTimeout(function() { _isSaving = false; }, 300); }
 }
 
 function renderMasterList() {
@@ -472,6 +481,22 @@ function renderDetailPane() {
         section("Prep Duration", summaryPrepDuration(item), () => renderPrepDurationSettings(item)),
         section("Multi-Parts", summaryMultiPart(item), () => renderMultiPartSettings(item))
     ]));
+    // Group 2: Time & Weather — time rules + weather (weather only for non-rainy-day items)
+    const timeWeatherSections = [section("Time Availability", summaryTime(item), () => renderTimeRules(item))];
+    timeWeatherSections.push(section("Day Availability", summaryDays(item), () => renderDayAvailability(item)));
+    if (!isRainyDayItem) timeWeatherSections.push(section("Weather & Availability", summaryWeather(item), () => renderWeatherSettings(item)));
+    detailPaneEl.appendChild(sectionGroup("Time & Weather", "When this special can be scheduled", timeWeatherSections));
+
+    // Group 3: Rotation Rules — usage limit + full grade + prep duration
+   const rotationSections = [
+        section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
+        section("Full Grade", summaryFullGrade(item), () => renderFullGradeSettings(item)),
+    ];
+    if (window.getCampBuilderMode?.() === 'auto' || window._daBuilderMode === 'auto') {
+        rotationSections.push(section("Activity Duration", summaryDuration(item), () => renderDurationSettings(item)));
+    }
+    rotationSections.push(section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)));
+   detailPaneEl.appendChild(sectionGroup("Rotation Rules", "Limits, timing & scheduling mode", rotationSections));
 }
 
 // =========================================================================
@@ -507,6 +532,22 @@ function summarySchedulingMode(item) {
     if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return 'Individual — 1 bunk at a time';
     return 'Individual — up to ' + (parseInt(item.sharableWith.capacity, 10) || 2) + ' bunks at once';
 }
+    function summaryDuration(item) {
+    var d = parseInt(item.duration) || 0;
+    if (d <= 0) return 'Not set';
+    var total = d + (parseInt(item.prepDuration) || 0);
+    if (item.prepDuration > 0) return d + 'min (+' + item.prepDuration + 'min prep = ' + total + 'min total)';
+    return d + ' minutes';
+}
+function summaryDuration(item) {
+    var d = parseInt(item.duration) || 0;
+    if (d <= 0) return 'Not set';
+    var total = d + (parseInt(item.prepDuration) || 0);
+    if (item.prepDuration > 0) return d + 'min (+' + item.prepDuration + 'min prep = ' + total + 'min total)';
+    return d + ' minutes';
+}
+function summaryFullGrade(item) { return item.fullGrade ? 'Entire grade does it together' : 'Off (normal rotation)'; }
+function summarySharing(item) { if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "No sharing (1 bunk only)"; return 'Up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks (same grade)'; }
 function summaryAccess(item) { if (!item.limitUsage?.enabled) return "Open to all grades"; const c = Object.keys(item.limitUsage.divisions||{}).length; if (c===0) return "\u26A0 Restricted (none selected)"; return c + ' grade' + (c!==1?'s':'') + ' allowed' + (item.limitUsage.usePriority?" \u00B7 prioritized":""); }
 function summaryTime(item) { const c = (item.timeRules||[]).length; return c ? c + ' rule(s) active' : "Available all day"; }
 function summaryWeather(item) {
@@ -518,6 +559,12 @@ function summaryWeather(item) {
     return s;
 }
 function summaryLocation(item) { return item.location || "No field assigned"; }
+function summaryDays(item) {
+    if (!Array.isArray(item.availableDays) || item.availableDays.length === 0) return 'Every day';
+    if (item.availableDays.length === 7) return 'Every day';
+    var dayMap = { 'Sunday':'Sun', 'Monday':'Mon', 'Tuesday':'Tue', 'Wednesday':'Wed', 'Thursday':'Thu', 'Friday':'Fri', 'Saturday':'Sat' };
+    return item.availableDays.map(function(d) { return dayMap[d] || d; }).join(', ');
+}
 
 // ★ v3.7: Multi-Part summary
 function summaryMultiPart(item) {
@@ -1212,6 +1259,60 @@ function renderWeatherSettings(item) {
     }
     return container;
 }
+function renderDurationSettings(item) {
+    const container = document.createElement("div");
+    const hasDur = (parseInt(item.duration) || 0) > 0;
+    
+    container.innerHTML = '<div style="margin-bottom:16px;">'
+        + '<p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Set how long this activity takes when scheduled. The scheduler will use this duration instead of the skeleton block\'s default time.</p>'
+        + '<div style="background:' + (hasDur ? '#eff6ff' : '#f9fafb') + '; border:1px solid ' + (hasDur ? '#bfdbfe' : '#e5e7eb') + '; border-radius:10px; padding:14px;">'
+        + '<div style="display:flex; align-items:center; gap:12px; margin-bottom:' + (hasDur ? '12px' : '0') + ';">'
+        + '<div style="flex:1;">'
+        + '<div style="font-weight:600; color:' + (hasDur ? '#1e40af' : '#374151') + ';">' + (hasDur ? item.duration + ' minutes' : 'Not Set') + '</div>'
+        + '<div style="font-size:0.8rem; color:' + (hasDur ? '#3b82f6' : '#6b7280') + ';">' + (hasDur ? 'Scheduler will use this duration' : 'Uses skeleton block duration') + '</div>'
+        + '</div>'
+        + '<label class="switch"><input type="checkbox" id="duration-toggle" ' + (hasDur ? 'checked' : '') + '><span class="slider"></span></label>'
+        + '</div>'
+        + '<div id="duration-config" style="display:' + (hasDur ? 'block' : 'none') + ';">'
+        + '<div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #bfdbfe; margin-top:8px;">'
+        + '<label style="font-size:0.85rem;">Duration:</label>'
+        + '<input type="number" id="duration-input" min="5" max="180" step="5" value="' + (item.duration || 30) + '" style="width:70px; padding:6px 10px; border:1px solid #bfdbfe; border-radius:6px; text-align:center;">'
+        + '<span style="font-size:0.85rem; color:#64748b;">minutes</span>'
+        + '</div></div></div></div>';
+    
+    const tog = container.querySelector("#duration-toggle");
+    if (tog) {
+        tog.addEventListener("change", function() {
+            const cfg = container.querySelector("#duration-config");
+            if (this.checked) {
+                cfg.style.display = "block";
+                item.duration = parseInt(container.querySelector("#duration-input").value, 10) || 30;
+            } else {
+                cfg.style.display = "none";
+                item.duration = null;
+            }
+            saveData();
+            const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+            if (s) s.textContent = summaryDuration(item);
+        });
+    }
+    
+    const di = container.querySelector("#duration-input");
+    if (di) {
+        di.addEventListener("change", function() {
+            const v = parseInt(this.value, 10);
+            if (!isNaN(v) && v >= 5 && v <= 180) {
+                item.duration = v;
+                saveData();
+                const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+                if (s) s.textContent = summaryDuration(item);
+            }
+        });
+    }
+    
+    return container;
+}
+   
 function renderPrepDurationSettings(item) {
     const container = document.createElement("div");
     const hp = (item.prepDuration || 0) > 0;
@@ -1494,6 +1595,41 @@ function propagateMultiPartRename(oldName, newName) {
 // =========================================================================
 // Add/Delete, Cleanup, Helpers
 // =========================================================================
+function renderDayAvailability(item) {
+    var container = document.createElement("div");
+    var updateSummary = function() { var s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if (s) s.textContent = summaryDays(item); };
+    var desc = document.createElement("p"); desc.style.cssText = "font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;";
+    desc.textContent = "Select which days this activity is available. Leave all unchecked for every day. When specific days are set, the auto builder treats this as a scarce activity and prioritizes scheduling it.";
+    container.appendChild(desc);
+    var allDays = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    var grid = document.createElement("div"); grid.style.cssText = "display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:8px; margin-bottom:12px;";
+    function renderChips() {
+        grid.innerHTML = "";
+        var sel = Array.isArray(item.availableDays) ? item.availableDays : [];
+        allDays.forEach(function(day) {
+            var active = sel.map(function(d){return d.toLowerCase();}).includes(day.toLowerCase());
+            var chip = document.createElement("button"); chip.type = "button"; chip.textContent = day;
+            chip.style.cssText = "padding:10px 14px; border-radius:10px; font-size:0.85rem; font-weight:500; cursor:pointer; transition:all 0.15s; text-align:center; border:1.5px solid " + (active ? "#0891b2" : "#E5E7EB") + "; background:" + (active ? "linear-gradient(135deg, #e0f7fa, #e6f4f7)" : "#fff") + "; color:" + (active ? "#0A4A56" : "#6b7280") + ";";
+            chip.onmouseenter = function() { chip.style.borderColor = '#0891b2'; chip.style.transform = 'translateY(-1px)'; };
+            chip.onmouseleave = function() { var a2 = Array.isArray(item.availableDays) && item.availableDays.map(function(d){return d.toLowerCase();}).includes(day.toLowerCase()); chip.style.borderColor = a2 ? '#0891b2' : '#E5E7EB'; chip.style.transform = 'translateY(0)'; };
+            chip.onclick = function() {
+                if (!item.availableDays) item.availableDays = [];
+                var idx = item.availableDays.findIndex(function(d){return d.toLowerCase() === day.toLowerCase();});
+                if (idx >= 0) item.availableDays.splice(idx, 1); else item.availableDays.push(day);
+                if (item.availableDays.length === 0 || item.availableDays.length === 7) item.availableDays = null;
+                saveData(); renderChips(); updateSummary();
+            };
+            grid.appendChild(chip);
+        });
+    }
+    renderChips();
+    container.appendChild(grid);
+    var info = document.createElement("div"); info.style.cssText = "padding:10px 14px; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; font-size:0.8rem; color:#92400e;";
+    info.innerHTML = '<strong>\uD83D\uDCA1 Tip:</strong> Activities with specific day restrictions are treated as <em>scarce</em> by the auto builder \u2014 they get priority scheduling with bunk rotation to ensure fair access.';
+    container.appendChild(info);
+    return container;
+}
+
 function addSpecial() { if(!window.AccessControl?.checkSetupAccess?.('add special activities'))return; if(!addSpecialInput)return; const n=addSpecialInput.value.trim(); if(!n)return; if(specialActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())||rainyDayActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())){alert("Already exists.");return;} specialActivities.push(createDefaultActivity(n)); addSpecialInput.value=""; saveData(); selectedItemId='special-'+n; renderMasterList(); renderRainyDayList(); renderDetailPane(); }
 function addRainyDayActivity() { if(!window.AccessControl?.checkSetupAccess?.('add rainy day activities'))return; if(!addRainyDayInput)return; const n=addRainyDayInput.value.trim(); if(!n)return; if(specialActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())||rainyDayActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())){alert("Already exists.");return;} const a=createDefaultActivity(n); a.rainyDayExclusive=true; a.rainyDayOnly=true; a.isIndoor=true; rainyDayActivities.push(a); addRainyDayInput.value=""; saveData(); selectedItemId='special-'+n; renderMasterList(); renderRainyDayList(); renderDetailPane(); }
 

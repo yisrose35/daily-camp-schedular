@@ -214,6 +214,101 @@
             byDivision[div].push(block);
         });
 
+        // ★★★ AUTO BUILD: For divisions with per-bunk blocks, create superset timeline ★★★
+        for (const [divName, blocks] of Object.entries(byDivision)) {
+            const hasBunkBlocks = blocks.some(b => b._bunk);
+            if (hasBunkBlocks) {
+                log(`  ★ Division ${divName} has per-bunk blocks — building superset timeline`);
+                const timePoints = new Set();
+                blocks.forEach(b => {
+                    const s = parseTimeToMinutes(b.startTime);
+                    const e = parseTimeToMinutes(b.endTime);
+                    if (s !== null) timePoints.add(s);
+                    if (e !== null) timePoints.add(e);
+                });
+               // ★★★ v1.3.4: Snap time points to 5-min boundaries ★★★
+                // Per-bunk blocks can create non-round times (e.g., 3:38 from a 33min sport).
+                // Snapping prevents ugly time slots from bleeding across the whole division.
+                const SNAP_TO = 5;
+                const snapped = [...timePoints].map(t => Math.round(t / SNAP_TO) * SNAP_TO);
+                const sorted = [...new Set(snapped)].sort((a, b) => a - b);
+                const supersetBlocks = [];
+                for (let i = 0; i < sorted.length - 1; i++) {
+                    const sMin = sorted[i];
+                    const eMin = sorted[i + 1];
+                    if (eMin - sMin < 3) continue;
+                    const covering = blocks.find(b => {
+                        const bs = parseTimeToMinutes(b.startTime);
+                        const be = parseTimeToMinutes(b.endTime);
+                        return bs !== null && be !== null && bs <= sMin && be >= eMin;
+                    });
+                    // ★ v1.3.1 FIX: Strip per-bunk metadata from superset slots.
+// Superset slots represent the division-wide time grid, NOT
+// per-bunk assignments. Copying _bunk from the covering block
+// causes scheduler_core_main.js to treat the superset slot as
+// a single-bunk block, breaking all other bunks.
+const supersetBase = covering ? { ...covering } : {};
+delete supersetBase._bunk;
+delete supersetBase._durationStrict;
+delete supersetBase._targetDuration;
+delete supersetBase._hintActivity;
+delete supersetBase._scarceEvent;
+
+supersetBlocks.push({
+    ...supersetBase,
+    startTime: minutesToTimeLabel(sMin),
+    endTime: minutesToTimeLabel(eMin),
+    _supersetSlot: true
+});
+                }
+               // ★★★ v1.3.3 FIX: Merge undersized superset slots, but NEVER pinned events ★★★
+                // Per-bunk blocks create boundaries at different times (e.g., bunk1 ends at 11:30,
+                // bunk3 ends at 11:50). Collecting ALL boundaries creates 20min and 10min slots.
+                // Merge any slot shorter than 25min with the next slot to maintain minimum durations.
+                // EXCEPTION: Pinned events (snacks, lunch, dismissal, etc.) must NEVER be merged,
+                // even if undersized — they need their own slot so the scheduler assigns them to all bunks.
+                const MIN_SLOT_DUR = 25;
+                const NEVER_MERGE_EVENTS = ['lunch', 'snack', 'snacks', 'dismissal', 'arrival', 'davening', 'tefillah', 'mincha', 'regroup', 'lineup', 'swim', 'free play'];
+                const merged = [];
+                for (let mi = 0; mi < supersetBlocks.length; mi++) {
+                    const curr = supersetBlocks[mi];
+                    const currStart = parseTimeToMinutes(curr.startTime);
+                    const currEnd = parseTimeToMinutes(curr.endTime);
+                    const currDur = currEnd - currStart;
+                    
+                    // ★★★ v1.3.3: Never merge pinned events — they must keep their own slot ★★★
+                    const currIsPinned = curr.type === 'pinned' || 
+                        NEVER_MERGE_EVENTS.some(p => (curr.event || '').toLowerCase().includes(p));
+                    
+                    if (currDur < MIN_SLOT_DUR && !currIsPinned && mi + 1 < supersetBlocks.length) {
+                        const next = supersetBlocks[mi + 1];
+                        const nextEnd = parseTimeToMinutes(next.endTime);
+                        const mergedDur = nextEnd - currStart;
+                        log(`    ★ Merging undersized slot ${curr.startTime}-${curr.endTime} (${currDur}min) with next → ${curr.startTime}-${next.endTime} (${mergedDur}min)`);
+                        merged.push({
+                            ...next,
+                            startTime: curr.startTime,
+                            endTime: next.endTime,
+                            _supersetSlot: true,
+                            _merged: true
+                        });
+                        mi++;
+                    } else if (currDur < MIN_SLOT_DUR && !currIsPinned && merged.length > 0) {
+                        const prev = merged[merged.length - 1];
+                        log(`    ★ Merging trailing undersized slot ${curr.startTime}-${curr.endTime} (${currDur}min) into prev → ${prev.startTime}-${curr.endTime}`);
+                        prev.endTime = curr.endTime;
+                        prev._merged = true;
+                    } else {
+                        if (currIsPinned && currDur < MIN_SLOT_DUR) {
+                            log(`    🛡️ Preserving pinned event "${curr.event}" ${curr.startTime}-${curr.endTime} (${currDur}min) — not merging`);
+                        }
+                        merged.push(curr);
+                    }
+                }
+                byDivision[divName] = merged;
+                log(`    Created ${merged.length} superset slots (merged from ${supersetBlocks.length}) from ${blocks.length} blocks`);            }
+        }
+
         // Build slot array for each division
         for (const [divName, blocks] of Object.entries(byDivision)) {
             // Parse times and filter invalid

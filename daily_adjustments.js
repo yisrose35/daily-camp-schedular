@@ -43,6 +43,9 @@ let smartTileHistory = null;
 let dailyOverrideSkeleton = [];
 let selectedTileId = null;
 
+// ★★★ AUTO MODE: DA's own layer state (independent from master builder) ★★★
+let daAutoLayers = {};  // { gradeKey: [{ id, type, startMin, endMin, qty, op }] }
+
 // DOM References
 let skeletonContainer = null;
 let tripsFormContainer = null;
@@ -61,7 +64,25 @@ const SMART_TILE_HISTORY_KEY = "smartTileHistory_v1";
 const PIXELS_PER_MINUTE = 2;
 const INCREMENT_MINS = 30;
 const SNAP_MINS = 5;
-
+ // ★★★ AUTO BUILDER v2: Check if today uses auto layers ★★★
+function checkAutoModeForDay(dateKey) {
+  const g = window.loadGlobalSettings?.() || {};
+  const app1 = g.app1 || {};
+  const assignments = app1.layerAssignments || {};
+  const templates = app1.autoLayerTemplates || {};
+  
+  // Determine day of week
+  const [Y, M, D] = (dateKey || '').split('-').map(Number);
+  if (!Y) return null;
+  const dow = new Date(Y, M - 1, D).getDay();
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const dayName = dayNames[dow];
+  
+  const templateName = assignments[dayName] || assignments['Default'];
+  if (!templateName || !templates[templateName]) return null;
+  
+  return { templateName, layers: templates[templateName] };
+}
 
 
 // =================================================================
@@ -1309,6 +1330,8 @@ function clearDisplacedTiles() {
 function renderDisplacedTilesPanel() {
   const panel = document.getElementById('da-displaced-tiles-panel');
   if (!panel) return;
+  // Auto mode: displaced tiles don't apply (auto uses layers, not individual tiles)
+  if (window._daBuilderMode === 'auto') { panel.style.display = 'none'; return; }
   if (displacedTiles.length === 0) { panel.style.display = 'none'; return; }
   
   panel.style.display = 'block';
@@ -1426,6 +1449,46 @@ function mapEventNameForOptimizer(name) {
 // RENDER PALETTE
 // =================================================================
 function renderPalette() {
+  // AUTO MODE: render DAW layer palette (same layer types as Master Builder)
+  if (window._daBuilderMode === 'auto') {
+    const paletteEl = document.getElementById('da-palette');
+    if (!paletteEl) return;
+    
+    const DAW_TYPES = window.MasterSchedulerInternal?.DAW_LAYER_TYPES || [
+      { type:'sport', name:'Sport', style:'background:#86efac;color:#14532d;' },
+      { type:'special', name:'Special Activity', style:'background:#c4b5fd;color:#3b1f6b;' },
+      { type:'activity', name:'Activity', style:'background:#93c5fd;color:#1e3a5f;' },
+      { type:'swim', name:'Swim', style:'background:#67e8f9;color:#155e75;', anchor:true },
+      { type:'lunch', name:'Lunch', style:'background:#fca5a5;color:#7f1d1d;', anchor:true },
+      { type:'snacks', name:'Snacks', style:'background:#fde047;color:#713f12;', anchor:true },
+      { type:'dismissal', name:'Dismissal', style:'background:#f87171;color:#fff;', anchor:true },
+      { type:'custom', name:'Custom Pinned', style:'background:#d1d5db;color:#374151;', anchor:true },
+      { type:'league', name:'League Game', style:'background:#a5b4fc;color:#312e81;' },
+      { type:'elective', name:'Elective', style:'background:#f0abfc;color:#701a75;' },
+    ];
+    
+    let html = '';
+    html += '<div class="da-tile-label">Floaters</div>';
+    DAW_TYPES.filter(t => !t.anchor).forEach(t => {
+      html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}" style="${t.style}">${t.name}</div>`;
+    });
+    html += '<div class="da-tile-divider"></div>';
+    html += '<div class="da-tile-label">Anchors</div>';
+    DAW_TYPES.filter(t => t.anchor).forEach(t => {
+      html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}" style="${t.style}">${t.name}</div>`;
+    });
+    
+    paletteEl.innerHTML = html;
+    
+    // Wire up drag from palette — uses same data format the DAW grid expects
+    paletteEl.querySelectorAll('.ms-daw-tile').forEach(tile => {
+      tile.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/daw-layer', tile.dataset.type);
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+    });
+    return;
+  }
   const paletteEl = document.getElementById('da-palette');
   if (!paletteEl) return;
   
@@ -1449,7 +1512,8 @@ function renderPalette() {
       if (!tile) return;
       
       const el = document.createElement('div');
-      el.className = 'da-tile';
+      const paletteIsMS = paletteEl.classList.contains('ms-palette');
+      el.className = paletteIsMS ? 'ms-tile' : 'da-tile';
       el.textContent = tile.name;
       el.style.cssText = tile.style;
       el.draggable = true;
@@ -1502,11 +1566,17 @@ function renderPalette() {
 function renderGrid() {
   const gridEl = document.getElementById('da-skeleton-grid');
   if (!gridEl) return;
-  
+
+  // AUTO MODE: render DAW layer timeline instead of stacking grid
+  if (window._daBuilderMode === 'auto') {
+      renderDAWTimeline(gridEl);
+      return;
+  }
+
   const divisions = window.divisions || {};
   const availableDivisions = window.availableDivisions || [];
   if (availableDivisions.length === 0) {
-    gridEl.innerHTML = `<div class="da-empty-state">No divisions found. Please go to Setup to create divisions.</div>`;
+    gridEl.innerHTML = `<div class="da-empty-state">No divisions found.</div>`;
     return;
   }
   
@@ -1536,7 +1606,9 @@ function renderGrid() {
   const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
   gridEl.dataset.earliestMin = earliestMin;
   
-  let html = `<div class="da-grid" style="grid-template-columns:60px repeat(${availableDivisions.length}, 1fr);">`;
+ const gridEl_isMS = gridEl.closest('.ms-container') !== null;
+  const G = gridEl_isMS ? 'ms' : 'da';
+  let html = `<div class="${G}-grid" style="grid-template-columns:60px repeat(${availableDivisions.length}, 1fr);">`;
   
   // Header row
   html += `<div class="da-grid-header da-time-header">Time</div>`;
@@ -1591,6 +1663,70 @@ function renderGrid() {
   addRemoveListeners(gridEl);
   applyConflictHighlighting(gridEl);
 }
+
+// --- AUTO MODE: DAW Layer Timeline ---
+function renderDAWTimeline(gridEl) {
+  if (typeof window.MasterSchedulerInternal?.renderDAWGridWith !== 'function') {
+      gridEl.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;">Master Schedule Builder not loaded.</div>';
+      return;
+  }
+
+  gridEl.style.overflow = 'auto';
+  
+  window.MasterSchedulerInternal.renderDAWGridWith(gridEl, daAutoLayers, {
+   onLayersChanged: function(updatedLayers) {
+      if (updatedLayers && typeof updatedLayers === 'object') {
+        daAutoLayers = updatedLayers;
+      }
+      saveDAAutoLayers();
+    }
+  });
+}
+function daConvertSkeletonToLayers(skeleton) {
+  var layers = [];
+  var eventTypeMap = {
+      'swim': 'swim', 'lunch': 'lunch', 'snacks': 'snack', 'snack': 'snack',
+      'dismissal': 'dismissal', 'general activity slot': 'activity',
+      'sports slot': 'sports', 'special activity': 'special',
+      'league game': 'league', 'specialty league': 'specialty_league'
+  };
+  var blockTypeMap = {
+      'slot': 'activity', 'sports': 'sports', 'sport': 'sports',
+      'special': 'special', 'pinned': 'custom', 'league': 'league',
+      'smart': 'activity', 'split': 'split', 'elective': 'elective'
+  };
+
+  skeleton.forEach(function(block) {
+      if (!block || !block.startTime || !block.endTime || !block.division) return;
+      var startMin = parseTimeToMinutes(block.startTime);
+      var endMin = parseTimeToMinutes(block.endTime);
+      if (startMin == null || endMin == null || endMin <= startMin) return;
+
+      var layerType = 'activity';
+      var lowerEvent = (block.event || '').toLowerCase().trim();
+      if (eventTypeMap[lowerEvent]) layerType = eventTypeMap[lowerEvent];
+      else if (blockTypeMap[block.type]) layerType = blockTypeMap[block.type];
+
+      var isPinned = block.type === 'pinned' || ['swim','lunch','snack','snacks','dismissal'].indexOf(layerType) >= 0;
+
+      layers.push({
+          id: 'layer_' + Math.random().toString(36).slice(2, 9),
+          type: layerType,
+          event: block.event || layerType,
+          startMin: startMin,
+          endMin: endMin,
+          periodMin: endMin - startMin,
+          operator: isPinned ? '=' : '\u2265',
+          quantity: 1,
+          grade: block.division,
+          pinExact: isPinned
+      });
+  });
+
+  return layers;
+}
+
+
 
 function renderEventTile(ev, top, height) {
   let tile = TILES.find(t => t.name === ev.event);
@@ -2394,7 +2530,98 @@ function deselectAllTiles() {
 // =================================================================
 // LOAD/SAVE
 // =================================================================
-function loadDailySkeleton() {
+// =================================================================
+// AUTO MODE: Load layer template for today (independent from MS)
+// =================================================================
+function loadDAAutoLayers() {
+  const g = window.loadGlobalSettings?.() || {};
+  const autoTemplates = g.app1?.autoLayerTemplates || {};
+  const assignments = g.app1?.skeletonAssignments || {};
+  
+  const dateStr = window.currentScheduleDate || '';
+  const [Y, M, D] = dateStr.split('-').map(Number);
+  let dow = 0;
+  if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
+  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const today = dayNames[dow];
+  
+let tmpl = assignments[today] || assignments['Default'];
+  console.log('[DailyAdj] Auto mode: loading layer template for', today, '→', tmpl || '(none)');
+  
+  // Priority 1: Day-specific saved layers (localStorage)
+  const dateKey = window.currentScheduleDate || '';
+  const dayLayerKey = `campAutoLayers_${dateKey}`;
+  let loaded = false;
+  try {
+    const stored = localStorage.getItem(dayLayerKey);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && Object.keys(parsed).length > 0) {
+        daAutoLayers = parsed;
+        loaded = true;
+        console.log('[DailyAdj] ✅ Loaded daily auto layers from localStorage for', dateKey);
+      }
+    }
+  } catch (e) { console.warn('[DailyAdj] Failed to load daily auto layers from localStorage:', e); }
+  
+  // Priority 2: Day-specific saved layers (cloud)
+  if (!loaded) {
+    try {
+      const cloudLayers = g.app1?.dailyAutoLayers?.[dateKey];
+      if (cloudLayers && Object.keys(cloudLayers).length > 0) {
+        daAutoLayers = JSON.parse(JSON.stringify(cloudLayers));
+        localStorage.setItem(dayLayerKey, JSON.stringify(daAutoLayers));
+        loaded = true;
+        console.log('[DailyAdj] ✅ Loaded daily auto layers from CLOUD for', dateKey);
+      }
+    } catch (e) { console.warn('[DailyAdj] Failed to load daily auto layers from cloud:', e); }
+  }
+  
+  // Priority 3: Template fallback
+  if (!loaded) {
+    if (tmpl && autoTemplates[tmpl]) {
+      daAutoLayers = JSON.parse(JSON.stringify(autoTemplates[tmpl]));
+    } else if (autoTemplates['_current']) {
+      daAutoLayers = JSON.parse(JSON.stringify(autoTemplates['_current']));
+    } else {
+      daAutoLayers = {};
+    }
+    console.log('[DailyAdj] Loaded auto layers from template:', tmpl || '_current');
+  }
+  
+  // If empty, seed with division keys
+  if (Object.keys(daAutoLayers).length === 0) {
+    const divisions = window.divisions || {};
+    Object.keys(divisions).forEach(d => {
+      const div = divisions[d];
+      if (div.isParent) return;
+      daAutoLayers[d] = [];
+    });
+  }
+  
+ console.log('[DailyAdj] Auto layers loaded:', Object.keys(daAutoLayers).length, 'grades');
+}
+
+function saveDAAutoLayers() {
+  if (!window.AccessControl?.canEdit?.()) {
+    console.warn('[DailyAdj] Save blocked - insufficient permissions');
+    return;
+  }
+  if (!daAutoLayers || typeof daAutoLayers !== 'object') return;
+  const dateKey = window.currentScheduleDate;
+  try {
+    localStorage.setItem(`campAutoLayers_${dateKey}`, JSON.stringify(daAutoLayers));
+  } catch (e) { console.error('[DailyAdj] Failed to save auto layers to localStorage:', e); }
+  try {
+    if (!masterSettings.app1) masterSettings.app1 = {};
+    if (!masterSettings.app1.dailyAutoLayers) masterSettings.app1.dailyAutoLayers = {};
+    masterSettings.app1.dailyAutoLayers[dateKey] = JSON.parse(JSON.stringify(daAutoLayers || {}));
+    window.saveGlobalSettings?.('app1', masterSettings.app1);
+    window.forceSyncToCloud?.();
+  } catch (e) { console.error('[DailyAdj] Failed to save auto layers to cloud:', e); }
+}
+
+  function loadDailySkeleton() {
   const dateKey = window.currentScheduleDate;
   console.log('[DailyAdj] loadDailySkeleton called for date:', dateKey);
   
@@ -2530,12 +2757,18 @@ function renderToolbar() {
   const names = Object.keys(savedSkeletons).sort();
   const loadOptions = names.map(n => `<option value="${n}">${n}</option>`).join('');
   
+  // ★ In auto mode, show auto layer templates instead of skeleton templates
+  const isAutoMode = window._daBuilderMode === 'auto';
+  const autoTemplates = isAutoMode ? (masterSettings.app1?.autoLayerTemplates || {}) : {};
+  const autoNames = Object.keys(autoTemplates).filter(n => n !== '_current').sort();
+  const autoLoadOptions = autoNames.map(n => `<option value="${n}">${n}</option>`).join('');
+  
   toolbar.innerHTML = `
     <div class="da-toolbar-group">
       <span class="da-toolbar-label">Template:</span>
       <select id="da-load-select" class="da-select">
         <option value="">Load...</option>
-        ${loadOptions}
+        ${isAutoMode ? autoLoadOptions : loadOptions}
       </select>
     </div>
     
@@ -2551,26 +2784,50 @@ function renderToolbar() {
     </div>
   `;
   
-  document.getElementById('da-load-select').onchange = async function() {
+ document.getElementById('da-load-select').onchange = async function() {
     const name = this.value;
-    if (name && savedSkeletons[name]) {
-      const ok = await daShowConfirm('Load template "' + name + '"?');
-      if (ok) {
-        dailyOverrideSkeleton = JSON.parse(JSON.stringify(savedSkeletons[name]));
-        clearDisplacedTiles();
-        saveDailySkeleton();
-        renderGrid();
+    if (!name) return;
+    
+    if (isAutoMode) {
+      // ★ Auto mode: load auto layer template
+      if (autoTemplates[name]) {
+        const ok = await daShowConfirm('Load auto template "' + name + '"?');
+        if (ok) {
+          daAutoLayers = JSON.parse(JSON.stringify(autoTemplates[name]));
+          saveDAAutoLayers();
+          console.log('[DailyAdj] Loaded auto template:', name);
+          renderGrid();
+        }
+      }
+    } else {
+      // Manual mode: load skeleton template
+      if (savedSkeletons[name]) {
+        const ok = await daShowConfirm('Load template "' + name + '"?');
+        if (ok) {
+          dailyOverrideSkeleton = JSON.parse(JSON.stringify(savedSkeletons[name]));
+          window._autoGeneratedSchedule = false;
+          window._autoBuildTimelines = null;
+          clearDisplacedTiles();
+          saveDailySkeleton();
+          renderGrid();
+        }
       }
     }
     this.value = '';
   };
   
-  document.getElementById('da-clear-btn').onclick = async () => {
-    const ok = await daShowConfirm('Clear all blocks?', { danger: true, confirmText: 'Clear All' });
+ document.getElementById('da-clear-btn').onclick = async () => {
+    const ok = await daShowConfirm(isAutoMode ? 'Clear all layers?' : 'Clear all blocks?', { danger: true, confirmText: 'Clear All' });
     if (ok) {
-      dailyOverrideSkeleton = [];
-      saveDailySkeleton();
-      renderGrid();
+      if (isAutoMode) {
+        Object.keys(daAutoLayers).forEach(k => { daAutoLayers[k] = []; });
+        saveDAAutoLayers();
+        renderGrid();
+      } else {
+        dailyOverrideSkeleton = [];
+        saveDailySkeleton();
+        renderGrid();
+      }
     }
   };
   
@@ -2592,14 +2849,93 @@ function renderToolbar() {
 async function runOptimizer() {
     if (!window.AccessControl?.checkEditAccess?.('run optimizer')) return;
     if (!window.runSkeletonOptimizer) { await daShowAlert("Error: 'runSkeletonOptimizer' not found."); return; }
-    if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
-    saveDailySkeleton();
 
+    // ★★★ AUTO MODE: Convert layers → skeleton via AutoBuildEngine ★★★
+    const isAutoMode = window._daBuilderMode === 'auto';
+    if (isAutoMode) {
+        console.log('[Optimizer] AUTO MODE detected — building skeleton from layers');
+        if (!window.AutoBuildEngine) { await daShowAlert("Error: AutoBuildEngine not loaded."); return; }
+        
+        // Flatten daAutoLayers (keyed by grade) into a single layers array
+        const allLayers = [];
+        Object.keys(daAutoLayers).forEach(grade => {
+            (daAutoLayers[grade] || []).forEach(layer => {
+                allLayers.push({ ...layer, grade: grade });
+            });
+        });
+        
+        if (allLayers.length === 0) { await daShowAlert("No layers defined. Add layers before generating."); return; }
+        
+        const dateStr = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        const result = window.AutoBuildEngine.build({ layers: allLayers, dateStr: dateStr });
+        
+        if (!result.skeleton || result.skeleton.length === 0) {
+            await daShowAlert("AutoBuildEngine produced no skeleton blocks. Check your layers.");
+            return;
+        }
+        
+        console.log('[Optimizer] AutoBuild produced', result.skeleton.length, 'skeleton blocks,', result.bunkOverrides.length, 'bunk overrides');
+        
+        // Store auto-generated flags
+        window._autoGeneratedSchedule = true;
+        window._autoBuildTimelines = result.bunkTimelines;
+        
+        // Push into daily skeleton so the rest of the pipeline uses it
+        dailyOverrideSkeleton = result.skeleton;
+        window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+        window.manualSkeleton = result.skeleton;
+        window.skeleton = result.skeleton;
+        
+        // ★★★ v3.2: Build divisionTimes from auto skeleton ★★★
+        if (window.DivisionTimesSystem?.buildFromSkeleton) {
+            var divisions = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
+            window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(result.skeleton, divisions);
+            console.log('[Optimizer] Built divisionTimes for', Object.keys(window.divisionTimes).length, 'divisions');
+        }
+        
+        // ★★★ v3.2: Store bunk overrides where scheduler_core_main can find them ★★★
+        if (result.bunkOverrides && result.bunkOverrides.length > 0) {
+            window._autoBunkOverrides = result.bunkOverrides;
+            console.log('[Optimizer] Stored', result.bunkOverrides.length, 'bunk overrides');
+        }
+        
+        // Save skeleton + bunk overrides
+        if (window.saveCurrentDailyData) {
+            window.saveCurrentDailyData('autoSkeleton', result.skeleton);
+            if (result.bunkOverrides && result.bunkOverrides.length > 0) {
+                window.saveCurrentDailyData('bunkActivityOverrides', result.bunkOverrides);
+            }
+            window.saveCurrentDailyData('_autoGenerated', true);
+            window.saveCurrentDailyData('_autoBuildTimelines', result.bunkTimelines);
+            window.saveCurrentDailyData('divisionTimes', window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes);
+        }
+        
+        // Also push bunk overrides into currentOverrides
+        if (result.bunkOverrides && result.bunkOverrides.length > 0) {
+            currentOverrides.bunkActivityOverrides = result.bunkOverrides;
+        }
+        
+       // ★ Don't contaminate the manual Master Builder with auto-generated skeletons.
+        // Auto mode manages its own pipeline; pushing here would create a false
+        // "unsaved draft" in the manual builder and risk overwriting manual templates.
+    } else {
+        // Manual mode: original check
+        if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
+    }
+    
+   // Only persist to manual skeleton storage paths in manual mode.
+    // In auto mode the skeleton was already saved via saveCurrentDailyData above.
+    if (window._daBuilderMode !== 'auto') {
+        saveDailySkeleton();
+    }
     if (window.SchedulerCoreUtils?.hydrateLocalStorageFromCloud) {
         await window.SchedulerCoreUtils.hydrateLocalStorageFromCloud();
     }
 
-  // ★★★ PRE-GENERATION CLEAR (v4 — FULL WIPE) ★★★
+   
+    
+
+    // ★★★ PRE-GENERATION CLEAR (v4 — FULL WIPE) ★★★
   const dateKey = window.currentScheduleDate;
   console.log('[Optimizer] ★ PRE-GENERATION FULL WIPE for', dateKey);
 
@@ -2658,6 +2994,10 @@ async function runOptimizer() {
   window._generationInProgress = true;
 
   console.log('[Optimizer] ★ FULL WIPE COMPLETE. Running optimizer...');
+  // ★★★ AUTO MODE: Clear auto flags so schedule view uses table renderer ★★★
+  window._autoGeneratedSchedule = false;
+  window._autoBuildTimelines = null;
+  dailyOverrideSkeleton.forEach(b => delete b._autoGenerated);
   // ★★★ END PRE-GENERATION CLEAR ★★★
 
   const success = window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
@@ -2665,7 +3005,7 @@ async function runOptimizer() {
   // ★★★ POST-GENERATION CLEANUP ★★★
   window._preGenClearActive = false;
 
-  if (success) {
+if (success) {
       // Force save the fresh schedule to ALL storage layers immediately
       try {
           const freshData = {
@@ -2676,30 +3016,29 @@ async function runOptimizer() {
               isRainyDay: window.isRainyDay || false,
               rainyDayStartTime: window.rainyDayStartTime ?? null
           };
-
           // Save to BOTH localStorage keys
           const DAILY_KEY = 'campDailyData_v1';
           const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
           allData[dateKey] = { ...freshData, savedAt: new Date().toISOString() };
           localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
-
           const ORCH_KEY = 'campistry_schedule_data';
           const orchData = JSON.parse(localStorage.getItem(ORCH_KEY) || '{}');
           orchData[dateKey] = { ...freshData, _updatedAt: new Date().toISOString() };
           localStorage.setItem(ORCH_KEY, JSON.stringify(orchData));
-
           // Save to cloud
           window.ScheduleDB?.saveSchedule?.(dateKey, freshData);
-
           console.log('[Optimizer] ★ Post-generation save complete:', 
               Object.keys(freshData.scheduleAssignments).length, 'bunks,',
               Object.keys(freshData.leagueAssignments).length, 'league entries');
       } catch (e) {
           console.warn('[Optimizer] Post-generation save failed:', e);
       }
-
       await daShowAlert("✅ Schedule Generated!"); 
       window.showTab?.('schedule');
+      // Force full re-render with clean state
+      const schedEl = document.getElementById('scheduleTable');
+      if (schedEl) schedEl.innerHTML = '';
+      window.renderStaggeredView?.();
   } else { 
       await daShowAlert("❌ Error generating schedule. Check console."); 
   }
@@ -3667,12 +4006,85 @@ function getStyles() {
     .da-modal-cb-item:hover { background:#f1f5f9; }
     .da-modal-cb-item input { margin:0; cursor:pointer; }
     .da-modal-cb-item span { color:#334155; }
-  </style>`;}
+ /* === AUTO MODE: .da-* inside .ms-container inherits MS look === */
+    .ms-container .da-pane { display:none; flex:1; overflow:auto; padding:0; }
+    .ms-container .da-pane.active { display:block; }
+    .ms-container .da-subtabs { display:flex; gap:0; border-bottom:1px solid #e2e8f0; background:#f8fafc; }
+    .ms-container .da-subtab { padding:12px 20px; border:none; background:none; cursor:pointer; font-size:13px; font-weight:500; color:#475569; border-bottom:2px solid transparent; transition:all 0.2s; }
+    .ms-container .da-subtab:hover { color:#0f172a; background:rgba(0,0,0,0.02); }
+    .ms-container .da-subtab.active { color:#3b82f6; border-bottom-color:#3b82f6; background:#fff; }
+    .ms-container #da-rainy-panel { padding:16px 16px 0; }
+    .ms-container #da-displaced-tiles-panel { padding:0 16px; }
+    .ms-container .da-grid-wrapper,
+    .ms-container .ms-grid-wrapper { flex:1; overflow:auto; margin:0; border:none; border-radius:0; }
+    .ms-container #da-skeleton-grid { padding:0; }
+    .ms-container .da-section { margin:16px; }
+    .ms-container .da-resource-layout { padding:16px; }
+    .ms-container #da-trips-container { padding:16px; }
+    .ms-container #da-bunk-overrides-container { padding:16px; }
+    .ms-container #da-resources-container { padding:16px; }
+    .ms-container #da-fluid-container { padding:16px; }
+    #da-skeleton-grid .al-toolbar { display: none !important; }
+    #da-skeleton-grid .al-palette { display: none !important; }
+  </style>`;
+}
 
 // =================================================================
 // MAIN HTML
 // =================================================================
-function getMainHTML() {
+function getMainHTML(useMS) {
+  if (useMS) {
+    return `
+      <div class="ms-container" style="height:calc(100vh - 160px);">
+        <div class="ms-sidebar">
+          <div class="ms-sidebar-header"><h3>Tile Types</h3></div>
+          <div id="da-palette" class="ms-palette"></div>
+        </div>
+        
+        <div class="ms-main" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+          <div class="da-subtabs">
+            <button class="da-subtab active" data-tab="skeleton">Schedule</button>
+            <button class="da-subtab" data-tab="trips">Trips</button>
+            <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
+            <button class="da-subtab" data-tab="resources">Resources</button>
+           
+          </div>
+          
+          <div id="da-pane-skeleton" class="da-pane active">
+            <div id="da-rainy-panel"></div>
+            <div id="da-displaced-tiles-panel" style="display:none;"></div>
+            ${window._daBuilderMode === 'auto' ? `
+  <div id="da-skeleton-toolbar" class="ms-toolbar"></div>
+  <div id="da-view-auto-layers" style="height:calc(100vh - 300px);overflow:auto;">
+    <div class="ms-grid-wrapper">
+      <div id="da-skeleton-grid"></div>
+    </div>
+  </div>
+` : `
+  <div id="da-view-skeleton">
+    <div id="da-skeleton-toolbar" class="ms-toolbar"></div>
+    <div class="ms-grid-wrapper">
+      <div id="da-skeleton-grid"></div>
+    </div>
+  </div>
+`}          </div>
+          
+          <div id="da-pane-trips" class="da-pane">
+            <div id="da-trips-container"></div>
+          </div>
+          
+          <div id="da-pane-bunk-overrides" class="da-pane">
+            <div id="da-bunk-overrides-container"></div>
+          </div>
+          
+          <div id="da-pane-resources" class="da-pane">
+            <div id="da-resources-container"></div>
+          </div>
+          
+        </div>
+      </div>
+    `;
+  }
   return `
     <div class="da-container">
       <div class="da-sidebar">
@@ -3686,6 +4098,7 @@ function getMainHTML() {
           <button class="da-subtab" data-tab="trips">Trips</button>
           <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
           <button class="da-subtab" data-tab="resources">Resources</button>
+          <button class="da-subtab" data-tab="fluid">Fluid Mode</button>
         </div>
         
         <div id="da-pane-skeleton" class="da-pane active">
@@ -3708,11 +4121,13 @@ function getMainHTML() {
         <div id="da-pane-resources" class="da-pane">
           <div id="da-resources-container"></div>
         </div>
+        <div id="da-pane-fluid" class="da-pane">
+          <div id="da-fluid-container"></div>
+        </div>
       </div>
     </div>
   `;
 }
-
 // =================================================================
 // SUBTAB NAVIGATION
 // =================================================================
@@ -3729,6 +4144,7 @@ function setupSubTabs() {
       if (pane) pane.classList.add('active');
       
       activeSubTab = tabId;
+      
     };
   });
 }
@@ -3739,11 +4155,14 @@ function setupSubTabs() {
 function setupKeyboardHandler() {
   if (_keyHandler) document.removeEventListener('keydown', _keyHandler);
   
-  _keyHandler = (e) => {
+ _keyHandler = (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
     
+    // Auto mode: don't allow manual skeleton tile deletion via keyboard
+    if (window._daBuilderMode === 'auto') return;
+    
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedTileId) {
-      e.preventDefault();
+      e.preventDefault();      e.preventDefault();
       (async () => {
         const ok = await daShowConfirm("Delete this block?", { danger: true, confirmText: 'Delete' });
         if (ok) {
@@ -3782,7 +4201,14 @@ function refreshFromCloud() {
   masterSettings.app1 = masterSettings.global.app1 || {};
   masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
   masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
-  loadDailySkeleton();
+  
+  // Mode-specific data reload — same isolation as init()
+  if (window._daBuilderMode === 'auto') {
+    loadDAAutoLayers();
+  } else {
+    loadDailySkeleton();
+  }
+  
   loadCurrentOverrides();
   renderGrid();
   renderResourceOverridesUI();
@@ -3806,31 +4232,46 @@ function loadCurrentOverrides() {
 function init() {
   container = document.getElementById("daily-adjustments-content");
   if (!container) { console.error("Daily Adjustments: container not found"); return; }
-  
+
+  // Read the builder mode — stored globally so renderGrid can check it
+  var globalMode = window.getCampBuilderMode ? window.getCampBuilderMode() : 'manual';
+  window._daBuilderMode = globalMode;
+  console.log('[DailyAdj] Mode:', globalMode);
+
+  // Load settings (same for both modes)
   masterSettings.global = window.loadGlobalSettings?.() || {};
   masterSettings.app1 = masterSettings.global.app1 || {};
   masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
   masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
   smartTileHistory = loadSmartTileHistory();
-  
+
   loadCurrentOverrides();
-  
-  // Initialize window.isRainyDay from loaded daily data
-  const dailyData = window.loadCurrentDailyData?.() || {};
+
+  var dailyData = window.loadCurrentDailyData?.() || {};
   if (window.isRainyDay === undefined) {
-    // Only set if not already defined (e.g., from another module)
-    window.isRainyDay = dailyData.isRainyDay === true || dailyData.rainyDayMode === true;
+      window.isRainyDay = dailyData.isRainyDay === true || dailyData.rainyDayMode === true;
   }
   console.log("[DailyAdj] Initialized window.isRainyDay =", window.isRainyDay);
-  
+
+  // Render UI (same HTML for both modes)
   container.innerHTML = getStyles() + getMainHTML();
-  
+
   setupSubTabs();
   setupKeyboardHandler();
   setupVisibilityHandler();
-  
-  loadDailySkeleton();
-  
+
+ // ★ Mode-specific data loading — keep auto and manual completely separate
+  if (window._daBuilderMode === 'auto') {
+    // Auto mode: load layer templates, clear manual skeleton to prevent bleed
+    loadDAAutoLayers();
+    dailyOverrideSkeleton = [];
+    window.dailyOverrideSkeleton = [];
+  } else {
+    // Manual mode: load skeleton, clear auto layers to prevent bleed
+    loadDailySkeleton();
+    daAutoLayers = {};
+  }
+
   renderPalette();
   renderRainyDayPanel();
   renderDisplacedTilesPanel();
@@ -3840,7 +4281,7 @@ function init() {
   renderBunkOverridesUI();
   renderResourceOverridesUI();
 }
-
+    
 function cleanup() {
   if (_keyHandler) {
     document.removeEventListener('keydown', _keyHandler);
@@ -3873,4 +4314,25 @@ window.DailyAdjustmentsInternal = {
   renderGrid: typeof renderGrid === 'function' ? renderGrid : function(){},
   bumpOverlappingTiles: typeof bumpOverlappingTiles === 'function' ? bumpOverlappingTiles : function(){}
 };
+ 
+
+
+  // Hook into daily adjustments render to check for auto mode
+const _origRenderDA = window.renderDailyAdjustments || window.initDailyAdjustments;
+if (_origRenderDA) {
+  window._checkAutoModeForDay = checkAutoModeForDay;
+}
+
+// ★ Listen for mode changes from Setup & Config
+window.addEventListener('campistry-builder-mode-changed', (e) => {
+  const newMode = e.detail?.mode;
+  if (newMode && newMode !== window._daBuilderMode) {
+    console.log('[DailyAdj] Mode changed to:', newMode, '— re-initializing');
+    window._daBuilderMode = newMode;
+    cleanup();
+    init();
+  }
+});
+
 })();
+

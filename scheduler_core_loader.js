@@ -216,6 +216,9 @@
                 limitUsage: null,
                 timeRules: [],
                 minDurationMin: 0,
+                duration: null,
+                availableDays: null,
+                mustScheduleWhenAvailable: false,
                 maxUsage: 0,
                 frequencyWeeks: 0,
                 rainyDayAvailable: false,
@@ -244,7 +247,10 @@
                rainyDayAvailable: a.rainyDayAvailable !== false,
                 rainyDayOnly: a.rainyDayOnly === true,
                 rainyDayExclusive: a.rainyDayExclusive === true,
-                fullGrade: a.fullGrade === true
+                fullGrade: a.fullGrade === true,
+                duration: (a.duration != null && parseInt(a.duration) > 0) ? parseInt(a.duration) : null,
+                availableDays: Array.isArray(a.availableDays) ? a.availableDays : null,
+                mustScheduleWhenAvailable: a.mustScheduleWhenAvailable === true
             });
         });
 

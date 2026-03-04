@@ -63,9 +63,9 @@ window.bootApp = bootApp;
 // ============================================================================
 
 document.addEventListener("DOMContentLoaded", async () => {
-    // If inline auth script is handling things, skip entirely
+    // Inline auth in flow.html handles everything — just defer to it
     if (window.__CAMPISTRY_AUTH_INLINE__) {
-        console.log("🚀 [welcome.js] Inline auth script present, deferring to it");
+        console.log("🚀 [welcome.js] Inline auth present, deferring");
         return;
     }
 
@@ -82,51 +82,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     const cachedUserId = localStorage.getItem('campistry_auth_user_id');
     const cachedCampId = localStorage.getItem('campistry_camp_id');
     const hasLocalAuth = !!(cachedUserId && cachedCampId);
+    // Fallback only if inline script missing (shouldn't happen in production)
+    console.log("🚀 [welcome.js] No inline auth — simple localStorage check");
     
-    // Check session
-    const { data: { session } } = await window.supabase?.auth?.getSession() || { data: { session: null } };
-
-    if (!session) {
-        if (hasLocalAuth) {
-            console.log('🔑 [welcome.js] No Supabase session but cached auth found — proceeding');
-            // Try background refresh
-            window.supabase?.auth?.refreshSession().then(({ data, error }) => {
-                if (error || !data?.session) {
-                    console.warn('🔑 [welcome.js] Background refresh failed — redirecting');
-                    localStorage.removeItem('campistry_auth_user_id');
-                    localStorage.removeItem('campistry_camp_id');
-                    localStorage.removeItem('campistry_role');
-                    window.location.href = 'index.html';
-                }
-            });
-        } else {
-            console.warn('[welcome.js] No active session, redirecting to login');
-            window.location.href = 'index.html';
-            return;
-        }
+    if (!localStorage.getItem('campistry_auth_user_id') || 
+        !localStorage.getItem('campistry_camp_id')) {
+        window.location.href = 'index.html';
+        return;
     }
 
-    // Show main app immediately once session is verified
-    const mainAppContainer = document.getElementById('main-app-container');
-    if (mainAppContainer) mainAppContainer.style.display = 'block';
-
-    // Hide the auth loading screen
-    const loadingScreen = document.getElementById('auth-loading-screen');
-    if (loadingScreen) loadingScreen.style.display = 'none';
-
-    // Hide welcome screen if it exists
-    const welcomeScreen = document.getElementById('welcome-screen');
-    if (welcomeScreen) welcomeScreen.style.display = 'none';
-
-    // Boot
     await bootApp();
-
-    // Listen for sign out
-    if (window.supabase?.auth) {
-        window.supabase.auth.onAuthStateChange((event) => {
-            if (event === 'SIGNED_OUT') {
-                window.location.href = 'index.html';
-            }
-        });
-    }
 });

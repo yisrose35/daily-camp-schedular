@@ -12,6 +12,7 @@
     <link rel="stylesheet" href="design-system.css" />
     <link rel="stylesheet" href="styles.css" />
     <link rel="stylesheet" href="mobile-responsive.css" />
+    <link rel="stylesheet" href="auto_schedule_styles.css">
     
     
     <!-- FIX: Hide app container initially to prevent flash -->
@@ -405,6 +406,7 @@
                             </div>
                         </section>
                     </div>
+                    <div id="schedule-mode-toggle" style="margin-top:20px;"></div>
                 </div>
                 <!-- /setup -->
 
@@ -641,7 +643,12 @@
 <script src="leagues.js"></script>
 <script src="specialty_leagues.js"></script>
 <script src="master_schedule_builder.js"></script>
-    
+    <script src="auto_build_engine.js"></script>
+<script src="auto_schedule_planner.js"></script>
+    <script src="custom_persistent_tiles.js"></script>
+  
+
+
 <script src="smart_logic_adapter.js"></script>
 
 <!-- PERMISSIONS & VERSIONING SYSTEM -->
@@ -656,6 +663,8 @@
 <script src="division_times_integration.js"></script>
 <script src="trial_guard.js"></script>
 <!-- SCHEDULER CORE -->
+    
+
 <script src="scheduler_core_loader.js"></script>
 <script src="global_field_locks.js"></script>
 <script src="scheduler_core_utils.js"></script>

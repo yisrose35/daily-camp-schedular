@@ -368,6 +368,43 @@
             calculateEditableDivisions();
             _initialized = true;
             console.log("🔐 ⚡ Instant-init from DB —", _currentRole, "with", _editableDivisions.length, "divisions");
+            // ★★★ v3.12: Try localStorage before hitting DB ★★★
+    const lsRole = localStorage.getItem('campistry_role');
+    const lsCampId = localStorage.getItem('campistry_camp_id');
+    const lsAuthId = localStorage.getItem('campistry_auth_user_id');
+    
+    if (lsRole && lsCampId && lsAuthId === user.id) {
+        console.log("🔐 ⚡ Restored from localStorage — role=" + lsRole);
+        _currentRole = lsRole;
+        _campId = lsCampId;
+        _isTeamMember = localStorage.getItem('campistry_is_team_member') === 'true';
+        _userName = user.email?.split('@')[0];
+        _userSubdivisionIds = [];
+        _directDivisionAssignments = [];
+        _roleVerifiedFromDB = false;  // verifyBeforeWrite() will DB-check later
+        _initialized = true;
+        
+        // Still load subdivisions/details in background for schedulers
+        if (_isTeamMember) {
+            determineUserContext().catch(e => console.warn("🔐 Background context refresh failed:", e));
+        }
+        
+        // Fire loaded event
+        calculateEditableDivisions();
+        setupMembershipSubscription();
+        dispatchAccessLoadedEvent();
+        return;
+    }
+
+    // Full initialization — no cache available
+    await determineUserContext();
+            _roleVerifiedFromDB = true;  // ★★★ v3.9: DB-verified via full path ★★★
+        }
+        
+        await loadSubdivisions();
+        
+        if (_currentRole === ROLES.SCHEDULER && _userSubdivisionIds.length > 0) {
+            await loadUserSubdivisionDetails();
         }
         
         // ★★★ v3.13: Subdivision loading is now NON-BLOCKING ★★★
@@ -583,8 +620,26 @@
         // ★★★ CRITICAL FIX v3.6: Default to VIEWER for safety ★★★
         // Invited users who fell through should NOT get owner access
         // =====================================================================
+       // ★★★ v3.12 FIX: Trust localStorage if landing.js already set role ★★★
+        const lsRole = localStorage.getItem('campistry_role');
+        const lsCampId = localStorage.getItem('campistry_camp_id');
+
+        if (lsRole && lsCampId && lsRole !== 'viewer') {
+            console.log("🔐 ⚠️ No camp in DB yet but localStorage says role=" + lsRole + " — trusting");
+            _currentRole = lsRole;
+            _isTeamMember = localStorage.getItem('campistry_is_team_member') === 'true';
+            _campId = lsCampId;
+            _userName = _currentUser.email.split('@')[0];
+            _userSubdivisionIds = [];
+            _directDivisionAssignments = [];
+            _roleVerifiedFromDB = false;
+            localStorage.setItem('campistry_user_id', _campId);
+            localStorage.setItem('campistry_auth_user_id', _currentUser.id);
+            return;
+        }
+
         console.log("🔐 ⚠️ No camp association found - defaulting to VIEWER for safety");
-        _currentRole = ROLES.VIEWER;  // ★★★ SAFE DEFAULT - NOT OWNER! ★★★
+        _currentRole = ROLES.VIEWER;  // ★★★ SAFE DEFAULT - NOT OWNER!
         _isTeamMember = false;
         _campId = _currentUser.id;
         _campName = 'Unknown Camp';
