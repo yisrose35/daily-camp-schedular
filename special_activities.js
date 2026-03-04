@@ -151,12 +151,9 @@ function validateSpecialActivity(activity, activityName) {
         location: activity.location || null, isIndoor, rainyDayAvailable: isIndoor, availableOnRainyDay: isIndoor,
        ...(activity.rainyDayCapacity > 0 ? { rainyDayCapacity: parseInt(activity.rainyDayCapacity, 10) } : {}),
         ...(activity.rainyDayAvailableAllDay === true ? { rainyDayAvailableAllDay: true } : {}),
-       fullGrade: activity.fullGrade === true,
-        fullGradePerGrade: (activity.fullGradePerGrade && typeof activity.fullGradePerGrade === 'object') ? activity.fullGradePerGrade : undefined,
+       fullGradePerGrade: (activity.fullGradePerGrade && typeof activity.fullGradePerGrade === 'object') ? activity.fullGradePerGrade : undefined,
         // ★ v3.7: Multi-Part Special support (simple N parts)
-
-
-        multiPart: activity.multiPart && typeof activity.multiPart === 'object' ? {
+        multiPart: activity.multiPart&& typeof activity.multiPart === 'object' ? {
             enabled: activity.multiPart.enabled === true,
             totalParts: (function() { var tp = parseInt(activity.multiPart.totalParts, 10); return (!isNaN(tp) && tp >= 2 && tp <= 10) ? tp : 2; })(),
             daysBetween: (function() { var db = parseInt(activity.multiPart.daysBetween, 10); return (!isNaN(db) && db >= 1 && db <= 14) ? db : 3; })(),
@@ -164,7 +161,7 @@ function validateSpecialActivity(activity, activityName) {
                 if (!p || typeof p !== 'object') return { location: null, duration: null };
                 return { location: p.location || null, duration: (parseInt(p.duration, 10) > 0) ? parseInt(p.duration, 10) : null };
             }) : []
-        } : { enabled: false, totalParts: 2, daysBetween: 3, parts: [] }
+        } : { enabled: false, totalParts: 2, daysBetween: 3, parts: [] },
         fullGrade: activity.fullGrade === true,
         duration: (activity.duration != null && parseInt(activity.duration, 10) > 0) ? parseInt(activity.duration, 10) : null,
         availableDays: Array.isArray(activity.availableDays) ? activity.availableDays : null,
