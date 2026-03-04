@@ -1092,12 +1092,39 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
         const props = activityProps[fName] || {};
         const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
         
-        const availability = window.TimeBasedFieldUsage.checkAvailability(
+       const availability = window.TimeBasedFieldUsage.checkAvailability(
             fName, startMin, endMin, maxCapacity, bunk
         );
         
-        return availability.available;
+        if (!availability.available) return false;
+
+        // ★★★ COMBINED FIELD MUTUAL EXCLUSION CHECK ★★★
+        if (window.FieldCombos?.isInCombo?.(fName)) {
+            const comboCheck = window.FieldCombos.isBlockedByCombo(fName, startMin, endMin, bunk);
+            if (comboCheck.blocked) return false;
+        }
+
+        // ★★★ LOCATION COOLDOWN CHECK ★★★
+        if (window.isLocationInCooldown) {
+            const divSlots = window.divisionTimes?.[getDivisionForBunk(bunk)] || [];
+            let slotIdx = divSlots.findIndex(s => s.startMin >= startMin);
+            if (slotIdx < 0) slotIdx = 0;
+            const cooldown = window.isLocationInCooldown(fName, slotIdx, bunk, getDivisionForBunk(bunk));
+            if (cooldown?.blocked) return false;
+        }
+
+        // ★★★ SEQUENCE RULE CHECK ★★★
+        if (window.checkSequenceViolation) {
+            const divSlots = window.divisionTimes?.[getDivisionForBunk(bunk)] || [];
+            let slotIdx = divSlots.findIndex(s => s.startMin >= startMin);
+            if (slotIdx < 0) slotIdx = 0;
+            const seqViolation = window.checkSequenceViolation(bunk, pick?.activityName || pick?._activity || pick?.sport || '', slotIdx, getDivisionForBunk(bunk));
+            if (seqViolation?.violated) return false;
+        }
+
+        return true;
     }
+
 
     function calculatePenaltyCost(bunk, slots, pick, fieldUsageBySlot, activityProps) {
         let penalty = 0;
@@ -1667,7 +1694,11 @@ function checkFieldAvailableByTime(fieldName, startMin, endMin, excludeBunk, act
             }
         }
     }
-    
+     // ★★★ COMBINED FIELD MUTUAL EXCLUSION CHECK ★★★
+    if (window.FieldCombos?.isInCombo?.(fieldName)) {
+        const comboCheck = window.FieldCombos.isBlockedByCombo(fieldName, startMin, endMin, excludeBunk);
+        if (comboCheck.blocked) return false;
+    }
     return true;
 }
 
@@ -2320,7 +2351,21 @@ divBlocks.forEach((block, blockIdx) => {
         if (leagueInfo.matchups?.length > 0) {
             html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
             leagueInfo.matchups.forEach(m => {
-                let matchText = typeof m === 'string' ? m : m.display || (m.teamA && m.teamB ? `${m.teamA} vs ${m.teamB}${m.field ? ` @ ${m.field}` : ''}` : (m.team1 && m.team2 ? `${m.team1} vs ${m.team2}` : (m.matchup || JSON.stringify(m))));
+                let matchText;
+                if (typeof m === 'string') {
+                    const atParts = m.split(' @ ');
+                    const teams = atParts[0] || '';
+                    const fieldPart = atParts[1] || '';
+                    let sport = '', field = '';
+                    const parenMatch = fieldPart.match(/^(.+?)\s*\((.+?)\)\s*$/);
+                    if (parenMatch) { field = parenMatch[1].trim(); sport = parenMatch[2].trim(); }
+                    else { field = fieldPart.trim(); }
+                    matchText = teams + (sport || field ? ' - ' : '') + (sport ? sport.charAt(0).toUpperCase() + sport.slice(1) : '') + (field ? ' (' + field + ')' : '');
+                } else {
+                    const sport = m.sport || leagueInfo.sport || '';
+                    const field = m.field || '';
+                    matchText = (m.teamA && m.teamB) ? `${m.teamA} vs ${m.teamB}${sport || field ? ' - ' : ''}${sport ? sport.charAt(0).toUpperCase() + sport.slice(1) : ''}${field ? ' (' + field + ')' : ''}` : m.display || (m.team1 && m.team2 ? `${m.team1} vs ${m.team2}` : (m.matchup || JSON.stringify(m)));
+                }
                 html += `<div style="background: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #1e3a5f; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">${escapeHtml(matchText)}</div>`;
             });
             html += '</div>';
@@ -2851,7 +2896,7 @@ if (bypassStatus.highlight) {
     // APPLY EDIT
     // =========================================================================
 
-   async function applyEdit(bunk, editData) {
+  async function applyEdit(bunk, editData) {
         const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
         const divName = getDivisionForBunk(bunk);
 
@@ -2865,7 +2910,17 @@ if (bypassStatus.highlight) {
        const isClear = !activity || activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
         const slots = findSlotsForRange(startMin, endMin, divName);
         if (slots.length === 0) { alert('Error: Could not find time slots.'); return; }
-        window._postEditInProgress = true; 
+
+        // ★ Sequence rule warning
+        if (!isClear && window.checkSequenceViolation && slots.length > 0) {
+            const _seqCheck = window.checkSequenceViolation(bunk, activity, slots[0], divName);
+            if (_seqCheck?.violated) { if (!confirm('⚠️ Sequence Warning:\n\n' + _seqCheck.reason + '\n\nPlace anyway?')) return; }
+        }
+        // ★ Location cooldown warning
+        if (!isClear && window.isLocationInCooldown && location && slots.length > 0) {
+            const _coolCheck = window.isLocationInCooldown(location, slots[0], bunk, divName);
+            if (_coolCheck?.blocked) { if (!confirm('⚠️ Location Cooldown:\n\n' + _coolCheck.reason + '\n\nPlace anyway?')) return; }
+        }        window._postEditInProgress = true; 
         window._postEditTimestamp = Date.now();
         const divSlots = window.divisionTimes?.[divName] || [];
         if (!window.scheduleAssignments) window.scheduleAssignments = {};

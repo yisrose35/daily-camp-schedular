@@ -665,10 +665,57 @@
             return false;
         }
 
+       // =================================================================
+        // ★★★ LOCATION COOLDOWN CHECK ★★★
+        // =================================================================
+        if (window.isLocationInCooldown) {
+            const cooldownResult = window.isLocationInCooldown(fieldName, uniqueSlots[0], block.bunk, block.divName);
+            if (cooldownResult?.blocked) {
+                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - ${cooldownResult.reason}`);
+                return false;
+            }
+        }
+
+        // =================================================================
+        // ★★★ ACTIVITY SEQUENCE RULE CHECK ★★★
+        // =================================================================
+        if (window.checkSequenceViolation) {
+            const seqActivityName = block.event || block._activity || '';
+            const seqViolation = window.checkSequenceViolation(block.bunk, seqActivityName, uniqueSlots[0], block.divName);
+            if (seqViolation?.violated) {
+                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${seqActivityName}: REJECTED - ${seqViolation.reason}`);
+                return false;
+            }
+        }
+
+        // =================================================================
+        // ★★★ LOCATION COOLDOWN CHECK ★★★
+        // =================================================================
+        if (window.isLocationInCooldown) {
+            const cooldownResult = window.isLocationInCooldown(fieldName, uniqueSlots[0], block.bunk, block.divName);
+            if (cooldownResult && cooldownResult.blocked) {
+                if (DEBUG_FITS) console.log('[FIT] ' + block.bunk + ' - ' + fieldName + ': REJECTED - ' + cooldownResult.reason);
+                return false;
+            }
+        }
+
+        // =================================================================
+        // ★★★ ACTIVITY SEQUENCE RULE CHECK ★★★
+        // =================================================================
+        if (window.checkSequenceViolation) {
+            const seqActivityName = block.event || block._activity || '';
+            const seqViolation = window.checkSequenceViolation(block.bunk, seqActivityName, uniqueSlots[0], block.divName);
+            if (seqViolation && seqViolation.violated) {
+                if (DEBUG_FITS) console.log('[FIT] ' + block.bunk + ' - ' + seqActivityName + ': REJECTED - ' + seqViolation.reason);
+                return false;
+            }
+        }
+
         // =================================================================
         // ★★★ ENHANCED CAPACITY CALCULATION (v7.5) ★★★
         // =================================================================
         let maxCapacity = Utils.getFieldCapacity(fieldName, activityProperties);
+
         
         // Basic availability checks
         if (effectiveProps.available === false) {
@@ -878,6 +925,25 @@
 
                 if (currentHeadcount + mySize > maxHeadcount) {
                     if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - headcount exceeded`);
+                    return false;
+                }
+            }
+        }
+
+        // ★★★ COMBINED FIELD MUTUAL EXCLUSION CHECK ★★★
+        if (window.FieldCombos?.isInCombo?.(fieldName)) {
+            const cStartMin = block.startTime ?? block.startMin;
+            const cEndMin = block.endTime ?? block.endMin;
+            if (cStartMin != null && cEndMin != null) {
+                const comboCheck = window.FieldCombos.isBlockedByCombo(fieldName, cStartMin, cEndMin, block.bunk);
+                if (comboCheck.blocked) {
+                    if (DEBUG_FITS) console.log('[FIT] ' + block.bunk + ' - ' + fieldName + ': REJECTED - COMBO blocked by "' + comboCheck.blocker + '"');
+                    return false;
+                }
+            } else if (uniqueSlots.length > 0) {
+                const divCtx = block.divName || block.division;
+                if (window.FieldCombos.isBlockedByComboAtSlots(fieldName, uniqueSlots, divCtx, block.bunk)) {
+                    if (DEBUG_FITS) console.log('[FIT] ' + block.bunk + ' - ' + fieldName + ': REJECTED - COMBO blocked (slot-based)');
                     return false;
                 }
             }

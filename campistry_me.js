@@ -336,17 +336,53 @@
         console.log('[Me] Ready');
     }
 
-    async function checkAuth() {
+   async function checkAuth() {
+        // ★ v7.2 FIX: Check cached auth before giving up on Supabase
+        const cachedUserId = localStorage.getItem('campistry_auth_user_id');
+        const cachedCampId = localStorage.getItem('campistry_camp_id');
+        const hasLocalAuth = !!(cachedUserId && cachedCampId);
+
         try {
             let attempts = 0;
-            while (!window.supabase && attempts < 20) { await new Promise(r => setTimeout(r, 100)); attempts++; }
-            if (!window.supabase) { window.location.href = 'index.html'; return false; }
+            while ((!window.supabase || !window.supabase.auth) && attempts < 20) { await new Promise(r => setTimeout(r, 100)); attempts++; }
+            if (!window.supabase || !window.supabase.auth) {
+                if (hasLocalAuth) {
+                    console.warn('[Me] Supabase not loaded but cached auth exists — proceeding');
+                    _cachedCampId = cachedCampId;
+                    return true;
+                }
+                window.location.href = 'index.html'; return false;
+            }
             const { data: { session } } = await window.supabase.auth.getSession();
-            if (!session) { window.location.href = 'index.html'; return false; }
+            if (!session) {
+                if (hasLocalAuth) {
+                    console.warn('[Me] No session but cached auth exists — trying refresh');
+                    const { data: refreshData, error: refreshError } = await window.supabase.auth.refreshSession();
+                    if (refreshError || !refreshData?.session) {
+                        if (hasLocalAuth) {
+                            console.warn('[Me] Refresh failed but cached auth exists — proceeding anyway');
+                            _cachedCampId = cachedCampId;
+                            return true;
+                        }
+                        window.location.href = 'index.html'; return false;
+                    }
+                    _cachedCampId = refreshData.session.user.id;
+                    return true;
+                }
+                window.location.href = 'index.html'; return false;
+            }
             // ★ v7.1: Cache the user UUID for cloud operations
             _cachedCampId = session.user.id;
             return true;
-        } catch (e) { window.location.href = 'index.html'; return false; }
+        } catch (e) {
+            console.error('[Me] Auth check failed:', e);
+            if (hasLocalAuth) {
+                console.warn('[Me] Error during auth but cached auth exists — proceeding');
+                _cachedCampId = cachedCampId;
+                return true;
+            }
+            window.location.href = 'index.html'; return false;
+        }
     }
 
     async function loadAllData() {

@@ -1,14 +1,20 @@
 // ============================================================================
-// edit_restrictions.js — Visual Editing Restrictions
+// edit_restrictions.js — Visual Editing Restrictions v1.1
 // ============================================================================
 // Adds visual indicators and blocks editing for divisions user can't access
 // Everyone sees everything, but only editable divisions allow interaction
+//
+// v1.1 OWNER-SAFETY FIX:
+// - ★★★ canEditDivision() now has owner/admin bypass (was missing in v1.0!)
+// - ★★★ _isOwnerOrAdmin() checks AccessControl live + localStorage fallback
+// - ★★★ All interceptors and applyTo*() bail out for owner/admin
+// - ★★★ This was the root cause of owners seeing "permission denied"
 // ============================================================================
 
 (function() {
     'use strict';
 
-    console.log("🚫 Edit Restrictions v1.0 loading...");
+    console.log("🚫 Edit Restrictions v1.1 loading...");
 
     // =========================================================================
     // STATE
@@ -17,6 +23,20 @@
     let _initialized = false;
     let _editableDivisions = [];
     let _currentRole = null;
+
+    // =========================================================================
+    // ★★★ v1.1: OWNER/ADMIN LIVE CHECK ★★★
+    // Checks 3 sources so owners are NEVER blocked, even during init races.
+    // =========================================================================
+
+    function _isOwnerOrAdmin() {
+        if (_currentRole === 'owner' || _currentRole === 'admin') return true;
+        const acRole = window.AccessControl?.getCurrentRole?.();
+        if (acRole === 'owner' || acRole === 'admin') return true;
+        const lsRole = localStorage.getItem('campistry_role');
+        if (lsRole === 'owner' || lsRole === 'admin') return true;
+        return false;
+    }
 
     // =========================================================================
     // INITIALIZATION
@@ -71,6 +91,9 @@
     function applyRestrictions() {
         if (!_initialized) return;
 
+        // ★★★ v1.1: Owner/Admin never gets restrictions ★★★
+        if (_isOwnerOrAdmin()) return;
+
         // Apply to division cards
         applyToDivisionCards();
         
@@ -91,6 +114,9 @@
      * Apply restrictions to division cards in the overview
      */
     function applyToDivisionCards() {
+        // ★★★ v1.1: Owner/Admin bypass ★★★
+        if (_isOwnerOrAdmin()) return;
+
         const divisionCards = document.querySelectorAll('[data-division], .division-card, .division-row');
         
         divisionCards.forEach(card => {
@@ -133,10 +159,12 @@
      * Apply restrictions to schedule grid cells
      */
     function applyToScheduleGrid() {
+        // ★★★ v1.1: Owner/Admin bypass ★★★
+        if (_isOwnerOrAdmin()) return;
+
         const scheduleCells = document.querySelectorAll('.schedule-cell, .time-slot, .activity-block');
         
         scheduleCells.forEach(cell => {
-            // Try to determine division from cell data or parent
             const divisionName = getDivisionFromElement(cell);
             if (!divisionName) return;
             
@@ -145,11 +173,8 @@
             if (!canEdit) {
                 cell.classList.add('view-only-cell');
                 cell.draggable = false;
-                
-                // Block click handlers
                 cell.style.cursor = 'default';
                 
-                // Add tooltip on hover
                 if (!cell.title) {
                     const subdivision = window.AccessControl?.getSubdivisionForDivision(divisionName);
                     cell.title = subdivision 
@@ -168,6 +193,9 @@
      * Apply restrictions to sidebar division list
      */
     function applyToSidebarItems() {
+        // ★★★ v1.1: Owner/Admin bypass ★★★
+        if (_isOwnerOrAdmin()) return;
+
         const sidebarItems = document.querySelectorAll('.sidebar-division, .division-list-item');
         
         sidebarItems.forEach(item => {
@@ -179,7 +207,6 @@
             if (!canEdit) {
                 item.classList.add('view-only-sidebar-item');
                 
-                // Add lock icon if not present
                 if (!item.querySelector('.lock-icon')) {
                     const lockIcon = document.createElement('span');
                     lockIcon.className = 'lock-icon';
@@ -198,7 +225,9 @@
      * Apply restrictions to action buttons (Generate, Clear, etc.)
      */
     function applyToActionButtons() {
-        // Generate button - should open division selector
+        // ★★★ v1.1: Owner/Admin bypass ★★★
+        if (_isOwnerOrAdmin()) return;
+
         const generateBtn = document.getElementById('generate-btn') || 
                            document.querySelector('[data-action="generate"]') ||
                            document.querySelector('.generate-button');
@@ -209,7 +238,6 @@
             generateBtn.classList.add('btn-disabled');
         }
         
-        // Clear button
         const clearBtn = document.getElementById('clear-btn') || 
                         document.querySelector('[data-action="clear"]');
         
@@ -225,23 +253,20 @@
 
     /**
      * Check if user can edit a division
+     * ★★★ v1.1 FIX: Added owner/admin bypass — this was the root cause! ★★★
      */
     function canEditDivision(divisionName) {
         if (!divisionName) return false;
+        // ★★★ v1.1: Owner/Admin can ALWAYS edit every division ★★★
+        if (_isOwnerOrAdmin()) return true;
+        if (_currentRole === 'viewer') return false;
         return _editableDivisions.includes(divisionName);
     }
 
-    /**
-     * Get division name from an element by traversing up the DOM
-     */
     function getDivisionFromElement(element) {
-        // Check element itself
         if (element.dataset.division) return element.dataset.division;
-        
-        // Check data attributes
         if (element.dataset.divisionName) return element.dataset.divisionName;
         
-        // Check parent elements
         let parent = element.parentElement;
         let depth = 0;
         while (parent && depth < 10) {
@@ -258,9 +283,6 @@
         return null;
     }
 
-    /**
-     * Create a view-only overlay for a division card
-     */
     function createViewOnlyOverlay(divisionName) {
         const subdivision = window.AccessControl?.getSubdivisionForDivision(divisionName);
         
@@ -289,13 +311,15 @@
         if (_observer) return;
 
         _observer = new MutationObserver((mutations) => {
+            // ★★★ v1.1: Skip for owner/admin ★★★
+            if (_isOwnerOrAdmin()) return;
+
             let shouldReapply = false;
             
             for (const mutation of mutations) {
                 if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
-                    // Check if any added nodes are schedule-related
                     for (const node of mutation.addedNodes) {
-                        if (node.nodeType === 1) { // Element node
+                        if (node.nodeType === 1) {
                             if (node.matches?.('[data-division], .division-card, .schedule-cell, .activity-block')) {
                                 shouldReapply = true;
                                 break;
@@ -311,7 +335,6 @@
             }
             
             if (shouldReapply) {
-                // Debounce
                 clearTimeout(_observer._debounceTimer);
                 _observer._debounceTimer = setTimeout(() => {
                     applyRestrictions();
@@ -327,14 +350,14 @@
 
     // =========================================================================
     // EVENT HANDLERS
+    // ★★★ v1.1: Every handler checks _isOwnerOrAdmin() FIRST ★★★
     // =========================================================================
 
-    /**
-     * Intercept edit attempts on restricted divisions
-     */
     function setupEditInterceptors() {
-        // Intercept drag start
         document.addEventListener('dragstart', (e) => {
+            // ★★★ v1.1: Owner/Admin is NEVER blocked ★★★
+            if (_isOwnerOrAdmin()) return;
+
             const divisionName = getDivisionFromElement(e.target);
             if (divisionName && !canEditDivision(divisionName)) {
                 e.preventDefault();
@@ -342,8 +365,10 @@
             }
         }, true);
 
-        // Intercept click on edit buttons
         document.addEventListener('click', (e) => {
+            // ★★★ v1.1: Owner/Admin is NEVER blocked ★★★
+            if (_isOwnerOrAdmin()) return;
+
             const editBtn = e.target.closest('[data-action="edit"], .edit-btn, .delete-btn');
             if (!editBtn) return;
             
@@ -355,26 +380,23 @@
             }
         }, true);
 
-        // Intercept context menu on restricted items
         document.addEventListener('contextmenu', (e) => {
+            // ★★★ v1.1: Owner/Admin is NEVER blocked ★★★
+            if (_isOwnerOrAdmin()) return;
+
             const divisionName = getDivisionFromElement(e.target);
             if (divisionName && !canEditDivision(divisionName)) {
                 // Allow context menu but show restricted state
-                // Don't prevent, just add info
             }
         }, true);
     }
 
-    /**
-     * Show toast when user tries to edit restricted content
-     */
     function showAccessDeniedToast(divisionName) {
         const subdivision = window.AccessControl?.getSubdivisionForDivision(divisionName);
         const message = subdivision 
             ? `"${divisionName}" is managed by ${subdivision.name}`
             : `You don't have permission to edit "${divisionName}"`;
         
-        // Create toast
         const toast = document.createElement('div');
         toast.className = 'access-denied-toast';
         toast.innerHTML = `
@@ -384,12 +406,10 @@
         
         document.body.appendChild(toast);
         
-        // Animate in
         requestAnimationFrame(() => {
             toast.classList.add('show');
         });
         
-        // Remove after delay
         setTimeout(() => {
             toast.classList.remove('show');
             setTimeout(() => toast.remove(), 300);
@@ -406,7 +426,6 @@
         const styles = document.createElement('style');
         styles.id = 'edit-restrictions-styles';
         styles.textContent = `
-            /* View-only overlay for division cards */
             .view-only-overlay {
                 position: absolute;
                 top: 8px;
@@ -440,7 +459,6 @@
                 border-radius: 4px;
             }
             
-            /* View-only card styling */
             .view-only {
                 position: relative;
             }
@@ -458,7 +476,6 @@
                 border-radius: inherit;
             }
             
-            /* View-only schedule cells */
             .view-only-cell {
                 opacity: 0.85;
                 background-image: repeating-linear-gradient(
@@ -474,7 +491,6 @@
                 cursor: not-allowed !important;
             }
             
-            /* Sidebar lock icon */
             .view-only-sidebar-item {
                 opacity: 0.7;
             }
@@ -485,13 +501,11 @@
                 opacity: 0.6;
             }
             
-            /* Disabled button styling */
             .btn-disabled {
                 opacity: 0.5;
                 cursor: not-allowed !important;
             }
             
-            /* Access denied toast */
             .access-denied-toast {
                 position: fixed;
                 bottom: 24px;
@@ -516,7 +530,6 @@
                 opacity: 1;
             }
             
-            /* Access control banner */
             #access-control-banner {
                 animation: slideDown 0.3s ease-out;
             }
@@ -539,28 +552,23 @@
     // PUBLIC API
     // =========================================================================
 
-    /**
-     * Manually refresh restrictions (call after schedule changes)
-     */
     function refresh() {
         _editableDivisions = window.AccessControl?.getEditableDivisions() || [];
         _currentRole = window.AccessControl?.getCurrentRole();
         applyRestrictions();
     }
 
-    /**
-     * Check if a specific element is editable
-     */
     function isElementEditable(element) {
+        // ★★★ v1.1: Owner/Admin always editable ★★★
+        if (_isOwnerOrAdmin()) return true;
         const divisionName = getDivisionFromElement(element);
-        if (!divisionName) return true; // If no division context, allow
+        if (!divisionName) return true;
         return canEditDivision(divisionName);
     }
 
-    /**
-     * Wrap an action to check permissions first
-     */
     function guardedAction(divisionName, action) {
+        // ★★★ v1.1: Owner/Admin always passes guard ★★★
+        if (_isOwnerOrAdmin()) return action();
         if (!canEditDivision(divisionName)) {
             showAccessDeniedToast(divisionName);
             return false;
@@ -596,6 +604,6 @@
         setupEditInterceptors();
     }
 
-    console.log("🚫 Edit Restrictions loaded");
+    console.log("🚫 Edit Restrictions v1.1 loaded");
 
 })();

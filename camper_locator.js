@@ -1,3 +1,4 @@
+
 // =================================================================
 // camper_locator.js — v2.0: Streamlined Real-Time Locator
 //
@@ -80,7 +81,7 @@
         return `<div style="margin-top:8px;">` +
             leagueData.matchups.map(m => {
                 const norm = normalizeMatchup(m);
-                return `<div style="padding:3px 0;">${norm.teamA} vs ${norm.teamB} @ <strong>${norm.field}</strong>${norm.sport ? ' (' + norm.sport + ')' : ''}</div>`;
+                return `<div style="padding:3px 0;">${norm.teamA} vs ${norm.teamB}${norm.sport || norm.field ? ' - ' : ''}${norm.sport ? '<strong>' + norm.sport.charAt(0).toUpperCase() + norm.sport.slice(1) + '</strong>' : ''}${norm.field ? ' (' + norm.field + ')' : ''}</div>`;
             }).join('') + `</div>`;
     }
 

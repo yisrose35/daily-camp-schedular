@@ -81,10 +81,10 @@
         }
     }
 
-    async function initializeAccessControl() {
-        // Wait for AccessControl to be defined
+   async function initializeAccessControl() {
+        // Wait for AccessControl AND Supabase to be defined
         let attempts = 0;
-        while (!window.AccessControl && attempts < 100) {
+        while ((!window.AccessControl || !window.supabase?.auth) && attempts < 100) {
             await new Promise(r => setTimeout(r, 50));
             attempts++;
         }

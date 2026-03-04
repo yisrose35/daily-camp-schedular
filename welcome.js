@@ -69,6 +69,19 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
     }
 
+    console.log("🚀 [welcome.js] No inline auth detected, running fallback auth check...");
+
+    // Wait for Supabase
+    let attempts = 0;
+    while ((!window.supabase || !window.supabase.auth) && attempts < 30) {
+        await new Promise(r => setTimeout(r, 100));
+        attempts++;
+    }
+
+    // ★ FAST-PASS: Check localStorage before redirecting
+    const cachedUserId = localStorage.getItem('campistry_auth_user_id');
+    const cachedCampId = localStorage.getItem('campistry_camp_id');
+    const hasLocalAuth = !!(cachedUserId && cachedCampId);
     // Fallback only if inline script missing (shouldn't happen in production)
     console.log("🚀 [welcome.js] No inline auth — simple localStorage check");
     

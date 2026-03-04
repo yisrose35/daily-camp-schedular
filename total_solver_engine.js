@@ -47,6 +47,10 @@
     // ========================================================================
     // SOLVER-WIDE CACHES
     // ========================================================================
+   // ★★★ FIELD GROUP SENIORITY CACHES ★★★
+    var _fieldGroupMap = {};
+    var _fieldGroups = {};
+    var _divisionSeniorityMap = {};
     var _normalizedNames = new Map();
     var _rotationScoreCache = new Map();
     var _todayCache = new Map();
@@ -90,8 +94,8 @@
         _activityPlan.clear(); _scarcityMap.clear(); _skeletonContext.clear();
         _isRainyDay = false; _rainyCapOverrides.clear(); _rainyTimeBypasses.clear();
         _perfCounters = { rotationCacheHits: 0, rotationCacheMisses: 0, timeIndexQueries: 0, domainPruned: 0, augmentingPathAttempts: 0, augmentingPathSuccesses: 0 };
+        _fieldGroupMap = {}; _fieldGroups = {}; _divisionSeniorityMap = {};
     }
-
     // ========================================================================
     // LOGGING
     // ========================================================================
@@ -229,7 +233,7 @@
                 else if (sw.type === 'custom') { capacity = parseInt(sw.capacity) || 2; sharingType = 'custom'; }
                 else if (sw.capacity) { capacity = parseInt(sw.capacity); sharingType = 'same_division'; }
                 else { capacity = 2; sharingType = 'same_division'; }
-            } else if (fieldProps.sharable) { capacity = 2; sharingType = 'same_division'; }
+           } else if (fieldProps.sharable) { capacity = 2; sharingType = 'same_division'; }
 
             // ★★★ v15.0: RAINY DAY CAPACITY OVERRIDE ★★★
             if (_isRainyDay && _rainyCapOverrides.has(fieldName)) {
@@ -237,7 +241,6 @@
                 if (rainCap > capacity) {
                     v12Log('🌧️ Capacity override: ' + fieldName + ' ' + capacity + ' → ' + rainCap);
                     capacity = rainCap;
-                    // If field was not_sharable but now has higher capacity, upgrade sharing
                     if (sharingType === 'not_sharable' && capacity > 1) sharingType = 'same_division';
                 }
             }
@@ -250,6 +253,66 @@
         }
         v12Log('Field properties pre-computed: ' + _fieldPropertyMap.size + ' fields' + (_isRainyDay ? ' (🌧️ rainy overrides applied)' : ''));
     }
+
+    // ========================================================================
+    // FIELD GROUP + DIVISION SENIORITY CACHE
+    // ========================================================================
+    function buildFieldGroupCaches() {
+        _fieldGroupMap = {};
+        _fieldGroups = {};
+        _divisionSeniorityMap = {};
+
+        var settings = window.loadGlobalSettings?.() || {};
+        var allFields = (settings.app1?.fields) || [];
+        
+        for (var fi = 0; fi < allFields.length; fi++) {
+            var f = allFields[fi];
+            if (f.fieldGroup && f.qualityRank) {
+                _fieldGroupMap[f.name] = {
+                    groupName: f.fieldGroup,
+                    qualityRank: parseInt(f.qualityRank) || 999
+                };
+                if (!_fieldGroups[f.fieldGroup]) _fieldGroups[f.fieldGroup] = [];
+                _fieldGroups[f.fieldGroup].push({
+                    name: f.name,
+                    qualityRank: parseInt(f.qualityRank) || 999
+                });
+            }
+        }
+        for (var gk in _fieldGroups) {
+            _fieldGroups[gk].sort(function(a, b) { return a.qualityRank - b.qualityRank; });
+        }
+
+        var divisions = window.divisions || {};
+        var divNames = Object.keys(divisions);
+        var divWithNumbers = [];
+        for (var di = 0; di < divNames.length; di++) {
+            var dn = divNames[di];
+            var m = String(dn).toLowerCase().trim().match(/(\d+)/);
+            var gradeNum = m ? parseInt(m[1], 10) : null;
+            divWithNumbers.push({ name: dn, gradeNum: gradeNum });
+        }
+        divWithNumbers.sort(function(a, b) {
+            if (a.gradeNum !== null && b.gradeNum !== null) return b.gradeNum - a.gradeNum;
+            if (a.gradeNum !== null) return -1;
+            if (b.gradeNum !== null) return 1;
+            return a.name.localeCompare(b.name);
+        });
+        for (var si = 0; si < divWithNumbers.length; si++) {
+            _divisionSeniorityMap[divWithNumbers[si].name] = si;
+        }
+        
+        var groupCount = Object.keys(_fieldGroups).length;
+        if (groupCount > 0) {
+            console.log('[SOLVER] 🏟️ Field groups: ' + groupCount);
+            for (var gn in _fieldGroups) {
+                console.log('[SOLVER]   📋 "' + gn + '": ' + _fieldGroups[gn].map(function(f) { return '#' + f.qualityRank + ' ' + f.name; }).join(', '));
+            }
+            console.log('[SOLVER] 👑 Seniority: ' + divWithNumbers.map(function(d) { return d.name + '(#' + _divisionSeniorityMap[d.name] + ')'; }).join(' > '));
+        }
+    }
+
+           
 
     function getFieldCapacity(fieldName) {
         var cached = _fieldPropertyMap.get(fieldName);
@@ -324,6 +387,19 @@
         for (var i = 0; i < upperBound; i++) { var e = entries[i]; if (e.bunk === excludeBunk) continue; if (e.endMin > startMin) count++; }
         return count;
     }
+
+    // ★★★ v15.3: Get raw time index entries for fullGrade capacity bypass ★★★
+    Solver.getFieldTimeIndexEntries = function(fieldNorm, startMin, endMin) {
+        var entries = _fieldTimeIndex.get(fieldNorm) || [];
+        var result = [];
+        for (var i = 0; i < entries.length; i++) {
+            var e = entries[i];
+            if (e.endMin <= startMin || e.startMin >= endMin) continue;
+            result.push(e);
+        }
+        return result;
+    };
+
     function checkCrossDivisionTimeConflict(fieldName, blockDivName, startMin, endMin, excludeBunk) {
         if (startMin === undefined || endMin === undefined) return null;
         var fieldNorm = normName(fieldName);
@@ -373,8 +449,15 @@
             if (lockStartMin == null || lockEndMin == null) continue;
             if (lockStartMin < endMin && lockEndMin > startMin) return true;
         }
+        
+        // ★★★ COMBINED FIELD CHECK ★★★
+        if (window.FieldCombos?.isBlockedByCombo) {
+            var comboCheck = window.FieldCombos.isBlockedByCombo(fieldName, startMin, endMin, null);
+            if (comboCheck.blocked) return true;
+        }
         return false;
     }
+    
 
     // ========================================================================
     // BATCHED ROTATION SCORING
@@ -545,6 +628,25 @@
             if (hist + todayCount >= specialRule.maxUsage) return 999999;
         }
 
+        // ★ v3.7: Multi-Part gate + follow-up urgency
+        if (window.isBunkEligibleForSpecial && !window.isBunkEligibleForSpecial(bunk, act)) return 999999;
+        if (window.getMultiPartConfig && window.getBunkCompletionCount) {
+            var _mp = window.getMultiPartConfig(act);
+            if (_mp) {
+                var _done = window.getBunkCompletionCount(bunk, act);
+                var _total = _mp.totalParts || 2;
+                if (_done > 0 && _done % _total !== 0) {
+                    // Mid-cycle: bunk needs the next part
+                    var _gap = _mp.daysBetween || 3;
+                    var _daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, act, 0) ?? 0;
+                    if (_daysSince >= _gap) {
+                        // Past the gap — bonus + escalating penalty per overdue day
+                        var _overdue = _daysSince - _gap;
+                        penalty -= 25000 + (_overdue * 5000);
+                    }
+                }
+            }
+        }
         // ★★★ v15.0: RAINY DAY TIME-RULE CHECK ★★★
         // If it's a rainy day and this field has rainyDayAvailableAllDay, skip time rule rejection.
         // Otherwise, existing time-rule logic in domain building handles it.
@@ -572,6 +674,35 @@
         else { var actPrefProps2 = activityProperties[act]; if (actPrefProps2?.preferences?.enabled) { var prefIdx2 = (actPrefProps2.preferences.list || []).indexOf(blockDivName); if (prefIdx2 !== -1) penalty -= (50 - prefIdx2 * 5); else penalty += 8000; } }
 
         // Sharing incentive
+        // ★★★ FIELD GROUP SENIORITY PENALTY ★★★
+        if (fieldName && fieldName !== 'Free') {
+            var fgInfo = _fieldGroupMap[fieldName];
+            if (fgInfo) {
+                var groupMembers = _fieldGroups[fgInfo.groupName];
+                var divSeniority = _divisionSeniorityMap[blockDivName];
+                if (groupMembers && divSeniority !== undefined) {
+                    var fieldQR = fgInfo.qualityRank;
+                    var totalInGroup = groupMembers.length;
+                    var idealRank = divSeniority + 1;
+                    if (fieldQR === idealRank) {
+                        // Perfect match: this division's seniority = this field's quality
+                        penalty -= 8000;
+                    } else if (idealRank <= totalInGroup) {
+                        var rankDiff = Math.abs(fieldQR - idealRank);
+                        if (fieldQR < idealRank) {
+                            // Getting a BETTER field than seniority warrants — leave it for seniors
+                            penalty += 4000 + rankDiff * 2000;
+                        } else {
+                            // Getting a WORSE field — ok if better ones are taken
+                            penalty += 1000 + rankDiff * 500;
+                        }
+                    } else {
+                        // More divisions than fields in group — prefer lower-ranked fields
+                        penalty += (totalInGroup - fieldQR) * 1500;
+                    }
+                }
+            }
+        }
         if (fieldName && fieldName !== 'Free' && slots.length > 0 && blockStart !== undefined && blockEnd !== undefined) {
             var sharingEntries = _fieldTimeIndex.get(fieldNorm) || [];
             var fieldOccupied = false, sameActivityOnField = false;
@@ -632,7 +763,9 @@ else penalty += 200;
         // ★★★ v15.0: fullGrade steering — if this activity has _fullGrade, bonus ★★★
         // This makes the solver PREFER fullGrade picks, used in conjunction with
         // the fullGrade forcing logic in Part 2's solveGroupMatchingAugmented
-        if (pick._fullGrade || activityProperties[act]?.fullGrade || activityProperties[act]?._fullGrade) penalty -= 15000;
+         var _isFGPenalty = pick._fullGrade || (window.isFullGradeForDivision ? window.isFullGradeForDivision(act, pick._divName || '') : (activityProperties[act]?.fullGrade || activityProperties[act]?._fullGrade));
+        if (_isFGPenalty) penalty -= 15000;
+
 
         // Tie-breaker
         penalty += Math.random() * (ROTATION_CONFIG.TIE_BREAKER_RANDOMNESS || 300);
@@ -829,8 +962,33 @@ else penalty += 200;
                 }
                 if (allocated[aBunk] && wishes2.length > 0 && allocated[aBunk] !== wishes2[0].activity) { var dk2 = aBunk + '|' + wishes2[0].activity; _activityDebt.set(dk2, (_activityDebt.get(dk2) || 0) - 2000); }
             }
-            for (var pi = 0; pi < blockIndices.length; pi++) { var bIdx = blockIndices[pi]; var pBunk2 = activityBlocks[bIdx].bunk; if (allocated[pBunk2]) _activityPlan.set(bIdx, { activity: allocated[pBunk2], steering: -8000 }); }
-            for (var scAct in activityUsed) { var demand = 0; for (var scBunk in wishLists) { if (wishLists[scBunk]?.some(function(w) { return w.activity === scAct; })) demand++; } var scSupply = activitySupply[scAct] || 1; if (demand > scSupply) _scarcityMap.set(scAct + '|' + startMin, demand / scSupply); }
+          // ★★★ v15.3: fullGrade coordination — if any bunk got a fullGrade activity,
+            // force ALL bunks in this group to be planned for it ★★★
+            var fgActivity = null;
+            for (var fgBunk in allocated) {
+                var fgAct = allocated[fgBunk];
+               var _fgCheckDiv = activityBlocks[fgBIdx]?.divName || '';
+               var _isFGPlanner = window.isFullGradeForDivision ? window.isFullGradeForDivision(fgAct, _fgCheckDiv) : (activityProperties[fgAct]?.fullGrade || activityProperties[fgAct]?._fullGrade);
+               if (fgAct && _isFGPlanner) {
+                    fgActivity = fgAct;
+                    console.log('[PLANNER] fullGrade activity found: ' + fgAct + ' for grade group at ' + startMin);
+
+
+                    break;
+                }
+            }
+            if (fgActivity) {
+                for (var fgBi = 0; fgBi < blockIndices.length; fgBi++) {
+                    var fgBIdx = blockIndices[fgBi];
+                    var fgBunk2 = activityBlocks[fgBIdx].bunk;
+                    var fgDoneCheck = getActivitiesDoneToday(fgBunk2, activityBlocks[fgBIdx].slots?.[0] ?? 999);
+                    if (!fgDoneCheck.has(normName(fgActivity))) {
+                        allocated[fgBunk2] = fgActivity;
+                    }
+                }
+                console.log('[PLANNER] fullGrade override: ALL bunks → ' + fgActivity);
+            }
+            for (var pi = 0; pi < blockIndices.length; pi++) { var bIdx = blockIndices[pi]; var pBunk2 = activityBlocks[bIdx].bunk; if (allocated[pBunk2]) _activityPlan.set(bIdx, { activity: allocated[pBunk2], steering: -8000 }); }            for (var scAct in activityUsed) { var demand = 0; for (var scBunk in wishLists) { if (wishLists[scBunk]?.some(function(w) { return w.activity === scAct; })) demand++; } var scSupply = activitySupply[scAct] || 1; if (demand > scSupply) _scarcityMap.set(scAct + '|' + startMin, demand / scSupply); }
         }
         console.log('[SOLVER-v13] 🧠 Activity-First Planner: ' + _activityPlan.size + ' planned, ' + _scarcityMap.size + ' scarce, ' + _activityDebt.size + ' debt');
     }
@@ -941,7 +1099,8 @@ else penalty += 200;
         buildFieldTimeIndex: buildFieldTimeIndex,
         addToFieldTimeIndex: addToFieldTimeIndex,
         removeFromFieldTimeIndex: removeFromFieldTimeIndex,
-        getFieldUsageFromTimeIndex: getFieldUsageFromTimeIndex,
+       getFieldUsageFromTimeIndex: getFieldUsageFromTimeIndex,
+        getFieldTimeIndexEntries: Solver.getFieldTimeIndexEntries,
         checkCrossDivisionTimeConflict: checkCrossDivisionTimeConflict,
         countSameDivisionUsage: countSameDivisionUsage,
         checkSameFieldActivityMismatch: checkSameFieldActivityMismatch,
@@ -955,6 +1114,7 @@ else penalty += 200;
         getFieldCapacity: getFieldCapacity,
         getSharingType: getSharingType,
         buildAllCandidateOptions: buildAllCandidateOptions,
+        buildFieldGroupCaches: buildFieldGroupCaches,
         setScratchPick: setScratchPick, clonePick: clonePick,
         calculatePenaltyCost: calculatePenaltyCost,
         precomputeResourceMaps: precomputeResourceMaps,
@@ -1070,7 +1230,11 @@ else penalty += 200;
                 var blocked = false;
                 if (blk.startTime!==undefined && blk.endTime!==undefined && blk.divName) { if (S.checkCrossDivisionTimeConflict(c3.field,blk.divName,blk.startTime,blk.endTime,blk.bunk)) blocked = true; }
                 if (blocked) { pk = {field:"Free",sport:null,_activity:"Free"}; S._assignedBlocks.add(bi3); S._assignments.set(bi3,{candIdx:-1,pick:pk,cost:100000}); S.applyPickToSchedule(blk,pk); }
-                else { var cost = S.calculatePenaltyCost(blk,pk); S._assignedBlocks.add(bi3); S._assignments.set(bi3,{candIdx:ci3,pick:pk,cost:cost}); S.applyPickToSchedule(blk,pk); var fn = normName(pk.field); if (blk.startTime!==undefined && blk.endTime!==undefined) { var pan = normName(pk._activity); S.addToFieldTimeIndex(fn,blk.startTime,blk.endTime,blk.bunk,blk.divName,pan); if (pan && pan!==fn) S.addToFieldTimeIndex(pan,blk.startTime,blk.endTime,blk.bunk,blk.divName,pan); } S.invalidateRotationCacheForBunk(blk.bunk); }
+                else { var cost = S.calculatePenaltyCost(blk,pk);
+                // ★ Scheduling constraint penalties
+                if (window.getSequenceConstraintPenalty) { var seqPen = window.getSequenceConstraintPenalty(blk.bunk, normName(pk._activity || pk.field), blk.slots?.[0], blk.divName); if (seqPen >= 50000) cost += seqPen; }
+                if (window.getLocationCooldownPenalty && pk.field) { var coolPen = window.getLocationCooldownPenalty(normName(pk.field), blk.slots?.[0], blk.bunk, blk.divName); if (coolPen >= 50000) cost += coolPen; }
+ S._assignedBlocks.add(bi3); S._assignments.set(bi3,{candIdx:ci3,pick:pk,cost:cost}); S.applyPickToSchedule(blk,pk); var fn = normName(pk.field); if (blk.startTime!==undefined && blk.endTime!==undefined) { var pan = normName(pk._activity); S.addToFieldTimeIndex(fn,blk.startTime,blk.endTime,blk.bunk,blk.divName,pan); if (pan && pan!==fn) S.addToFieldTimeIndex(pan,blk.startTime,blk.endTime,blk.bunk,blk.divName,pan); } S.invalidateRotationCacheForBunk(blk.bunk); }
                 autoAssigned++;
                 var nb = overlaps.get(bi3) || new Set();
                 for (var ni of nb) { if (S._assignedBlocks.has(ni)) continue; var nd = S._domains.get(ni); if (!nd) continue; var chg=false; for (var nci of Array.from(nd)) { if (wouldConflict(blk,pk,activityBlocks[ni],allCands[nci])) { nd.delete(nci); chg=true; propagated++; } } if (chg) queue.add(ni); }
@@ -1083,7 +1247,21 @@ else penalty += 200;
     }
     function wouldConflict(aBlock,aPick,oBlock,oCand) {
         var afn = normName(aPick.field), ofn = oCand._fieldNorm || normName(oCand.field);
-        if (afn !== ofn) return false;
+        if (afn !== ofn) {
+            // ★★★ COMBINED FIELD: check if these are combo partners ★★★
+            if (window.FieldCombos?.isInCombo) {
+                var exclusive = window.FieldCombos.getExclusiveFields(aPick.field || '');
+                var isPartner = false;
+                for (var _ei = 0; _ei < exclusive.length; _ei++) {
+                    if (exclusive[_ei].toLowerCase().trim() === ofn) { isPartner = true; break; }
+                }
+                var aS=aBlock.startTime,aE=aBlock.endTime,oS=oBlock.startTime,oE=oBlock.endTime;
+                if (isPartner && aS !== undefined && oS !== undefined && !(aS >= oE || aE <= oS)) {
+                    return true; // Mutually exclusive combo partners at overlapping times
+                }
+            }
+            return false;
+        }
         var aS=aBlock.startTime,aE=aBlock.endTime,oS=oBlock.startTime,oE=oBlock.endTime;
         if (aS===undefined||oS===undefined) return false; if (aS>=oE||aE<=oS) return false;
         var fp = S._fieldPropertyMap.get(aPick.field); var cap = fp?fp.capacity:S.getFieldCapacity(aPick.field); var st = fp?fp.sharingType:S.getSharingType(aPick.field);
@@ -1100,6 +1278,8 @@ else penalty += 200;
         var allCands = S.allCandidateOptions, actProps = S.activityProperties;
         var groupsSolved = 0, blocksAssigned = 0;
         var globalBunkActs = new Map();
+        // ★★★ v15.3: Global fullGrade map persists across slot groups ★★★
+        var globalFullGradeMap = new Map();
         var allBunks = Object.keys(window.scheduleAssignments || {});
         for (var gbi=0;gbi<allBunks.length;gbi++) { var gb=allBunks[gbi],gbs=window.scheduleAssignments[gb]||[]; for (var gsi=0;gsi<gbs.length;gsi++) { var ge=gbs[gsi]; if (!ge||ge.continuation||ge._isTransition) continue; var ga=normName(ge._activity||ge.sport||ge.field); if (ga&&ga!=='free'&&ga!=='free play'&&ga!=='transition/buffer') { if (!globalBunkActs.has(gb)) globalBunkActs.set(gb,new Set()); globalBunkActs.get(gb).add(ga); } } }
         var sorted = Array.from(S._slotGroups.entries()).sort(function(a,b){return a[1].length-b[1].length;});
@@ -1107,7 +1287,7 @@ else penalty += 200;
             S._todayCache.clear();
             var unassigned = blockIndices.filter(function(bi){return !S._assignedBlocks.has(bi);});
             if (unassigned.length===0) continue;
-            var grpResults = solveGroupAugmented(activityBlocks, unassigned, globalBunkActs);
+            var grpResults = solveGroupAugmented(activityBlocks, unassigned, globalBunkActs, globalFullGradeMap);
             for (var ga2 of grpResults) {
                 if (S._assignedBlocks.has(ga2.blockIdx)) continue;
                 var blk = activityBlocks[ga2.blockIdx];
@@ -1126,9 +1306,10 @@ else penalty += 200;
         return blocksAssigned;
     }
 
-    function solveGroupAugmented(activityBlocks, unassigned, globalBunkActs) {
+    function solveGroupAugmented(activityBlocks, unassigned, globalBunkActs, globalFullGradeMap) {
         var allCands = S.allCandidateOptions, actProps = S.activityProperties;
         globalBunkActs = globalBunkActs || new Map();
+        globalFullGradeMap = globalFullGradeMap || new Map();
         var results = [], blockOpts = [];
         for (var bi of unassigned) {
             var dom = S._domains.get(bi);
@@ -1152,8 +1333,8 @@ else penalty += 200;
             return a.domainSize - b.domainSize;
         });
         var fieldUsageGrp = new Map(), fieldDivsGrp = new Map(), bunkActsGrp = new Map();
-        // ★★★ v15.0: fullGrade per GRADE — key = "gradeName|start|end" ★★★
-        var fullGradeMap = new Map();
+        // ★★★ v15.3: fullGrade uses global cross-group map ★★★
+        var fullGradeMap = globalFullGradeMap;
 
         for (var bo of blockOpts) {
             if (S._assignedBlocks.has(bo.bi)) continue;
@@ -1162,13 +1343,18 @@ else penalty += 200;
             var fgKey = (b2.divName||'')+'|'+(b2.startTime??'')+'|'+(b2.endTime??'');
             var fgExist = fullGradeMap.get(fgKey);
             if (fgExist) {
-                var fgPk = fgExist.pick, fgAn = normName(fgPk._activity||fgPk.field);
+                var fgAn = normName(fgExist.pick._activity||fgExist.pick.field);
                 var fgDone1 = bunkActsGrp.get(b2.bunk), fgDone2 = globalBunkActs.get(b2.bunk);
                 var fgDup = (fgDone1&&fgDone1.has(fgAn))||(fgDone2&&fgDone2.has(fgAn));
                 if (!fgDup) { var fgLive = S.getActivitiesDoneToday(b2.bunk,b2.slots?.[0]??999); if (!fgLive.has(fgAn)) {
-                    results.push({blockIdx:bo.bi,candIdx:fgExist.candIdx,pick:fgPk,cost:fgExist.cost});
+                    // ★★★ v15.3: Clone pick properly + update ALL tracking maps ★★★
+                    var fgClone = { field: fgExist.pick.field, sport: fgExist.pick.sport, _activity: fgExist.pick._activity, _type: fgExist.pick._type, _fullGrade: true };
+                    results.push({blockIdx:bo.bi,candIdx:fgExist.candIdx,pick:fgClone,cost:fgExist.cost});
                     if (!bunkActsGrp.has(b2.bunk)) bunkActsGrp.set(b2.bunk,new Set()); bunkActsGrp.get(b2.bunk).add(fgAn);
-                    assigned = true; console.log('[FULL_GRADE] Forced '+b2.bunk+' → '+fgPk._activity+' (grade: '+b2.divName+')');
+                    var fgFn = normName(fgClone.field);
+                    fieldUsageGrp.set(fgFn, (fieldUsageGrp.get(fgFn)||0)+1);
+                    if (!fieldDivsGrp.has(fgFn)) fieldDivsGrp.set(fgFn,new Set()); fieldDivsGrp.get(fgFn).add(b2.divName||'');
+                    assigned = true; console.log('[FULL_GRADE] Forced '+b2.bunk+' → '+fgClone._activity+' (grade: '+b2.divName+')');
                 } }
             }
             if (assigned) continue;
@@ -1196,6 +1382,25 @@ else penalty += 200;
                     if (!xca&&b2.divName) { for (var ria=0;ria<results.length;ria++) { var ra2=results[ria]; if (ra2.candIdx===-1||normName(ra2.pick.field)!==fn2) continue; var rba=activityBlocks[ra2.blockIdx]; if (rba.divName&&rba.divName!==b2.divName&&rba.startTime<b2.endTime&&rba.endTime>b2.startTime) { xca=true; break; } } }
                     canFit=!xca&&(existUse+grpUse<cap);
                 }
+               // ★★★ v15.3: fullGrade capacity bypass — same grade bypasses capacity ★★★
+               var _isFGCapBypass = c2._fullGrade || (window.isFullGradeForDivision ? window.isFullGradeForDivision(c2.activityName, b2.divName || '') : actProps[c2.activityName]?.fullGrade);
+               if (!canFit && _isFGCapBypass) {
+                    var fgSameGrade = true;
+                    var fgDivSet = fieldDivsGrp.get(fn2);
+                    if (fgDivSet && fgDivSet.size > 0) {
+                        for (var fgd of fgDivSet) { if (fgd && fgd !== (b2.divName||'')) { fgSameGrade = false; break; } }
+                    }
+                    if (fgSameGrade && b2.startTime !== undefined && b2.endTime !== undefined) {
+                        var fgIdxEntries = S.getFieldTimeIndexEntries ? S.getFieldTimeIndexEntries(fn2, b2.startTime, b2.endTime) : [];
+                        for (var fge = 0; fge < fgIdxEntries.length; fge++) {
+                            if (fgIdxEntries[fge].bunk !== b2.bunk && fgIdxEntries[fge].divName !== (b2.divName||'')) { fgSameGrade = false; break; }
+                        }
+                    }
+                    if (fgSameGrade) {
+                        canFit = true;
+                        console.log('[FULL_GRADE] Capacity bypass: ' + b2.bunk + ' → ' + c2.activityName + ' (grade: ' + b2.divName + ')');
+                    }
+                }
                 if (canFit) {
                     var newPk = S.clonePick(c2);
                     results.push({blockIdx:bo.bi,candIdx:opt.ci,pick:newPk,cost:opt.cost});
@@ -1203,8 +1408,9 @@ else penalty += 200;
                     if (!fieldDivsGrp.has(fn2)) fieldDivsGrp.set(fn2,new Set()); fieldDivsGrp.get(fn2).add(b2.divName||'');
                     if (!bunkActsGrp.has(b2.bunk)) bunkActsGrp.set(b2.bunk,new Set());
                     var aAn=normName(c2.activityName); if (aAn&&aAn!=='free') bunkActsGrp.get(b2.bunk).add(aAn);
-                    // ★ v15.0: Record fullGrade if activity has _fullGrade
-                    if (newPk._fullGrade||actProps[c2.activityName]?.fullGrade||actProps[c2.activityName]?._fullGrade) { fullGradeMap.set(fgKey,{pick:newPk,candIdx:opt.ci,cost:opt.cost}); }
+                    // ★ v15.3: Record fullGrade — check both property names
+                    var _isFGRecord = newPk._fullGrade || (window.isFullGradeForDivision ? window.isFullGradeForDivision(c2.activityName, b2.divName || '') : (actProps[c2.activityName]?.fullGrade || actProps[c2.activityName]?._fullGrade));
+                    if (_isFGRecord) { fullGradeMap.set(fgKey,{pick:newPk,candIdx:opt.ci,cost:opt.cost}); }
                     assigned=true; break;
                 }
                 // Augmenting path
@@ -1518,6 +1724,7 @@ else penalty += 200;
         S.detectRainyDayMode(config);
 
         S.allCandidateOptions = S.buildAllCandidateOptions(S.globalConfig);
+        S.buildFieldGroupCaches();
         if (S.allCandidateOptions.length === 0) { console.error('[SOLVER] No candidate options!'); return; }
 
         // Ensure divName is set for all blocks

@@ -227,6 +227,9 @@
                     <button class="sidebar-item active" data-tab="setup">
                         <span class="sidebar-dot"></span> Setup (Bunks / Divisions)
                     </button>
+                    <button class="sidebar-item" data-tab="rules">
+                        <span class="sidebar-dot"></span> Rules
+                    </button>
                     <button class="sidebar-item" data-tab="locations">
                         <span class="sidebar-dot"></span> Location Zones
                     </button>
@@ -414,7 +417,8 @@
                 <div id="fields" class="tab-content"></div>
                 <div id="special_activities" class="tab-content"></div>
                 <div id="leagues" class="tab-content"></div>
-                <div id="specialty-leagues" class="tab-content"></div>
+               <div id="specialty-leagues" class="tab-content"></div>
+                <div id="rules" class="tab-content"></div>
 
                 <div id="master-scheduler" class="tab-content">
                     <!-- MULTI-SCHEDULER: Subdivision Status Panel will be inserted here -->
@@ -513,12 +517,12 @@
         }
         
         let attempts = 0;
-        while (!window.supabase && attempts < 20) {
-            await new Promise(r => setTimeout(r, 100));
+      while ((!window.supabase || !window.supabase.auth) && attempts < 20) {           
+          await new Promise(r => setTimeout(r, 100));
             attempts++;
         }
         
-        if (!window.supabase) {
+        if (!window.supabase || !window.supabase.auth) {
             if (hasLocalAuth) {
                 console.warn('🔑 [Auth] Supabase SDK not loaded, but cached auth exists — proceeding');
                 // Still show the app; supabase will init eventually
@@ -564,9 +568,17 @@
             await waitForCloudHydration();
             showApp();
             
-        } catch (e) {
+       } catch (e) {
             console.error("Auth check failed:", e);
-            redirectToLogin();
+            // ★ v7.2 FIX: Don't bounce to login on transient errors if cached auth exists
+            const cachedUserId = localStorage.getItem('campistry_auth_user_id');
+            const cachedCampId = localStorage.getItem('campistry_camp_id');
+            if (cachedUserId && cachedCampId) {
+                console.warn('🔑 [Auth] Error during auth check, but cached auth exists — proceeding anyway');
+                showApp();
+            } else {
+                redirectToLogin();
+            }
         }
     }
     
@@ -620,6 +632,8 @@
 <script src="calendar.js"></script>
 <script src="app1.js"></script>
 <script src="locations.js"></script>
+   <script src="scheduling_constraints.js"></script>
+<script src="scheduling_rules.js"></script>
 <script src="skeleton_sandbox.js"></script>
 <script src="daily_adjustments.js"></script>
 <script src="rainy_day_manager.js"></script>
@@ -697,6 +711,7 @@ function showTab(id) {
     if (id === "special_activities") window.initSpecialActivitiesTab?.();
     if (id === "leagues") window.initLeagues?.();
     if (id === "specialty-leagues") window.initSpecialtyLeagues?.();
+    if (id === "rules") window.initRulesTab?.();
     if (id === "master-scheduler") {
         window.initMasterScheduler?.();
         const container = document.getElementById('subdivision-status-container');

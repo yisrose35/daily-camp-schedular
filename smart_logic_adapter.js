@@ -425,6 +425,12 @@
             return false;
         }
         
+        // ★ v3.5: Multi-Part check — Part 2 requires Part 1 completion
+        if (window.isBunkEligibleForSpecial && !window.isBunkEligibleForSpecial(bunk, special.name)) {
+            log(`      ${bunk}: blocked from ${special.name} (hasn't completed Part 1)`);
+            return false;
+        }
+        
         return true;
     }
 
@@ -793,7 +799,19 @@
                     log(`  ${bunk} -> ${effectiveA.open} (INELIGIBLE)`);
                 });
             }
-
+// ★★★ FULL GRADE CHECK FOR BLOCK A ★★★
+            if (!effectiveA.allFallback) {
+                const fullGradeActA = Object.values(block1).find(act => {
+                    if (!act) return false;
+                    return window.isFullGradeForDivision ? window.isFullGradeForDivision(act, job.division || '') : (activityProps[act]?.fullGrade || activityProps[act]?._fullGrade);
+                });
+                if (fullGradeActA) {
+                    log(`\n  ★ FULL GRADE OVERRIDE (Block A): "${fullGradeActA}" → ALL ${bunks.length} bunks`);
+                    bunks.forEach(bunk => { block1[bunk] = fullGradeActA; });
+                    specialWinnersA.clear();
+                    bunks.forEach(b => specialWinnersA.add(b));
+                }
+            }
             log(`\n  Block A Summary: ${specialWinnersA.size} got specials, ${bunks.length - specialWinnersA.size} got ${effectiveA.open || fbAct}`);
 
             // -----------------------------------------------------------------
@@ -857,7 +875,14 @@
                         log(`  ${bunk} -> ${fbAct} (INELIGIBLE)`);
                     });
                 }
-
+// ★★★ FULL GRADE CHECK FOR BLOCK B ★★★
+                if (!effectiveB.allFallback) {
+                    const fullGradeActB = Object.values(block2).find(act => act && (activityProps[act]?.fullGrade || activityProps[act]?._fullGrade));
+                    if (fullGradeActB) {
+                        log(`\n  ★ FULL GRADE OVERRIDE (Block B): "${fullGradeActB}" → ALL ${bunks.length} bunks`);
+                        bunks.forEach(bunk => { block2[bunk] = fullGradeActB; });
+                    }
+                }
                 const specialsInB = Object.values(block2).filter(act => 
                     specialsBlockB.some(s => s.name === act)
                 ).length;

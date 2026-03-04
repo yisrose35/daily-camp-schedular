@@ -1990,6 +1990,12 @@ function renderEventTile(ev, top, height) {
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${ev.reservedFields.join(', ')}</div>`;
   }
   
+  
+// ★★★ MULTIPLE LEAGUE SUPPORT: Show league name badge ★★★
+  if (ev.leagueName) {
+    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🏆 ${ev.leagueName}</div>`;
+  }
+
   if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
     const actList = ev.electiveActivities.slice(0, 3).join(', ');
     const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
@@ -2004,7 +2010,6 @@ function renderEventTile(ev, top, height) {
   if (ev.type === 'split' && ev.subEvents?.length === 2) {
     innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">↔ ${ev.subEvents[0].event} / ${ev.subEvents[1].event}</div>`;
   }
-
   const selectedClass = selectedTileId === ev.id ? ' selected' : '';
   return `<div class="grid-event${selectedClass}" data-id="${ev.id}" draggable="true" title="Click to select, Delete key to remove" 
           style="${style}; position:absolute; top:${top}px; height:${adjustedHeight}px; width:96%; left:2%; padding:5px 7px; font-size:11px; overflow:hidden; border-radius:5px; cursor:pointer; display:flex; flex-direction:column; box-sizing:border-box;">
@@ -2192,7 +2197,7 @@ function addDropListeners(selector) {
           location: reservedFields.length === 1 ? reservedFields[0] : null
         };
       }
-      // OTHER PINNED (swim, lunch, snacks, dismissal)
+     // OTHER PINNED (swim, lunch, snacks, dismissal)
       else if (['lunch', 'snacks', 'dismissal', 'swim'].includes(tileData.type)) {
         let name = tileData.name;
         let reservedFields = [];
@@ -2212,25 +2217,80 @@ function addDropListeners(selector) {
           }
         }
         
+        const swimModalFields = [
+          { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
+          { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
+        ];
+        if (tileData.type === 'swim') {
+          swimModalFields.push(
+            { name: 'preChangeMin', label: 'Pre-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 10' },
+            { name: 'postChangeMin', label: 'Post-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 10' }
+          );
+        }
+        
         const result = await showModal({
           title: name,
-          fields: [
-            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
-            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
-          ]
+          description: tileData.type === 'swim' ? 'Change time is carved from the total block. e.g. 3–4 with 10min changes → Change 3:00–3:10, Swim 3:10–3:50, Change 3:50–4:00' : undefined,
+          fields: swimModalFields
         });
         if (!result) return;
         
+        const msTotalStart = parseTimeToMinutes(result.startTime);
+        const msTotalEnd = parseTimeToMinutes(result.endTime);
+        const msPreChange = (tileData.type === 'swim') ? (parseInt(result.preChangeMin) || 0) : 0;
+        const msPostChange = (tileData.type === 'swim') ? (parseInt(result.postChangeMin) || 0) : 0;
+        
+        if (msPreChange + msPostChange >= (msTotalEnd - msTotalStart)) {
+          await showAlert('Change time (' + (msPreChange + msPostChange) + ' min) must be less than the total block (' + (msTotalEnd - msTotalStart) + ' min).');
+          return;
+        }
+        
+        const msSwimStart = msTotalStart + msPreChange;
+        const msSwimEnd = msTotalEnd - msPostChange;
+        
+        // Pre-Change carved from start of block
+        if (msPreChange > 0) {
+          dailySkeleton.push({
+            id: Date.now().toString() + '_prechange',
+            type: 'pinned',
+            event: 'Change',
+            division: divName,
+            startTime: result.startTime,
+            endTime: minutesToTime(msSwimStart),
+            reservedFields: [],
+            location: null,
+            _swimChange: 'pre'
+          });
+        }
+        
+        // Swim tile — narrowed to exclude change time
         newEvent = {
           id: Date.now().toString(),
           type: 'pinned',
           event: name,
           division: divName,
-          startTime: result.startTime,
-          endTime: result.endTime,
+          startTime: minutesToTime(msSwimStart),
+          endTime: minutesToTime(msSwimEnd),
           reservedFields: reservedFields,
-          location: location
+          location: location,
+          _preChangeMin: msPreChange || undefined,
+          _postChangeMin: msPostChange || undefined
         };
+        
+        // Post-Change carved from end of block
+        if (msPostChange > 0) {
+          dailySkeleton.push({
+            id: Date.now().toString() + '_postchange',
+            type: 'pinned',
+            event: 'Change',
+            division: divName,
+            startTime: minutesToTime(msSwimEnd),
+            endTime: result.endTime,
+            reservedFields: [],
+            location: null,
+            _swimChange: 'post'
+          });
+        }
       }
       // STANDARD SLOTS & LEAGUES
       else {
@@ -2243,9 +2303,29 @@ function addDropListeners(selector) {
         else if (tileData.type === 'league') { name = "League Game"; finalType = 'league'; }
         else if (tileData.type === 'specialty_league') { name = "Specialty League"; finalType = 'specialty_league'; }
         
+        // ★★★ MULTIPLE LEAGUE SUPPORT: Build league picker for league tiles ★★★
+        let leaguePickerField = [];
+        if (tileData.type === 'league') {
+          const _gs = window.loadGlobalSettings?.() || {};
+          const _lbn = _gs.leaguesByName || {};
+          const _leagueNames = Object.keys(_lbn).filter(ln => _lbn[ln] && _lbn[ln].enabled !== false);
+          if (_leagueNames.length > 0) {
+            leaguePickerField = [{
+              name: 'leagueName',
+              label: 'Which League?',
+              type: 'select',
+              options: [{ value: '', label: '— Any League (auto) —' }].concat(
+                _leagueNames.map(ln => ({ value: ln, label: ln }))
+              ),
+              default: ''
+            }];
+          }
+        }
+
         const result = await showModal({
           title: name,
           fields: [
+            ...leaguePickerField,
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
           ]
@@ -2260,6 +2340,12 @@ function addDropListeners(selector) {
           startTime: result.startTime,
           endTime: result.endTime
         };
+
+        // ★★★ MULTIPLE LEAGUE SUPPORT: Store selected league name ★★★
+        if (finalType === 'league' && result.leagueName) {
+          newEvent.leagueName = result.leagueName;
+          newEvent.event = result.leagueName;
+        }
       }
 
       if (newEvent) {

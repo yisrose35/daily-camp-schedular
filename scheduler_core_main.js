@@ -399,8 +399,16 @@
             }
         }
         
-        const fName = Utils.fieldLabel(pick.field);
-        const trans = Utils.getTransitionRules(fName, activityProperties);
+     const fName = Utils.fieldLabel(pick.field);
+        // ★ PREP LOCATION OVERRIDE: use different location for prep blocks
+        let effectiveLocation = block._isPrepBlock && block._prepLocation ? block._prepLocation : fName;
+        // ★ MULTI-PART LOCATION OVERRIDE: each part can have its own location
+        const mpPartCfg = window.getMultiPartPartConfig?.(block.bunk, block._activity || block.event || pick._activity || fName);
+        if (mpPartCfg && mpPartCfg.location) {
+            effectiveLocation = mpPartCfg.location;
+            console.log('[fillBlock] Multi-part ' + mpPartCfg.partNumber + '/' + mpPartCfg.totalParts + ' for ' + block.bunk + ' -> location: ' + effectiveLocation);
+        }
+        const trans = Utils.getTransitionRules(effectiveLocation, activityProperties);
         const {
             blockStartMin,
             blockEndMin,
@@ -659,7 +667,23 @@
                     console.log(`[SmartTile] ${bunk} has bunk override, skipping`);
                     return;
                 }
+// ★★★ FULL GRADE: Fill ALL bunks in division ★★★
+               const _isFG = window.isFullGradeForDivision ? window.isFullGradeForDivision(activityLabel, divName) : (activityProperties[activityLabel]?.fullGrade || activityProperties[activityLabel]?._fullGrade);
 
+                if (_isFG && !needsGeneration(activityLabel)) {
+                    console.log(`[SmartTile] ★ FULL GRADE: "${activityLabel}" → filling ALL bunks in ${divName}`);
+                    bunkList.forEach(fgBunk => {
+                        const fgEx = window.scheduleAssignments[fgBunk]?.[slots[0]];
+                        if (fgEx && fgEx._bunkOverride) return;
+                        window.fillBlock({
+                            divName, bunk: fgBunk, startTime: startMin, endTime: endMin, slots
+                        }, {
+                            field: activityLabel, sport: null, _fixed: true,
+                            _activity: activityLabel, _fullGrade: true
+                        }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                    });
+                    return; // Already filled all bunks
+                }
                 if (window.GlobalFieldLocks?.isFieldLocked(activityLabel, slots, divName)) {
                     console.log(`[SmartTile] ${bunk} - ${activityLabel} is LOCKED for ${divName}, trying alternatives`);
                     
@@ -2030,7 +2054,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     endTime: eMin,
                     slots,
                     bunks: bunkList,
-                    type: 'league'
+                    type: 'league',
+                    // ★★★ MULTIPLE LEAGUE SUPPORT: Pass through which league this block is for ★★★
+                    leagueName: item.leagueName || null
                 });
                 return;
             }

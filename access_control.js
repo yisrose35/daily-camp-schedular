@@ -47,7 +47,7 @@
 (function() {
     'use strict';
 
-    console.log("🔐 Access Control v3.11 loading...");
+    console.log("🔐 Access Control v3.12 loading...");
 
     // =========================================================================
     // STATE
@@ -161,6 +161,38 @@
     }
 
     // =========================================================================
+    // ★★★ v3.12: LOCALSTORAGE ROLE FALLBACK ★★★
+    // When sessionStorage cache misses, check localStorage for a persisted role.
+    // This prevents the owner from being locked out on fresh tabs.
+    // =========================================================================
+    
+    function tryRestoreFromLocalStorage(currentUserId) {
+        try {
+            const cachedRole = localStorage.getItem('campistry_role');
+            const cachedAuthId = localStorage.getItem('campistry_auth_user_id');
+            
+            // Must match current user
+            if (!cachedRole || cachedAuthId !== currentUserId) return false;
+            
+            // Only use this for owner/admin — these are safe to fast-path.
+            // Scheduler/viewer should go through full Supabase resolution.
+            if (cachedRole !== 'owner' && cachedRole !== 'admin') return false;
+            
+            _currentRole = cachedRole;
+            _campId = localStorage.getItem('campistry_user_id') || currentUserId;
+            _isTeamMember = localStorage.getItem('campistry_is_team_member') === 'true';
+            
+            debugLog("Restored owner/admin role from localStorage fallback:", cachedRole);
+            _restoredFromCache = true;
+            return true;
+            
+        } catch (e) {
+            console.warn("🔐 localStorage fallback error:", e);
+            return false;
+        }
+    }
+
+    // =========================================================================
     // ★★★ v3.9: WRITE-TIME ROLE VERIFICATION ★★★
     // Before any destructive operation (save/delete/generate), re-verify
     // role from Supabase. Prevents session cache poisoning (Hack #1)
@@ -253,7 +285,21 @@
             return true;
         }
 
-        // Need to verify — deduplicate concurrent calls
+        // ★★★ v3.12 FIX: Owner/Admin fast-path — don't block on background verify ★★★
+        // If we have a role from cache or localStorage and it's owner/admin,
+        // allow the write immediately. The background verify will catch any
+        // escalation (viewer pretending to be owner) by downgrading _currentRole,
+        // but a legitimate owner should NEVER be blocked waiting for a network call.
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
+            debugLog("verifyBeforeWrite: fast-path for", _currentRole, "— allowing while verify runs");
+            // Still kick off verification in background if not already running
+            if (!_verifyPromise) {
+                _verifyPromise = verifyRoleFromDB().finally(() => { _verifyPromise = null; });
+            }
+            return true;
+        }
+
+        // For non-owner/admin (scheduler, viewer, unknown): block until verified
         if (!_verifyPromise) {
             _verifyPromise = verifyRoleFromDB().finally(() => { _verifyPromise = null; });
         }
@@ -279,12 +325,12 @@
         console.log("🔐 Initializing access control...");
         
         let attempts = 0;
-        while (!window.supabase && attempts < 50) {
+        while ((!window.supabase || !window.supabase.auth) && attempts < 50) {
             await new Promise(r => setTimeout(r, 100));
             attempts++;
         }
         
-        if (!window.supabase) {
+        if (!window.supabase || !window.supabase.auth) {
             console.error("🔐 Supabase not available");
             return;
         }
@@ -297,28 +343,31 @@
 
         _currentUser = user;
         
-        // ★★★ v3.8: TRY SESSION CACHE FIRST ★★★
-        if (tryRestoreFromCache(user.id)) {
-            console.log("🔐 ⚡ Restored from session cache — skipping Supabase queries");
+        // ★★★ v3.8: TRY SESSION CACHE FIRST, v3.12: THEN LOCALSTORAGE ★★★
+        if (tryRestoreFromCache(user.id) || tryRestoreFromLocalStorage(user.id)) {
+            console.log("🔐 ⚡ Restored from session cache/local storage — skipping Supabase queries");
             
-            // ★★★ v3.11 FIX: Set _initialized immediately for owner/admin on cache hit ★★★
-            // Owner/admin don't need subdivision data for permission checks.
-            // Without this, all permission checks fail-closed during async loads
-            // (loadSubdivisions, loadUserSubdivisionDetails) causing intermittent
-            // "locked out of post-edit" for the camp owner.
-            if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
-                _initialized = true;
-                calculateEditableDivisions();
-                console.log("🔐 ⚡ Owner/Admin instant-init from cache — permissions active immediately");
-            }
+           // ★★★ v3.13: Instant-init for ALL roles from cache ★★★
+            // Cache already has role, subdivisionIds, and assignedDivisions.
+            // Calculate permissions immediately — no network calls needed.
+            // Subdivision details load in background for UI enrichment only.
+            calculateEditableDivisions();
+            _initialized = true;
+            console.log("🔐 ⚡ Instant-init from cache —", _currentRole, "with", _editableDivisions.length, "divisions");
             
             // ★★★ v3.9: Background-verify the cached role (non-blocking) ★★★
-            // UI loads instantly from cache, but before any WRITE is allowed,
-            // verifyBeforeWrite() will block until this completes.
             verifyRoleFromDB().then(() => {
                 debugLog("Background role verification complete:", _currentRole);
             });
         } else {
+            // Full Supabase resolution (first load / cache miss / cache expired)
+            await determineUserContext();
+            _roleVerifiedFromDB = true;
+
+            // ★★★ v3.13: Instant-init for ALL roles from DB too ★★★
+            calculateEditableDivisions();
+            _initialized = true;
+            console.log("🔐 ⚡ Instant-init from DB —", _currentRole, "with", _editableDivisions.length, "divisions");
             // ★★★ v3.12: Try localStorage before hitting DB ★★★
     const lsRole = localStorage.getItem('campistry_role');
     const lsCampId = localStorage.getItem('campistry_camp_id');
@@ -358,12 +407,10 @@
             await loadUserSubdivisionDetails();
         }
         
-        calculateEditableDivisions();
-        
-        _initialized = true;
-        
-        // ★★★ v3.11: Recalculate in case window.divisions loaded during async work ★★★
-        calculateEditableDivisions();
+        // ★★★ v3.13: Subdivision loading is now NON-BLOCKING ★★★
+        // Loads in background for UI enrichment (colors, names, "Managed by X" labels).
+        // Does NOT gate _initialized or permission checks.
+        _loadSubdivisionsInBackground();
         
         setupDivisionChangeObserver();
         setupMembershipSubscription();  // ★★★ v3.7: Real-time membership updates ★★★
@@ -674,7 +721,41 @@
             _userSubdivisionDetails = [];
         }
     }
+// =========================================================================
+    // ★★★ v3.13: NON-BLOCKING SUBDIVISION LOADING ★★★
+    // Subdivision data is needed for UI labels and colors, not for permission
+    // checks. Loading it in background prevents slow internet from blocking
+    // any user role from using the app.
+    // =========================================================================
 
+    function _loadSubdivisionsInBackground() {
+        (async () => {
+            try {
+                await loadSubdivisions();
+                
+                if (_currentRole === ROLES.SCHEDULER && _userSubdivisionIds.length > 0) {
+                    await loadUserSubdivisionDetails();
+                }
+                
+                // Recalculate with full subdivision data (may refine scheduler permissions)
+                const prevCount = _editableDivisions.length;
+                calculateEditableDivisions();
+                
+                if (_editableDivisions.length !== prevCount) {
+                    console.log("🔐 Subdivision data refined permissions:", prevCount, "→", _editableDivisions.length, "divisions");
+                    window.VisualRestrictions?.refresh?.();
+                }
+                
+                // Dispatch event so UI modules can update subdivision labels/colors
+                window.dispatchEvent(new CustomEvent('campistry-subdivisions-loaded', {
+                    detail: { subdivisions: _subdivisions }
+                }));
+                
+            } catch (e) {
+                console.warn("🔐 Background subdivision load failed (non-fatal):", e);
+            }
+        })();
+    }
     function calculateEditableDivisions() {
         const allDivisions = Object.keys(window.divisions || {});
         
@@ -812,17 +893,19 @@
     // =========================================================================
 
     function canEditDivision(divisionName) {
-        if (!_initialized) return false;
         if (!divisionName) return false;
+        // ★★★ v3.12: Owner/Admin bypass — role is known before _initialized ★★★
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        if (!_initialized) return false;
         if (_currentRole === ROLES.VIEWER) return false;
         return _editableDivisions.includes(divisionName);
     }
 
     function canEditBunk(bunkName) {
-        if (!_initialized) return false;
         if (!bunkName) return false;
+        // ★★★ v3.12: Owner/Admin bypass — role is known before _initialized ★★★
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        if (!_initialized) return false;
         if (_currentRole === ROLES.VIEWER) return false;
         
         const divisions = window.divisions || {};
@@ -850,36 +933,47 @@
     // =========================================================================
 
     function canInviteUsers() {
+        // ★★★ v3.12: Owner bypass before _initialized ★★★
+        if (_currentRole === ROLES.OWNER) return true;
         if (!_initialized) return false;
-        return _currentRole === ROLES.OWNER;
+        return false;
     }
 
     function canManageSubdivisions() {
+        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
-        return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN;
+        return false;
     }
 
     function canManageTeam() {
+        // ★★★ v3.12: Owner bypass before _initialized ★★★
+        if (_currentRole === ROLES.OWNER) return true;
         if (!_initialized) return false;
-        return _currentRole === ROLES.OWNER;
+        return false;
     }
 
     function canDeleteCampData() {
+        // ★★★ v3.12: Owner bypass before _initialized ★★★
+        if (_currentRole === ROLES.OWNER) return true;
         if (!_initialized) return false;
-        return _currentRole === ROLES.OWNER;
+        return false;
     }
 
     // ★★★ FIXED v3.6: Admin can now erase schedules/history ★★★
     function canEraseData() {
+        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
-        // Owner and Admin can erase schedules and history
-        return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN;
+        return false;
     }
 
     // ★★★ NEW v3.6: Owner-only for nuclear option ★★★
     function canEraseAllCampData() {
+        // ★★★ v3.12: Owner bypass before _initialized ★★★
+        if (_currentRole === ROLES.OWNER) return true;
         if (!_initialized) return false;
-        return _currentRole === ROLES.OWNER;
+        return false;
     }
 
     /**
@@ -887,8 +981,10 @@
      * Owner and Admin can edit templates; Scheduler and Viewer cannot.
      */
     function canEditPrintTemplates() {
+        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized || !_currentRole) return false;
-        return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN;
+        return false;
     }
 
     /**
@@ -896,6 +992,8 @@
      * All roles can print (per existing Print Center exception).
      */
     function canPrintSchedules() {
+        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
         return true; // Print Center is accessible to all roles
     }
@@ -905,33 +1003,44 @@
      * Only Owner can delete templates.
      */
     function canDeletePrintTemplates() {
+        // ★★★ v3.12: Owner bypass before _initialized ★★★
+        if (_currentRole === ROLES.OWNER) return true;
         if (!_initialized || !_currentRole) return false;
-        return _currentRole === ROLES.OWNER;
+        return false;
     }
 
     function canEditSetup() {
+        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
-        return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER;
+        return _currentRole === ROLES.SCHEDULER;
     }
 
     function canEditFields() {
+        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
-        return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN;
+        return false;
     }
 
     function canEditGlobalFields() {
+        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
-        return _currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN;
+        return false;
     }
 
     function canEditAnything() {
+        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
         if (_currentRole === ROLES.VIEWER) return false;
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         return _editableDivisions.length > 0;
     }
     
     function canSave() {
+        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
         return _currentRole !== ROLES.VIEWER;
     }
@@ -941,9 +1050,10 @@
     }
 
     function canRunGenerator() {
+        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
         if (_currentRole === ROLES.VIEWER) return false;
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         return _editableDivisions.length > 0;
     }
 
@@ -952,15 +1062,18 @@
     // =========================================================================
 
     function canPrint() {
-        return _initialized;
+        // ★★★ v3.12: Allow if role is known, even before full init ★★★
+        return _initialized || !!_currentRole;
     }
 
     function canUseCamperLocator() {
-        return _initialized;
+        // ★★★ v3.12: Allow if role is known, even before full init ★★★
+        return _initialized || !!_currentRole;
     }
 
     function canViewDailySchedule() {
-        return _initialized;
+        // ★★★ v3.12: Allow if role is known, even before full init ★★★
+        return _initialized || !!_currentRole;
     }
 
     // =========================================================================
@@ -968,20 +1081,24 @@
     // =========================================================================
 
     function canAddFieldAvailability(divisionName) {
-        if (!_initialized) return false;
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        if (!_initialized) return false;
         if (_currentRole === ROLES.SCHEDULER) return canEditDivision(divisionName);
         return false;
     }
 
     function canRemoveFieldAvailability(divisionName) {
-        if (!_initialized) return false;
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        if (!_initialized) return false;
         if (_currentRole === ROLES.SCHEDULER) return canEditDivision(divisionName);
         return false;
     }
 
     function hasRoleAtLeast(requiredRole) {
+        // ★★★ v3.12: If role is known, check it even before _initialized ★★★
+        if (_currentRole) {
+            return (ROLE_HIERARCHY[_currentRole] || 0) >= (ROLE_HIERARCHY[requiredRole] || 0);
+        }
         if (!_initialized) return false;
         const currentLevel = ROLE_HIERARCHY[_currentRole] || 0;
         const requiredLevel = ROLE_HIERARCHY[requiredRole] || 0;
@@ -993,11 +1110,11 @@
     // =========================================================================
 
     function getEditableDivisions() {
-        // ★★★ v3.11 FIX: Owner/Admin always gets ALL current divisions dynamically ★★★
+        // ★★★ v3.11/v3.12 FIX: Owner/Admin always gets ALL current divisions dynamically ★★★
         // _editableDivisions may be empty if window.divisions wasn't loaded at init time.
         // The polling interval recalculates eventually, but there's a gap where
         // getEditableDivisions() returns [] causing cells to render as non-editable.
-        if (_initialized && (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN)) {
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
             const allDivs = Object.keys(window.divisions || {});
             return allDivs.length > 0 ? allDivs : [..._editableDivisions];
         }
@@ -1317,7 +1434,7 @@
         const existing = document.getElementById('access-control-banner');
         if (existing) existing.remove();
         
-        if (!_initialized) return;
+        if (!_initialized && !_currentRole) return;
         
         if (_currentRole === ROLES.OWNER) return;
         
@@ -1385,6 +1502,9 @@
     // =========================================================================
 
     function canEdit() {
+        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        if (!_initialized) return false;
         return canEditAnything();
     }
 
@@ -1398,7 +1518,7 @@
 
    // ★★★ v3.10: Granular per-section setup permissions ★★★
     // Admin-only sections: fields, divisions, locations, special activities
-    // Scheduler+: schedule templates, leagues, skeleton assignments
+    // Scheduler+ : schedule templates, leagues, skeleton assignments
     function checkSetupAccess(action) {
         const actionLower = (action || '').toLowerCase();
 
@@ -1440,16 +1560,16 @@
 
     function filterEditableBunks(bunks) {
         if (!Array.isArray(bunks)) return [];
-        if (!_initialized) return [];
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return bunks;
+        if (!_initialized) return [];
         if (!canEdit()) return [];
         return bunks.filter(b => canEditBunk(b));
     }
 
     function filterEditableDivisions(divisionNames) {
         if (!Array.isArray(divisionNames)) return [];
-        if (!_initialized) return [];
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return divisionNames;
+        if (!_initialized) return [];
         if (!canEdit()) return [];
         return divisionNames.filter(d => canEditDivision(d));
     }
@@ -1789,6 +1909,7 @@
             return { error: e.message };
         }
     }
+    
     async function acceptInvite(inviteToken) {
         if (!_currentUser) {
             return { error: "Must be logged in to accept invite" };
@@ -2094,8 +2215,9 @@
         enumerable: true
     });
 
-   if (window.supabase?.auth) {
-        window.supabase.auth.onAuthStateChange((event, session) => {            if (event === 'SIGNED_IN' && session) {
+    if (window.supabase?.auth) {
+        window.supabase.auth.onAuthStateChange((event, session) => {            
+            if (event === 'SIGNED_IN' && session) {
                 setTimeout(() => initialize(), 500);
             } else if (event === 'SIGNED_OUT') {
                 // Clean up subscription
@@ -2124,6 +2246,6 @@
         });
     }
 
-    console.log("🔐 Access Control v3.11 loaded");
+    console.log("🔐 Access Control v3.12 loaded");
 
 })();

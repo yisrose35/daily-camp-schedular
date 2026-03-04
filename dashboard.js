@@ -84,21 +84,21 @@
         
         // Wait for Supabase
         let attempts = 0;
-        while (!window.supabase && attempts < 50) {
+        while ((!window.supabase || !window.supabase.auth) && attempts < 50) {
             await new Promise(r => setTimeout(r, 100));
             attempts++;
         }
         
-        if (!window.supabase) {
+        if (!window.supabase || !window.supabase.auth) {
             if (hasLocalAuth) {
                 console.warn('🔑 [Dashboard] Supabase not loaded but cached auth exists — waiting longer');
                 // Give it more time since we know user was authenticated
                 let extraAttempts = 0;
-                while (!window.supabase && extraAttempts < 50) {
+               while ((!window.supabase || !window.supabase.auth) && extraAttempts < 50) {
                     await new Promise(r => setTimeout(r, 100));
                     extraAttempts++;
                 }
-                if (!window.supabase) {
+                if (!window.supabase || !window.supabase.auth) {
                     console.error('Supabase still not available after extended wait');
                     window.location.href = 'index.html';
                     return;
@@ -301,7 +301,7 @@
     // instantly without re-querying Supabase (eliminates white screen).
     // ========================================
     
-    function cacheRBACContext() {
+   function cacheRBACContext() {
         try {
             const rbacCache = {
                 userId: currentUser?.id,
@@ -317,7 +317,17 @@
                 cachedAt: Date.now()
             };
             sessionStorage.setItem('campistry_rbac_cache', JSON.stringify(rbacCache));
-            console.log('📊 ⚡ RBAC context cached to sessionStorage:', rbacCache.role);
+            
+            // ★★★ v2.5: Also write to localStorage as durable fallback ★★★
+            // sessionStorage is cleared on tab close. localStorage persists.
+            // access_control.js reads localStorage as last-resort fallback.
+            localStorage.setItem('campistry_role', userRole);
+            localStorage.setItem('campistry_user_id', rbacCache.campId);
+            localStorage.setItem('campistry_camp_id', rbacCache.campId);
+            localStorage.setItem('campistry_auth_user_id', currentUser?.id);
+            localStorage.setItem('campistry_is_team_member', String(isTeamMember));
+            
+            console.log('📊 ⚡ RBAC context cached to sessionStorage + localStorage:', rbacCache.role);
         } catch (e) {
             console.warn('📊 Failed to cache RBAC context:', e);
         }
@@ -1002,8 +1012,17 @@
             await window.supabase.auth.signOut();
             window.location.href = 'index.html';
         } catch (e) {
-            console.error('Error logging out:', e);
-            window.location.href = 'index.html';
+            console.error('Auth check failed:', e);
+            // ★ v2.5 FIX: Don't redirect on transient errors if cached auth exists
+            const cachedUserId = localStorage.getItem('campistry_auth_user_id');
+            const cachedCampId = localStorage.getItem('campistry_camp_id');
+            if (cachedUserId && cachedCampId) {
+                console.warn('🔑 [Dashboard] Error during auth, but cached auth exists — staying on dashboard');
+                // Try to load dashboard with cached data
+                try { await loadDashboardData(); setupDashboardForRole(); } catch(e2) { console.warn('Dashboard load with cache failed:', e2); }
+            } else {
+                window.location.href = 'index.html';
+            }
         }
     };
     
