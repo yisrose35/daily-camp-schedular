@@ -1,16 +1,16 @@
 // ============================================================================
-// scheduling_rules.js — CAMPISTRY RULES TAB (v5.0)
+// scheduling_rules.js — CAMPISTRY RULES TAB (v6.0)
 // ============================================================================
 // Sections:
-//   1. Activity Sequence Rules — chip picker with multi-select, custom input
+//   1. Activity Sequence Rules — time-based gaps, multi-select chips, custom
 //   2. Location Cooldowns — minutes-based with sentence layout
 //   3. Sports Player Requirements
 //
 // Data model for sequence rules:
-//   { activityA: string|string[], activityB: string|string[], direction }
-//   - Single string for one activity or custom
-//   - Array of strings for multiple individual picks
-//   - "__ALL_SPORTS__" / "__ALL_SPECIALS__" when ALL are selected
+//   { activityA, activityB, direction, gapMinutes }
+//   - activityA/B: string | string[] | "__ALL_SPORTS__" | "__ALL_SPECIALS__"
+//   - direction: "before" | "after" | "both"
+//   - gapMinutes: number (e.g., 30)
 // ============================================================================
 
 (function() {
@@ -96,12 +96,18 @@ function isGroupValue(value) {
     return value === GROUP_ALL_SPORTS || value === GROUP_ALL_SPECIALS;
 }
 
-// Format a rule value for display
 function formatRuleValue(val) {
     if (val === GROUP_ALL_SPORTS) return 'Sports';
     if (val === GROUP_ALL_SPECIALS) return 'Specials';
     if (Array.isArray(val)) return val.join(', ');
     return val || '';
+}
+
+function formatDirection(dir, gap) {
+    var mins = gap ? gap + ' min' : '';
+    if (dir === 'before') return 'cannot be within ' + mins + ' before';
+    if (dir === 'after') return 'cannot be within ' + mins + ' after';
+    return 'cannot be within ' + mins + ' of';
 }
 
 function esc(str) {
@@ -190,253 +196,176 @@ function buildActivityPicker(containerId) {
     var specials = getSpecialsList();
     var pinned = getPinnedTileNames();
 
-    // State
     var expanded = { sports: false, specials: false };
-    var selectedItems = new Set(); // individual items
-    var groupSelected = { sports: false, specials: false }; // whole group
+    var selectedItems = new Set();
+    var groupSelected = { sports: false, specials: false };
     var customMode = false;
     var customValue = '';
 
-    // CSS helpers
+    // Styles
     var chipBase = 'display:inline-flex; align-items:center; gap:4px; padding:5px 12px; border-radius:var(--radius-full, 999px); font-size:0.82rem; cursor:pointer; margin:3px 4px 3px 0; border:1px solid; transition:all 0.15s; user-select:none;';
     var subChipBase = 'display:inline-flex; align-items:center; gap:3px; padding:3px 10px; border-radius:var(--radius-full, 999px); font-size:0.78rem; cursor:pointer; margin:2px 3px 2px 0; border:1px solid; transition:all 0.15s; user-select:none;';
 
-    function groupChipStyle(active) {
-        if (active) return chipBase + ' background:#fed7aa; color:#7c2d12; border-color:#fdba74; font-weight:600;';
+    function groupStyle(a) {
+        if (a) return chipBase + ' background:#fed7aa; color:#7c2d12; border-color:#fdba74; font-weight:600;';
         return chipBase + ' background:var(--slate-50, #F8FAFC); color:var(--slate-600, #475569); border-color:var(--slate-200, #E5E7EB);';
     }
-    function itemChipStyle(active) {
-        if (active) return subChipBase + ' background:var(--teal-tint, #e6f4f7); color:var(--teal-dark, #0F5F6E); border-color:var(--teal-primary, #147D91); font-weight:600;';
+    function itemStyle(a) {
+        if (a) return subChipBase + ' background:var(--teal-tint, #e6f4f7); color:var(--teal-dark, #0F5F6E); border-color:var(--teal-primary, #147D91); font-weight:600;';
         return subChipBase + ' background:white; color:var(--slate-500, #6B7280); border-color:var(--slate-200, #E5E7EB);';
     }
-    function pinnedChipStyle(active) {
-        if (active) return chipBase + ' background:var(--teal-tint, #e6f4f7); color:var(--teal-dark, #0F5F6E); border-color:var(--teal-primary, #147D91); font-weight:600;';
+    function pinnedStyle(a) {
+        if (a) return chipBase + ' background:var(--teal-tint, #e6f4f7); color:var(--teal-dark, #0F5F6E); border-color:var(--teal-primary, #147D91); font-weight:600;';
         return chipBase + ' background:var(--slate-50, #F8FAFC); color:var(--slate-600, #475569); border-color:var(--slate-200, #E5E7EB);';
+    }
+
+    function chevronSvg(open) {
+        return open
+            ? '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>'
+            : '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
+    }
+
+    function renderGroup(name, items, groupKey, row) {
+        var chip = document.createElement('span');
+        chip.style.cssText = groupStyle(groupSelected[groupKey]);
+        chip.textContent = name;
+        chip.onclick = function() {
+            if (groupSelected[groupKey]) {
+                groupSelected[groupKey] = false;
+                items.forEach(function(s) { selectedItems.delete(s); });
+            } else {
+                groupSelected[groupKey] = true;
+                items.forEach(function(s) { selectedItems.add(s); });
+            }
+            render();
+        };
+        row.appendChild(chip);
+
+        if (items.length > 0) {
+            var expBtn = document.createElement('span');
+            expBtn.style.cssText = 'display:inline-block; padding:3px 6px; cursor:pointer; color:var(--slate-400, #94A3B8); font-size:0.7rem; vertical-align:middle;';
+            expBtn.innerHTML = chevronSvg(expanded[groupKey]);
+            expBtn.title = expanded[groupKey] ? 'Collapse' : 'Pick specific';
+            expBtn.onclick = function(e) { e.stopPropagation(); expanded[groupKey] = !expanded[groupKey]; render(); };
+            row.appendChild(expBtn);
+        }
+
+        if (expanded[groupKey]) {
+            var sub = document.createElement('div');
+            sub.style.cssText = 'padding:4px 0 2px 12px;';
+            items.forEach(function(s) {
+                var c = document.createElement('span');
+                c.style.cssText = itemStyle(selectedItems.has(s));
+                c.textContent = s;
+                c.onclick = function() {
+                    if (selectedItems.has(s)) {
+                        selectedItems.delete(s);
+                        groupSelected[groupKey] = false;
+                    } else {
+                        selectedItems.add(s);
+                        if (items.every(function(x) { return selectedItems.has(x); })) groupSelected[groupKey] = true;
+                    }
+                    render();
+                };
+                sub.appendChild(c);
+            });
+            row.appendChild(sub);
+        }
     }
 
     function render() {
         el.innerHTML = '';
 
-        // --- Sports ---
         if (sports.length > 0) {
-            var sportsRow = document.createElement('div');
-            sportsRow.style.cssText = 'margin-bottom:6px;';
-
-            var sportsChip = document.createElement('span');
-            sportsChip.style.cssText = groupChipStyle(groupSelected.sports);
-            sportsChip.textContent = 'Sports';
-            sportsChip.onclick = function() {
-                if (groupSelected.sports) {
-                    // Deselect all sports
-                    groupSelected.sports = false;
-                    sports.forEach(function(s) { selectedItems.delete(s); });
-                } else {
-                    // Select all sports
-                    groupSelected.sports = true;
-                    sports.forEach(function(s) { selectedItems.add(s); });
-                }
-                render();
-            };
-            sportsRow.appendChild(sportsChip);
-
-            // Expand toggle
-            var expandBtn = document.createElement('span');
-            expandBtn.style.cssText = 'display:inline-block; padding:3px 6px; cursor:pointer; color:var(--slate-400, #94A3B8); font-size:0.7rem; vertical-align:middle;';
-            expandBtn.innerHTML = expanded.sports
-                ? '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>'
-                : '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
-            expandBtn.title = expanded.sports ? 'Collapse' : 'Pick specific sports';
-            expandBtn.onclick = function(e) {
-                e.stopPropagation();
-                expanded.sports = !expanded.sports;
-                render();
-            };
-            sportsRow.appendChild(expandBtn);
-
-            if (expanded.sports) {
-                var subRow = document.createElement('div');
-                subRow.style.cssText = 'padding:4px 0 2px 12px;';
-                sports.forEach(function(s) {
-                    var chip = document.createElement('span');
-                    var isActive = selectedItems.has(s);
-                    chip.style.cssText = itemChipStyle(isActive);
-                    chip.textContent = s;
-                    chip.onclick = function() {
-                        if (selectedItems.has(s)) {
-                            selectedItems.delete(s);
-                            groupSelected.sports = false;
-                        } else {
-                            selectedItems.add(s);
-                            // Check if all sports now selected
-                            var allIn = sports.every(function(sp) { return selectedItems.has(sp); });
-                            if (allIn) groupSelected.sports = true;
-                        }
-                        render();
-                    };
-                    subRow.appendChild(chip);
-                });
-                sportsRow.appendChild(subRow);
-            }
-            el.appendChild(sportsRow);
+            var sRow = document.createElement('div');
+            sRow.style.cssText = 'margin-bottom:6px;';
+            renderGroup('Sports', sports, 'sports', sRow);
+            el.appendChild(sRow);
         }
 
-        // --- Specials ---
         if (specials.length > 0) {
-            var specialsRow = document.createElement('div');
-            specialsRow.style.cssText = 'margin-bottom:6px;';
-
-            var specialsChip = document.createElement('span');
-            specialsChip.style.cssText = groupChipStyle(groupSelected.specials);
-            specialsChip.textContent = 'Specials';
-            specialsChip.onclick = function() {
-                if (groupSelected.specials) {
-                    groupSelected.specials = false;
-                    specials.forEach(function(s) { selectedItems.delete(s); });
-                } else {
-                    groupSelected.specials = true;
-                    specials.forEach(function(s) { selectedItems.add(s); });
-                }
-                render();
-            };
-            specialsRow.appendChild(specialsChip);
-
-            var expandBtn2 = document.createElement('span');
-            expandBtn2.style.cssText = 'display:inline-block; padding:3px 6px; cursor:pointer; color:var(--slate-400, #94A3B8); font-size:0.7rem; vertical-align:middle;';
-            expandBtn2.innerHTML = expanded.specials
-                ? '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>'
-                : '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
-            expandBtn2.title = expanded.specials ? 'Collapse' : 'Pick specific specials';
-            expandBtn2.onclick = function(e) {
-                e.stopPropagation();
-                expanded.specials = !expanded.specials;
-                render();
-            };
-            specialsRow.appendChild(expandBtn2);
-
-            if (expanded.specials) {
-                var subRow2 = document.createElement('div');
-                subRow2.style.cssText = 'padding:4px 0 2px 12px;';
-                specials.forEach(function(s) {
-                    var chip = document.createElement('span');
-                    var isActive = selectedItems.has(s);
-                    chip.style.cssText = itemChipStyle(isActive);
-                    chip.textContent = s;
-                    chip.onclick = function() {
-                        if (selectedItems.has(s)) {
-                            selectedItems.delete(s);
-                            groupSelected.specials = false;
-                        } else {
-                            selectedItems.add(s);
-                            var allIn = specials.every(function(sp) { return selectedItems.has(sp); });
-                            if (allIn) groupSelected.specials = true;
-                        }
-                        render();
-                    };
-                    subRow2.appendChild(chip);
-                });
-                specialsRow.appendChild(subRow2);
-            }
-            el.appendChild(specialsRow);
+            var spRow = document.createElement('div');
+            spRow.style.cssText = 'margin-bottom:6px;';
+            renderGroup('Specials', specials, 'specials', spRow);
+            el.appendChild(spRow);
         }
 
-        // --- Pinned tiles ---
         if (pinned.length > 0) {
-            var pinnedRow = document.createElement('div');
-            pinnedRow.style.cssText = 'margin-bottom:6px;';
+            var pRow = document.createElement('div');
+            pRow.style.cssText = 'margin-bottom:6px;';
             pinned.forEach(function(p) {
-                var chip = document.createElement('span');
-                chip.style.cssText = pinnedChipStyle(selectedItems.has(p));
-                chip.textContent = p;
-                chip.onclick = function() {
-                    if (selectedItems.has(p)) selectedItems.delete(p);
-                    else selectedItems.add(p);
+                var c = document.createElement('span');
+                c.style.cssText = pinnedStyle(selectedItems.has(p));
+                c.textContent = p;
+                c.onclick = function() {
+                    if (selectedItems.has(p)) selectedItems.delete(p); else selectedItems.add(p);
                     render();
                 };
-                pinnedRow.appendChild(chip);
+                pRow.appendChild(c);
             });
-            el.appendChild(pinnedRow);
+            el.appendChild(pRow);
         }
 
-        // --- Custom ---
-        var customRow = document.createElement('div');
-        customRow.style.cssText = 'margin-top:4px;';
-
+        // Custom
+        var cRow = document.createElement('div');
+        cRow.style.cssText = 'margin-top:4px;';
         if (!customMode) {
-            var customBtn = document.createElement('span');
-            customBtn.style.cssText = 'display:inline-block; padding:5px 12px; border-radius:var(--radius-full, 999px); font-size:0.82rem; cursor:pointer; border:1px dashed var(--slate-300, #CBD5E1); color:var(--slate-500, #6B7280); margin:3px 0;';
-            customBtn.textContent = '+ Custom';
-            customBtn.onclick = function() { customMode = true; render(); };
-            customRow.appendChild(customBtn);
+            var cb = document.createElement('span');
+            cb.style.cssText = 'display:inline-block; padding:5px 12px; border-radius:var(--radius-full, 999px); font-size:0.82rem; cursor:pointer; border:1px dashed var(--slate-300, #CBD5E1); color:var(--slate-500, #6B7280);';
+            cb.textContent = '+ Custom';
+            cb.onclick = function() { customMode = true; render(); };
+            cRow.appendChild(cb);
         } else {
-            var customWrap = document.createElement('div');
-            customWrap.style.cssText = 'display:flex; gap:6px; align-items:center; margin-top:4px;';
-            var customInput = document.createElement('input');
-            customInput.type = 'text';
-            customInput.placeholder = 'e.g., Prayers';
-            customInput.value = customValue;
-            customInput.style.cssText = 'padding:6px 10px; border:1px solid var(--slate-300, #D1D5DB); border-radius:var(--radius-xs, 6px); font-size:0.85rem; width:140px; font-family:var(--font-body);';
-
-            var addCustBtn = document.createElement('button');
-            addCustBtn.textContent = 'Add';
-            addCustBtn.style.cssText = 'padding:5px 14px; background:var(--teal-primary, #147D91); color:white; border:none; border-radius:var(--radius-xs, 6px); cursor:pointer; font-size:0.82rem; font-weight:600;';
-            addCustBtn.onclick = function() {
-                var v = customInput.value.trim();
-                if (v) {
-                    selectedItems.add(v);
-                    customValue = '';
-                    customMode = false;
-                    render();
-                }
-            };
-            customInput.onkeyup = function(e) { if (e.key === 'Enter') addCustBtn.click(); };
-
-            var cancelBtn = document.createElement('button');
-            cancelBtn.textContent = 'Cancel';
-            cancelBtn.style.cssText = 'padding:5px 10px; background:var(--slate-100, #F1F5F9); color:var(--slate-600, #475569); border:1px solid var(--slate-200, #E5E7EB); border-radius:var(--radius-xs, 6px); cursor:pointer; font-size:0.82rem;';
-            cancelBtn.onclick = function() { customMode = false; customValue = ''; render(); };
-
-            customWrap.appendChild(customInput);
-            customWrap.appendChild(addCustBtn);
-            customWrap.appendChild(cancelBtn);
-            customRow.appendChild(customWrap);
+            var cw = document.createElement('div');
+            cw.style.cssText = 'display:flex; gap:6px; align-items:center; margin-top:4px;';
+            var ci = document.createElement('input');
+            ci.type = 'text'; ci.placeholder = 'e.g., Prayers'; ci.value = customValue;
+            ci.style.cssText = 'padding:6px 10px; border:1px solid var(--slate-300, #D1D5DB); border-radius:var(--radius-xs, 6px); font-size:0.85rem; width:140px; font-family:var(--font-body);';
+            var ab = document.createElement('button');
+            ab.textContent = 'Add';
+            ab.style.cssText = 'padding:5px 14px; background:var(--teal-primary, #147D91); color:white; border:none; border-radius:var(--radius-xs, 6px); cursor:pointer; font-size:0.82rem; font-weight:600;';
+            ab.onclick = function() { var v = ci.value.trim(); if (v) { selectedItems.add(v); customValue = ''; customMode = false; render(); } };
+            ci.onkeyup = function(e) { if (e.key === 'Enter') ab.click(); };
+            var xb = document.createElement('button');
+            xb.textContent = 'Cancel';
+            xb.style.cssText = 'padding:5px 10px; background:var(--slate-100, #F1F5F9); color:var(--slate-600, #475569); border:1px solid var(--slate-200, #E5E7EB); border-radius:var(--radius-xs, 6px); cursor:pointer; font-size:0.82rem;';
+            xb.onclick = function() { customMode = false; customValue = ''; render(); };
+            cw.appendChild(ci); cw.appendChild(ab); cw.appendChild(xb);
+            cRow.appendChild(cw);
         }
-        el.appendChild(customRow);
+        el.appendChild(cRow);
 
-        // --- Selection summary ---
-        var selArr = Array.from(selectedItems);
-        if (selArr.length > 0) {
-            var summary = document.createElement('div');
-            summary.style.cssText = 'margin-top:8px; padding:6px 10px; background:var(--teal-tint-bg, #f0f9fb); border-radius:var(--radius-xs, 6px); font-size:0.8rem; color:var(--teal-dark, #0F5F6E); display:flex; flex-wrap:wrap; gap:4px; align-items:center;';
-            summary.innerHTML = '<span style="font-weight:500; margin-right:4px;">Selected:</span>';
-            selArr.forEach(function(item) {
+        // Selection summary
+        var sel = Array.from(selectedItems);
+        if (sel.length > 0) {
+            var sum = document.createElement('div');
+            sum.style.cssText = 'margin-top:8px; padding:6px 10px; background:var(--teal-tint-bg, #f0f9fb); border-radius:var(--radius-xs, 6px); font-size:0.8rem; color:var(--teal-dark, #0F5F6E); display:flex; flex-wrap:wrap; gap:4px; align-items:center;';
+            sum.innerHTML = '<span style="font-weight:500; margin-right:4px;">Selected:</span>';
+            sel.forEach(function(item) {
                 var tag = document.createElement('span');
                 tag.style.cssText = 'display:inline-flex; align-items:center; gap:3px; padding:2px 8px; background:var(--teal-tint, #e6f4f7); border-radius:var(--radius-full, 999px); font-size:0.78rem; font-weight:500;';
                 tag.innerHTML = esc(item) + ' <span style="cursor:pointer; color:var(--slate-400); font-size:0.7rem; margin-left:2px;" title="Remove">\u2715</span>';
                 tag.querySelector('span').onclick = function() {
                     selectedItems.delete(item);
-                    // Uncheck group if needed
                     if (sports.indexOf(item) !== -1) groupSelected.sports = false;
                     if (specials.indexOf(item) !== -1) groupSelected.specials = false;
                     render();
                 };
-                summary.appendChild(tag);
+                sum.appendChild(tag);
             });
-            el.appendChild(summary);
+            el.appendChild(sum);
         }
     }
 
     render();
 
-    // Expose getter — returns the stored value
     el._getValue = function() {
         var sel = Array.from(selectedItems);
         if (sel.length === 0) return null;
-        // Check if all sports selected
         if (groupSelected.sports && sports.length > 0) {
             var nonSports = sel.filter(function(s) { return sports.indexOf(s) === -1; });
             if (nonSports.length === 0) return GROUP_ALL_SPORTS;
         }
-        // Check if all specials selected
         if (groupSelected.specials && specials.length > 0) {
             var nonSpecials = sel.filter(function(s) { return specials.indexOf(s) === -1; });
             if (nonSpecials.length === 0) return GROUP_ALL_SPECIALS;
@@ -455,7 +384,7 @@ function buildActivityPicker(containerId) {
 function renderSequenceRulesSection() {
     var section = createSection(
         'Activity Sequence Rules',
-        'Control which activities can or can\'t be scheduled back-to-back.'
+        'Control which activities can or can\'t be scheduled near each other.'
     );
 
     var body = section.querySelector('.detail-section-body');
@@ -468,26 +397,21 @@ function renderSequenceRulesSection() {
 
         rules.forEach(function(rule, idx) {
             var row = document.createElement('div');
-            row.style.cssText = 'display:flex; align-items:center; gap:10px; padding:10px 14px; background:var(--slate-50, #F8FAFC); border:1px solid var(--slate-200, #E5E7EB); border-radius:var(--radius-sm, 8px); flex-wrap:wrap;';
-
-            var dirLabel = rule.direction === 'b_before_a' ? 'cannot be right after' : 'cannot be right before';
+            row.style.cssText = 'display:flex; align-items:center; gap:8px; padding:10px 14px; background:var(--slate-50, #F8FAFC); border:1px solid var(--slate-200, #E5E7EB); border-radius:var(--radius-sm, 8px); flex-wrap:wrap;';
 
             var pillBase = 'font-weight:600; padding:4px 10px; border-radius:var(--radius-xs, 6px); font-size:0.85rem; ';
-            function getPillStyle(val) {
+            function ps(val) {
                 if (isGroupValue(val)) return pillBase + 'color:#7c2d12; background:#fed7aa;';
                 return pillBase + 'color:var(--teal-dark, #0F5F6E); background:var(--teal-tint, #e6f4f7);';
             }
 
-            // Format: could be string, array, or group
-            var aDisplay = formatRuleValue(rule.activityA);
-            var bDisplay = formatRuleValue(rule.activityB);
-            var aIsGroup = isGroupValue(rule.activityA);
-            var bIsGroup = isGroupValue(rule.activityB);
+            var gap = rule.gapMinutes || 30;
+            var dirText = formatDirection(rule.direction, gap);
 
             row.innerHTML =
-                '<span style="' + getPillStyle(rule.activityA) + '">' + esc(aDisplay) + '</span>' +
-                '<span style="color:var(--slate-500, #6B7280); font-size:0.8rem; flex-shrink:0;">' + dirLabel + '</span>' +
-                '<span style="' + getPillStyle(rule.activityB) + '">' + esc(bDisplay) + '</span>' +
+                '<span style="' + ps(rule.activityA) + '">' + esc(formatRuleValue(rule.activityA)) + '</span>' +
+                '<span style="color:var(--slate-500, #6B7280); font-size:0.8rem; flex-shrink:0;">' + dirText + '</span>' +
+                '<span style="' + ps(rule.activityB) + '">' + esc(formatRuleValue(rule.activityB)) + '</span>' +
                 '<span style="flex:1;"></span>';
 
             var delBtn = document.createElement('button');
@@ -537,15 +461,45 @@ function renderSequenceRulesSection() {
     leftWrap.appendChild(pickerA);
     pickerRow.appendChild(leftWrap);
 
-    // Direction
-    var dirWrap = document.createElement('div');
-    dirWrap.style.cssText = 'display:flex; flex-direction:column; align-items:center; justify-content:center; min-width:160px; padding-top:28px;';
+    // Center: direction + gap
+    var centerWrap = document.createElement('div');
+    centerWrap.style.cssText = 'display:flex; flex-direction:column; align-items:center; justify-content:center; min-width:180px; padding-top:28px; gap:10px;';
+
+    // Direction sentence: "cannot be within [__] min [before ▼] "
+    var sentenceRow = document.createElement('div');
+    sentenceRow.style.cssText = 'display:flex; flex-wrap:wrap; align-items:center; gap:6px; justify-content:center;';
+
+    var lbl1 = document.createElement('span');
+    lbl1.style.cssText = 'font-size:0.85rem; color:var(--slate-600, #475569);';
+    lbl1.textContent = 'cannot be within';
+    sentenceRow.appendChild(lbl1);
+
+    var gapInput = document.createElement('input');
+    gapInput.type = 'number';
+    gapInput.id = 'seq-gap-input';
+    gapInput.min = '1';
+    gapInput.max = '120';
+    gapInput.step = '5';
+    gapInput.placeholder = 'min';
+    gapInput.style.cssText = 'width:56px; padding:6px 8px; border:1px solid var(--slate-300, #D1D5DB); border-radius:var(--radius-xs, 6px); text-align:center; font-size:0.85rem; background:white;';
+    sentenceRow.appendChild(gapInput);
+
+    var lbl2 = document.createElement('span');
+    lbl2.style.cssText = 'font-size:0.85rem; color:var(--slate-600, #475569);';
+    lbl2.textContent = 'min';
+    sentenceRow.appendChild(lbl2);
+
     var dirSelect = document.createElement('select');
     dirSelect.id = 'seq-rule-dir';
-    dirSelect.style.cssText = 'padding:8px 10px; border:1px solid var(--slate-300, #D1D5DB); border-radius:var(--radius-xs, 6px); font-size:0.85rem; background:white; font-family:var(--font-body); text-align:center;';
-    dirSelect.innerHTML = '<option value="a_before_b">cannot be right before</option><option value="b_before_a">cannot be right after</option>';
-    dirWrap.appendChild(dirSelect);
-    pickerRow.appendChild(dirWrap);
+    dirSelect.style.cssText = 'padding:6px 10px; border:1px solid var(--slate-300, #D1D5DB); border-radius:var(--radius-xs, 6px); font-size:0.85rem; background:white; font-family:var(--font-body);';
+    dirSelect.innerHTML =
+        '<option value="before">before</option>' +
+        '<option value="after">after</option>' +
+        '<option value="both">before or after</option>';
+    sentenceRow.appendChild(dirSelect);
+
+    centerWrap.appendChild(sentenceRow);
+    pickerRow.appendChild(centerWrap);
 
     // Right picker
     var rightWrap = document.createElement('div');
@@ -570,8 +524,9 @@ function renderSequenceRulesSection() {
         var a = pickerA._getValue();
         var b = pickerB._getValue();
         var dir = dirSelect.value;
+        var gap = parseInt(gapInput.value);
         if (!a || !b) { alert('Please select at least one activity on each side.'); return; }
-        // Stringify for comparison
+        if (!gap || gap < 1) { alert('Please enter the number of minutes.'); return; }
         var aStr = JSON.stringify(a);
         var bStr = JSON.stringify(b);
         if (aStr === bStr) { alert('The two sides must be different.'); return; }
@@ -581,7 +536,7 @@ function renderSequenceRulesSection() {
                    (JSON.stringify(r.activityA) === bStr && JSON.stringify(r.activityB) === aStr && r.direction === dir);
         });
         if (dup) { alert('This rule already exists.'); return; }
-        existing.push({ activityA: a, activityB: b, direction: dir });
+        existing.push({ activityA: a, activityB: b, direction: dir, gapMinutes: gap });
         saveSequenceRules(existing);
         renderRulesTab(document.getElementById('rules'));
     };
@@ -593,8 +548,8 @@ function renderSequenceRulesSection() {
     // Hint
     var hint = document.createElement('div');
     hint.style.cssText = 'margin-top:12px; font-size:0.8rem; color:var(--slate-500, #6B7280); padding:12px; background:var(--slate-50, #F9FAFB); border-radius:var(--radius-sm, 8px); border-left:3px solid var(--teal-primary, #147D91); line-height:1.5;';
-    hint.innerHTML = '<strong>Examples:</strong> Select "Sports" to apply to all sports, or expand and pick specific ones like Basketball and Football. ' +
-        'Use "+ Custom" for activities like Prayers that aren\'t in your field or special activity lists.';
+    hint.innerHTML = '<strong>Examples:</strong> "Basketball cannot be within 30 min before Lunch" or "Sports cannot be within 45 min after Swim". ' +
+        'Use "before or after" to block in both directions.';
     body.appendChild(hint);
 
     return section;
@@ -632,18 +587,15 @@ function renderCooldownSection() {
             locLabel.innerHTML = '<div style="font-weight:600; color:var(--slate-800, #1E293B);">' + (esc(location) || '<em style="color:var(--slate-400);">No location</em>') + '</div>';
             row.appendChild(locLabel);
 
-            var blockLabel = document.createElement('span');
-            blockLabel.style.cssText = 'font-size:0.85rem; color:var(--slate-500, #6B7280);';
-            blockLabel.textContent = 'blocked for';
-            row.appendChild(blockLabel);
+            var t1 = document.createElement('span');
+            t1.style.cssText = 'font-size:0.85rem; color:var(--slate-500, #6B7280);';
+            t1.textContent = 'blocked for';
+            row.appendChild(t1);
 
             var coolInput = document.createElement('input');
             coolInput.type = 'number';
-            coolInput.min = '0';
-            coolInput.max = '120';
-            coolInput.step = '5';
-            coolInput.value = cooldownMin;
-            coolInput.placeholder = '0';
+            coolInput.min = '0'; coolInput.max = '120'; coolInput.step = '5';
+            coolInput.value = cooldownMin; coolInput.placeholder = '0';
             coolInput.style.cssText = 'width:60px; padding:6px 8px; border:1px solid var(--slate-300, #D1D5DB); border-radius:var(--radius-xs, 6px); text-align:center; font-size:0.85rem; background:white;';
             coolInput.onchange = (function(name) {
                 return function() {
@@ -663,10 +615,10 @@ function renderCooldownSection() {
             })(tileName);
             row.appendChild(coolInput);
 
-            var afterLabel = document.createElement('span');
-            afterLabel.style.cssText = 'font-size:0.85rem; color:var(--slate-500, #6B7280);';
-            afterLabel.textContent = 'min after';
-            row.appendChild(afterLabel);
+            var t2 = document.createElement('span');
+            t2.style.cssText = 'font-size:0.85rem; color:var(--slate-500, #6B7280);';
+            t2.textContent = 'min after';
+            row.appendChild(t2);
 
             var eventPill = document.createElement('span');
             eventPill.style.cssText = 'font-weight:600; color:var(--teal-dark, #0F5F6E); background:var(--teal-tint, #e6f4f7); padding:4px 10px; border-radius:var(--radius-xs, 6px); font-size:0.85rem;';
@@ -675,7 +627,6 @@ function renderCooldownSection() {
 
             list.appendChild(row);
         });
-
         body.appendChild(list);
     } else {
         var empty = document.createElement('div');
@@ -735,57 +686,50 @@ function renderSportRulesSection() {
         nameEl.textContent = sport;
         row.appendChild(nameEl);
 
-        var inputsWrap = document.createElement('div');
-        inputsWrap.style.cssText = 'display:flex; align-items:center; gap:16px;';
+        var iw = document.createElement('div');
+        iw.style.cssText = 'display:flex; align-items:center; gap:16px;';
 
         ['min', 'max'].forEach(function(type) {
-            var group = document.createElement('div');
-            group.style.cssText = 'display:flex; align-items:center; gap:6px;';
-            var label = document.createElement('span');
-            label.style.cssText = 'font-size:0.8rem; color:var(--slate-500, #6B7280);';
-            label.textContent = type === 'min' ? 'Min:' : 'Max:';
-            var input = document.createElement('input');
-            input.type = 'number';
-            input.min = '1';
-            input.value = (type === 'min' ? meta.minPlayers : meta.maxPlayers) || '';
-            input.placeholder = type === 'min' ? '\u2014' : '\u221e';
-            input.style.cssText = 'width:60px; padding:6px 8px; border:1px solid var(--slate-300, #D1D5DB); border-radius:var(--radius-xs, 6px); text-align:center; font-size:0.85rem;';
-            input.dataset.sport = sport;
-            input.dataset.type = type;
-            group.appendChild(label);
-            group.appendChild(input);
-            inputsWrap.appendChild(group);
+            var g = document.createElement('div');
+            g.style.cssText = 'display:flex; align-items:center; gap:6px;';
+            var l = document.createElement('span');
+            l.style.cssText = 'font-size:0.8rem; color:var(--slate-500, #6B7280);';
+            l.textContent = type === 'min' ? 'Min:' : 'Max:';
+            var inp = document.createElement('input');
+            inp.type = 'number'; inp.min = '1';
+            inp.value = (type === 'min' ? meta.minPlayers : meta.maxPlayers) || '';
+            inp.placeholder = type === 'min' ? '\u2014' : '\u221e';
+            inp.style.cssText = 'width:60px; padding:6px 8px; border:1px solid var(--slate-300, #D1D5DB); border-radius:var(--radius-xs, 6px); text-align:center; font-size:0.85rem;';
+            inp.dataset.sport = sport; inp.dataset.type = type;
+            g.appendChild(l); g.appendChild(inp); iw.appendChild(g);
         });
 
-        row.appendChild(inputsWrap);
+        row.appendChild(iw);
         list.appendChild(row);
     });
 
     body.appendChild(list);
 
-    var btnRow = document.createElement('div');
-    btnRow.style.cssText = 'text-align:right;';
-    var saveBtn = document.createElement('button');
-    saveBtn.textContent = 'Save Rules';
-    saveBtn.style.cssText = 'padding:8px 24px; background:var(--teal-primary, #147D91); color:white; border:none; border-radius:var(--radius-full, 999px); cursor:pointer; font-weight:600; font-size:0.9rem; box-shadow:0 2px 5px rgba(20,125,145,0.3);';
-    saveBtn.onclick = function() {
-        var updatedMeta = getSportMetaData();
+    var br = document.createElement('div');
+    br.style.cssText = 'text-align:right;';
+    var sb = document.createElement('button');
+    sb.textContent = 'Save Rules';
+    sb.style.cssText = 'padding:8px 24px; background:var(--teal-primary, #147D91); color:white; border:none; border-radius:var(--radius-full, 999px); cursor:pointer; font-weight:600; font-size:0.9rem; box-shadow:0 2px 5px rgba(20,125,145,0.3);';
+    sb.onclick = function() {
+        var um = getSportMetaData();
         body.querySelectorAll('input[data-sport]').forEach(function(input) {
-            var sport = input.dataset.sport;
-            var type = input.dataset.type;
-            var val = parseInt(input.value) || null;
-            if (!updatedMeta[sport]) updatedMeta[sport] = {};
-            if (type === 'min') updatedMeta[sport].minPlayers = val;
-            if (type === 'max') updatedMeta[sport].maxPlayers = val;
+            var s = input.dataset.sport, t = input.dataset.type, v = parseInt(input.value) || null;
+            if (!um[s]) um[s] = {};
+            if (t === 'min') um[s].minPlayers = v;
+            if (t === 'max') um[s].maxPlayers = v;
         });
-        saveSportMetaData(updatedMeta);
-        var orig = saveBtn.textContent;
-        saveBtn.textContent = 'Saved';
-        saveBtn.style.background = 'var(--teal-dark, #0F5F6E)';
-        setTimeout(function() { saveBtn.textContent = orig; saveBtn.style.background = 'var(--teal-primary, #147D91)'; }, 1200);
+        saveSportMetaData(um);
+        var o = sb.textContent;
+        sb.textContent = 'Saved'; sb.style.background = 'var(--teal-dark, #0F5F6E)';
+        setTimeout(function() { sb.textContent = o; sb.style.background = 'var(--teal-primary, #147D91)'; }, 1200);
     };
-    btnRow.appendChild(saveBtn);
-    body.appendChild(btnRow);
+    br.appendChild(sb);
+    body.appendChild(br);
 
     return section;
 }
