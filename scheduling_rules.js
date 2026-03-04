@@ -1,16 +1,5 @@
 // ============================================================================
-// scheduling_rules.js — CAMPISTRY RULES TAB (v6.0)
-// ============================================================================
-// Sections:
-//   1. Activity Sequence Rules — time-based gaps, multi-select chips, custom
-//   2. Location Cooldowns — minutes-based with sentence layout
-//   3. Sports Player Requirements
-//
-// Data model for sequence rules:
-//   { activityA, activityB, direction, gapMinutes }
-//   - activityA/B: string | string[] | "__ALL_SPORTS__" | "__ALL_SPECIALS__"
-//   - direction: "before" | "after" | "both"
-//   - gapMinutes: number (e.g., 30)
+// scheduling_rules.js — CAMPISTRY RULES TAB (v6.1)
 // ============================================================================
 
 (function() {
@@ -115,6 +104,9 @@ function esc(str) {
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// Track which sections are open
+var _openSections = {};
+
 // =========================================================================
 // MAIN RENDER
 // =========================================================================
@@ -148,7 +140,7 @@ function renderRulesTab(container) {
 // SECTION BUILDER
 // =========================================================================
 
-function createSection(title, description) {
+function createSection(sectionKey, title, description) {
     var wrapper = document.createElement('div');
     wrapper.className = 'detail-section';
     wrapper.style.cssText = 'margin-bottom:16px;';
@@ -161,8 +153,10 @@ function createSection(title, description) {
     titleEl.innerHTML = '<span class="detail-section-title">' + title + '</span>' +
         '<div class="detail-section-summary" style="margin-top:2px;">' + description + '</div>';
 
+    var isOpen = !!_openSections[sectionKey];
+
     var caret = document.createElement('span');
-    caret.style.cssText = 'transition:transform 0.2s; color:var(--slate-400, #94A3B8); transform:rotate(-90deg);';
+    caret.style.cssText = 'transition:transform 0.2s; color:var(--slate-400, #94A3B8); transform:rotate(' + (isOpen ? '0deg' : '-90deg') + ');';
     caret.innerHTML = '<svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>';
 
     header.appendChild(titleEl);
@@ -170,12 +164,13 @@ function createSection(title, description) {
 
     var body = document.createElement('div');
     body.className = 'detail-section-body';
-    body.style.display = 'none';
+    body.style.display = isOpen ? 'block' : 'none';
 
     header.onclick = function() {
-        var isOpen = body.style.display !== 'none';
-        body.style.display = isOpen ? 'none' : 'block';
-        caret.style.transform = isOpen ? 'rotate(-90deg)' : 'rotate(0deg)';
+        var nowOpen = body.style.display !== 'none';
+        body.style.display = nowOpen ? 'none' : 'block';
+        caret.style.transform = nowOpen ? 'rotate(-90deg)' : 'rotate(0deg)';
+        _openSections[sectionKey] = !nowOpen;
     };
 
     wrapper.appendChild(header);
@@ -202,7 +197,6 @@ function buildActivityPicker(containerId) {
     var customMode = false;
     var customValue = '';
 
-    // Styles
     var chipBase = 'display:inline-flex; align-items:center; gap:4px; padding:5px 12px; border-radius:var(--radius-full, 999px); font-size:0.82rem; cursor:pointer; margin:3px 4px 3px 0; border:1px solid; transition:all 0.15s; user-select:none;';
     var subChipBase = 'display:inline-flex; align-items:center; gap:3px; padding:3px 10px; border-radius:var(--radius-full, 999px); font-size:0.78rem; cursor:pointer; margin:2px 3px 2px 0; border:1px solid; transition:all 0.15s; user-select:none;';
 
@@ -383,6 +377,7 @@ function buildActivityPicker(containerId) {
 
 function renderSequenceRulesSection() {
     var section = createSection(
+        'sequence',
         'Activity Sequence Rules',
         'Control which activities can or can\'t be scheduled near each other.'
     );
@@ -390,55 +385,7 @@ function renderSequenceRulesSection() {
     var body = section.querySelector('.detail-section-body');
     var rules = getSequenceRules();
 
-    // Existing rules
-    if (rules.length > 0) {
-        var list = document.createElement('div');
-        list.style.cssText = 'display:flex; flex-direction:column; gap:8px; margin-bottom:20px;';
-
-        rules.forEach(function(rule, idx) {
-            var row = document.createElement('div');
-            row.style.cssText = 'display:flex; align-items:center; gap:8px; padding:10px 14px; background:var(--slate-50, #F8FAFC); border:1px solid var(--slate-200, #E5E7EB); border-radius:var(--radius-sm, 8px); flex-wrap:wrap;';
-
-            var pillBase = 'font-weight:600; padding:4px 10px; border-radius:var(--radius-xs, 6px); font-size:0.85rem; ';
-            function ps(val) {
-                if (isGroupValue(val)) return pillBase + 'color:#7c2d12; background:#fed7aa;';
-                return pillBase + 'color:var(--teal-dark, #0F5F6E); background:var(--teal-tint, #e6f4f7);';
-            }
-
-            var gap = rule.gapMinutes || 30;
-            var dirText = formatDirection(rule.direction, gap);
-
-            row.innerHTML =
-                '<span style="' + ps(rule.activityA) + '">' + esc(formatRuleValue(rule.activityA)) + '</span>' +
-                '<span style="color:var(--slate-500, #6B7280); font-size:0.8rem; flex-shrink:0;">' + dirText + '</span>' +
-                '<span style="' + ps(rule.activityB) + '">' + esc(formatRuleValue(rule.activityB)) + '</span>' +
-                '<span style="flex:1;"></span>';
-
-            var delBtn = document.createElement('button');
-            delBtn.textContent = '\u2715';
-            delBtn.title = 'Remove this rule';
-            delBtn.style.cssText = 'width:28px; height:28px; border-radius:var(--radius-xs, 6px); border:1px solid #fecaca; background:#fef2f2; color:#dc2626; cursor:pointer; font-size:0.9rem; font-weight:600; flex-shrink:0;';
-            delBtn.onclick = (function(i) {
-                return function() {
-                    if (!confirm('Remove this rule?')) return;
-                    var updated = getSequenceRules().filter(function(_, j) { return j !== i; });
-                    saveSequenceRules(updated);
-                    renderRulesTab(document.getElementById('rules'));
-                };
-            })(idx);
-            row.appendChild(delBtn);
-            list.appendChild(row);
-        });
-
-        body.appendChild(list);
-    } else {
-        var empty = document.createElement('div');
-        empty.style.cssText = 'padding:20px; text-align:center; color:var(--slate-400, #94A3B8); font-size:0.9rem; background:var(--slate-50, #F8FAFC); border-radius:var(--radius-sm, 8px); margin-bottom:20px; border:1px dashed var(--slate-300, #CBD5E1);';
-        empty.textContent = 'No sequence rules configured yet. Add one below.';
-        body.appendChild(empty);
-    }
-
-    // --- Builder ---
+    // --- Builder first ---
     var builderLabel = document.createElement('div');
     builderLabel.style.cssText = 'font-weight:600; font-size:0.9rem; color:var(--slate-700, #334155); margin-bottom:10px;';
     builderLabel.textContent = 'Add a new rule';
@@ -465,7 +412,6 @@ function renderSequenceRulesSection() {
     var centerWrap = document.createElement('div');
     centerWrap.style.cssText = 'display:flex; flex-direction:column; align-items:center; justify-content:center; min-width:180px; padding-top:28px; gap:10px;';
 
-    // Direction sentence: "cannot be within [__] min [before ▼] "
     var sentenceRow = document.createElement('div');
     sentenceRow.style.cssText = 'display:flex; flex-wrap:wrap; align-items:center; gap:6px; justify-content:center;';
 
@@ -475,12 +421,8 @@ function renderSequenceRulesSection() {
     sentenceRow.appendChild(lbl1);
 
     var gapInput = document.createElement('input');
-    gapInput.type = 'number';
-    gapInput.id = 'seq-gap-input';
-    gapInput.min = '1';
-    gapInput.max = '120';
-    gapInput.step = '5';
-    gapInput.placeholder = 'min';
+    gapInput.type = 'number'; gapInput.id = 'seq-gap-input';
+    gapInput.min = '1'; gapInput.max = '120'; gapInput.step = '5'; gapInput.placeholder = 'min';
     gapInput.style.cssText = 'width:56px; padding:6px 8px; border:1px solid var(--slate-300, #D1D5DB); border-radius:var(--radius-xs, 6px); text-align:center; font-size:0.85rem; background:white;';
     sentenceRow.appendChild(gapInput);
 
@@ -538,6 +480,7 @@ function renderSequenceRulesSection() {
         if (dup) { alert('This rule already exists.'); return; }
         existing.push({ activityA: a, activityB: b, direction: dir, gapMinutes: gap });
         saveSequenceRules(existing);
+        _openSections['sequence'] = true;
         renderRulesTab(document.getElementById('rules'));
     };
     addRow.appendChild(addBtn);
@@ -552,6 +495,55 @@ function renderSequenceRulesSection() {
         'Use "before or after" to block in both directions.';
     body.appendChild(hint);
 
+    // --- Active rules below ---
+    if (rules.length > 0) {
+        var rulesLabel = document.createElement('div');
+        rulesLabel.style.cssText = 'font-weight:600; font-size:0.9rem; color:var(--slate-700, #334155); margin:20px 0 10px 0;';
+        rulesLabel.textContent = 'Active rules';
+        body.appendChild(rulesLabel);
+
+        var list = document.createElement('div');
+        list.style.cssText = 'display:flex; flex-direction:column; gap:8px;';
+
+        rules.forEach(function(rule, idx) {
+            var row = document.createElement('div');
+            row.style.cssText = 'display:flex; align-items:center; gap:8px; padding:10px 14px; background:var(--slate-50, #F8FAFC); border:1px solid var(--slate-200, #E5E7EB); border-radius:var(--radius-sm, 8px); flex-wrap:wrap;';
+
+            var pillBase = 'font-weight:600; padding:4px 10px; border-radius:var(--radius-xs, 6px); font-size:0.85rem; ';
+            function ps(val) {
+                if (isGroupValue(val)) return pillBase + 'color:#7c2d12; background:#fed7aa;';
+                return pillBase + 'color:var(--teal-dark, #0F5F6E); background:var(--teal-tint, #e6f4f7);';
+            }
+
+            var gap = rule.gapMinutes || 30;
+            var dirText = formatDirection(rule.direction, gap);
+
+            row.innerHTML =
+                '<span style="' + ps(rule.activityA) + '">' + esc(formatRuleValue(rule.activityA)) + '</span>' +
+                '<span style="color:var(--slate-500, #6B7280); font-size:0.8rem; flex-shrink:0;">' + dirText + '</span>' +
+                '<span style="' + ps(rule.activityB) + '">' + esc(formatRuleValue(rule.activityB)) + '</span>' +
+                '<span style="flex:1;"></span>';
+
+            var delBtn = document.createElement('button');
+            delBtn.textContent = '\u2715';
+            delBtn.title = 'Remove this rule';
+            delBtn.style.cssText = 'width:28px; height:28px; border-radius:var(--radius-xs, 6px); border:1px solid #fecaca; background:#fef2f2; color:#dc2626; cursor:pointer; font-size:0.9rem; font-weight:600; flex-shrink:0;';
+            delBtn.onclick = (function(i) {
+                return function() {
+                    if (!confirm('Remove this rule?')) return;
+                    var updated = getSequenceRules().filter(function(_, j) { return j !== i; });
+                    saveSequenceRules(updated);
+                    _openSections['sequence'] = true;
+                    renderRulesTab(document.getElementById('rules'));
+                };
+            })(idx);
+            row.appendChild(delBtn);
+            list.appendChild(row);
+        });
+
+        body.appendChild(list);
+    }
+
     return section;
 }
 
@@ -561,6 +553,7 @@ function renderSequenceRulesSection() {
 
 function renderCooldownSection() {
     var section = createSection(
+        'cooldowns',
         'Location Cooldowns',
         'Keep a location empty for a set amount of time after an event.'
     );
@@ -593,8 +586,7 @@ function renderCooldownSection() {
             row.appendChild(t1);
 
             var coolInput = document.createElement('input');
-            coolInput.type = 'number';
-            coolInput.min = '0'; coolInput.max = '120'; coolInput.step = '5';
+            coolInput.type = 'number'; coolInput.min = '0'; coolInput.max = '120'; coolInput.step = '5';
             coolInput.value = cooldownMin; coolInput.placeholder = '0';
             coolInput.style.cssText = 'width:60px; padding:6px 8px; border:1px solid var(--slate-300, #D1D5DB); border-radius:var(--radius-xs, 6px); text-align:center; font-size:0.85rem; background:white;';
             coolInput.onchange = (function(name) {
@@ -652,6 +644,7 @@ function renderSportRulesSection() {
     var sportMeta = getSportMetaData();
 
     var section = createSection(
+        'sports',
         'Sports Player Requirements',
         allSports.length > 0
             ? 'Set how many players each sport needs so the scheduler picks the right matchups.'
