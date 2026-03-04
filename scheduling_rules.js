@@ -1,10 +1,16 @@
 // ============================================================================
-// scheduling_rules.js — CAMPISTRY RULES TAB (v4.0)
+// scheduling_rules.js — CAMPISTRY RULES TAB (v5.0)
 // ============================================================================
 // Sections:
-//   1. Activity Sequence Rules — chip-based picker with expandable groups
-//   2. Location Cooldowns — minutes-based with "after [event]" input
+//   1. Activity Sequence Rules — chip picker with multi-select, custom input
+//   2. Location Cooldowns — minutes-based with sentence layout
 //   3. Sports Player Requirements
+//
+// Data model for sequence rules:
+//   { activityA: string|string[], activityB: string|string[], direction }
+//   - Single string for one activity or custom
+//   - Array of strings for multiple individual picks
+//   - "__ALL_SPORTS__" / "__ALL_SPECIALS__" when ALL are selected
 // ============================================================================
 
 (function() {
@@ -57,9 +63,7 @@ function saveSportMetaData(meta) {
     if (!settings.app1) settings.app1 = {};
     settings.app1.sportMetaData = meta;
     saveSettings('app1', settings.app1);
-    if (typeof window.requestCloudSync === 'function') {
-        window.requestCloudSync();
-    }
+    if (typeof window.requestCloudSync === 'function') window.requestCloudSync();
 }
 
 // =========================================================================
@@ -88,14 +92,16 @@ function getPinnedTileNames() {
     return Object.keys(getPinnedTileDefaults()).sort();
 }
 
-function getDisplayName(value) {
-    if (value === GROUP_ALL_SPORTS) return 'All Sports';
-    if (value === GROUP_ALL_SPECIALS) return 'All Specials';
-    return value;
-}
-
 function isGroupValue(value) {
     return value === GROUP_ALL_SPORTS || value === GROUP_ALL_SPECIALS;
+}
+
+// Format a rule value for display
+function formatRuleValue(val) {
+    if (val === GROUP_ALL_SPORTS) return 'Sports';
+    if (val === GROUP_ALL_SPECIALS) return 'Specials';
+    if (Array.isArray(val)) return val.join(', ');
+    return val || '';
 }
 
 function esc(str) {
@@ -172,156 +178,178 @@ function createSection(title, description) {
 }
 
 // =========================================================================
-// CHIP-BASED ACTIVITY PICKER
+// MULTI-SELECT CHIP PICKER
 // =========================================================================
 
-function buildActivityPicker(containerId, selectedValue, onSelect) {
+function buildActivityPicker(containerId) {
     var el = document.createElement('div');
     el.id = containerId;
-    el.style.cssText = 'border:1px solid var(--slate-200, #E5E7EB); border-radius:var(--radius-sm, 8px); padding:12px; background:white; min-width:200px;';
+    el.style.cssText = 'border:1px solid var(--slate-200, #E5E7EB); border-radius:var(--radius-sm, 8px); padding:12px; background:white; min-width:220px;';
 
     var sports = getSportsList();
     var specials = getSpecialsList();
     var pinned = getPinnedTileNames();
-    var currentVal = selectedValue || '';
 
-    function chipStyle(isActive, isGroup) {
-        var base = 'display:inline-block; padding:5px 12px; border-radius:var(--radius-full, 999px); font-size:0.82rem; cursor:pointer; margin:3px 4px 3px 0; border:1px solid; transition:all 0.15s;';
-        if (isActive && isGroup) return base + ' background:#fed7aa; color:#7c2d12; border-color:#fdba74; font-weight:600;';
-        if (isActive) return base + ' background:var(--teal-tint, #e6f4f7); color:var(--teal-dark, #0F5F6E); border-color:var(--teal-primary, #147D91); font-weight:600;';
-        return base + ' background:var(--slate-50, #F8FAFC); color:var(--slate-600, #475569); border-color:var(--slate-200, #E5E7EB);';
-    }
-
-    function subChipStyle(isActive) {
-        var base = 'display:inline-block; padding:3px 10px; border-radius:var(--radius-full, 999px); font-size:0.78rem; cursor:pointer; margin:2px 3px 2px 0; border:1px solid; transition:all 0.15s;';
-        if (isActive) return base + ' background:var(--teal-tint, #e6f4f7); color:var(--teal-dark, #0F5F6E); border-color:var(--teal-primary, #147D91); font-weight:600;';
-        return base + ' background:white; color:var(--slate-500, #6B7280); border-color:var(--slate-200, #E5E7EB);';
-    }
-
-    var expandedSports = false;
-    var expandedSpecials = false;
+    // State
+    var expanded = { sports: false, specials: false };
+    var selectedItems = new Set(); // individual items
+    var groupSelected = { sports: false, specials: false }; // whole group
     var customMode = false;
+    var customValue = '';
+
+    // CSS helpers
+    var chipBase = 'display:inline-flex; align-items:center; gap:4px; padding:5px 12px; border-radius:var(--radius-full, 999px); font-size:0.82rem; cursor:pointer; margin:3px 4px 3px 0; border:1px solid; transition:all 0.15s; user-select:none;';
+    var subChipBase = 'display:inline-flex; align-items:center; gap:3px; padding:3px 10px; border-radius:var(--radius-full, 999px); font-size:0.78rem; cursor:pointer; margin:2px 3px 2px 0; border:1px solid; transition:all 0.15s; user-select:none;';
+
+    function groupChipStyle(active) {
+        if (active) return chipBase + ' background:#fed7aa; color:#7c2d12; border-color:#fdba74; font-weight:600;';
+        return chipBase + ' background:var(--slate-50, #F8FAFC); color:var(--slate-600, #475569); border-color:var(--slate-200, #E5E7EB);';
+    }
+    function itemChipStyle(active) {
+        if (active) return subChipBase + ' background:var(--teal-tint, #e6f4f7); color:var(--teal-dark, #0F5F6E); border-color:var(--teal-primary, #147D91); font-weight:600;';
+        return subChipBase + ' background:white; color:var(--slate-500, #6B7280); border-color:var(--slate-200, #E5E7EB);';
+    }
+    function pinnedChipStyle(active) {
+        if (active) return chipBase + ' background:var(--teal-tint, #e6f4f7); color:var(--teal-dark, #0F5F6E); border-color:var(--teal-primary, #147D91); font-weight:600;';
+        return chipBase + ' background:var(--slate-50, #F8FAFC); color:var(--slate-600, #475569); border-color:var(--slate-200, #E5E7EB);';
+    }
 
     function render() {
         el.innerHTML = '';
 
-        // -- Sports group --
+        // --- Sports ---
         if (sports.length > 0) {
             var sportsRow = document.createElement('div');
-            sportsRow.style.cssText = 'margin-bottom:8px;';
+            sportsRow.style.cssText = 'margin-bottom:6px;';
 
-            // "Sports" parent chip
             var sportsChip = document.createElement('span');
-            sportsChip.style.cssText = chipStyle(currentVal === GROUP_ALL_SPORTS, true);
-            sportsChip.textContent = 'All Sports';
+            sportsChip.style.cssText = groupChipStyle(groupSelected.sports);
+            sportsChip.textContent = 'Sports';
             sportsChip.onclick = function() {
-                if (currentVal === GROUP_ALL_SPORTS) {
-                    // Toggle expand instead
-                    expandedSports = !expandedSports;
+                if (groupSelected.sports) {
+                    // Deselect all sports
+                    groupSelected.sports = false;
+                    sports.forEach(function(s) { selectedItems.delete(s); });
                 } else {
-                    currentVal = GROUP_ALL_SPORTS;
-                    expandedSports = false;
-                    onSelect(currentVal);
+                    // Select all sports
+                    groupSelected.sports = true;
+                    sports.forEach(function(s) { selectedItems.add(s); });
                 }
                 render();
             };
             sportsRow.appendChild(sportsChip);
 
-            // Expand arrow
+            // Expand toggle
             var expandBtn = document.createElement('span');
-            expandBtn.style.cssText = 'display:inline-block; padding:3px 6px; cursor:pointer; color:var(--slate-400, #94A3B8); font-size:0.75rem; vertical-align:middle;';
-            expandBtn.textContent = expandedSports ? '\u25B2' : '\u25BC';
-            expandBtn.title = expandedSports ? 'Collapse' : 'Choose a specific sport';
+            expandBtn.style.cssText = 'display:inline-block; padding:3px 6px; cursor:pointer; color:var(--slate-400, #94A3B8); font-size:0.7rem; vertical-align:middle;';
+            expandBtn.innerHTML = expanded.sports
+                ? '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>'
+                : '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
+            expandBtn.title = expanded.sports ? 'Collapse' : 'Pick specific sports';
             expandBtn.onclick = function(e) {
                 e.stopPropagation();
-                expandedSports = !expandedSports;
+                expanded.sports = !expanded.sports;
                 render();
             };
             sportsRow.appendChild(expandBtn);
 
-            // Individual sport chips
-            if (expandedSports) {
+            if (expanded.sports) {
                 var subRow = document.createElement('div');
-                subRow.style.cssText = 'padding:6px 0 2px 16px;';
+                subRow.style.cssText = 'padding:4px 0 2px 12px;';
                 sports.forEach(function(s) {
                     var chip = document.createElement('span');
-                    chip.style.cssText = subChipStyle(currentVal === s);
+                    var isActive = selectedItems.has(s);
+                    chip.style.cssText = itemChipStyle(isActive);
                     chip.textContent = s;
                     chip.onclick = function() {
-                        currentVal = s;
-                        onSelect(currentVal);
+                        if (selectedItems.has(s)) {
+                            selectedItems.delete(s);
+                            groupSelected.sports = false;
+                        } else {
+                            selectedItems.add(s);
+                            // Check if all sports now selected
+                            var allIn = sports.every(function(sp) { return selectedItems.has(sp); });
+                            if (allIn) groupSelected.sports = true;
+                        }
                         render();
                     };
                     subRow.appendChild(chip);
                 });
                 sportsRow.appendChild(subRow);
             }
-
             el.appendChild(sportsRow);
         }
 
-        // -- Specials group --
+        // --- Specials ---
         if (specials.length > 0) {
             var specialsRow = document.createElement('div');
-            specialsRow.style.cssText = 'margin-bottom:8px;';
+            specialsRow.style.cssText = 'margin-bottom:6px;';
 
             var specialsChip = document.createElement('span');
-            specialsChip.style.cssText = chipStyle(currentVal === GROUP_ALL_SPECIALS, true);
-            specialsChip.textContent = 'All Specials';
+            specialsChip.style.cssText = groupChipStyle(groupSelected.specials);
+            specialsChip.textContent = 'Specials';
             specialsChip.onclick = function() {
-                if (currentVal === GROUP_ALL_SPECIALS) {
-                    expandedSpecials = !expandedSpecials;
+                if (groupSelected.specials) {
+                    groupSelected.specials = false;
+                    specials.forEach(function(s) { selectedItems.delete(s); });
                 } else {
-                    currentVal = GROUP_ALL_SPECIALS;
-                    expandedSpecials = false;
-                    onSelect(currentVal);
+                    groupSelected.specials = true;
+                    specials.forEach(function(s) { selectedItems.add(s); });
                 }
                 render();
             };
             specialsRow.appendChild(specialsChip);
 
             var expandBtn2 = document.createElement('span');
-            expandBtn2.style.cssText = 'display:inline-block; padding:3px 6px; cursor:pointer; color:var(--slate-400, #94A3B8); font-size:0.75rem; vertical-align:middle;';
-            expandBtn2.textContent = expandedSpecials ? '\u25B2' : '\u25BC';
-            expandBtn2.title = expandedSpecials ? 'Collapse' : 'Choose a specific special';
+            expandBtn2.style.cssText = 'display:inline-block; padding:3px 6px; cursor:pointer; color:var(--slate-400, #94A3B8); font-size:0.7rem; vertical-align:middle;';
+            expandBtn2.innerHTML = expanded.specials
+                ? '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>'
+                : '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
+            expandBtn2.title = expanded.specials ? 'Collapse' : 'Pick specific specials';
             expandBtn2.onclick = function(e) {
                 e.stopPropagation();
-                expandedSpecials = !expandedSpecials;
+                expanded.specials = !expanded.specials;
                 render();
             };
             specialsRow.appendChild(expandBtn2);
 
-            if (expandedSpecials) {
+            if (expanded.specials) {
                 var subRow2 = document.createElement('div');
-                subRow2.style.cssText = 'padding:6px 0 2px 16px;';
+                subRow2.style.cssText = 'padding:4px 0 2px 12px;';
                 specials.forEach(function(s) {
                     var chip = document.createElement('span');
-                    chip.style.cssText = subChipStyle(currentVal === s);
+                    var isActive = selectedItems.has(s);
+                    chip.style.cssText = itemChipStyle(isActive);
                     chip.textContent = s;
                     chip.onclick = function() {
-                        currentVal = s;
-                        onSelect(currentVal);
+                        if (selectedItems.has(s)) {
+                            selectedItems.delete(s);
+                            groupSelected.specials = false;
+                        } else {
+                            selectedItems.add(s);
+                            var allIn = specials.every(function(sp) { return selectedItems.has(sp); });
+                            if (allIn) groupSelected.specials = true;
+                        }
                         render();
                     };
                     subRow2.appendChild(chip);
                 });
                 specialsRow.appendChild(subRow2);
             }
-
             el.appendChild(specialsRow);
         }
 
-        // -- Pinned tiles as individual chips --
+        // --- Pinned tiles ---
         if (pinned.length > 0) {
             var pinnedRow = document.createElement('div');
-            pinnedRow.style.cssText = 'margin-bottom:8px;';
+            pinnedRow.style.cssText = 'margin-bottom:6px;';
             pinned.forEach(function(p) {
                 var chip = document.createElement('span');
-                chip.style.cssText = chipStyle(currentVal === p, false);
+                chip.style.cssText = pinnedChipStyle(selectedItems.has(p));
                 chip.textContent = p;
                 chip.onclick = function() {
-                    currentVal = p;
-                    onSelect(currentVal);
+                    if (selectedItems.has(p)) selectedItems.delete(p);
+                    else selectedItems.add(p);
                     render();
                 };
                 pinnedRow.appendChild(chip);
@@ -329,7 +357,7 @@ function buildActivityPicker(containerId, selectedValue, onSelect) {
             el.appendChild(pinnedRow);
         }
 
-        // -- Custom input --
+        // --- Custom ---
         var customRow = document.createElement('div');
         customRow.style.cssText = 'margin-top:4px;';
 
@@ -337,66 +365,85 @@ function buildActivityPicker(containerId, selectedValue, onSelect) {
             var customBtn = document.createElement('span');
             customBtn.style.cssText = 'display:inline-block; padding:5px 12px; border-radius:var(--radius-full, 999px); font-size:0.82rem; cursor:pointer; border:1px dashed var(--slate-300, #CBD5E1); color:var(--slate-500, #6B7280); margin:3px 0;';
             customBtn.textContent = '+ Custom';
-            customBtn.onclick = function() {
-                customMode = true;
-                render();
-            };
+            customBtn.onclick = function() { customMode = true; render(); };
             customRow.appendChild(customBtn);
         } else {
             var customWrap = document.createElement('div');
-            customWrap.style.cssText = 'display:flex; gap:6px; align-items:center;';
+            customWrap.style.cssText = 'display:flex; gap:6px; align-items:center; margin-top:4px;';
             var customInput = document.createElement('input');
             customInput.type = 'text';
             customInput.placeholder = 'e.g., Prayers';
+            customInput.value = customValue;
             customInput.style.cssText = 'padding:6px 10px; border:1px solid var(--slate-300, #D1D5DB); border-radius:var(--radius-xs, 6px); font-size:0.85rem; width:140px; font-family:var(--font-body);';
-            // If current value is custom (not in any list), pre-fill
-            var isCurrentCustom = currentVal && currentVal !== GROUP_ALL_SPORTS && currentVal !== GROUP_ALL_SPECIALS &&
-                sports.indexOf(currentVal) === -1 && specials.indexOf(currentVal) === -1 && pinned.indexOf(currentVal) === -1;
-            if (isCurrentCustom) customInput.value = currentVal;
 
-            var setBtn = document.createElement('button');
-            setBtn.textContent = 'Set';
-            setBtn.style.cssText = 'padding:5px 14px; background:var(--teal-primary, #147D91); color:white; border:none; border-radius:var(--radius-xs, 6px); cursor:pointer; font-size:0.82rem; font-weight:600;';
-            setBtn.onclick = function() {
+            var addCustBtn = document.createElement('button');
+            addCustBtn.textContent = 'Add';
+            addCustBtn.style.cssText = 'padding:5px 14px; background:var(--teal-primary, #147D91); color:white; border:none; border-radius:var(--radius-xs, 6px); cursor:pointer; font-size:0.82rem; font-weight:600;';
+            addCustBtn.onclick = function() {
                 var v = customInput.value.trim();
                 if (v) {
-                    currentVal = v;
-                    onSelect(currentVal);
+                    selectedItems.add(v);
+                    customValue = '';
+                    customMode = false;
                     render();
                 }
             };
-            customInput.onkeyup = function(e) {
-                if (e.key === 'Enter') setBtn.click();
-            };
+            customInput.onkeyup = function(e) { if (e.key === 'Enter') addCustBtn.click(); };
 
             var cancelBtn = document.createElement('button');
             cancelBtn.textContent = 'Cancel';
             cancelBtn.style.cssText = 'padding:5px 10px; background:var(--slate-100, #F1F5F9); color:var(--slate-600, #475569); border:1px solid var(--slate-200, #E5E7EB); border-radius:var(--radius-xs, 6px); cursor:pointer; font-size:0.82rem;';
-            cancelBtn.onclick = function() {
-                customMode = false;
-                render();
-            };
+            cancelBtn.onclick = function() { customMode = false; customValue = ''; render(); };
 
             customWrap.appendChild(customInput);
-            customWrap.appendChild(setBtn);
+            customWrap.appendChild(addCustBtn);
             customWrap.appendChild(cancelBtn);
             customRow.appendChild(customWrap);
         }
         el.appendChild(customRow);
 
-        // Show selected value label
-        if (currentVal) {
-            var selLabel = document.createElement('div');
-            selLabel.style.cssText = 'margin-top:8px; padding:6px 10px; background:var(--teal-tint-bg, #f0f9fb); border-radius:var(--radius-xs, 6px); font-size:0.8rem; color:var(--teal-dark, #0F5F6E);';
-            selLabel.innerHTML = 'Selected: <strong>' + esc(getDisplayName(currentVal)) + '</strong>';
-            el.appendChild(selLabel);
+        // --- Selection summary ---
+        var selArr = Array.from(selectedItems);
+        if (selArr.length > 0) {
+            var summary = document.createElement('div');
+            summary.style.cssText = 'margin-top:8px; padding:6px 10px; background:var(--teal-tint-bg, #f0f9fb); border-radius:var(--radius-xs, 6px); font-size:0.8rem; color:var(--teal-dark, #0F5F6E); display:flex; flex-wrap:wrap; gap:4px; align-items:center;';
+            summary.innerHTML = '<span style="font-weight:500; margin-right:4px;">Selected:</span>';
+            selArr.forEach(function(item) {
+                var tag = document.createElement('span');
+                tag.style.cssText = 'display:inline-flex; align-items:center; gap:3px; padding:2px 8px; background:var(--teal-tint, #e6f4f7); border-radius:var(--radius-full, 999px); font-size:0.78rem; font-weight:500;';
+                tag.innerHTML = esc(item) + ' <span style="cursor:pointer; color:var(--slate-400); font-size:0.7rem; margin-left:2px;" title="Remove">\u2715</span>';
+                tag.querySelector('span').onclick = function() {
+                    selectedItems.delete(item);
+                    // Uncheck group if needed
+                    if (sports.indexOf(item) !== -1) groupSelected.sports = false;
+                    if (specials.indexOf(item) !== -1) groupSelected.specials = false;
+                    render();
+                };
+                summary.appendChild(tag);
+            });
+            el.appendChild(summary);
         }
     }
 
     render();
 
-    // Expose getter
-    el._getValue = function() { return currentVal; };
+    // Expose getter — returns the stored value
+    el._getValue = function() {
+        var sel = Array.from(selectedItems);
+        if (sel.length === 0) return null;
+        // Check if all sports selected
+        if (groupSelected.sports && sports.length > 0) {
+            var nonSports = sel.filter(function(s) { return sports.indexOf(s) === -1; });
+            if (nonSports.length === 0) return GROUP_ALL_SPORTS;
+        }
+        // Check if all specials selected
+        if (groupSelected.specials && specials.length > 0) {
+            var nonSpecials = sel.filter(function(s) { return specials.indexOf(s) === -1; });
+            if (nonSpecials.length === 0) return GROUP_ALL_SPECIALS;
+        }
+        if (sel.length === 1) return sel[0];
+        return sel;
+    };
 
     return el;
 }
@@ -414,7 +461,7 @@ function renderSequenceRulesSection() {
     var body = section.querySelector('.detail-section-body');
     var rules = getSequenceRules();
 
-    // Existing rules list
+    // Existing rules
     if (rules.length > 0) {
         var list = document.createElement('div');
         list.style.cssText = 'display:flex; flex-direction:column; gap:8px; margin-bottom:20px;';
@@ -425,16 +472,22 @@ function renderSequenceRulesSection() {
 
             var dirLabel = rule.direction === 'b_before_a' ? 'cannot be right after' : 'cannot be right before';
 
-            var pillBase = 'font-weight:600; padding:4px 10px; border-radius:var(--radius-xs, 6px); font-size:0.85rem;';
+            var pillBase = 'font-weight:600; padding:4px 10px; border-radius:var(--radius-xs, 6px); font-size:0.85rem; ';
             function getPillStyle(val) {
-                if (isGroupValue(val)) return pillBase + ' color:#7c2d12; background:#fed7aa;';
-                return pillBase + ' color:var(--teal-dark, #0F5F6E); background:var(--teal-tint, #e6f4f7);';
+                if (isGroupValue(val)) return pillBase + 'color:#7c2d12; background:#fed7aa;';
+                return pillBase + 'color:var(--teal-dark, #0F5F6E); background:var(--teal-tint, #e6f4f7);';
             }
 
+            // Format: could be string, array, or group
+            var aDisplay = formatRuleValue(rule.activityA);
+            var bDisplay = formatRuleValue(rule.activityB);
+            var aIsGroup = isGroupValue(rule.activityA);
+            var bIsGroup = isGroupValue(rule.activityB);
+
             row.innerHTML =
-                '<span style="' + getPillStyle(rule.activityA) + '">' + esc(getDisplayName(rule.activityA)) + '</span>' +
+                '<span style="' + getPillStyle(rule.activityA) + '">' + esc(aDisplay) + '</span>' +
                 '<span style="color:var(--slate-500, #6B7280); font-size:0.8rem; flex-shrink:0;">' + dirLabel + '</span>' +
-                '<span style="' + getPillStyle(rule.activityB) + '">' + esc(getDisplayName(rule.activityB)) + '</span>' +
+                '<span style="' + getPillStyle(rule.activityB) + '">' + esc(bDisplay) + '</span>' +
                 '<span style="flex:1;"></span>';
 
             var delBtn = document.createElement('button');
@@ -461,7 +514,7 @@ function renderSequenceRulesSection() {
         body.appendChild(empty);
     }
 
-    // --- Add new rule builder ---
+    // --- Builder ---
     var builderLabel = document.createElement('div');
     builderLabel.style.cssText = 'font-weight:600; font-size:0.9rem; color:var(--slate-700, #334155); margin-bottom:10px;';
     builderLabel.textContent = 'Add a new rule';
@@ -470,26 +523,23 @@ function renderSequenceRulesSection() {
     var builder = document.createElement('div');
     builder.style.cssText = 'padding:16px; background:var(--teal-tint-bg, #f0f9fb); border:1px solid var(--teal-border, #b2dce6); border-radius:var(--radius-sm, 8px);';
 
-    // Two-column layout: left picker, direction, right picker
     var pickerRow = document.createElement('div');
     pickerRow.style.cssText = 'display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start;';
 
     // Left picker
     var leftWrap = document.createElement('div');
-    leftWrap.style.cssText = 'flex:1; min-width:200px;';
+    leftWrap.style.cssText = 'flex:1; min-width:220px;';
     var leftLabel = document.createElement('div');
     leftLabel.style.cssText = 'font-size:0.8rem; color:var(--slate-500, #6B7280); margin-bottom:6px; font-weight:500;';
     leftLabel.textContent = 'This activity...';
     leftWrap.appendChild(leftLabel);
-
-    var selectedA = '';
-    var pickerA = buildActivityPicker('seq-picker-a', '', function(val) { selectedA = val; });
+    var pickerA = buildActivityPicker('seq-picker-a');
     leftWrap.appendChild(pickerA);
     pickerRow.appendChild(leftWrap);
 
     // Direction
     var dirWrap = document.createElement('div');
-    dirWrap.style.cssText = 'display:flex; flex-direction:column; align-items:center; justify-content:center; min-width:160px; padding-top:24px;';
+    dirWrap.style.cssText = 'display:flex; flex-direction:column; align-items:center; justify-content:center; min-width:160px; padding-top:28px;';
     var dirSelect = document.createElement('select');
     dirSelect.id = 'seq-rule-dir';
     dirSelect.style.cssText = 'padding:8px 10px; border:1px solid var(--slate-300, #D1D5DB); border-radius:var(--radius-xs, 6px); font-size:0.85rem; background:white; font-family:var(--font-body); text-align:center;';
@@ -499,14 +549,12 @@ function renderSequenceRulesSection() {
 
     // Right picker
     var rightWrap = document.createElement('div');
-    rightWrap.style.cssText = 'flex:1; min-width:200px;';
+    rightWrap.style.cssText = 'flex:1; min-width:220px;';
     var rightLabel = document.createElement('div');
     rightLabel.style.cssText = 'font-size:0.8rem; color:var(--slate-500, #6B7280); margin-bottom:6px; font-weight:500;';
     rightLabel.textContent = '...this activity';
     rightWrap.appendChild(rightLabel);
-
-    var selectedB = '';
-    var pickerB = buildActivityPicker('seq-picker-b', '', function(val) { selectedB = val; });
+    var pickerB = buildActivityPicker('seq-picker-b');
     rightWrap.appendChild(pickerB);
     pickerRow.appendChild(rightWrap);
 
@@ -522,12 +570,15 @@ function renderSequenceRulesSection() {
         var a = pickerA._getValue();
         var b = pickerB._getValue();
         var dir = dirSelect.value;
-        if (!a || !b) { alert('Please select an activity on both sides.'); return; }
-        if (a === b) { alert('The two selections must be different.'); return; }
+        if (!a || !b) { alert('Please select at least one activity on each side.'); return; }
+        // Stringify for comparison
+        var aStr = JSON.stringify(a);
+        var bStr = JSON.stringify(b);
+        if (aStr === bStr) { alert('The two sides must be different.'); return; }
         var existing = getSequenceRules();
         var dup = existing.some(function(r) {
-            return (r.activityA === a && r.activityB === b && r.direction === dir) ||
-                   (r.activityA === b && r.activityB === a && r.direction === dir);
+            return (JSON.stringify(r.activityA) === aStr && JSON.stringify(r.activityB) === bStr && r.direction === dir) ||
+                   (JSON.stringify(r.activityA) === bStr && JSON.stringify(r.activityB) === aStr && r.direction === dir);
         });
         if (dup) { alert('This rule already exists.'); return; }
         existing.push({ activityA: a, activityB: b, direction: dir });
@@ -542,15 +593,15 @@ function renderSequenceRulesSection() {
     // Hint
     var hint = document.createElement('div');
     hint.style.cssText = 'margin-top:12px; font-size:0.8rem; color:var(--slate-500, #6B7280); padding:12px; background:var(--slate-50, #F9FAFB); border-radius:var(--radius-sm, 8px); border-left:3px solid var(--teal-primary, #147D91); line-height:1.5;';
-    hint.innerHTML = '<strong>Examples:</strong> "All Sports cannot be right after Swim" prevents any sport from following Swim. ' +
-        '"Prayers cannot be right after Lunch" uses a custom activity name. You can pick whole groups or individual activities.';
+    hint.innerHTML = '<strong>Examples:</strong> Select "Sports" to apply to all sports, or expand and pick specific ones like Basketball and Football. ' +
+        'Use "+ Custom" for activities like Prayers that aren\'t in your field or special activity lists.';
     body.appendChild(hint);
 
     return section;
 }
 
 // =========================================================================
-// SECTION 2: LOCATION COOLDOWNS (minutes + "after" input)
+// SECTION 2: LOCATION COOLDOWNS
 // =========================================================================
 
 function renderCooldownSection() {
@@ -576,19 +627,16 @@ function renderCooldownSection() {
             var row = document.createElement('div');
             row.style.cssText = 'display:flex; align-items:center; gap:10px; padding:12px 14px; background:var(--slate-50, #F8FAFC); border:1px solid var(--slate-200, #E5E7EB); border-radius:var(--radius-sm, 8px); flex-wrap:wrap;';
 
-            // Location name
             var locLabel = document.createElement('div');
             locLabel.style.cssText = 'min-width:100px;';
             locLabel.innerHTML = '<div style="font-weight:600; color:var(--slate-800, #1E293B);">' + (esc(location) || '<em style="color:var(--slate-400);">No location</em>') + '</div>';
             row.appendChild(locLabel);
 
-            // "blocked for"
             var blockLabel = document.createElement('span');
             blockLabel.style.cssText = 'font-size:0.85rem; color:var(--slate-500, #6B7280);';
             blockLabel.textContent = 'blocked for';
             row.appendChild(blockLabel);
 
-            // Minutes input
             var coolInput = document.createElement('input');
             coolInput.type = 'number';
             coolInput.min = '0';
@@ -615,13 +663,11 @@ function renderCooldownSection() {
             })(tileName);
             row.appendChild(coolInput);
 
-            // "min after"
             var afterLabel = document.createElement('span');
             afterLabel.style.cssText = 'font-size:0.85rem; color:var(--slate-500, #6B7280);';
             afterLabel.textContent = 'min after';
             row.appendChild(afterLabel);
 
-            // Event name (the tile)
             var eventPill = document.createElement('span');
             eventPill.style.cssText = 'font-weight:600; color:var(--teal-dark, #0F5F6E); background:var(--teal-tint, #e6f4f7); padding:4px 10px; border-radius:var(--radius-xs, 6px); font-size:0.85rem;';
             eventPill.textContent = tileName;
@@ -638,7 +684,6 @@ function renderCooldownSection() {
         body.appendChild(empty);
     }
 
-    // Info
     var infoBox = document.createElement('div');
     infoBox.style.cssText = 'margin-top:12px; font-size:0.8rem; color:var(--slate-500, #6B7280); padding:12px; background:var(--slate-50, #F9FAFB); border-radius:var(--radius-sm, 8px); border-left:3px solid var(--teal-primary, #147D91); line-height:1.5;';
     infoBox.innerHTML = '<strong>Example:</strong> Gym blocked for 45 min after Lunch means no activity can use the Gym for 45 minutes after Lunch ends. Set to 0 for no cooldown.';
