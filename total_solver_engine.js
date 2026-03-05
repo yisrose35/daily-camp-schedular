@@ -784,6 +784,7 @@ else penalty += 200;
         // Tie-breaker
         penalty += Math.random() * (ROTATION_CONFIG.TIE_BREAKER_RANDOMNESS || 300);
         return penalty;
+    }
 
     // ========================================================================
     // BLOCK SORTING
