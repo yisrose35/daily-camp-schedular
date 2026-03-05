@@ -767,10 +767,23 @@ else penalty += 200;
         if (_isFGPenalty) penalty -= 15000;
 
 
+        // ★★★ v15.5: AUTO BUILD _suggestedActivity bonus ★★★
+        // If the auto builder suggested a specific activity for this block,
+        // give a strong bonus when the candidate matches. The solver still
+        // validates all rules (capacity, field locks, time rules, rotation)
+        // via the hard constraints above — this just steers the pick.
+        if (block._suggestedActivity) {
+            var sugNorm = normName(block._suggestedActivity);
+            if (sugNorm && actNorm === sugNorm) {
+                penalty -= 25000; // Strong preference for the suggestion
+            } else if (sugNorm) {
+                penalty += 3000;  // Mild penalty for ignoring the suggestion
+            }
+        }
+
         // Tie-breaker
         penalty += Math.random() * (ROTATION_CONFIG.TIE_BREAKER_RANDOMNESS || 300);
         return penalty;
-    }
 
     // ========================================================================
     // BLOCK SORTING
