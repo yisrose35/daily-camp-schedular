@@ -313,17 +313,7 @@ function initLocationsTab(){
                   </div>
                 </div>
 
-                  <div style="margin-top:24px;">
-                    <div class="setup-subtitle" style="margin-bottom:8px;">⛔ Sequence Rules</div>
-                    <p style="font-size:0.8rem; color:#6B7280; margin:0 0 12px 0;">Prevent certain activities from being scheduled back-to-back.</p>
-                    <div id="sequence-rules-list" style="margin-bottom:12px;"></div>
-                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                      <select id="seq-rule-a" style="flex:1; min-width:100px; padding:6px; border:1px solid #E5E7EB; border-radius:6px; font-size:0.85rem;"><option value="">Activity A...</option></select>
-                      <select id="seq-rule-dir" style="width:170px; padding:6px; border:1px solid #E5E7EB; border-radius:6px; font-size:0.85rem;"><option value="a_before_b">can't be right before</option><option value="b_before_a">can't be right after</option><option value="either">can't be adjacent to</option></select>
-                      <select id="seq-rule-b" style="flex:1; min-width:100px; padding:6px; border:1px solid #E5E7EB; border-radius:6px; font-size:0.85rem;"><option value="">Activity B...</option></select>
-                      <button id="add-seq-rule-btn" style="background:#111; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
-                    </div>
-                  </div>
+                  
               </div>
 
               <!-- RIGHT SIDE: DETAIL PANE -->
@@ -346,7 +336,7 @@ function initLocationsTab(){
 
     // Initialize pinned tile defaults section
     initPinnedTileDefaultsSection();
-    initSequenceRulesSection();
+   
 
     renderZonesList();
     renderDetailPane();
@@ -1258,47 +1248,7 @@ function initPinnedTileDefaultsSection(){
     renderPinnedTileDefaults();
 }
 
-function initSequenceRulesSection() {
-    const listEl = document.getElementById('sequence-rules-list');
-    const selA = document.getElementById('seq-rule-a');
-    const selB = document.getElementById('seq-rule-b');
-    const selDir = document.getElementById('seq-rule-dir');
-    const addBtn = document.getElementById('add-seq-rule-btn');
-    if (!listEl || !selA || !selB || !addBtn) return;
-    const allActivities = [];
-    const settings = window.loadGlobalSettings?.() || {};
-    (settings.app1?.fields || []).forEach(f => { (f.activities || []).forEach(sport => { if (!allActivities.includes(sport)) allActivities.push(sport); }); });
-    (settings.app1?.specialActivities || []).forEach(s => { if (s.name && !allActivities.includes(s.name)) allActivities.push(s.name); });
-    Object.keys(settings.pinnedTileDefaults || {}).forEach(name => { if (!allActivities.includes(name)) allActivities.push(name); });
-    allActivities.sort().forEach(name => {
-        selA.innerHTML += '<option value="' + escapeHtml(name) + '">' + escapeHtml(name) + '</option>';
-        selB.innerHTML += '<option value="' + escapeHtml(name) + '">' + escapeHtml(name) + '</option>';
-    });
-    function renderRules() {
-        const rules = window.getSequenceRules?.() || [];
-        if (rules.length === 0) { listEl.innerHTML = '<div class="muted" style="padding:12px; text-align:center; border:1px dashed #E5E7EB; border-radius:8px; font-size:0.85rem;">No sequence rules yet.</div>'; return; }
-        listEl.innerHTML = '';
-        const dirLabels = { 'a_before_b': "can't be right before", 'b_before_a': "can't be right after", 'either': "can't be adjacent to" };
-        rules.forEach((rule, idx) => {
-            const el = document.createElement('div');
-            el.style.cssText = 'display:flex; align-items:center; gap:8px; padding:8px 12px; background:white; border:1px solid #FECACA; border-radius:8px; margin-bottom:6px;';
-            el.innerHTML = '<span style="color:#dc2626;">⛔</span> <strong>' + escapeHtml(rule.activityA) + '</strong> <span style="color:#6B7280; font-size:0.85rem;">' + (dirLabels[rule.direction] || "can't be adjacent to") + '</span> <strong>' + escapeHtml(rule.activityB) + '</strong><span style="flex:1;"></span>';
-            const rmBtn = document.createElement('button'); rmBtn.textContent = '✕'; rmBtn.style.cssText = 'padding:2px 8px; background:#fef2f2; color:#dc2626; border:1px solid #fecaca; border-radius:4px; cursor:pointer; font-size:0.75rem;';
-            rmBtn.onclick = () => { const r = window.getSequenceRules?.() || []; r.splice(idx, 1); window.saveSequenceRules(r); renderRules(); };
-            el.appendChild(rmBtn); listEl.appendChild(el);
-        });
-    }
-    addBtn.onclick = () => {
-        const a = selA.value, b = selB.value, dir = selDir.value;
-        if (!a || !b) { alert('Select both activities.'); return; }
-        if (a === b) { alert('Activities must be different.'); return; }
-        const rules = window.getSequenceRules?.() || [];
-        if (rules.some(r => r.activityA === a && r.activityB === b && r.direction === dir)) { alert('Rule already exists.'); return; }
-        rules.push({ activityA: a, activityB: b, direction: dir });
-        window.saveSequenceRules(rules); selA.value = ''; selB.value = ''; renderRules();
-    };
-    renderRules();
-}
+
 
 function buildPinnedLocationPicker(pickerContainer) {
     pickerContainer.innerHTML = '';
