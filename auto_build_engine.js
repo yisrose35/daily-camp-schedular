@@ -809,13 +809,13 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         // ★★★ v3.2.9 FIX #6: Check global cross-division capacity ★★★
         // If previous grades already filled all of this scarce special's slots,
         // skip it entirely for this grade.
-        if (globalScarceUsage) {
-            const remaining = globalScarceUsage.getRemaining(specialConfig);
+       if (globalScarceUsage) {
+            const remaining = globalScarceUsage.getRemaining(specialConfig, divName);
             if (remaining <= 0) {
-                log(`    ${name}: skipped — all slots filled by other grades (global capacity exhausted)`);
+                log(`    ${name}: skipped — all slots filled by other grades (global capacity exhausted or division sharing blocked)`);
                 return;
             }
-            log(`    ${name}: ${remaining} global slots remaining across all grades`);
+            log(`    ${name}: ${remaining} global slots remaining for ${divName}`);
         }
         
         // Rank bunks by rotation (most overdue first)
@@ -921,11 +921,10 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 assignedThisSlot++;
             }
             
-            // ★★★ v3.2.9: Record global usage for this time slot ★★★
+           // ★★★ v3.3.0: Record global usage WITH division name ★★★
             if (assignedThisSlot > 0 && globalScarceUsage) {
-                globalScarceUsage.record(name, slotStart, assignedThisSlot);
-            }
-            
+                globalScarceUsage.record(name, slotStart, assignedThisSlot, divName);
+            }   
             slotCursor = slotEnd;
         }
         
