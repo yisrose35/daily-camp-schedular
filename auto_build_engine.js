@@ -629,7 +629,7 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     const specialDurMax = specialLayers.length > 0 ? getLayerDurationMax(specialLayers[0]) : specialDur;
     const sportDurMin = sportLayers.length > 0 ? getLayerDuration(sportLayers[0]) : 30;
     const sportDurMax = sportLayers.length > 0 ? getLayerDurationMax(sportLayers[0]) : sportDurMin;
-    const minActivityDur = Math.min(sportDurMin, specialDur, 25);
+    const minActivityDur = Math.min(sportDurMin, specialDur);
 
     log(`  Classified: ${pinnedLayers.length} pinned, ${fixedLayers.length} fixed, ` +
         `${leagueLayers.length} league, ${specialtyLeagueLayers.length} specialty_league, ` +
@@ -1008,11 +1008,35 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
 
         log(`    ${bunk}: ${gaps.length} gaps, already ${placedSpecials}S/${placedSports}Sp`);
 
+        // Track blocks placed in this bunk's gaps so we can extend the last one
+        let lastPlacedBlock = null;
+
         for (const gap of gaps) {
             let cursor = gap.startMin;
+            lastPlacedBlock = null; // reset per gap
 
-            while (cursor + minActivityDur <= gap.endMin) {
+            while (cursor < gap.endMin) {
                 const remaining = gap.endMin - cursor;
+
+                // If remaining time is less than any layer minimum, absorb into previous block
+                if (remaining < minActivityDur) {
+                    if (lastPlacedBlock) {
+                        const maxAllowed = lastPlacedBlock._pickType === 'special' ? specialDurMax : sportDurMax;
+                        const extended = lastPlacedBlock._blockDur + remaining;
+                        if (extended <= maxAllowed) {
+                            // Extend the previous skeleton block and timeline entry
+                            lastPlacedBlock.skeletonRef.endTime = fmtTime(cursor + remaining);
+                            lastPlacedBlock.skeletonRef._targetDuration = extended;
+                            lastPlacedBlock.timelineRef.endMin = cursor + remaining;
+                            lastPlacedBlock.occupiedRef.endMin = cursor + remaining;
+                            if (lastPlacedBlock.overrideRef) {
+                                lastPlacedBlock.overrideRef.endTime = fmtTime(cursor + remaining);
+                            }
+                            log(`      ${bunk}: Absorbed ${remaining}min remainder into previous block (now ${extended}min)`);
+                        }
+                    }
+                    break;
+                }
 
                 // Decide: does this bunk need a special or a sport?
                 const specialsNeeded = Math.max(0, specialReq.min - placedSpecials);
@@ -1026,23 +1050,54 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 } else if (sportsNeeded > 0 && !sportsMaxed) {
                     pickType = 'sport';
                 } else if (!specialsMaxed && !sportsMaxed) {
-                    // Both satisfied — alternate based on what we placed last
                     pickType = (placedSpecials <= placedSports) ? 'special' : 'sport';
                 } else if (!specialsMaxed) {
                     pickType = 'special';
                 } else if (!sportsMaxed) {
                     pickType = 'sport';
                 } else {
-                    // Both maxed — create generic slot
                     pickType = 'sport';
                 }
+
+                // Get the minimum duration for the chosen type
+                const typeMinDur = pickType === 'special' ? specialDur : sportDurMin;
+                const typeMaxDur = pickType === 'special' ? specialDurMax : sportDurMax;
+
+                // If remaining is less than this type's minimum, try the other type
+                if (remaining < typeMinDur) {
+                    const otherType = pickType === 'special' ? 'sport' : 'special';
+                    const otherMin = otherType === 'special' ? specialDur : sportDurMin;
+                    if (remaining >= otherMin) {
+                        pickType = otherType;
+                    } else {
+                        // Neither type fits at minimum — absorb into previous or skip
+                        if (lastPlacedBlock) {
+                            const maxAllowed = lastPlacedBlock._pickType === 'special' ? specialDurMax : sportDurMax;
+                            const extended = lastPlacedBlock._blockDur + remaining;
+                            if (extended <= maxAllowed) {
+                                lastPlacedBlock.skeletonRef.endTime = fmtTime(cursor + remaining);
+                                lastPlacedBlock.skeletonRef._targetDuration = extended;
+                                lastPlacedBlock.timelineRef.endMin = cursor + remaining;
+                                lastPlacedBlock.occupiedRef.endMin = cursor + remaining;
+                                if (lastPlacedBlock.overrideRef) {
+                                    lastPlacedBlock.overrideRef.endTime = fmtTime(cursor + remaining);
+                                }
+                                log(`      ${bunk}: Absorbed ${remaining}min (below min) into previous block`);
+                            }
+                        }
+                        break;
+                    }
+                }
+
+                // Recalculate min/max for the (possibly switched) type
+                const effectiveMinDur = pickType === 'special' ? specialDur : sportDurMin;
+                const effectiveMaxDur = pickType === 'special' ? specialDurMax : sportDurMax;
 
                 let blockDur;
                 let hintActivity = null;
                 let eventLabel;
 
                 if (pickType === 'special') {
-                    // Find best special by rotation for this bunk
                     const availableNames = divRegular.map(s => s.name)
                         .filter(n => !usedToday.map(u => u.toLowerCase()).includes(n.toLowerCase()))
                         .filter(n => !isSpecialAtCapacity(n, cursor));
@@ -1051,39 +1106,36 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
 
                     if (ranked.length > 0) {
                         const best = ranked[0];
-                        // Use the activity's actual configured duration
                         const actDuration = best.duration || specialDur;
-                        blockDur = Math.min(actDuration, remaining);
+                        blockDur = Math.min(actDuration, remaining, effectiveMaxDur);
                         blockDur = snapTo5(blockDur);
-                        if (blockDur < minActivityDur) blockDur = Math.min(minActivityDur, remaining);
+                        if (blockDur < effectiveMinDur) blockDur = effectiveMinDur;
+                        if (blockDur > remaining) blockDur = remaining;
                         hintActivity = best.name;
                         eventLabel = 'Special Activity';
                     } else {
-                        // No specials available, fall back to sport
+                        // No specials left, switch to sport
                         pickType = 'sport';
-                        blockDur = Math.min(sportDurMax, remaining);
-                        blockDur = snapTo5(blockDur);
-                        if (blockDur < minActivityDur) blockDur = Math.min(minActivityDur, remaining);
-                        eventLabel = 'Sports Slot';
                     }
                 }
 
                 if (pickType === 'sport') {
                     blockDur = Math.min(sportDurMax, remaining);
                     blockDur = snapTo5(blockDur);
-                    if (blockDur < sportDurMin && remaining >= sportDurMin) blockDur = sportDurMin;
-                    if (blockDur < minActivityDur) blockDur = Math.min(minActivityDur, remaining);
+                    if (blockDur < sportDurMin) blockDur = sportDurMin;
+                    if (blockDur > remaining) blockDur = remaining;
                     eventLabel = 'Sports Slot';
                 }
 
-                // Anti-runt: if leftover after this block is too small, absorb it
+                // Anti-runt: if leftover after this block would be too small, absorb it
                 const afterThis = remaining - blockDur;
                 if (afterThis > 0 && afterThis < minActivityDur) {
-                    const maxAllowed = pickType === 'special' ? specialDurMax : sportDurMax;
-                    if (remaining <= maxAllowed) {
-                        blockDur = remaining;
+                    if (remaining <= effectiveMaxDur) {
+                        blockDur = remaining; // take the whole gap
                     } else {
+                        // Split evenly
                         blockDur = snapTo5(Math.ceil(remaining / 2));
+                        if (blockDur < effectiveMinDur) blockDur = effectiveMinDur;
                     }
                 }
 
@@ -1092,7 +1144,7 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                 const blockEnd = cursor + blockDur;
 
                 // Create per-bunk skeleton block
-                skeleton.push({
+                const skelBlock = {
                     id: 'auto_fill_' + Math.random().toString(36).slice(2, 9),
                     type: 'slot',
                     event: eventLabel,
@@ -1104,29 +1156,36 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                     _durationStrict: true,
                     _targetDuration: blockDur,
                     _hintActivity: hintActivity
-                });
+                };
+                skeleton.push(skelBlock);
 
                 // Track in bunk state
-                state.occupied.push({
+                const occEntry = {
                     startMin: cursor, endMin: blockEnd,
                     event: eventLabel, type: pickType === 'special' ? 'special_slot' : 'sport_slot'
-                });
-                bunkTimelines[bunk].push({
+                };
+                state.occupied.push(occEntry);
+
+                const tlEntry = {
                     startMin: cursor, endMin: blockEnd,
                     event: eventLabel, type: pickType === 'special' ? 'special_slot' : 'sport_slot',
                     _autoGenerated: true, _hintActivity: hintActivity
-                });
+                };
+                bunkTimelines[bunk].push(tlEntry);
 
                 // Create bunk override if we have a specific activity hint
+                let overrideRef = null;
                 if (hintActivity) {
                     recordSpecialUsage(hintActivity, cursor);
                     usedToday.push(hintActivity);
 
-                    bunkOverrides.push({
+                    const ovr = {
                         bunk, division: divName, activity: hintActivity, type: 'special',
                         startTime: fmtTime(cursor), endTime: fmtTime(blockEnd),
                         _autoGenerated: true, _intelligent: true
-                    });
+                    };
+                    bunkOverrides.push(ovr);
+                    overrideRef = ovr;
                 }
 
                 if (pickType === 'special') {
@@ -1136,6 +1195,18 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                     placedSports++;
                     state.sportCount++;
                 }
+
+                // Track for absorb logic
+                lastPlacedBlock = {
+                    skeletonRef: skelBlock,
+                    timelineRef: tlEntry,
+                    occupiedRef: occEntry,
+                    overrideRef: overrideRef,
+                    _pickType: pickType,
+                    _blockDur: blockDur
+                };
+
+                log(`      ${bunk}: ${pickType === 'special' ? (hintActivity || 'Special') : 'Sport'} ${blockDur}min → ${fmtTime(cursor)}-${fmtTime(blockEnd)}`);
 
                 cursor = blockEnd;
             }
