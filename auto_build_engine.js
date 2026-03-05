@@ -1043,7 +1043,7 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                     // No previous block to absorb into (e.g. gap after a league)
                     // Create a slot anyway — the solver can handle slightly short durations
                     if (remaining >= 15) {
-                        const gapEvent = (placedSpecials <= placedSports && !specialsMaxed) ? 'Special Activity' : 'Sports Slot';
+                        const gapEvent = (placedSpecials <= placedSports && !(specialReq.max !== Infinity && placedSpecials >= specialReq.max)) ? 'Special Activity' : 'Sports Slot';
                         skeleton.push({
                             id: 'auto_short_' + Math.random().toString(36).slice(2, 9),
                             type: 'slot', event: gapEvent, division: divName,
