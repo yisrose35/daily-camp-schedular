@@ -346,6 +346,9 @@ function build({ layers, dateStr }) {
     // Scarce specials (like Bubble Lady) have a fixed time window and limited slots.
     // When Grade 1 fills all slots, Grade 2 should know she's fully booked.
     // Key: "specialName|slotStartMin" → count of bunks assigned across ALL divisions
+    // ★★★ v3.3.0 FIX: globalScarceUsage tracks division + count per slot ★★★
+    // This enables same_division enforcement: if Grade 1 owns a slot,
+    // Grade 2 cannot share it even if capacity isn't full.
     const globalScarceUsage = {};
     
     function getGlobalScarceCapacity(specialConfig) {
@@ -355,15 +358,60 @@ function build({ layers, dateStr }) {
     }
     
     function getGlobalScarceSlotUsage(name, slotStartMin) {
-        return globalScarceUsage[name + '|' + slotStartMin] || 0;
+        const entry = globalScarceUsage[name + '|' + slotStartMin];
+        return entry ? entry.count : 0;
     }
     
-    function recordGlobalScarceUsage(name, slotStartMin, count) {
+    function getGlobalScarceSlotDivision(name, slotStartMin) {
+        const entry = globalScarceUsage[name + '|' + slotStartMin];
+        return entry ? entry.division : null;
+    }
+    
+    function recordGlobalScarceUsage(name, slotStartMin, count, divisionName) {
         const key = name + '|' + slotStartMin;
-        globalScarceUsage[key] = (globalScarceUsage[key] || 0) + count;
+        if (!globalScarceUsage[key]) {
+            globalScarceUsage[key] = { count: 0, division: divisionName };
+        }
+        globalScarceUsage[key].count += count;
+        // If multiple divisions use the same slot, mark as 'mixed'
+        if (globalScarceUsage[key].division !== divisionName) {
+            globalScarceUsage[key].division = '_mixed';
+        }
     }
     
-    function getRemainingGlobalScarceSlots(specialConfig) {
+    // ★★★ v3.3.0: Check if a slot is available for a specific division ★★★
+    // Enforces sharableWith.type rules:
+    //   - 'not_sharable': only ONE division can use the slot at all
+    //   - 'same_division': only bunks from the SAME division can share
+    //   - 'custom': only listed divisions can share
+    //   - 'all': anyone can share (just check capacity)
+    function isSlotAvailableForDivision(specialConfig, slotStartMin, divName) {
+        const name = specialConfig.name;
+        const entry = globalScarceUsage[name + '|' + slotStartMin];
+        if (!entry || entry.count === 0) return true; // slot empty
+        
+        const shareType = specialConfig.sharableWith?.type || 'not_sharable';
+        const ownerDiv = entry.division;
+        
+        if (shareType === 'not_sharable') {
+            // No sharing at all — if anyone owns it, it's taken
+            return false;
+        }
+        if (shareType === 'same_division') {
+            // Only the same division can share
+            if (ownerDiv === '_mixed') return false; // already cross-div, don't add more
+            return ownerDiv === divName;
+        }
+        if (shareType === 'custom') {
+            const allowedDivs = specialConfig.sharableWith?.divisions || [];
+            if (!allowedDivs.includes(divName)) return false;
+            return true; // custom allows these divisions
+        }
+        // 'all' — just check capacity (done by caller)
+        return true;
+    }
+    
+    function getRemainingGlobalScarceSlots(specialConfig, forDivision) {
         const name = specialConfig.name;
         const duration = specialConfig.defaultDuration || specialConfig.duration || 30;
         const timeWindow = getSpecialTimeWindow(specialConfig);
@@ -373,13 +421,16 @@ function build({ layers, dateStr }) {
         let remaining = 0;
         
         for (let cursor = timeWindow.startMin; cursor + duration <= timeWindow.endMin; cursor += duration) {
+            // ★★★ v3.3.0: Check division sharing rules, not just capacity ★★★
+            if (forDivision && !isSlotAvailableForDivision(specialConfig, cursor, forDivision)) {
+                continue; // slot owned by different division, can't use
+            }
             const used = getGlobalScarceSlotUsage(name, cursor);
             remaining += Math.max(0, capacity - used);
         }
         
         return remaining;
     }
-    
     const baseLayersForAll = layersByGrade['_all'] || [];
     delete layersByGrade['_all'];
     
@@ -422,8 +473,7 @@ function build({ layers, dateStr }) {
             regularSpecials,
             todaysSpecials,
             warnings,
-            globalScarceUsage: { getUsage: getGlobalScarceSlotUsage, record: recordGlobalScarceUsage, getRemaining: getRemainingGlobalScarceSlots, getCapacity: getGlobalScarceCapacity }
-        });
+           globalScarceUsage: { getUsage: getGlobalScarceSlotUsage, getDivision: getGlobalScarceSlotDivision, record: recordGlobalScarceUsage, getRemaining: getRemainingGlobalScarceSlots, getCapacity: getGlobalScarceCapacity, isSlotAvailableForDiv: isSlotAvailableForDivision }        });
         
         allSkeleton.push(...result.skeleton);
         allBunkOverrides.push(...result.bunkOverrides);
@@ -805,15 +855,23 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             const slotStart = slotCursor;
             const slotEnd = slotCursor + duration;
             
-            // ★★★ v3.2.9: Check global capacity for this specific time slot ★★★
+            // ★★★ v3.3.0: Check global capacity AND division sharing rules ★★★
             let slotGlobalUsed = 0;
+            let slotDivBlocked = false;
             if (globalScarceUsage) {
                 slotGlobalUsed = globalScarceUsage.getUsage(name, slotStart);
+                // Check if this division is allowed to share this slot
+                if (slotGlobalUsed > 0 && globalScarceUsage.isSlotAvailableForDiv) {
+                    slotDivBlocked = !globalScarceUsage.isSlotAvailableForDiv(specialConfig, slotStart, divName);
+                }
             }
             const slotRemainingCapacity = capacity - slotGlobalUsed;
             
-            if (slotRemainingCapacity <= 0) {
-                // This time slot is fully booked by other grades
+            if (slotRemainingCapacity <= 0 || slotDivBlocked) {
+                // This time slot is fully booked or owned by a different division
+                if (slotDivBlocked) {
+                    log(`      Slot ${fmtTime(slotStart)}-${fmtTime(slotEnd)}: blocked for ${divName} (${specialConfig.sharableWith?.type || 'not_sharable'} — owned by different grade)`);
+                }
                 slotCursor = slotEnd;
                 continue;
             }
