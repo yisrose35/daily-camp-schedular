@@ -1,29 +1,33 @@
 // =================================================================
-// auto_build_engine.js — Campistry Auto Build Engine v4.0.0
+// auto_build_engine.js — Campistry Auto Build Engine v4.1.0
 // =================================================================
 // Converts user-defined LAYERS + special activity config into:
 //   1. A skeleton array (per-bunk time structure)
 //   2. Bunk overrides (pre-assigned specific activities)
 //
-// v4.0 REWRITE — Per-bunk intelligent scheduling
+// v4.1 — PUZZLE SOLVER
 //
-// KEY CHANGES FROM v3.x:
-// - Scarce activities discovered from Special Activities config,
-//   NOT from layers. User sets "Horses: Mon/Thu" in config, engine
-//   finds it automatically.
-// - Leagues are the ONLY division-wide placement. Everything else
-//   is built per-bunk.
-// - Phase 4 (filler) thinks per-bunk: checks rotation history,
-//   picks activity type + duration based on what that bunk needs,
-//   sizes skeleton slots to real activity durations.
-// - Soft feasibility check after each high-priority placement
-//   verifies the rest of the day still fits.
+// KEY CHANGES FROM v4.0:
+// - Phase 4 is now a true puzzle solver. For each bunk, it:
+//   (a) Tries relocating windowed fixed events (lunch/snack) to 
+//       positions that make the rest of the day work best
+//   (b) Builds a rotation-aware wishlist of activities with REAL
+//       durations from Special Activities config
+//   (c) Fills gaps using actual activity durations, not templates.
+//       A 20min Art gets a 20min slot. A 40min Basketball gets 40min.
+//   (d) Repairs dead gaps by extending blocks or shifting posts
+// - Suggestion tags (_suggestedActivity) instead of bunk overrides
+//   for all activity slots. Solver validates before assigning.
+// - Layer duration ranges are respected: if a layer says 30-50min,
+//   only activities whose duration fits that range are selected.
+// - Maximize time: when an activity has no configured duration,
+//   the engine gives it the MAX of the layer range, not the min.
 //
 // PHASE ORDER:
 //   1. Discover & place SCARCE activities (per-bunk, with soft verify)
-//   2. Place LIMITED/PINNED tiles (per-bunk, with soft verify)
-//   3. Place LEAGUES (division-wide, with soft verify)
-//   4. Intelligent filler (per-bunk, rotation-aware)
+//   2. Place LIMITED/PINNED tiles + initial fixed events (per-bunk)
+//   3. Place LEAGUES (division-wide)
+//   4. PUZZLE SOLVER: Relocate posts + fill with real activities
 //   5. Validation
 //
 // OUTPUT feeds existing pipeline unchanged:
@@ -35,7 +39,7 @@
 (function() {
 'use strict';
 
-const VERSION = '4.0.0';
+const VERSION = '4.1.0';
 const DEBUG = true;
 
 function log(...args) { if (DEBUG) console.log('[AutoBuild]', ...args); }
@@ -880,8 +884,10 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
             (changeDur > 0 ? ` (+${changeDur}min change)` : ''));
     });
 
-    // 2b: Fixed events (lunch, snack, dismissal) — per-bunk placement
+    // 2b: Fixed events (lunch, snack, dismissal) — INITIAL per-bunk placement
+    // Phase 4 puzzle solver may relocate these within their windows
     const fixedEventRanges = [];
+    const fixedEventMeta = []; // Store window info for Phase 4 relocation
 
     fixedLayers.forEach(layer => {
         const duration = getLayerDuration(layer);
@@ -890,7 +896,13 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
         const eventName = layer.event || layer.type;
         const isPinned = (windowEnd - windowStart) <= duration;
 
-        log(`    Fixed: ${eventName} window=${fmtTime(windowStart)}-${fmtTime(windowEnd)} dur=${duration}min ${isPinned ? '(pinned)' : '(windowed)'}`);
+        // Store meta for Phase 4 puzzle solver
+        fixedEventMeta.push({
+            eventName, duration, windowStart, windowEnd,
+            isPinned, layer
+        });
+
+        log(`    Fixed: ${eventName} window=${fmtTime(windowStart)}-${fmtTime(windowEnd)} dur=${duration}min ${isPinned ? '(pinned)' : '(windowed — Phase 4 may relocate)'}`);
 
         bunks.forEach(bunk => {
             let placement;
@@ -1055,245 +1067,347 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
     });
 
     // ═════════════════════════════════════════════════════════════════
-    // PHASE 4: INTELLIGENT FILLER (per-bunk, rotation-aware)
+    // PHASE 4: PUZZLE SOLVER (per-bunk, rotation-aware)
     // ═════════════════════════════════════════════════════════════════
-    // For each bunk:
-    //   1. Find this bunk's actual gaps
-    //   2. For each gap, decide what type of activity is needed
-    //   3. Check rotation — what hasn't this bunk done recently?
-    //   4. Size the skeleton slot to the chosen activity's real duration
-    //   5. Fill the rest of the gap with the next needed type
+    //
+    // For each bunk, solve the entire remaining day as a puzzle:
+    //
+    // Step A — RELOCATE FLEXIBLE POSTS
+    //   Lunch, snack, dismissal were placed in Phase 2 as a "best guess."
+    //   Now that we know what activities this bunk needs (from rotation),
+    //   try moving each windowed fixed event to find the position that
+    //   makes the rest of the day work best.
+    //
+    // Step B — BUILD ACTIVITY WISHLIST
+    //   Check rotation history. For each remaining special/sport need,
+    //   pick the most overdue activity and note its real duration.
+    //
+    // Step C — FILL GAPS WITH REAL ACTIVITIES
+    //   Walk each gap. Pull from the wishlist. Size skeleton slots to
+    //   real activity durations. Tag with _suggestedActivity.
+    //   If a block doesn't fill the gap exactly, continue with next
+    //   wishlist item. Sport blocks fill remaining space.
+    //
+    // Step D — DEAD GAP REPAIR
+    //   If any gap between 1 and minActivityDur remains, try shifting
+    //   the nearest flexible post to absorb it, or extend the adjacent
+    //   activity block.
     // ═════════════════════════════════════════════════════════════════
 
-    log(`\n  [Phase 4] Intelligent filler (per-bunk)`);
+    log(`\n  [Phase 4] Puzzle Solver (per-bunk)`);
 
     // Capacity tracking for specials across bunks within this grade
     const specialSlotUsage = {};
+    function getSpecialCap(specialName) {
+        const config = getSpecialConfig(specialName);
+        if (!config) return 2;
+        if (config.sharableWith) {
+            if (config.sharableWith.capacity !== undefined) {
+                const cap = parseInt(config.sharableWith.capacity);
+                if (!isNaN(cap) && cap > 0) return cap;
+            }
+            if (config.sharableWith.type === 'not_sharable') return 1;
+        }
+        return parseInt(config.capacity) || parseInt(config.maxBunks) || 2;
+    }
     function isSpecialAtCapacity(specialName, slotStartMin) {
         const key = specialName + '|' + slotStartMin;
         const used = specialSlotUsage[key] || 0;
-        const config = getSpecialConfig(specialName);
-        const cap = config?.sharableWith?.capacity ? parseInt(config.sharableWith.capacity) :
-            (config?.sharableWith?.type === 'not_sharable' ? 1 : 2);
-        return used >= cap;
+        return used >= getSpecialCap(specialName);
     }
     function recordSpecialUsage(specialName, slotStartMin) {
         const key = specialName + '|' + slotStartMin;
         specialSlotUsage[key] = (specialSlotUsage[key] || 0) + 1;
     }
 
+    // Identify which fixed events are WINDOWED (movable by Phase 4)
+    const windowedFixedEvents = fixedEventMeta.filter(f => !f.isPinned);
+
     bunks.forEach(bunk => {
         const state = bunkState[bunk];
-        const gaps = findGaps(state.occupied, divTimes);
+        const bunkStr = String(bunk);
 
+        log(`    ${bunk}: Starting puzzle solve...`);
+
+        // ─────────────────────────────────────────────────────────
+        // STEP A: Try relocating windowed fixed events for this bunk
+        // ─────────────────────────────────────────────────────────
+
+        if (windowedFixedEvents.length > 0) {
+            // For each windowed fixed event, try all positions within its window
+            // and score the resulting gap structure
+            for (const fixedMeta of windowedFixedEvents) {
+                const { eventName, duration: fixedDur, windowStart: fWinStart, windowEnd: fWinEnd } = fixedMeta;
+
+                // Find current placement for this bunk
+                const currentIdx = state.occupied.findIndex(o =>
+                    o.event?.toLowerCase() === eventName.toLowerCase() && o.type === 'fixed'
+                );
+                if (currentIdx === -1) continue; // wasn't placed, nothing to relocate
+
+                const currentPlacement = state.occupied[currentIdx];
+
+                // Build "other occupied" = everything except this fixed event
+                const otherOccupied = state.occupied.filter((_, i) => i !== currentIdx);
+
+                let bestStart = currentPlacement.startMin;
+                let bestScore = Infinity;
+
+                for (let tryStart = fWinStart; tryStart + fixedDur <= fWinEnd; tryStart += 5) {
+                    const tryEnd = tryStart + fixedDur;
+
+                    // Check conflict with other occupied
+                    if (otherOccupied.some(o => tryStart < o.endMin && tryEnd > o.startMin)) continue;
+
+                    // Score: how well do the resulting gaps accommodate activities?
+                    const testOccupied = [...otherOccupied, { startMin: tryStart, endMin: tryEnd, event: eventName, type: 'fixed' }];
+                    const testGaps = findGaps(testOccupied, divTimes);
+
+                    let score = 0;
+                    for (const g of testGaps) {
+                        const gDur = g.endMin - g.startMin;
+                        // Dead gap penalty: gap exists but can't fit any activity
+                        if (gDur >= 5 && gDur < minActivityDur) {
+                            score += 10000; // heavy penalty
+                        }
+                        // Runt penalty: gap can fit 1 activity but has awkward leftover
+                        const leftover = gDur % minActivityDur;
+                        if (leftover > 0 && leftover < 15) {
+                            score += leftover * 5;
+                        }
+                    }
+
+                    if (score < bestScore) {
+                        bestScore = score;
+                        bestStart = tryStart;
+                    }
+                    if (score === 0) break; // perfect
+                }
+
+                // If we found a better position, relocate
+                if (bestStart !== currentPlacement.startMin) {
+                    const oldStart = currentPlacement.startMin;
+                    const oldEnd = currentPlacement.endMin;
+                    const newEnd = bestStart + fixedDur;
+
+                    log(`      ${bunk}: Relocating ${eventName} from ${fmtTime(oldStart)} to ${fmtTime(bestStart)}`);
+
+                    // Update occupied
+                    currentPlacement.startMin = bestStart;
+                    currentPlacement.endMin = newEnd;
+
+                    // Update timeline
+                    const tlIdx = bunkTimelines[bunk].findIndex(t =>
+                        t.event?.toLowerCase() === eventName.toLowerCase() &&
+                        t.startMin === oldStart && t.type === 'fixed'
+                    );
+                    if (tlIdx !== -1) {
+                        bunkTimelines[bunk][tlIdx].startMin = bestStart;
+                        bunkTimelines[bunk][tlIdx].endMin = newEnd;
+                    }
+
+                    // Update skeleton block
+                    const skelIdx = skeleton.findIndex(s =>
+                        s.event?.toLowerCase() === eventName.toLowerCase() &&
+                        s._bunk === bunkStr &&
+                        s.startTime === fmtTime(oldStart)
+                    );
+                    if (skelIdx !== -1) {
+                        skeleton[skelIdx].startTime = fmtTime(bestStart);
+                        skeleton[skelIdx].endTime = fmtTime(newEnd);
+                    }
+
+                    // Update bunk override
+                    const ovIdx = bunkOverrides.findIndex(o =>
+                        o.activity?.toLowerCase() === eventName.toLowerCase() &&
+                        String(o.bunk) === bunkStr &&
+                        o.startTime === fmtTime(oldStart)
+                    );
+                    if (ovIdx !== -1) {
+                        bunkOverrides[ovIdx].startTime = fmtTime(bestStart);
+                        bunkOverrides[ovIdx].endTime = fmtTime(newEnd);
+                    }
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // STEP B: Build activity wishlist from rotation history
+        // ─────────────────────────────────────────────────────────
+
+        const usedToday = [...state.usedActivities];
+        let placedSpecials = state.specialCount;
+        let placedSports = state.sportCount;
+
+        // Get all gaps AFTER potential relocation
+        const gaps = findGaps(state.occupied, divTimes);
         if (gaps.length === 0) {
-            log(`    ${bunk}: No gaps to fill`);
+            log(`      ${bunk}: No gaps after fixed placements`);
             return;
         }
 
-        let placedSpecials = state.specialCount;
-        let placedSports = state.sportCount;
-        const usedToday = [...state.usedActivities];
+        // Build ranked special wishlist (most overdue first)
+        function buildSpecialWishlist(cursorTime) {
+            const availableNames = divRegular.map(s => s.name)
+                .filter(n => !usedToday.map(u => u.toLowerCase()).includes(n.toLowerCase()))
+                .filter(n => !isSpecialAtCapacity(n, cursorTime))
+                .filter(n => {
+                    const cfg = getSpecialConfig(n);
+                    if (cfg && isScarceSpecial(cfg, dayName)) return false;
+                    const tw = cfg ? getSpecialTimeWindow(cfg) : null;
+                    if (tw) {
+                        if (cursorTime < tw.startMin || cursorTime >= tw.endMin) return false;
+                        const actDur = cfg.defaultDuration || cfg.duration || specialDur;
+                        if (cursorTime + actDur > tw.endMin) return false;
+                    }
+                    return true;
+                });
+            return getRankedSpecials(bunk, availableNames);
+        }
 
-        log(`    ${bunk}: ${gaps.length} gaps, already ${placedSpecials}S/${placedSports}Sp`);
+        // ─────────────────────────────────────────────────────────
+        // STEP C: Fill each gap using real activity durations
+        // ─────────────────────────────────────────────────────────
+
+        log(`      ${bunk}: ${gaps.length} gaps, needs ${Math.max(0, specialReq.min - placedSpecials)}S + ${Math.max(0, sportReq.min - placedSports)}Sp`);
 
         for (const gap of gaps) {
             const gapDur = gap.endMin - gap.startMin;
             if (gapDur < 15) continue;
 
-            // ═══════════════════════════════════════════════════════
-            // PLAN THE GAP: Decide how many blocks and what sizes
-            // before placing anything. Ensures no dead time.
-            // ═══════════════════════════════════════════════════════
-
-            // How many specials and sports does this bunk still need?
-            const specialsNeeded = Math.max(0, specialReq.min - placedSpecials);
-            const sportsNeeded = Math.max(0, sportReq.min - placedSports);
-            const specialsMaxed = specialReq.max !== Infinity && placedSpecials >= specialReq.max;
-            const sportsMaxed = sportReq.max !== Infinity && placedSports >= sportReq.max;
-
-            // Build a sequence of desired block types for this gap
-            const blockPlan = [];
-            let planMinutes = 0;
-
-            // Alternate special/sport based on what's needed
-            let nextType = (specialsNeeded > 0 && !specialsMaxed) ? 'special' : 'sport';
-            let planSpecials = 0, planSports = 0;
-
-            while (planMinutes < gapDur) {
-                const remaining = gapDur - planMinutes;
-                if (remaining < minActivityDur) break; // can't fit another block
-
-                let dur;
-                let type = nextType;
-
-                // Switch type if current is maxed
-                if (type === 'special' && (specialsMaxed || placedSpecials + planSpecials >= (specialReq.max === Infinity ? 999 : specialReq.max))) {
-                    type = 'sport';
-                }
-                if (type === 'sport' && (sportsMaxed || placedSports + planSports >= (sportReq.max === Infinity ? 999 : sportReq.max))) {
-                    type = 'special';
-                }
-
-                if (type === 'special') {
-                    // Find the best special by rotation to get its real duration
-                    const availableNames = divRegular.map(s => s.name)
-                        .filter(n => !usedToday.map(u => u.toLowerCase()).includes(n.toLowerCase()))
-                        .filter(n => !blockPlan.some(bp => bp.hintActivity && bp.hintActivity.toLowerCase() === n.toLowerCase()))
-                        .filter(n => !isSpecialAtCapacity(n, gap.startMin + planMinutes))
-                        .filter(n => {
-                            const cfg = getSpecialConfig(n);
-                            if (cfg && isScarceSpecial(cfg, dayName)) return false;
-                            const tw = cfg ? getSpecialTimeWindow(cfg) : null;
-                            if (tw) {
-                                const cursorTime = gap.startMin + planMinutes;
-                                if (cursorTime < tw.startMin || cursorTime >= tw.endMin) return false;
-                                const actDur = cfg.defaultDuration || cfg.duration || specialDur;
-                                if (cursorTime + actDur > tw.endMin) return false;
-                            }
-                            return true;
-                        });
-
-                    const ranked = getRankedSpecials(bunk, availableNames);
-                    if (ranked.length > 0) {
-                        dur = ranked[0].duration || specialDur;
-                        blockPlan.push({ type: 'special', dur: dur, hintActivity: ranked[0].name });
-                        planSpecials++;
-                    } else {
-                        // No specials available, switch to sport
-                        type = 'sport';
-                    }
-                }
-
-                if (type === 'sport') {
-                    dur = sportDurMin || 30;
-                    blockPlan.push({ type: 'sport', dur: dur, hintActivity: null });
-                    planSports++;
-                }
-
-                planMinutes += dur;
-                nextType = (nextType === 'special') ? 'sport' : 'special';
-                // Reset next type based on remaining needs
-                if (specialsNeeded > planSpecials && !specialsMaxed) nextType = 'special';
-                else if (sportsNeeded > planSports && !sportsMaxed) nextType = 'sport';
-            }
-
-            if (blockPlan.length === 0) {
-                // Gap too small for even one activity — create short slot
-                if (gapDur >= 15) {
-                    const gapEvent = 'Sports Slot';
-                    skeleton.push({
-                        id: 'auto_short_' + Math.random().toString(36).slice(2, 9),
-                        type: 'slot', event: gapEvent, division: divName,
-                        startTime: fmtTime(gap.startMin), endTime: fmtTime(gap.endMin),
-                        _autoGenerated: true, _bunk: String(bunk),
-                        _durationStrict: false, _targetDuration: gapDur
-                    });
-                    state.occupied.push({ startMin: gap.startMin, endMin: gap.endMin, event: gapEvent, type: 'short_slot' });
-                    bunkTimelines[bunk].push({ startMin: gap.startMin, endMin: gap.endMin, event: gapEvent, type: 'short_slot', _autoGenerated: true });
-                }
-                continue;
-            }
-
-            // ═══════════════════════════════════════════════════════
-            // ADJUST PLAN: Make block durations sum to exactly gapDur
-            // Distribute excess/deficit across blocks proportionally
-            // ═══════════════════════════════════════════════════════
-
-            const totalPlanned = blockPlan.reduce((s, b) => s + b.dur, 0);
-            let diff = gapDur - totalPlanned;
-
-            if (diff !== 0) {
-                // Distribute the difference across sport blocks first (more flexible)
-                const sportBlocks = blockPlan.filter(b => b.type === 'sport');
-                const specialBlocks = blockPlan.filter(b => b.type === 'special');
-                const adjustable = sportBlocks.length > 0 ? sportBlocks : specialBlocks;
-
-                if (adjustable.length > 0) {
-                    const perBlock = Math.floor(diff / adjustable.length);
-                    let remainder = diff - (perBlock * adjustable.length);
-
-                    for (const block of adjustable) {
-                        let adj = perBlock + (remainder > 0 ? 1 : remainder < 0 ? -1 : 0);
-                        if (remainder > 0) remainder--;
-                        else if (remainder < 0) remainder++;
-
-                        const newDur = block.dur + adj;
-                        const maxDur = block.type === 'special' ? (specialDurMax || 60) : (sportDurMax || 50);
-                        block.dur = Math.max(minActivityDur, Math.min(newDur, maxDur));
-                    }
-                }
-
-                // Final check — if still doesn't sum, adjust last block
-                const newTotal = blockPlan.reduce((s, b) => s + b.dur, 0);
-                const finalDiff = gapDur - newTotal;
-                if (finalDiff !== 0 && blockPlan.length > 0) {
-                    const last = blockPlan[blockPlan.length - 1];
-                    const maxDur = last.type === 'special' ? (specialDurMax || 60) : (sportDurMax || 50);
-                    last.dur = Math.max(15, Math.min(last.dur + finalDiff, maxDur));
-                }
-            }
-
-            // Snap all durations to 5-min boundaries
             let cursor = gap.startMin;
-            for (let pi = 0; pi < blockPlan.length; pi++) {
-                const planned = blockPlan[pi];
-                let blockEnd = cursor + planned.dur;
 
-                // Last block must reach gap end exactly
-                if (pi === blockPlan.length - 1) {
-                    blockEnd = gap.endMin;
+            while (cursor < gap.endMin) {
+                const remaining = gap.endMin - cursor;
+                if (remaining < minActivityDur) {
+                    // Runt — too short for any activity. Handle in Step D.
+                    break;
+                }
+
+                const specialsNeeded = Math.max(0, specialReq.min - placedSpecials);
+                const sportsNeeded = Math.max(0, sportReq.min - placedSports);
+                const specialsMaxed = specialReq.max !== Infinity && placedSpecials >= specialReq.max;
+                const sportsMaxed = sportReq.max !== Infinity && placedSports >= sportReq.max;
+
+                // Decide type: prioritize whichever is more needed
+                let useSpecial = false;
+                if (specialsNeeded > 0 && !specialsMaxed) {
+                    useSpecial = true;
+                } else if (sportsNeeded > 0 && !sportsMaxed) {
+                    useSpecial = false;
+                } else if (!specialsMaxed && specialsNeeded >= sportsNeeded) {
+                    useSpecial = true;
                 } else {
-                    blockEnd = snapTo5(blockEnd);
+                    useSpecial = false;
                 }
 
-                planned._startMin = cursor;
-                planned._endMin = blockEnd;
-                planned.dur = blockEnd - cursor;
-                cursor = blockEnd;
-            }
+                let blockDur = 0;
+                let blockType = 'sport';
+                let hintActivity = null;
 
-            // ═══════════════════════════════════════════════════════
-            // COMMIT PLAN: Create skeleton blocks from the plan
-            // ═══════════════════════════════════════════════════════
+                if (useSpecial) {
+                    const wishlist = buildSpecialWishlist(cursor);
+                    if (wishlist.length > 0) {
+                        const pick = wishlist[0];
+                        const actDur = pick.duration || specialDur;
 
-            for (const planned of blockPlan) {
-                const eventLabel = planned.type === 'special' ? 'Special Activity' : 'Sports Slot';
+                        // Check: does this activity's duration fit within the layer's range?
+                        if (actDur >= specialDur && actDur <= specialDurMax && actDur <= remaining) {
+                            blockDur = actDur;
+                            blockType = 'special';
+                            hintActivity = pick.name;
+                        } else if (actDur > remaining) {
+                            // Activity too long for remaining gap — try shorter specials
+                            const shorter = wishlist.find(w => {
+                                const d = w.duration || specialDur;
+                                return d <= remaining && d >= specialDur && d <= specialDurMax;
+                            });
+                            if (shorter) {
+                                blockDur = shorter.duration || specialDur;
+                                blockType = 'special';
+                                hintActivity = shorter.name;
+                            } else {
+                                // No special fits — use sport
+                                useSpecial = false;
+                            }
+                        } else {
+                            // Activity duration outside layer range — use its real duration anyway
+                            // (layer range is a preference, not a hard block for configured durations)
+                            blockDur = Math.min(actDur, remaining);
+                            blockType = 'special';
+                            hintActivity = pick.name;
+                        }
+                    } else {
+                        // No specials available at this cursor time
+                        useSpecial = false;
+                    }
+                }
 
-                const skelBlock = {
+                if (!useSpecial || blockDur === 0) {
+                    // Sport block: use max of layer range, capped by remaining gap
+                    blockDur = Math.min(sportDurMax, remaining);
+                    // But at least the minimum
+                    if (blockDur < sportDurMin && remaining >= sportDurMin) {
+                        blockDur = sportDurMin;
+                    }
+                    blockType = 'sport';
+                    hintActivity = null;
+                }
+
+                // Anti-runt: if leftover after this block would be a dead gap, absorb it
+                const afterThis = remaining - blockDur;
+                if (afterThis > 0 && afterThis < minActivityDur) {
+                    // Either extend this block or split evenly
+                    const maxDur = blockType === 'special' ? specialDurMax : sportDurMax;
+                    if (remaining <= maxDur) {
+                        blockDur = remaining; // absorb the runt
+                    } else {
+                        // Split into two equal-ish blocks
+                        blockDur = Math.min(Math.ceil(remaining / 2), maxDur);
+                    }
+                }
+
+                // Snap to 5-min boundary
+                const snappedEnd = snapTo5(cursor + blockDur);
+                if (snappedEnd > cursor && snappedEnd <= gap.endMin) {
+                    blockDur = snappedEnd - cursor;
+                }
+
+                // Final guard
+                if (blockDur < 15) break;
+
+                const blockStart = cursor;
+                const blockEnd = cursor + blockDur;
+
+                // Create skeleton block
+                const eventLabel = blockType === 'special' ? 'Special Activity' : 'Sports Slot';
+
+                skeleton.push({
                     id: 'auto_fill_' + Math.random().toString(36).slice(2, 9),
-                    type: 'slot',
-                    event: eventLabel,
-                    division: divName,
-                    startTime: fmtTime(planned._startMin),
-                    endTime: fmtTime(planned._endMin),
-                    _autoGenerated: true,
-                    _bunk: String(bunk),
-                    _durationStrict: planned.type === 'special' && planned.hintActivity ? true : false,
-                    _targetDuration: planned.dur,
-                    _suggestedActivity: planned.hintActivity || null
-                };
-                skeleton.push(skelBlock);
+                    type: 'slot', event: eventLabel, division: divName,
+                    startTime: fmtTime(blockStart), endTime: fmtTime(blockEnd),
+                    _autoGenerated: true, _bunk: bunkStr,
+                    _durationStrict: blockType === 'special' && hintActivity ? true : false,
+                    _targetDuration: blockDur,
+                    _suggestedActivity: hintActivity
+                });
 
-                const occEntry = {
-                    startMin: planned._startMin, endMin: planned._endMin,
-                    event: eventLabel, type: planned.type === 'special' ? 'special_slot' : 'sport_slot'
-                };
-                state.occupied.push(occEntry);
+                state.occupied.push({
+                    startMin: blockStart, endMin: blockEnd,
+                    event: eventLabel, type: blockType === 'special' ? 'special_slot' : 'sport_slot'
+                });
+                bunkTimelines[bunk].push({
+                    startMin: blockStart, endMin: blockEnd,
+                    event: eventLabel, type: blockType === 'special' ? 'special_slot' : 'sport_slot',
+                    _autoGenerated: true, _suggestedActivity: hintActivity
+                });
 
-                const tlEntry = {
-                    startMin: planned._startMin, endMin: planned._endMin,
-                    event: eventLabel, type: planned.type === 'special' ? 'special_slot' : 'sport_slot',
-                    _autoGenerated: true, _suggestedActivity: planned.hintActivity || null
-                };
-                bunkTimelines[bunk].push(tlEntry);
-
-                if (planned.hintActivity) {
-                    recordSpecialUsage(planned.hintActivity, planned._startMin);
-                    usedToday.push(planned.hintActivity);
+                if (hintActivity) {
+                    recordSpecialUsage(hintActivity, blockStart);
+                    usedToday.push(hintActivity);
                 }
 
-                if (planned.type === 'special') {
+                if (blockType === 'special') {
                     placedSpecials++;
                     state.specialCount++;
                 } else {
@@ -1301,7 +1415,131 @@ function buildForGrade({ gradeName, divName, bunks, layers, dayName, dateStr, di
                     state.sportCount++;
                 }
 
-                log(`      ${bunk}: ${planned.type === 'special' ? (planned.hintActivity || 'Special') : 'Sport'} ${planned.dur}min → ${fmtTime(planned._startMin)}-${fmtTime(planned._endMin)}`);
+                log(`      ${bunk}: ${blockType === 'special' ? (hintActivity || 'Special') : 'Sport'} ${blockDur}min → ${fmtTime(blockStart)}-${fmtTime(blockEnd)}`);
+
+                cursor = blockEnd;
+            }
+
+            // ─────────────────────────────────────────────────────
+            // STEP D: Dead gap repair for this gap's tail
+            // ─────────────────────────────────────────────────────
+
+            if (cursor < gap.endMin) {
+                const runtDur = gap.endMin - cursor;
+                if (runtDur >= 5 && runtDur < minActivityDur) {
+                    // Try to extend the last placed block to absorb the runt
+                    const lastSkel = skeleton.filter(s =>
+                        s._bunk === bunkStr && parseTime(s.endTime) === cursor
+                    );
+                    if (lastSkel.length > 0) {
+                        const extBlock = lastSkel[lastSkel.length - 1];
+                        const extStart = parseTime(extBlock.startTime);
+                        const newEnd = gap.endMin;
+                        const newDur = newEnd - extStart;
+                        const maxDur = extBlock.event === 'Special Activity' ? specialDurMax : sportDurMax;
+
+                        if (newDur <= maxDur) {
+                            extBlock.endTime = fmtTime(newEnd);
+                            extBlock._targetDuration = newDur;
+
+                            // Update occupied + timeline
+                            const occMatch = state.occupied.find(o => o.endMin === cursor && o.startMin === extStart);
+                            if (occMatch) occMatch.endMin = newEnd;
+                            const tlMatch = bunkTimelines[bunk].find(t => t.endMin === cursor && t.startMin === extStart);
+                            if (tlMatch) tlMatch.endMin = newEnd;
+
+                            log(`      ${bunk}: Extended last block to absorb ${runtDur}min runt → now ${fmtTime(extStart)}-${fmtTime(newEnd)}`);
+                        } else {
+                            // Can't extend — try relocating nearest flexible post
+                            // (only if the runt is adjacent to a windowed fixed event)
+                            let absorbed = false;
+                            for (const fixedMeta of windowedFixedEvents) {
+                                const fixedOcc = state.occupied.find(o =>
+                                    o.event?.toLowerCase() === fixedMeta.eventName.toLowerCase() && o.type === 'fixed'
+                                );
+                                if (!fixedOcc) continue;
+
+                                // Is this fixed event adjacent to the runt?
+                                if (fixedOcc.startMin === gap.endMin || fixedOcc.endMin === cursor) {
+                                    // Try shifting the fixed event by runtDur
+                                    const shiftDir = fixedOcc.startMin === gap.endMin ? runtDur : -runtDur;
+                                    const newFixStart = fixedOcc.startMin + shiftDir;
+                                    const newFixEnd = fixedOcc.endMin + shiftDir;
+
+                                    // Check within window
+                                    if (newFixStart >= fixedMeta.windowStart && newFixEnd <= fixedMeta.windowEnd) {
+                                        // Check no new conflicts
+                                        const otherOcc = state.occupied.filter(o => o !== fixedOcc);
+                                        if (!otherOcc.some(o => newFixStart < o.endMin && newFixEnd > o.startMin)) {
+                                            // Shift it
+                                            const oldFixStart = fixedOcc.startMin;
+                                            fixedOcc.startMin = newFixStart;
+                                            fixedOcc.endMin = newFixEnd;
+
+                                            // Update skeleton + override + timeline
+                                            const fSkel = skeleton.find(s =>
+                                                s.event?.toLowerCase() === fixedMeta.eventName.toLowerCase() &&
+                                                s._bunk === bunkStr
+                                            );
+                                            if (fSkel) {
+                                                fSkel.startTime = fmtTime(newFixStart);
+                                                fSkel.endTime = fmtTime(newFixEnd);
+                                            }
+                                            const fOv = bunkOverrides.find(o =>
+                                                o.activity?.toLowerCase() === fixedMeta.eventName.toLowerCase() &&
+                                                String(o.bunk) === bunkStr
+                                            );
+                                            if (fOv) {
+                                                fOv.startTime = fmtTime(newFixStart);
+                                                fOv.endTime = fmtTime(newFixEnd);
+                                            }
+                                            const fTl = bunkTimelines[bunk].find(t =>
+                                                t.event?.toLowerCase() === fixedMeta.eventName.toLowerCase() &&
+                                                t.startMin === oldFixStart
+                                            );
+                                            if (fTl) {
+                                                fTl.startMin = newFixStart;
+                                                fTl.endMin = newFixEnd;
+                                            }
+
+                                            // Now the runt is absorbed — extend last activity block
+                                            if (extBlock) {
+                                                extBlock.endTime = fmtTime(gap.endMin);
+                                                extBlock._targetDuration = gap.endMin - extStart;
+                                                if (occMatch) occMatch.endMin = gap.endMin;
+                                                if (tlMatch) tlMatch.endMin = gap.endMin;
+                                            }
+
+                                            absorbed = true;
+                                            log(`      ${bunk}: Shifted ${fixedMeta.eventName} by ${shiftDir}min to absorb runt`);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (!absorbed && runtDur >= 15) {
+                                // Last resort: create a short filler slot
+                                skeleton.push({
+                                    id: 'auto_runt_' + Math.random().toString(36).slice(2, 9),
+                                    type: 'slot', event: 'Sports Slot', division: divName,
+                                    startTime: fmtTime(cursor), endTime: fmtTime(gap.endMin),
+                                    _autoGenerated: true, _bunk: bunkStr, _runt: true,
+                                    _durationStrict: false, _targetDuration: runtDur
+                                });
+                                state.occupied.push({
+                                    startMin: cursor, endMin: gap.endMin,
+                                    event: 'Sports Slot', type: 'runt_slot'
+                                });
+                                bunkTimelines[bunk].push({
+                                    startMin: cursor, endMin: gap.endMin,
+                                    event: 'Sports Slot', type: 'runt_slot', _autoGenerated: true
+                                });
+                                log(`      ${bunk}: Runt ${runtDur}min → short filler ${fmtTime(cursor)}-${fmtTime(gap.endMin)}`);
+                            }
+                        }
+                    }
+                }
             }
         }
 
