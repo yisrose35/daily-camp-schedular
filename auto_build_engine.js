@@ -1,28 +1,30 @@
 // =================================================================
-// auto_build_engine.js — Campistry Auto Build Engine v4.1.0
+// auto_build_engine.js — Campistry Auto Build Engine v5.0.0
 // =================================================================
-// Converts user-defined LAYERS + special activity config into:
-//   1. A skeleton array (per-bunk time structure)
-//   2. Bunk overrides (pre-assigned specific activities)
+// The auto builder does the job of a human scheduler in manual mode:
+//   - User gives CONTRACTS (layers): type ranges, time windows, quantities
+//   - Auto builder decides: WHAT TYPE, WHERE, HOW LONG
+//   - Total solver then picks: WHICH SPECIFIC activity + field
 //
-// v4.1 — UNIFIED PUZZLE SOLVER
+// v5.0 — DIVISION RESOURCE PLANNER
 //
 // Architecture:
-//   Phase 1 (PRE-WORK): Gather all puzzle pieces. Only truly
-//     immovable items (pinned events, leagues) are committed.
-//     Scarce assignments + fixed events are DEFERRED to Phase 2.
-//   Phase 2 (PUZZLE SOLVE): For each bunk, solve entire day at once.
-//     Place all constrained items (scarce, fixed) optimally by trying
-//     every valid position and scoring the resulting gap structure.
-//     Then fill gaps with real activities from rotation wishlist.
-//   Phase 3 (VALIDATION): Repair any gaps or missing events.
+//   Phase 1: Commit pinned layers (window <= max duration). Permanent.
+//   Phase 2: Sandbox solver — place constrained pieces (leagues, scarce,
+//            fixed events) by constraint tightness, most constrained first.
+//            All placements tentative until everything fits.
+//   Phase 3: Fill gaps — Division Resource Planner counts fields and
+//            special capacity, plans rotation waves, builds aligned
+//            block structure for the whole division.
+//   Phase 4: Validation — verify all constraints met, commit.
 //
 // Key principles:
-//   - Suggestion tags (_suggestedActivity), not overrides
-//   - Real activity durations from config (Art=20, Drama=30)
-//   - Maximize time (use max of layer range, not min)
-//   - No dead gaps (every placement checks feasibility)
-//   - Constrained pieces sorted tightest-window-first
+//   - Nothing permanent until everything fits (sandbox)
+//   - Block sizes come from actual activity durations
+//   - Field demand never exceeds supply at any time
+//   - Division-aligned block boundaries (no superset fragmentation)
+//   - Scarce specials get priority (day-restricted = must schedule today)
+//   - Capacity-aware staggering (Gameroom cap 2 → wave bunks through)
 //
 // OUTPUT feeds existing pipeline unchanged:
 //   skeleton → DivisionTimesSystem.buildFromSkeleton()
@@ -33,11 +35,11 @@
 (function() {
 'use strict';
 
-const VERSION = '4.1.0';
-const DEBUG = true;
+var VERSION = '5.0.0';
+var DEBUG = true;
 
-function log(...args) { if (DEBUG) console.log('[AutoBuild]', ...args); }
-function warn(...args) { console.warn('[AutoBuild]', ...args); }
+function log() { if (DEBUG) console.log.apply(console, ['[AutoBuild]'].concat(Array.prototype.slice.call(arguments))); }
+function warn() { console.warn.apply(console, ['[AutoBuild]'].concat(Array.prototype.slice.call(arguments))); }
 
 // =================================================================
 // TIME UTILITIES
@@ -46,16 +48,15 @@ function warn(...args) { console.warn('[AutoBuild]', ...args); }
 function parseTime(str) {
     if (typeof str === 'number') return str;
     if (!str || typeof str !== 'string') return null;
-    let s = str.trim().toLowerCase();
-    let mer = null;
-    if (s.endsWith('am') || s.endsWith('pm')) {
+    var s = str.trim().toLowerCase();
+    var mer = null;
+    if (s.slice(-2) === 'am' || s.slice(-2) === 'pm') {
         mer = s.slice(-2);
         s = s.slice(0, -2).trim();
     }
-    const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+    var m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
     if (!m) return null;
-    let hh = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
+    var hh = parseInt(m[1], 10), mm = parseInt(m[2], 10);
     if (isNaN(hh) || isNaN(mm)) return null;
     if (mer === 'am' && hh === 12) hh = 0;
     else if (mer === 'pm' && hh !== 12) hh += 12;
@@ -64,75 +65,82 @@ function parseTime(str) {
 
 function fmtTime(min) {
     if (min == null) return '?';
-    let h = Math.floor(min / 60), m = min % 60;
-    const ap = h >= 12 ? 'pm' : 'am';
+    var h = Math.floor(min / 60), m = min % 60;
+    var ap = h >= 12 ? 'pm' : 'am';
     h = h % 12 || 12;
-    return h + ':' + m.toString().padStart(2, '0') + ap;
+    return h + ':' + (m < 10 ? '0' : '') + m + ap;
 }
 
-function snapTo5(min) { return Math.round(min / 5) * 5; }
+function snapTo5(val) { return Math.round(val / 5) * 5; }
+function uid() { return 'auto_' + Math.random().toString(36).slice(2, 9); }
+function overlaps(s1, e1, s2, e2) { return s1 < e2 && e1 > s2; }
 
 // =================================================================
 // DATA ACCESS HELPERS
 // =================================================================
 
 function getGlobalSettings() { return window.loadGlobalSettings?.() || {}; }
-function getSpecialActivities() { const g = getGlobalSettings(); return g.app1?.specialActivities || []; }
-function getFields() { const g = getGlobalSettings(); return g.app1?.fields || g.fields || []; }
+function getSpecialActivities() { var g = getGlobalSettings(); return g.app1?.specialActivities || []; }
+function getFields() { var g = getGlobalSettings(); return g.app1?.fields || g.fields || []; }
 function getDivisions() { return window.divisions || getGlobalSettings().app1?.divisions || {}; }
 function getBunksForDivision(divName) { return getDivisions()[divName]?.bunks || []; }
 
 function getDivisionForGrade(gradeName) {
-    const divisions = getDivisions();
+    var divisions = getDivisions();
     if (divisions[gradeName]) return gradeName;
-    for (const [divName, divData] of Object.entries(divisions)) {
-        if (divData.grades && divData.grades.includes(gradeName)) return divName;
-        if (divData.grade === gradeName) return divName;
+    for (var divName in divisions) {
+        if (divisions[divName].grades && divisions[divName].grades.indexOf(gradeName) >= 0) return divName;
+        if (divisions[divName].grade === gradeName) return divName;
     }
     return gradeName;
 }
 
 function getDivisionTimes(divName) {
-    const div = getDivisions()[divName];
+    var div = getDivisions()[divName];
     if (!div) return { start: 540, end: 960 };
-    return { start: (div.startTime ? parseTime(div.startTime) : 540) || 540, end: (div.endTime ? parseTime(div.endTime) : 960) || 960 };
+    return {
+        start: (div.startTime ? parseTime(div.startTime) : 540) || 540,
+        end: (div.endTime ? parseTime(div.endTime) : 960) || 960
+    };
 }
 
 function getSpecialConfig(name) {
-    return getSpecialActivities().find(s => s.name?.toLowerCase().trim() === name?.toLowerCase().trim()) || null;
+    return getSpecialActivities().find(function(s) {
+        return s.name?.toLowerCase().trim() === name?.toLowerCase().trim();
+    }) || null;
 }
 
 function getSpecialDuration(name) {
-    const config = getSpecialConfig(name);
+    var config = getSpecialConfig(name);
     return config?.defaultDuration || config?.duration || null;
 }
 
 function isSpecialAvailableOnDay(specialConfig, dayName) {
     if (!specialConfig) return true;
     if (Array.isArray(specialConfig.availableDays) && specialConfig.availableDays.length > 0) {
-        return specialConfig.availableDays.map(d => d.toLowerCase()).includes(dayName.toLowerCase());
+        return specialConfig.availableDays.map(function(d) { return d.toLowerCase(); }).indexOf(dayName.toLowerCase()) >= 0;
     }
     if (!specialConfig.dayAvailability) return true;
-    const avail = specialConfig.dayAvailability;
+    var avail = specialConfig.dayAvailability;
     if (typeof avail === 'object' && !Array.isArray(avail)) return avail[dayName] !== false;
-    if (Array.isArray(avail)) return avail.map(d => d.toLowerCase()).includes(dayName.toLowerCase());
+    if (Array.isArray(avail)) return avail.map(function(d) { return d.toLowerCase(); }).indexOf(dayName.toLowerCase()) >= 0;
     return true;
 }
 
 function getSpecialTimeWindow(specialConfig) {
     if (!specialConfig) return null;
-    const start = specialConfig.availableFrom || specialConfig.windowStart || specialConfig.startTime;
-    const end = specialConfig.availableTo || specialConfig.windowEnd || specialConfig.endTime;
+    var start = specialConfig.availableFrom || specialConfig.windowStart || specialConfig.startTime;
+    var end = specialConfig.availableTo || specialConfig.windowEnd || specialConfig.endTime;
     if (start && end) {
         return { startMin: typeof start === 'number' ? start : parseTime(start), endMin: typeof end === 'number' ? end : parseTime(end) };
     }
     if (Array.isArray(specialConfig.timeRules) && specialConfig.timeRules.length > 0) {
-        const availableRules = specialConfig.timeRules.filter(r => r.type === 'Available' || !r.type);
+        var availableRules = specialConfig.timeRules.filter(function(r) { return r.type === 'Available' || !r.type; });
         if (availableRules.length > 0) {
-            let earliest = Infinity, latest = -Infinity;
-            for (const rule of availableRules) {
-                const rStart = rule.startMin ?? (rule.start ? parseTime(rule.start) : null);
-                const rEnd = rule.endMin ?? (rule.end ? parseTime(rule.end) : null);
+            var earliest = Infinity, latest = -Infinity;
+            for (var i = 0; i < availableRules.length; i++) {
+                var rStart = availableRules[i].startMin != null ? availableRules[i].startMin : (availableRules[i].start ? parseTime(availableRules[i].start) : null);
+                var rEnd = availableRules[i].endMin != null ? availableRules[i].endMin : (availableRules[i].end ? parseTime(availableRules[i].end) : null);
                 if (rStart != null && rStart < earliest) earliest = rStart;
                 if (rEnd != null && rEnd > latest) latest = rEnd;
             }
@@ -152,14 +160,26 @@ function isScarceSpecial(specialConfig, dayName) {
 }
 
 function isSpecialAvailableForDivision(specialName, divName) {
-    const config = getSpecialConfig(specialName);
+    var config = getSpecialConfig(specialName);
     if (!config) return true;
-    const rules = config.limitUsage;
+    var rules = config.limitUsage;
     if (!rules || !rules.enabled) return true;
-    const allowedDivs = rules.divisions;
+    var allowedDivs = rules.divisions;
     if (!allowedDivs || typeof allowedDivs !== 'object') return true;
-    if (Array.isArray(allowedDivs)) return allowedDivs.includes(divName);
+    if (Array.isArray(allowedDivs)) return allowedDivs.indexOf(divName) >= 0;
     return divName in allowedDivs;
+}
+
+function getSpecialCapacity(specialConfig) {
+    if (!specialConfig) return 2;
+    if (specialConfig.sharableWith) {
+        if (specialConfig.sharableWith.capacity !== undefined) {
+            var c = parseInt(specialConfig.sharableWith.capacity);
+            if (!isNaN(c) && c > 0) return c;
+        }
+        if (specialConfig.sharableWith.type === 'not_sharable') return 1;
+    }
+    return parseInt(specialConfig.capacity) || parseInt(specialConfig.maxBunks) || 2;
 }
 
 // =================================================================
@@ -172,10 +192,38 @@ function getRotationScore(bunkName, activityName) {
     return 0;
 }
 
-function getRankedSpecials(bunkName, availableSpecials) {
-    const ranked = availableSpecials.map(name => ({ name, score: getRotationScore(bunkName, name), duration: getSpecialDuration(name) || 30 }));
-    ranked.sort((a, b) => a.score - b.score);
+function getRankedSpecials(bunkName, availableNames) {
+    var ranked = availableNames.map(function(name) {
+        return { name: name, score: getRotationScore(bunkName, name), duration: getSpecialDuration(name) || 30 };
+    });
+    ranked.sort(function(a, b) { return a.score - b.score; });
     return ranked;
+}
+
+// =================================================================
+// FIELD SUPPLY COUNTER
+// =================================================================
+
+function countAvailableSportsFields(timeStart, timeEnd, divName) {
+    var fields = getFields();
+    var count = 0;
+    var disabled = window.currentDisabledFields || [];
+    fields.forEach(function(f) {
+        if (!f.activities || f.activities.length === 0) return;
+        if (disabled.indexOf(f.name) >= 0) return;
+        if (f.timeRules) {
+            for (var i = 0; i < f.timeRules.length; i++) {
+                var rule = f.timeRules[i];
+                if (rule.type === 'Unavailable' || rule.type === 'unavailable') {
+                    var rStart = rule.startMin != null ? rule.startMin : parseTime(rule.start);
+                    var rEnd = rule.endMin != null ? rule.endMin : parseTime(rule.end);
+                    if (rStart != null && rEnd != null && timeStart < rEnd && timeEnd > rStart) return;
+                }
+            }
+        }
+        count++;
+    });
+    return count;
 }
 
 // =================================================================
@@ -184,43 +232,16 @@ function getRankedSpecials(bunkName, availableSpecials) {
 
 function findGaps(occupied, divTimes) {
     if (occupied.length === 0) return [{ startMin: divTimes.start, endMin: divTimes.end }];
-    const sorted = [...occupied].sort((a, b) => a.startMin - b.startMin);
-    const gaps = [];
+    var sorted = occupied.slice().sort(function(a, b) { return a.startMin - b.startMin; });
+    var gaps = [];
     if (sorted[0].startMin > divTimes.start) gaps.push({ startMin: divTimes.start, endMin: sorted[0].startMin });
-    for (let i = 0; i < sorted.length - 1; i++) {
-        const gapStart = sorted[i].endMin, gapEnd = sorted[i + 1].startMin;
+    for (var i = 0; i < sorted.length - 1; i++) {
+        var gapStart = sorted[i].endMin, gapEnd = sorted[i + 1].startMin;
         if (gapEnd > gapStart + 4) gaps.push({ startMin: gapStart, endMin: gapEnd });
     }
-    const lastEnd = sorted[sorted.length - 1].endMin;
+    var lastEnd = sorted[sorted.length - 1].endMin;
     if (lastEnd < divTimes.end) gaps.push({ startMin: lastEnd, endMin: divTimes.end });
     return gaps;
-}
-
-function findPerBunkPlacement(bunkOccupied, duration, windowStart, windowEnd, divTimes) {
-    for (let start = windowStart; start + duration <= windowEnd; start += 5) {
-        const end = start + duration;
-        if (!bunkOccupied.some(o => start < o.endMin && end > o.startMin)) return { startMin: start, endMin: end };
-    }
-    for (let start = windowEnd; start + duration <= divTimes.end; start += 5) {
-        const end = start + duration;
-        if (!bunkOccupied.some(o => start < o.endMin && end > o.startMin)) return { startMin: start, endMin: end };
-    }
-    for (let start = divTimes.start; start + duration <= windowStart; start += 5) {
-        const end = start + duration;
-        if (!bunkOccupied.some(o => start < o.endMin && end > o.startMin)) return { startMin: start, endMin: end };
-    }
-    return null;
-}
-
-function getSharedOccupied(bunkState, bunks) {
-    const shared = [], seen = new Set();
-    bunks.forEach(bunk => {
-        bunkState[bunk].occupied.forEach(occ => {
-            const key = occ.startMin + '-' + occ.endMin + '-' + occ.event;
-            if (!seen.has(key)) { seen.add(key); shared.push(occ); }
-        });
-    });
-    return shared;
 }
 
 // =================================================================
@@ -236,73 +257,80 @@ function getLayerQty(layer) {
     return 1;
 }
 
-function getLayerOp(layer) {
-    return layer.op || layer.operator || layer.quantity?.op || '>=';
-}
-
-function getLayerDuration(layer) {
-    return layer.durationMin || layer.periodMin || layer.duration || 30;
-}
-
-function getLayerDurationMax(layer) {
-    return layer.durationMax || getLayerDuration(layer);
-}
+function getLayerOp(layer) { return layer.op || layer.operator || layer.quantity?.op || '>='; }
+function getLayerDuration(layer) { return layer.durationMin || layer.periodMin || layer.duration || 30; }
+function getLayerDurationMax(layer) { return layer.durationMax || getLayerDuration(layer); }
 
 function isLayerPinned(layer) {
-    const lType = (layer.type || '').toLowerCase();
+    var windowSize = (layer.endMin || 0) - (layer.startMin || 0);
+    var maxDur = getLayerDurationMax(layer);
+    if (windowSize > 0 && maxDur > 0 && windowSize <= maxDur) return true;
     if (layer.pinned || layer.pinExact) return true;
-    if (lType === 'swim' || lType === 'custom') return true;
-    if (window.CustomPersistentTiles?.isCustomType?.(lType)) return true;
-    const op = layer.op || layer.operator || '>=';
-    if (op === '=') {
-        const windowSize = (layer.endMin || 0) - (layer.startMin || 0);
-        const dur = layer.durationMin || layer.periodMin || layer.duration || 0;
-        if (dur > 0 && windowSize > 0 && windowSize <= dur) return true;
-    }
     return false;
 }
 
 function computeRequirements(typeLayers) {
-    let minRequired = 0, maxAllowed = Infinity, hasExact = false;
-    typeLayers.forEach(layer => {
-        const qty = getLayerQty(layer), op = getLayerOp(layer);
+    var minRequired = 0, maxAllowed = Infinity, hasExact = false;
+    typeLayers.forEach(function(layer) {
+        var qty = getLayerQty(layer), op = getLayerOp(layer);
         if (op === '=' || op === '==') { minRequired = qty; maxAllowed = qty; hasExact = true; }
         else if (op === '>=' || op === '\u2265') minRequired = Math.max(minRequired, qty);
         else if (op === '<=' || op === '\u2264') maxAllowed = Math.min(maxAllowed, qty);
     });
-    return { min: minRequired, max: maxAllowed, hasExact };
+    return { min: minRequired, max: maxAllowed, hasExact: hasExact };
+}
+
+// =================================================================
+// CONSTRAINT TIGHTNESS SCORER
+// =================================================================
+
+function calculateTightness(piece) {
+    var windowSize = piece.windowEnd - piece.windowStart;
+    var slack = windowSize - piece.duration;
+    if (slack <= 0) return 0;
+    var score = slack;
+    if (piece.divisionWide) score *= 0.5;
+    if (piece.isScarce && piece.capacity && piece.bunksToServe) {
+        var slotsNeeded = Math.ceil(piece.bunksToServe / piece.capacity);
+        var slotsAvailable = Math.floor(windowSize / piece.duration);
+        var pressure = slotsNeeded / Math.max(slotsAvailable, 1);
+        score *= (1 / Math.max(pressure, 0.1));
+    }
+    return score;
 }
 
 // =================================================================
 // MAIN BUILD FUNCTION
 // =================================================================
 
-function build({ layers, dateStr }) {
-    log('\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550');
+function build(params) {
+    var layers = params.layers, dateStr = params.dateStr;
+
+    log('=======================================================');
     log('AUTO BUILD ENGINE v' + VERSION);
     log('Date: ' + dateStr + ', Layers: ' + layers.length);
-    log('\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550');
+    log('=======================================================');
 
-    const warnings = [];
-    const parts = dateStr.split('-').map(Number);
-    const dow = new Date(parts[0], parts[1] - 1, parts[2]).getDay();
-    const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-    const dayName = dayNames[dow];
+    var warnings = [];
+    var parts = dateStr.split('-').map(Number);
+    var dow = new Date(parts[0], parts[1] - 1, parts[2]).getDay();
+    var dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    var dayName = dayNames[dow];
     log('Day: ' + dayName);
 
-    const allSpecials = getSpecialActivities();
-    const isRainy = !!window.isRainyDay;
-    const todaysSpecials = allSpecials.filter(function(s) {
+    var allSpecials = getSpecialActivities();
+    var isRainy = !!window.isRainyDay;
+    var todaysSpecials = allSpecials.filter(function(s) {
         if (!isSpecialAvailableOnDay(s, dayName)) return false;
         if (!isRainy && s.rainyDayOnly) return false;
         return true;
     });
-    const scarceSpecials = todaysSpecials.filter(function(s) { return isScarceSpecial(s, dayName); });
-    const regularSpecials = todaysSpecials.filter(function(s) { return !isScarceSpecial(s, dayName); });
+    var scarceSpecials = todaysSpecials.filter(function(s) { return isScarceSpecial(s, dayName); });
+    var regularSpecials = todaysSpecials.filter(function(s) { return !isScarceSpecial(s, dayName); });
 
-    log('Specials: total=' + allSpecials.length + ' today=' + todaysSpecials.length + ' scarce=' + scarceSpecials.length + ' regular=' + regularSpecials.length);
+    log('Specials: total=' + allSpecials.length + ' today=' + todaysSpecials.length +
+        ' scarce=' + scarceSpecials.length + ' regular=' + regularSpecials.length);
 
-    // Group layers by grade
     var layersByGrade = {};
     layers.forEach(function(l) {
         var grade = l.grade || l.division || '_all';
@@ -312,44 +340,25 @@ function build({ layers, dateStr }) {
 
     var allSkeleton = [], allBunkOverrides = [], bunkTimelines = {};
 
-    // Cross-division scarce capacity tracker
+    // Cross-division scarce tracker
     var globalScarceUsage = {};
-
-    function getGlobalScarceCapacity(cfg) { return parseInt(cfg.sharableWith?.capacity) || parseInt(cfg.capacity) || 1; }
-    function getGlobalScarceSlotUsage(name, slotStart) { var e = globalScarceUsage[name + '|' + slotStart]; return e ? e.count : 0; }
-    function getGlobalScarceSlotDivision(name, slotStart) { var e = globalScarceUsage[name + '|' + slotStart]; return e ? e.division : null; }
-    function recordGlobalScarceUsage(name, slotStart, count, divName) {
+    function getGlobalScarceUsage(name, slotStart) { var e = globalScarceUsage[name + '|' + slotStart]; return e ? e.count : 0; }
+    function recordGlobalScarce(name, slotStart, count, divName) {
         var key = name + '|' + slotStart;
         if (!globalScarceUsage[key]) globalScarceUsage[key] = { count: 0, division: divName };
         globalScarceUsage[key].count += count;
-        if (globalScarceUsage[key].division !== divName) globalScarceUsage[key].division = '_mixed';
     }
-    function isSlotAvailableForDivision(cfg, slotStart, divName) {
-        var entry = globalScarceUsage[cfg.name + '|' + slotStart];
-        if (!entry || entry.count === 0) return true;
-        var shareType = cfg.sharableWith?.type || 'not_sharable';
-        if (shareType === 'not_sharable') return false;
-        if (shareType === 'same_division') return entry.division !== '_mixed' && entry.division === divName;
-        if (shareType === 'custom') return (cfg.sharableWith?.divisions || []).includes(divName);
-        return true;
-    }
-    function getRemainingGlobalScarceSlots(cfg, forDiv) {
+    function getRemainingGlobalScarce(cfg, forDiv) {
         var name = cfg.name, dur = cfg.defaultDuration || cfg.duration || 30;
         var tw = getSpecialTimeWindow(cfg);
         if (!tw) return 0;
-        var cap = getGlobalScarceCapacity(cfg), remaining = 0;
+        var cap = getSpecialCapacity(cfg), remaining = 0;
         for (var c = tw.startMin; c + dur <= tw.endMin; c += dur) {
-            if (forDiv && !isSlotAvailableForDivision(cfg, c, forDiv)) continue;
-            remaining += Math.max(0, cap - getGlobalScarceSlotUsage(name, c));
+            remaining += Math.max(0, cap - getGlobalScarceUsage(name, c));
         }
         return remaining;
     }
-
-    var globalScarceAPI = {
-        getUsage: getGlobalScarceSlotUsage, getDivision: getGlobalScarceSlotDivision,
-        record: recordGlobalScarceUsage, getRemaining: getRemainingGlobalScarceSlots,
-        getCapacity: getGlobalScarceCapacity, isSlotAvailableForDiv: isSlotAvailableForDivision
-    };
+    var globalScarceAPI = { getUsage: getGlobalScarceUsage, record: recordGlobalScarce, getRemaining: getRemainingGlobalScarce };
 
     var baseLayersForAll = layersByGrade['_all'] || [];
     delete layersByGrade['_all'];
@@ -369,7 +378,7 @@ function build({ layers, dateStr }) {
             gradeName: gradeName, divName: divName, bunks: bunks, layers: gradeLayers,
             dayName: dayName, dateStr: dateStr, divTimes: divTimes,
             scarceSpecials: scarceSpecials, regularSpecials: regularSpecials,
-            todaysSpecials: todaysSpecials, warnings: warnings, globalScarceUsage: globalScarceAPI
+            todaysSpecials: todaysSpecials, warnings: warnings, globalScarceAPI: globalScarceAPI
         });
         allSkeleton = allSkeleton.concat(result.skeleton);
         allBunkOverrides = allBunkOverrides.concat(result.bunkOverrides);
@@ -377,18 +386,19 @@ function build({ layers, dateStr }) {
     }
 
     log('\nBUILD COMPLETE: ' + allSkeleton.length + ' skeleton, ' + allBunkOverrides.length + ' overrides');
-    return { skeleton: allSkeleton, bunkOverrides: allBunkOverrides, bunkTimelines: bunkTimelines, warnings: warnings, _autoGenerated: true, _buildDate: dateStr, _buildVersion: VERSION };
+    return { skeleton: allSkeleton, bunkOverrides: allBunkOverrides, bunkTimelines: bunkTimelines,
+             warnings: warnings, _autoGenerated: true, _buildDate: dateStr, _buildVersion: VERSION };
 }
 
 // =================================================================
-// BUILD FOR GRADE — v4.1 Unified Puzzle Solver
+// BUILD FOR GRADE — v5.0 Division Resource Planner
 // =================================================================
 
 function buildForGrade(params) {
-    var gradeName = params.gradeName, divName = params.divName, bunks = params.bunks;
-    var layers = params.layers, dayName = params.dayName, divTimes = params.divTimes;
+    var divName = params.divName, bunks = params.bunks, layers = params.layers;
+    var dayName = params.dayName, divTimes = params.divTimes;
     var scarceSpecials = params.scarceSpecials, regularSpecials = params.regularSpecials;
-    var warnings = params.warnings, globalScarceUsage = params.globalScarceUsage;
+    var warnings = params.warnings, globalScarceAPI = params.globalScarceAPI;
 
     var skeleton = [], bunkOverrides = [], bunkTimelines = {};
 
@@ -402,591 +412,577 @@ function buildForGrade(params) {
         bunkTimelines[bunk] = [];
     });
 
-    // CLASSIFY LAYERS
+    // Classify layers
     var pinnedLayers = [], fixedLayers = [], leagueLayers = [], specialtyLeagueLayers = [];
-    var specialLayers = [], sportLayers = [], customLayers = [];
+    var specialLayers = [], sportLayers = [], swimLayers = [], customLayers = [];
 
     layers.forEach(function(layer, idx) {
         layer._idx = idx;
         var lType = (layer.type || '').toLowerCase();
-        if (['lunch', 'snack', 'snacks', 'dismissal'].indexOf(lType) >= 0) fixedLayers.push(layer);
-        else if (lType === 'league') leagueLayers.push(layer);
-        else if (lType === 'specialty_league') specialtyLeagueLayers.push(layer);
-        else if (window.CustomPersistentTiles?.isCustomType?.(lType)) pinnedLayers.push(layer);
-        else if (isLayerPinned(layer)) pinnedLayers.push(layer);
-        else if (lType === 'special') specialLayers.push(layer);
-        else if (lType === 'sport' || lType === 'sports') sportLayers.push(layer);
-        else customLayers.push(layer);
+        var pinned = isLayerPinned(layer);
+
+        if (['lunch', 'snack', 'snacks', 'dismissal'].indexOf(lType) >= 0) {
+            if (pinned) pinnedLayers.push(layer); else fixedLayers.push(layer);
+        } else if (lType === 'league') {
+            if (pinned) pinnedLayers.push(layer); else leagueLayers.push(layer);
+        } else if (lType === 'specialty_league') {
+            if (pinned) pinnedLayers.push(layer); else specialtyLeagueLayers.push(layer);
+        } else if (lType === 'swim') {
+            if (pinned) pinnedLayers.push(layer); else swimLayers.push(layer);
+        } else if (window.CustomPersistentTiles?.isCustomType?.(lType)) {
+            if (pinned) pinnedLayers.push(layer); else customLayers.push(layer);
+        } else if (lType === 'special') { specialLayers.push(layer); }
+        else if (lType === 'sport' || lType === 'sports') { sportLayers.push(layer); }
+        else { customLayers.push(layer); }
     });
 
     var specialReq = computeRequirements(specialLayers);
     var sportReq = computeRequirements(sportLayers);
-    var specialDur = specialLayers.length > 0 ? getLayerDuration(specialLayers[0]) : 30;
-    var specialDurMax = specialLayers.length > 0 ? getLayerDurationMax(specialLayers[0]) : specialDur;
+    var specialDurMin = specialLayers.length > 0 ? getLayerDuration(specialLayers[0]) : 30;
+    var specialDurMax = specialLayers.length > 0 ? getLayerDurationMax(specialLayers[0]) : specialDurMin;
     var sportDurMin = sportLayers.length > 0 ? getLayerDuration(sportLayers[0]) : 30;
     var sportDurMax = sportLayers.length > 0 ? getLayerDurationMax(sportLayers[0]) : sportDurMin;
-    var minActivityDur = Math.min(sportDurMin, specialDur, 20);
+    var minActivityDur = Math.min(sportDurMin, specialDurMin, 20);
 
-    log('  Reqs: Special min=' + specialReq.min + ' max=' + specialReq.max + ' | Sport min=' + sportReq.min + ' max=' + sportReq.max);
-    log('  Durs: Special ' + specialDur + '-' + specialDurMax + ' | Sport ' + sportDurMin + '-' + sportDurMax + ' | minAct=' + minActivityDur);
-    // Diagnostic: show raw layer duration fields
-    if (sportLayers.length > 0) {
-        var sl = sportLayers[0];
-        log('  [DIAG] Sport layer[0] raw: durationMin=' + sl.durationMin + ' durationMax=' + sl.durationMax + ' periodMin=' + sl.periodMin + ' duration=' + sl.duration);
-    }
-    if (specialLayers.length > 0) {
-        var spl = specialLayers[0];
-        log('  [DIAG] Special layer[0] raw: durationMin=' + spl.durationMin + ' durationMax=' + spl.durationMax + ' periodMin=' + spl.periodMin + ' duration=' + spl.duration);
+    var sportWindow = sportLayers.length > 0 ? { startMin: sportLayers[0].startMin, endMin: sportLayers[0].endMin } : { startMin: divTimes.start, endMin: divTimes.end };
+    var specialWindow = specialLayers.length > 0 ? { startMin: specialLayers[0].startMin, endMin: specialLayers[0].endMin } : { startMin: divTimes.start, endMin: divTimes.end };
+
+    log('  Reqs: Spec min=' + specialReq.min + ' max=' + specialReq.max + ' | Sport min=' + sportReq.min + ' max=' + sportReq.max);
+    log('  Durs: Spec ' + specialDurMin + '-' + specialDurMax + ' | Sport ' + sportDurMin + '-' + sportDurMax);
+
+    function markAllBunksOccupied(startMin, endMin, event, type) {
+        bunks.forEach(function(bunk) {
+            bunkState[bunk].occupied.push({ startMin: startMin, endMin: endMin, event: event, type: type });
+            bunkTimelines[bunk].push({ startMin: startMin, endMin: endMin, event: event, type: type, _autoGenerated: true });
+        });
     }
 
-    function markBunkOccupied(bunk, startMin, endMin, event, type) {
-        bunkState[bunk].occupied.push({ startMin: startMin, endMin: endMin, event: event, type: type });
-        bunkTimelines[bunk].push({ startMin: startMin, endMin: endMin, event: event, type: type, _autoGenerated: true });
-    }
+    var divisionOccupied = [];
 
     // ═══════════════════════════════════════════════════════
-    // PHASE 1: PRE-WORK — Gather pieces, commit only immovables
+    // PHASE 1: COMMIT PINNED LAYERS (PERMANENT)
     // ═══════════════════════════════════════════════════════
-    log('\n  [Phase 1] Pre-work');
+    log('\n  [Phase 1] Committing pinned layers (' + pinnedLayers.length + ')');
 
-    // 1a: IMMOVABLE PINNED (swim, custom tiles — exact time, all bunks)
     pinnedLayers.forEach(function(layer) {
-        var startMin = layer.startMin;
-        var endMin = layer.startMin + (getLayerDuration(layer) || (layer.endMin - layer.startMin));
+        var windowSize = (layer.endMin || 0) - (layer.startMin || 0);
+        var maxDur = getLayerDurationMax(layer);
+        var dur = windowSize > 0 ? Math.min(windowSize, maxDur) : maxDur;
+        if (dur <= 0) dur = maxDur || 30;
+        var startMin = layer.startMin, endMin = startMin + dur;
         var eventName = layer.event || layer.type;
         var lType = (layer.type || '').toLowerCase();
+        var skeletonType = lType === 'league' ? 'league' : lType === 'specialty_league' ? 'specialty_league' : 'pinned';
 
-        skeleton.push({
-            id: 'auto_pinned_' + Math.random().toString(36).slice(2, 9),
-            type: 'pinned', event: eventName, division: divName,
-            startTime: fmtTime(startMin), endTime: fmtTime(endMin),
-            pinned: true, _autoGenerated: true
-        });
+        skeleton.push({ id: uid(), type: skeletonType, event: eventName, division: divName,
+            startTime: fmtTime(startMin), endTime: fmtTime(endMin), pinned: true, _autoGenerated: true });
+        divisionOccupied.push({ startMin: startMin, endMin: endMin, event: eventName, type: skeletonType });
+        markAllBunksOccupied(startMin, endMin, eventName, skeletonType);
 
-        var changeDur = 0;
+        // Change buffer for swim
         if (lType === 'swim') {
             var gs = getGlobalSettings();
-            changeDur = parseInt(gs.app1?.changeBufferDuration) || parseInt(gs.changeBufferDuration) || 10;
-        } else if (window.CustomPersistentTiles?.getChangeDuration) {
-            changeDur = window.CustomPersistentTiles.getChangeDuration(lType) || 0;
-        }
-
-        bunks.forEach(function(bunk) {
-            markBunkOccupied(bunk, startMin, endMin, eventName, 'pinned');
-            if (changeDur > 0 && endMin + changeDur <= divTimes.end) {
-                markBunkOccupied(bunk, endMin, endMin + changeDur, 'Change', 'change_buffer');
-                skeleton.push({ id: 'auto_change_' + Math.random().toString(36).slice(2, 9), type: 'pinned', event: 'Change', division: divName, startTime: fmtTime(endMin), endTime: fmtTime(endMin + changeDur), pinned: true, _autoGenerated: true, _bunk: String(bunk), _changeFor: eventName });
-            }
-            if (changeDur > 0 && startMin - changeDur >= divTimes.start) {
-                var pStart = startMin - changeDur;
-                if (!bunkState[bunk].occupied.some(function(o) { return pStart < o.endMin && startMin > o.startMin; })) {
-                    markBunkOccupied(bunk, pStart, startMin, 'Change', 'change_buffer');
-                    skeleton.push({ id: 'auto_prechange_' + Math.random().toString(36).slice(2, 9), type: 'pinned', event: 'Change', division: divName, startTime: fmtTime(pStart), endTime: fmtTime(startMin), pinned: true, _autoGenerated: true, _bunk: String(bunk), _changeFor: eventName });
+            var changeDur = parseInt(gs.app1?.changeBufferDuration) || parseInt(gs.changeBufferDuration) || 10;
+            if (changeDur > 0) {
+                if (endMin + changeDur <= divTimes.end) {
+                    skeleton.push({ id: uid(), type: 'pinned', event: 'Change', division: divName,
+                        startTime: fmtTime(endMin), endTime: fmtTime(endMin + changeDur), pinned: true, _autoGenerated: true });
+                    divisionOccupied.push({ startMin: endMin, endMin: endMin + changeDur, event: 'Change', type: 'change' });
+                    markAllBunksOccupied(endMin, endMin + changeDur, 'Change', 'change');
+                }
+                if (startMin - changeDur >= divTimes.start) {
+                    var preS = startMin - changeDur;
+                    if (!divisionOccupied.some(function(o) { return overlaps(preS, startMin, o.startMin, o.endMin); })) {
+                        skeleton.push({ id: uid(), type: 'pinned', event: 'Change', division: divName,
+                            startTime: fmtTime(preS), endTime: fmtTime(startMin), pinned: true, _autoGenerated: true });
+                        divisionOccupied.push({ startMin: preS, endMin: startMin, event: 'Change', type: 'change' });
+                        markAllBunksOccupied(preS, startMin, 'Change', 'change');
+                    }
                 }
             }
-        });
-        log('    Pinned: ' + eventName + ' ' + fmtTime(startMin) + '-' + fmtTime(endMin) + (changeDur > 0 ? ' (+' + changeDur + 'min change)' : ''));
+        }
+
+        // Bunk overrides for fixed events
+        if (['lunch', 'snack', 'snacks', 'dismissal'].indexOf(lType) >= 0) {
+            bunks.forEach(function(bunk) {
+                bunkOverrides.push({ bunk: bunk, division: divName, activity: eventName, type: 'pinned',
+                    startTime: fmtTime(startMin), endTime: fmtTime(endMin), _autoGenerated: true, _fixedEvent: true });
+            });
+        }
+
+        log('    PINNED: ' + eventName + ' ' + fmtTime(startMin) + '-' + fmtTime(endMin) + ' (' + dur + 'min)');
     });
 
-    // 1b: SCARCE ASSIGNMENTS — which bunks get which scarce, time TBD
-    var scarceAssignments = {};
-    bunks.forEach(function(b) { scarceAssignments[b] = []; });
+    // ═══════════════════════════════════════════════════════
+    // PHASE 2: SANDBOX SOLVER — Constrained Pieces
+    // ═══════════════════════════════════════════════════════
+    log('\n  [Phase 2] Sandbox solver');
 
+    var constrainedPieces = [];
+
+    // 2a: Leagues
+    leagueLayers.concat(specialtyLeagueLayers).forEach(function(layer) {
+        var isSp = (layer.type || '').toLowerCase() === 'specialty_league';
+        var dur = getLayerDuration(layer), qty = getLayerQty(layer);
+        for (var i = 0; i < Math.max(qty, 1); i++) {
+            constrainedPieces.push({
+                eventName: isSp ? 'Specialty League' : 'League Game',
+                duration: dur, windowStart: layer.startMin, windowEnd: layer.endMin || (layer.startMin + dur),
+                divisionWide: true, isScarce: false, type: isSp ? 'specialty_league' : 'league',
+                config: null, bunksToServe: bunks.length, capacity: bunks.length
+            });
+        }
+    });
+
+    // 2b: Scarce specials
     divScarce.forEach(function(cfg) {
         var name = cfg.name, dur = cfg.defaultDuration || cfg.duration || 30;
         var tw = getSpecialTimeWindow(cfg);
         if (!tw) { warn('Scarce "' + name + '" no time window'); return; }
-        var cap = parseInt(cfg.sharableWith?.capacity) || parseInt(cfg.capacity) || 1;
-        if (globalScarceUsage) {
-            var rem = globalScarceUsage.getRemaining(cfg, divName);
+        var cap = getSpecialCapacity(cfg);
+        if (globalScarceAPI) {
+            var rem = globalScarceAPI.getRemaining(cfg, divName);
             if (rem <= 0) { log('    ' + name + ': globally exhausted'); return; }
         }
-        var ranked = bunks.map(function(b) { return { bunk: b, score: getRotationScore(b, name) }; }).sort(function(a, b) { return a.score - b.score; });
-        var slots = Math.floor((tw.endMin - tw.startMin) / dur);
-        var totalCap = slots * cap;
+        var slotsInWindow = Math.floor((tw.endMin - tw.startMin) / dur);
+        var totalCap = slotsInWindow * cap;
         var gUsed = 0;
-        if (globalScarceUsage) { for (var c = tw.startMin; c + dur <= tw.endMin; c += dur) gUsed += globalScarceUsage.getUsage(name, c); }
-        var toServe = Math.min(ranked.length, Math.max(0, totalCap - gUsed));
+        for (var c = tw.startMin; c + dur <= tw.endMin; c += dur) gUsed += globalScarceAPI.getUsage(name, c);
+        var available = Math.max(0, totalCap - gUsed);
+        var ranked = bunks.map(function(b) { return { bunk: b, score: getRotationScore(b, name) }; })
+            .sort(function(a, b) { return a.score - b.score; });
+        var toServe = Math.min(ranked.length, available);
         if (toServe <= 0) { log('    ' + name + ': no capacity'); return; }
-        for (var i = 0; i < toServe; i++) {
-            scarceAssignments[ranked[i].bunk].push({ name: name, duration: dur, windowStart: tw.startMin, windowEnd: tw.endMin, capacity: cap, config: cfg });
+
+        for (var wave = 0; wave < Math.ceil(toServe / cap); wave++) {
+            var waveBunks = [];
+            for (var bi = wave * cap; bi < Math.min((wave + 1) * cap, toServe); bi++) waveBunks.push(ranked[bi].bunk);
+            constrainedPieces.push({
+                eventName: name, duration: dur, windowStart: tw.startMin, windowEnd: tw.endMin,
+                divisionWide: false, isScarce: true, type: 'scarce_special', config: cfg,
+                bunksToServe: waveBunks.length, capacity: cap, assignedBunks: waveBunks
+            });
         }
-        log('    ' + name + ': assigned to ' + toServe + ' bunks (time TBD)');
+        log('    Scarce: ' + name + ' -> ' + toServe + ' bunks in ' + Math.ceil(toServe / cap) + ' waves');
     });
 
-    // 1c: FIXED EVENT PIECES — store window info, don't place
-    var fixedEventPieces = [];
+    // 2c: Fixed events
     fixedLayers.forEach(function(layer) {
-        var dur = getLayerDuration(layer), wStart = layer.startMin, wEnd = layer.endMin || (wStart + dur);
-        var evName = layer.event || layer.type, isPinned = (wEnd - wStart) <= dur;
-        fixedEventPieces.push({ eventName: evName, duration: dur, windowStart: wStart, windowEnd: wEnd, isPinned: isPinned });
-        log('    Fixed: ' + evName + ' ' + fmtTime(wStart) + '-' + fmtTime(wEnd) + ' ' + dur + 'min ' + (isPinned ? '(exact)' : '(flexible)'));
+        var dur = getLayerDuration(layer);
+        constrainedPieces.push({
+            eventName: layer.event || layer.type, duration: dur,
+            windowStart: layer.startMin, windowEnd: layer.endMin || (layer.startMin + dur),
+            divisionWide: true, isScarce: false, type: 'fixed',
+            config: null, bunksToServe: bunks.length, capacity: bunks.length
+        });
     });
 
-    // 1d: LEAGUES — division-wide, commit now (must be same for all bunks)
-    var fixedEventRanges = [];
-    var allLeagues = leagueLayers.concat(specialtyLeagueLayers);
-    allLeagues.forEach(function(layer, idx) {
-        var isSp = (layer.type || '').toLowerCase() === 'specialty_league';
-        var dur = getLayerDuration(layer), wStart = layer.startMin, wEnd = layer.endMin || (wStart + dur);
-        var qty = getLayerQty(layer), evName = isSp ? 'Specialty League' : 'League Game';
-        var lType = isSp ? 'specialty_league' : 'league';
+    // 2d: Swim (flexible)
+    swimLayers.forEach(function(layer) {
+        var dur = getLayerDuration(layer);
+        constrainedPieces.push({
+            eventName: layer.event || 'Swim', duration: dur,
+            windowStart: layer.startMin, windowEnd: layer.endMin || (layer.startMin + dur),
+            divisionWide: true, isScarce: false, type: 'swim',
+            config: null, bunksToServe: bunks.length, capacity: bunks.length
+        });
+    });
 
-        for (var i = 0; i < Math.max(qty, 1); i++) {
-            var sharedOcc = getSharedOccupied(bunkState, bunks);
-            var bestP = null, bestS = Infinity;
-            for (var ts = wStart; ts + dur <= wEnd; ts += 5) {
-                var te = ts + dur;
-                if (sharedOcc.some(function(o) { return ts < o.endMin && te > o.startMin; })) continue;
-                var dgs = 0;
-                bunks.forEach(function(bunk) {
-                    var testOcc = bunkState[bunk].occupied.concat([{ startMin: ts, endMin: te }]);
-                    findGaps(testOcc, divTimes).forEach(function(g) {
-                        var gd = g.endMin - g.startMin;
-                        if (gd >= 5 && gd < minActivityDur) dgs += (minActivityDur - gd) * 10;
-                    });
-                });
-                if (dgs < bestS) { bestS = dgs; bestP = { startMin: ts, endMin: te }; }
-                if (dgs === 0) break;
+    // 2e: Custom (flexible)
+    customLayers.forEach(function(layer) {
+        var dur = getLayerDuration(layer);
+        constrainedPieces.push({
+            eventName: layer.event || layer.type, duration: dur,
+            windowStart: layer.startMin, windowEnd: layer.endMin || (layer.startMin + dur),
+            divisionWide: true, isScarce: false, type: 'custom',
+            config: null, bunksToServe: bunks.length, capacity: bunks.length
+        });
+    });
+
+    // Sort by tightness
+    constrainedPieces.forEach(function(p) { p._tightness = calculateTightness(p); });
+    constrainedPieces.sort(function(a, b) { return a._tightness - b._tightness; });
+    log('  Constrained: ' + constrainedPieces.length + ' pieces');
+
+    var sandboxPlacements = [];
+
+    for (var pi = 0; pi < constrainedPieces.length; pi++) {
+        var piece = constrainedPieces[pi];
+        var bestPos = null, bestScore = Infinity;
+
+        for (var ts = piece.windowStart; ts + piece.duration <= piece.windowEnd; ts += 5) {
+            var te = ts + piece.duration;
+            var conflict = false;
+
+            // Check permanent + sandbox conflicts
+            if (piece.divisionWide) {
+                conflict = divisionOccupied.some(function(o) { return overlaps(ts, te, o.startMin, o.endMin); });
+                if (!conflict) conflict = sandboxPlacements.some(function(sp) { return sp.piece.divisionWide && overlaps(ts, te, sp.startMin, sp.endMin); });
+            } else {
+                var assignedBunks = piece.assignedBunks || bunks;
+                for (var bi = 0; bi < assignedBunks.length && !conflict; bi++) {
+                    if (bunkState[assignedBunks[bi]].occupied.some(function(o) { return overlaps(ts, te, o.startMin, o.endMin); })) conflict = true;
+                }
+                if (!conflict) {
+                    for (var si = 0; si < sandboxPlacements.length && !conflict; si++) {
+                        var sp = sandboxPlacements[si];
+                        if (!overlaps(ts, te, sp.startMin, sp.endMin)) continue;
+                        if (sp.piece.divisionWide) { conflict = true; continue; }
+                        var spBunks = sp.piece.assignedBunks || bunks;
+                        for (var sbi = 0; sbi < assignedBunks.length && !conflict; sbi++) {
+                            if (spBunks.indexOf(assignedBunks[sbi]) >= 0) conflict = true;
+                        }
+                    }
+                }
             }
-            if (!bestP) { bestP = { startMin: wStart, endMin: wStart + dur }; }
-            skeleton.push({ id: 'auto_league_' + Math.random().toString(36).slice(2, 9), type: lType, event: evName, division: divName, startTime: fmtTime(bestP.startMin), endTime: fmtTime(bestP.endMin), _autoGenerated: true });
-            bunks.forEach(function(bunk) { markBunkOccupied(bunk, bestP.startMin, bestP.endMin, evName, lType); });
-            log('    League: ' + evName + ' ' + fmtTime(bestP.startMin) + '-' + fmtTime(bestP.endMin));
+            if (conflict) continue;
+
+            // Score position
+            var score = 0;
+            var testOcc = divisionOccupied.concat(
+                sandboxPlacements.map(function(sp) { return { startMin: sp.startMin, endMin: sp.endMin }; }),
+                [{ startMin: ts, endMin: te }]
+            );
+            var testGaps = findGaps(testOcc, divTimes);
+            for (var tgi = 0; tgi < testGaps.length; tgi++) {
+                var gd = testGaps[tgi].endMin - testGaps[tgi].startMin;
+                if (gd >= 5 && gd < minActivityDur) score += 10000;
+            }
+            if (piece.isScarce && piece.assignedBunks) {
+                var sportsAtTime = bunks.length - piece.assignedBunks.length;
+                var fieldsAvail = countAvailableSportsFields(ts, te, divName);
+                if (sportsAtTime > fieldsAvail) score += (sportsAtTime - fieldsAvail) * 5000;
+            }
+            score += (ts - piece.windowStart) * 0.1;
+
+            if (score < bestScore) { bestScore = score; bestPos = { startMin: ts, endMin: te }; }
+            if (score === 0) break;
         }
-    });
 
-    log('  [Phase 1] Done. Deferred: ' + fixedEventPieces.length + ' fixed, ' + Object.values(scarceAssignments).reduce(function(s, a) { return s + a.length; }, 0) + ' scarce');
+        if (!bestPos) {
+            warn('  Could not place: ' + piece.eventName);
+            warnings.push(divName + ': Could not place ' + piece.eventName);
+            continue;
+        }
+
+        sandboxPlacements.push({ startMin: bestPos.startMin, endMin: bestPos.endMin, piece: piece });
+
+        // Commit based on type
+        if (piece.divisionWide) {
+            divisionOccupied.push({ startMin: bestPos.startMin, endMin: bestPos.endMin, event: piece.eventName, type: piece.type });
+        }
+
+        if (piece.type === 'league' || piece.type === 'specialty_league') {
+            skeleton.push({ id: uid(), type: piece.type, event: piece.eventName, division: divName,
+                startTime: fmtTime(bestPos.startMin), endTime: fmtTime(bestPos.endMin), _autoGenerated: true });
+            markAllBunksOccupied(bestPos.startMin, bestPos.endMin, piece.eventName, piece.type);
+        } else if (piece.type === 'fixed') {
+            skeleton.push({ id: uid(), type: 'pinned', event: piece.eventName, division: divName,
+                startTime: fmtTime(bestPos.startMin), endTime: fmtTime(bestPos.endMin), pinned: true, _autoGenerated: true });
+            bunks.forEach(function(bunk) {
+                bunkOverrides.push({ bunk: bunk, division: divName, activity: piece.eventName, type: 'pinned',
+                    startTime: fmtTime(bestPos.startMin), endTime: fmtTime(bestPos.endMin), _autoGenerated: true, _fixedEvent: true });
+            });
+            markAllBunksOccupied(bestPos.startMin, bestPos.endMin, piece.eventName, 'fixed');
+        } else if (piece.type === 'swim') {
+            skeleton.push({ id: uid(), type: 'pinned', event: piece.eventName, division: divName,
+                startTime: fmtTime(bestPos.startMin), endTime: fmtTime(bestPos.endMin), pinned: true, _autoGenerated: true });
+            markAllBunksOccupied(bestPos.startMin, bestPos.endMin, piece.eventName, 'swim');
+            var gs = getGlobalSettings();
+            var changeDur = parseInt(gs.app1?.changeBufferDuration) || parseInt(gs.changeBufferDuration) || 10;
+            if (changeDur > 0) {
+                if (bestPos.endMin + changeDur <= divTimes.end) {
+                    skeleton.push({ id: uid(), type: 'pinned', event: 'Change', division: divName,
+                        startTime: fmtTime(bestPos.endMin), endTime: fmtTime(bestPos.endMin + changeDur), pinned: true, _autoGenerated: true });
+                    divisionOccupied.push({ startMin: bestPos.endMin, endMin: bestPos.endMin + changeDur, event: 'Change', type: 'change' });
+                    markAllBunksOccupied(bestPos.endMin, bestPos.endMin + changeDur, 'Change', 'change');
+                }
+                if (bestPos.startMin - changeDur >= divTimes.start) {
+                    var preS = bestPos.startMin - changeDur;
+                    if (!divisionOccupied.some(function(o) { return overlaps(preS, bestPos.startMin, o.startMin, o.endMin); })) {
+                        skeleton.push({ id: uid(), type: 'pinned', event: 'Change', division: divName,
+                            startTime: fmtTime(preS), endTime: fmtTime(bestPos.startMin), pinned: true, _autoGenerated: true });
+                        divisionOccupied.push({ startMin: preS, endMin: bestPos.startMin, event: 'Change', type: 'change' });
+                        markAllBunksOccupied(preS, bestPos.startMin, 'Change', 'change');
+                    }
+                }
+            }
+        } else if (piece.type === 'scarce_special') {
+            piece.assignedBunks.forEach(function(bunk) {
+                skeleton.push({ id: uid(), type: 'slot', event: 'Special Activity', division: divName,
+                    startTime: fmtTime(bestPos.startMin), endTime: fmtTime(bestPos.endMin),
+                    _autoGenerated: true, _bunk: String(bunk), _suggestedActivity: piece.eventName, _scarce: true, _durationStrict: true });
+                bunkState[bunk].occupied.push({ startMin: bestPos.startMin, endMin: bestPos.endMin, event: piece.eventName, type: 'scarce' });
+                bunkState[bunk].specialCount++;
+                bunkState[bunk].usedActivities.push(piece.eventName);
+            });
+            if (globalScarceAPI && piece.config) globalScarceAPI.record(piece.eventName, bestPos.startMin, piece.assignedBunks.length, divName);
+        } else if (piece.type === 'custom') {
+            skeleton.push({ id: uid(), type: 'pinned', event: piece.eventName, division: divName,
+                startTime: fmtTime(bestPos.startMin), endTime: fmtTime(bestPos.endMin), pinned: true, _autoGenerated: true });
+            markAllBunksOccupied(bestPos.startMin, bestPos.endMin, piece.eventName, 'custom');
+        }
+
+        log('    ' + piece.eventName + ': ' + fmtTime(bestPos.startMin) + '-' + fmtTime(bestPos.endMin) + ' (score:' + bestScore.toFixed(0) + ')');
+    }
+
+    log('  [Phase 2] Done: ' + sandboxPlacements.length + ' pieces placed');
 
     // ═══════════════════════════════════════════════════════
-    // PHASE 2: PER-BUNK PUZZLE SOLVER
+    // PHASE 3: FILL GAPS — Division Resource Planner
     // ═══════════════════════════════════════════════════════
-    log('\n  [Phase 2] Per-bunk puzzle solver');
+    log('\n  [Phase 3] Filling gaps');
 
     var specialSlotUsage = {};
-    function getSpecialCap(name) {
-        var cfg = getSpecialConfig(name);
-        if (!cfg) return 2;
-        if (cfg.sharableWith) {
-            if (cfg.sharableWith.capacity !== undefined) { var c = parseInt(cfg.sharableWith.capacity); if (!isNaN(c) && c > 0) return c; }
-            if (cfg.sharableWith.type === 'not_sharable') return 1;
-        }
-        return parseInt(cfg.capacity) || parseInt(cfg.maxBunks) || 2;
-    }
-    function isSpecialAtCapacity(name, slotStart) { return (specialSlotUsage[name + '|' + slotStart] || 0) >= getSpecialCap(name); }
-    function recordSpecialUsage(name, slotStart) { var k = name + '|' + slotStart; specialSlotUsage[k] = (specialSlotUsage[k] || 0) + 1; }
+    function isSpecAtCap(name, slotStart) { return (specialSlotUsage[name + '|' + slotStart] || 0) >= getSpecialCapacity(getSpecialConfig(name)); }
+    function recordSpecUsage(name, slotStart) { var k = name + '|' + slotStart; specialSlotUsage[k] = (specialSlotUsage[k] || 0) + 1; }
 
-    // Scoring: given occupied blocks, how well can remaining layers fit?
-    function scoreArrangement(occupied, specCount, sportCount) {
-        var gaps = findGaps(occupied, divTimes), score = 0, usable = 0;
-        for (var i = 0; i < gaps.length; i++) {
-            var gd = gaps[i].endMin - gaps[i].startMin;
-            if (gd >= 5 && gd < minActivityDur) score += 10000;
-            if (gd >= minActivityDur) {
-                usable += gd;
-                var lo = gd % minActivityDur;
-                if (lo > 0 && lo < 15) score += lo * 5;
-            }
-        }
-        var needed = Math.max(0, specialReq.min - specCount) * specialDur + Math.max(0, sportReq.min - sportCount) * sportDurMin;
-        if (usable < needed) score += (needed - usable) * 100;
-        return score;
-    }
+    var divGaps = findGaps(divisionOccupied, divTimes);
+    log('  Division gaps: ' + divGaps.length);
 
-    bunks.forEach(function(bunk) {
-        var state = bunkState[bunk], bunkStr = String(bunk);
-        log('    ' + bunk + ': Puzzle solving...');
+    for (var dgi = 0; dgi < divGaps.length; dgi++) {
+        var gap = divGaps[dgi], gapDur = gap.endMin - gap.startMin;
+        if (gapDur < minActivityDur) continue;
+        log('    Gap: ' + fmtTime(gap.startMin) + '-' + fmtTime(gap.endMin) + ' (' + gapDur + 'min)');
 
-        // ── STEP A: Place CONSTRAINED pieces (scarce + fixed) ──
-        var constrained = [];
-        (scarceAssignments[bunk] || []).forEach(function(s) {
-            constrained.push({ eventName: s.name, duration: s.duration, windowStart: s.windowStart, windowEnd: s.windowEnd, isPinned: false, isScarce: true, type: 'scarce_special', config: s.config });
+        var fieldsAvailable = countAvailableSportsFields(gap.startMin, gap.endMin, divName);
+
+        // Which bunks are free in this gap?
+        var bunksFree = [], bunksOccupied = [];
+        bunks.forEach(function(bunk) {
+            var hasNonFiller = bunkState[bunk].occupied.some(function(o) {
+                return overlaps(gap.startMin, gap.endMin, o.startMin, o.endMin) && o.type !== 'sport_slot' && o.type !== 'special_slot';
+            });
+            if (hasNonFiller) bunksOccupied.push(bunk); else bunksFree.push(bunk);
         });
-        fixedEventPieces.forEach(function(f) {
-            constrained.push({ eventName: f.eventName, duration: f.duration, windowStart: f.windowStart, windowEnd: f.windowEnd, isPinned: f.isPinned, isScarce: false, type: 'fixed', config: null });
+        if (bunksFree.length === 0) continue;
+
+        // Which bunks still need specials?
+        var bunksNeedSpec = [], bunksDontNeedSpec = [];
+        bunksFree.forEach(function(bunk) {
+            if (specialReq.min > 0 && bunkState[bunk].specialCount < specialReq.min) bunksNeedSpec.push(bunk);
+            else bunksDontNeedSpec.push(bunk);
         });
 
-        // Sort: pinned first, then tightest window
-        constrained.sort(function(a, b) {
-            if (a.isPinned && !b.isPinned) return -1;
-            if (!a.isPinned && b.isPinned) return 1;
-            return (a.windowEnd - a.windowStart - a.duration) - (b.windowEnd - b.windowStart - b.duration);
+        // Available specials for this gap
+        var gapSpecials = [];
+        divRegular.forEach(function(cfg) {
+            var tw = getSpecialTimeWindow(cfg);
+            if (tw && !overlaps(gap.startMin, gap.endMin, tw.startMin, tw.endMin)) return;
+            gapSpecials.push({ name: cfg.name, duration: cfg.defaultDuration || cfg.duration || specialDurMin, capacity: getSpecialCapacity(cfg), config: cfg });
         });
+        var totalSeats = 0;
+        gapSpecials.forEach(function(sp) { totalSeats += sp.capacity; });
 
-        var bunkSpecCount = state.specialCount;
+        log('      Free: ' + bunksFree.length + ', needSpec: ' + bunksNeedSpec.length +
+            ', seats: ' + totalSeats + ', fields: ' + fieldsAvailable);
 
-        for (var ci = 0; ci < constrained.length; ci++) {
-            var piece = constrained[ci];
+        // Plan blocks
+        var blockPlan = [];
+        var cursor = gap.startMin;
 
-            if (piece.isPinned) {
-                var pStart = piece.windowStart, pEnd = pStart + piece.duration;
-                var conflict = state.occupied.some(function(o) { return pStart < o.endMin && pEnd > o.startMin; });
-                var placement = conflict ? findPerBunkPlacement(state.occupied, piece.duration, piece.windowStart, piece.windowEnd, divTimes) : { startMin: pStart, endMin: pEnd };
-                if (placement) {
-                    markBunkOccupied(bunk, placement.startMin, placement.endMin, piece.eventName, piece.type);
-                    if (piece.type === 'fixed') {
-                        skeleton.push({ id: 'auto_fixed_' + Math.random().toString(36).slice(2, 9), type: 'pinned', event: piece.eventName, division: divName, startTime: fmtTime(placement.startMin), endTime: fmtTime(placement.endMin), pinned: true, _autoGenerated: true, _bunk: bunkStr });
-                        bunkOverrides.push({ bunk: bunk, division: divName, activity: piece.eventName, type: 'pinned', startTime: fmtTime(placement.startMin), endTime: fmtTime(placement.endMin), _autoGenerated: true, _fixedEvent: true });
-                    }
-                    if (piece.isScarce) { bunkSpecCount++; state.specialCount++; }
-                    log('        ' + piece.eventName + ': pinned at ' + fmtTime(placement.startMin));
-                } else {
-                    warn(bunk + ': Could not place ' + piece.eventName);
-                    warnings.push(bunk + ': ' + piece.eventName + ' could not be placed');
-                }
-                continue;
-            }
+        if (bunksNeedSpec.length > 0 && gapSpecials.length > 0 && totalSeats > 0) {
+            var wavesNeeded = Math.ceil(bunksNeedSpec.length / totalSeats);
 
-            // WINDOWED: try every valid position, pick best score
-            var bestPos = null, bestScore = Infinity;
-            for (var ts = piece.windowStart; ts + piece.duration <= piece.windowEnd; ts += 5) {
-                var te = ts + piece.duration;
-                if (state.occupied.some(function(o) { return ts < o.endMin && te > o.startMin; })) continue;
-                var testOcc = state.occupied.concat([{ startMin: ts, endMin: te, event: piece.eventName, type: piece.type }]);
-                var sc = scoreArrangement(testOcc, bunkSpecCount + (piece.isScarce ? 1 : 0), state.sportCount);
-                if (sc < bestScore) { bestScore = sc; bestPos = { startMin: ts, endMin: te }; }
-                if (sc === 0) break;
-            }
+            // Find dominant special duration
+            var durCounts = {};
+            gapSpecials.forEach(function(sp) { durCounts[sp.duration] = (durCounts[sp.duration] || 0) + sp.capacity; });
+            var bestSpecDur = specialDurMin, bestCount = 0;
+            for (var d in durCounts) { if (durCounts[d] > bestCount) { bestCount = durCounts[d]; bestSpecDur = parseInt(d); } }
 
-            if (!bestPos) bestPos = findPerBunkPlacement(state.occupied, piece.duration, piece.windowStart, piece.windowEnd, divTimes);
-
-            if (bestPos) {
-                markBunkOccupied(bunk, bestPos.startMin, bestPos.endMin, piece.eventName, piece.type);
-                if (piece.isScarce) {
-                    skeleton.push({ id: 'auto_scarce_' + Math.random().toString(36).slice(2, 9), type: 'slot', event: 'Special Activity', division: divName, startTime: fmtTime(bestPos.startMin), endTime: fmtTime(bestPos.endMin), _autoGenerated: true, _bunk: bunkStr, _suggestedActivity: piece.eventName, _scarce: true, _durationStrict: true, _targetDuration: piece.duration });
-                    state.usedActivities.push(piece.eventName);
-                    bunkSpecCount++; state.specialCount++;
-                    if (globalScarceUsage && piece.config) {
-                        var slotS = Math.floor((bestPos.startMin - piece.windowStart) / piece.duration) * piece.duration + piece.windowStart;
-                        globalScarceUsage.record(piece.eventName, slotS, 1, divName);
-                    }
-                } else {
-                    skeleton.push({ id: 'auto_fixed_' + Math.random().toString(36).slice(2, 9), type: 'pinned', event: piece.eventName, division: divName, startTime: fmtTime(bestPos.startMin), endTime: fmtTime(bestPos.endMin), pinned: true, _autoGenerated: true, _bunk: bunkStr });
-                    bunkOverrides.push({ bunk: bunk, division: divName, activity: piece.eventName, type: 'pinned', startTime: fmtTime(bestPos.startMin), endTime: fmtTime(bestPos.endMin), _autoGenerated: true, _fixedEvent: true });
-                }
-                log('        ' + piece.eventName + ': ' + fmtTime(bestPos.startMin) + '-' + fmtTime(bestPos.endMin) + ' (score:' + bestScore + ')');
-            } else {
-                warn(bunk + ': Could not place ' + piece.eventName);
-                warnings.push(bunk + ': ' + piece.eventName + ' could not be placed');
-            }
-        }
-
-        // Track fixed ranges for Phase 3 validation
-        fixedEventPieces.forEach(function(f) {
-            var occ = state.occupied.find(function(o) { return o.event && o.event.toLowerCase() === f.eventName.toLowerCase() && o.type === 'fixed'; });
-            if (occ) fixedEventRanges.push({ startMin: occ.startMin, endMin: occ.endMin, event: f.eventName, bunk: bunk });
-        });
-
-        // ── STEP B: Build activity wishlist from rotation ──
-        var usedToday = state.usedActivities.slice();
-        var placedSpecials = bunkSpecCount;
-        var placedSports = state.sportCount;
-
-        function buildWishlist(cursorTime) {
-            var available = divRegular.map(function(s) { return s.name; })
-                .filter(function(n) {
-                    // Not already used today by this bunk
-                    if (usedToday.some(function(u) { return u.toLowerCase() === n.toLowerCase(); })) return false;
-                    // Not at capacity
-                    if (isSpecialAtCapacity(n, cursorTime)) return false;
-                    // Not a scarce special (those are handled in Step A)
-                    var cfg = getSpecialConfig(n);
-                    if (cfg && isScarceSpecial(cfg, dayName)) return false;
-                    // Time window check
-                    var tw = cfg ? getSpecialTimeWindow(cfg) : null;
-                    if (tw) {
-                        if (cursorTime < tw.startMin || cursorTime >= tw.endMin) return false;
-                        var actDur = cfg.defaultDuration || cfg.duration || specialDur;
-                        if (cursorTime + actDur > tw.endMin) return false;
-                    }
-                    return true;
-                });
-            return getRankedSpecials(bunk, available);
-        }
-
-        // ── STEP C: Fill gaps with real activity durations ──
-        var gaps = findGaps(state.occupied, divTimes);
-        log('      ' + bunk + ': ' + gaps.length + ' gaps, needs ' + Math.max(0, specialReq.min - placedSpecials) + 'S + ' + Math.max(0, sportReq.min - placedSports) + 'Sp');
-
-        for (var gi = 0; gi < gaps.length; gi++) {
-            var gap = gaps[gi];
-            var gapDur = gap.endMin - gap.startMin;
-            if (gapDur < 15) continue;
-
-            var cursor = gap.startMin;
+            var specQueue = bunksNeedSpec.slice();
+            var waveIdx = 0;
 
             while (cursor < gap.endMin) {
                 var remaining = gap.endMin - cursor;
-                if (remaining < minActivityDur) break; // runt — Step D handles
+                if (remaining < minActivityDur) break;
 
-                var specNeeded = Math.max(0, specialReq.min - placedSpecials);
-                var sprtNeeded = Math.max(0, sportReq.min - placedSports);
-                var specMaxed = specialReq.max !== Infinity && placedSpecials >= specialReq.max;
-                var sprtMaxed = sportReq.max !== Infinity && placedSports >= sportReq.max;
+                var assigns = {};
+                var blockDur;
 
-                // Decide: special or sport?
-                var useSpecial = false;
-                if (specNeeded > 0 && !specMaxed) useSpecial = true;
-                else if (sprtNeeded > 0 && !sprtMaxed) useSpecial = false;
-                else if (!specMaxed && specNeeded >= sprtNeeded) useSpecial = true;
+                if (waveIdx < wavesNeeded && specQueue.length > 0) {
+                    blockDur = Math.min(bestSpecDur, remaining);
+                    if (blockDur < minActivityDur) break;
 
-                var blockDur = 0, blockType = 'sport', hintActivity = null;
-
-                if (useSpecial) {
-                    var wishlist = buildWishlist(cursor);
-                    if (wishlist.length > 0) {
-                        // Try the most overdue special first
-                        var picked = null;
-                        for (var wi = 0; wi < wishlist.length; wi++) {
-                            var w = wishlist[wi];
-                            var actDur = w.duration || specialDur;
-                            // Does this duration fit within the layer's range?
-                            if (actDur <= remaining) {
-                                // Activity fits in remaining gap
-                                if (actDur >= specialDur && actDur <= specialDurMax) {
-                                    // Within layer range — perfect
-                                    picked = { name: w.name, dur: actDur };
-                                } else {
-                                    // Outside layer range but has a configured duration — use it
-                                    // (configured duration takes priority over layer range)
-                                    picked = { name: w.name, dur: actDur };
-                                }
-                                break;
-                            }
-                        }
+                    var waveBunks = specQueue.splice(0, totalSeats);
+                    waveBunks.forEach(function(bunk) {
+                        var available = gapSpecials.filter(function(sp) {
+                            return bunkState[bunk].usedActivities.indexOf(sp.name) < 0 && !isSpecAtCap(sp.name, cursor);
+                        }).map(function(sp) { return sp.name; });
+                        var ranked = getRankedSpecials(bunk, available);
+                        var picked = ranked.length > 0 ? ranked[0].name : null;
                         if (picked) {
-                            blockDur = picked.dur;
-                            blockType = 'special';
-                            hintActivity = picked.name;
+                            assigns[bunk] = { type: 'special', suggestedActivity: picked };
+                            recordSpecUsage(picked, cursor);
+                            bunkState[bunk].usedActivities.push(picked);
+                            bunkState[bunk].specialCount++;
                         } else {
-                            // No special fits in remaining gap — fall through to sport
-                            useSpecial = false;
+                            assigns[bunk] = { type: 'sport', suggestedActivity: null };
                         }
-                    } else {
-                        useSpecial = false;
-                    }
-                }
-
-                if (!useSpecial || blockDur === 0) {
-                    // Sport: use MAX of layer range (maximize time), capped by remaining
-                    // But NEVER exceed the layer's configured max
+                    });
+                    bunksFree.forEach(function(bunk) {
+                        if (assigns[bunk]) return;
+                        assigns[bunk] = { type: 'sport', suggestedActivity: null };
+                    });
+                    waveIdx++;
+                } else {
                     blockDur = Math.min(sportDurMax, remaining);
                     if (blockDur < sportDurMin && remaining >= sportDurMin) blockDur = sportDurMin;
-                    blockType = 'sport';
-                    hintActivity = null;
+                    if (blockDur < minActivityDur) break;
+                    bunksFree.forEach(function(bunk) { assigns[bunk] = { type: 'sport', suggestedActivity: null }; });
                 }
 
-                // HARD CAP: block must never exceed the layer's duration range
-                var layerMax = blockType === 'special' ? specialDurMax : sportDurMax;
-                var layerMin = blockType === 'special' ? specialDur : sportDurMin;
-                if (blockDur > layerMax) blockDur = layerMax;
+                if (blockDur > sportDurMax) blockDur = sportDurMax;
 
-                // Anti-runt: if leftover after this block can't fit any activity, absorb it
-                // BUT only up to the layer's max duration
-                var afterThis = remaining - blockDur;
-                if (afterThis > 0 && afterThis < minActivityDur) {
-                    if (remaining <= layerMax) {
-                        blockDur = remaining; // absorb runt — still within layer max
-                    } else {
-                        // Can't absorb without exceeding layer max — split instead
-                        // Split into N blocks that fit within [layerMin, layerMax]
-                        var numBlocks = Math.ceil(remaining / layerMax);
-                        blockDur = Math.min(Math.ceil(remaining / numBlocks), layerMax);
-                        blockDur = Math.max(blockDur, layerMin);
+                // Anti-runt
+                var afterBlock = gap.endMin - (cursor + blockDur);
+                if (afterBlock > 0 && afterBlock < minActivityDur) {
+                    if (cursor + blockDur + afterBlock - cursor <= sportDurMax) { blockDur += afterBlock; }
+                    else {
+                        var totalRem = gap.endMin - cursor;
+                        var nBlocks = Math.ceil(totalRem / sportDurMax);
+                        blockDur = Math.ceil(totalRem / nBlocks);
+                        blockDur = Math.max(blockDur, minActivityDur);
+                        blockDur = Math.min(blockDur, sportDurMax);
                     }
                 }
 
-                // Final hard cap (defense)
-                if (blockDur > layerMax) blockDur = layerMax;
-
-                // Snap to 5-min
                 var snapped = snapTo5(cursor + blockDur);
                 if (snapped > cursor && snapped <= gap.endMin) blockDur = snapped - cursor;
+                if (blockDur < minActivityDur) break;
 
-                if (blockDur < 15) break;
-
-                var blockStart = cursor, blockEnd = cursor + blockDur;
-                var eventLabel = blockType === 'special' ? 'Special Activity' : 'Sports Slot';
-
-                skeleton.push({
-                    id: 'auto_fill_' + Math.random().toString(36).slice(2, 9),
-                    type: 'slot', event: eventLabel, division: divName,
-                    startTime: fmtTime(blockStart), endTime: fmtTime(blockEnd),
-                    _autoGenerated: true, _bunk: bunkStr,
-                    _durationStrict: blockType === 'special' && hintActivity ? true : false,
-                    _targetDuration: blockDur,
-                    _suggestedActivity: hintActivity
-                });
-                state.occupied.push({ startMin: blockStart, endMin: blockEnd, event: eventLabel, type: blockType === 'special' ? 'special_slot' : 'sport_slot' });
-                bunkTimelines[bunk].push({ startMin: blockStart, endMin: blockEnd, event: eventLabel, type: blockType === 'special' ? 'special_slot' : 'sport_slot', _autoGenerated: true, _suggestedActivity: hintActivity });
-
-                if (hintActivity) {
-                    recordSpecialUsage(hintActivity, blockStart);
-                    usedToday.push(hintActivity);
-                }
-                if (blockType === 'special') { placedSpecials++; state.specialCount++; }
-                else { placedSports++; state.sportCount++; }
-
-                log('      ' + bunk + ': ' + (hintActivity || blockType) + ' ' + blockDur + 'min ' + fmtTime(blockStart) + '-' + fmtTime(blockEnd));
-                cursor = blockEnd;
+                blockPlan.push({ startMin: cursor, endMin: cursor + blockDur, assignments: assigns });
+                cursor += blockDur;
             }
+        } else {
+            // Pure sport fill
+            while (cursor < gap.endMin) {
+                var rem = gap.endMin - cursor;
+                if (rem < minActivityDur) break;
+                var bDur = Math.min(sportDurMax, rem);
+                if (bDur < sportDurMin && rem >= sportDurMin) bDur = sportDurMin;
+                if (bDur < minActivityDur) break;
 
-            // ── STEP D: Dead gap repair for this gap's tail ──
-            if (cursor < gap.endMin) {
-                var runtDur = gap.endMin - cursor;
-                if (runtDur >= 5 && runtDur < minActivityDur) {
-                    // Try extending the last placed block
-                    var lastBlocks = skeleton.filter(function(s) { return s._bunk === bunkStr && parseTime(s.endTime) === cursor; });
-                    if (lastBlocks.length > 0) {
-                        var ext = lastBlocks[lastBlocks.length - 1];
-                        var extStart = parseTime(ext.startTime);
-                        var newDur = gap.endMin - extStart;
-                        var extMax = ext.event === 'Special Activity' ? specialDurMax : sportDurMax;
-
-                        if (newDur <= extMax) {
-                            ext.endTime = fmtTime(gap.endMin);
-                            ext._targetDuration = newDur;
-                            var occM = state.occupied.find(function(o) { return o.endMin === cursor && o.startMin === extStart; });
-                            if (occM) occM.endMin = gap.endMin;
-                            var tlM = bunkTimelines[bunk].find(function(t) { return t.endMin === cursor && t.startMin === extStart; });
-                            if (tlM) tlM.endMin = gap.endMin;
-                            log('      ' + bunk + ': Extended block to absorb ' + runtDur + 'min runt');
-                        } else {
-                            // Try shifting adjacent windowed fixed event
-                            var absorbed = false;
-                            for (var fi = 0; fi < windowedFixedEvents.length && !absorbed; fi++) {
-                                var fm = windowedFixedEvents[fi];
-                                var fixOcc = state.occupied.find(function(o) {
-                                    return o.event && o.event.toLowerCase() === fm.eventName.toLowerCase() && o.type === 'fixed';
-                                });
-                                if (!fixOcc) continue;
-                                // Adjacent?
-                                if (fixOcc.startMin !== gap.endMin && fixOcc.endMin !== cursor) continue;
-                                var shiftAmt = fixOcc.startMin === gap.endMin ? runtDur : -runtDur;
-                                var nfs = fixOcc.startMin + shiftAmt, nfe = fixOcc.endMin + shiftAmt;
-                                if (nfs < fm.windowStart || nfe > fm.windowEnd) continue;
-                                var others = state.occupied.filter(function(o) { return o !== fixOcc; });
-                                if (others.some(function(o) { return nfs < o.endMin && nfe > o.startMin; })) continue;
-                                // Shift it
-                                var oldFs = fixOcc.startMin;
-                                fixOcc.startMin = nfs; fixOcc.endMin = nfe;
-                                // Update skeleton
-                                var fSk = skeleton.find(function(s) { return s.event && s.event.toLowerCase() === fm.eventName.toLowerCase() && s._bunk === bunkStr; });
-                                if (fSk) { fSk.startTime = fmtTime(nfs); fSk.endTime = fmtTime(nfe); }
-                                // Update override
-                                var fOv = bunkOverrides.find(function(o) { return o.activity && o.activity.toLowerCase() === fm.eventName.toLowerCase() && String(o.bunk) === bunkStr; });
-                                if (fOv) { fOv.startTime = fmtTime(nfs); fOv.endTime = fmtTime(nfe); }
-                                // Update timeline
-                                var fTl = bunkTimelines[bunk].find(function(t) { return t.event && t.event.toLowerCase() === fm.eventName.toLowerCase() && t.startMin === oldFs; });
-                                if (fTl) { fTl.startMin = nfs; fTl.endMin = nfe; }
-                                // Now extend last activity block
-                                ext.endTime = fmtTime(gap.endMin);
-                                ext._targetDuration = gap.endMin - extStart;
-                                if (occM) occM.endMin = gap.endMin;
-                                if (tlM) tlM.endMin = gap.endMin;
-                                absorbed = true;
-                                log('      ' + bunk + ': Shifted ' + fm.eventName + ' by ' + shiftAmt + 'min to absorb runt');
-                            }
-                            if (!absorbed && runtDur >= 15) {
-                                skeleton.push({
-                                    id: 'auto_runt_' + Math.random().toString(36).slice(2, 9),
-                                    type: 'slot', event: 'Sports Slot', division: divName,
-                                    startTime: fmtTime(cursor), endTime: fmtTime(gap.endMin),
-                                    _autoGenerated: true, _bunk: bunkStr, _runt: true,
-                                    _durationStrict: false, _targetDuration: runtDur
-                                });
-                                state.occupied.push({ startMin: cursor, endMin: gap.endMin, event: 'Sports Slot', type: 'runt_slot' });
-                                bunkTimelines[bunk].push({ startMin: cursor, endMin: gap.endMin, event: 'Sports Slot', type: 'runt_slot', _autoGenerated: true });
-                                log('      ' + bunk + ': Runt ' + runtDur + 'min as short filler');
-                            }
-                        }
-                    }
+                var after = gap.endMin - (cursor + bDur);
+                if (after > 0 && after < minActivityDur) {
+                    if (rem <= sportDurMax) bDur = rem;
+                    else { var n = Math.ceil(rem / sportDurMax); bDur = Math.ceil(rem / n); bDur = Math.max(bDur, minActivityDur); bDur = Math.min(bDur, sportDurMax); }
                 }
+                var sn = snapTo5(cursor + bDur);
+                if (sn > cursor && sn <= gap.endMin) bDur = sn - cursor;
+                if (bDur < minActivityDur) break;
+
+                var a = {};
+                bunksFree.forEach(function(bunk) { a[bunk] = { type: 'sport', suggestedActivity: null }; });
+                blockPlan.push({ startMin: cursor, endMin: cursor + bDur, assignments: a });
+                cursor += bDur;
             }
         }
 
-        // Bunk summary + warnings
-        if (specialReq.min > 0 && placedSpecials < specialReq.min) warnings.push(bunk + ': Only ' + placedSpecials + '/' + specialReq.min + ' specials');
-        if (sportReq.min > 0 && placedSports < sportReq.min) warnings.push(bunk + ': Only ' + placedSports + '/' + sportReq.min + ' sports');
-        log('    ' + bunk + ' DONE: ' + placedSpecials + 'S + ' + placedSports + 'Sp');
-    });
+        // Field supply check
+        for (var bpi = 0; bpi < blockPlan.length; bpi++) {
+            var sportCount = 0;
+            for (var bk in blockPlan[bpi].assignments) { if (blockPlan[bpi].assignments[bk].type === 'sport') sportCount++; }
+            if (sportCount > fieldsAvailable) {
+                warnings.push(divName + ': field shortage at ' + fmtTime(blockPlan[bpi].startMin));
+            }
+        }
+
+        // Output skeleton blocks
+        for (var bpi2 = 0; bpi2 < blockPlan.length; bpi2++) {
+            var blk = blockPlan[bpi2];
+            for (var bunk in blk.assignments) {
+                var assign = blk.assignments[bunk];
+                var evLabel = assign.type === 'special' ? 'Special Activity' : 'Sports Slot';
+                skeleton.push({ id: uid(), type: 'slot', event: evLabel, division: divName,
+                    startTime: fmtTime(blk.startMin), endTime: fmtTime(blk.endMin),
+                    _autoGenerated: true, _bunk: String(bunk),
+                    _suggestedActivity: assign.suggestedActivity || null,
+                    _durationStrict: assign.type === 'special' && assign.suggestedActivity ? true : false });
+                bunkState[bunk].occupied.push({ startMin: blk.startMin, endMin: blk.endMin, event: evLabel, type: assign.type + '_slot' });
+                bunkTimelines[bunk].push({ startMin: blk.startMin, endMin: blk.endMin, event: evLabel, type: assign.type + '_slot', _autoGenerated: true, _suggestedActivity: assign.suggestedActivity });
+                if (assign.type === 'sport') bunkState[bunk].sportCount++;
+            }
+        }
+    }
 
     // ═══════════════════════════════════════════════════════
-    // PHASE 3: VALIDATION
+    // PHASE 4: VALIDATION
     // ═══════════════════════════════════════════════════════
-    log('\n  [Phase 3] Validation');
-
+    log('\n  [Phase 4] Validation');
     var repairs = 0;
+
     var requiredFixed = {};
-    fixedLayers.forEach(function(l) { requiredFixed[l.event || l.type] = getLayerDuration(l); });
+    fixedLayers.forEach(function(l) { requiredFixed[l.event || l.type] = 1; });
+    pinnedLayers.forEach(function(l) {
+        var lt = (l.type || '').toLowerCase();
+        if (['lunch', 'snack', 'snacks', 'dismissal'].indexOf(lt) >= 0) requiredFixed[l.event || l.type] = 1;
+    });
 
     bunks.forEach(function(bunk) {
         var bunkStr = String(bunk);
-
-        // Check all fixed events present
         Object.keys(requiredFixed).forEach(function(evName) {
             var has = bunkState[bunk].occupied.some(function(o) { return o.event && o.event.toLowerCase() === evName.toLowerCase(); });
             if (!has) {
-                var ref = fixedEventRanges.find(function(f) { return f.event.toLowerCase() === evName.toLowerCase(); });
+                var ref = null;
+                for (var rb = 0; rb < bunks.length; rb++) {
+                    ref = bunkState[bunks[rb]].occupied.find(function(o) { return o.event && o.event.toLowerCase() === evName.toLowerCase(); });
+                    if (ref) break;
+                }
                 if (ref) {
-                    log('    REPAIR: ' + bunk + ' missing ' + evName + ' — adding at ' + fmtTime(ref.startMin));
-                    bunkOverrides.push({ bunk: bunk, division: divName, activity: evName, type: 'pinned', startTime: fmtTime(ref.startMin), endTime: fmtTime(ref.endMin), _autoGenerated: true, _repair: true });
-                    markBunkOccupied(bunk, ref.startMin, ref.endMin, evName, 'fixed');
+                    bunkOverrides.push({ bunk: bunk, division: divName, activity: evName, type: 'pinned',
+                        startTime: fmtTime(ref.startMin), endTime: fmtTime(ref.endMin), _autoGenerated: true, _repair: true });
+                    bunkState[bunk].occupied.push({ startMin: ref.startMin, endMin: ref.endMin, event: evName, type: 'fixed' });
                     repairs++;
-                } else {
-                    warn(bunk + ' missing ' + evName + ' — no reference found');
                 }
             }
         });
 
-        // Fill any remaining gaps with generic slots
         var finalGaps = findGaps(bunkState[bunk].occupied, divTimes);
         finalGaps.forEach(function(gap) {
-            var gd = gap.endMin - gap.startMin;
-            if (gd < minActivityDur) return;
+            if (gap.endMin - gap.startMin < minActivityDur) return;
             var covered = skeleton.some(function(s) {
                 if (s.division !== divName) return false;
                 if (s._bunk && s._bunk !== bunkStr) return false;
                 var ss = parseTime(s.startTime), se = parseTime(s.endTime);
-                return ss != null && se != null && ss < gap.endMin && se > gap.startMin;
+                return ss != null && se != null && overlaps(ss, se, gap.startMin, gap.endMin);
             });
             if (!covered) {
-                skeleton.push({
-                    id: 'auto_repair_' + Math.random().toString(36).slice(2, 9),
-                    type: 'slot', event: 'General Activity Slot', division: divName,
+                skeleton.push({ id: uid(), type: 'slot', event: 'General Activity Slot', division: divName,
                     startTime: fmtTime(gap.startMin), endTime: fmtTime(gap.endMin),
-                    _autoGenerated: true, _bunk: bunkStr, _repair: true
-                });
+                    _autoGenerated: true, _bunk: bunkStr, _repair: true });
                 repairs++;
             }
         });
+
+        if (specialReq.min > 0 && bunkState[bunk].specialCount < specialReq.min)
+            warnings.push(bunk + ': Only ' + bunkState[bunk].specialCount + '/' + specialReq.min + ' specials');
+        if (sportReq.min > 0 && bunkState[bunk].sportCount < sportReq.min)
+            warnings.push(bunk + ': Only ' + bunkState[bunk].sportCount + '/' + sportReq.min + ' sports');
     });
 
-    // Sort timelines
     Object.values(bunkTimelines).forEach(function(tl) { tl.sort(function(a, b) { return a.startMin - b.startMin; }); });
-
-    log('  [Phase 3] ' + (repairs > 0 ? repairs + ' repairs' : 'All good'));
+    log('  [Phase 4] ' + (repairs > 0 ? repairs + ' repairs' : 'All good'));
     return { skeleton: skeleton, bunkOverrides: bunkOverrides, bunkTimelines: bunkTimelines };
 }
 
 // =================================================================
-// VALIDATION
+// VALIDATION (standalone)
 // =================================================================
 
 function validate(layers, dateStr) {
     var errors = [];
     if (!layers || layers.length === 0) { errors.push('No layers defined'); return errors; }
     if (!dateStr) { errors.push('No date specified'); return errors; }
-    var pinned = layers.filter(function(l) { return l.pinned; });
+    var pinned = layers.filter(function(l) { return isLayerPinned(l); });
     for (var i = 0; i < pinned.length; i++) {
         for (var j = i + 1; j < pinned.length; j++) {
             var a = pinned[i], b = pinned[j];
             if (a.grade !== b.grade) continue;
-            var aEnd = a.startMin + (a.duration || 30);
-            var bEnd = b.startMin + (b.duration || 30);
-            if (a.startMin < bEnd && aEnd > b.startMin) {
-                errors.push('Overlapping pinned: "' + a.event + '" and "' + b.event + '"');
-            }
+            var wA = (a.endMin || 0) - (a.startMin || 0), wB = (b.endMin || 0) - (b.startMin || 0);
+            var aEnd = a.startMin + Math.min(wA, getLayerDurationMax(a));
+            var bEnd = b.startMin + Math.min(wB, getLayerDurationMax(b));
+            if (a.startMin < bEnd && aEnd > b.startMin) errors.push('Overlapping pinned: "' + a.event + '" and "' + b.event + '"');
         }
     }
     return errors;
@@ -997,22 +993,13 @@ function validate(layers, dateStr) {
 // =================================================================
 
 window.AutoBuildEngine = {
-    build: build,
-    validate: validate,
-    getSpecialActivities: getSpecialActivities,
-    getSpecialDuration: getSpecialDuration,
-    getSpecialConfig: getSpecialConfig,
-    isScarceSpecial: isScarceSpecial,
-    isSpecialAvailableOnDay: isSpecialAvailableOnDay,
-    getRankedSpecials: getRankedSpecials,
-    getFields: getFields,
-    getDivisions: getDivisions,
-    getDivisionTimes: getDivisionTimes,
-    parseTime: parseTime,
-    fmtTime: fmtTime,
-    VERSION: VERSION
+    build: build, validate: validate,
+    getSpecialActivities: getSpecialActivities, getSpecialDuration: getSpecialDuration,
+    getSpecialConfig: getSpecialConfig, isScarceSpecial: isScarceSpecial,
+    isSpecialAvailableOnDay: isSpecialAvailableOnDay, getRankedSpecials: getRankedSpecials,
+    getFields: getFields, getDivisions: getDivisions, getDivisionTimes: getDivisionTimes,
+    parseTime: parseTime, fmtTime: fmtTime, VERSION: VERSION
 };
 
 log('Auto Build Engine v' + VERSION + ' loaded');
-
 })();
