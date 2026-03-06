@@ -99,9 +99,10 @@ function getBunkActivities(bunk, divName) {
     var assignments = window.scheduleAssignments || {};
     var bunkSlots = assignments[bunk];
     if (!bunkSlots || !Array.isArray(bunkSlots)) return [];
-
-    var divSlots = window.divisionTimes?.[divName] || [];
-    if (divSlots.length === 0) return [];
+var allDivSlots = window.divisionTimes?.[divName] || [];
+    var divSlots = (allDivSlots._perBunkSlots && allDivSlots._perBunkSlots[bunk])
+        ? allDivSlots._perBunkSlots[bunk]
+        : allDivSlots;    if (divSlots.length === 0) return [];
 
     var activities = [];
     var i = 0;
