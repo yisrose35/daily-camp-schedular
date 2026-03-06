@@ -258,8 +258,8 @@ function getLayerQty(layer) {
 }
 
 function getLayerOp(layer) { return layer.op || layer.operator || layer.quantity?.op || '>='; }
-function getLayerDuration(layer) { return layer.durationMin || layer.periodMin || layer.duration || 30; }
-function getLayerDurationMax(layer) { return layer.durationMax || getLayerDuration(layer); }
+function getLayerDuration(layer) { return layer.durationMin || layer.duration || layer.periodMin || 30; }
+function getLayerDurationMax(layer) { return layer.durationMax || layer.duration || layer.durationMin || layer.periodMin || getLayerDuration(layer); }
 
 function isLayerPinned(layer) {
     var windowSize = (layer.endMin || 0) - (layer.startMin || 0);
@@ -999,6 +999,29 @@ function buildForGrade(params) {
                     type: curr.type, suggestedActivity: curr.suggestedActivity });
             }
             perBunkBlocks[bk2] = merged;
+        }
+
+        // Step 2b: Enforce sportDurMin floor — merge short sport blocks with neighbors
+        for (var bk2b in perBunkBlocks) {
+            var blist = perBunkBlocks[bk2b];
+            var fixed = [];
+            for (var fi = 0; fi < blist.length; fi++) {
+                var blk = blist[fi];
+                if (blk.type === 'sport' && (blk.endMin - blk.startMin) < sportDurMin) {
+                    // Try to merge with next block if it's also sport
+                    if (fi + 1 < blist.length && blist[fi + 1].type === 'sport' && blist[fi + 1].suggestedActivity === blk.suggestedActivity) {
+                        blist[fi + 1].startMin = blk.startMin;
+                        continue; // skip this short block, next block absorbed it
+                    }
+                    // Try to merge with previous block if it's also sport
+                    if (fixed.length > 0 && fixed[fixed.length - 1].type === 'sport' && fixed[fixed.length - 1].suggestedActivity === blk.suggestedActivity) {
+                        fixed[fixed.length - 1].endMin = blk.endMin;
+                        continue;
+                    }
+                }
+                fixed.push(blk);
+            }
+            perBunkBlocks[bk2b] = fixed;
         }
 
         // Step 3: Emit skeleton blocks from merged list
