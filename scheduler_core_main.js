@@ -2227,7 +2227,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                        });
                         gapBlocksAdded++;
                     });
-                });
+                }
+            });
             }
         });
         
