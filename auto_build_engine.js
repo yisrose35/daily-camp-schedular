@@ -790,12 +790,6 @@ function buildForGrade(params) {
         if (bunksNeedSpec.length > 0 && gapSpecials.length > 0 && totalSeats > 0) {
             var wavesNeeded = Math.ceil(bunksNeedSpec.length / totalSeats);
 
-            // Find dominant special duration
-            var durCounts = {};
-            gapSpecials.forEach(function(sp) { durCounts[sp.duration] = (durCounts[sp.duration] || 0) + sp.capacity; });
-            var bestSpecDur = specialDurMin, bestCount = 0;
-            for (var d in durCounts) { if (durCounts[d] > bestCount) { bestCount = durCounts[d]; bestSpecDur = parseInt(d); } }
-
             var specQueue = bunksNeedSpec.slice();
             var waveIdx = 0;
 
@@ -803,62 +797,134 @@ function buildForGrade(params) {
                 var remaining = gap.endMin - cursor;
                 if (remaining < minActivityDur) break;
 
-                var assigns = {};
-                var blockDur;
-
                 if (waveIdx < wavesNeeded && specQueue.length > 0) {
-                    blockDur = Math.min(bestSpecDur, remaining);
-                    if (blockDur < minActivityDur) break;
-
+                    // ═══ SPECIAL WAVE: Assign specials, then group by duration ═══
                     var waveBunks = specQueue.splice(0, totalSeats);
+
+                    // Step 1: Pick a special for each bunk in this wave
+                    var bunkSpecPicks = []; // { bunk, specialName, duration }
                     waveBunks.forEach(function(bunk) {
                         var available = gapSpecials.filter(function(sp) {
                             return bunkState[bunk].usedActivities.indexOf(sp.name) < 0 && !isSpecAtCap(sp.name, cursor);
                         }).map(function(sp) { return sp.name; });
                         var ranked = getRankedSpecials(bunk, available);
-                        var picked = ranked.length > 0 ? ranked[0].name : null;
+                        var picked = ranked.length > 0 ? ranked[0] : null;
                         if (picked) {
-                            assigns[bunk] = { type: 'special', suggestedActivity: picked };
-                            recordSpecUsage(picked, cursor);
-                            bunkState[bunk].usedActivities.push(picked);
+                            bunkSpecPicks.push({ bunk: bunk, specialName: picked.name, duration: picked.duration || specialDurMin });
+                            recordSpecUsage(picked.name, cursor);
+                            bunkState[bunk].usedActivities.push(picked.name);
                             bunkState[bunk].specialCount++;
                         } else {
-                            assigns[bunk] = { type: 'sport', suggestedActivity: null };
+                            // No special available — this bunk does sport
+                            bunkSpecPicks.push({ bunk: bunk, specialName: null, duration: 0 });
                         }
                     });
-                    bunksFree.forEach(function(bunk) {
-                        if (assigns[bunk]) return;
-                        assigns[bunk] = { type: 'sport', suggestedActivity: null };
+
+                    // Step 2: Group by duration
+                    var durGroups = {}; // { duration: [{ bunk, specialName }] }
+                    bunkSpecPicks.forEach(function(pick) {
+                        if (!pick.specialName) return; // sport bunk, handled below
+                        var d = pick.duration;
+                        if (!durGroups[d]) durGroups[d] = [];
+                        durGroups[d].push(pick);
                     });
+
+                    // Step 3: Sort duration groups longest first
+                    var sortedDurs = Object.keys(durGroups).map(Number).sort(function(a, b) { return b - a; });
+
+                    // Step 4: Emit blocks for each duration group
+                    // The LONGEST special determines the first block boundary.
+                    // Shorter specials get their own block at the start, then the
+                    // remainder becomes a sport block for those bunks.
+                    //
+                    // Example: Art=20min, Painting=40min, gap starts at cursor
+                    //   Block 1: cursor to cursor+20 → Art bunks: Special, Painting bunks: Sport*, other bunks: Sport
+                    //   Block 2: cursor+20 to cursor+40 → Art bunks: Sport, Painting bunks: Special continues (or new sport), other bunks: Sport
+                    //
+                    // Actually simpler: create per-bunk blocks at each bunk's special duration,
+                    // and sport blocks fill the rest. Division superset will create boundaries
+                    // at each unique duration mark. That's minimal fragmentation.
+
+                    // Find all unique duration boundaries from this wave
+                    var durationBoundaries = new Set();
+                    durationBoundaries.add(0);
+                    sortedDurs.forEach(function(d) {
+                        if (cursor + d <= gap.endMin) durationBoundaries.add(d);
+                    });
+                    var boundaries = Array.from(durationBoundaries).sort(function(a, b) { return a - b; });
+
+                    // Find the longest special duration in this wave (defines how far specials extend)
+                    var maxSpecDurInWave = sortedDurs.length > 0 ? sortedDurs[0] : specialDurMin;
+                    maxSpecDurInWave = Math.min(maxSpecDurInWave, remaining);
+
+                    // Create blocks from cursor to cursor+maxSpecDurInWave using the boundaries
+                    // Then after cursor+maxSpecDurInWave, continue with sport blocks
+                    for (var bi = 0; bi < boundaries.length; bi++) {
+                        var bStart = cursor + boundaries[bi];
+                        var bEnd;
+                        if (bi + 1 < boundaries.length) {
+                            bEnd = cursor + boundaries[bi + 1];
+                        } else {
+                            bEnd = cursor + maxSpecDurInWave;
+                        }
+                        if (bEnd <= bStart) continue;
+                        if (bEnd > gap.endMin) bEnd = gap.endMin;
+                        if (bEnd - bStart < 5) continue;
+
+                        var assigns = {};
+                        // For each bunk, determine what they do in this sub-block
+                        bunkSpecPicks.forEach(function(pick) {
+                            var specDur = pick.duration;
+                            if (pick.specialName && boundaries[bi] < specDur) {
+                                // This bunk's special extends through this sub-block
+                                assigns[pick.bunk] = { type: 'special', suggestedActivity: pick.specialName };
+                            } else {
+                                // This bunk's special is done (or they don't have one) — sport
+                                assigns[pick.bunk] = { type: 'sport', suggestedActivity: null };
+                            }
+                        });
+                        // All other free bunks do sport
+                        bunksFree.forEach(function(bunk) {
+                            if (assigns[bunk]) return;
+                            assigns[bunk] = { type: 'sport', suggestedActivity: null };
+                        });
+
+                        blockPlan.push({ startMin: bStart, endMin: bEnd, assignments: assigns });
+                    }
+
+                    cursor += maxSpecDurInWave;
                     waveIdx++;
                 } else {
-                    blockDur = Math.min(sportDurMax, remaining);
+                    // ═══ SPORT BLOCK ═══
+                    var blockDur = Math.min(sportDurMax, remaining);
                     if (blockDur < sportDurMin && remaining >= sportDurMin) blockDur = sportDurMin;
                     if (blockDur < minActivityDur) break;
-                    bunksFree.forEach(function(bunk) { assigns[bunk] = { type: 'sport', suggestedActivity: null }; });
-                }
 
-                if (blockDur > sportDurMax) blockDur = sportDurMax;
+                    var assigns2 = {};
+                    bunksFree.forEach(function(bunk) { assigns2[bunk] = { type: 'sport', suggestedActivity: null }; });
 
-                // Anti-runt
-                var afterBlock = gap.endMin - (cursor + blockDur);
-                if (afterBlock > 0 && afterBlock < minActivityDur) {
-                    if (cursor + blockDur + afterBlock - cursor <= sportDurMax) { blockDur += afterBlock; }
-                    else {
-                        var totalRem = gap.endMin - cursor;
-                        var nBlocks = Math.ceil(totalRem / sportDurMax);
-                        blockDur = Math.ceil(totalRem / nBlocks);
-                        blockDur = Math.max(blockDur, minActivityDur);
-                        blockDur = Math.min(blockDur, sportDurMax);
+                    if (blockDur > sportDurMax) blockDur = sportDurMax;
+
+                    // Anti-runt
+                    var afterBlock = gap.endMin - (cursor + blockDur);
+                    if (afterBlock > 0 && afterBlock < minActivityDur) {
+                        if (cursor + blockDur + afterBlock - cursor <= sportDurMax) { blockDur += afterBlock; }
+                        else {
+                            var totalRem = gap.endMin - cursor;
+                            var nBlocks = Math.ceil(totalRem / sportDurMax);
+                            blockDur = Math.ceil(totalRem / nBlocks);
+                            blockDur = Math.max(blockDur, minActivityDur);
+                            blockDur = Math.min(blockDur, sportDurMax);
+                        }
                     }
+
+                    var snapped = snapTo5(cursor + blockDur);
+                    if (snapped > cursor && snapped <= gap.endMin) blockDur = snapped - cursor;
+                    if (blockDur < minActivityDur) break;
+
+                    blockPlan.push({ startMin: cursor, endMin: cursor + blockDur, assignments: assigns2 });
+                    cursor += blockDur;
                 }
-
-                var snapped = snapTo5(cursor + blockDur);
-                if (snapped > cursor && snapped <= gap.endMin) blockDur = snapped - cursor;
-                if (blockDur < minActivityDur) break;
-
-                blockPlan.push({ startMin: cursor, endMin: cursor + blockDur, assignments: assigns });
-                cursor += blockDur;
             }
         } else {
             // Pure sport fill
@@ -894,21 +960,64 @@ function buildForGrade(params) {
             }
         }
 
-        // Output skeleton blocks
+        // Output skeleton blocks — merge adjacent sub-blocks per bunk
+        // When a special spans multiple sub-blocks (e.g., Painting=40min across
+        // two 20min sub-blocks), emit ONE skeleton block for the full duration.
+        // This gives each bunk properly sized blocks instead of pre-sliced fragments.
+
+        // Step 1: Build per-bunk block list from the plan
+        var perBunkBlocks = {}; // { bunk: [{ startMin, endMin, type, suggestedActivity }] }
         for (var bpi2 = 0; bpi2 < blockPlan.length; bpi2++) {
             var blk = blockPlan[bpi2];
-            for (var bunk in blk.assignments) {
-                var assign = blk.assignments[bunk];
-                var evLabel = assign.type === 'special' ? 'Special Activity' : 'Sports Slot';
-                skeleton.push({ id: uid(), type: 'slot', event: evLabel, division: divName,
-                    startTime: fmtTime(blk.startMin), endTime: fmtTime(blk.endMin),
-                    _autoGenerated: true, _bunk: String(bunk),
-                    _suggestedActivity: assign.suggestedActivity || null,
-                    _durationStrict: assign.type === 'special' && assign.suggestedActivity ? true : false });
-                bunkState[bunk].occupied.push({ startMin: blk.startMin, endMin: blk.endMin, event: evLabel, type: assign.type + '_slot' });
-                bunkTimelines[bunk].push({ startMin: blk.startMin, endMin: blk.endMin, event: evLabel, type: assign.type + '_slot', _autoGenerated: true, _suggestedActivity: assign.suggestedActivity });
-                if (assign.type === 'sport') bunkState[bunk].sportCount++;
+            for (var bk in blk.assignments) {
+                if (!perBunkBlocks[bk]) perBunkBlocks[bk] = [];
+                var assign = blk.assignments[bk];
+                perBunkBlocks[bk].push({
+                    startMin: blk.startMin, endMin: blk.endMin,
+                    type: assign.type, suggestedActivity: assign.suggestedActivity || null
+                });
             }
+        }
+
+        // Step 2: Merge adjacent blocks with same type+suggestion
+        for (var bk2 in perBunkBlocks) {
+            var blocks = perBunkBlocks[bk2];
+            var merged = [];
+            for (var mi = 0; mi < blocks.length; mi++) {
+                var curr = blocks[mi];
+                if (merged.length > 0) {
+                    var prev = merged[merged.length - 1];
+                    if (prev.endMin === curr.startMin &&
+                        prev.type === curr.type &&
+                        prev.suggestedActivity === curr.suggestedActivity) {
+                        // Merge: extend previous block
+                        prev.endMin = curr.endMin;
+                        continue;
+                    }
+                }
+                merged.push({ startMin: curr.startMin, endMin: curr.endMin,
+                    type: curr.type, suggestedActivity: curr.suggestedActivity });
+            }
+            perBunkBlocks[bk2] = merged;
+        }
+
+        // Step 3: Emit skeleton blocks from merged list
+        for (var bk3 in perBunkBlocks) {
+            var bunkStr3 = String(bk3);
+            perBunkBlocks[bk3].forEach(function(block) {
+                var evLabel = block.type === 'special' ? 'Special Activity' : 'Sports Slot';
+                skeleton.push({ id: uid(), type: 'slot', event: evLabel, division: divName,
+                    startTime: fmtTime(block.startMin), endTime: fmtTime(block.endMin),
+                    _autoGenerated: true, _bunk: bunkStr3,
+                    _suggestedActivity: block.suggestedActivity,
+                    _durationStrict: block.type === 'special' && block.suggestedActivity ? true : false });
+                bunkState[bk3].occupied.push({ startMin: block.startMin, endMin: block.endMin,
+                    event: evLabel, type: block.type + '_slot' });
+                bunkTimelines[bk3].push({ startMin: block.startMin, endMin: block.endMin,
+                    event: evLabel, type: block.type + '_slot',
+                    _autoGenerated: true, _suggestedActivity: block.suggestedActivity });
+                if (block.type === 'sport') bunkState[bk3].sportCount++;
+            });
         }
     }
 
