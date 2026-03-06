@@ -95,33 +95,44 @@
      * @param {string} [divisionOrBunk] - Division name or bunk name (NEW: for division-specific lookup)
      * @returns {number[]} Array of slot indices
      */
-    Utils.findSlotsForRange = function (startMin, endMin, divisionOrBunk = null) {
+   Utils.findSlotsForRange = function (startMin, endMin, divisionOrBunk = null, bunkName = null) {
         const slots = [];
         if (startMin == null || endMin == null) return slots;
 
-        // ★★★ NEW: Division-specific lookup ★★★
         if (divisionOrBunk && window.divisionTimes) {
             let divName = String(divisionOrBunk);
+            let resolvedBunk = bunkName ? String(bunkName) : null;
 
-            // ★★★ FIX: Check if it's already a DIVISION name FIRST ★★★
+            // Check if divisionOrBunk is actually a bunk name
             if (!window.divisionTimes[divName]) {
-                // Not a division, check if it's a bunk name
                 const divisions = window.divisions || {};
                 const bunkStr = String(divisionOrBunk);
                 for (const [dName, dData] of Object.entries(divisions)) {
                     if (dData.bunks?.some(b => String(b) === bunkStr)) {
+                        resolvedBunk = resolvedBunk || bunkStr;
                         divName = dName;
                         break;
                     }
                 }
             }
 
-            // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
+            // ★★★ v7.7: Check per-bunk slots first ★★★
+            if (resolvedBunk) {
+                const perBunk = Utils._getPerBunkSlots(divName, resolvedBunk);
+                if (perBunk) {
+                    for (let i = 0; i < perBunk.length; i++) {
+                        if (!(perBunk[i].endMin <= startMin || perBunk[i].startMin >= endMin)) {
+                            slots.push(i);
+                        }
+                    }
+                    return slots;
+                }
+            }
+
             const divSlots = window.divisionTimes[divName];
             if (divSlots && divSlots.length > 0) {
                 for (let i = 0; i < divSlots.length; i++) {
                     const slot = divSlots[i];
-                    // Check if slot overlaps with requested range
                     if (!(slot.endMin <= startMin || slot.startMin >= endMin)) {
                         slots.push(i);
                     }
@@ -130,7 +141,6 @@
             }
         }
 
-        // No fallback - division context is required
         if (divisionOrBunk) {
             console.warn(`[findSlotsForRange] No divisionTimes for: ${divisionOrBunk}`);
         }
@@ -155,16 +165,22 @@
         let blockStartMin = (typeof block.startTime === "number") ? block.startTime : null;
         let blockEndMin = (typeof block.endTime === "number") ? block.endTime : null;
 
-        // ★ FIX: Use divisionTimes instead of unifiedTimes ★
         if ((!blockStartMin || !blockEndMin) && block.slots?.length) {
             const divName = block.divName || (block.bunk ? Utils.getDivisionForBunk(block.bunk) : null);
-            const divTimes = divName ? window.divisionTimes?.[divName] : null;
+            // ★★★ v7.7: Use per-bunk slots when available ★★★
+            let slotSource = null;
+            if (divName && block.bunk) {
+                slotSource = Utils._getPerBunkSlots(divName, block.bunk);
+            }
+            if (!slotSource && divName) {
+                slotSource = window.divisionTimes?.[divName];
+            }
 
-            if (divTimes && divTimes.length > 0) {
+            if (slotSource && slotSource.length > 0) {
                 const minIndex = Math.min(...block.slots);
                 const maxIndex = Math.max(...block.slots);
-                const firstSlot = divTimes[minIndex];
-                const lastSlot = divTimes[maxIndex];
+                const firstSlot = slotSource[minIndex];
+                const lastSlot = slotSource[maxIndex];
                 if (firstSlot && lastSlot) {
                     blockStartMin = firstSlot.startMin;
                     blockEndMin = lastSlot.endMin;
@@ -173,7 +189,6 @@
         }
         return { blockStartMin, blockEndMin };
     };
-
     // =================================================================
     // 2. FIELD RESERVATION LOGIC (Skeleton-based)
     // =================================================================
@@ -1241,27 +1256,33 @@
      * @param {string} [bunkOrDiv] - Optional bunk name or division name for division-specific lookup
      * @returns {Object} { startMin, endMin } or { startMin: null, endMin: null }
      */
-    Utils.getSlotTimeRange = function(slotIdx, bunkOrDiv) {
-        // Try division-specific lookup first
+   Utils.getSlotTimeRange = function(slotIdx, bunkOrDiv) {
         if (bunkOrDiv && window.divisionTimes) {
             let divName = bunkOrDiv;
+            let bunkName = null;
             
             // Check if it's a bunk name, convert to division
             const possibleDiv = Utils.getDivisionForBunk(bunkOrDiv);
-            if (possibleDiv) divName = possibleDiv;
+            if (possibleDiv) {
+                bunkName = bunkOrDiv; // it was a bunk name
+                divName = possibleDiv;
+            }
             
-            // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
             const divNameStr = String(divName);
+            
+            // ★★★ v7.7: Check per-bunk slots first ★★★
+            if (bunkName) {
+                const perBunk = Utils._getPerBunkSlots(divNameStr, bunkName);
+                if (perBunk && perBunk[slotIdx]) {
+                    return { startMin: perBunk[slotIdx].startMin, endMin: perBunk[slotIdx].endMin };
+                }
+            }
+            
             const slot = window.divisionTimes[divNameStr]?.[slotIdx];
             if (slot) {
-                return {
-                    startMin: slot.startMin,
-                    endMin: slot.endMin
-                };
+                return { startMin: slot.startMin, endMin: slot.endMin };
             }
         }
-        
-        // No fallback - division context is required
         return { startMin: null, endMin: null };
     };
 
@@ -1425,9 +1446,29 @@
      * * @param {string} bunkName - Bunk name
      * @returns {Array} Array of slot objects
      */
+    /**
+     * ★★★ v7.7: PER-BUNK SLOT SUPPORT ★★★
+     * Internal helper: get the actual slot array for a specific bunk.
+     * In per-bunk mode, returns bunk's own slots. In shared mode, returns division slots.
+     */
+    Utils._getPerBunkSlots = function(divName, bunkName) {
+        const divNameStr = String(divName);
+        const divSlots = window.divisionTimes?.[divNameStr];
+        if (!divSlots) return null;
+        if (divSlots._isPerBunk && divSlots._perBunkSlots && bunkName) {
+            const bunkStr = String(bunkName);
+            return divSlots._perBunkSlots[bunkStr] || null;
+        }
+        return null; // not per-bunk mode, use shared slots
+    };
+
     Utils.getSlotsForBunk = function(bunkName) {
         const divName = Utils.getDivisionForBunk(bunkName);
-        return divName ? Utils.getSlotsForDivision(divName) : [];
+        if (!divName) return [];
+        // Check per-bunk first
+        const perBunk = Utils._getPerBunkSlots(divName, bunkName);
+        if (perBunk) return perBunk;
+        return Utils.getSlotsForDivision(divName);
     };
 
     /**
