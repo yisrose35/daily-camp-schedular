@@ -523,11 +523,17 @@ function buildForGrade(params) {
     // 2a: Leagues
     leagueLayers.concat(specialtyLeagueLayers).forEach(function(layer) {
         var isSp = (layer.type || '').toLowerCase() === 'specialty_league';
-        var dur = getLayerDuration(layer), qty = getLayerQty(layer);
+        var durMin = getLayerDuration(layer), durMax = getLayerDurationMax(layer);
+        var wStart = layer.startMin, wEnd = layer.endMin || (wStart + durMax);
+        var windowSize = wEnd - wStart;
+        // Maximize league duration: use max duration capped by window
+        var dur = Math.min(durMax, windowSize);
+        if (dur < durMin) dur = Math.min(durMin, windowSize); // window is tight, take what we can
+        var qty = getLayerQty(layer);
         for (var i = 0; i < Math.max(qty, 1); i++) {
             constrainedPieces.push({
                 eventName: isSp ? 'Specialty League' : 'League Game',
-                duration: dur, windowStart: layer.startMin, windowEnd: layer.endMin || (layer.startMin + dur),
+                duration: dur, windowStart: wStart, windowEnd: wEnd,
                 divisionWide: true, isScarce: false, type: isSp ? 'specialty_league' : 'league',
                 config: null, bunksToServe: bunks.length, capacity: bunks.length
             });
