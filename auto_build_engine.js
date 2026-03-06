@@ -429,6 +429,15 @@ function buildForGrade(params) {
 
     log('  Reqs: Special min=' + specialReq.min + ' max=' + specialReq.max + ' | Sport min=' + sportReq.min + ' max=' + sportReq.max);
     log('  Durs: Special ' + specialDur + '-' + specialDurMax + ' | Sport ' + sportDurMin + '-' + sportDurMax + ' | minAct=' + minActivityDur);
+    // Diagnostic: show raw layer duration fields
+    if (sportLayers.length > 0) {
+        var sl = sportLayers[0];
+        log('  [DIAG] Sport layer[0] raw: durationMin=' + sl.durationMin + ' durationMax=' + sl.durationMax + ' periodMin=' + sl.periodMin + ' duration=' + sl.duration);
+    }
+    if (specialLayers.length > 0) {
+        var spl = specialLayers[0];
+        log('  [DIAG] Special layer[0] raw: durationMin=' + spl.durationMin + ' durationMax=' + spl.durationMax + ' periodMin=' + spl.periodMin + ' duration=' + spl.duration);
+    }
 
     function markBunkOccupied(bunk, startMin, endMin, event, type) {
         bunkState[bunk].occupied.push({ startMin: startMin, endMin: endMin, event: event, type: type });
@@ -760,22 +769,35 @@ function buildForGrade(params) {
 
                 if (!useSpecial || blockDur === 0) {
                     // Sport: use MAX of layer range (maximize time), capped by remaining
+                    // But NEVER exceed the layer's configured max
                     blockDur = Math.min(sportDurMax, remaining);
                     if (blockDur < sportDurMin && remaining >= sportDurMin) blockDur = sportDurMin;
                     blockType = 'sport';
                     hintActivity = null;
                 }
 
+                // HARD CAP: block must never exceed the layer's duration range
+                var layerMax = blockType === 'special' ? specialDurMax : sportDurMax;
+                var layerMin = blockType === 'special' ? specialDur : sportDurMin;
+                if (blockDur > layerMax) blockDur = layerMax;
+
                 // Anti-runt: if leftover after this block can't fit any activity, absorb it
+                // BUT only up to the layer's max duration
                 var afterThis = remaining - blockDur;
                 if (afterThis > 0 && afterThis < minActivityDur) {
-                    var maxDur = blockType === 'special' ? specialDurMax : sportDurMax;
-                    if (remaining <= maxDur) {
-                        blockDur = remaining; // absorb runt
+                    if (remaining <= layerMax) {
+                        blockDur = remaining; // absorb runt — still within layer max
                     } else {
-                        blockDur = Math.min(Math.ceil(remaining / 2), maxDur);
+                        // Can't absorb without exceeding layer max — split instead
+                        // Split into N blocks that fit within [layerMin, layerMax]
+                        var numBlocks = Math.ceil(remaining / layerMax);
+                        blockDur = Math.min(Math.ceil(remaining / numBlocks), layerMax);
+                        blockDur = Math.max(blockDur, layerMin);
                     }
                 }
+
+                // Final hard cap (defense)
+                if (blockDur > layerMax) blockDur = layerMax;
 
                 // Snap to 5-min
                 var snapped = snapTo5(cursor + blockDur);
