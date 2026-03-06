@@ -1290,25 +1290,21 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             // ★★★ KEY FIX: Skip initialization for divisions NOT being generated ★★★
             const isBeingGenerated = !allowedDivisionsSet || allowedDivisionsSet.has(String(divName));
             
-            (divisions[divName].bunks || []).forEach(bunk => {
+           (divisions[divName].bunks || []).forEach(bunk => {
+                const bunkSlotCount = (perBunkSlots && perBunkSlots[String(bunk)]) ? perBunkSlots[String(bunk)].length : slotCount;
                 if (isBeingGenerated) {
-                    // This division IS being generated — create fresh empty array
-                    window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
+                    window.scheduleAssignments[bunk] = new Array(bunkSlotCount).fill(null);
                 } else {
-                    // This division is NOT being generated — PRESERVE existing data
                     if (!window.scheduleAssignments[bunk]) {
-                        // Only create if doesn't exist (shouldn't blank existing)
-                        window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
-                    } else if (window.scheduleAssignments[bunk].length !== slotCount && slotCount > 0) {
-                        // Resize if needed but KEEP the data
+                        window.scheduleAssignments[bunk] = new Array(bunkSlotCount).fill(null);
+                    } else if (window.scheduleAssignments[bunk].length !== bunkSlotCount && bunkSlotCount > 0) {
                         const existing = window.scheduleAssignments[bunk];
-                        const resized = new Array(slotCount).fill(null);
-                        for (let i = 0; i < Math.min(existing.length, slotCount); i++) {
+                        const resized = new Array(bunkSlotCount).fill(null);
+                        for (let i = 0; i < Math.min(existing.length, bunkSlotCount); i++) {
                             resized[i] = existing[i];
                         }
                         window.scheduleAssignments[bunk] = resized;
                     }
-                    // else: existing array is correct size — leave it completely alone
                 }
             });
         });
