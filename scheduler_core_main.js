@@ -2024,7 +2024,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
             // Check if it's a regular league block
             if (normalizedLeague || item.type === 'league') {
-                leagueBlocks.push({
+               leagueBlocks.push({
                     divName,
                     event: eventName,
                     startTime: sMin,
@@ -2032,8 +2032,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     slots,
                     bunks: bunkList,
                     type: 'league',
-                    // ★★★ MULTIPLE LEAGUE SUPPORT: Pass through which league this block is for ★★★
-                    leagueName: item.leagueName || null
+                    leagueName: item.leagueName || null,
+                    _doubleHeaderPairId: item._doubleHeaderPairId || null
                 });
                 return;
             }
