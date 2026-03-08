@@ -955,6 +955,7 @@ for (const futureDate of Object.keys(allDailyData)) {
                                 field: 'League: ' + league.name,
                                 sport: 'Game ' + gameNum,
                                 _activity: 'League: ' + league.name,
+                                _leagueName: league.name,
                                 _h2h: true, _fixed: true,
                                 _allMatchups: g1All.map(function(a){ return a.team1+' vs '+a.team2+' @ '+a.field+' ('+a.sport+')'; }),
                                 _gameLabel: lbl1
@@ -977,6 +978,7 @@ for (const futureDate of Object.keys(allDailyData)) {
                                 field: 'League: ' + league.name,
                                 sport: 'Game ' + (gameNum + 1),
                                 _activity: 'League: ' + league.name,
+                                _leagueName: league.name,
                                 _h2h: true, _fixed: true,
                                 _allMatchups: g2All.map(function(a){ return a.team1+' vs '+a.team2+' @ '+a.field+' ('+a.sport+')'; }),
                                 _gameLabel: lbl2
