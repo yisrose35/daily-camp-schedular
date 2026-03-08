@@ -1216,8 +1216,9 @@
     }
 
     // =========================================================================
-    // GAME RESULTS VIEW
-    // =========================================================================    function renderGameResultsUI(league, container) {
+   // GAME RESULTS VIEW
+    // =========================================================================
+    function renderGameResultsUI(league, container) {        
         if (!container) return;
 
         container.innerHTML = '';
