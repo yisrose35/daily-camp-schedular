@@ -979,7 +979,28 @@ function buildForGrade(params) {
             }
         }
 
-        // Step 2: No merge — blocks already at correct durations from fill loop
+       // Step 2: Merge adjacent SPECIAL blocks only (to reconstruct full durations
+        // from sub-slices created by duration boundaries). Sport blocks stay split.
+        for (var bk2 in perBunkBlocks) {
+            var blocks = perBunkBlocks[bk2];
+            var merged = [];
+            for (var mi = 0; mi < blocks.length; mi++) {
+                var curr = blocks[mi];
+                if (merged.length > 0) {
+                    var prev = merged[merged.length - 1];
+                    if (prev.endMin === curr.startMin &&
+                        prev.type === curr.type &&
+                        prev.suggestedActivity === curr.suggestedActivity &&
+                        prev.type === 'special' && prev.suggestedActivity) {
+                        prev.endMin = curr.endMin;
+                        continue;
+                    }
+                }
+                merged.push({ startMin: curr.startMin, endMin: curr.endMin,
+                    type: curr.type, suggestedActivity: curr.suggestedActivity });
+            }
+            perBunkBlocks[bk2] = merged;
+        }
 
         // Step 2b: Enforce sportDurMin floor — merge short sport blocks with neighbors
         for (var bk2b in perBunkBlocks) {
