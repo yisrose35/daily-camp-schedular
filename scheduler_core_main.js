@@ -1816,29 +1816,15 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             if (isPinnedType && item.type !== 'split' && item.type !== 'smart') {
                 // ★★★ v17.9 FIX: Use exact slot matching for pinned events too ★★★
                 const exactSlot = findExactSlotForTimeRange(divName, sMin, eMin);
-                const defaultSlots = exactSlot !== -1 ? [exactSlot] : Utils.findSlotsForRange(sMin, eMin, divName);
-                if (defaultSlots.length > 0 || (window.divisionTimes?.[divName]?._isPerBunk)) {
+                const slots = exactSlot !== -1 ? [exactSlot] : Utils.findSlotsForRange(sMin, eMin, divName);
+                if (slots.length > 0) {
                     const eventName = item.event || item.type || 'Pinned Event';
                     
                     // ★★★ AUTO BUILD: Per-bunk pinned events ★★★
                     const _pinnedTargetBunks = item._bunk 
                         ? [item._bunk].filter(b => bunkList.includes(b)) 
                         : bunkList;
-                    const _perBunkSlots = window.divisionTimes?.[divName]?._perBunkSlots;
                     _pinnedTargetBunks.forEach(bunk => {
-                        // ★★★ v17.13: Per-bunk slot lookup for pinned events ★★★
-                        let slots = defaultSlots;
-                        if (_perBunkSlots && _perBunkSlots[String(bunk)]) {
-                            const bunkSlotArr = _perBunkSlots[String(bunk)];
-                            const bunkExact = bunkSlotArr.findIndex(s => s.startMin === sMin && s.endMin === eMin);
-                            if (bunkExact !== -1) {
-                                slots = [bunkExact];
-                            } else {
-                                // Containing match
-                                const bunkContain = bunkSlotArr.findIndex(s => s.startMin <= sMin && s.endMin >= eMin);
-                                if (bunkContain !== -1) slots = [bunkContain];
-                            }
-                        }
                         const existing = window.scheduleAssignments[bunk]?.[slots[0]];
                         if (existing && existing._bunkOverride) return;
 
