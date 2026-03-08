@@ -110,8 +110,7 @@
         const originalRunSkeletonOptimizer = window.runSkeletonOptimizer;
 
         // Create wrapper that builds divisionTimes first
-        window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
-            
+        window.runSkeletonOptimizer = async function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {    
             // ★★★ FIX v1.1: Fallback if skeleton parameter is empty ★★★
             if (!manualSkeleton || manualSkeleton.length === 0) {
                 log('Skeleton parameter empty, checking fallbacks...');
@@ -175,11 +174,13 @@
             // "No slots found for range" errors on split tiles and mis-indexed pins.
             window._divisionTimesLocked = true;
             
-            try {
+           try {
                 // ★★★ FIX v1.5: Lazy lookup — scheduler_core_main.js loads AFTER this file ★★★
                 const optimizer = originalRunSkeletonOptimizer || window._coreRunSkeletonOptimizer;
                 if (optimizer) {
-                    return optimizer.call(this, manualSkeleton, externalOverrides, allowedDivisions, existingScheduleSnapshot, existingUnifiedTimes);
+                    // ★★★ FIX v1.4: AWAIT the async optimizer so the lock stays active ★★★
+                    const result = await optimizer.call(this, manualSkeleton, externalOverrides, allowedDivisions, existingScheduleSnapshot, existingUnifiedTimes);
+                    return result;
                 } else {
                     console.error('[DivTimesIntegration] ❌ No original optimizer found! scheduler_core_main.js may not have loaded.');
                     return false;
