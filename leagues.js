@@ -245,10 +245,12 @@
             standings: (league.standings && typeof league.standings === 'object') ? league.standings : {},
             games: Array.isArray(league.games) ? league.games : [],
             enabled: league.enabled !== false,
-           schedulingPriority: ['sport_variety', 'matchup_variety'].includes(league.schedulingPriority) 
+          schedulingPriority: ['sport_variety', 'matchup_variety'].includes(league.schedulingPriority) 
                 ? league.schedulingPriority 
                 : 'sport_variety',
-            awayDoubleheader: league.awayDoubleheader || null
+            offCampus: (league.offCampus && typeof league.offCampus === 'object')
+                ? { enabled: league.offCampus.enabled === true, zone: typeof league.offCampus.zone === 'string' ? league.offCampus.zone : '', teamsPerDay: parseInt(league.offCampus.teamsPerDay) || 0 }
+                : { enabled: false, zone: '', teamsPerDay: 0 }
         };
 
         // ★ ORPHAN CLEANUP: Remove references to deleted divisions
@@ -1065,144 +1067,157 @@
                 }
             }
         };
-       teamCard.appendChild(teamInput);
+      teamCard.appendChild(teamInput);
         container.appendChild(teamCard);
 
-        // ═════════════════════════════════════════════════════════
-        // ADVANCED SETTINGS (collapsed accordion — niche features)
-        // ═════════════════════════════════════════════════════════
-        var advancedWrap = document.createElement('div');
-        advancedWrap.style.cssText = 'margin-top:4px; border:1px dashed #E5E7EB; border-radius:12px; overflow:hidden;';
-
-        var advancedHeader = document.createElement('div');
-        advancedHeader.style.cssText = 'padding:10px 14px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; user-select:none;';
-        advancedHeader.innerHTML =
-            '<span style="font-size:0.8rem; color:#9CA3AF; font-weight:500;">Advanced Settings</span>' +
-            '<svg class="adv-caret" width="16" height="16" fill="none" stroke="#9CA3AF" stroke-width="2" viewBox="0 0 24 24" style="transition:transform 0.2s;"><path d="M9 5l7 7-7 7"></path></svg>';
-
-        var advancedBody = document.createElement('div');
-        advancedBody.style.cssText = 'display:none; padding:0 14px 14px;';
-
-        advancedHeader.onclick = function () {
-            var isOpen = advancedBody.style.display === 'block';
+        // ═══════════════════════════════════════════════════════════════
+        // ADVANCED SETTINGS (Collapsible)
+        // ═══════════════════════════════════════════════════════════════
+        const advancedWrap = document.createElement('div');
+        advancedWrap.style.cssText = 'margin-top:4px;';
+        const advancedToggle = document.createElement('div');
+        advancedToggle.style.cssText = 'display:flex; align-items:center; gap:6px; padding:10px 0; cursor:pointer; user-select:none;';
+        const advancedCaret = document.createElement('span');
+        advancedCaret.textContent = '\u25B6';
+        advancedCaret.style.cssText = 'font-size:0.65rem; color:#9CA3AF; transition:transform 0.2s;';
+        const advancedLabel = document.createElement('span');
+        advancedLabel.style.cssText = 'font-size:0.8rem; color:#9CA3AF; font-weight:500; letter-spacing:0.02em;';
+        advancedLabel.textContent = 'Advanced Settings';
+        advancedToggle.appendChild(advancedCaret);
+        advancedToggle.appendChild(advancedLabel);
+        const advancedBody = document.createElement('div');
+        advancedBody.style.cssText = 'display:none; padding-top:4px;';
+        const advancedShouldOpen = league.offCampus?.enabled === true;
+        advancedToggle.onclick = function () {
+            const isOpen = advancedBody.style.display !== 'none';
             advancedBody.style.display = isOpen ? 'none' : 'block';
-            advancedHeader.querySelector('.adv-caret').style.transform = isOpen ? '' : 'rotate(90deg)';
+            advancedCaret.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(90deg)';
+            advancedLabel.style.color = isOpen ? '#9CA3AF' : '#475569';
         };
-
-        // --- AWAY DOUBLEHEADER CARD (inside advanced) ---
-        var awayCard = document.createElement('div');
-        awayCard.className = 'league-section-card';
-        awayCard.style.marginBottom = '0';
-        awayCard.innerHTML =
-            '<div class="league-section-header">' +
-            '<span class="league-section-title">Away Doubleheader</span>' +
-            '<span style="font-size:0.75rem; color:#9CA3AF;">Off-campus back-to-back</span>' +
-            '</div>';
-
-        var awayDesc = document.createElement('p');
-        awayDesc.className = 'league-priority-desc';
-        awayDesc.textContent = 'Teams travel in groups to an off-campus facility and play back-to-back games. Groups rotate daily.';
-        awayCard.appendChild(awayDesc);
-
-        var awayToggleRow = document.createElement('div');
-        awayToggleRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:10px;';
-        var awayTogLabel = document.createElement('label');
-        awayTogLabel.className = 'switch';
-        var awayCb = document.createElement('input');
-        awayCb.type = 'checkbox';
-        awayCb.checked = !!league.awayDoubleheader?.enabled;
-        var awaySlider = document.createElement('span');
-        awaySlider.className = 'slider';
-        awayTogLabel.append(awayCb, awaySlider);
-        var awayTogText = document.createElement('span');
-        awayTogText.style.cssText = 'font-size:0.85rem; color:#374151;';
-        awayTogText.textContent = league.awayDoubleheader?.enabled ? 'Enabled' : 'Disabled';
-        awayToggleRow.append(awayTogLabel, awayTogText);
-        awayCard.appendChild(awayToggleRow);
-
-        awayCb.onchange = function () {
-            if (!league.awayDoubleheader) league.awayDoubleheader = { enabled: false, groupSize: 4, gamesPerVisit: 2 };
-            league.awayDoubleheader.enabled = awayCb.checked;
-            saveLeaguesData();
-            renderConfigSections(league, container);
-        };
-
-        if (league.awayDoubleheader?.enabled) {
-            var awaySettingsDiv = document.createElement('div');
-            awaySettingsDiv.style.cssText = 'display:flex; flex-wrap:wrap; gap:16px; margin-top:6px;';
-
-            var groupSizeDiv = document.createElement('div');
-            groupSizeDiv.style.cssText = 'flex:1; min-width:130px;';
-            var gsLabel = document.createElement('label');
-            gsLabel.style.cssText = 'font-size:0.78rem; color:#6B7280; display:block; margin-bottom:4px;';
-            gsLabel.textContent = 'Teams per trip';
-            var gsInput = document.createElement('input');
-            gsInput.type = 'number';
-            gsInput.min = '2';
-            gsInput.max = String(league.teams?.length || 20);
-            gsInput.value = league.awayDoubleheader.groupSize || 4;
-            gsInput.className = 'league-team-input';
-            gsInput.onchange = function () {
-                var val = parseInt(gsInput.value) || 4;
-                if (val < 2) val = 2;
-                if (val % 2 !== 0) val += 1;
-                league.awayDoubleheader.groupSize = val;
-                gsInput.value = val;
-                saveLeaguesData();
-                renderConfigSections(league, container);
-            };
-            groupSizeDiv.append(gsLabel, gsInput);
-
-            var gpvDiv = document.createElement('div');
-            gpvDiv.style.cssText = 'flex:1; min-width:130px;';
-            var gpvLabel = document.createElement('label');
-            gpvLabel.style.cssText = 'font-size:0.78rem; color:#6B7280; display:block; margin-bottom:4px;';
-            gpvLabel.textContent = 'Games per visit';
-            var gpvInput = document.createElement('input');
-            gpvInput.type = 'number';
-            gpvInput.min = '1';
-            gpvInput.max = '4';
-            gpvInput.value = league.awayDoubleheader.gamesPerVisit || 2;
-            gpvInput.className = 'league-team-input';
-            gpvInput.onchange = function () {
-                league.awayDoubleheader.gamesPerVisit = parseInt(gpvInput.value) || 2;
-                saveLeaguesData();
-                renderConfigSections(league, container);
-            };
-            gpvDiv.append(gpvLabel, gpvInput);
-
-            awaySettingsDiv.append(groupSizeDiv, gpvDiv);
-            awayCard.appendChild(awaySettingsDiv);
-
-            var numTeams = league.teams?.length || 0;
-            var gs = league.awayDoubleheader.groupSize || 4;
-            var gpv = league.awayDoubleheader.gamesPerVisit || 2;
-            var numGroups = Math.ceil(numTeams / gs);
-            var groupRounds = gs - 1 + (gs % 2 === 1 ? 1 : 0);
-            var infoNote = document.createElement('p');
-            infoNote.className = 'league-priority-note';
-            if (numTeams > 0) {
-                infoNote.textContent = numTeams + ' teams \u2192 ' + numGroups + ' group' + (numGroups !== 1 ? 's' : '') + ' of ' + gs + '. ' +
-                    'Each group plays ' + gpv + ' game' + (gpv !== 1 ? 's' : '') + ' per visit. ' +
-                    groupRounds + ' unique rounds per group before repeating.';
-            } else {
-                infoNote.textContent = 'Add teams to see group breakdown.';
-            }
-            awayCard.appendChild(infoNote);
-
+        if (advancedShouldOpen) {
             advancedBody.style.display = 'block';
-            advancedHeader.querySelector('.adv-caret').style.transform = 'rotate(90deg)';
+            advancedCaret.style.transform = 'rotate(90deg)';
+            advancedLabel.style.color = '#475569';
         }
 
-        advancedBody.appendChild(awayCard);
-        advancedWrap.append(advancedHeader, advancedBody);
+        const offCampusCard = document.createElement('div');
+        offCampusCard.className = 'league-section-card';
+        offCampusCard.innerHTML = '<div class="league-section-header"><span class="league-section-title">Off-Campus Double-Header</span><span>Back-to-back away games</span></div>';
+        if (!league.offCampus) league.offCampus = { enabled: false, zone: '', teamsPerDay: 0 };
+
+        const ocToggleWrap = document.createElement('div');
+        ocToggleWrap.style.cssText = 'display:flex; align-items:center; gap:12px; margin-bottom:12px;';
+        const ocToggle = document.createElement('label');
+        ocToggle.style.cssText = 'display:flex; align-items:center; gap:8px; cursor:pointer; font-size:0.85rem;';
+        const ocCb = document.createElement('input');
+        ocCb.type = 'checkbox';
+        ocCb.checked = league.offCampus.enabled === true;
+        ocCb.onchange = function () { league.offCampus.enabled = ocCb.checked; saveLeaguesData(); renderConfigSections(league, container); };
+        ocToggle.appendChild(ocCb);
+        ocToggle.appendChild(document.createTextNode('Enable off-campus double-headers'));
+        ocToggleWrap.appendChild(ocToggle);
+        offCampusCard.appendChild(ocToggleWrap);
+
+        if (league.offCampus.enabled) {
+            const zoneWrap = document.createElement('div');
+            zoneWrap.style.cssText = 'margin-bottom:12px;';
+            const zoneLabel = document.createElement('div');
+            zoneLabel.style.cssText = 'font-size:0.8rem; color:#6B7280; margin-bottom:4px;';
+            zoneLabel.textContent = 'Off-Campus Zone:';
+            zoneWrap.appendChild(zoneLabel);
+            const zoneSelect = document.createElement('select');
+            zoneSelect.style.cssText = 'width:100%; padding:8px 12px; border:1px solid #E5E7EB; border-radius:8px; font-size:0.85rem; background:white;';
+            const settings = window.loadGlobalSettings?.() || {};
+            const locationZones = settings.locationZones || settings.global?.locationZones || {};
+            zoneSelect.innerHTML = '<option value="">-- Select Zone --</option>';
+            Object.keys(locationZones).forEach(function (zoneName) {
+                const zone = locationZones[zoneName];
+                if (zone.isDefault) return;
+                const opt = document.createElement('option');
+                opt.value = zoneName;
+                opt.textContent = zoneName + ' (' + (zone.fields?.length || 0) + ' fields)';
+                if (league.offCampus.zone === zoneName) opt.selected = true;
+                zoneSelect.appendChild(opt);
+            });
+            zoneSelect.onchange = function () { league.offCampus.zone = zoneSelect.value; saveLeaguesData(); renderConfigSections(league, container); };
+            zoneWrap.appendChild(zoneSelect);
+            offCampusCard.appendChild(zoneWrap);
+
+            const teamsWrap = document.createElement('div');
+            teamsWrap.style.cssText = 'margin-bottom:12px;';
+            const teamsLabel = document.createElement('div');
+            teamsLabel.style.cssText = 'font-size:0.8rem; color:#6B7280; margin-bottom:4px;';
+            teamsLabel.textContent = 'Teams going off-campus per day:';
+            teamsWrap.appendChild(teamsLabel);
+            const teamsInput = document.createElement('input');
+            teamsInput.type = 'number'; teamsInput.min = '2'; teamsInput.max = String(league.teams?.length || 20);
+            teamsInput.step = '2'; teamsInput.value = league.offCampus.teamsPerDay || '';
+            teamsInput.placeholder = 'e.g., 4 (must be even)';
+            teamsInput.style.cssText = 'width:100%; padding:8px 12px; border:1px solid #E5E7EB; border-radius:8px; font-size:0.85rem; background:white;';
+            teamsInput.onchange = function () {
+                var val = parseInt(teamsInput.value) || 0;
+                if (val % 2 !== 0 && val > 0) { val = val + 1; teamsInput.value = val; }
+                league.offCampus.teamsPerDay = val; saveLeaguesData(); renderConfigSections(league, container);
+            };
+            teamsWrap.appendChild(teamsInput);
+            offCampusCard.appendChild(teamsWrap);
+
+            if (league.offCampus.teamsPerDay > 0 && league.offCampus.zone) {
+                var numTeamsAway = league.offCampus.teamsPerDay;
+                var totalTeams = (league.teams || []).length;
+                var numTeamsHome = totalTeams - numTeamsAway;
+                var infoDiv = document.createElement('div');
+                infoDiv.style.cssText = 'background:#F0FDF4; border:1px solid #BBF7D0; border-radius:8px; padding:10px 12px; font-size:0.8rem; color:#166534; margin-bottom:12px;';
+                infoDiv.innerHTML = '<strong>' + numTeamsAway + ' teams</strong> (' + Math.floor(numTeamsAway/2) + ' matchups) go to <strong>' + escapeHtml(league.offCampus.zone) + '</strong> each game day<br><span style="color:#6B7280;">\u2192 ' + numTeamsHome + ' teams (' + Math.floor(numTeamsHome/2) + ' matchups) stay on campus</span><br><span style="color:#6B7280;">\u2192 Teams stay at the same location for both games, switching opponents for Game 2</span>';
+                var zoneFieldNames = locationZones[league.offCampus.zone]?.fields || [];
+                var globalFields = settings.fields || settings.app1?.fields || [];
+                var zoneSports = new Set();
+                zoneFieldNames.forEach(function(fn) { var fc = globalFields.find(function(f){return f.name===fn;}); if (fc && fc.activities) fc.activities.forEach(function(s){zoneSports.add(s);}); });
+                if (zoneSports.size > 0) infoDiv.innerHTML += '<br><span style="color:#6B7280; font-style:italic;">Sports at ' + escapeHtml(league.offCampus.zone) + ': ' + Array.from(zoneSports).join(', ') + '</span>';
+                offCampusCard.appendChild(infoDiv);
+                if (numTeamsAway >= totalTeams) {
+                    var warnDiv = document.createElement('div');
+                    warnDiv.style.cssText = 'background:#FEF2F2; border:1px solid #FECACA; border-radius:8px; padding:8px 12px; font-size:0.8rem; color:#991B1B; margin-bottom:12px;';
+                    warnDiv.textContent = 'Teams per day must be less than total teams (' + totalTeams + '). Some teams need to stay on campus.';
+                    offCampusCard.appendChild(warnDiv);
+                }
+            }
+
+            var leagueHist = window.loadGlobalSettings?.()?.leagueHistory || {};
+            var ocCounts = leagueHist.offCampusCounts || {};
+            var teamTrips = {}, hasHist = false;
+            (league.teams || []).forEach(function (team) { var c = ocCounts[league.name + '|' + team] || 0; teamTrips[team] = c; if (c > 0) hasHist = true; });
+            if (hasHist) {
+                var histDiv = document.createElement('div');
+                histDiv.style.cssText = 'margin-bottom:12px; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:10px 12px;';
+                var histTitle = document.createElement('div');
+                histTitle.style.cssText = 'font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:6px;';
+                histTitle.textContent = 'Off-Campus Trip Counts:';
+                histDiv.appendChild(histTitle);
+                var chipWrap = document.createElement('div');
+                chipWrap.style.cssText = 'display:flex; flex-wrap:wrap; gap:6px;';
+                Object.entries(teamTrips).sort(function(a,b){return a[1]-b[1];}).forEach(function(entry) {
+                    var chip = document.createElement('span');
+                    chip.style.cssText = 'display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:6px; font-size:0.75rem; background:#E2E8F0; color:#334155;';
+                    chip.textContent = entry[0] + ': ' + entry[1]; chipWrap.appendChild(chip);
+                });
+                histDiv.appendChild(chipWrap); offCampusCard.appendChild(histDiv);
+            }
+
+            var note = document.createElement('p');
+            note.className = 'league-priority-note';
+            note.textContent = 'When 2 back-to-back league slots are linked as a double-header, teams with the fewest off-campus trips get priority. In Sport Variety mode, teams who recently played the off-campus sports are deprioritized.';
+            offCampusCard.appendChild(note);
+        }
+        advancedBody.appendChild(offCampusCard);
+        advancedWrap.appendChild(advancedToggle);
+        advancedWrap.appendChild(advancedBody);
         container.appendChild(advancedWrap);
     }
 
     // =========================================================================
     // GAME RESULTS VIEW
-    // =========================================================================
-    function renderGameResultsUI(league, container) {
+    // =========================================================================    function renderGameResultsUI(league, container) {
         if (!container) return;
 
         container.innerHTML = '';
