@@ -1054,8 +1054,13 @@
                         
                         // Also hydrate divisionTimes if available
                         if (cloudResult.data.divisionTimes) {
-                            window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(cloudResult.data.divisionTimes) || cloudResult.data.divisionTimes;
-                        }
+                            var _hasPerBunk = Object.values(window.divisionTimes || {}).some(function(dt) { return dt && dt._isPerBunk; });
+                            if (!_hasPerBunk) {
+                                window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(cloudResult.data.divisionTimes) || cloudResult.data.divisionTimes;
+                            } else {
+                                console.log('[OPTIMIZER] ☁️ Skipping cloud divisionTimes — per-bunk mode active');
+                            }
+                        }                        }
                         
                         console.log(`[OPTIMIZER] ☁️ Merged snapshot: ${Object.keys(merged).length} total bunks (${myBunks.size} mine)`);
                     }
