@@ -776,7 +776,7 @@ else penalty += 200;
             if (sugNorm && actNorm === sugNorm) {
                 penalty -= 80000; // Very strong preference — nearly guarantees this pick
             } else if (sugNorm) {
-                penalty += 15000;  // Strong penalty for ignoring the suggestion
+                penalty += 5000;  // Strong penalty for ignoring the suggestion
             }
         }
 
@@ -1242,13 +1242,7 @@ else penalty += 200;
                 // If a special activity has a configured duration that's much shorter than
                 // this block, exclude it from the domain. This prevents Art (20min) from
                 // being placed in a 50min sport slot. Tolerance: 10 minutes.
-                if (c2.type === 'special' && hasTime && !_dStrict) {
-                    var _revDur = S.getActivityDuration(c2.activityName);
-                    var _blkSize = endMin - startMin;
-                    if (_revDur > 0 && _blkSize > _revDur + 10) {
-                        continue; // Block is too large for this activity
-                    }
-                }
+                
                 domain.add(ci2);            }
             domains.set(bi, domain);
         }
