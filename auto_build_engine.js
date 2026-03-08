@@ -807,18 +807,36 @@ function buildForGrade(params) {
                         var available = gapSpecials.filter(function(sp) {
                             return bunkState[bunk].usedActivities.indexOf(sp.name) < 0 && !isSpecAtCap(sp.name, cursor);
                         }).map(function(sp) { return sp.name; });
-                        var ranked = getRankedSpecials(bunk, available);
-                        var picked = ranked.length > 0 ? ranked[0] : null;
+                       var ranked = getRankedSpecials(bunk, available);
+                        // ★★★ v5.1: Validate leftover time fits a sport block ★★★
+                        // Try each ranked special. If picking it would leave less than
+                        // sportDurMin for the remaining sport block, skip it and try
+                        // the next shorter special. If none fit, this bunk does sport.
+                        var picked = null;
+                        for (var ri = 0; ri < ranked.length; ri++) {
+                            var candidate = ranked[ri];
+                            var candDur = candidate.duration || specialDurMin;
+                            var leftover = remaining - candDur;
+                            // Valid if: leftover is 0 (special fills gap exactly),
+                            // or leftover >= sportDurMin (room for a proper sport block)
+                            if (leftover === 0 || leftover >= sportDurMin) {
+                                picked = candidate;
+                                break;
+                            }
+                            // Also valid if leftover fits another special instead of sport
+                            // (edge case: two short specials can share a gap)
+                            // For now, just skip — the bunk will do sport for the full gap
+                            log('        ' + bunk + ': skipping ' + candidate.name + ' (' + candDur + 'min) — leftover ' + leftover + 'min < sportDurMin ' + sportDurMin);
+                        }
                         if (picked) {
                             bunkSpecPicks.push({ bunk: bunk, specialName: picked.name, duration: picked.duration || specialDurMin });
                             recordSpecUsage(picked.name, cursor);
                             bunkState[bunk].usedActivities.push(picked.name);
                             bunkState[bunk].specialCount++;
                         } else {
-                            // No special available — this bunk does sport
+                            // No special fits without leaving a runt sport block — this bunk does sport
                             bunkSpecPicks.push({ bunk: bunk, specialName: null, duration: 0 });
-                        }
-                    });
+                        }                    });
 
                     // Step 2: Group by duration
                     var durGroups = {}; // { duration: [{ bunk, specialName }] }
