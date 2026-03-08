@@ -262,8 +262,8 @@
                 // proper split-half slots. The localStorage version is stale and
                 // lacks split expansion, so restoring it mid-generation breaks
                 // slot lookups for split tiles and causes mis-indexed pinned events.
-                if (result?.divisionTimes && !window._divisionTimesLocked) {
-                    window.divisionTimes = window.DivisionTimesSystem?.deserialize(result.divisionTimes) || {};
+                if (result?.divisionTimes && !window._divisionTimesLocked && !window.divisionTimes?.[Object.keys(window.divisionTimes || {})[0]]?._isPerBunk) {
+    window.divisionTimes = window.DivisionTimesSystem?.deserialize(result.divisionTimes) || {};
                     log('Restored divisionTimes from localStorage');
                 }
 
