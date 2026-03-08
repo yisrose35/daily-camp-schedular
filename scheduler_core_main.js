@@ -1052,9 +1052,15 @@
                             window.leagueAssignments = mergedLeagues;
                         }
                         
-                        // Also hydrate divisionTimes if available
+                       // Also hydrate divisionTimes if available
+                        // ★★★ FIX: Don't overwrite per-bunk divisionTimes from auto builder ★★★
                         if (cloudResult.data.divisionTimes) {
-                            window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(cloudResult.data.divisionTimes) || cloudResult.data.divisionTimes;
+                            const _hasPerBunk = Object.values(window.divisionTimes || {}).some(dt => dt?._isPerBunk);
+                            if (!_hasPerBunk) {
+                                window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(cloudResult.data.divisionTimes) || cloudResult.data.divisionTimes;
+                            } else {
+                                console.log('[OPTIMIZER] ☁️ Skipping cloud divisionTimes — per-bunk mode active from auto builder');
+                            }
                         }
                         
                         console.log(`[OPTIMIZER] ☁️ Merged snapshot: ${Object.keys(merged).length} total bunks (${myBunks.size} mine)`);
