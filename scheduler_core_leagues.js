@@ -947,17 +947,44 @@ for (const futureDate of Object.keys(allDailyData)) {
                 var g1All = g1Off.concat(g1On), g2All = g2Off.concat(g2On);
                 var lbl1 = league.name + ' Game ' + gameNum, lbl2 = league.name + ' Game ' + (gameNum + 1);
 
-                if (g1All.length > 0 && fillBlock) {
-                    ocDivs.forEach(function(d) { fillBlock(d, s1, g1All, {isLeague:true, leagueName:league.name, gameLabel:lbl1, sport:g1All[0]?.sport||lSports[0]}); });
-                    var uf1 = [...new Set(g1All.map(function(a){return a.field;}))];
-                    if (window.GlobalFieldLocks && s1.length > 0) {
+              if (g1All.length > 0 && fillBlock) {
+                    ocDivs.forEach(function(d) {
+                        var blocksForDiv = (blocksByTime[timeKey1]?.byDivision[d]) || [];
+                        blocksForDiv.forEach(function(block) {
+                            var pick = {
+                                field: 'League: ' + league.name,
+                                sport: 'Game ' + gameNum,
+                                _activity: 'League: ' + league.name,
+                                _h2h: true, _fixed: true,
+                                _allMatchups: g1All.map(function(a){ return a.team1+' vs '+a.team2+' @ '+a.field+' ('+a.sport+')'; }),
+                                _gameLabel: lbl1
+                            };
+                            fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);
+                            block.processed = true;
+                        });
+                    });
+                    var uf1 = [...new Set(g1All.map(function(a){return a.field;}))];                    if (window.GlobalFieldLocks && s1.length > 0) {
                         var ds1 = window.divisionTimes?.[ocDivs[0]]||[];
                         var st1 = ds1[s1[0]]?.startMin, en1 = ds1[s1[s1.length-1]]?.endMin||st1+40;
                         uf1.forEach(function(f){window.GlobalFieldLocks.lockField(f,s1,league.name,'league',{startMin:st1,endMin:en1});});
                     }
                 }
-                if (g2All.length > 0 && fillBlock) {
-                    ocDivs.forEach(function(d) { fillBlock(d, s2, g2All, {isLeague:true, leagueName:league.name, gameLabel:lbl2, sport:g2All[0]?.sport||lSports[0]}); });
+               if (g2All.length > 0 && fillBlock) {
+                    ocDivs.forEach(function(d) {
+                        var blocksForDiv = (blocksByTime[timeKey2]?.byDivision[d]) || [];
+                        blocksForDiv.forEach(function(block) {
+                            var pick = {
+                                field: 'League: ' + league.name,
+                                sport: 'Game ' + (gameNum + 1),
+                                _activity: 'League: ' + league.name,
+                                _h2h: true, _fixed: true,
+                                _allMatchups: g2All.map(function(a){ return a.team1+' vs '+a.team2+' @ '+a.field+' ('+a.sport+')'; }),
+                                _gameLabel: lbl2
+                            };
+                            fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);
+                            block.processed = true;
+                        });
+                    });
                     var uf2 = [...new Set(g2All.map(function(a){return a.field;}))];
                     if (window.GlobalFieldLocks && s2.length > 0) {
                         var ds2 = window.divisionTimes?.[ocDivs[0]]||[];
