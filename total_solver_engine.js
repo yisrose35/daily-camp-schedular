@@ -767,17 +767,33 @@ else penalty += 200;
         if (_isFGPenalty) penalty -= 15000;
 
 
-        // ★★★ v15.5: AUTO BUILD _suggestedActivity bonus ★★★
-        // If the auto builder suggested a specific activity for this block,
-        // give a strong bonus when the candidate matches. The solver still
-        // validates all rules (capacity, field locks, time rules, rotation)
-        // via the hard constraints above — this just steers the pick.
+      // ★★★ v15.6: AUTO BUILD _suggestedActivity — near-hard constraint ★★★
+        // The auto builder carefully planned which bunk gets which activity and for
+        // how long. The suggestion should be respected unless hard constraints
+        // (capacity, field locks, same-day duplicate) prevent it.
         if (block._suggestedActivity) {
             var sugNorm = normName(block._suggestedActivity);
             if (sugNorm && actNorm === sugNorm) {
-                penalty -= 25000; // Strong preference for the suggestion
+                penalty -= 80000; // Very strong preference — nearly guarantees this pick
             } else if (sugNorm) {
-                penalty += 3000;  // Mild penalty for ignoring the suggestion
+                penalty += 15000;  // Strong penalty for ignoring the suggestion
+            }
+        }
+
+        // ★★★ v15.6: REVERSE DURATION CHECK — prevent short specials in wrong-sized slots ★★★
+        // If this activity has a configured duration (e.g., Art=20min) and this block
+        // is significantly larger (e.g., 50min sport slot), heavily penalize.
+        // This prevents the solver from "stealing" a short special and placing it
+        // in a long slot where it doesn't belong.
+        if (act && pick._type === 'special' && blockStart !== undefined && blockEnd !== undefined) {
+            var _actConfigDur = S.getActivityDuration(act);
+            var _blockDur = blockEnd - blockStart;
+            if (_actConfigDur > 0 && _blockDur > 0) {
+                // If the block is more than 10 minutes longer than the activity's duration,
+                // and this block was NOT specifically built for this activity, penalize heavily
+                if (_blockDur > _actConfigDur + 10 && (!block._suggestedActivity || normName(block._suggestedActivity) !== actNorm)) {
+                    penalty += 50000; // Don't put a 20min activity in a 50min slot
+                }
             }
         }
 
@@ -843,9 +859,13 @@ else penalty += 200;
         }
     }
 
-    return blocks.sort(function(a, b) {
+   return blocks.sort(function(a, b) {
         if (a._isLeague && !b._isLeague) return -1;
         if (!a._isLeague && b._isLeague) return 1;
+        // ★★★ v15.6: Auto-build suggested blocks get highest priority ★★★
+        var aSugg = a._suggestedActivity ? 1 : 0;
+        var bSugg = b._suggestedActivity ? 1 : 0;
+        if (aSugg !== bSugg) return bSugg - aSugg; // Suggested blocks first
         // ★★★ v15.2: Bunks that need scarce activities go FIRST ★★★
         var aNeedsScarce = bunkNeedsScarce[a.bunk] ? 1 : 0;
         var bNeedsScarce = bunkNeedsScarce[b.bunk] ? 1 : 0;
@@ -1214,11 +1234,22 @@ else penalty += 200;
                // ★★★ v15.1: Event-type filtering — Sports Slots never get specials ★★★
                 if ((block.event || '').toLowerCase() === 'sports slot' && c2.type === 'special') continue;
                 // ★★★ AUTO BUILD: Duration-strict — skip if activity duration doesn't match block ★★★
-                if (_dStrict && _dStrictDur > 0) {                    var _candDur = S.getActivityDuration(c2.activityName);
+                if (_dStrict && _dStrictDur > 0) {
+                    var _candDur = S.getActivityDuration(c2.activityName);
                     if (_candDur > 0 && _candDur !== _dStrictDur) continue;
                 }
-                domain.add(ci2);
-            }
+                // ★★★ v15.6: REVERSE DURATION GUARD — prevent short specials in oversized slots ★★★
+                // If a special activity has a configured duration that's much shorter than
+                // this block, exclude it from the domain. This prevents Art (20min) from
+                // being placed in a 50min sport slot. Tolerance: 10 minutes.
+                if (c2.type === 'special' && hasTime && !_dStrict) {
+                    var _revDur = S.getActivityDuration(c2.activityName);
+                    var _blkSize = endMin - startMin;
+                    if (_revDur > 0 && _blkSize > _revDur + 10) {
+                        continue; // Block is too large for this activity
+                    }
+                }
+                domain.add(ci2);            }
             domains.set(bi, domain);
         }
         return { domains: domains, slotGroups: slotGroups };
