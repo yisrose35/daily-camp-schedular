@@ -45,7 +45,8 @@
                 teamSports: {},
                 matchupHistory: {},
                 gamesPerDate: {},
-                offCampusCounts: {}
+                offCampusCounts: {},
+                _awayState: {}
             };
 
             const history = JSON.parse(raw);
@@ -68,9 +69,8 @@
             return {
                 teamSports: {},
                 matchupHistory: {},
-               gamesPerDate: {},
-                offCampusCounts: {}
-            };
+                gamesPerDate: {},
+                offCampusCounts: {},
                 _awayState: {}
             };
         }
