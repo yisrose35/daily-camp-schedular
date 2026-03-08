@@ -1210,12 +1210,11 @@ else penalty += 200;
                     else { if (S.countSameDivisionUsage(fn, blockDiv, startMin, endMin, bunk) >= cap) continue; }
                 }
                if (S.getPrecomputedRotationScore(bunk, c2.activityName) === Infinity) continue;
-                // ★★★ v15.1: Event-type filtering in domain building ★★★
-                var _blockEv = (block.event || '').toLowerCase();
-                if (_blockEv === 'sports slot' && c2.type === 'special') continue;
-                if (_blockEv === 'special activity' && c2.type === 'sport') continue;
-                // ★★★ AUTO BUILD: Duration-strict — skip if activity duration doesn't match block ★★★                if (_dStrict && _dStrictDur > 0) {
-                    var _candDur = S.getActivityDuration(c2.activityName);
+               // ★★★ v15.1: Event-type filtering — Sports Slots never get specials ★★★
+               // ★★★ v15.1: Event-type filtering — Sports Slots never get specials ★★★
+                if ((block.event || '').toLowerCase() === 'sports slot' && c2.type === 'special') continue;
+                // ★★★ AUTO BUILD: Duration-strict — skip if activity duration doesn't match block ★★★
+                if (_dStrict && _dStrictDur > 0) {                    var _candDur = S.getActivityDuration(c2.activityName);
                     if (_candDur > 0 && _candDur !== _dStrictDur) continue;
                 }
                 domain.add(ci2);
