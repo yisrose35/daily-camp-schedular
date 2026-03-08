@@ -1098,6 +1098,7 @@ function renderGrid() {
   addDragToRepositionListeners(grid);
   addResizeListeners(grid);
   addClickToSelectListeners();
+  setTimeout(function() { if (typeof renderMSDoubleHeaderLinker === 'function') renderMSDoubleHeaderLinker(); }, 50);
 }
 
 function addClickToSelectListeners() {
@@ -1154,9 +1155,11 @@ function renderEventTile(ev, top, height) {
   }
   
   
-// ★★★ MULTIPLE LEAGUE SUPPORT: Show league name badge ★★★
-  if (ev.leagueName) {
-    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🏆 ${ev.leagueName}</div>`;
+if (ev.leagueName) {
+    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${ev.leagueName}</div>`;
+  }
+  if (ev._doubleHeaderPairId) {
+    innerHtml += `<div style="font-size:8px;font-weight:700;color:#0F5F6E;background:#E0F2FE;display:inline-block;padding:1px 5px;border-radius:3px;margin-top:2px;letter-spacing:0.5px;">DH</div>`;
   }
 
   if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
@@ -1788,6 +1791,92 @@ function minutesToTime(min) {
 }
 
 window.initMasterScheduler = init;
+  // =================================================================
+// DOUBLE-HEADER LINKER (Off-Campus) — Master Schedule Builder
+// =================================================================
+function renderMSDoubleHeaderLinker() {
+  var existing = document.getElementById('ms-dh-linker');
+  if (existing) existing.remove();
+
+  var gs = window.loadGlobalSettings?.() || {};
+  var lbn = gs.leaguesByName || {};
+  var ocLeagues = Object.values(lbn).filter(function(l) {
+    return l && l.offCampus?.enabled && l.offCampus?.zone && l.offCampus?.teamsPerDay > 0 && l.enabled !== false;
+  });
+  if (ocLeagues.length === 0) return;
+
+  var leagueBlocks = dailySkeleton.filter(function(b) {
+    return b.type === 'league' || (b.event && /league/i.test(b.event));
+  });
+  if (leagueBlocks.length < 2) return;
+
+  var grouped = {};
+  leagueBlocks.forEach(function(b) {
+    var key = b.leagueName || 'League Game';
+    var ml = ocLeagues.find(function(l) { return l.name === key; });
+    if (!ml) ml = ocLeagues.find(function(l) { return (l.divisions || []).includes(b.division); });
+    if (!ml) return;
+    if (!grouped[ml.name]) grouped[ml.name] = { league: ml, blocks: [] };
+    grouped[ml.name].blocks.push(b);
+  });
+
+  var linkable = Object.values(grouped).filter(function(g) { return g.blocks.length >= 2; });
+  if (linkable.length === 0) return;
+
+  var panel = document.createElement('div');
+  panel.id = 'ms-dh-linker';
+  panel.style.cssText = 'margin:12px 0; padding:12px; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px;';
+  var title = document.createElement('div');
+  title.style.cssText = 'font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:8px;';
+  title.textContent = 'Double-Header Links';
+  panel.appendChild(title);
+
+  linkable.forEach(function(group) {
+    var blocks = group.blocks.sort(function(a, b) { return (parseTimeToMinutes(a.startTime)||0) - (parseTimeToMinutes(b.startTime)||0); });
+    var leagueRow = document.createElement('div');
+    leagueRow.style.cssText = 'margin-bottom:8px;';
+    var lbl = document.createElement('div');
+    lbl.style.cssText = 'font-size:0.75rem; color:#6B7280; margin-bottom:4px;';
+    lbl.textContent = group.league.name + ' (' + group.league.offCampus.zone + ')';
+    leagueRow.appendChild(lbl);
+
+    var existingPairId = null;
+    blocks.forEach(function(b) { if (b._doubleHeaderPairId) existingPairId = b._doubleHeaderPairId; });
+    var isLinked = existingPairId && blocks.filter(function(b) { return b._doubleHeaderPairId === existingPairId; }).length >= 2;
+
+    var row = document.createElement('div');
+    row.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;';
+    blocks.forEach(function(b, idx) {
+      var chip = document.createElement('span');
+      var inPair = isLinked && b._doubleHeaderPairId === existingPairId;
+      chip.style.cssText = 'display:inline-flex; padding:4px 10px; border-radius:6px; font-size:0.75rem; font-weight:500; ' +
+        (inPair ? 'background:#DBEAFE; color:#1E40AF; border:1px solid #93C5FD;' : 'background:#F1F5F9; color:#475569; border:1px solid #E2E8F0;');
+      chip.textContent = (b.leagueName || b.event) + ' ' + (b.division||'') + ' ' + (b.startTime||'') + '-' + (b.endTime||'');
+      row.appendChild(chip);
+      if (idx < blocks.length - 1) {
+        var arrow = document.createElement('span');
+        arrow.style.cssText = 'color:#9CA3AF; font-size:0.7rem;';
+        arrow.textContent = isLinked ? '\u2194' : '\u00B7\u00B7\u00B7';
+        row.appendChild(arrow);
+      }
+    });
+
+    var btn = document.createElement('button');
+    btn.style.cssText = 'margin-left:8px; padding:4px 10px; border-radius:5px; font-size:0.7rem; font-weight:600; cursor:pointer; ' +
+      (isLinked ? 'background:none; border:1px solid #E2E8F0; color:#9CA3AF;' : 'background:#0F5F6E; border:1px solid #0F5F6E; color:#fff;');
+    btn.textContent = isLinked ? 'Unlink' : 'Link as Double-Header';
+    btn.onclick = function() {
+      if (isLinked) { blocks.forEach(function(b) { delete b._doubleHeaderPairId; }); }
+      else { var pid = 'dh_' + Date.now().toString(36); blocks[0]._doubleHeaderPairId = pid; blocks[1]._doubleHeaderPairId = pid; }
+      markUnsavedChanges(); saveDraftToLocalStorage(); renderGrid();
+    };
+    row.appendChild(btn);
+    leagueRow.appendChild(row);
+    panel.appendChild(leagueRow);
+  });
+
+  if (grid) grid.parentNode.insertBefore(panel, grid.nextSibling);
+}
 // Expose internals for mobile touch support + auto build integration
 window.MasterSchedulerInternal = {
   get dailySkeleton() { return dailySkeleton; },
