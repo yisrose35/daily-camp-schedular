@@ -927,7 +927,7 @@ function buildForGrade(params) {
                 }
             }
         } else {
-            // Pure sport fill
+           // Pure sport fill
             while (cursor < gap.endMin) {
                 var rem = gap.endMin - cursor;
                 if (rem < minActivityDur) break;
@@ -935,10 +935,15 @@ function buildForGrade(params) {
                 if (bDur < sportDurMin && rem >= sportDurMin) bDur = sportDurMin;
                 if (bDur < minActivityDur) break;
 
+                // Anti-runt: if leftover after this block is too small for another sport,
+                // redistribute evenly across remaining blocks
                 var after = gap.endMin - (cursor + bDur);
-                if (after > 0 && after < minActivityDur) {
-                    if (rem <= sportDurMax) bDur = rem;
-                    else { var n = Math.ceil(rem / sportDurMax); bDur = Math.ceil(rem / n); bDur = Math.max(bDur, minActivityDur); bDur = Math.min(bDur, sportDurMax); }
+                if (after > 0 && after < sportDurMin) {
+                    // Leftover can't fit a proper sport block — distribute evenly
+                    var n = Math.ceil(rem / sportDurMax);
+                    bDur = snapTo5(Math.ceil(rem / n));
+                    bDur = Math.max(bDur, sportDurMin);
+                    bDur = Math.min(bDur, sportDurMax);
                 }
                 var sn = snapTo5(cursor + bDur);
                 if (sn > cursor && sn <= gap.endMin) bDur = sn - cursor;
