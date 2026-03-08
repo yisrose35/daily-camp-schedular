@@ -2239,7 +2239,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         
         console.log(`[STEP 5.5] Active leagues: ${activeLeagues.length}, Specialty: ${activeSpecialtyLeagues.length}`);
         
-        leagueBlocks.forEach(block => {
+       leagueBlocks.forEach(block => {
+            if (block.processed) return;
             const divName = block.divName;
             const slots = block.slots || [];
             if (slots.length === 0) return;
