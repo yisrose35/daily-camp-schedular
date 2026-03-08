@@ -1213,12 +1213,21 @@ else penalty += 200;
                // ★★★ v15.1: Event-type filtering — Sports Slots never get specials ★★★
                // ★★★ v15.1: Event-type filtering — Sports Slots never get specials ★★★
                 if ((block.event || '').toLowerCase() === 'sports slot' && c2.type === 'special') continue;
-                // ★★★ AUTO BUILD: Duration-strict — skip if activity duration doesn't match block ★★★
-                if (_dStrict && _dStrictDur > 0) {                    var _candDur = S.getActivityDuration(c2.activityName);
+               // ★★★ AUTO BUILD: Duration-strict — skip if activity duration doesn't match block ★★★
+                if (_dStrict && _dStrictDur > 0) {
+                    var _candDur = S.getActivityDuration(c2.activityName);
                     if (_candDur > 0 && _candDur !== _dStrictDur) continue;
                 }
-                domain.add(ci2);
-            }
+                // ★★★ v15.6: Reverse duration check — special activities with configured 
+                // durations cannot go into blocks that don't match their duration ★★★
+                if (c2.type === 'special' && hasTime) {
+                    var _specDur = S.getActivityDuration(c2.activityName);
+                    if (_specDur > 0) {
+                        var _blockSize = endMin - startMin;
+                        if (_blockSize !== _specDur) continue;
+                    }
+                }
+                domain.add(ci2);       }
             domains.set(bi, domain);
         }
         return { domains: domains, slotGroups: slotGroups };
