@@ -1060,7 +1060,7 @@
                             } else {
                                 console.log('[OPTIMIZER] ☁️ Skipping cloud divisionTimes — per-bunk mode active');
                             }
-                        }                        }
+                        }
                         
                         console.log(`[OPTIMIZER] ☁️ Merged snapshot: ${Object.keys(merged).length} total bunks (${myBunks.size} mine)`);
                     }
