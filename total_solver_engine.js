@@ -1852,6 +1852,10 @@ else penalty += 200;
                 if (st === 'not_sharable') { if (S.getFieldUsageFromTimeIndex(normName(fn), startMin, endMin, bunk) >= cap) continue; }
                 else { if (S.countSameDivisionUsage(fn, blockDiv, startMin, endMin, bunk) >= cap) continue; }
             }
+            // ★★★ v15.1: Event-type filtering — Sports Slots only allow sports, Special Activity only allows specials ★★★
+            var blockEvent = (block.event || '').toLowerCase();
+            if (blockEvent === 'sports slot' && c.type === 'special') continue;
+            if (blockEvent === 'special activity' && c.type === 'sport') continue;
             picks.push({ field: fn, sport: c.sport, _activity: c.activityName, _type: c.type });
         }
         return picks;
