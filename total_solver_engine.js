@@ -1209,9 +1209,12 @@ else penalty += 200;
                     if (st === 'not_sharable') { if (S.getFieldUsageFromTimeIndex(fnorm, startMin, endMin, bunk) >= cap) continue; }
                     else { if (S.countSameDivisionUsage(fn, blockDiv, startMin, endMin, bunk) >= cap) continue; }
                 }
-                if (S.getPrecomputedRotationScore(bunk, c2.activityName) === Infinity) continue;
-                // ★★★ AUTO BUILD: Duration-strict — skip if activity duration doesn't match block ★★★
-                if (_dStrict && _dStrictDur > 0) {
+               if (S.getPrecomputedRotationScore(bunk, c2.activityName) === Infinity) continue;
+                // ★★★ v15.1: Event-type filtering in domain building ★★★
+                var _blockEv = (block.event || '').toLowerCase();
+                if (_blockEv === 'sports slot' && c2.type === 'special') continue;
+                if (_blockEv === 'special activity' && c2.type === 'sport') continue;
+                // ★★★ AUTO BUILD: Duration-strict — skip if activity duration doesn't match block ★★★                if (_dStrict && _dStrictDur > 0) {
                     var _candDur = S.getActivityDuration(c2.activityName);
                     if (_candDur > 0 && _candDur !== _dStrictDur) continue;
                 }
@@ -1838,10 +1841,14 @@ else penalty += 200;
             if (slots.length > 0 && divSlots[slots[0]]) { startMin = divSlots[slots[0]].startMin; var ls = divSlots[slots[slots.length - 1]]; endMin = ls ? ls.endMin : (startMin + 40); }
         }
         if (!allCands || allCands.length === 0) allCands = S.buildAllCandidateOptions(S.globalConfig || {});
-        var todayDone = S.getActivitiesDoneToday(bunk, slots[0] ?? 999);
+      var todayDone = S.getActivitiesDoneToday(bunk, slots[0] ?? 999);
+        // ★★★ v15.1: Event-type filtering — Sports Slots only allow sports, Special Activity only allows specials ★★★
+        var blockEvent = (block.event || '').toLowerCase();
         for (var ci = 0; ci < allCands.length; ci++) {
             var c = allCands[ci], fn = c.field, an = normName(c.activityName);
             if (an && an !== 'free' && todayDone.has(an)) continue;
+            if (blockEvent === 'sports slot' && c.type === 'special') continue;
+            if (blockEvent === 'special activity' && c.type === 'sport') continue;
             if (window.GlobalFieldLocks?.isFieldLocked(fn, slots, blockDiv)) continue;
             if (startMin !== undefined && endMin !== undefined) {
                 if (S.isFieldLockedByTime(fn, startMin, endMin, blockDiv)) continue;
@@ -1852,10 +1859,6 @@ else penalty += 200;
                 if (st === 'not_sharable') { if (S.getFieldUsageFromTimeIndex(normName(fn), startMin, endMin, bunk) >= cap) continue; }
                 else { if (S.countSameDivisionUsage(fn, blockDiv, startMin, endMin, bunk) >= cap) continue; }
             }
-            // ★★★ v15.1: Event-type filtering — Sports Slots only allow sports, Special Activity only allows specials ★★★
-            var blockEvent = (block.event || '').toLowerCase();
-            if (blockEvent === 'sports slot' && c.type === 'special') continue;
-            if (blockEvent === 'special activity' && c.type === 'sport') continue;
             picks.push({ field: fn, sport: c.sport, _activity: c.activityName, _type: c.type });
         }
         return picks;
