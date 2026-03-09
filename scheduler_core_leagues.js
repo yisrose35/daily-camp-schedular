@@ -33,7 +33,8 @@
                 // Ensure all fields exist
                 history.teamSports = history.teamSports || {};
                 history.matchupHistory = history.matchupHistory || {};
-                history.gamesPerDate = history.gamesPerDate || {};  // ★ NEW: tracks games per date per league
+                history.gamesPerDate = history.gamesPerDate || {};  
+                history.offCampusCounts = history.offCampusCounts || {};// ★ NEW: tracks games per date per league
                 console.log("[RegularLeagues] ✅ Loaded history from cloud");
                 return history;
             }
@@ -43,7 +44,9 @@
             if (!raw) return {
                 teamSports: {},
                 matchupHistory: {},
-                gamesPerDate: {}  // ★ NEW: { leagueName: { "2025-01-01": 2, "2025-01-02": 3 } }
+                gamesPerDate: {},
+                offCampusCounts: {},
+                _awayState: {}
             };
 
             const history = JSON.parse(raw);
@@ -51,6 +54,8 @@
             history.teamSports = history.teamSports || {};
             history.matchupHistory = history.matchupHistory || {};
             history.gamesPerDate = history.gamesPerDate || {};
+            history.offCampusCounts = history.offCampusCounts || {};
+            
             
             // Migrate from old roundCounters/dayStartRound if present
             if (history.roundCounters && !history.gamesPerDate) {
@@ -64,7 +69,9 @@
             return {
                 teamSports: {},
                 matchupHistory: {},
-                gamesPerDate: {}
+                gamesPerDate: {},
+                offCampusCounts: {},
+                _awayState: {}
             };
         }
     }
@@ -372,7 +379,69 @@ for (const futureDate of Object.keys(allDailyData)) {
     // =========================================================================
     // ROUND-ROBIN MATCHUP GENERATION
     // =========================================================================
+// =========================================================================
+    // ★★★ AWAY DOUBLEHEADER ENGINE ★★★
+    // =========================================================================
+    function getAwayDoubleheaderMatchups(league, gameNumber, history) {
+        var teams = league.teams || [];
+        var config = league.awayDoubleheader || {};
+        var groupSize = config.groupSize || 4;
+        var gamesPerVisit = config.gamesPerVisit || 2;
 
+        if (teams.length < 4) return null;
+
+        // Build stable groups
+        var groups = [];
+        for (var i = 0; i < teams.length; i += groupSize) {
+            var group = teams.slice(i, i + groupSize);
+            if (group.length >= 2) groups.push(group);
+        }
+        if (groups.length < 2) return null;
+
+        // Which group travels today
+        var visitIndex = Math.floor((gameNumber - 1) / gamesPerVisit);
+        var gameWithinVisit = (gameNumber - 1) % gamesPerVisit;
+        var groupIndex = visitIndex % groups.length;
+        var groupTeams = groups[groupIndex];
+
+        // Group's own round-robin
+        var groupRR = generateRoundRobinSchedule(groupTeams);
+        var totalRounds = groupRR.length;
+        if (totalRounds === 0) return null;
+
+        // Track each group's pointer independently
+        if (!history._awayState) history._awayState = {};
+        var stateKey = league.name + '_group' + groupIndex;
+        if (history._awayState[stateKey] === undefined) {
+            history._awayState[stateKey] = 0;
+        }
+
+        var roundPointer = history._awayState[stateKey];
+        var roundIdx = (roundPointer + gameWithinVisit) % totalRounds;
+        var matchups = groupRR[roundIdx];
+
+        console.log('[AwayDoubleheader] Game #' + gameNumber + ': Visit ' + (visitIndex + 1) + ', Group ' + (groupIndex + 1) + '/' + groups.length);
+        console.log('[AwayDoubleheader]   Teams: [' + groupTeams.join(', ') + ']');
+        console.log('[AwayDoubleheader]   Game ' + (gameWithinVisit + 1) + '/' + gamesPerVisit + ' | Round ' + (roundIdx + 1) + '/' + totalRounds + ' (pointer=' + roundPointer + ')');
+        matchups.forEach(function(m) { console.log('   \uD83C\uDFDF\uFE0F ' + m[0] + ' vs ' + m[1]); });
+
+        // Advance pointer after LAST game of this visit
+        if (gameWithinVisit === gamesPerVisit - 1) {
+            history._awayState[stateKey] = (roundPointer + gamesPerVisit) % totalRounds;
+            console.log('[AwayDoubleheader]   \u2705 Pointer advanced \u2192 ' + history._awayState[stateKey]);
+        }
+
+        return {
+            groupIndex: groupIndex,
+            groupTeams: groupTeams,
+            matchups: matchups,
+            gameWithinVisit: gameWithinVisit,
+            gamesPerVisit: gamesPerVisit,
+            isAwayDoubleheader: true,
+            roundIndex: roundIdx,
+            totalRounds: totalRounds
+        };
+    }
     function generateRoundRobinSchedule(teams) {
         if (teams.length < 2) return [];
 
@@ -614,7 +683,139 @@ for (const futureDate of Object.keys(allDailyData)) {
             return assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots);
         }
     }
+// =========================================================================
+    // ★★★ OFF-CAMPUS DOUBLE-HEADER ENGINE ★★★
+    // =========================================================================
 
+    function ocTeamsFromMatchup(m) {
+        if (Array.isArray(m)) return [m[0], m[1]];
+        return [m.teamA || m[0], m.teamB || m[1]];
+    }
+
+    function ocFindRepairings(teams, game1Matchups) {
+        var game1Pairs = new Set();
+        for (var i = 0; i < game1Matchups.length; i++) {
+            var p = ocTeamsFromMatchup(game1Matchups[i]);
+            game1Pairs.add(p[0] + '|' + p[1]); game1Pairs.add(p[1] + '|' + p[0]);
+        }
+        var results = [];
+        function findMatchings(remaining, current) {
+            if (remaining.length === 0) { results.push([...current]); return; }
+            if (remaining.length === 1) return;
+            var first = remaining[0], rest = remaining.slice(1);
+            for (var i = 0; i < rest.length; i++) {
+                if (game1Pairs.has(first + '|' + rest[i])) continue;
+                current.push([first, rest[i]]);
+                findMatchings([...rest.slice(0, i), ...rest.slice(i + 1)], current);
+                current.pop();
+            }
+        }
+        findMatchings([...teams], []);
+        return results.length > 0 ? results : null;
+    }
+
+    function ocGetCombinations(arr, k) {
+        if (k === 0) return [[]]; if (arr.length < k) return [];
+        var results = [];
+        function combine(start, current) {
+            if (current.length === k) { results.push([...current]); return; }
+            for (var i = start; i <= arr.length - (k - current.length); i++) { current.push(arr[i]); combine(i + 1, current); current.pop(); }
+        }
+        combine(0, []); return results;
+    }
+
+    function ocSelectBestRepairing(repairings, history, leagueName) {
+        if (repairings.length === 1) return repairings[0];
+        var best = repairings[0], bestScore = Infinity;
+        for (var ri = 0; ri < repairings.length; ri++) {
+            var score = 0;
+            for (var mi = 0; mi < repairings[ri].length; mi++) {
+                var pair = repairings[ri][mi];
+                score += (history.matchupHistory || {})[leagueName + ':' + [pair[0], pair[1]].sort().join('-vs-')] || 0;
+            }
+            if (score < bestScore) { bestScore = score; best = repairings[ri]; }
+        }
+        return best;
+    }
+
+    function ocGetZoneSports(zoneName, leagueSports, context) {
+        var zoneFields = window.getFieldsInZone?.(zoneName) || [];
+        var allFields = context.fields || [];
+        var zoneSports = new Set();
+        for (var i = 0; i < zoneFields.length; i++) {
+            var fc = allFields.find(function(f) { return f.name === zoneFields[i]; });
+            if (fc && fc.activities) fc.activities.forEach(function(s) { if (leagueSports.includes(s)) zoneSports.add(s); });
+        }
+        return zoneSports;
+    }
+
+    function ocSportRepeatPenalty(team, zoneSports, history, leagueName, priority) {
+        var th = getTeamSportHistory(leagueName, team, history);
+        if (th.length === 0) return 0;
+        var recent = th.slice(-Math.min(th.length, 6));
+        var cnt = 0;
+        for (var i = 0; i < recent.length; i++) { if (zoneSports.has(recent[i])) cnt++; }
+        var lastWas = zoneSports.has(th[th.length - 1]) ? 1 : 0;
+        return priority === 'sport_variety' ? (cnt * 500) + (lastWas * 2000) : (cnt * 10) + (lastWas * 50);
+    }
+
+    function ocSelectGroups(game1Matchups, teamsPerDay, history, leagueName, priority, zoneSports) {
+        var away = Math.floor(teamsPerDay / 2);
+        if (away <= 0 || away >= game1Matchups.length) return null;
+        console.log('[OffCampus] Selecting ' + away + ' matchup(s), priority: ' + priority);
+        var combos = ocGetCombinations(game1Matchups, away);
+        var bestCombo = null, bestScore = Infinity, bestROff = null, bestROn = null;
+        for (var ci = 0; ci < combos.length; ci++) {
+            var combo = combos[ci], offT = [], onM = [], onT = [];
+            combo.forEach(function(m) { var p = ocTeamsFromMatchup(m); offT.push(p[0], p[1]); });
+            game1Matchups.forEach(function(m) { if (combo.indexOf(m) === -1) { onM.push(m); var p = ocTeamsFromMatchup(m); onT.push(p[0], p[1]); } });
+            var rOff = ocFindRepairings(offT, combo); if (!rOff) continue;
+            var rOn = ocFindRepairings(onT, onM); if (!rOn) continue;
+            var trip = 0, maxI = 0, sp = 0;
+            offT.forEach(function(t) { var c = (history.offCampusCounts||{})[leagueName+'|'+t]||0; trip += c; if (c > maxI) maxI = c; sp += ocSportRepeatPenalty(t, zoneSports, history, leagueName, priority); });
+            var score = trip * 10000 + maxI * 1000 + sp;
+            if (score < bestScore) { bestScore = score; bestCombo = combo; bestROff = rOff; bestROn = rOn; }
+        }
+        if (!bestCombo) return null;
+        var fOff = [], fOn = [], fOnM = game1Matchups.filter(function(m){return bestCombo.indexOf(m)===-1;});
+        bestCombo.forEach(function(m){var p=ocTeamsFromMatchup(m);fOff.push(p[0],p[1]);});
+        fOnM.forEach(function(m){var p=ocTeamsFromMatchup(m);fOn.push(p[0],p[1]);});
+        console.log('[OffCampus] Off: ' + fOff.join(',') + ' | On: ' + fOn.join(','));
+        return {
+            offCampus: { game1: bestCombo.map(function(m){return ocTeamsFromMatchup(m);}), game2: ocSelectBestRepairing(bestROff, history, leagueName), teams: fOff },
+            onCampus: { game1: fOnM.map(function(m){return ocTeamsFromMatchup(m);}), game2: ocSelectBestRepairing(bestROn, history, leagueName), teams: fOn }
+        };
+    }
+
+    function ocFindLinkedPairs(blocksByTime, sortedTimeKeys) {
+        var pairMap = {};
+        sortedTimeKeys.forEach(function(tk) {
+            blocksByTime[tk].allBlocks.forEach(function(b) {
+                if (!b._doubleHeaderPairId) return;
+                if (!pairMap[b._doubleHeaderPairId]) pairMap[b._doubleHeaderPairId] = [];
+                if (pairMap[b._doubleHeaderPairId].indexOf(tk) === -1) pairMap[b._doubleHeaderPairId].push(tk);
+            });
+        });
+        return pairMap;
+    }
+
+    function ocRecordTrips(history, leagueName, teams) {
+        if (!history.offCampusCounts) history.offCampusCounts = {};
+        teams.forEach(function(t) { history.offCampusCounts[leagueName+'|'+t] = (history.offCampusCounts[leagueName+'|'+t]||0) + 1; });
+    }
+
+    window.viewOffCampusHistory = function(ln) {
+        var c = ((window.loadGlobalSettings?.()||{}).leagueHistory||{}).offCampusCounts||{};
+        var f = {};
+        Object.keys(c).forEach(function(k) { if (!ln||k.indexOf(ln+'|')===0) { var p=k.split('|'); if(!f[p[0]])f[p[0]]={}; f[p[0]][p[1]]=c[k]; } });
+        for (var l in f) { console.log('League: '+l); console.table(f[l]); }
+        return f;
+    };
+    window.resetOffCampusHistory = function(ln) {
+        var h = ((window.loadGlobalSettings?.()||{}).leagueHistory||{});
+        if (ln) { var c=h.offCampusCounts||{}; Object.keys(c).forEach(function(k){if(k.indexOf(ln+'|')===0)delete c[k];}); } else { h.offCampusCounts={}; }
+        window.saveGlobalSettings?.('leagueHistory', h);
+    };
     // =========================================================================
     // ★★★ MAIN REGULAR LEAGUE PROCESSOR ★★★
     // =========================================================================
@@ -675,12 +876,151 @@ for (const futureDate of Object.keys(allDailyData)) {
             });
 
         // Sort time slots to ensure consistent ordering
-       const sortedTimeKeys = Object.keys(blocksByTime).sort((a, b) => Number(a) - Number(b));
+     const sortedTimeKeys = Object.keys(blocksByTime).sort((a, b) => Number(a) - Number(b));
 
-        // Process each time slot
+        // ★★★ OFF-CAMPUS: Propagate _doubleHeaderPairId from skeleton to league blocks ★★★
+        const manualSkeleton = window.dailyOverrideSkeleton || window.loadCurrentDailyData?.()?.manualSkeleton || [];
+        manualSkeleton.forEach(function(skelItem) {
+            if (!skelItem._doubleHeaderPairId || skelItem.type !== 'league') return;
+            var skelStart = window.SchedulerCoreUtils?.parseTimeToMinutes?.(skelItem.startTime);
+            sortedTimeKeys.forEach(function(tk) {
+                if (Math.abs(Number(tk) - skelStart) > 5) return;
+                blocksByTime[tk].allBlocks.forEach(function(b) {
+                    if (b.type !== 'league' && !/league/i.test(b.event)) return;
+                    if (skelItem.leagueName && b.leagueName && skelItem.leagueName !== b.leagueName) return;
+                    if (skelItem.division && b.divName && String(skelItem.division) !== String(b.divName)) return;
+                    b._doubleHeaderPairId = skelItem._doubleHeaderPairId;
+                });
+            });
+        });
+
+        // ★★★ OFF-CAMPUS DOUBLE-HEADER PRE-PROCESSING ★★★
+        const offCampusScheduled = {};
+        var linkedPairs = ocFindLinkedPairs(blocksByTime, sortedTimeKeys);
+
+        for (const league of Object.values(masterLeagues)) {
+            if (!league.offCampus?.enabled || !league.offCampus?.zone || !league.offCampus?.teamsPerDay) continue;
+            if (!league.enabled || disabledLeagues?.includes(league.name)) continue;
+
+            for (var pairId in linkedPairs) {
+                var timeKeys = linkedPairs[pairId].sort(function(a,b){return Number(a)-Number(b);});
+                if (timeKeys.length < 2) continue;
+                var timeKey1 = timeKeys[0], timeKey2 = timeKeys[1];
+
+                var matchesLeague = blocksByTime[timeKey1].allBlocks.some(function(b) {
+                    if (b.leagueName) return b.leagueName === league.name;
+                    return Object.keys(blocksByTime[timeKey1].byDivision).some(function(d) { return (league.divisions||[]).includes(d); });
+                });
+                if (!matchesLeague) continue;
+
+                console.log('[OffCampus] Pair "' + pairId + '" for "' + league.name + '" at ' + timeKey1 + '/' + timeKey2);
+
+                if (leagueGameCounters[league.name] === undefined) leagueGameCounters[league.name] = 0;
+                var leagueTeams = league.teams || [];
+                if (leagueTeams.length < 4) continue;
+
+                var baseGN = calculateStartingGameNumber(league.name, dayId, history);
+                var gameNum = baseGN + leagueGameCounters[league.name] + 1;
+                var fullSched = generateRoundRobinSchedule(leagueTeams);
+                var g1Matchups = fullSched[(gameNum - 1) % fullSched.length] || [];
+                if (g1Matchups.length === 0) continue;
+
+                var lSports = league.sports || ['General Sport'];
+                var zoneSports = ocGetZoneSports(league.offCampus.zone, lSports, context);
+                var priority = league.schedulingPriority || 'sport_variety';
+                var dh = ocSelectGroups(g1Matchups, league.offCampus.teamsPerDay, history, league.name, priority, zoneSports);
+                if (!dh) continue;
+
+                ocRecordTrips(history, league.name, dh.offCampus.teams);
+
+                var ocDivs = league.divisions.filter(function(d) { return Object.keys(blocksByTime[timeKey1]?.byDivision||{}).includes(d); });
+                var s1 = blocksByTime[timeKey1].allBlocks[0]?.slots || [];
+                var s2 = blocksByTime[timeKey2].allBlocks[0]?.slots || [];
+                var zoneF = window.getFieldsInZone?.(league.offCampus.zone) || [];
+                var fp1 = buildAvailableFieldSportPool(lSports, context, ocDivs, timeKey1, s1);
+                var fp2 = buildAvailableFieldSportPool(lSports, context, ocDivs, timeKey2, s2);
+
+                var g1Off = assignMatchupsToFieldsAndSports(dh.offCampus.game1, fp1.filter(function(p){return zoneF.includes(p.field);}), league.name, history, s1, priority);
+                var g1On = assignMatchupsToFieldsAndSports(dh.onCampus.game1, fp1.filter(function(p){return !zoneF.includes(p.field);}), league.name, history, s1, priority);
+                var g2Off = assignMatchupsToFieldsAndSports(dh.offCampus.game2, fp2.filter(function(p){return zoneF.includes(p.field);}), league.name, history, s2, priority);
+                var g2On = assignMatchupsToFieldsAndSports(dh.onCampus.game2, fp2.filter(function(p){return !zoneF.includes(p.field);}), league.name, history, s2, priority);
+                var g1All = g1Off.concat(g1On), g2All = g2Off.concat(g2On);
+                var lbl1 = league.name + ' Game ' + gameNum, lbl2 = league.name + ' Game ' + (gameNum + 1);
+
+              if (g1All.length > 0 && fillBlock) {
+                    ocDivs.forEach(function(d) {
+                        var blocksForDiv = (blocksByTime[timeKey1]?.byDivision[d]) || [];
+                        blocksForDiv.forEach(function(block) {
+                            var pick = {
+                                field: 'League: ' + league.name,
+                                sport: 'Game ' + gameNum,
+                                _activity: 'League: ' + league.name,
+                                _leagueName: league.name,
+                                _h2h: true, _fixed: true,
+                                _allMatchups: g1All.map(function(a){ return a.team1+' vs '+a.team2+' @ '+a.field+' ('+a.sport+')'; }),
+                                _gameLabel: lbl1
+                            };
+                            fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);
+                            block.processed = true;
+                        });
+                    });
+                    var uf1 = [...new Set(g1All.map(function(a){return a.field;}))];                    if (window.GlobalFieldLocks && s1.length > 0) {
+                        var ds1 = window.divisionTimes?.[ocDivs[0]]||[];
+                        var st1 = ds1[s1[0]]?.startMin, en1 = ds1[s1[s1.length-1]]?.endMin||st1+40;
+                        uf1.forEach(function(f){window.GlobalFieldLocks.lockField(f,s1,league.name,'league',{startMin:st1,endMin:en1});});
+                    }
+                }
+               if (g2All.length > 0 && fillBlock) {
+                    ocDivs.forEach(function(d) {
+                        var blocksForDiv = (blocksByTime[timeKey2]?.byDivision[d]) || [];
+                        blocksForDiv.forEach(function(block) {
+                            var pick = {
+                                field: 'League: ' + league.name,
+                                sport: 'Game ' + (gameNum + 1),
+                                _activity: 'League: ' + league.name,
+                                _leagueName: league.name,
+                                _h2h: true, _fixed: true,
+                                _allMatchups: g2All.map(function(a){ return a.team1+' vs '+a.team2+' @ '+a.field+' ('+a.sport+')'; }),
+                                _gameLabel: lbl2
+                            };
+                            fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);
+                            block.processed = true;
+                        });
+                    });
+                    var uf2 = [...new Set(g2All.map(function(a){return a.field;}))];
+                    if (window.GlobalFieldLocks && s2.length > 0) {
+                        var ds2 = window.divisionTimes?.[ocDivs[0]]||[];
+                        var st2 = ds2[s2[0]]?.startMin, en2 = ds2[s2[s2.length-1]]?.endMin||st2+40;
+                        uf2.forEach(function(f){window.GlobalFieldLocks.lockField(f,s2,league.name,'league',{startMin:st2,endMin:en2});});
+                    }
+                }
+
+                [g1All, g2All].forEach(function(aa) { aa.forEach(function(a) {
+                    if (a.sport) { recordTeamSport(league.name, a.team1||a.teamA, a.sport, history); recordTeamSport(league.name, a.team2||a.teamB, a.sport, history); }
+                    recordMatchup(league.name, a.team1||a.teamA, a.team2||a.teamB, history);
+                }); });
+
+                leagueGameCounters[league.name] += 2;
+                if (!history.gamesPerDate[league.name]) history.gamesPerDate[league.name] = {};
+                history.gamesPerDate[league.name][dayId] = (history.gamesPerDate[league.name][dayId]||0) + 2;
+               blocksByTime[timeKey1].allBlocks.forEach(function(b){
+                    if ((league.divisions||[]).includes(b.divName)) b.processed=true;
+                });
+                blocksByTime[timeKey2].allBlocks.forEach(function(b){
+                    if ((league.divisions||[]).includes(b.divName)) b.processed=true;
+                });
+                offCampusScheduled[league.name] = { handled: true };
+                console.log('[OffCampus] ' + lbl1 + ' + ' + lbl2 + ' | Away: ' + dh.offCampus.teams.join(',') + ' | Home: ' + dh.onCampus.teams.join(','));
+            }
+        }
+
+        // Normal league processing
         for (const timeKey of sortedTimeKeys) {
             const timeData = blocksByTime[timeKey];
-            const divisionsAtTime = Object.keys(timeData.byDivision);
+            if (timeData.allBlocks.every(b => b.processed)) {
+                console.log('\nSkipping time ' + timeKey + ' (off-campus handled)');
+                continue;
+            }            const divisionsAtTime = Object.keys(timeData.byDivision);
 
             console.log(`\n📅 Processing League Time Slot: ${timeKey}`);
             console.log(`   Divisions present: [${divisionsAtTime.join(", ")}]`);
@@ -719,6 +1059,10 @@ for (const futureDate of Object.keys(allDailyData)) {
             for (const league of applicableLeagues) {
                 if (processedLeagues.has(league.name)) continue;
                 processedLeagues.add(league.name);
+                if (offCampusScheduled[league.name]?.handled) {
+                    console.log('   Skipping "' + league.name + '" (off-campus double-header)');
+                    continue;
+                }
 
                 const leagueDivisions = league.divisions.filter(div => divisionsAtTime.includes(div));
                 if (leagueDivisions.length === 0) continue;
@@ -758,14 +1102,33 @@ for (const futureDate of Object.keys(allDailyData)) {
                 const todayGameIndex = leagueGameCounters[league.name];
                 const gameNumber = baseGameNumber + todayGameIndex + 1;
                 
-                // Get matchups using round robin
-                const fullSchedule = generateRoundRobinSchedule(leagueTeams);
-                const roundIndex = (gameNumber - 1) % fullSchedule.length;
-                const matchups = fullSchedule[roundIndex] || [];
+                // ★★★ Get matchups — check for Away Doubleheader mode ★★★
+                let matchups;
+                let awayInfo = null;
+                
+                if (league.awayDoubleheader?.enabled) {
+                    awayInfo = getAwayDoubleheaderMatchups(league, gameNumber, history);
+                    if (awayInfo) {
+                        matchups = awayInfo.matchups;
+                        console.log('   \uD83D\uDE8C Away DH: Group ' + (awayInfo.groupIndex + 1) + ' [' + awayInfo.groupTeams.join(', ') + ']');
+                        console.log('   \uD83C\uDFAE Game ' + (awayInfo.gameWithinVisit + 1) + '/' + awayInfo.gamesPerVisit + ' (Round ' + (awayInfo.roundIndex + 1) + '/' + awayInfo.totalRounds + ')');
+                    } else {
+                        console.log('   \u26A0\uFE0F Away doubleheader: no matchups generated');
+                        matchups = [];
+                    }
+                } else {
+                    const fullSchedule = generateRoundRobinSchedule(leagueTeams);
+                    const roundIndex = (gameNumber - 1) % fullSchedule.length;
+                    matchups = fullSchedule[roundIndex] || [];
+                }
 
-                console.log(`   Game #${gameNumber} (Round Index: ${roundIndex}, Today's Game: ${todayGameIndex + 1})`);
+               console.log(`   Game #${gameNumber} (Today's Game: ${todayGameIndex + 1})`);
                 console.log(`   Matchups: ${matchups.length}`);
-                matchups.forEach(([t1, t2]) => console.log(`      • ${t1} vs ${t2}`));
+                matchups.forEach(m => {
+                    var t1 = Array.isArray(m) ? m[0] : m;
+                    var t2 = Array.isArray(m) ? m[1] : m;
+                    console.log(`      • ${t1} vs ${t2}`);
+                });
 
                 if (matchups.length === 0) continue;
 
@@ -871,6 +1234,7 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
                             field: `League: ${league.name}`,
                             sport: `Game ${gameNumber}`,
                             _activity: `League: ${league.name}`,
+                            _leagueName: league.name,
                             _h2h: true,
                             _fixed: true,
                             _allMatchups: assignments.map(a =>
