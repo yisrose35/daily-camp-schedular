@@ -1230,6 +1230,7 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
                             field: `League: ${league.name}`,
                             sport: `Game ${gameNumber}`,
                             _activity: `League: ${league.name}`,
+                            _leagueName: league.name,
                             _h2h: true,
                             _fixed: true,
                             _allMatchups: assignments.map(a =>
