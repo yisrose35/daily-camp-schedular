@@ -1485,6 +1485,26 @@ else penalty += 200;
     function isPickStillValid(block, cand) {
         var fn=cand.field,fnorm=cand._fieldNorm||normName(fn),bunk=block.bunk,bDiv=block.divName||'',sM=block.startTime,eM=block.endTime;
         if (sM===undefined||eM===undefined) return true;
+
+        // ★★★ FIX 1: Enforce Event Type Strictness in repair phases ★★★
+        var blockEvent = (block.event || '').toLowerCase();
+        if (blockEvent === 'sports slot' && cand.type === 'special') return false;
+        if (blockEvent === 'special activity' && cand.type === 'sport') return false;
+
+        // ★★★ FIX 2: Enforce Duration Strictness in repair phases ★★★
+        var _blockSize = eM - sM;
+        var _dStrict = block._durationStrict === true;
+        if (_dStrict && _blockSize > 0) {
+            var _candDur = S.getActivityDuration(cand.activityName);
+            if (_candDur > 0 && _candDur !== _blockSize) return false;
+        }
+        
+        // ★★★ FIX 3: Reverse duration check for specials ★★★
+        if (cand.type === 'special') {
+            var _specDur = S.getActivityDuration(cand.activityName);
+            if (_specDur > 0 && _blockSize !== _specDur) return false;
+        }
+
         var cAn=normName(cand.activityName);
         if (cAn&&cAn!=='free'&&cAn!=='free play') { var bs=window.scheduleAssignments?.[bunk]||[]; var ms=new Set(block.slots||[]); for (var i=0;i<bs.length;i++) { if (ms.has(i)) continue; var e=bs[i]; if (!e||e.continuation||e._isTransition) continue; if (normName(e._activity||e.sport||e.field)===cAn) return false; } }
         if (S.isFieldLockedByTime(fn,sM,eM,bDiv)) return false;
@@ -1557,7 +1577,7 @@ else penalty += 200;
             var bi=freeIdx[idx],blk=activityBlocks[bi],bunk=blk.bunk,bDiv=blk.divName||'',sM=blk.startTime,eM=blk.endTime,slots=blk.slots||[];
             if (sM===undefined||eM===undefined) continue; S._todayCache.clear();
             var fresh=[];
-            for (var ci=0;ci<allCands.length;ci++) { var c=allCands[ci]; if (disabled.indexOf(c.field)!==-1) continue; if (window.GlobalFieldLocks?.isFieldLocked(c.field,slots)) continue; if (S.isFieldLockedByTime(c.field,sM,eM,bDiv)) continue; if (S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue;
+            for (var ci=0;ci<allCands.length;ci++) { var c=allCands[ci]; if (!isPickStillValid(blk, c)) continue; if (disabled.indexOf(c.field)!==-1) continue; if (window.GlobalFieldLocks?.isFieldLocked(c.field,slots)) continue; if (S.isFieldLockedByTime(c.field,sM,eM,bDiv)) continue; if (S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue;
                 var fp=S._fieldPropertyMap.get(c.field),cap=fp?fp.capacity:S.getFieldCapacity(c.field),st=fp?fp.sharingType:S.getSharingType(c.field);
                 if (st==='not_sharable') { if (S.getFieldUsageFromTimeIndex(c._fieldNorm,sM,eM,bunk)>=cap) continue; } else { if (S.countSameDivisionUsage(c.field,bDiv,sM,eM,bunk)>=cap) continue; }
                 var td=S.getActivitiesDoneToday(bunk,slots[0]??999),cAn=normName(c.activityName); if (cAn&&cAn!=='free'&&cAn!=='free play'&&td.has(cAn)) continue;
@@ -1579,7 +1599,7 @@ else penalty += 200;
                 var saved={candIdx:oa.candIdx,pick:oa.pick,cost:oa.cost};
                 S.undoPickFromSchedule(ob,oa.pick); var ap=S.clonePick(alts[0].cand); S._assignments.set(obi,{candIdx:alts[0].ci,pick:ap,cost:alts[0].cost}); S.applyPickToSchedule(ob,ap);
                 S.addToFieldTimeIndex(normName(ap.field),ob.startTime,ob.endTime,ob.bunk,ob.divName,normName(ap._activity)); S.removeFromFieldTimeIndex(cfn,ob.startTime,ob.endTime,ob.bunk); S.invalidateRotationCacheForBunk(ob.bunk); S._todayCache.clear();
-                var pf2=[]; for (var pci=0;pci<allCands.length;pci++) { var pc=allCands[pci]; if (disabled.indexOf(pc.field)!==-1) continue; if (S.isFieldLockedByTime(pc.field,sM,eM,bDiv)) continue; if (S.checkCrossDivisionTimeConflict(pc.field,bDiv,sM,eM,bunk)) continue; var pfp=S._fieldPropertyMap.get(pc.field),pcap=pfp?pfp.capacity:S.getFieldCapacity(pc.field),pst=pfp?pfp.sharingType:S.getSharingType(pc.field); if (pst==='not_sharable') { if (S.getFieldUsageFromTimeIndex(pc._fieldNorm,sM,eM,bunk)>=pcap) continue; } else { if (S.countSameDivisionUsage(pc.field,bDiv,sM,eM,bunk)>=pcap) continue; } var ptd=S.getActivitiesDoneToday(bunk,slots[0]??999),pAn=normName(pc.activityName); if (pAn&&pAn!=='free'&&pAn!=='free play'&&ptd.has(pAn)) continue; if (!actProps[pc.field]&&!actProps[pc.activityName]&&pc.type!=='special') continue; S.setScratchPick(pc); var pCost=S.calculatePenaltyCost(blk,S.setScratchPick(pc)); if (pCost<900000) pf2.push({ci:pci,cost:pCost}); }
+                var pf2=[]; for (var pci=0;pci<allCands.length;pci++) { var pc=allCands[pci]; if (!isPickStillValid(blk, pc)) continue; if (disabled.indexOf(pc.field)!==-1) continue; if (S.isFieldLockedByTime(pc.field,sM,eM,bDiv)) continue; if (S.checkCrossDivisionTimeConflict(pc.field,bDiv,sM,eM,bunk)) continue; var pfp=S._fieldPropertyMap.get(pc.field),pcap=pfp?pfp.capacity:S.getFieldCapacity(pc.field),pst=pfp?pfp.sharingType:S.getSharingType(pc.field); if (pst==='not_sharable') { if (S.getFieldUsageFromTimeIndex(pc._fieldNorm,sM,eM,bunk)>=pcap) continue; } else { if (S.countSameDivisionUsage(pc.field,bDiv,sM,eM,bunk)>=pcap) continue; } var ptd=S.getActivitiesDoneToday(bunk,slots[0]??999),pAn=normName(pc.activityName); if (pAn&&pAn!=='free'&&pAn!=='free play'&&ptd.has(pAn)) continue; if (!actProps[pc.field]&&!actProps[pc.activityName]&&pc.type!=='special') continue; S.setScratchPick(pc); var pCost=S.calculatePenaltyCost(blk,S.setScratchPick(pc)); if (pCost<900000) pf2.push({ci:pci,cost:pCost}); }
                 if (pf2.length>0) { pf2.sort(function(a,b){return a.cost-b.cost;}); var opk=S.clonePick(allCands[pf2[0].ci]); S.undoPickFromSchedule(blk,S._assignments.get(bi).pick); S._assignments.set(bi,{candIdx:pf2[0].ci,pick:opk,cost:pf2[0].cost}); S.applyPickToSchedule(blk,opk); S.addToFieldTimeIndex(normName(opk.field),sM,eM,bunk,bDiv,normName(opk._activity)); S.invalidateRotationCacheForBunk(bunk); S._todayCache.clear(); resolved++; break; }
                 else { S.undoPickFromSchedule(ob,ap); S.removeFromFieldTimeIndex(normName(ap.field),ob.startTime,ob.endTime,ob.bunk); S._assignments.set(obi,saved); S.applyPickToSchedule(ob,saved.pick); S.addToFieldTimeIndex(cfn,ob.startTime,ob.endTime,ob.bunk,ob.divName,normName(saved.pick._activity)); S.invalidateRotationCacheForBunk(ob.bunk); S._todayCache.clear(); }
             }
