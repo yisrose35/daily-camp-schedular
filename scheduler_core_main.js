@@ -1567,15 +1567,28 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             const bunk = override.bunk;
             const divName = Object.keys(divisions).find(d => divisions[d].bunks?.includes(bunk));
             
-            // ★ FIX: Look up the exact slot index specifically for THIS bunk's custom timeline
-            const exactSlot = findExactSlotForTimeRange(divName, startMin, endMin, bunk);
+            // ★ FIX: Safely look up the exact slot index specifically for THIS bunk's custom timeline
+            let exactSlot = -1;
+            const divSlots = window.divisionTimes && window.divisionTimes[divName];
+            if (divSlots && divSlots._isPerBunk && divSlots._perBunkSlots && divSlots._perBunkSlots[bunk]) {
+                const bSlots = divSlots._perBunkSlots[bunk];
+                // Try exact match first
+                exactSlot = bSlots.findIndex(s => s.startMin === startMin && s.endMin === endMin);
+                // If not found, find the slot that safely encapsulates this time
+                if (exactSlot === -1) {
+                    exactSlot = bSlots.findIndex(s => s.startMin <= startMin && s.endMin >= endMin);
+                }
+            } else if (window.DivisionTimesSystem && window.DivisionTimesSystem.findExactSlotForTimeRange) {
+                // Fallback to the system function if not in per-bunk mode
+                exactSlot = window.DivisionTimesSystem.findExactSlotForTimeRange(divName, startMin, endMin, bunk);
+            }
+
             const slots = exactSlot !== -1 ? [exactSlot] : Utils.findSlotsForRange(startMin, endMin, divName);
 
             if (!divName || slots.length === 0) {
                 console.warn(`[BunkOverride] Skipping ${bunk} - no division found or no slots`);
                 return;
             }
-
             if (allowedDivisionsSet && !allowedDivisionsSet.has(String(divName))) {
                 return; 
             }
