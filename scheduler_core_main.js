@@ -91,10 +91,17 @@
      * @param {number} endMin - End time in minutes 
      * @returns {number} Slot index or -1 if not found 
      */
-    function findExactSlotForTimeRange(divName, startMin, endMin) {
-        // ★★★ v17.10 FIX: Convert divName to string for divisionTimes lookup ★★★
+   function findExactSlotForTimeRange(divName, startMin, endMin, bunkName) {
         const divNameStr = String(divName);
-        const divSlots = window.divisionTimes?.[divNameStr] || [];
+        const divData = window.divisionTimes?.[divNameStr];
+        
+        // ★★★ v17.13: Per-bunk slot lookup ★★★
+        let divSlots;
+        if (bunkName && divData?._isPerBunk && divData._perBunkSlots?.[String(bunkName)]) {
+            divSlots = divData._perBunkSlots[String(bunkName)];
+        } else {
+            divSlots = divData || [];
+        }
         
         // Exact match
         for (let i = 0; i < divSlots.length; i++) {
@@ -1819,43 +1826,50 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                      window.CustomPersistentTiles?.isCustomPinnedEvent?.(item);
             
             if (isPinnedType && item.type !== 'split' && item.type !== 'smart') {
-                // ★★★ v17.9 FIX: Use exact slot matching for pinned events too ★★★
-                const exactSlot = findExactSlotForTimeRange(divName, sMin, eMin);
-                const slots = exactSlot !== -1 ? [exactSlot] : Utils.findSlotsForRange(sMin, eMin, divName);
-                if (slots.length > 0) {
-                    const eventName = item.event || item.type || 'Pinned Event';
+                const eventName = item.event || item.type || 'Pinned Event';
+                
+                // ★★★ AUTO BUILD: Per-bunk pinned events ★★★
+                const _pinnedTargetBunks = item._bunk 
+                    ? [item._bunk].filter(b => bunkList.includes(b)) 
+                    : bunkList;
+                
+                // ★★★ v17.13: Find slots PER BUNK for per-bunk mode ★★★
+                let anySlotFound = false;
+                let _lastSlots = null;
+                _pinnedTargetBunks.forEach(bunk => {
+                    const exactSlot = findExactSlotForTimeRange(divName, sMin, eMin, bunk);
+                    const slots = exactSlot !== -1 ? [exactSlot] : Utils.findSlotsForRange(sMin, eMin, divName);
+                    if (slots.length === 0) return;
+                    anySlotFound = true;
+                    _lastSlots = slots;
                     
-                    // ★★★ AUTO BUILD: Per-bunk pinned events ★★★
-                    const _pinnedTargetBunks = item._bunk 
-                        ? [item._bunk].filter(b => bunkList.includes(b)) 
-                        : bunkList;
-                    _pinnedTargetBunks.forEach(bunk => {
-                        const existing = window.scheduleAssignments[bunk]?.[slots[0]];
-                        if (existing && existing._bunkOverride) return;
+                    const existing = window.scheduleAssignments[bunk]?.[slots[0]];
+                    if (existing && existing._bunkOverride) return;
 
-                        fillBlock({
-                            divName,
-                            bunk,
-                            startTime: sMin,
-                            endTime: eMin,
-                            slots
-                        }, {
-                            field: eventName,
-                            sport: null,
-                            _fixed: true,
-                            _pinned: true,
-                            _activity: eventName
-                        }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                        
-                        pinnedEventCount++;
-                    });
+                    fillBlock({
+                        divName,
+                        bunk,
+                        startTime: sMin,
+                        endTime: eMin,
+                        slots
+                    }, {
+                        field: eventName,
+                        sport: null,
+                        _fixed: true,
+                        _pinned: true,
+                        _activity: eventName
+                    }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                     
-                    console.log(`[SKELETON] ✅ Filled pinned "${eventName}" for ${divName} (${bunkList.length} bunks)`);
+                    pinnedEventCount++;
+                });
+                
+                if (anySlotFound) {
+                    console.log(`[SKELETON] ✅ Filled pinned "${eventName}" for ${divName} (${_pinnedTargetBunks.length} bunks)`);
 
                     // ★ v17.11: Lock physical location if pinned event uses one
                     const pinnedLocName = getLocationForPinnedEvent(item);
-                    if (pinnedLocName && window.GlobalFieldLocks) {
-                        window.GlobalFieldLocks.lockField(pinnedLocName, slots, {
+                    if (pinnedLocName && window.GlobalFieldLocks && _lastSlots) {
+                        window.GlobalFieldLocks.lockField(pinnedLocName, _lastSlots, {
                             lockedBy: 'pinned_event_location',
                             division: divName,
                             activity: `${eventName} (pinned @ ${pinnedLocName})`
@@ -1865,7 +1879,6 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
                 return; // Done with this item
             }
-
             // Skip slots that overlap with pinned events
             if (item.type === 'slot' || GENERATOR_TYPES.includes(item.type)) {
                 const hasPinnedOverlap = manualSkeleton.some(other =>
