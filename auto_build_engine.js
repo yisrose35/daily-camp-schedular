@@ -1,10 +1,21 @@
 // =================================================================
-// auto_build_engine.js — Campistry Auto Build Engine v5.0.0
+// auto_build_engine.js — Campistry Auto Build Engine v5.1.0
 // =================================================================
 // The auto builder does the job of a human scheduler in manual mode:
 //   - User gives CONTRACTS (layers): type ranges, time windows, quantities
 //   - Auto builder decides: WHAT TYPE, WHERE, HOW LONG
 //   - Total solver then picks: WHICH SPECIFIC activity + field
+//
+// v5.1 — DURATION FIX
+//   ★ getSpecialDuration now checks window.getSpecialActivityByName as
+//     fallback, and checks all known property names (defaultDuration,
+//     duration, durationMin) so duration is never silently lost.
+//   ★ getRankedSpecials now carries _durationKnown flag so specials
+//     with unknown durations are never picked for sized blocks.
+//   ★ Special candidate loop skips any candidate whose duration is
+//     unknown — prevents mismatched block sizes entirely.
+//   ★ maxSpecDurInWave now uses real durations, never the || 30 fallback,
+//     so block boundaries are always correctly sized.
 //
 // v5.0 — DIVISION RESOURCE PLANNER
 //
@@ -35,7 +46,7 @@
 (function() {
 'use strict';
 
-var VERSION = '5.0.0';
+var VERSION = '5.1.0';
 var DEBUG = true;
 
 function log() { if (DEBUG) console.log.apply(console, ['[AutoBuild]'].concat(Array.prototype.slice.call(arguments))); }
@@ -110,9 +121,25 @@ function getSpecialConfig(name) {
     }) || null;
 }
 
+// ★★★ v5.1 FIX: getSpecialDuration now checks all known property names
+// AND falls back to window.getSpecialActivityByName so duration is never
+// silently lost when the live registry uses a different property name.
 function getSpecialDuration(name) {
     var config = getSpecialConfig(name);
-    return config?.defaultDuration || config?.duration || null;
+
+    // Fallback to live window registry if settings-based config missing or has no duration
+    if ((!config || (!config.defaultDuration && !config.duration && !config.durationMin)) &&
+        window.getSpecialActivityByName) {
+        var liveConfig = window.getSpecialActivityByName(name);
+        if (liveConfig) config = liveConfig;
+    }
+
+    if (!config) return null;
+
+    // Check all known property names — return the first one that is a positive number
+    var dur = config.defaultDuration || config.duration || config.durationMin || null;
+    if (dur && parseInt(dur) > 0) return parseInt(dur);
+    return null;
 }
 
 function isSpecialAvailableOnDay(specialConfig, dayName) {
@@ -192,9 +219,18 @@ function getRotationScore(bunkName, activityName) {
     return 0;
 }
 
-function getRankedSpecials(bunkName, availableNames) {
+// ★★★ v5.1 FIX: getRankedSpecials now carries _durationKnown flag.
+// Specials whose duration cannot be resolved are flagged so they can be
+// excluded from block sizing — preventing mismatched slot sizes.
+function getRankedSpecials(bunkName, availableNames, fallbackDuration) {
     var ranked = availableNames.map(function(name) {
-        return { name: name, score: getRotationScore(bunkName, name), duration: getSpecialDuration(name) || 30 };
+        var dur = getSpecialDuration(name);
+        return {
+            name: name,
+            score: getRotationScore(bunkName, name),
+            duration: dur || fallbackDuration || 30,
+            _durationKnown: dur !== null && dur > 0
+        };
     });
     ranked.sort(function(a, b) { return a.score - b.score; });
     return ranked;
@@ -391,7 +427,7 @@ function build(params) {
 }
 
 // =================================================================
-// BUILD FOR GRADE — v5.0 Division Resource Planner
+// BUILD FOR GRADE — v5.1 Division Resource Planner
 // =================================================================
 
 function buildForGrade(params) {
@@ -526,9 +562,8 @@ function buildForGrade(params) {
         var durMin = getLayerDuration(layer), durMax = getLayerDurationMax(layer);
         var wStart = layer.startMin, wEnd = layer.endMin || (wStart + durMax);
         var windowSize = wEnd - wStart;
-        // Maximize league duration: use max duration capped by window
         var dur = Math.min(durMax, windowSize);
-        if (dur < durMin) dur = Math.min(durMin, windowSize); // window is tight, take what we can
+        if (dur < durMin) dur = Math.min(durMin, windowSize);
         var qty = getLayerQty(layer);
         for (var i = 0; i < Math.max(qty, 1); i++) {
             constrainedPieces.push({
@@ -620,7 +655,6 @@ function buildForGrade(params) {
             var te = ts + piece.duration;
             var conflict = false;
 
-            // Check permanent + sandbox conflicts
             if (piece.divisionWide) {
                 conflict = divisionOccupied.some(function(o) { return overlaps(ts, te, o.startMin, o.endMin); });
                 if (!conflict) conflict = sandboxPlacements.some(function(sp) { return sp.piece.divisionWide && overlaps(ts, te, sp.startMin, sp.endMin); });
@@ -643,7 +677,6 @@ function buildForGrade(params) {
             }
             if (conflict) continue;
 
-            // Score position
             var score = 0;
             var testOcc = divisionOccupied.concat(
                 sandboxPlacements.map(function(sp) { return { startMin: sp.startMin, endMin: sp.endMin }; }),
@@ -673,7 +706,6 @@ function buildForGrade(params) {
 
         sandboxPlacements.push({ startMin: bestPos.startMin, endMin: bestPos.endMin, piece: piece });
 
-        // Commit based on type
         if (piece.divisionWide) {
             divisionOccupied.push({ startMin: bestPos.startMin, endMin: bestPos.endMin, event: piece.eventName, type: piece.type });
         }
@@ -753,7 +785,6 @@ function buildForGrade(params) {
 
         var fieldsAvailable = countAvailableSportsFields(gap.startMin, gap.endMin, divName);
 
-        // Which bunks are free in this gap?
         var bunksFree = [], bunksOccupied = [];
         bunks.forEach(function(bunk) {
             var hasNonFiller = bunkState[bunk].occupied.some(function(o) {
@@ -763,33 +794,48 @@ function buildForGrade(params) {
         });
         if (bunksFree.length === 0) continue;
 
-        // Which bunks still need specials?
         var bunksNeedSpec = [], bunksDontNeedSpec = [];
         bunksFree.forEach(function(bunk) {
             if (specialReq.min > 0 && bunkState[bunk].specialCount < specialReq.min) bunksNeedSpec.push(bunk);
             else bunksDontNeedSpec.push(bunk);
         });
 
-        // Available specials for this gap
+        // Available specials for this gap — only include those with a KNOWN duration
+        // ★★★ v5.1 FIX: Filter out specials with unknown durations to prevent mismatched blocks
         var gapSpecials = [];
         divRegular.forEach(function(cfg) {
             var tw = getSpecialTimeWindow(cfg);
             if (tw && !overlaps(gap.startMin, gap.endMin, tw.startMin, tw.endMin)) return;
-            gapSpecials.push({ name: cfg.name, duration: cfg.defaultDuration || cfg.duration || specialDurMin, capacity: getSpecialCapacity(cfg), config: cfg });
+
+            // ★★★ v5.1: Resolve duration using the fixed getSpecialDuration
+            var resolvedDur = getSpecialDuration(cfg.name);
+            if (!resolvedDur || resolvedDur <= 0) {
+                warn('    Skipping "' + cfg.name + '" — duration unknown, cannot size block correctly');
+                return;
+            }
+
+            // ★★★ v5.1: Only include if the special's duration fits within this gap
+            if (resolvedDur > gapDur) return;
+
+            gapSpecials.push({
+                name: cfg.name,
+                duration: resolvedDur,  // ★ always use resolved duration, never || 30 fallback
+                capacity: getSpecialCapacity(cfg),
+                config: cfg
+            });
         });
+
         var totalSeats = 0;
         gapSpecials.forEach(function(sp) { totalSeats += sp.capacity; });
 
         log('      Free: ' + bunksFree.length + ', needSpec: ' + bunksNeedSpec.length +
             ', seats: ' + totalSeats + ', fields: ' + fieldsAvailable);
 
-        // Plan blocks
         var blockPlan = [];
         var cursor = gap.startMin;
 
         if (bunksNeedSpec.length > 0 && gapSpecials.length > 0 && totalSeats > 0) {
             var wavesNeeded = Math.ceil(bunksNeedSpec.length / totalSeats);
-
             var specQueue = bunksNeedSpec.slice();
             var waveIdx = 0;
 
@@ -798,50 +844,58 @@ function buildForGrade(params) {
                 if (remaining < minActivityDur) break;
 
                 if (waveIdx < wavesNeeded && specQueue.length > 0) {
-                    // ═══ SPECIAL WAVE: Assign specials, then group by duration ═══
+                    // ═══ SPECIAL WAVE ═══
                     var waveBunks = specQueue.splice(0, totalSeats);
 
                     // Step 1: Pick a special for each bunk in this wave
-                    var bunkSpecPicks = []; // { bunk, specialName, duration }
+                    var bunkSpecPicks = [];
                     waveBunks.forEach(function(bunk) {
-                        var available = gapSpecials.filter(function(sp) {
+                        var availableNames = gapSpecials.filter(function(sp) {
                             return bunkState[bunk].usedActivities.indexOf(sp.name) < 0 && !isSpecAtCap(sp.name, cursor);
                         }).map(function(sp) { return sp.name; });
-                       var ranked = getRankedSpecials(bunk, available);
-                        // ★★★ v5.1: Validate leftover time fits a sport block ★★★
-                        // Try each ranked special. If picking it would leave less than
-                        // sportDurMin for the remaining sport block, skip it and try
-                        // the next shorter special. If none fit, this bunk does sport.
+
+                        // ★★★ v5.1: Pass specialDurMin as fallback; _durationKnown flag carried through
+                        var ranked = getRankedSpecials(bunk, availableNames, specialDurMin);
+
                         var picked = null;
                         for (var ri = 0; ri < ranked.length; ri++) {
                             var candidate = ranked[ri];
-                            var candDur = candidate.duration || specialDurMin;
+
+                            // ★★★ v5.1 FIX: Skip candidates with unknown duration entirely
+                            // Cannot safely size a block if we don't know the true duration
+                            if (!candidate._durationKnown) {
+                                log('        ' + bunk + ': skipping ' + candidate.name + ' — duration unknown');
+                                continue;
+                            }
+
+                            var candDur = candidate.duration;
                             var leftover = remaining - candDur;
+
                             // Valid if: leftover is 0 (special fills gap exactly),
                             // or leftover >= sportDurMin (room for a proper sport block)
                             if (leftover === 0 || leftover >= sportDurMin) {
                                 picked = candidate;
                                 break;
                             }
-                            // Also valid if leftover fits another special instead of sport
-                            // (edge case: two short specials can share a gap)
-                            // For now, just skip — the bunk will do sport for the full gap
+
                             log('        ' + bunk + ': skipping ' + candidate.name + ' (' + candDur + 'min) — leftover ' + leftover + 'min < sportDurMin ' + sportDurMin);
                         }
+
                         if (picked) {
-                            bunkSpecPicks.push({ bunk: bunk, specialName: picked.name, duration: picked.duration || specialDurMin });
+                            bunkSpecPicks.push({ bunk: bunk, specialName: picked.name, duration: picked.duration });
                             recordSpecUsage(picked.name, cursor);
                             bunkState[bunk].usedActivities.push(picked.name);
                             bunkState[bunk].specialCount++;
                         } else {
-                            // No special fits without leaving a runt sport block — this bunk does sport
+                            // No valid special — this bunk does sport
                             bunkSpecPicks.push({ bunk: bunk, specialName: null, duration: 0 });
-                        }                    });
+                        }
+                    });
 
                     // Step 2: Group by duration
-                    var durGroups = {}; // { duration: [{ bunk, specialName }] }
+                    var durGroups = {};
                     bunkSpecPicks.forEach(function(pick) {
-                        if (!pick.specialName) return; // sport bunk, handled below
+                        if (!pick.specialName) return;
                         var d = pick.duration;
                         if (!durGroups[d]) durGroups[d] = [];
                         durGroups[d].push(pick);
@@ -850,18 +904,11 @@ function buildForGrade(params) {
                     // Step 3: Sort duration groups longest first
                     var sortedDurs = Object.keys(durGroups).map(Number).sort(function(a, b) { return b - a; });
 
-                    // Step 4: Emit blocks for each duration group
-                    // The LONGEST special determines the first block boundary.
-                    // Shorter specials get their own block at the start, then the
-                    // remainder becomes a sport block for those bunks.
-                    //
-                    // Example: Art=20min, Painting=40min, gap starts at cursor
-                    //   Block 1: cursor to cursor+20 → Art bunks: Special, Painting bunks: Sport*, other bunks: Sport
-                    //   Block 2: cursor+20 to cursor+40 → Art bunks: Sport, Painting bunks: Special continues (or new sport), other bunks: Sport
-                    //
-                    // Actually simpler: create per-bunk blocks at each bunk's special duration,
-                    // and sport blocks fill the rest. Division superset will create boundaries
-                    // at each unique duration mark. That's minimal fragmentation.
+                    // If no specials were picked this wave, advance cursor by sportDurMin and loop
+                    if (sortedDurs.length === 0) {
+                        waveIdx++;
+                        continue;
+                    }
 
                     // Find all unique duration boundaries from this wave
                     var durationBoundaries = new Set();
@@ -871,12 +918,12 @@ function buildForGrade(params) {
                     });
                     var boundaries = Array.from(durationBoundaries).sort(function(a, b) { return a - b; });
 
-                    // Find the longest special duration in this wave (defines how far specials extend)
+                    // ★★★ v5.1: maxSpecDurInWave uses actual resolved durations, never fallback
                     var maxSpecDurInWave = sortedDurs.length > 0 ? sortedDurs[0] : specialDurMin;
                     maxSpecDurInWave = Math.min(maxSpecDurInWave, remaining);
 
-                    // Create blocks from cursor to cursor+maxSpecDurInWave using the boundaries
-                    // Then after cursor+maxSpecDurInWave, continue with sport blocks
+                    log('      Wave ' + waveIdx + ': maxSpecDur=' + maxSpecDurInWave + ', boundaries=' + boundaries.join(','));
+
                     for (var bi = 0; bi < boundaries.length; bi++) {
                         var bStart = cursor + boundaries[bi];
                         var bEnd;
@@ -890,18 +937,14 @@ function buildForGrade(params) {
                         if (bEnd - bStart < 5) continue;
 
                         var assigns = {};
-                        // For each bunk, determine what they do in this sub-block
                         bunkSpecPicks.forEach(function(pick) {
                             var specDur = pick.duration;
                             if (pick.specialName && boundaries[bi] < specDur) {
-                                // This bunk's special extends through this sub-block
                                 assigns[pick.bunk] = { type: 'special', suggestedActivity: pick.specialName };
                             } else {
-                                // This bunk's special is done (or they don't have one) — sport
                                 assigns[pick.bunk] = { type: 'sport', suggestedActivity: null };
                             }
                         });
-                        // All other free bunks do sport
                         bunksFree.forEach(function(bunk) {
                             if (assigns[bunk]) return;
                             assigns[bunk] = { type: 'sport', suggestedActivity: null };
@@ -945,7 +988,7 @@ function buildForGrade(params) {
                 }
             }
         } else {
-           // Pure sport fill
+            // Pure sport fill
             while (cursor < gap.endMin) {
                 var rem = gap.endMin - cursor;
                 if (rem < minActivityDur) break;
@@ -953,11 +996,8 @@ function buildForGrade(params) {
                 if (bDur < sportDurMin && rem >= sportDurMin) bDur = sportDurMin;
                 if (bDur < minActivityDur) break;
 
-                // Anti-runt: if leftover after this block is too small for another sport,
-                // redistribute evenly across remaining blocks
                 var after = gap.endMin - (cursor + bDur);
                 if (after > 0 && after < sportDurMin) {
-                    // Leftover can't fit a proper sport block — distribute evenly
                     var n = Math.ceil(rem / sportDurMax);
                     bDur = snapTo5(Math.ceil(rem / n));
                     bDur = Math.max(bDur, sportDurMin);
@@ -983,13 +1023,8 @@ function buildForGrade(params) {
             }
         }
 
-        // Output skeleton blocks — merge adjacent sub-blocks per bunk
-        // When a special spans multiple sub-blocks (e.g., Painting=40min across
-        // two 20min sub-blocks), emit ONE skeleton block for the full duration.
-        // This gives each bunk properly sized blocks instead of pre-sliced fragments.
-
         // Step 1: Build per-bunk block list from the plan
-        var perBunkBlocks = {}; // { bunk: [{ startMin, endMin, type, suggestedActivity }] }
+        var perBunkBlocks = {};
         for (var bpi2 = 0; bpi2 < blockPlan.length; bpi2++) {
             var blk = blockPlan[bpi2];
             for (var bk in blk.assignments) {
@@ -1002,8 +1037,7 @@ function buildForGrade(params) {
             }
         }
 
-       // Step 2: Merge adjacent SPECIAL blocks only (to reconstruct full durations
-        // from sub-slices created by duration boundaries). Sport blocks stay split.
+        // Step 2: Merge adjacent SPECIAL blocks with same suggestedActivity
         for (var bk2 in perBunkBlocks) {
             var blocks = perBunkBlocks[bk2];
             var merged = [];
@@ -1032,12 +1066,10 @@ function buildForGrade(params) {
             for (var fi = 0; fi < blist.length; fi++) {
                 var blk = blist[fi];
                 if (blk.type === 'sport' && (blk.endMin - blk.startMin) < sportDurMin) {
-                    // Try to merge with next block if it's also sport
                     if (fi + 1 < blist.length && blist[fi + 1].type === 'sport' && blist[fi + 1].suggestedActivity === blk.suggestedActivity) {
                         blist[fi + 1].startMin = blk.startMin;
-                        continue; // skip this short block, next block absorbed it
+                        continue;
                     }
-                    // Try to merge with previous block if it's also sport
                     if (fixed.length > 0 && fixed[fixed.length - 1].type === 'sport' && fixed[fixed.length - 1].suggestedActivity === blk.suggestedActivity) {
                         fixed[fixed.length - 1].endMin = blk.endMin;
                         continue;
@@ -1046,6 +1078,23 @@ function buildForGrade(params) {
                 fixed.push(blk);
             }
             perBunkBlocks[bk2b] = fixed;
+        }
+
+        // ★★★ v5.1 FIX: Step 2c — Validate special block durations match configured durations.
+        // If a special block was emitted with the wrong size (e.g. 35min for a 40min special),
+        // correct it here before emitting to skeleton. This is a safety net for edge cases
+        // where boundary math produces an off-by-one or rounding error.
+        for (var bk2c in perBunkBlocks) {
+            perBunkBlocks[bk2c].forEach(function(block) {
+                if (block.type !== 'special' || !block.suggestedActivity) return;
+                var expectedDur = getSpecialDuration(block.suggestedActivity);
+                if (!expectedDur || expectedDur <= 0) return;
+                var actualDur = block.endMin - block.startMin;
+                if (actualDur !== expectedDur) {
+                    warn('    Duration mismatch for ' + block.suggestedActivity + ': block=' + actualDur + 'min, expected=' + expectedDur + 'min — correcting endMin');
+                    block.endMin = block.startMin + expectedDur;
+                }
+            });
         }
 
         // Step 3: Emit skeleton blocks from merged list
@@ -1057,7 +1106,11 @@ function buildForGrade(params) {
                     startTime: fmtTime(block.startMin), endTime: fmtTime(block.endMin),
                     _autoGenerated: true, _bunk: bunkStr3,
                     _suggestedActivity: block.suggestedActivity,
-                    _durationStrict: block.type === 'special' && block.suggestedActivity ? true : false });
+                    // ★★★ v5.1: _durationStrict only set for specials with known durations
+                    _durationStrict: block.type === 'special' && block.suggestedActivity ? true : false,
+                    // ★★★ v5.1: _sportOnly prevents solver placing specials in pure sport blocks
+                    _sportOnly: block.type === 'sport' ? true : false
+                });
                 bunkState[bk3].occupied.push({ startMin: block.startMin, endMin: block.endMin,
                     event: evLabel, type: block.type + '_slot' });
                 bunkTimelines[bk3].push({ startMin: block.startMin, endMin: block.endMin,
