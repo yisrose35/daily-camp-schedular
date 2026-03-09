@@ -1559,14 +1559,17 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         if (bunkOverrides.length > 0) {
             console.log(`[STEP 2] Found ${bunkOverrides.length} overrides (source: ${externalOverrides?.bunkActivityOverrides?.length > 0 ? 'externalOverrides' : window._autoBunkOverrides?.length > 0 ? 'window._autoBunkOverrides' : 'localStorage'})`);
         }
-        bunkOverrides.forEach(override => {
+       bunkOverrides.forEach(override => {
             const activityName = override.activity;
             const overrideType = override.type;
             const startMin = Utils.parseTimeToMinutes(override.startTime);
             const endMin = Utils.parseTimeToMinutes(override.endTime);
             const bunk = override.bunk;
             const divName = Object.keys(divisions).find(d => divisions[d].bunks?.includes(bunk));
-            const slots = Utils.findSlotsForRange(startMin, endMin, divName);
+            
+            // ★ FIX: Look up the exact slot index specifically for THIS bunk's custom timeline
+            const exactSlot = findExactSlotForTimeRange(divName, startMin, endMin, bunk);
+            const slots = exactSlot !== -1 ? [exactSlot] : Utils.findSlotsForRange(startMin, endMin, divName);
 
             if (!divName || slots.length === 0) {
                 console.warn(`[BunkOverride] Skipping ${bunk} - no division found or no slots`);
