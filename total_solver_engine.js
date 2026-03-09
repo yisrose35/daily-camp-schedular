@@ -1485,6 +1485,8 @@ else penalty += 200;
     function isPickStillValid(block, cand) {
         var fn=cand.field,fnorm=cand._fieldNorm||normName(fn),bunk=block.bunk,bDiv=block.divName||'',sM=block.startTime,eM=block.endTime;
         if (sM===undefined||eM===undefined) return true;
+        // ★★★ v15.8 FIX: Duration guard — enforce special activity duration at every call site ★★★
+        if (cand.type==='special') { var _specDur=S.getActivityDuration(cand.activityName); if (_specDur>0&&_specDur!==(eM-sM)) return false; }
         var cAn=normName(cand.activityName);
         if (cAn&&cAn!=='free'&&cAn!=='free play') { var bs=window.scheduleAssignments?.[bunk]||[]; var ms=new Set(block.slots||[]); for (var i=0;i<bs.length;i++) { if (ms.has(i)) continue; var e=bs[i]; if (!e||e.continuation||e._isTransition) continue; if (normName(e._activity||e.sport||e.field)===cAn) return false; } }
         if (S.isFieldLockedByTime(fn,sM,eM,bDiv)) return false;
