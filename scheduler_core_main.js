@@ -398,7 +398,7 @@
         
         if (!block.slots || block.slots.length === 0) {
             if (block.startTime !== undefined && block.endTime !== undefined) {
-                block.slots = Utils.findSlotsForRange(block.startTime, block.endTime, block.divName);
+                block.slots = Utils.findSlotsForRange(block.startTime, block.endTime, block.divName, bunk);
             }
             if (!block.slots || block.slots.length === 0) {
                 console.warn(`[fillBlock] No slots for ${bunk}, times: ${block.startTime}-${block.endTime}`);
@@ -445,7 +445,7 @@
         }
 
         if (writePre) {
-            const preSlots = Utils.findSlotsForRange(blockStartMin, effectiveStart, block.divName);
+            const preSlots = Utils.findSlotsForRange(blockStartMin, effectiveStart, block.divName, bunk);
             preSlots.forEach((slotIndex, i) => {
                 if (!window.scheduleAssignments[bunk][slotIndex]) {
                     window.scheduleAssignments[bunk][slotIndex] = {
@@ -472,7 +472,7 @@
             mainSlots = block.slots;
             console.log(`[fillBlock] ★ SPLIT TILE: Using explicit slots [${mainSlots.join(',')}] for ${bunk}`);
         } else {
-            mainSlots = Utils.findSlotsForRange(effectiveStart, effectiveEnd, block.divName);
+            mainSlots = Utils.findSlotsForRange(effectiveStart, effectiveEnd, block.divName, bunk);
             if (mainSlots.length === 0 && block.slots && block.slots.length > 0) {
                 if (trans.preMin === 0 && trans.postMin === 0) mainSlots = block.slots;
             }
@@ -539,7 +539,7 @@
         }
 
         if (writePost) {
-            const postSlots = Utils.findSlotsForRange(effectiveEnd, blockEndMin, block.divName);
+            const postSlots = Utils.findSlotsForRange(effectiveEnd, blockEndMin, block.divName, bunk);
             postSlots.forEach((slotIndex, i) => {
                 if (!window.scheduleAssignments[bunk][slotIndex]) {
                     window.scheduleAssignments[bunk][slotIndex] = {
