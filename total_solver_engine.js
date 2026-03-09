@@ -1210,10 +1210,10 @@ else penalty += 200;
                     else { if (S.countSameDivisionUsage(fn, blockDiv, startMin, endMin, bunk) >= cap) continue; }
                 }
                if (S.getPrecomputedRotationScore(bunk, c2.activityName) === Infinity) continue;
-               // ★★★ v15.1: Event-type filtering — Sports Slots never get specials ★★★
-               // ★★★ v15.1: Event-type filtering — Sports Slots never get specials ★★★
+              // ★★★ v15.1: Event-type filtering — Sports Slots never get specials ★★★
                 if ((block.event || '').toLowerCase() === 'sports slot' && c2.type === 'special') continue;
-               // ★★★ AUTO BUILD: Duration-strict — skip if activity duration doesn't match block ★★★
+               // ★★★ v15.8: _sportOnly blocks (auto builder sport leftovers) never get specials ★★★
+                if (block._sportOnly === true && c2.type === 'special') continue;               // ★★★ AUTO BUILD: Duration-strict — skip if activity duration doesn't match block ★★★
                 if (_dStrict && _dStrictDur > 0) {
                     var _candDur = S.getActivityDuration(c2.activityName);
                     if (_candDur > 0 && _candDur !== _dStrictDur) continue;
@@ -1484,12 +1484,15 @@ else penalty += 200;
     // ========================================================================
     function isPickStillValid(block, cand) {
         var fn=cand.field,fnorm=cand._fieldNorm||normName(fn),bunk=block.bunk,bDiv=block.divName||'',sM=block.startTime,eM=block.endTime;
-        if (sM===undefined||eM===undefined) return true;
-       // ★★★ v15.8 FIX: Duration guard — enforce special activity duration at every call site ★★★
+       if (sM===undefined||eM===undefined) return true;
+        // ★★★ v15.8 FIX: _sportOnly blocks never get specials ★★★
+        if (block._sportOnly===true && cand.type==='special') return false;
+        // ★★★ v15.8 FIX: Duration guard — enforce special activity duration at every call site ★★★
         var _ap=S.activityProperties?.[cand.activityName]||S.activityProperties?.[cand.field];
         if (_ap && (_ap.type==='special'||cand.type==='special')) {
             var _specDur=_ap.duration||_ap.defaultDuration||S.getActivityDuration(cand.activityName);
             if (_specDur>0&&_specDur!==(eM-sM)) return false;
+        }
         }        var cAn=normName(cand.activityName);
         if (cAn&&cAn!=='free'&&cAn!=='free play') { var bs=window.scheduleAssignments?.[bunk]||[]; var ms=new Set(block.slots||[]); for (var i=0;i<bs.length;i++) { if (ms.has(i)) continue; var e=bs[i]; if (!e||e.continuation||e._isTransition) continue; if (normName(e._activity||e.sport||e.field)===cAn) return false; } }
         if (S.isFieldLockedByTime(fn,sM,eM,bDiv)) return false;
