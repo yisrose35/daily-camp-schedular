@@ -310,16 +310,20 @@
         return window.SchedulerCoreUtils?.findSlotForTime(divName, targetMin);
     }
 
-    function findExactSlotForTimeRange(divisionName, startMin, endMin) {
-        const slots = window.divisionTimes?.[divisionName] || [];
-        for (let i = 0; i < slots.length; i++) {
-            if (slots[i].startMin === startMin && slots[i].endMin === endMin) return i;
-        }
-        for (let i = 0; i < slots.length; i++) {
-            if (slots[i].startMin <= startMin && slots[i].endMin >= endMin) return i;
-        }
-        return -1;
+   function findExactSlotForTimeRange(divisionName, startMin, endMin, bunkName) {
+    const divSlots = window.divisionTimes?.[String(divisionName)] || [];
+    // ★★★ FIX: In per-bunk mode, use THIS bunk's slot array, not the base array ★★★
+    const slots = (bunkName && divSlots._isPerBunk && divSlots._perBunkSlots)
+        ? (divSlots._perBunkSlots[String(bunkName)] || divSlots)
+        : divSlots;
+    for (let i = 0; i < slots.length; i++) {
+        if (slots[i].startMin === startMin && slots[i].endMin === endMin) return i;
     }
+    for (let i = 0; i < slots.length; i++) {
+        if (slots[i].startMin <= startMin && slots[i].endMin >= endMin) return i;
+    }
+    return -1;
+}
 
     // =========================================================================
     // FIELD USAGE TRACKING
