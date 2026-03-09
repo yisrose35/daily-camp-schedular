@@ -1076,10 +1076,15 @@ else penalty += 200;
         var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
         var specials = (gs.app1 && gs.app1.specialActivities) || [];
         var name = (activityName || '').toLowerCase().trim();
-        for (var i = 0; i < specials.length; i++) {
+       for (var i = 0; i < specials.length; i++) {
             if ((specials[i].name || '').toLowerCase().trim() === name) {
-                return specials[i].defaultDuration || specials[i].duration || 0;
+                return specials[i].defaultDuration || specials[i].duration || specials[i].durationMin || 0;
             }
+        }
+        // Also try window.getSpecialActivityByName as fallback
+        if (window.getSpecialActivityByName) {
+            var _sa = window.getSpecialActivityByName(activityName);
+            if (_sa) return _sa.defaultDuration || _sa.duration || _sa.durationMin || 0;
         }
         return 0;
     }
