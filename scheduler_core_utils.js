@@ -1389,36 +1389,32 @@
      * @returns {Object} { entry, slotIdx }
      */
     Utils.getEntryForBlock = function(bunk, startMin, endMin, unifiedTimes) {
-        const assignments = window.scheduleAssignments || {};
-        
-        if (!assignments[bunk]) {
-            return { entry: null, slotIdx: -1 };
-        }
-        
-        const bunkData = assignments[bunk];
-        const divName = Utils.getDivisionForBunk(bunk);
-        const divSlots = window.divisionTimes?.[divName] || [];
-        
-        // Method 1: Find by EXACT time match in divisionTimes
-        for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
-            const slot = divSlots[slotIdx];
-            if (slot.startMin === startMin && slot.endMin === endMin) {
-                return { entry: bunkData[slotIdx] || null, slotIdx };
-            }
-        }
-        
-        // Method 2: Find slot that starts within the requested range
-        for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
-            const slot = divSlots[slotIdx];
-            if (slot.startMin >= startMin && slot.startMin < endMin) {
-                return { entry: bunkData[slotIdx] || null, slotIdx };
-            }
-        }
+    const assignments = window.scheduleAssignments || {};
+    if (!assignments[bunk]) return { entry: null, slotIdx: -1 };
+    const bunkData = assignments[bunk];
+    const divName = Utils.getDivisionForBunk(bunk);
+    // ★★★ FIX: Use this bunk's own slot array in per-bunk mode ★★★
+    const perBunk = Utils._getPerBunkSlots(divName, bunk);
+    const divSlots = perBunk || window.divisionTimes?.[divName] || [];
 
-        // ★★★ NEW Method 3: Find slot that OVERLAPS the requested range ★★★
-        for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
-            const slot = divSlots[slotIdx];
-            const hasOverlap = !(slot.endMin <= startMin || slot.startMin >= endMin);
+    // Method 1: Find by EXACT time match
+    for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
+        const slot = divSlots[slotIdx];
+        if (slot.startMin === startMin && slot.endMin === endMin) {
+            return { entry: bunkData[slotIdx] || null, slotIdx };
+        }
+    }
+    // Method 2: Find slot that starts within the requested range
+    for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
+        const slot = divSlots[slotIdx];
+        if (slot.startMin >= startMin && slot.startMin < endMin) {
+            return { entry: bunkData[slotIdx] || null, slotIdx };
+        }
+    }
+    // Method 3: Find slot that OVERLAPS the requested range
+    for (let slotIdx = 0; slotIdx < divSlots.length; slotIdx++) {
+        const slot = divSlots[slotIdx];
+        const hasOverlap = !(slot.endMin <= startMin || slot.startMin >= endMin);
             if (hasOverlap) {
                 const entry = bunkData[slotIdx];
                 if (entry && !entry.continuation) {
@@ -1478,10 +1474,16 @@
      * @returns {number} Slot index or -1
      */
     Utils.findSlotForBunkAtTime = function(bunkName, targetMin) {
-        const divName = Utils.getDivisionForBunk(bunkName);
-        if (!divName) return -1;
-        return Utils.findSlotForTime(divName, targetMin);
-    };
+    const divName = Utils.getDivisionForBunk(bunkName);
+    if (!divName) return -1;
+    // ★★★ FIX: Use per-bunk slots if available ★★★
+    const perBunk = Utils._getPerBunkSlots(divName, bunkName);
+    const slots = perBunk || Utils.getSlotsForDivision(divName);
+    for (let i = 0; i < slots.length; i++) {
+        if (slots[i].startMin <= targetMin && targetMin < slots[i].endMin) return i;
+    }
+    return -1;
+};
 
     // =================================================================
     // 10. CROSS-DIVISION CONFLICT DETECTION (CONSOLIDATED)
