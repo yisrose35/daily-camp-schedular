@@ -264,8 +264,12 @@
                 // lacks split expansion, so restoring it mid-generation breaks
                 // slot lookups for split tiles and causes mis-indexed pinned events.
                 if (result?.divisionTimes && !window._divisionTimesLocked) {
-                    window.divisionTimes = window.DivisionTimesSystem?.deserialize(result.divisionTimes) || {};
-                    log('Restored divisionTimes from localStorage');
+                    // ★★★ v1.4: Don't overwrite per-bunk divisionTimes with stale localStorage ★★★
+                    var _currentHasPerBunk = window.divisionTimes && Object.values(window.divisionTimes).some(function(dt) { return dt && dt._isPerBunk; });
+                    if (!_currentHasPerBunk) {
+                        window.divisionTimes = window.DivisionTimesSystem?.deserialize(result.divisionTimes) || {};
+                        log('Restored divisionTimes from localStorage');
+                    }
                 }
 
                 return result;
