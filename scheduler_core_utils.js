@@ -1243,11 +1243,15 @@
      * @param {number} slotIndex - Slot index
      * @returns {Object|null} Slot object or null
      */
-    Utils.getSlotAtIndex = function(divisionName, slotIndex) {
-        // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
-        const divNameStr = String(divisionName);
-        return window.divisionTimes?.[divNameStr]?.[slotIndex] || null;
-    };
+    Utils.getSlotAtIndex = function(divisionName, slotIndex, bunkName) {
+    const divNameStr = String(divisionName);
+    // ★★★ FIX: Per-bunk slot lookup ★★★
+    if (bunkName) {
+        const perBunk = Utils._getPerBunkSlots(divNameStr, bunkName);
+        if (perBunk) return perBunk[slotIndex] || null;
+    }
+    return window.divisionTimes?.[divNameStr]?.[slotIndex] || null;
+};
 
     /**
      * Get time range for a slot (DIVISION-AWARE)
