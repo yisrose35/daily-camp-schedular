@@ -1916,14 +1916,8 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
             const data = leagues[divName][slotIdx];
             return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '' };
         }
-        if (leagues[divName]) {
-            const divSlotKeys = Object.keys(leagues[divName]).map(Number).sort((a, b) => a - b);
-            for (const storedSlot of divSlotKeys) {
-                if (Math.abs(storedSlot - slotIdx) <= 2) {
-                    const data = leagues[divName][storedSlot];
-                    if (data && (data.matchups?.length > 0 || data.gameLabel)) return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '' };
-                }
-            }
+       if (leagues[divName]) {
+            // Only use exact slot match — fuzzy matching causes wrong league data in adjacent slots
         }
         const rawMasterLeagues = window.masterLeagues || window.loadGlobalSettings?.()?.app1?.leagues || [];
         let masterLeaguesList = Array.isArray(rawMasterLeagues) ? rawMasterLeagues : Object.values(rawMasterLeagues);
