@@ -1485,8 +1485,12 @@ else penalty += 200;
     function isPickStillValid(block, cand) {
         var fn=cand.field,fnorm=cand._fieldNorm||normName(fn),bunk=block.bunk,bDiv=block.divName||'',sM=block.startTime,eM=block.endTime;
        if (sM===undefined||eM===undefined) return true;
-        
-        }        var cAn=normName(cand.activityName);
+        // ★★★ v15.8: Duration guard for specials in backjump path ★★★
+        if (cand.type==='special') {
+            var _bjDur=S.getActivityDuration(cand.activityName);
+            if (_bjDur>0 && _bjDur!==(eM-sM)) return false;
+        }
+        var cAn=normName(cand.activityName);
         if (cAn&&cAn!=='free'&&cAn!=='free play') { var bs=window.scheduleAssignments?.[bunk]||[]; var ms=new Set(block.slots||[]); for (var i=0;i<bs.length;i++) { if (ms.has(i)) continue; var e=bs[i]; if (!e||e.continuation||e._isTransition) continue; if (normName(e._activity||e.sport||e.field)===cAn) return false; } }
         if (S.isFieldLockedByTime(fn,sM,eM,bDiv)) return false;
         var fp=S._fieldPropertyMap.get(fn); var cap=fp?fp.capacity:S.getFieldCapacity(fn); var st=fp?fp.sharingType:S.getSharingType(fn);
