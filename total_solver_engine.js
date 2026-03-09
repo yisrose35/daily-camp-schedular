@@ -1487,10 +1487,9 @@ else penalty += 200;
        if (sM===undefined||eM===undefined) return true;
         // ★★★ v15.8 FIX: _sportOnly blocks never get specials ★★★
         if (block._sportOnly===true && cand.type==='special') return false;
-        // ★★★ v15.8 FIX: Duration guard — enforce special activity duration at every call site ★★★
-        var _ap=S.activityProperties?.[cand.activityName]||S.activityProperties?.[cand.field];
-        if (_ap && (_ap.type==='special'||cand.type==='special')) {
-            var _specDur=_ap.duration||_ap.defaultDuration||S.getActivityDuration(cand.activityName);
+       // ★★★ v15.8 FIX: Duration guard — only applies when cand.type is confirmed 'special' ★★★
+        if (cand.type==='special') {
+            var _specDur=S.getActivityDuration(cand.activityName);
             if (_specDur>0&&_specDur!==(eM-sM)) return false;
         }
         }        var cAn=normName(cand.activityName);
