@@ -2068,7 +2068,20 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
             // ★★★ v17.9 FIX: Use EXACT slot matching to prevent boundary overlap issues ★★★
             const exactSlot = findExactSlotForTimeRange(divName, sMin, eMin);
-            const slots = exactSlot !== -1 ? [exactSlot] : Utils.findSlotsForRange(sMin, eMin, divName);
+           let slots;
+if (exactSlot !== -1) {
+    slots = [exactSlot];
+} else {
+    // ★★★ FIX v17.14: Fallback also uses this bunk's own slot array ★★★
+    const divData = window.divisionTimes?.[String(divName)];
+    const bunkSlots = (divData?._isPerBunk && divData._perBunkSlots?.[String(bunk)])
+        ? divData._perBunkSlots[String(bunk)]
+        : divData || [];
+    slots = [];
+    for (let i = 0; i < bunkSlots.length; i++) {
+        if (bunkSlots[i].startMin < eMin && bunkSlots[i].endMin > sMin) slots.push(i);
+    }
+}
             if (slots.length === 0) return;
             const eventName = item.event || '';
             const normalizedLeague = normalizeLeague(eventName);
