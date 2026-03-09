@@ -1025,7 +1025,7 @@
 
             // ★ Sequence rule warning
             if (window.checkSequenceViolation) {
-                const _seqSlots = findSlotsForRange(times.startMin, times.endMin, divName);
+                const _seqSlots = findSlotsForRange(times.startMin, times.endMin, divName, bunk);
                 if (_seqSlots.length > 0) {
                     const _seqCheck = window.checkSequenceViolation(bunk, activity, _seqSlots[0], divName);
                     if (_seqCheck?.violated) { if (!confirm('⚠️ Sequence Warning:\n\n' + _seqCheck.reason + '\n\nPlace anyway?')) return; }
@@ -1033,7 +1033,7 @@
             }
             // ★ Location cooldown warning
             if (window.isLocationInCooldown && location) {
-                const _coolSlots = findSlotsForRange(times.startMin, times.endMin, divName);
+                const _coolSlots = findSlotsForRange(times.startMin, times.endMin, divName, bunk);
                 if (_coolSlots.length > 0) {
                     const _coolCheck = window.isLocationInCooldown(location, _coolSlots[0], bunk, divName);
                     if (_coolCheck?.blocked) { if (!confirm('⚠️ Location Cooldown:\n\n' + _coolCheck.reason + '\n\nPlace anyway?')) return; }
