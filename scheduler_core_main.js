@@ -1394,7 +1394,18 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             let targetIndex = i;
 
                             // ★★★ v17.5: Try direct index mapping first for division-aware restoration ★★★
-                            if (targetIndex < targetSlotCount) {
+                          if (targetIndex < targetSlotCount) {
+                                // ★★★ v15.9: Duration guard — reject specials placed in wrong-size slots ★★★
+                                const _bgActivity = slots[i]._activity || slots[i].field || '';
+                                const _bgSlot = divSlots[targetIndex];
+                                if (_bgSlot && _bgActivity) {
+                                    const _bgBlockDur = _bgSlot.endMin - _bgSlot.startMin;
+                                    const _bgConfigDur = window._SolverInternals?.getActivityDuration?.(_bgActivity) || 0;
+                                    if (_bgConfigDur > 0 && _bgBlockDur !== _bgConfigDur) {
+                                        console.warn(`[Step1.5] ⚠️ Duration mismatch — skipping "${_bgActivity}" in ${_bgBlockDur}min slot (config=${_bgConfigDur}min) for ${bunkName} slot[${targetIndex}]`);
+                                        continue;
+                                    }
+                                }
                                 window.scheduleAssignments[bunkName][targetIndex] = {
                                     ...slots[i],
                                     _locked: true,
