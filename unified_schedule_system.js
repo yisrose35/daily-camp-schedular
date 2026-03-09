@@ -83,9 +83,9 @@
         return Utils()?.getSlotsForDivision?.(divName) || window.divisionTimes?.[divName] || [];
     }
     
-    function findSlotsForRange(startMin, endMin, divisionOrBunk) {
-        return Utils()?.findSlotsForRange?.(startMin, endMin, divisionOrBunk) || [];
-    }
+    function findSlotsForRange(startMin, endMin, divisionOrBunk, bunkName) {
+    return Utils()?.findSlotsForRange?.(startMin, endMin, divisionOrBunk, bunkName) || [];
+}
     
     function getEntryForBlock(bunk, startMin, endMin) {
         return Utils()?.getEntryForBlock?.(bunk, startMin, endMin) || { entry: null, slotIdx: -1 };
@@ -2716,7 +2716,7 @@ if (bypassStatus.highlight) {
         }
         
         const divName = getDivisionForBunk(bunk);
-        const slots = findSlotsForRange(startMin, endMin, divName);
+       const slots = findSlotsForRange(startMin, endMin, divName, bunk);
         
         if (slots.length === 0) {
             alert('Error: Could not find time slots for this block.');
