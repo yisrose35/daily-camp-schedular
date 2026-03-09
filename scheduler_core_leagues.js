@@ -1003,8 +1003,12 @@ for (const futureDate of Object.keys(allDailyData)) {
                 leagueGameCounters[league.name] += 2;
                 if (!history.gamesPerDate[league.name]) history.gamesPerDate[league.name] = {};
                 history.gamesPerDate[league.name][dayId] = (history.gamesPerDate[league.name][dayId]||0) + 2;
-                blocksByTime[timeKey1].allBlocks.forEach(function(b){b.processed=true;});
-                blocksByTime[timeKey2].allBlocks.forEach(function(b){b.processed=true;});
+               blocksByTime[timeKey1].allBlocks.forEach(function(b){
+                    if ((league.divisions||[]).includes(b.divName)) b.processed=true;
+                });
+                blocksByTime[timeKey2].allBlocks.forEach(function(b){
+                    if ((league.divisions||[]).includes(b.divName)) b.processed=true;
+                });
                 offCampusScheduled[league.name] = { handled: true };
                 console.log('[OffCampus] ' + lbl1 + ' + ' + lbl2 + ' | Away: ' + dh.offCampus.teams.join(',') + ' | Home: ' + dh.onCampus.teams.join(','));
             }
