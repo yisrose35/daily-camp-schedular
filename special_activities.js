@@ -151,16 +151,21 @@ function validateSpecialActivity(activity, activityName) {
         location: activity.location || null, isIndoor, rainyDayAvailable: isIndoor, availableOnRainyDay: isIndoor,
        ...(activity.rainyDayCapacity > 0 ? { rainyDayCapacity: parseInt(activity.rainyDayCapacity, 10) } : {}),
         ...(activity.rainyDayAvailableAllDay === true ? { rainyDayAvailableAllDay: true } : {}),
-       fullGrade: activity.fullGrade === true,
-        fullGradePerGrade: (activity.fullGradePerGrade && typeof activity.fullGradePerGrade === 'object') ? activity.fullGradePerGrade : undefined,
+       fullGradePerGrade: (activity.fullGradePerGrade && typeof activity.fullGradePerGrade === 'object') ? activity.fullGradePerGrade : undefined,
         // ★ v3.7: Multi-Part Special support (simple N parts)
-
-
-        multiPart: activity.multiPart && typeof activity.multiPart === 'object' ? {
+        multiPart: activity.multiPart&& typeof activity.multiPart === 'object' ? {
             enabled: activity.multiPart.enabled === true,
             totalParts: (function() { var tp = parseInt(activity.multiPart.totalParts, 10); return (!isNaN(tp) && tp >= 2 && tp <= 10) ? tp : 2; })(),
-            daysBetween: (function() { var db = parseInt(activity.multiPart.daysBetween, 10); return (!isNaN(db) && db >= 1 && db <= 14) ? db : 3; })()
-        } : { enabled: false, totalParts: 2, daysBetween: 3 }
+            daysBetween: (function() { var db = parseInt(activity.multiPart.daysBetween, 10); return (!isNaN(db) && db >= 1 && db <= 14) ? db : 3; })(),
+            parts: Array.isArray(activity.multiPart.parts) ? activity.multiPart.parts.map(function(p) {
+                if (!p || typeof p !== 'object') return { location: null, duration: null };
+                return { location: p.location || null, duration: (parseInt(p.duration, 10) > 0) ? parseInt(p.duration, 10) : null };
+            }) : []
+        } : { enabled: false, totalParts: 2, daysBetween: 3, parts: [] },
+        fullGrade: activity.fullGrade === true,
+        duration: (activity.duration != null && parseInt(activity.duration, 10) > 0) ? parseInt(activity.duration, 10) : null,
+        availableDays: Array.isArray(activity.availableDays) ? activity.availableDays : null,
+        mustScheduleWhenAvailable: activity.mustScheduleWhenAvailable === true
     };
 }
 
@@ -168,9 +173,10 @@ function createDefaultActivity(name) {
     return { name, type: 'Special', available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
         maxUsage: null, maxUsagePeriod: 'half', frequencyWeeks: 0, rainyDayExclusive: false, prepDuration: 0,
+        duration: null, availableDays: null, mustScheduleWhenAvailable: false,
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
         rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
-        multiPart: { enabled: false, totalParts: 2, daysBetween: 3 } };
+        multiPart: { enabled: false, totalParts: 2, daysBetween: 3, parts: [] } };
 }
 
 function validateAllActivities(activities) { if (!Array.isArray(activities)) return []; return activities.map(a => validateSpecialActivity(a, a?.name)); }
@@ -289,6 +295,7 @@ function loadData() {
 }
 
 function refreshFromStorage() {
+    if (_isSaving) return;
     const pS = JSON.stringify(specialActivities), pR = JSON.stringify(rainyDayActivities), pSel = selectedItemId;
     loadData();
     if (selectedItemId) { const [, n] = selectedItemId.split(/-(.+)/); if (!specialActivities.some(s=>s.name===n) && !rainyDayActivities.some(s=>s.name===n)) selectedItemId = null; }
@@ -297,8 +304,10 @@ function refreshFromStorage() {
     }
 }
 
+let _isSaving = false;
 function saveData() {
     if (window.AccessControl?.canEditSetup && !window.AccessControl.canEditSetup()) return;
+    _isSaving = true;
     try {
         specialActivities = validateAllActivities(specialActivities);
         rainyDayActivities = validateAllActivities(rainyDayActivities);
@@ -308,6 +317,7 @@ function saveData() {
             window._specialActivitiesSyncTimeout = setTimeout(() => { window.forceSyncToCloud(); window._specialActivitiesSyncTimeout = null; }, 500);
         }
     } catch (e) { console.error("[SPECIAL_ACTIVITIES] Error saving data:", e); }
+    finally { setTimeout(function() { _isSaving = false; }, 300); }
 }
 
 function renderMasterList() {
@@ -465,14 +475,36 @@ function renderDetailPane() {
    // Group 4: ADVANCED — usage caps + duration + multi-part
     detailPaneEl.appendChild(sectionGroup("Advanced", "Usage limits, prep time & multi-part", [
         section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
-        section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)),
+        section("Prep Duration", summaryPrepDuration(item), () => renderPrepDurationSettings(item)),
         section("Multi-Parts", summaryMultiPart(item), () => renderMultiPartSettings(item))
     ]));
+    // Group 2: Time & Weather — time rules + weather (weather only for non-rainy-day items)
+    const timeWeatherSections = [section("Time Availability", summaryTime(item), () => renderTimeRules(item))];
+    timeWeatherSections.push(section("Day Availability", summaryDays(item), () => renderDayAvailability(item)));
+    if (!isRainyDayItem) timeWeatherSections.push(section("Weather & Availability", summaryWeather(item), () => renderWeatherSettings(item)));
+    detailPaneEl.appendChild(sectionGroup("Time & Weather", "When this special can be scheduled", timeWeatherSections));
+
+    // Group 3: Rotation Rules — usage limit + full grade + prep duration
+   const rotationSections = [
+        section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
+        section("Full Grade", summaryFullGrade(item), () => renderFullGradeSettings(item)),
+    ];
+    if (window.getCampBuilderMode?.() === 'auto' || window._daBuilderMode === 'auto') {
+        rotationSections.push(section("Activity Duration", summaryDuration(item), () => renderDurationSettings(item)));
+    }
+    rotationSections.push(section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)));
+   detailPaneEl.appendChild(sectionGroup("Rotation Rules", "Limits, timing & scheduling mode", rotationSections));
 }
 
 // =========================================================================
 // SUMMARY HELPERS
 // =========================================================================
+function summaryPrepDuration(item) {
+    if (!item.prepDuration || item.prepDuration <= 0) return 'None';
+    var txt = item.prepDuration + 'min prep';
+    if (item.prepLocation) txt += ' - ' + item.prepLocation;
+    return txt;
+}
 function summaryMaxUsage(item) {
     var m = parseInt(item.maxUsage) || 0;
     if (m <= 0) return 'No limit';
@@ -497,6 +529,22 @@ function summarySchedulingMode(item) {
     if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return 'Individual — 1 bunk at a time';
     return 'Individual — up to ' + (parseInt(item.sharableWith.capacity, 10) || 2) + ' bunks at once';
 }
+    function summaryDuration(item) {
+    var d = parseInt(item.duration) || 0;
+    if (d <= 0) return 'Not set';
+    var total = d + (parseInt(item.prepDuration) || 0);
+    if (item.prepDuration > 0) return d + 'min (+' + item.prepDuration + 'min prep = ' + total + 'min total)';
+    return d + ' minutes';
+}
+function summaryDuration(item) {
+    var d = parseInt(item.duration) || 0;
+    if (d <= 0) return 'Not set';
+    var total = d + (parseInt(item.prepDuration) || 0);
+    if (item.prepDuration > 0) return d + 'min (+' + item.prepDuration + 'min prep = ' + total + 'min total)';
+    return d + ' minutes';
+}
+function summaryFullGrade(item) { return item.fullGrade ? 'Entire grade does it together' : 'Off (normal rotation)'; }
+function summarySharing(item) { if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "No sharing (1 bunk only)"; return 'Up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks (same grade)'; }
 function summaryAccess(item) { if (!item.limitUsage?.enabled) return "Open to all grades"; const c = Object.keys(item.limitUsage.divisions||{}).length; if (c===0) return "\u26A0 Restricted (none selected)"; return c + ' grade' + (c!==1?'s':'') + ' allowed' + (item.limitUsage.usePriority?" \u00B7 prioritized":""); }
 function summaryTime(item) { const c = (item.timeRules||[]).length; return c ? c + ' rule(s) active' : "Available all day"; }
 function summaryWeather(item) {
@@ -508,6 +556,12 @@ function summaryWeather(item) {
     return s;
 }
 function summaryLocation(item) { return item.location || "No field assigned"; }
+function summaryDays(item) {
+    if (!Array.isArray(item.availableDays) || item.availableDays.length === 0) return 'Every day';
+    if (item.availableDays.length === 7) return 'Every day';
+    var dayMap = { 'Sunday':'Sun', 'Monday':'Mon', 'Tuesday':'Tue', 'Wednesday':'Wed', 'Thursday':'Thu', 'Friday':'Fri', 'Saturday':'Sat' };
+    return item.availableDays.map(function(d) { return dayMap[d] || d; }).join(', ');
+}
 
 // ★ v3.7: Multi-Part summary
 function summaryMultiPart(item) {
@@ -1202,16 +1256,114 @@ function renderWeatherSettings(item) {
     }
     return container;
 }
-function renderPrepDurationSettings(item) {
+function renderDurationSettings(item) {
     const container = document.createElement("div");
-    const hp = (item.prepDuration||0) > 0;
-    container.innerHTML = '<div style="margin-bottom:16px;"><p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Some activities need prep time. Example: <strong>Skits</strong> = 30min practice + 60min performance.</p><div style="background:' + (hp?'#faf5ff':'#f9fafb') + '; border:1px solid ' + (hp?'#d8b4fe':'#e5e7eb') + '; border-radius:10px; padding:14px;"><div style="display:flex; align-items:center; gap:12px; margin-bottom:' + (hp?'12px':'0') + ';"><div style="flex:1;"><div style="font-weight:600; color:' + (hp?'#6b21a8':'#374151') + ';">' + (hp?'Has Prep Phase':'Single Phase') + '</div><div style="font-size:0.8rem; color:' + (hp?'#7c3aed':'#6b7280') + ';">' + (hp?item.prepDuration+' min prep + main':'No prep needed') + '</div></div><label class="switch"><input type="checkbox" id="prep-duration-toggle" ' + (hp?'checked':'') + '><span class="slider"></span></label></div><div id="prep-duration-config" style="display:' + (hp?'block':'none') + ';"><div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #e9d5ff;"><label style="font-size:0.85rem;">Prep time:</label><input type="number" id="prep-duration-input" min="5" max="120" step="5" value="' + (item.prepDuration||30) + '" style="width:70px; padding:6px 10px; border:1px solid #d8b4fe; border-radius:6px; text-align:center;"><span style="font-size:0.85rem; color:#64748b;">minutes</span></div></div></div></div>';
-    const pt = container.querySelector("#prep-duration-toggle");
-    if (pt) { pt.addEventListener("change", function() { const c = container.querySelector("#prep-duration-config"); if(this.checked){c.style.display="block";item.prepDuration=parseInt(container.querySelector("#prep-duration-input").value,10)||30;}else{c.style.display="none";item.prepDuration=0;} saveData(); const s=container.closest('.detail-section')?.querySelector('.detail-section-summary'); if(s)s.textContent=(item.prepDuration>0)?item.prepDuration+'min prep':'None'; }); }
-    const di = container.querySelector("#prep-duration-input");
-    if (di) { di.addEventListener("change", function() { const v=parseInt(this.value,10); if(!isNaN(v)&&v>=5&&v<=120){item.prepDuration=v;saveData();const s=container.closest('.detail-section')?.querySelector('.detail-section-summary');if(s)s.textContent=v+'min prep';} }); }
+    const hasDur = (parseInt(item.duration) || 0) > 0;
+    
+    container.innerHTML = '<div style="margin-bottom:16px;">'
+        + '<p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Set how long this activity takes when scheduled. The scheduler will use this duration instead of the skeleton block\'s default time.</p>'
+        + '<div style="background:' + (hasDur ? '#eff6ff' : '#f9fafb') + '; border:1px solid ' + (hasDur ? '#bfdbfe' : '#e5e7eb') + '; border-radius:10px; padding:14px;">'
+        + '<div style="display:flex; align-items:center; gap:12px; margin-bottom:' + (hasDur ? '12px' : '0') + ';">'
+        + '<div style="flex:1;">'
+        + '<div style="font-weight:600; color:' + (hasDur ? '#1e40af' : '#374151') + ';">' + (hasDur ? item.duration + ' minutes' : 'Not Set') + '</div>'
+        + '<div style="font-size:0.8rem; color:' + (hasDur ? '#3b82f6' : '#6b7280') + ';">' + (hasDur ? 'Scheduler will use this duration' : 'Uses skeleton block duration') + '</div>'
+        + '</div>'
+        + '<label class="switch"><input type="checkbox" id="duration-toggle" ' + (hasDur ? 'checked' : '') + '><span class="slider"></span></label>'
+        + '</div>'
+        + '<div id="duration-config" style="display:' + (hasDur ? 'block' : 'none') + ';">'
+        + '<div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #bfdbfe; margin-top:8px;">'
+        + '<label style="font-size:0.85rem;">Duration:</label>'
+        + '<input type="number" id="duration-input" min="5" max="180" step="5" value="' + (item.duration || 30) + '" style="width:70px; padding:6px 10px; border:1px solid #bfdbfe; border-radius:6px; text-align:center;">'
+        + '<span style="font-size:0.85rem; color:#64748b;">minutes</span>'
+        + '</div></div></div></div>';
+    
+    const tog = container.querySelector("#duration-toggle");
+    if (tog) {
+        tog.addEventListener("change", function() {
+            const cfg = container.querySelector("#duration-config");
+            if (this.checked) {
+                cfg.style.display = "block";
+                item.duration = parseInt(container.querySelector("#duration-input").value, 10) || 30;
+            } else {
+                cfg.style.display = "none";
+                item.duration = null;
+            }
+            saveData();
+            const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+            if (s) s.textContent = summaryDuration(item);
+        });
+    }
+    
+    const di = container.querySelector("#duration-input");
+    if (di) {
+        di.addEventListener("change", function() {
+            const v = parseInt(this.value, 10);
+            if (!isNaN(v) && v >= 5 && v <= 180) {
+                item.duration = v;
+                saveData();
+                const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+                if (s) s.textContent = summaryDuration(item);
+            }
+        });
+    }
+    
     return container;
 }
+   
+function renderPrepDurationSettings(item) {
+    const container = document.createElement("div");
+    const hp = (item.prepDuration || 0) > 0;
+    container.innerHTML =
+        '<div style="margin-bottom:16px;">' +
+        '<p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Some activities need prep time. Example: <strong>Skits</strong> = 30 min practice in the Gym + 60 min performance in the Lunchroom.</p>' +
+        '<div style="background:' + (hp ? '#faf5ff' : '#f9fafb') + '; border:1px solid ' + (hp ? '#d8b4fe' : '#e5e7eb') + '; border-radius:10px; padding:14px;">' +
+        '<div style="display:flex; align-items:center; gap:12px; margin-bottom:' + (hp ? '12px' : '0') + ';">' +
+        '<div style="flex:1;"><div style="font-weight:600; color:' + (hp ? '#6b21a8' : '#374151') + ';">' + (hp ? 'Has Prep Phase' : 'Single Phase') + '</div>' +
+        '<div style="font-size:0.8rem; color:' + (hp ? '#7c3aed' : '#6b7280') + ';">' + (hp ? item.prepDuration + ' min prep + main' : 'No prep needed') + '</div></div>' +
+        '<label class="switch"><input type="checkbox" id="prep-duration-toggle" ' + (hp ? 'checked' : '') + '><span class="slider"></span></label></div>' +
+        '<div id="prep-duration-config" style="display:' + (hp ? 'block' : 'none') + ';">' +
+        '<div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #e9d5ff; margin-bottom:10px;">' +
+        '<label style="font-size:0.85rem;">Prep time:</label>' +
+        '<input type="number" id="prep-duration-input" min="5" max="120" step="5" value="' + (item.prepDuration || 30) + '" style="width:70px; padding:6px 10px; border:1px solid #d8b4fe; border-radius:6px; text-align:center;">' +
+        '<span style="font-size:0.85rem; color:#64748b;">minutes</span></div>' +
+        '<div style="padding:10px; background:white; border-radius:8px; border:1px solid #e9d5ff;">' +
+        '<div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><span style="font-size:1rem;">📍</span>' +
+        '<label style="font-size:0.85rem; font-weight:600; color:#6b21a8;">Prep Location</label></div>' +
+        '<p style="font-size:0.8rem; color:#7c3aed; margin:0 0 8px 0;">Where does the prep phase happen? If different from the main location (' + escapeHtml(item.location || 'none set') + '), select it here.</p>' +
+        '<select id="prep-location-select" style="width:100%; padding:8px 10px; border:1px solid #d8b4fe; border-radius:8px; font-size:0.9rem; background:white; cursor:pointer;"><option value="">-- Same as main location --</option></select>' +
+        (item.prepLocation ? '<div style="margin-top:8px; padding:8px 12px; background:#faf5ff; border:1px solid #d8b4fe; border-radius:8px; font-size:0.8rem; color:#6b21a8;">⚡ Prep in <strong>' + escapeHtml(item.prepLocation) + '</strong>, then main in <strong>' + escapeHtml(item.location || 'assigned field') + '</strong></div>' : '') +
+        '</div></div></div></div>';
+    // Populate prep location dropdown
+    const sel = container.querySelector("#prep-location-select");
+    if (sel) {
+        const sf = window.loadGlobalSettings?.() || {};
+        const allFields = sf.app1?.fields || sf.fields || window.getFields?.() || [];
+        if (allFields.length > 0) {
+            const fg = document.createElement("optgroup"); fg.label = "Fields";
+            allFields.sort((a, b) => (a.name || '').localeCompare(b.name || '')).forEach(f => {
+                if (!f.name) return;
+                const o = document.createElement("option"); o.value = f.name;
+                o.textContent = f.name + (f.rainyDayAvailable ? ' 🌧' : '');
+                if (item.prepLocation === f.name) o.selected = true;
+                fg.appendChild(o);
+            });
+            sel.appendChild(fg);
+        }
+        sel.addEventListener("change", function () {
+            item.prepLocation = this.value || null; saveData();
+            const parent = container.parentElement;
+            if (parent) { parent.innerHTML = ''; parent.appendChild(renderPrepDurationSettings(item)); }
+            updateSummary();
+        });
+    }
+    const updateSummary = () => { const s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if (s) s.textContent = summaryPrepDuration(item); };
+    const pt = container.querySelector("#prep-duration-toggle");
+    if (pt) { pt.addEventListener("change", function () { const c = container.querySelector("#prep-duration-config"); if (this.checked) { c.style.display = "block"; item.prepDuration = parseInt(container.querySelector("#prep-duration-input").value, 10) || 30; } else { c.style.display = "none"; item.prepDuration = 0; item.prepLocation = null; } saveData(); updateSummary(); }); }
+    const di = container.querySelector("#prep-duration-input");
+    if (di) { di.addEventListener("change", function () { const v = parseInt(this.value, 10); if (!isNaN(v) && v >= 5 && v <= 120) { item.prepDuration = v; saveData(); updateSummary(); } }); }
+    return container;
+}
+
 
 // =========================================================================
 // ★ v3.5: RENDER Multi-Part Special Settings
@@ -1290,33 +1442,105 @@ function renderMultiPartSettings(item) {
         daysRow.lastElementChild.insertAdjacentHTML('afterend', '<span style="font-size:0.8rem; color:#6B7280;">days before the scheduler starts pushing the next part</span>');
         configPanel.appendChild(daysRow);
 
-        // Preview
-        var preview = document.createElement("div");
-        preview.style.cssText = "border:1px solid #E5E7EB; border-radius:10px; padding:14px; background:#FAFAFA; margin-bottom:14px;";
-        preview.innerHTML = '<div style="font-weight:600; font-size:0.85rem; margin-bottom:10px;">Schedule Preview</div>';
-        for (var i = 1; i <= mp.totalParts; i++) {
-            var step = document.createElement("div");
-            step.style.cssText = "display:flex; align-items:center; gap:10px; padding:8px 12px; margin-bottom:" + (i < mp.totalParts ? "4px" : "0") + "; border-radius:8px; background:#fff; border:1px solid #E5E7EB;";
-            var badge = document.createElement("span");
-            badge.style.cssText = "width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.75rem; flex-shrink:0; color:#fff; background:#147D91;";
-            badge.textContent = i;
-            step.appendChild(badge);
-            var label = document.createElement("span");
-            label.style.cssText = "font-size:0.85rem; color:#374151;";
-            label.textContent = escapeHtml(item.name) + " " + i + "/" + mp.totalParts;
-            step.appendChild(label);
-            if (i === 1) { step.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.7rem; color:#6B7280;">No prerequisite</span>'); }
-            else { step.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.7rem; color:#92400e;">Requires ' + (i-1) + '/' + mp.totalParts + ' done</span>'); }
-            preview.appendChild(step);
-            if (i < mp.totalParts) {
-                var arrow = document.createElement("div");
-                arrow.style.cssText = "text-align:center; color:#9CA3AF; font-size:0.75rem; margin:2px 0;";
-                arrow.textContent = "\u2193 " + (mp.daysBetween || 3) + " day" + ((mp.daysBetween || 3) > 1 ? "s" : "") + " gap";
-                preview.appendChild(arrow);
-            }
-        }
-        configPanel.appendChild(preview);
+        // Ensure parts array matches totalParts
+        if (!Array.isArray(mp.parts)) mp.parts = [];
+        while (mp.parts.length < mp.totalParts) mp.parts.push({ location: null, duration: null });
+        if (mp.parts.length > mp.totalParts) mp.parts.length = mp.totalParts;
 
+        // Per-part configuration
+        var partsSection = document.createElement("div");
+        partsSection.style.cssText = "border:1px solid #E5E7EB; border-radius:10px; padding:14px; background:#FAFAFA; margin-bottom:14px;";
+        partsSection.innerHTML = '<div style="font-weight:600; font-size:0.85rem; margin-bottom:4px;">Part Configuration</div><div style="font-size:0.75rem; color:#6B7280; margin-bottom:12px;">Set a different location or duration for each part. Leave blank to use the activity defaults.</div>';
+
+        var sf = window.loadGlobalSettings?.() || {};
+        var allFields = sf.app1?.fields || [];
+        var fieldOptions = '<option value="">-- Same as main --</option>';
+        allFields.sort(function(a, b) { return (a.name || '').localeCompare(b.name || ''); }).forEach(function(f) {
+            if (f.name) fieldOptions += '<option value="' + escapeHtml(f.name) + '">' + escapeHtml(f.name) + '</option>';
+        });
+
+        for (var i = 0; i < mp.totalParts; i++) {
+            (function(partIdx) {
+                var part = mp.parts[partIdx] || { location: null, duration: null };
+                var partRow = document.createElement("div");
+                partRow.style.cssText = "display:flex; align-items:center; gap:10px; padding:10px 12px; margin-bottom:" + (partIdx < mp.totalParts - 1 ? "6px" : "0") + "; border-radius:8px; background:#fff; border:1px solid #E5E7EB; flex-wrap:wrap;";
+
+                var badge = document.createElement("span");
+                badge.style.cssText = "width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.75rem; flex-shrink:0; color:#fff; background:#147D91;";
+                badge.textContent = partIdx + 1;
+                partRow.appendChild(badge);
+
+                var nameLabel = document.createElement("span");
+                nameLabel.style.cssText = "font-size:0.85rem; color:#374151; font-weight:500; min-width:80px;";
+                nameLabel.textContent = escapeHtml(item.name) + " " + (partIdx + 1) + "/" + mp.totalParts;
+                partRow.appendChild(nameLabel);
+
+                // Location dropdown
+                var locWrap = document.createElement("div");
+                locWrap.style.cssText = "display:flex; align-items:center; gap:4px;";
+                locWrap.innerHTML = '<span style="font-size:0.75rem; color:#6B7280;">📍</span>';
+                var locSel = document.createElement("select");
+                locSel.style.cssText = "padding:4px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.8rem; background:white; max-width:140px;";
+                locSel.innerHTML = fieldOptions;
+                if (part.location) locSel.value = part.location;
+                locSel.onchange = function() {
+                    mp.parts[partIdx].location = this.value || null;
+                    item.multiPart = mp;
+                    saveData();
+                    updateSummary();
+                };
+                locWrap.appendChild(locSel);
+                partRow.appendChild(locWrap);
+
+                // Duration input
+                var durWrap = document.createElement("div");
+                durWrap.style.cssText = "display:flex; align-items:center; gap:4px;";
+                durWrap.innerHTML = '<span style="font-size:0.75rem; color:#6B7280;">⏱</span>';
+                var durInp = document.createElement("input");
+                durInp.type = "number";
+                durInp.min = "5";
+                durInp.max = "240";
+                durInp.step = "5";
+                durInp.placeholder = "default";
+                durInp.value = part.duration || "";
+                durInp.style.cssText = "width:60px; padding:4px 6px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.8rem; text-align:center;";
+                durInp.onchange = function() {
+                    var v = parseInt(this.value, 10);
+                    if (this.value === "" || isNaN(v) || v <= 0) {
+                        mp.parts[partIdx].duration = null;
+                        this.value = "";
+                    } else {
+                        mp.parts[partIdx].duration = Math.min(240, Math.max(5, v));
+                        this.value = mp.parts[partIdx].duration;
+                    }
+                    item.multiPart = mp;
+                    saveData();
+                };
+                durWrap.appendChild(durInp);
+                var minLabel = document.createElement("span");
+                minLabel.style.cssText = "font-size:0.75rem; color:#6B7280;";
+                minLabel.textContent = "min";
+                durWrap.appendChild(minLabel);
+                partRow.appendChild(durWrap);
+
+                // Prerequisite hint
+                if (partIdx === 0) {
+                    partRow.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.65rem; color:#6B7280;">No prereq</span>');
+                } else {
+                    partRow.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.65rem; color:#92400e;">After part ' + partIdx + '</span>');
+                }
+
+                partsSection.appendChild(partRow);
+
+                if (partIdx < mp.totalParts - 1) {
+                    var arrow = document.createElement("div");
+                    arrow.style.cssText = "text-align:center; color:#9CA3AF; font-size:0.7rem; margin:2px 0;";
+                    arrow.textContent = "\u2193 " + (mp.daysBetween || 3) + " day" + ((mp.daysBetween || 3) > 1 ? "s" : "") + " gap";
+                    partsSection.appendChild(arrow);
+                }
+            })(i);
+        }
+        configPanel.appendChild(partsSection);
         // Info box
         var info = document.createElement("div");
         info.style.cssText = "padding:10px 14px; border-radius:8px; font-size:0.8rem; line-height:1.5; background:#e6f4f7; border:1px solid #b2dce6; color:#0A4A56;";
@@ -1368,6 +1592,41 @@ function propagateMultiPartRename(oldName, newName) {
 // =========================================================================
 // Add/Delete, Cleanup, Helpers
 // =========================================================================
+function renderDayAvailability(item) {
+    var container = document.createElement("div");
+    var updateSummary = function() { var s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if (s) s.textContent = summaryDays(item); };
+    var desc = document.createElement("p"); desc.style.cssText = "font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;";
+    desc.textContent = "Select which days this activity is available. Leave all unchecked for every day. When specific days are set, the auto builder treats this as a scarce activity and prioritizes scheduling it.";
+    container.appendChild(desc);
+    var allDays = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    var grid = document.createElement("div"); grid.style.cssText = "display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:8px; margin-bottom:12px;";
+    function renderChips() {
+        grid.innerHTML = "";
+        var sel = Array.isArray(item.availableDays) ? item.availableDays : [];
+        allDays.forEach(function(day) {
+            var active = sel.map(function(d){return d.toLowerCase();}).includes(day.toLowerCase());
+            var chip = document.createElement("button"); chip.type = "button"; chip.textContent = day;
+            chip.style.cssText = "padding:10px 14px; border-radius:10px; font-size:0.85rem; font-weight:500; cursor:pointer; transition:all 0.15s; text-align:center; border:1.5px solid " + (active ? "#0891b2" : "#E5E7EB") + "; background:" + (active ? "linear-gradient(135deg, #e0f7fa, #e6f4f7)" : "#fff") + "; color:" + (active ? "#0A4A56" : "#6b7280") + ";";
+            chip.onmouseenter = function() { chip.style.borderColor = '#0891b2'; chip.style.transform = 'translateY(-1px)'; };
+            chip.onmouseleave = function() { var a2 = Array.isArray(item.availableDays) && item.availableDays.map(function(d){return d.toLowerCase();}).includes(day.toLowerCase()); chip.style.borderColor = a2 ? '#0891b2' : '#E5E7EB'; chip.style.transform = 'translateY(0)'; };
+            chip.onclick = function() {
+                if (!item.availableDays) item.availableDays = [];
+                var idx = item.availableDays.findIndex(function(d){return d.toLowerCase() === day.toLowerCase();});
+                if (idx >= 0) item.availableDays.splice(idx, 1); else item.availableDays.push(day);
+                if (item.availableDays.length === 0 || item.availableDays.length === 7) item.availableDays = null;
+                saveData(); renderChips(); updateSummary();
+            };
+            grid.appendChild(chip);
+        });
+    }
+    renderChips();
+    container.appendChild(grid);
+    var info = document.createElement("div"); info.style.cssText = "padding:10px 14px; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; font-size:0.8rem; color:#92400e;";
+    info.innerHTML = '<strong>\uD83D\uDCA1 Tip:</strong> Activities with specific day restrictions are treated as <em>scarce</em> by the auto builder \u2014 they get priority scheduling with bunk rotation to ensure fair access.';
+    container.appendChild(info);
+    return container;
+}
+
 function addSpecial() { if(!window.AccessControl?.checkSetupAccess?.('add special activities'))return; if(!addSpecialInput)return; const n=addSpecialInput.value.trim(); if(!n)return; if(specialActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())||rainyDayActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())){alert("Already exists.");return;} specialActivities.push(createDefaultActivity(n)); addSpecialInput.value=""; saveData(); selectedItemId='special-'+n; renderMasterList(); renderRainyDayList(); renderDetailPane(); }
 function addRainyDayActivity() { if(!window.AccessControl?.checkSetupAccess?.('add rainy day activities'))return; if(!addRainyDayInput)return; const n=addRainyDayInput.value.trim(); if(!n)return; if(specialActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())||rainyDayActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())){alert("Already exists.");return;} const a=createDefaultActivity(n); a.rainyDayExclusive=true; a.rainyDayOnly=true; a.isIndoor=true; rainyDayActivities.push(a); addRainyDayInput.value=""; saveData(); selectedItemId='special-'+n; renderMasterList(); renderRainyDayList(); renderDetailPane(); }
 
@@ -1587,6 +1846,21 @@ window.getMultiPartDisplayLabel = function(bunkName, activityName) {
     var completed = window.getBunkCompletionCount(bunkName, activityName);
     var partInCycle = (completed % mp.totalParts) + 1;
     return activityName + ' ' + partInCycle + '/' + mp.totalParts;
+};
+
+window.getMultiPartPartConfig = function(bunkName, activityName) {
+    var mp = window.getMultiPartConfig?.(activityName);
+    if (!mp || !Array.isArray(mp.parts) || mp.parts.length === 0) return null;
+    var completed = window.getBunkCompletionCount(bunkName, activityName);
+    var partIdx = completed % mp.totalParts;
+    var partCfg = mp.parts[partIdx];
+    if (!partCfg) return null;
+    return {
+        partNumber: partIdx + 1,
+        totalParts: mp.totalParts,
+        location: partCfg.location || null,
+        duration: partCfg.duration || null
+    };
 };
 
 console.log("[SPECIAL_ACTIVITIES] Module v3.7 loaded (multi-part: single activity, N parts)");
