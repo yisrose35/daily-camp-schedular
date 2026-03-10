@@ -79,7 +79,9 @@
     // Types that always get a locked "change" buffer around them (swim only)
     var CHANGE_BUFFER_TYPES = ['swim'];
     // Types that are always treated as hard anchors regardless of ratio
-    var HARD_ANCHOR_TYPES = ['swim', 'lunch', 'snack', 'snacks', 'dismissal'];
+    // snack/snacks are NOT hard anchors — they are a short slot inside a window.
+    // They use ANCHOR_DEFAULT_DURATIONS (10min) and get classified by ratio.
+    var HARD_ANCHOR_TYPES = ['swim', 'lunch', 'dismissal'];
 
     function needsChangeBuffer(layerType) {
         return CHANGE_BUFFER_TYPES.indexOf((layerType || '').toLowerCase()) >= 0;
@@ -128,11 +130,19 @@
     //              → unlocked slot, solver can place within window
     var SOFT_PIN_RATIO = 0.6; // if duration >= 60% of window → soft-pinned
 
+    // Anchor types that are a SHORT slot inside a wider window.
+    // These are always soft-pinned (locked at own duration, earliest free spot).
+    var SOFT_ANCHOR_TYPES = ['snack', 'snacks'];
+
     function classifyLayer(layer) {
         var layerType = (layer.type || layer.event || 'activity').toLowerCase();
 
-        // Hard anchor types are always PINNED regardless of ratio
+        // Hard anchor types always fill their full window
         if (isHardAnchor(layerType)) return 'pinned';
+
+        // Soft anchor types are always soft-pinned regardless of ratio
+        // (duration is a known short value, window is the free window around them)
+        if (SOFT_ANCHOR_TYPES.indexOf(layerType) >= 0) return 'soft-pinned';
 
         var windowSize = getWindowSize(layer);
         if (windowSize <= 0) return 'filler'; // no window → treat as filler
