@@ -110,8 +110,18 @@
         const originalRunSkeletonOptimizer = window.runSkeletonOptimizer;
 
         // Create wrapper that builds divisionTimes first
-        window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
+       window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
             
+            // ★ AUTO BUILD: divisionTimes already built by AutoBuildPrep — skip rebuild
+            if (window._autoBuildRunActive) {
+                console.log('[DivTimesIntegration] ⏭️ Auto mode — bypassing DT rebuild');
+                const optimizer = originalRunSkeletonOptimizer || window._coreRunSkeletonOptimizer;
+                if (optimizer) {
+                    return optimizer.call(this, manualSkeleton, externalOverrides, allowedDivisions, existingScheduleSnapshot, existingUnifiedTimes);
+                }
+                return false;
+            }
+
             // ★★★ FIX v1.1: Fallback if skeleton parameter is empty ★★★
             if (!manualSkeleton || manualSkeleton.length === 0) {
                 log('Skeleton parameter empty, checking fallbacks...');
