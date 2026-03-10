@@ -121,17 +121,24 @@ var allDivSlots = window.divisionTimes?.[divName] || [];
             continue;
         }
 
-        // Find how far this activity spans (via continuation)
+       // Find how far this activity spans (via continuation)
         var startIdx = i;
         var endIdx = i;
-        while (endIdx + 1 < bunkSlots.length && bunkSlots[endIdx + 1]?.continuation) {
+        while (endIdx + 1 < bunkSlots.length && 
+               endIdx + 1 < divSlots.length &&
+               bunkSlots[endIdx + 1]?.continuation) {
             endIdx++;
+        }
+
+        // Guard: skip if slot indices are out of bounds
+        if (!divSlots[startIdx] || !divSlots[endIdx]) {
+            i = endIdx + 1;
+            continue;
         }
 
         var startMin = divSlots[startIdx].startMin;
         var endMin = divSlots[endIdx].endMin;
         var duration = endMin - startMin;
-
         activities.push({
             startMin: startMin,
             endMin: endMin,
