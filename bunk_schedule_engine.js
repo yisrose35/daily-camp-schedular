@@ -293,7 +293,13 @@
     function placeAnchors(timelines, anchorRules, divName, dayName) {
         var changeBuf = getChangeBufferDuration();
 
-        anchorRules.forEach(function (rule) {
+        // Sort by startMin so anchors are placed in chronological order
+        // regardless of the order layers were defined by the user.
+        var sorted = anchorRules.slice().sort(function (a, b) {
+            return (a.startMin || 0) - (b.startMin || 0);
+        });
+
+        sorted.forEach(function (rule) {
             var isSwim = rule.layerType === 'swim';
 
             if (isSwim) {
@@ -630,12 +636,19 @@
             return { bunkTimelines: {}, warnings: warnings, _buildVersion: VERSION };
         }
 
-        // Group layers by division
+        // Group layers by division.
+        // Deduplicate by layer id within each division — the DAW editor stores
+        // one copy of each layer per bunk key, so without dedup a dismissal
+        // layer with qty=1 would produce N anchor rules (one per bunk).
         var layersByDiv = {};
+        var seenByDiv = {};  // divName → Set of layer ids already added
         allLayers.forEach(function (layer) {
             var grade = layer.grade || layer.division || '_all';
             var divName = getDivisionForGrade(grade);
-            if (!layersByDiv[divName]) layersByDiv[divName] = [];
+            if (!layersByDiv[divName]) { layersByDiv[divName] = []; seenByDiv[divName] = {}; }
+            var lid = layer.id || null;
+            if (lid && seenByDiv[divName][lid]) return; // duplicate — skip
+            if (lid) seenByDiv[divName][lid] = true;
             layersByDiv[divName].push(layer);
         });
 
@@ -673,6 +686,11 @@
 
             // ── Phase 1: Place anchors ────────────────────────────────────
             placeAnchors(timelines, rules.anchorRules, divName, dayName);
+            // Sort slots chronologically after placement so later phases
+            // and the output reflect time order, not layer definition order.
+            timelines.forEach(function (tl) {
+                tl.slots.sort(function (a, b) { return a.startMin - b.startMin; });
+            });
             log('[Phase 1] Anchors placed');
 
             // ── Phase 2: Scarce pre-allocation ───────────────────────────
