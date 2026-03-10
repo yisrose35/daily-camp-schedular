@@ -76,8 +76,14 @@
     // LAYER HELPERS
     // =========================================================================
 
-    var ALWAYS_ANCHOR_TYPES = ['swim', 'lunch', 'snack', 'snacks', 'dismissal'];
+    // Anchors placed at exact startMin with their own duration (not full window width)
+    var EXACT_ANCHOR_TYPES = ['swim', 'lunch', 'dismissal'];
+    // Windowed anchors: placed as a short slot (duration) anywhere within startMin→endMin
+    var WINDOWED_ANCHOR_TYPES = ['snack', 'snacks'];
+    // Change is ONLY generated adjacent to swim — never a general fill type
     var CHANGE_BUFFER_TYPES = ['swim'];
+    // Combined for isAnchorType checks
+    var ALWAYS_ANCHOR_TYPES = EXACT_ANCHOR_TYPES.concat(WINDOWED_ANCHOR_TYPES);
 
     function isAnchorType(layerType) {
         return ALWAYS_ANCHOR_TYPES.indexOf((layerType || '').toLowerCase()) >= 0;
@@ -159,14 +165,26 @@
             var duration = getLayerDuration(layer);
 
             if (isAnchorType(layerType)) {
+                // Windowed anchors (snacks): short slot placed anywhere within window.
+                // duration = the activity duration (e.g. 10min), NOT the full window.
+                // Exact anchors (lunch, dismissal, swim): placed at startMin, duration wide.
+                var isWindowed = WINDOWED_ANCHOR_TYPES.indexOf(layerType) >= 0;
+                var anchorDuration = isWindowed
+                    ? (layer.periodMin || layer.durationMin || layer.duration || 10)
+                    : (endMin != null && startMin != null && !isWindowed)
+                        ? (endMin - startMin)
+                        : duration;
                 anchorRules.push({
                     id: layer.id || uid(),
                     layerType: layerType,
                     event: layer.event || layerType,
                     startMin: startMin,
                     endMin: endMin,
-                    duration: duration,
-                    pinExact: layer.pinExact || true,
+                    duration: anchorDuration,
+                    windowMin: startMin,   // earliest placement
+                    windowMax: endMin,     // latest end time
+                    isWindowed: isWindowed,
+                    pinExact: !isWindowed,
                     _layer: layer
                 });
             } else if (startMin != null && endMin != null && layer.pinExact) {
@@ -303,12 +321,56 @@
                 log('Swim staggered across ' + sortedTimelines.length + ' bunks. ' +
                     'Window: ' + fmtTime(rule.startMin) + '-' + fmtTime(rule.endMin));
 
+            } else if (rule.isWindowed) {
+                // ── WINDOWED ANCHOR (snacks) ────────────────────────────────
+                // Place a short locked slot (rule.duration) at the earliest
+                // free position within the window [windowMin, windowMax].
+                timelines.forEach(function (tl) {
+                    var wStart = rule.windowMin;
+                    var wEnd = rule.windowMax;
+                    var dur = rule.duration || 10;
+                    // Find earliest conflict-free spot in window
+                    var placed = false;
+                    var cursor = wStart;
+                    while (cursor + dur <= wEnd) {
+                        if (!hasConflict(tl.slots, cursor, cursor + dur)) {
+                            tl.slots.push({
+                                startMin: cursor,
+                                endMin: cursor + dur,
+                                activity: rule.event || rule.layerType,
+                                activityType: rule.layerType,
+                                locked: true,
+                                source: 'anchor-windowed-' + rule.layerType,
+                                _ruleId: rule.id
+                            });
+                            placed = true;
+                            break;
+                        }
+                        cursor += 5; // step forward 5 min
+                    }
+                    if (!placed) {
+                        // Fallback: place at window start regardless of conflict
+                        tl.slots.push({
+                            startMin: wStart,
+                            endMin: wStart + dur,
+                            activity: rule.event || rule.layerType,
+                            activityType: rule.layerType,
+                            locked: true,
+                            source: 'anchor-windowed-fallback',
+                            _ruleId: rule.id
+                        });
+                    }
+                });
+                log('Anchor "' + rule.layerType + '" (windowed ' + rule.duration + 'min) placed within ' +
+                    fmtTime(rule.windowMin) + '-' + fmtTime(rule.windowMax));
+
             } else {
-                // ── SIMULTANEOUS ANCHOR (lunch, snack, dismissal) ──────────
+                // ── SIMULTANEOUS EXACT ANCHOR (lunch, dismissal) ────────────
+                // Placed at exact startMin, spanning its own duration.
                 timelines.forEach(function (tl) {
                     tl.slots.push({
                         startMin: rule.startMin,
-                        endMin: rule.endMin != null ? rule.endMin : rule.startMin + rule.duration,
+                        endMin: rule.startMin + rule.duration,
                         activity: rule.event || rule.layerType,
                         activityType: rule.layerType,
                         locked: true,
@@ -316,7 +378,6 @@
                         _ruleId: rule.id
                     });
                 });
-
                 log('Anchor "' + rule.layerType + '" placed simultaneously for all bunks at ' +
                     fmtTime(rule.startMin));
             }
@@ -497,10 +558,16 @@
     }
 
     function pickTypeForGap(tl, gap, rules) {
-        // Check if any windowed rule covers this gap
+        // Find windowed rules whose window overlaps this gap
+        // A rule's window overlaps if gap falls inside or partially inside it
+        var midpoint = (gap.start + gap.end) / 2;
         var covering = rules.windowedRules.filter(function (r) {
             if (r._scarce) return false; // already handled in Phase 2
-            return r.startMin <= gap.start && r.endMin >= gap.end;
+            // Skip snacks/lunch/dismissal windowed rules — those become locked slots
+            var lt = (r.layerType || '').toLowerCase();
+            if (lt === 'snack' || lt === 'snacks' || lt === 'lunch' || lt === 'dismissal') return false;
+            // Gap midpoint falls within window
+            return r.startMin <= midpoint && r.endMin >= midpoint;
         });
 
         if (covering.length === 0) return 'activity';
