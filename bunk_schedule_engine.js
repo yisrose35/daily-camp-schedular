@@ -89,14 +89,17 @@
         return HARD_ANCHOR_TYPES.indexOf((layerType || '').toLowerCase()) >= 0;
     }
 
-    // Duration of the activity slot itself (not the window)
+    // Duration of the activity slot itself (not the window).
+    // Prefer periodMin — the DAW sets this to the activity run-time.
+    // durationMin on anchor layers often equals the full window width,
+    // which would cause a 10-min snack to be classified as pinned.
     function getLayerDuration(layer) {
-        return layer.durationMin || layer.periodMin || layer.duration || 30;
+        return layer.periodMin || layer.durationMin || layer.duration || 30;
     }
 
-    // Max duration (upper bound) of the activity slot
+    // Max duration — same priority: periodMin before durationMin.
     function getLayerDurationMax(layer) {
-        return layer.durationMax || layer.durationMin || layer.periodMin || layer.duration || getLayerDuration(layer);
+        return layer.durationMax || layer.periodMin || layer.durationMin || layer.duration || getLayerDuration(layer);
     }
 
     // Window size = endMin - startMin
@@ -641,14 +644,20 @@
         // one copy of each layer per bunk key, so without dedup a dismissal
         // layer with qty=1 would produce N anchor rules (one per bunk).
         var layersByDiv = {};
-        var seenByDiv = {};  // divName → Set of layer ids already added
+        var seenByDiv = {};  // divName → fingerprint → true
         allLayers.forEach(function (layer) {
             var grade = layer.grade || layer.division || '_all';
             var divName = getDivisionForGrade(grade);
             if (!layersByDiv[divName]) { layersByDiv[divName] = []; seenByDiv[divName] = {}; }
-            var lid = layer.id || null;
-            if (lid && seenByDiv[divName][lid]) return; // duplicate — skip
-            if (lid) seenByDiv[divName][lid] = true;
+            // Dedup key: id if present, otherwise type+startMin+endMin+periodMin fingerprint.
+            // The DAW stores one copy of each layer per bunk key, so without dedup an 8-bunk
+            // division would produce 8 anchor rules for a single dismissal layer.
+            var layerType = (layer.type || layer.event || '').toLowerCase();
+            var fp = layer.id ||
+                (layerType + '|' + (layer.startMin || '') + '|' + (layer.endMin || '') +
+                 '|' + (layer.periodMin || layer.durationMin || ''));
+            if (seenByDiv[divName][fp]) return;
+            seenByDiv[divName][fp] = true;
             layersByDiv[divName].push(layer);
         });
 
