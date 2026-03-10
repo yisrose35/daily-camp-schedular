@@ -35,9 +35,9 @@
     }
 
     function isBunkMode() {
-    var g = window.loadGlobalSettings?.() || {};
-    return g.app1?.YOUR_ACTUAL_KEY === 'bunk'; // ← align to toggle's key
-}
+        var g = window.loadGlobalSettings?.() || {};
+        return g.app1?.generationMode === 'bunk';
+    }
 
     // -------------------------------------------------------------------------
     // MAIN: Run the bunk-level generation pipeline
