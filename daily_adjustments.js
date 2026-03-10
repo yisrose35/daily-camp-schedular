@@ -2874,8 +2874,10 @@ if (isAutoMode) {
 if (!daAutoLayers || Object.keys(daAutoLayers).length === 0) {
     try {
         var dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        var stored = localStorage.getItem('daAutoLayers_' + dateKey) 
-            || localStorage.getItem('daAutoLayers');
+        var stored = localStorage.getItem('campAutoLayers_' + dateKey) 
+    || localStorage.getItem('daAutoLayers_' + dateKey)
+    || localStorage.getItem('daAutoLayers')
+    || localStorage.getItem('campAutoLayers');
         if (stored) {
             daAutoLayers = JSON.parse(stored);
             console.log('[Optimizer] Loaded daAutoLayers from localStorage:', Object.keys(daAutoLayers));
