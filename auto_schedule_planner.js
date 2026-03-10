@@ -510,8 +510,11 @@ function renderBand(layer, dayStart, stackIdx, maxStack) {
   var selClass = isSelected ? ' al-band-selected' : '';
   var durText = layer.periodMin ? layer.periodMin + 'm' : '';
   var timeText = fmtShort(layer.startMin) + '\u2013' + fmtShort(layer.endMin);
-  var badge = (layer.operator || '\u2265') + (layer.quantity || 1);
+ var badge = (layer.operator || '\u2265') + (layer.quantity || 1);
   var pinHtml = isPinned ? '<span class="al-band-pin">\uD83D\uDCCC</span>' : '';
+  var weeklyBadgeHtml = (layer.timesPerWeek != null)
+    ? '<span class="al-band-week-badge">' + (layer.weeklyOp || '\u2265') + layer.timesPerWeek + 'x/wk</span>'
+    : '';
 
   return '<div class="al-band' + selClass + '" data-layer-id="' + layer.id + '" style="left:' + left + 'px;width:' + width + 'px;top:' + topCss + ';height:' + heightCss + ';background:' + color.bg + ';border:2px ' + borderStyle + ' ' + color.border + ';color:' + color.text + ';">' +
     '<div class="al-band-resize al-band-resize-left"></div>' +
@@ -519,6 +522,7 @@ function renderBand(layer, dayStart, stackIdx, maxStack) {
     '<span class="al-band-label">' + (layer.event || layer.type) + '</span>' +
     '<span class="al-band-dur">' + durText + '</span>' +
     '<span class="al-band-badge">' + badge + '</span>' +
+    weeklyBadgeHtml +
     '<span class="al-band-time">' + timeText + '</span>' +
     '<div class="al-band-resize al-band-resize-right"></div>' +
     '</div>';
@@ -577,7 +581,9 @@ function setupDropZones(dayStart) {
         operator: tile.defaultOp || '\u2265',
         quantity: tile.defaultQty || 1,
         grade: grade,
-        pinExact: tile.fixed || false
+        pinExact: tile.fixed || false,
+        timesPerWeek: null,   // null = "every active day" (unconstrained)
+        weeklyOp: '\u2265'    // ≥ by default
       });
       hasChanges = true; selectedLayerId = layers[layers.length - 1].id;
       saveDraftLayers(); render();
@@ -760,16 +766,37 @@ function openPopover(layerId, bandEl) {
     '<button class="al-pop-op' + (layer.operator === '\u2264' ? ' active' : '') + '" data-op="\u2264">\u2264</button>' +
     '<button class="al-pop-op' + (layer.operator === '=' ? ' active' : '') + '" data-op="=">=</button>' +
     '</div><input type="number" class="al-pop-input al-pop-qty" id="al-pop-qty" value="' + (layer.quantity || 1) + '" min="1" max="10"></div>' +
-    '<div class="al-popover-row"><label>Pin Time</label><button class="al-pin-toggle' + (isPinned ? ' active' : '') + '" id="al-pop-pin"><span class="al-pin-icon">\uD83D\uDCCC</span><span id="al-pin-label">' + (isPinned ? 'Exact Time' : 'Flexible') + '</span></button></div>' +
+   '<div class="al-popover-row"><label>Pin Time</label><button class="al-pin-toggle' + (isPinned ? ' active' : '') + '" id="al-pop-pin"><span class="al-pin-icon">\uD83D\uDCCC</span><span id="al-pin-label">' + (isPinned ? 'Exact Time' : 'Flexible') + '</span></button></div>' +
     (isPinned ? '<div style="font-size:10px;color:#92400e;background:#fffbeb;border-radius:6px;padding:6px 10px;margin:0 0 8px 78px;">\u26A0\uFE0F Must occur at exactly <b>' + fmtTime(layer.startMin) + '\u2013' + fmtTime(layer.endMin) + '</b></div>' : '') +
+    '<div class="al-popover-divider"></div>' +
+    '<div class="al-popover-section-title">Weekly Recurrence</div>' +
+    '<div class="al-popover-row">' +
+      '<label>Per Week</label>' +
+      '<div class="al-pop-ops">' +
+        '<button class="al-pop-op' + ((layer.weeklyOp || '\u2265') === '\u2265' ? ' active' : '') + '" data-wop="\u2265">\u2265</button>' +
+        '<button class="al-pop-op' + ((layer.weeklyOp) === '\u2264' ? ' active' : '') + '" data-wop="\u2264">\u2264</button>' +
+        '<button class="al-pop-op' + ((layer.weeklyOp) === '=' ? ' active' : '') + '" data-wop="=">=</button>' +
+      '</div>' +
+      '<input type="number" class="al-pop-input al-pop-qty" id="al-pop-week-qty"' +
+        ' value="' + (layer.timesPerWeek != null ? layer.timesPerWeek : '') + '"' +
+        ' min="1" max="7" placeholder="Any">' +
+      '<span style="font-size:10px;color:#94a3b8;margin-left:4px;">days/wk<br><span style="color:#64748b;">blank&nbsp;=&nbsp;every&nbsp;day</span></span>' +
+    '</div>' +
     '<div class="al-popover-actions"><button class="al-btn al-btn-danger al-btn-sm" id="al-pop-delete">\uD83D\uDDD1 Delete</button><button class="al-btn al-btn-primary al-btn-sm" id="al-pop-done">\u2713 Done</button></div>';
 
   document.body.appendChild(popoverEl);
 
-  // Operator buttons
-  popoverEl.querySelectorAll('.al-pop-op').forEach(function(btn) {
+  // Daily quantity operator buttons (data-op)
+  popoverEl.querySelectorAll('.al-pop-op[data-op]').forEach(function(btn) {
     btn.onclick = function() {
-      popoverEl.querySelectorAll('.al-pop-op').forEach(function(b) { b.classList.remove('active'); });
+      popoverEl.querySelectorAll('.al-pop-op[data-op]').forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+    };
+  });
+  // Weekly operator buttons (data-wop)
+  popoverEl.querySelectorAll('.al-pop-op[data-wop]').forEach(function(btn) {
+    btn.onclick = function() {
+      popoverEl.querySelectorAll('.al-pop-op[data-wop]').forEach(function(b) { b.classList.remove('active'); });
       btn.classList.add('active');
     };
   });
@@ -787,14 +814,24 @@ function openPopover(layerId, bandEl) {
     var eVal = parseTime(popoverEl.querySelector('#al-pop-end').value);
     var dVal = parseInt(popoverEl.querySelector('#al-pop-dur').value) || null;
     var qVal = parseInt(popoverEl.querySelector('#al-pop-qty').value) || 1;
-    var activeOp = popoverEl.querySelector('.al-pop-op.active');
+   var activeOp = popoverEl.querySelector('.al-pop-op[data-op].active');
     var opVal = activeOp ? activeOp.dataset.op : '\u2265';
     var pinned = popoverEl.querySelector('#al-pop-pin').classList.contains('active');
+
+    // Weekly recurrence
+    var activeWop = popoverEl.querySelector('.al-pop-op[data-wop].active');
+    var wopVal = activeWop ? activeWop.dataset.wop : '\u2265';
+    var weekQtyRaw = popoverEl.querySelector('#al-pop-week-qty') ? popoverEl.querySelector('#al-pop-week-qty').value.trim() : '';
+    var weekQtyVal = weekQtyRaw !== '' ? Math.max(1, Math.min(7, parseInt(weekQtyRaw) || 1)) : null;
 
     if (sVal != null) layer.startMin = snap(sVal);
     if (eVal != null) layer.endMin = snap(eVal);
     if (dVal) layer.periodMin = dVal;
-    layer.quantity = qVal; layer.operator = opVal; layer.pinExact = pinned;
+    layer.quantity = qVal;
+    layer.operator = opVal;
+    layer.pinExact = pinned;
+    layer.timesPerWeek = weekQtyVal;
+    layer.weeklyOp = weekQtyVal != null ? wopVal : '\u2265';
     hasChanges = true; saveDraftLayers(); closePopover(); render();
   };
 }
