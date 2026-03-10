@@ -2850,16 +2850,28 @@ async function runOptimizer() {
     if (!window.AccessControl?.checkEditAccess?.('run optimizer')) return;
     if (!window.runSkeletonOptimizer) { await daShowAlert("Error: 'runSkeletonOptimizer' not found."); return; }
 
-    // ★★★ AUTO MODE: Convert layers → skeleton via AutoBuildEngine ★★★
-    const isAutoMode = window._daBuilderMode === 'auto';
-    if (isAutoMode) {
-        console.log('[Optimizer] AUTO MODE detected — building skeleton from layers');
-        if (!window.AutoBuildEngine) { await daShowAlert("Error: AutoBuildEngine not loaded."); return; }
-        
-        // Flatten daAutoLayers (keyed by grade) into a single layers array
-        const allLayers = [];
-        Object.keys(daAutoLayers).forEach(grade => {
-            (daAutoLayers[grade] || []).forEach(layer => {
+   // ★★★ AUTO MODE: Convert layers → skeleton via AutoBuildEngine ★★★
+const isAutoMode = window._daBuilderMode === 'auto';
+if (isAutoMode) {
+    console.log('[Optimizer] AUTO MODE detected — building skeleton from layers');
+
+    // ★★★ BUNK MODE: Route to BunkScheduleEngine if camp uses per-bunk pipeline ★★★
+    if (window.BunkEngineIntegration?.isBunkMode()) {
+        const dateStr = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        const handled = await window.BunkEngineIntegration.handleAutoGenerate(
+            dateStr,
+            daAutoLayers,
+            daShowAlert
+        );
+        if (handled) return;
+    }
+    // ★★★ END BUNK MODE ★★★
+
+    if (!window.AutoBuildEngine) { await daShowAlert("Error: AutoBuildEngine not loaded."); return; }
+    
+    // Flatten daAutoLayers (keyed by grade) into a single layers array
+    const allLayers = [];
+    Object.keys(daAutoLayers).forEach(grade => {            (daAutoLayers[grade] || []).forEach(layer => {
                 allLayers.push({ ...layer, grade: grade });
             });
         });
