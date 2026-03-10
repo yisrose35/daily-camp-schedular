@@ -1305,10 +1305,14 @@
         allocateScarceResources(timelines, dateStr, dayName, resourceTracker, warnings);
 
         // ── Phases 3 + 4: Per-bunk requirements + timeline construction ────
+        log('rulesByDiv keys: ' + JSON.stringify(Object.keys(rulesByDiv)));
+        log('division names: ' + JSON.stringify(timelines.map(function(t){return t.divisionName;}).filter(function(v,i,a){return a.indexOf(v)===i;})));
         timelines.forEach(function (timeline) {
             var divName = timeline.divisionName;
             // Find the rules for this bunk's division
-            var rules = rulesByDiv[divName] || { anchors: [], windowed: [], frequency: [] };
+            var rules = rulesByDiv[divName];
+            if (!rules) { log('KEY MISS: bunk ' + timeline.bunkName + ' divName="' + divName + '" not found in rulesByDiv'); }
+            rules = rules || { anchors: [], windowed: [], frequency: [] };
 
             // Phase 3
             var requirements = computeBunkRequirements(timeline, rules, dateStr);
