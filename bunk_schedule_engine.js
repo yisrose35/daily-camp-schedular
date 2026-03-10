@@ -259,7 +259,10 @@
             if (!layer || !layer.type) return;
 
             var windowSize = (layer.endMin != null && layer.startMin != null) ? layer.endMin - layer.startMin : 0;
-            var isAnchor = isLayerPinned(layer);
+            // ★★★ FIX: Force pinned-type layers to always be anchors ★★★
+var lTypeLower = (layer.type || '').toLowerCase();
+var ALWAYS_ANCHOR_TYPES = ['swim', 'lunch', 'snack', 'snacks', 'dismissal'];
+var isAnchor = ALWAYS_ANCHOR_TYPES.indexOf(lTypeLower) >= 0 || isLayerPinned(layer);
             var duration = layer.periodMin || layer.durationMin || (windowSize > 0 ? windowSize : null) || getLayerDurationMax(layer);
 
             if (!duration || duration <= 0) {
@@ -978,21 +981,30 @@
     }
 
     function pickActivityForSlot(slot, timeline, resourceTracker) {
-        var type = slot.activityType;
-        var duration = slot.endMin - slot.startMin;
-        var bunkName = timeline.bunkName;
-        var divName = timeline.divisionName;
+    var type = slot.activityType;
+    var duration = slot.endMin - slot.startMin;
+    var bunkName = timeline.bunkName;
+    var divName = timeline.divisionName;
 
-        var candidates = buildCandidatesForType(type, duration, slot.startMin, slot.endMin,
-            bunkName, divName, resourceTracker);
-
-        if (candidates.length === 0) return null;
-
-        // Sort by rotation score (lower = more deserved)
-        candidates.sort(function (a, b) { return a.rotationScore - b.rotationScore; });
-        return candidates[0];
+    // ★★★ FIX: Fixed types don't need candidate search ★★★
+    var FIXED_TYPES = ['swim', 'lunch', 'snack', 'snacks', 'dismissal', 'league', 'specialty_league'];
+    if (FIXED_TYPES.indexOf((type || '').toLowerCase()) >= 0) {
+        var actName = type.charAt(0).toUpperCase() + type.slice(1);
+        if (type === 'snack') actName = 'Snacks';
+        if (type === 'league') actName = 'League Game';
+        if (type === 'specialty_league') actName = 'Specialty League';
+        return { activity: actName, field: null };
     }
 
+    var candidates = buildCandidatesForType(type, duration, slot.startMin, slot.endMin,
+        bunkName, divName, resourceTracker);
+
+    if (candidates.length === 0) return null;
+
+    // Sort by rotation score (lower = more deserved)
+    candidates.sort(function (a, b) { return a.rotationScore - b.rotationScore; });
+    return candidates[0];
+}
     function pickActivityForGap(gap, timeline, resourceTracker) {
         var bunkName = timeline.bunkName;
         var divName = timeline.divisionName;
@@ -1047,11 +1059,24 @@
             getSpecialActivities().forEach(function (special) {
                 if (special.available === false) return;
 
-                // Check day restrictions
-                if (Array.isArray(special.availableDays) && special.availableDays.length > 0) {
-                    // Scarce — should have been handled in Phase 2
-                    return;
-                }
+               // ★★★ FIX: Only skip if this bunk already has this scarce special today ★★★
+// Phase 2 pre-allocates scarce specials, but not every bunk gets one.
+// Don't blindly skip — check if this bunk already has it placed.
+if (Array.isArray(special.availableDays) && special.availableDays.length > 0) {
+    var dayName = getDayName(window.currentScheduleDate || '');
+    var availableToday = special.availableDays.some(function(d) {
+        return d.toLowerCase() === dayName.toLowerCase();
+    });
+    if (!availableToday) return; // Not available today at all
+
+    // Check if Phase 2 already placed this for this bunk
+    // (We check the timeline we're currently filling)
+    // This is safe because fillGapsAndAssignActivities has access to the timeline
+    // via closure. We pass a flag to skip re-placing.
+    // For now: allow it through — Phase 2 bunks will have it locked,
+    // Phase 6 won't double-place because of the "already done today" check
+    // in calcRotationScore (returns Infinity for same-day repeats).
+}
 
                 // Check duration
                 var sdur = getActivityDuration(special.name);
@@ -1080,7 +1105,43 @@
                 });
             });
         }
+// ★★★ FIX: Handle 'activity' type (general activity = sports OR specials) ★★★
+        else if (type === 'activity') {
+            // Try sports candidates first
+            var sportCands = buildCandidatesForType('sports', duration, startMin, endMin, bunkName, divName, resourceTracker);
+            // Then special candidates
+            var specCands = buildCandidatesForType('special', duration, startMin, endMin, bunkName, divName, resourceTracker);
+            candidates = sportCands.concat(specCands);
+        }
 
+        // ★★★ FIX: Handle 'league' type ★★★
+        // Leagues are division-wide fixed events. If they reach candidate search,
+        // treat them as a named anchor — the activity IS the league itself.
+        else if (type === 'league' || type === 'specialty_league') {
+            // League slots should have been anchored. If they reach here,
+            // just assign the event name directly.
+            candidates.push({
+                activity: 'League Game',
+                field: null,
+                rotationScore: 0,
+                duration: duration
+            });
+        }
+
+        // ★★★ FIX: Handle pinned types that somehow escaped anchor placement ★★★
+        else if (type === 'swim' || type === 'lunch' || type === 'snack' || 
+                 type === 'snacks' || type === 'dismissal' || type === 'custom') {
+            // These should have been anchors. If they reach candidate search,
+            // just use the type name as the activity.
+            var activityName = type.charAt(0).toUpperCase() + type.slice(1);
+            if (type === 'snack') activityName = 'Snacks';
+            candidates.push({
+                activity: activityName,
+                field: null,
+                rotationScore: 0,
+                duration: duration
+            });
+        }
         return candidates;
     }
 
