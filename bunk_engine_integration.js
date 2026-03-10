@@ -160,7 +160,16 @@
                     if (!slot.locked) return;
 
                     var indices = findSlotIndices(bunkSlots, slot.startMin, slot.endMin);
-                    if (indices.length === 0) return;
+                    if (indices.length === 0) {
+                        log('⚠ No slot index found for locked ' + slot.activityType +
+                            ' ' + fmtTime(slot.startMin) + '-' + fmtTime(slot.endMin) +
+                            ' bunk ' + tl.bunkName +
+                            ' (bunk has ' + bunkSlots.length + ' slots)');
+                        return;
+                    }
+                    log('✓ Locked ' + slot.activityType + ' ' + fmtTime(slot.startMin) +
+                        '-' + fmtTime(slot.endMin) + ' → indices ' + indices.join(',') +
+                        ' (bunk ' + tl.bunkName + ')');
 
                     indices.forEach(function (idx, i) {
                         window.scheduleAssignments[tl.bunkName][idx] = {
