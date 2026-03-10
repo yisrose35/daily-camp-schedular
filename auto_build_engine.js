@@ -294,6 +294,15 @@ function getLayerQty(layer) {
 }
 
 function getLayerOp(layer) { return layer.op || layer.operator || layer.quantity?.op || '>='; }
+    function getLayerDuration(layer) { return layer.durationMin || layer.duration || layer.periodMin || 30; }
+function getLayerDurationMax(layer) { return layer.durationMax || layer.duration || layer.durationMin || layer.periodMin || getLayerDuration(layer); }
+function isLayerPinned(layer) {
+    var windowSize = (layer.endMin || 0) - (layer.startMin || 0);
+    var maxDur = getLayerDurationMax(layer);
+    if (windowSize > 0 && maxDur > 0 && windowSize <= maxDur) return true;
+    if (layer.pinned || layer.pinExact) return true;
+    return false;
+}
 function getLayerDuration(layer) { return layer.durationMin || layer.duration || layer.periodMin || 30; }
 function getLayerDurationMax(layer) { return layer.durationMax || layer.duration || layer.durationMin || layer.periodMin || getLayerDuration(layer); }
 
