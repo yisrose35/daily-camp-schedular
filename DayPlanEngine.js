@@ -1002,6 +1002,11 @@
         // Refinement (exposed for testing / manual trigger)
         refine:                   refine,
         detectFailedSuggestions:  detectFailedSuggestions,
+        snapshotGoodBunks:        snapshotGoodBunks,
+        restoreGoodBunks:         restoreGoodBunks,
+        patchFailedBunks:         patchFailedBunks,
+        fullWipe:                 fullWipe,
+        installRefinementHook:    installRefinementHook,
 
         // Internals (exposed for testing)
         _shouldUseNewEngine:          _shouldUseNewEngine,
