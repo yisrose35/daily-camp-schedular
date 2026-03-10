@@ -83,9 +83,9 @@
         return Utils()?.getSlotsForDivision?.(divName) || window.divisionTimes?.[divName] || [];
     }
     
-    function findSlotsForRange(startMin, endMin, divisionOrBunk) {
-        return Utils()?.findSlotsForRange?.(startMin, endMin, divisionOrBunk) || [];
-    }
+    function findSlotsForRange(startMin, endMin, divisionOrBunk, bunkName) {
+    return Utils()?.findSlotsForRange?.(startMin, endMin, divisionOrBunk, bunkName) || [];
+}
     
     function getEntryForBlock(bunk, startMin, endMin) {
         return Utils()?.getEntryForBlock?.(bunk, startMin, endMin) || { entry: null, slotIdx: -1 };
@@ -430,8 +430,12 @@ function shouldHighlightBunk(bunkName) {
     function getSkeleton(dateKey) {
         const dailyData = loadDailyData();
         const dateData = dailyData[dateKey || getDateKey()] || {};
-        return dateData.manualSkeleton || dateData.skeleton || 
-               window.dailyOverrideSkeleton || window.manualSkeleton || window.skeleton || [];
+        return (dateData.manualSkeleton?.length ? dateData.manualSkeleton : null)
+            || (dateData.skeleton?.length ? dateData.skeleton : null)
+            || (window.dailyOverrideSkeleton?.length ? window.dailyOverrideSkeleton : null)
+            || (window.manualSkeleton?.length ? window.manualSkeleton : null)
+            || window.skeleton
+            || [];
     }
 
     /**
@@ -826,8 +830,7 @@ function shouldHighlightBunk(bunkName) {
                lower.includes('dismissal') || lower.includes('rest') || lower.includes('free');
     }
 
-    function isLeagueBlockType(eventName, blockType) {
-        if (blockType === 'league' || blockType === 'specialty_league') return true;
+    function isLeagueBlockType(eventName) {
         return eventName && eventName.toLowerCase().includes('league');
     }
 
@@ -1099,6 +1102,24 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
         if (window.FieldCombos?.isInCombo?.(fName)) {
             const comboCheck = window.FieldCombos.isBlockedByCombo(fName, startMin, endMin, bunk);
             if (comboCheck.blocked) return false;
+        }
+
+        // ★★★ LOCATION COOLDOWN CHECK ★★★
+        if (window.isLocationInCooldown) {
+            const divSlots = window.divisionTimes?.[getDivisionForBunk(bunk)] || [];
+            let slotIdx = divSlots.findIndex(s => s.startMin >= startMin);
+            if (slotIdx < 0) slotIdx = 0;
+            const cooldown = window.isLocationInCooldown(fName, slotIdx, bunk, getDivisionForBunk(bunk));
+            if (cooldown?.blocked) return false;
+        }
+
+        // ★★★ SEQUENCE RULE CHECK ★★★
+        if (window.checkSequenceViolation) {
+            const divSlots = window.divisionTimes?.[getDivisionForBunk(bunk)] || [];
+            let slotIdx = divSlots.findIndex(s => s.startMin >= startMin);
+            if (slotIdx < 0) slotIdx = 0;
+            const seqViolation = window.checkSequenceViolation(bunk, pick?.activityName || pick?._activity || pick?.sport || '', slotIdx, getDivisionForBunk(bunk));
+            if (seqViolation?.violated) return false;
         }
 
         return true;
@@ -1916,8 +1937,14 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
             const data = leagues[divName][slotIdx];
             return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '' };
         }
-       if (leagues[divName]) {
-            // Only use exact slot match — fuzzy matching causes wrong league data in adjacent slots
+        if (leagues[divName]) {
+            const divSlotKeys = Object.keys(leagues[divName]).map(Number).sort((a, b) => a - b);
+            for (const storedSlot of divSlotKeys) {
+                if (Math.abs(storedSlot - slotIdx) <= 2) {
+                    const data = leagues[divName][storedSlot];
+                    if (data && (data.matchups?.length > 0 || data.gameLabel)) return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '' };
+                }
+            }
         }
         const rawMasterLeagues = window.masterLeagues || window.loadGlobalSettings?.()?.app1?.leagues || [];
         let masterLeaguesList = Array.isArray(rawMasterLeagues) ? rawMasterLeagues : Object.values(rawMasterLeagues);
@@ -1983,6 +2010,11 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
         
         const editableDivisions = window.AccessControl?.getEditableDivisions?.() || divisionsToShow;
         
+      // ★★★ AUTO BUILD: Choose renderer based on CURRENT mode + schedule type ★★★
+        // Must check current mode to prevent stale flag from forcing wrong renderer
+        const currentBuilderMode = window.getCampBuilderMode?.() || window._daBuilderMode || 'manual';
+const isAutoSchedule = currentBuilderMode === 'auto';
+        
         divisionsToShow.forEach(divName => {
             if (!shouldShowDivision(divName)) return;
             const divInfo = divisions[divName];
@@ -1991,8 +2023,14 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
             if (bunks.length === 0) return;
             bunks = bunks.slice().sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }));
             const isEditable = editableDivisions.includes(divName);
-            const table = renderDivisionTable(divName, divInfo, bunks, skeleton, isEditable);
-            if (table) wrapper.appendChild(table);
+            
+            let element;
+            if (isAutoSchedule) {
+                element = renderDivisionTimeline(divName, divInfo, bunks, isEditable);
+            } else {
+                element = renderDivisionTable(divName, divInfo, bunks, skeleton, isEditable);
+            }
+            if (element) wrapper.appendChild(element);
         });
         
         container.appendChild(wrapper);
@@ -2059,36 +2097,140 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
         table.appendChild(thead);
         
         const tbody = document.createElement('tbody');
-        divBlocks.forEach((block, blockIdx) => {
-            const timeLabel = `${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(block.endMin)}`;
-            const tr = document.createElement('tr');
-            tr.style.background = blockIdx % 2 === 0 ? '#fff' : '#fafafa';
-            if (block._isSplitTile) tr.style.background = block._splitHalf === 1 ? (blockIdx % 2 === 0 ? '#f0fdf4' : '#ecfdf5') : (blockIdx % 2 === 0 ? '#fef3c7' : '#fef9c3');
+        // ★★★ v3.2: Pre-compute rowspan map for continuation merging ★★★
+// For each bunk, determine which rows should merge (rowspan > 1)
+// and which rows should be skipped (continuation cells)
+const rowspanMap = {}; // { bunkName: { rowIdx: spanCount } }
+const skipMap = {};    // { bunkName: Set<rowIdx> }
+
+bunks.forEach(bunk => {
+    rowspanMap[bunk] = {};
+    skipMap[bunk] = new Set();
+    
+    for (let ri = 0; ri < divBlocks.length; ri++) {
+        if (skipMap[bunk].has(ri)) continue;
+        
+        const slotIdx = divBlocks[ri].slotIndex !== undefined 
+            ? divBlocks[ri].slotIndex 
+            : ri;
+        const entry = (window.scheduleAssignments?.[bunk] || [])[slotIdx];
+        
+        if (!entry || entry.continuation) continue;
+        
+        // Look ahead: how many continuation rows follow for this bunk?
+        let span = 1;
+        for (let ni = ri + 1; ni < divBlocks.length; ni++) {
+            const nextSlotIdx = divBlocks[ni].slotIndex !== undefined
+                ? divBlocks[ni].slotIndex
+                : ni;
+            const nextEntry = (window.scheduleAssignments?.[bunk] || [])[nextSlotIdx];
             
-            const tdTime = document.createElement('td'); 
-            tdTime.textContent = timeLabel;
-            tdTime.style.cssText = 'padding: 10px 12px; font-weight: 500; color: #4b5563; border-right: 1px solid #e5e7eb; white-space: nowrap;';
-            if (block._isSplitTile) { 
-                const halfLabel = block._splitHalf === 1 ? '①' : '②'; 
-                tdTime.innerHTML = `${escapeHtml(timeLabel)} <span style="color: #6b7280; font-size: 0.8rem;">${halfLabel}</span>`; 
+            if (nextEntry && nextEntry.continuation) {
+                span++;
+                skipMap[bunk].add(ni);
+            } else {
+                break;
             }
-            tr.appendChild(tdTime);
-            
-           if (isLeagueBlockType(block.event, block.type)) {
-                tr.appendChild(renderLeagueCell(block, bunks, divName, isEditable)); 
-                tbody.appendChild(tr); 
-                return; 
+        }
+        
+        if (span > 1) {
+            rowspanMap[bunk][ri] = span;
+        }
+    }
+});
+
+divBlocks.forEach((block, blockIdx) => {
+    const timeLabel = `${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(block.endMin)}`;
+    const tr = document.createElement('tr');
+    tr.style.background = blockIdx % 2 === 0 ? '#fff' : '#fafafa';
+    if (block._isSplitTile) tr.style.background = block._splitHalf === 1 
+        ? (blockIdx % 2 === 0 ? '#f0fdf4' : '#ecfdf5') 
+        : (blockIdx % 2 === 0 ? '#fef3c7' : '#fef9c3');
+    
+    const tdTime = document.createElement('td'); 
+    tdTime.textContent = timeLabel;
+    tdTime.style.cssText = 'padding: 10px 12px; font-weight: 500; color: #4b5563; border-right: 1px solid #e5e7eb; white-space: nowrap;';
+    if (block._isSplitTile) { 
+        const halfLabel = block._splitHalf === 1 ? '①' : '②'; 
+        tdTime.innerHTML = `${escapeHtml(timeLabel)} <span style="color: #6b7280; font-size: 0.8rem;">${halfLabel}</span>`; 
+    }
+    tr.appendChild(tdTime);
+    
+    if (isLeagueBlockType(block.event)) { 
+        tr.appendChild(renderLeagueCell(block, bunks, divName, isEditable)); 
+        tbody.appendChild(tr); 
+        return; 
+    }
+    
+    bunks.forEach(bunk => {
+        // ★★★ v3.2: Handle continuation merging ★★★
+        if (skipMap[bunk].has(blockIdx)) {
+            // This row is a continuation for this bunk — cell already covered by rowspan
+            return;
+        }
+        
+        const td = renderBunkCell(block, bunk, divName, isEditable);
+        
+        // Apply rowspan if this cell spans multiple rows
+        const span = rowspanMap[bunk]?.[blockIdx];
+        if (span && span > 1) {
+            td.rowSpan = span;
+            td.style.verticalAlign = 'middle';
+            // Show the merged time range duration
+            const endBlockIdx = blockIdx + span - 1;
+            if (endBlockIdx < divBlocks.length) {
+                const duration = divBlocks[endBlockIdx].endMin - divBlocks[blockIdx].startMin;
+                if (duration > 0) {
+                    const small = document.createElement('div');
+                    small.style.cssText = 'font-size: 0.7rem; color: #9ca3af; margin-top: 2px;';
+                    small.textContent = `${duration}min`;
+                    td.appendChild(small);
+                }
             }
-            
-            bunks.forEach(bunk => tr.appendChild(renderBunkCell(block, bunk, divName, isEditable)));
-            tbody.appendChild(tr);
-        });
+        }
+        
+        tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+});
         table.appendChild(tbody);
         return table;
     }
 
-    function renderLeagueCell(block, bunks, divName, isEditable) {
-        const td = document.createElement('td');
+    // =========================================================================
+    // ★★★ AUTO BUILD: GANTT/TIMELINE RENDERER ★★★
+    // =========================================================================
+    
+    function renderDivisionTimeline(divName, divInfo, bunks, isEditable) {
+        // ★★★ v5.0: Delegate to AutoScheduleGrid for time-scaled per-bunk view ★★★
+        if (window.AutoScheduleGrid?.render) {
+            return window.AutoScheduleGrid.render(divName, divInfo, bunks, isEditable);
+        }
+
+        // Fallback if auto_schedule_grid.js not loaded
+        const container = document.createElement('div');
+        container.style.cssText = 'padding:40px; text-align:center; color:#6b7280; background:#fff; border-radius:8px; margin-bottom:16px;';
+        container.innerHTML = '<p>Auto schedule grid not loaded.</p>';
+        return container;
+    }
+    
+    function _getTimelineBlockStyle(block) {
+        const type = block.type || '';
+        const event = (block.event || '').toLowerCase();
+        if (type === 'pinned' || type === 'fixed' || event.includes('lunch') || event.includes('snack') || event.includes('dismissal'))
+            return 'background: linear-gradient(135deg, #fef3c7, #fde68a); color: #92400e; border: 1px solid #f59e0b;';
+        if (block._scarce)
+            return 'background: linear-gradient(135deg, #fce7f3, #fbcfe8); color: #9d174d; border: 1px solid #ec4899;';
+        if (event.includes('special') || type === 'special_slot')
+            return 'background: linear-gradient(135deg, #e0e7ff, #c7d2fe); color: #3730a3; border: 1px solid #6366f1;';
+        if (event.includes('sport') || type === 'sport_slot')
+            return 'background: linear-gradient(135deg, #d1fae5, #a7f3d0); color: #065f46; border: 1px solid #10b981;';
+        if (event.includes('league'))
+            return 'background: linear-gradient(135deg, #e0f2fe, #bae6fd); color: #075985; border: 1px solid #0284c7;';
+        return 'background: linear-gradient(135deg, #f3f4f6, #e5e7eb); color: #374151; border: 1px solid #d1d5db;';
+    }
+
+    function renderLeagueCell(block, bunks, divName, isEditable) {        const td = document.createElement('td');
         td.colSpan = bunks.length;
         td.style.cssText = 'padding: 12px 16px; background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); border-left: 4px solid #0284c7; vertical-align: top;';
         
@@ -2169,8 +2311,28 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
             else bgColor = '#f9fafb'; 
         }
         
-        td.textContent = displayText;
-        td.style.background = bgColor;
+       // ★★★ AUTO BUILDER v2: _subEntries = multiple activities in one slot ★★★
+        if (entry && entry._subEntries && entry._subEntries.length > 0) {
+            td.innerHTML = '';
+            td.style.padding = '2px';
+            td.style.background = bgColor;
+            const allSubs = [entry, ...entry._subEntries];
+            const totalMin = block.endMin - block.startMin;
+            allSubs.forEach((sub, si) => {
+                const subDiv = document.createElement('div');
+                const subDur = (sub._endMin || block.endMin) - (sub._startMin || block.startMin);
+                const hPct = Math.max(30, (subDur / totalMin) * 100);
+                const subText = formatEntry(sub);
+                const subBg = getEntryBackground(sub, block.event);
+                subDiv.style.cssText = 'padding:2px 4px; font-size:0.75rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border-radius:3px; margin-bottom:1px; background:' + subBg + ';';
+                subDiv.textContent = subText;
+                subDiv.title = subText + ' (' + subDur + 'min)';
+                td.appendChild(subDiv);
+            });
+        } else {
+            td.textContent = displayText;
+            td.style.background = bgColor;
+        }
         
         // Cell-specific bypass highlighting
 const bypassStatus = getCellBypassStatus(bunk, slotIdx);
@@ -2554,7 +2716,7 @@ if (bypassStatus.highlight) {
         }
         
         const divName = getDivisionForBunk(bunk);
-        const slots = findSlotsForRange(startMin, endMin, divName);
+       const slots = findSlotsForRange(startMin, endMin, divName, bunk);
         
         if (slots.length === 0) {
             alert('Error: Could not find time slots for this block.');
@@ -2629,7 +2791,7 @@ if (bypassStatus.highlight) {
     // APPLY EDIT
     // =========================================================================
 
-   async function applyEdit(bunk, editData) {
+  async function applyEdit(bunk, editData) {
         const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
         const divName = getDivisionForBunk(bunk);
 
@@ -2643,7 +2805,17 @@ if (bypassStatus.highlight) {
        const isClear = !activity || activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
         const slots = findSlotsForRange(startMin, endMin, divName);
         if (slots.length === 0) { alert('Error: Could not find time slots.'); return; }
-        window._postEditInProgress = true; 
+
+        // ★ Sequence rule warning
+        if (!isClear && window.checkSequenceViolation && slots.length > 0) {
+            const _seqCheck = window.checkSequenceViolation(bunk, activity, slots[0], divName);
+            if (_seqCheck?.violated) { if (!confirm('⚠️ Sequence Warning:\n\n' + _seqCheck.reason + '\n\nPlace anyway?')) return; }
+        }
+        // ★ Location cooldown warning
+        if (!isClear && window.isLocationInCooldown && location && slots.length > 0) {
+            const _coolCheck = window.isLocationInCooldown(location, slots[0], bunk, divName);
+            if (_coolCheck?.blocked) { if (!confirm('⚠️ Location Cooldown:\n\n' + _coolCheck.reason + '\n\nPlace anyway?')) return; }
+        }        window._postEditInProgress = true; 
         window._postEditTimestamp = Date.now();
         const divSlots = window.divisionTimes?.[divName] || [];
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
@@ -4341,12 +4513,12 @@ window.clearMyBypassHighlights = clearMyBypassHighlights;
     };
 
     window.UnifiedScheduleSystem = {
-        version: '4.1.0',
+        version: '4.2.0',
         
         // Core functions
         loadScheduleForDate, 
-        renderStaggeredView, 
-        findFirstSlotForTime,
+        renderStaggeredView,
+        renderDivisionTimeline,        findFirstSlotForTime,
         findSlotsForRange,
         getLeagueMatchups, 
         getEntryForBlock,
@@ -4402,11 +4574,94 @@ window.clearMyBypassHighlights = clearMyBypassHighlights;
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initScheduleSystem);
     else setTimeout(initScheduleSystem, 100);
 
+    // =========================================================================
+    // PRINT CENTER: ROWSPAN MERGING FOR CONTINUATION CELLS
+    // =========================================================================
+    // When the print center renders per-bunk schedules, activities that
+    // span multiple sub-slots show as repeated or empty cells. This
+    // post-processes the print preview to merge those cells with rowspan.
+    // =========================================================================
+
+    function patchPrintCenter() {
+        const originalLiveRefresh = window.pcLiveRefresh;
+        if (!originalLiveRefresh) return;
+
+        window.pcLiveRefresh = function() {
+            originalLiveRefresh.call(this);
+            setTimeout(() => {
+                const preview = document.getElementById('pc-preview-content');
+                if (!preview) return;
+                preview.querySelectorAll('table').forEach(postProcessPrintTable);
+            }, 100);
+        };
+        console.log('[UnifiedSchedule] Print center rowspan patch applied');
+    }
+
+    function postProcessPrintTable(table) {
+        const tbody = table.querySelector('tbody');
+        if (!tbody) return;
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        if (rows.length === 0) return;
+        const headerRow = table.querySelector('thead tr:last-child');
+        if (!headerRow) return;
+        const headers = Array.from(headerRow.querySelectorAll('th'));
+
+        for (let colIdx = 1; colIdx < headers.length; colIdx++) {
+            let mergeStart = -1, mergeContent = '', mergeCount = 0;
+
+            for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+                const cells = Array.from(rows[rowIdx].querySelectorAll('td'));
+                if (cells.length <= colIdx) continue;
+                const text = cells[colIdx].textContent.trim();
+
+                if (mergeStart >= 0 && (text === '' || text === '—' || text === mergeContent)) {
+                    mergeCount++;
+                } else {
+                    if (mergeStart >= 0 && mergeCount > 1) {
+                        applyPrintRowMerge(rows, mergeStart, mergeCount, colIdx);
+                    }
+                    mergeStart = rowIdx;
+                    mergeContent = text;
+                    mergeCount = 1;
+                }
+            }
+            if (mergeStart >= 0 && mergeCount > 1) {
+                applyPrintRowMerge(rows, mergeStart, mergeCount, colIdx);
+            }
+        }
+    }
+
+    function applyPrintRowMerge(rows, startRow, count, colIdx) {
+        if (startRow < 0 || startRow >= rows.length) return;
+        const cells = Array.from(rows[startRow].querySelectorAll('td'));
+        if (cells.length <= colIdx) return;
+        cells[colIdx].rowSpan = count;
+        cells[colIdx].style.verticalAlign = 'middle';
+        for (let i = 1; i < count; i++) {
+            const nextRow = rows[startRow + i];
+            if (!nextRow) continue;
+            const nextCells = Array.from(nextRow.querySelectorAll('td'));
+            if (nextCells.length > colIdx) nextCells[colIdx].style.display = 'none';
+        }
+    }
+
+    // Initialize print center patch when ready
+    if (window.pcLiveRefresh) {
+        patchPrintCenter();
+    } else {
+        const pcObserver = new MutationObserver(() => {
+            if (window.pcLiveRefresh) { patchPrintCenter(); pcObserver.disconnect(); }
+        });
+        pcObserver.observe(document.body, { childList: true, subtree: true });
+        setTimeout(() => pcObserver.disconnect(), 30000);
+    }
+
     console.log('📅 Unified Schedule System v4.1.0 loaded successfully');
     console.log('   ★★★ FULL DIVISIONTIMES INTEGRATION ★★★');
     console.log('   ✅ Division-aware time slot management');
     console.log('   ✅ TimeBasedFieldUsage for cross-division conflicts');
     console.log('   ✅ Removed unifiedTimes dependency');
     console.log('   ✅ Data persistence uses divisionTimes');
+    console.log('   ✅ Print center rowspan merging');
 
 })();
