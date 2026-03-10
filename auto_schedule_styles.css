@@ -576,3 +576,28 @@
     .al-container { border: none; box-shadow: none; }
     .al-band { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+.al-band-week-badge {
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(99, 102, 241, 0.18);
+    color: #4338ca;
+    white-space: nowrap;
+    font-weight: 700;
+    border: 1px solid rgba(99,102,241,0.3);
+}
+
+.al-popover-divider {
+    height: 1px;
+    background: #f1f5f9;
+    margin: 8px 0 6px;
+}
+
+.al-popover-section-title {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #6366f1;
+    padding: 0 0 4px 0;
+}
