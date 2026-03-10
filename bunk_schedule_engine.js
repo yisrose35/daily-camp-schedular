@@ -1279,7 +1279,8 @@
         // ── Phase 0: Compile rules per division ──────────────────────────────
         var rulesByDiv = {};
         Object.keys(layersByDiv).forEach(function (grade) {
-            rulesByDiv[grade] = compileRules(layersByDiv[grade], dateStr, warnings);
+            var gradedLayers = layersByDiv[grade].map(function(l) { return Object.assign({}, l, { grade: grade }); });
+            rulesByDiv[grade] = compileRules(gradedLayers, dateStr, warnings);
         });
 
         // ── Create resource tracker (shared across all bunks) ─────────────
