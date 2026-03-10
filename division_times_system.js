@@ -262,33 +262,73 @@
             // Re-sort after expansion (split halves should be in order)
             withExpandedSplits.sort((a, b) => a.startMin - b.startMin);
 
-            // Handle overlapping/nested blocks by merging or splitting
-            const consolidated = consolidateBlocks(withExpandedSplits);
+            // ★★★ v1.4 FIX: Use time-boundary approach to support per-bunk auto-build blocks
+// consolidateBlocks breaks when per-bunk blocks legitimately overlap each other
+const hasBunkSpecificBlocks = withExpandedSplits.some(b => b._bunk);
 
-            // Create slot array
-            divisionTimes[divName] = consolidated.map((block, idx) => ({
-                slotIndex: idx,
-                startMin: block.startMin,
-                endMin: block.endMin,
-                duration: block.endMin - block.startMin,
-                event: block.event || 'Activity',
-                type: block.type || 'slot',
-                label: `${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(block.endMin)}`,
-                // Preserve original skeleton data
-                _originalId: block.id,
-                _subEvents: block.subEvents,
-                _smartData: block.smartData,
-                // ★★★ v1.2: Preserve split tile metadata ★★★
-                _splitHalf: block._splitHalf,
-                _splitParentEvent: block._splitParentEvent,
-                _splitAct1: block._splitAct1,
-                _splitAct2: block._splitAct2,
-                _originalStartMin: block._originalStartMin,
-                _originalEndMin: block._originalEndMin,
-                // For backwards compat: Date objects
-                start: minutesToDate(block.startMin),
-                end: minutesToDate(block.endMin)
-            }));
+let slotsForDiv;
+
+if (hasBunkSpecificBlocks) {
+    // Collect ALL unique time boundaries from every block (div-wide + per-bunk)
+    const timePoints = new Set();
+    if (divStartMin !== null) timePoints.add(divStartMin);
+    if (divEndMin !== null) timePoints.add(divEndMin);
+    withExpandedSplits.forEach(b => {
+        timePoints.add(b.startMin);
+        timePoints.add(b.endMin);
+    });
+
+    const sortedPoints = [...timePoints].sort((a, b) => a - b);
+    const divWideBlocks = withExpandedSplits.filter(b => !b._bunk);
+
+    slotsForDiv = [];
+    for (let i = 0; i < sortedPoints.length - 1; i++) {
+        const s = sortedPoints[i];
+        const e = sortedPoints[i + 1];
+        if (e - s < 5) continue;
+        // Find a div-wide block that covers this range for metadata
+        const meta = divWideBlocks.find(b => b.startMin <= s && b.endMin >= e);
+        slotsForDiv.push({
+            slotIndex: slotsForDiv.length,
+            startMin: s,
+            endMin: e,
+            duration: e - s,
+            event: meta?.event || 'Activity',
+            type: meta?.type || 'slot',
+            label: `${minutesToTimeLabel(s)} - ${minutesToTimeLabel(e)}`,
+            _originalId: meta?.id,
+            start: minutesToDate(s),
+            end: minutesToDate(e)
+        });
+    }
+} else {
+    // Original path for manual div-wide-only skeletons
+    const consolidated = consolidateBlocks(withExpandedSplits);
+    slotsForDiv = consolidated.map((block, idx) => ({
+        slotIndex: idx,
+        startMin: block.startMin,
+        endMin: block.endMin,
+        duration: block.endMin - block.startMin,
+        event: block.event || 'Activity',
+        type: block.type || 'slot',
+        label: `${minutesToTimeLabel(block.startMin)} - ${minutesToTimeLabel(block.endMin)}`,
+        _originalId: block.id,
+        _subEvents: block.subEvents,
+        _smartData: block.smartData,
+        _splitHalf: block._splitHalf,
+        _splitParentEvent: block._splitParentEvent,
+        _splitAct1: block._splitAct1,
+        _splitAct2: block._splitAct2,
+        _originalStartMin: block._originalStartMin,
+        _originalEndMin: block._originalEndMin,
+        start: minutesToDate(block.startMin),
+        end: minutesToDate(block.endMin)
+    }));
+}
+
+// Create slot array
+divisionTimes[divName] = slotsForDiv;
+               
 
             log(`  ${divName}: ${divisionTimes[divName].length} slots`);
             if (DEBUG && divisionTimes[divName].length > 0) {
