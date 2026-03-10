@@ -471,11 +471,106 @@ var isAnchor = ALWAYS_ANCHOR_TYPES.indexOf(lTypeLower) >= 0 || isLayerPinned(lay
     // =========================================================================
 
     function placeAnchors(timelines, anchorRules, resourceTracker) {
-        log('Phase 1: placing ' + anchorRules.length + ' anchors across ' + timelines.length + ' bunks');
+    log('Phase 1: placing ' + anchorRules.length + ' anchors across ' + timelines.length + ' bunks');
 
-        anchorRules.forEach(function (rule) {
+    var gs = getGlobalSettings();
+    var changeDur = parseInt(gs.app1?.changeBufferDuration) || parseInt(gs.changeBufferDuration) || 0;
+
+    anchorRules.forEach(function (rule) {
+        var isSwim = (rule.layerType || '').toLowerCase() === 'swim';
+
+        if (isSwim) {
+            // ★★★ v1.1 FIX: Swim is staggered per-bunk, NOT stamped simultaneously
+            // across the whole division. Each bunk gets its own sequential swim slot
+            // within the declared window, separated by a change buffer if configured.
+
+            var duration = rule.endMin - rule.startMin;
+            var winStart = rule.startMin;
+            var winEnd = rule.endMin + (timelines.length * (duration + changeDur)) + 60; // generous window
+
+            // Collect timelines that match this rule's grade, sorted by bunk number
+            var matched = timelines.filter(function (tl) {
+                return !rule.grade || rule.grade === tl.divisionName;
+            }).sort(function (a, b) {
+                var na = parseInt((a.bunkName || '').match(/\d+/)?.[0] || '0', 10);
+                var nb = parseInt((b.bunkName || '').match(/\d+/)?.[0] || '0', 10);
+                return na - nb;
+            });
+
+            var cursor = winStart;
+
+            matched.forEach(function (timeline) {
+                // Find the next available slot starting at cursor
+                var slotStart = cursor;
+                var tries = 0;
+
+                while (tries++ < 200) {
+                    var slotEnd = slotStart + duration;
+                    // Check this bunk's own timeline for conflicts
+                    var conflict = timeline.slots.some(function (s) {
+                        return overlaps(slotStart, slotEnd, s.startMin, s.endMin);
+                    });
+                    if (!conflict) break;
+                    slotStart += 5;
+                }
+
+                var slotEnd = slotStart + duration;
+
+                addSlot(timeline, {
+                    startMin: slotStart,
+                    endMin: slotEnd,
+                    activity: rule.event,
+                    activityType: 'swim',
+                    field: null,
+                    locked: true,
+                    source: 'anchor',
+                    _ruleId: rule.id
+                });
+
+                // Add change buffer slots on this bunk's timeline
+                if (changeDur > 0) {
+                    if (slotEnd + changeDur <= getDivisionTimeRange(timeline.divisionName).end) {
+                        addSlot(timeline, {
+                            startMin: slotEnd,
+                            endMin: slotEnd + changeDur,
+                            activity: 'Change',
+                            activityType: 'change',
+                            field: null,
+                            locked: true,
+                            source: 'anchor',
+                            _ruleId: rule.id + '_postchange'
+                        });
+                    }
+                    if (slotStart - changeDur >= getDivisionTimeRange(timeline.divisionName).start) {
+                        var preStart = slotStart - changeDur;
+                        var preConflict = timeline.slots.some(function (s) {
+                            return overlaps(preStart, slotStart, s.startMin, s.endMin);
+                        });
+                        if (!preConflict) {
+                            addSlot(timeline, {
+                                startMin: preStart,
+                                endMin: slotStart,
+                                activity: 'Change',
+                                activityType: 'change',
+                                field: null,
+                                locked: true,
+                                source: 'anchor',
+                                _ruleId: rule.id + '_prechange'
+                            });
+                        }
+                    }
+                }
+
+                log('  Swim stagger: ' + timeline.bunkName + ' ' + fmtTime(slotStart) + '–' + fmtTime(slotEnd));
+
+                // Advance cursor for next bunk: swim + post-change buffer
+                cursor = slotEnd + (changeDur > 0 ? changeDur : 0);
+            });
+
+        } else {
+            // All other anchors (lunch, snack, dismissal, league, custom)
+            // are stamped at the exact same time for every bunk — this is correct.
             timelines.forEach(function (timeline) {
-                // Only apply if grade matches (or rule has no grade restriction)
                 if (rule.grade && rule.grade !== timeline.divisionName) return;
 
                 addSlot(timeline, {
@@ -489,15 +584,14 @@ var isAnchor = ALWAYS_ANCHOR_TYPES.indexOf(lTypeLower) >= 0 || isLayerPinned(lay
                     _ruleId: rule.id
                 });
 
-                // Register resource use if the anchor has a known resource
                 if (rule.field) {
                     resourceTracker.register(rule.field, rule.startMin, rule.endMin,
                         timeline.bunkName, timeline.divisionName, rule.event);
                 }
             });
-        });
-    }
-
+        }
+    });
+}
     // =========================================================================
     // PHASE 2 — SCARCE RESOURCE PRE-ALLOCATION
     // =========================================================================
