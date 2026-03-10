@@ -1,376 +1,410 @@
 // =============================================================================
-// bunk_engine_integration.js — Wires BunkScheduleEngine into the existing
-// daily_adjustments.js generate flow for AUTO mode.
+// bunk_engine_integration.js — Campistry Bunk Engine Integration v2.0
 // =============================================================================
+// Bridge between BunkScheduleEngine (placement) and total_solver_engine (assignment).
 //
-// HOW IT PLUGS IN:
-//   The existing runOptimizer() in daily_adjustments.js checks
-//   window._daBuilderMode. When it's 'auto', it currently calls AutoBuildEngine.
-//   This file replaces that call with BunkScheduleEngine when the camp has
-//   opted into the new per-bunk pipeline.
+// v2.0 Changes:
+//   ★ Complete rewrite of runBunkGeneration() to feed solver directly.
+//   ★ buildPerBunkDivisionTimes(): each bunk gets its own slot array
+//     (_isPerBunk mode). Handles the case where Bunk 1 has 2 slots 11-12
+//     and Bunk 2 has 3 slots 11-12 — they're independent, no index collision.
+//   ★ Locked slots (swim, lunch, snack) written to scheduleAssignments as
+//     _fixed — solver skips them.
+//   ★ activityBlocks built with correct per-bunk slot indices for unlocked
+//     placeholder slots — solver fills specific activity + field.
 //
-//   The camp-level flag is:   globalSettings.app1.generationMode === 'bunk'
-//   The old auto engine runs: globalSettings.app1.generationMode === 'grade' (or absent)
-//
-// OUTPUT FORMAT:
-//   BunkScheduleEngine outputs bunkTimelines keyed by bunk name.
-//   This integration layer:
-//     1. Stores bunkTimelines as the canonical source of truth
-//     2. Saves to campDailyData_v1 alongside scheduleAssignments
-//     3. Triggers history update
-//     4. Fires the existing 'campistry-generation-complete' event so
-//        all downstream hooks (save, sync, Gantt) fire as normal
-//
+// Flow:
+//   daily_adjustments.runOptimizer()
+//     → BunkEngineIntegration.handleAutoGenerate()
+//       → runBunkGeneration()
+//         → BunkScheduleEngine.build()         [Phases 0-4: placement only]
+//         → buildPerBunkDivisionTimes()        [_isPerBunk slot arrays]
+//         → write locked slots to scheduleAssignments
+//         → buildActivityBlocks()              [typed placeholders for solver]
+//         → Solver.solveSchedule()             [specific activity + field]
+//         → persist + fire campistry-generation-complete
 // =============================================================================
 
 (function () {
     'use strict';
 
-    // -------------------------------------------------------------------------
-    // Check which generation mode this camp uses
-    // -------------------------------------------------------------------------
-    function getGenerationMode() {
-        var g = window.loadGlobalSettings?.() || {};
-        return g.app1?.generationMode || 'grade'; // 'grade' = existing, 'bunk' = new
+    var VERSION = '2.0.0';
+
+    function log(msg) {
+        console.log('[BunkEngineIntegration v' + VERSION + '] ' + msg);
+    }
+
+    // =========================================================================
+    // UTILITIES
+    // =========================================================================
+
+    function fmtTime(min) {
+        if (min == null) return '?';
+        var h = Math.floor(min / 60), m = min % 60;
+        var ap = h >= 12 ? 'pm' : 'am';
+        h = h % 12 || 12;
+        return h + ':' + (m < 10 ? '0' : '') + m + ap;
     }
 
     function isBunkMode() {
-        var g = window.loadGlobalSettings?.() || {};
-        return g.app1?.generationMode === 'bunk';
+        var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+        return (gs.app1?.generationMode || gs.generationMode) === 'bunk';
     }
 
-    // -------------------------------------------------------------------------
-    // MAIN: Run the bunk-level generation pipeline
-    // Called from the Generate button when mode='auto' AND generationMode='bunk'
-    // -------------------------------------------------------------------------
-   async function runBunkGeneration(dateStr, daAutoLayers, onComplete, onError) {
-    if (!window.BunkScheduleEngine) {
-        onError?.('BunkScheduleEngine not loaded');
-        return;
+    // =========================================================================
+    // PUBLIC ENTRY POINT
+    // =========================================================================
+    // Called by daily_adjustments.runOptimizer() when bunk mode is active.
+    // Returns true if handled (prevents the caller from running the old pipeline).
+
+    async function handleAutoGenerate(dateStr, daAutoLayers, showAlert) {
+        if (!isBunkMode()) return false;
+
+        log('handleAutoGenerate() called for ' + dateStr);
+
+        var errorMsg = null;
+        var successMsg = null;
+
+        await runBunkGeneration(
+            dateStr,
+            daAutoLayers,
+            function (msg) { successMsg = msg; },
+            function (msg) { errorMsg = msg; }
+        );
+
+        if (errorMsg) {
+            await showAlert('⚠️ ' + errorMsg);
+        } else if (successMsg) {
+            log(successMsg);
+        }
+
+        return true; // always handled — don't fall through to old pipeline
     }
 
-    console.log('[BunkIntegration] Starting bunk-level generation for', dateStr);
+    // =========================================================================
+    // MAIN GENERATION PIPELINE
+    // =========================================================================
 
-    try {
-        // ── 1. Full pre-generation wipe ──────────────────────────────────────
-        window.scheduleAssignments = {};
-        window.leagueAssignments = {};
-        window.GlobalFieldLocks?.clearAllLocks?.();
-        window._preGenClearActive = true;
-        window._generationInProgress = true;
-
-        // ── 2. Run BunkScheduleEngine (Phases 0-4 only — placement, no assignment) ─
-        var result = window.BunkScheduleEngine.build({
-            dateStr: dateStr,
-            layers: daAutoLayers
-        });
-
-        window._preGenClearActive = false;
-        window._generationInProgress = false;
-
-        if (!result || Object.keys(result.bunkTimelines || {}).length === 0) {
-            onError?.('BunkScheduleEngine produced no timelines — check layers');
+    async function runBunkGeneration(dateStr, daAutoLayers, onComplete, onError) {
+        if (!window.BunkScheduleEngine) {
+            onError('BunkScheduleEngine not loaded');
+            return;
+        }
+        if (!window.Solver?.solveSchedule) {
+            onError('total_solver_engine not loaded (window.Solver.solveSchedule missing)');
             return;
         }
 
-        // ── 3. Build per-bunk divisionTimes ──────────────────────────────────
-        // Each bunk gets its own slot array derived from its own timeline.
-        // This is _isPerBunk mode — slot indices are unique per bunk.
-        var divisions = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
-        var perBunkDivisionTimes = buildPerBunkDivisionTimes(result.bunkTimelines, divisions);
-        window.divisionTimes = perBunkDivisionTimes;
-        window._autoDivisionTimesBuilt = true;
+        try {
+            // ── 1. Full pre-generation wipe ──────────────────────────────
+            window.scheduleAssignments = {};
+            window.leagueAssignments = {};
+            window.GlobalFieldLocks?.clearAllLocks?.();
+            window._preGenClearActive = true;
+            window._generationInProgress = true;
 
-        // ── 4. Initialize scheduleAssignments with correct slot counts per bunk ─
-        Object.values(result.bunkTimelines).forEach(function(tl) {
-            var bunkSlots = perBunkDivisionTimes[tl.divisionName]?._perBunkSlots?.[tl.bunkName] || [];
-            window.scheduleAssignments[tl.bunkName] = new Array(bunkSlots.length).fill(null);
-        });
+            log('Starting generation for ' + dateStr);
 
-        // ── 5. Write locked slots (anchors) directly into scheduleAssignments ─
-        // These are swim, lunch, snack, dismissal — already fully resolved,
-        // solver should not touch them.
-        Object.values(result.bunkTimelines).forEach(function(tl) {
-            var bunkSlots = perBunkDivisionTimes[tl.divisionName]?._perBunkSlots?.[tl.bunkName] || [];
-            tl.slots.forEach(function(slot) {
-                if (!slot.locked) return;
-                // Find which slot indices this covers
-                var indices = findSlotIndices(bunkSlots, slot.startMin, slot.endMin);
-                indices.forEach(function(idx) {
-                    window.scheduleAssignments[tl.bunkName][idx] = {
-                        _activity: slot.activity,
-                        field: slot.field || null,
-                        _fixed: true,
-                        _autoGenerated: true,
-                        _startMin: slot.startMin,
-                        _endMin: slot.endMin,
-                        continuation: false
-                    };
-                });
-                // Mark continuations for multi-slot blocks
-                for (var i = 1; i < indices.length; i++) {
-                    window.scheduleAssignments[tl.bunkName][indices[i]].continuation = true;
-                }
+            // ── 2. Run BunkScheduleEngine (Phases 0-4) ───────────────────
+            var result = window.BunkScheduleEngine.build({
+                dateStr: dateStr,
+                layers: daAutoLayers
             });
-        });
 
-        // ── 6. Build activityBlocks for the solver ───────────────────────────
-        // One block per UNLOCKED placeholder slot per bunk.
-        // These are the slots the solver will fill in with specific activities.
-        var activityBlocks = buildActivityBlocks(result.bunkTimelines, perBunkDivisionTimes);
+            window._preGenClearActive = false;
+            window._generationInProgress = false;
 
-        if (activityBlocks.length === 0) {
-            onError?.('No solvable slots found — check layer types and windows');
-            return;
-        }
+            var bunkTimelines = result.bunkTimelines || {};
+            var bunkCount = Object.keys(bunkTimelines).length;
 
-        console.log('[BunkIntegration] Built', activityBlocks.length, 'activity blocks for solver');
-
-        // ── 7. Build solver config (same as existing pipeline) ───────────────
-        var rotationHistory = window.loadRotationHistory?.() || {};
-        var config = {
-            activityProperties: window.activityProperties || {},
-            rotationHistory: rotationHistory,
-            divisions: divisions,
-            dateStr: dateStr,
-            _bunkMode: true
-        };
-
-        // ── 8. Run the solver ─────────────────────────────────────────────────
-        window.Solver?.solveSchedule(activityBlocks, config);
-
-        // ── 9. Update rotation history ────────────────────────────────────────
-        window.RotationEngine?.clearHistoryCache?.();
-
-        // ── 10. Persist ───────────────────────────────────────────────────────
-        window.saveCurrentDailyData?.('scheduleAssignments', window.scheduleAssignments);
-        window.saveCurrentDailyData?.('_autoGenerated', true);
-        window.saveCurrentDailyData?.('_generationMode', 'bunk');
-        window.saveCurrentDailyData?.('divisionTimes', perBunkDivisionTimes);
-        window.ScheduleDB?.saveSchedule?.(dateStr, {
-            scheduleAssignments: window.scheduleAssignments,
-            divisionTimes: perBunkDivisionTimes,
-            _autoGenerated: true,
-            _generationMode: 'bunk',
-            savedAt: new Date().toISOString()
-        });
-
-        // ── 11. Fire completion event and update UI ───────────────────────────
-        window.dispatchEvent(new CustomEvent('campistry-generation-complete', {
-            detail: { dateKey: dateStr, mode: 'bunk', bunkCount: Object.keys(result.bunkTimelines).length }
-        }));
-
-        window.updateTable?.();
-
-        var msg = '✅ Schedule Generated! (' + Object.keys(result.bunkTimelines).length + ' bunks';
-        if (result.warnings?.length > 0) msg += ', ' + result.warnings.length + ' warnings';
-        msg += ')';
-
-        console.log('[BunkIntegration] Generation complete:', msg);
-        onComplete?.(msg, result);
-
-    } catch (err) {
-        window._preGenClearActive = false;
-        window._generationInProgress = false;
-        console.error('[BunkIntegration] Generation failed:', err);
-        onError?.('Generation error: ' + err.message);
-    }
-}
-
-// =============================================================================
-// BUILD PER-BUNK DIVISION TIMES
-// =============================================================================
-// Converts bunkTimelines into the _isPerBunk divisionTimes structure.
-// Each bunk gets its own slot array — slot indices are independent per bunk.
-
-function buildPerBunkDivisionTimes(bunkTimelines, divisions) {
-    var divisionTimes = {};
-
-    // Group timelines by division
-    var byDiv = {};
-    Object.values(bunkTimelines).forEach(function(tl) {
-        if (!byDiv[tl.divisionName]) byDiv[tl.divisionName] = [];
-        byDiv[tl.divisionName].push(tl);
-    });
-
-    Object.keys(byDiv).forEach(function(divName) {
-        var perBunkSlots = {};
-
-        byDiv[divName].forEach(function(tl) {
-            // Each slot in the bunk timeline becomes one entry in the slot array.
-            // We include ALL slots (locked + unlocked) so indices are complete.
-            perBunkSlots[tl.bunkName] = tl.slots.map(function(slot) {
-                return {
-                    startMin: slot.startMin,
-                    endMin: slot.endMin,
-                    label: fmtTime(slot.startMin) + ' - ' + fmtTime(slot.endMin),
-                    _locked: slot.locked || false,
-                    _activityType: slot.activityType,
-                    _source: slot.source
-                };
-            });
-        });
-
-        divisionTimes[divName] = {
-            _isPerBunk: true,
-            _perBunkSlots: perBunkSlots,
-            // Provide a fallback flat array for any code that reads divisionTimes[div] directly
-            // Use the union of all unique time boundaries across all bunks
-            length: Math.max.apply(null, Object.values(perBunkSlots).map(function(s) { return s.length; }))
-        };
-
-        console.log('[BunkIntegration] divisionTimes[' + divName + ']: _isPerBunk, ' +
-            Object.keys(perBunkSlots).length + ' bunks');
-    });
-
-    return divisionTimes;
-}
-
-// =============================================================================
-// FIND SLOT INDICES
-// =============================================================================
-// Given a bunk's slot array and a time range, returns which slot indices
-// the range covers. Used when writing locked slots to scheduleAssignments.
-
-function findSlotIndices(bunkSlots, startMin, endMin) {
-    var indices = [];
-    for (var i = 0; i < bunkSlots.length; i++) {
-        var s = bunkSlots[i];
-        // Slot overlaps with the time range
-        if (s.startMin < endMin && s.endMin > startMin) {
-            indices.push(i);
-        }
-    }
-    return indices;
-}
-
-// =============================================================================
-// BUILD ACTIVITY BLOCKS FOR SOLVER
-// =============================================================================
-// Converts unlocked bunk timeline slots into the exact format
-// Solver.solveSchedule() expects.
-
-function buildActivityBlocks(bunkTimelines, perBunkDivisionTimes) {
-    var activityBlocks = [];
-
-    Object.values(bunkTimelines).forEach(function(tl) {
-        var bunkSlots = perBunkDivisionTimes[tl.divisionName]?._perBunkSlots?.[tl.bunkName] || [];
-
-        tl.slots.forEach(function(slot) {
-            // Skip locked slots — already written to scheduleAssignments
-            if (slot.locked) return;
-            // Skip types the solver can't fill
-            var type = (slot.activityType || '').toLowerCase();
-            if (type === 'free' || type === 'change') return;
-
-            // Find slot indices for this time range
-            var slotIndices = findSlotIndices(bunkSlots, slot.startMin, slot.endMin);
-            if (slotIndices.length === 0) {
-                console.warn('[BunkIntegration] No slot indices for', tl.bunkName,
-                    fmtTime(slot.startMin), '-', fmtTime(slot.endMin));
+            if (bunkCount === 0) {
+                onError('BunkScheduleEngine produced no timelines — check layers');
                 return;
             }
 
-            activityBlocks.push({
-                bunk: tl.bunkName,
-                divName: tl.divisionName,
-                slots: slotIndices,
-                startTime: slot.startMin,   // minutes — solver uses this for field conflict checks
-                endTime: slot.endMin,
-                event: slot.activityType,   // 'sports', 'special', 'activity' — solver picks specific
-                type: 'slot',
-                _autoGenerated: true,
-                _bunkMode: true
+            log('BunkScheduleEngine produced ' + bunkCount + ' bunk timelines');
+
+            // ── 3. Build per-bunk divisionTimes ──────────────────────────
+            // Each bunk gets its own independent slot array.
+            // Bunk 1 with 2 slots 11-12 and Bunk 2 with 3 slots 11-12
+            // are handled cleanly — their slot indices are independent.
+            var divisions = window.divisions ||
+                window.loadGlobalSettings?.()?.app1?.divisions || {};
+
+            var perBunkDivisionTimes = buildPerBunkDivisionTimes(bunkTimelines, divisions);
+            window.divisionTimes = perBunkDivisionTimes;
+            window._autoDivisionTimesBuilt = true;
+
+            log('divisionTimes built (_isPerBunk mode) for ' +
+                Object.keys(perBunkDivisionTimes).length + ' divisions');
+
+            // ── 4. Initialize scheduleAssignments with correct slot counts ─
+            Object.values(bunkTimelines).forEach(function (tl) {
+                var bunkSlots = perBunkDivisionTimes[tl.divisionName]
+                    ?._perBunkSlots?.[tl.bunkName] || [];
+                window.scheduleAssignments[tl.bunkName] = new Array(bunkSlots.length).fill(null);
             });
-        });
-    });
 
-    return activityBlocks;
-}
+            // ── 5. Write locked slots directly to scheduleAssignments ─────
+            // Swim, lunch, snack, dismissal are already fully resolved.
+            // Mark as _fixed so the solver leaves them alone.
+            var lockedCount = 0;
+            Object.values(bunkTimelines).forEach(function (tl) {
+                var bunkSlots = perBunkDivisionTimes[tl.divisionName]
+                    ?._perBunkSlots?.[tl.bunkName] || [];
 
-// Simple time formatter (same as BunkScheduleEngine)
-function fmtTime(min) {
-    if (min == null) return '?';
-    var h = Math.floor(min / 60), m = min % 60;
-    var ap = h >= 12 ? 'pm' : 'am';
-    h = h % 12 || 12;
-    return h + ':' + (m < 10 ? '0' : '') + m + ap;
-}
-    // -------------------------------------------------------------------------
-    // Build a synthetic scheduleAssignments structure from bunkTimelines
-    // so existing code that reads scheduleAssignments doesn't crash.
-    // Each bunk gets an array where each entry is indexed by a 5-minute slot
-    // starting from the division's day start.
-    // -------------------------------------------------------------------------
-    function buildSyntheticAssignments(bunkTimelines) {
-        var assignments = {};
+                tl.slots.forEach(function (slot) {
+                    if (!slot.locked) return;
 
+                    var indices = findSlotIndices(bunkSlots, slot.startMin, slot.endMin);
+                    if (indices.length === 0) return;
+
+                    indices.forEach(function (idx, i) {
+                        window.scheduleAssignments[tl.bunkName][idx] = {
+                            _activity: slot.activity,
+                            field: slot.field || null,
+                            _fixed: true,
+                            _autoGenerated: true,
+                            _startMin: slot.startMin,
+                            _endMin: slot.endMin,
+                            continuation: i > 0
+                        };
+                    });
+
+                    lockedCount++;
+                });
+            });
+
+            log('Wrote ' + lockedCount + ' locked slots to scheduleAssignments');
+
+            // ── 6. Build activityBlocks for the solver ────────────────────
+            // One block per unlocked placeholder slot per bunk.
+            // slot indices are per-bunk — Bunk 1 index 2 ≠ Bunk 2 index 2.
+            var activityBlocks = buildActivityBlocks(bunkTimelines, perBunkDivisionTimes);
+
+            if (activityBlocks.length === 0) {
+                onError('No solvable slots found — check layer types and time windows');
+                return;
+            }
+
+            log('Built ' + activityBlocks.length + ' activity blocks for solver');
+
+            // ── 7. Build solver config ────────────────────────────────────
+            var rotationHistory = window.loadRotationHistory?.() || {};
+            var config = {
+                activityProperties: window.activityProperties || {},
+                rotationHistory: rotationHistory,
+                divisions: divisions,
+                dateStr: dateStr,
+                _bunkMode: true
+            };
+
+            // ── 8. Run the solver ─────────────────────────────────────────
+            log('Handing off to Solver.solveSchedule()...');
+            window.Solver.solveSchedule(activityBlocks, config);
+
+            // ── 9. Update rotation history ────────────────────────────────
+            window.RotationEngine?.clearHistoryCache?.();
+
+            // ── 10. Persist ───────────────────────────────────────────────
+            window.saveCurrentDailyData?.('scheduleAssignments', window.scheduleAssignments);
+            window.saveCurrentDailyData?.('_autoGenerated', true);
+            window.saveCurrentDailyData?.('_generationMode', 'bunk');
+            window.saveCurrentDailyData?.('divisionTimes', perBunkDivisionTimes);
+
+            window.ScheduleDB?.saveSchedule?.(dateStr, {
+                scheduleAssignments: window.scheduleAssignments,
+                divisionTimes: perBunkDivisionTimes,
+                _autoGenerated: true,
+                _generationMode: 'bunk',
+                savedAt: new Date().toISOString()
+            });
+
+            // ── 11. Fire completion event and update UI ───────────────────
+            window.dispatchEvent(new CustomEvent('campistry-generation-complete', {
+                detail: {
+                    dateKey: dateStr,
+                    mode: 'bunk',
+                    bunkCount: bunkCount
+                }
+            }));
+
+            window.updateTable?.();
+
+            var msg = '✅ Schedule Generated! (' + bunkCount + ' bunks';
+            if (result.warnings?.length > 0) {
+                msg += ', ' + result.warnings.length + ' warnings';
+            }
+            msg += ')';
+
+            log('Generation complete: ' + msg);
+            onComplete(msg, result);
+
+        } catch (err) {
+            window._preGenClearActive = false;
+            window._generationInProgress = false;
+            console.error('[BunkEngineIntegration] Generation failed:', err);
+            onError('Generation error: ' + err.message);
+        }
+    }
+
+    // =========================================================================
+    // BUILD PER-BUNK DIVISION TIMES
+    // =========================================================================
+    // Converts bunkTimelines into the _isPerBunk divisionTimes structure.
+    //
+    // Key design: each bunk's slot array is built from ITS OWN timeline.
+    // If Bunk 1 has slots [11:00-11:30, 11:30-12:00] and
+    //    Bunk 2 has slots [11:00-11:20, 11:20-11:40, 11:40-12:00],
+    // they get separate arrays — slot index 1 means different times for each.
+    //
+    // The solver calls Utils._getPerBunkSlots(divSlots, bunkName) which
+    // already handles this correctly when _isPerBunk is true.
+
+    function buildPerBunkDivisionTimes(bunkTimelines, divisions) {
+        var divisionTimes = {};
+
+        // Group timelines by division
+        var byDiv = {};
         Object.values(bunkTimelines).forEach(function (tl) {
-            var bunkName = tl.bunkName;
-            assignments[bunkName] = [];
+            if (!byDiv[tl.divisionName]) byDiv[tl.divisionName] = [];
+            byDiv[tl.divisionName].push(tl);
+        });
 
-            tl.slots.forEach(function (slot) {
-                // Convert to 5-minute slot indices
-                var slotIdx = Math.floor((slot.startMin - tl.dayStart) / 5);
-                var slotCount = Math.ceil((slot.endMin - slot.startMin) / 5);
+        Object.keys(byDiv).forEach(function (divName) {
+            var divGroup = byDiv[divName];
+            var perBunkSlots = {};
 
-                for (var i = 0; i < slotCount; i++) {
-                    assignments[bunkName][slotIdx + i] = {
-                        _activity: slot.activity || slot.activityType || 'Free',
-                        field: slot.field,
-                        _autoGenerated: true,
-                        _bunkMode: true,
-                        _startMin: slot.startMin,
-                        _endMin: slot.endMin,
-                        continuation: i > 0,
+            divGroup.forEach(function (tl) {
+                // ALL slots (locked + unlocked) go in the array — indices must
+                // cover the full day so scheduleAssignments is correctly sized.
+                perBunkSlots[tl.bunkName] = tl.slots.map(function (slot) {
+                    return {
+                        startMin: slot.startMin,
+                        endMin: slot.endMin,
+                        label: fmtTime(slot.startMin) + ' - ' + fmtTime(slot.endMin),
                         _locked: slot.locked || false,
+                        _activityType: slot.activityType,
                         _source: slot.source
                     };
+                });
+            });
+
+            // Max slot count across all bunks in this division
+            var maxLen = Math.max.apply(null,
+                Object.values(perBunkSlots).map(function (s) { return s.length; })
+            );
+
+            divisionTimes[divName] = {
+                _isPerBunk: true,
+                _perBunkSlots: perBunkSlots,
+                // Provide length for code that reads divisionTimes[div].length
+                length: maxLen
+            };
+
+            log('divisionTimes[' + divName + ']: _isPerBunk, ' +
+                Object.keys(perBunkSlots).length + ' bunks, max ' + maxLen + ' slots');
+        });
+
+        return divisionTimes;
+    }
+
+    // =========================================================================
+    // FIND SLOT INDICES
+    // =========================================================================
+    // Given a bunk's slot array and a time range, returns which slot indices
+    // the range overlaps. Used when writing locked slots and building blocks.
+
+    function findSlotIndices(bunkSlots, startMin, endMin) {
+        var indices = [];
+        for (var i = 0; i < bunkSlots.length; i++) {
+            var s = bunkSlots[i];
+            if (s.startMin < endMin && s.endMin > startMin) {
+                indices.push(i);
+            }
+        }
+        return indices;
+    }
+
+    // =========================================================================
+    // BUILD ACTIVITY BLOCKS FOR SOLVER
+    // =========================================================================
+    // Converts unlocked bunk timeline slots into the exact format that
+    // Solver.solveSchedule(activityBlocks, config) expects.
+    //
+    // Each block:
+    //   bunk    — bunk name (string)
+    //   divName — division name (string)
+    //   slots   — array of slot INDICES into this bunk's own slot array
+    //   startTime / endTime — minutes (integer), for field conflict detection
+    //   event   — activity type hint ('sports', 'special', 'activity')
+    //   type    — always 'slot'
+    //
+    // Locked slots are skipped — already written to scheduleAssignments as _fixed.
+    // 'free' and 'change' type slots are also skipped.
+
+    function buildActivityBlocks(bunkTimelines, perBunkDivisionTimes) {
+        var activityBlocks = [];
+        var skipped = 0;
+
+        Object.values(bunkTimelines).forEach(function (tl) {
+            var bunkSlots = perBunkDivisionTimes[tl.divisionName]
+                ?._perBunkSlots?.[tl.bunkName] || [];
+
+            tl.slots.forEach(function (slot) {
+                // Skip locked slots — already in scheduleAssignments as _fixed
+                if (slot.locked) return;
+
+                // Skip non-solvable types
+                var type = (slot.activityType || '').toLowerCase();
+                if (type === 'free' || type === 'change' || type === 'break') {
+                    skipped++;
+                    return;
                 }
+
+                // Find slot indices for this time range in this bunk's own array
+                var slotIndices = findSlotIndices(bunkSlots, slot.startMin, slot.endMin);
+
+                if (slotIndices.length === 0) {
+                    console.warn('[BunkEngineIntegration] No slot indices found for',
+                        tl.bunkName, fmtTime(slot.startMin), '-', fmtTime(slot.endMin));
+                    return;
+                }
+
+                activityBlocks.push({
+                    bunk: tl.bunkName,
+                    divName: tl.divisionName,
+                    slots: slotIndices,
+                    startTime: slot.startMin,   // integer minutes — field conflict checks
+                    endTime: slot.endMin,
+                    event: slot.activityType,   // type only — solver picks specific activity
+                    type: 'slot',
+                    _autoGenerated: true,
+                    _bunkMode: true
+                });
             });
         });
 
-        return assignments;
+        if (skipped > 0) {
+            log('Skipped ' + skipped + ' free/change/locked slots');
+        }
+
+        return activityBlocks;
     }
 
-    // -------------------------------------------------------------------------
-    // SETTINGS: get/set the generation mode for this camp
-    // -------------------------------------------------------------------------
-    function setGenerationMode(mode) {
-        // mode: 'grade' | 'bunk'
-        var g = window.loadGlobalSettings?.() || {};
-        g.app1 = g.app1 || {};
-        g.app1.generationMode = mode;
-        window.saveGlobalSettings?.('app1', g.app1);
-        console.log('[BunkIntegration] Generation mode set to:', mode);
-    }
-
-    // -------------------------------------------------------------------------
+    // =========================================================================
     // PUBLIC API
-    // -------------------------------------------------------------------------
+    // =========================================================================
+
     window.BunkEngineIntegration = {
         isBunkMode: isBunkMode,
-        getGenerationMode: getGenerationMode,
-        setGenerationMode: setGenerationMode,
-        runBunkGeneration: runBunkGeneration,
-        buildSyntheticAssignments: buildSyntheticAssignments,
-
-        // Called from daily_adjustments.js runOptimizer() — replaces
-        // the AutoBuildEngine call when bunk mode is active
-        handleAutoGenerate: async function (dateStr, daAutoLayers, showAlert) {
-            if (!isBunkMode()) return false; // signal: use existing pipeline
-
-            await runBunkGeneration(
-                dateStr,
-                daAutoLayers,
-                function (msg) { showAlert?.(msg); },
-                function (err) { showAlert?.('❌ ' + err); }
-            );
-
-            return true; // signal: handled by bunk engine, skip existing pipeline
-        }
+        handleAutoGenerate: handleAutoGenerate,
+        // Exposed for diagnostics / testing
+        buildPerBunkDivisionTimes: buildPerBunkDivisionTimes,
+        buildActivityBlocks: buildActivityBlocks,
+        VERSION: VERSION
     };
 
-    console.log('[BunkEngineIntegration] loaded. Mode:', getGenerationMode());
+    log('Loaded v' + VERSION);
 
 })();
