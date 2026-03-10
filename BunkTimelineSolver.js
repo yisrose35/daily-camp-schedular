@@ -774,6 +774,7 @@
         buildForBunk:         buildForBunk,
         buildForDivision:     buildForDivision,
         applyToDivisionTimes: applyToDivisionTimes,
+        buildLayerQtyMap:     buildLayerQtyMap,
 
         // Utilities (shared with DayPlanEngine)
         classifyAnchor:     classifyAnchor,
