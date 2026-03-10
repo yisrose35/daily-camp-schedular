@@ -478,7 +478,7 @@ function buildForGrade(params) {
     var specialDurMax = specialLayers.length > 0 ? getLayerDurationMax(specialLayers[0]) : specialDurMin;
     var sportDurMin = sportLayers.length > 0 ? getLayerDuration(sportLayers[0]) : 30;
     var sportDurMax = sportLayers.length > 0 ? getLayerDurationMax(sportLayers[0]) : sportDurMin;
-    var minActivityDur = Math.min(sportDurMin, specialDurMin, 20);
+    var minActivityDur = Math.min(specialDurMin, 20); // sports enforce their own minimum separately
 
     var sportWindow = sportLayers.length > 0 ? { startMin: sportLayers[0].startMin, endMin: sportLayers[0].endMin } : { startMin: divTimes.start, endMin: divTimes.end };
     var specialWindow = specialLayers.length > 0 ? { startMin: specialLayers[0].startMin, endMin: specialLayers[0].endMin } : { startMin: divTimes.start, endMin: divTimes.end };
