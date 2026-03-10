@@ -76,26 +76,67 @@
     // LAYER HELPERS
     // =========================================================================
 
-    // Anchors placed at exact startMin with their own duration (not full window width)
-    var EXACT_ANCHOR_TYPES = ['swim', 'lunch', 'dismissal'];
-    // Windowed anchors: placed as a short slot (duration) anywhere within startMin→endMin
-    var WINDOWED_ANCHOR_TYPES = ['snack', 'snacks'];
-    // Change is ONLY generated adjacent to swim — never a general fill type
+    // Types that always get a locked "change" buffer around them (swim only)
     var CHANGE_BUFFER_TYPES = ['swim'];
-    // Combined for isAnchorType checks
-    var ALWAYS_ANCHOR_TYPES = EXACT_ANCHOR_TYPES.concat(WINDOWED_ANCHOR_TYPES);
-
-    function isAnchorType(layerType) {
-        return ALWAYS_ANCHOR_TYPES.indexOf((layerType || '').toLowerCase()) >= 0;
-    }
+    // Types that are always treated as hard anchors regardless of ratio
+    var HARD_ANCHOR_TYPES = ['swim', 'lunch', 'snack', 'snacks', 'dismissal'];
 
     function needsChangeBuffer(layerType) {
         return CHANGE_BUFFER_TYPES.indexOf((layerType || '').toLowerCase()) >= 0;
     }
 
+    function isHardAnchor(layerType) {
+        return HARD_ANCHOR_TYPES.indexOf((layerType || '').toLowerCase()) >= 0;
+    }
+
+    // Duration of the activity slot itself (not the window)
     function getLayerDuration(layer) {
-        return layer.periodMin || layer.durationMin || layer.duration ||
-            ((layer.endMin || 0) - (layer.startMin || 0)) || 30;
+        return layer.durationMin || layer.periodMin || layer.duration || 30;
+    }
+
+    // Max duration (upper bound) of the activity slot
+    function getLayerDurationMax(layer) {
+        return layer.durationMax || layer.durationMin || layer.periodMin || layer.duration || getLayerDuration(layer);
+    }
+
+    // Window size = endMin - startMin
+    function getWindowSize(layer) {
+        var s = layer.startMin != null ? layer.startMin : parseTime(layer.startTime);
+        var e = layer.endMin != null ? layer.endMin : parseTime(layer.endTime);
+        if (s == null || e == null) return 0;
+        return Math.max(0, e - s);
+    }
+
+    // ── Placement classification ─────────────────────────────────────────
+    // PINNED:      duration >= window  (or hard anchor type)
+    //              → locked slot at startMin, fills window exactly
+    // SOFT-PINNED: duration / window >= 0.6  (slot is close to window size)
+    //              → locked slot placed at earliest free spot in window
+    // FILLER:      duration / window < 0.6
+    //              → unlocked slot, solver can place within window
+    var SOFT_PIN_RATIO = 0.6; // if duration >= 60% of window → soft-pinned
+
+    function classifyLayer(layer) {
+        var layerType = (layer.type || layer.event || 'activity').toLowerCase();
+
+        // Hard anchor types are always PINNED regardless of ratio
+        if (isHardAnchor(layerType)) return 'pinned';
+
+        var windowSize = getWindowSize(layer);
+        if (windowSize <= 0) return 'filler'; // no window → treat as filler
+
+        var maxDur = getLayerDurationMax(layer);
+
+        // pinExact flag overrides ratio
+        if (layer.pinExact || layer.pinned) return 'pinned';
+        // op='=' with duration >= window → pinned
+        var op = layer.op || layer.operator || '>=';
+        if ((op === '=' || op === '==') && maxDur >= windowSize) return 'pinned';
+
+        var ratio = maxDur / windowSize;
+        if (ratio >= 1.0) return 'pinned';
+        if (ratio >= SOFT_PIN_RATIO) return 'soft-pinned';
+        return 'filler';
     }
 
     function getChangeBufferDuration() {
@@ -140,13 +181,21 @@
     // =========================================================================
     // PHASE 0: COMPILE RULES FROM LAYERS
     // =========================================================================
-    // Converts raw layer objects into typed rule objects that the placement
-    // phases can work with.
+    // Classifies each layer by its duration-to-window ratio:
+    //
+    //   PINNED:      duration >= window  OR hard anchor type (swim/lunch/snacks/dismissal)
+    //                → locked slot stamped at startMin, full window width
+    //   SOFT-PINNED: duration / window >= 0.6
+    //                → locked slot, placed at earliest free spot within window
+    //   FILLER:      duration / window < 0.6
+    //                → unlocked slot within window, solver picks activity
+    //
+    // All three produce anchorRules (locked) or windowedRules (solver-fillable).
 
     function compileRules(layers, divName, dayName) {
-        var anchorRules = [];      // fixed-time: swim, lunch, snack, dismissal
-        var windowedRules = [];    // time-windowed type blocks
-        var frequencyRules = [];   // "X of type Y per day" rules
+        var anchorRules = [];      // locked slots (pinned + soft-pinned)
+        var windowedRules = [];    // solver-fillable slots within a time window
+        var frequencyRules = [];   // "N of type T per day" rules (no time window)
 
         layers.forEach(function (layer) {
             var grade = layer.grade || layer.division || '_all';
@@ -161,49 +210,47 @@
 
             var layerType = (layer.type || layer.event || 'activity').toLowerCase();
             var startMin = layer.startMin != null ? layer.startMin : parseTime(layer.startTime);
-            var endMin = layer.endMin != null ? layer.endMin : parseTime(layer.endTime);
+            var endMin   = layer.endMin   != null ? layer.endMin   : parseTime(layer.endTime);
             var duration = getLayerDuration(layer);
+            var windowSize = (startMin != null && endMin != null) ? Math.max(0, endMin - startMin) : 0;
 
-            if (isAnchorType(layerType)) {
-                // Windowed anchors (snacks): short slot placed anywhere within window.
-                // duration = the activity duration (e.g. 10min), NOT the full window.
-                // Exact anchors (lunch, dismissal, swim): placed at startMin, duration wide.
-                var isWindowed = WINDOWED_ANCHOR_TYPES.indexOf(layerType) >= 0;
-                var anchorDuration = isWindowed
-                    ? (layer.periodMin || layer.durationMin || layer.duration || 10)
-                    : (endMin != null && startMin != null && !isWindowed)
-                        ? (endMin - startMin)
-                        : duration;
+            var classification = classifyLayer(layer);
+
+            if (classification === 'pinned') {
+                // Locked slot spanning the full window (duration == windowSize)
+                var pinnedDur = windowSize > 0 ? windowSize : duration;
                 anchorRules.push({
                     id: layer.id || uid(),
                     layerType: layerType,
                     event: layer.event || layerType,
                     startMin: startMin,
                     endMin: endMin,
-                    duration: anchorDuration,
-                    windowMin: startMin,   // earliest placement
-                    windowMax: endMin,     // latest end time
-                    isWindowed: isWindowed,
-                    pinExact: !isWindowed,
+                    duration: pinnedDur,
+                    windowMin: startMin,
+                    windowMax: endMin,
+                    placement: 'pinned',    // at startMin, full width
                     _layer: layer
                 });
-            } else if (startMin != null && endMin != null && layer.pinExact) {
-                // Pinned non-anchor (exact time window)
-                windowedRules.push({
+
+            } else if (classification === 'soft-pinned') {
+                // Locked slot of own duration, placed at earliest free spot in window
+                anchorRules.push({
                     id: layer.id || uid(),
                     layerType: layerType,
                     event: layer.event || layerType,
                     startMin: startMin,
                     endMin: endMin,
                     duration: duration,
-                    pinExact: true,
-                    _scarce: layer.scarce || layer._scarce || false,
+                    windowMin: startMin,
+                    windowMax: endMin,
+                    placement: 'soft-pinned',  // floating within window, locked
                     _layer: layer
                 });
+
             } else if (startMin != null && endMin != null) {
-                // Time window (flexible placement within window)
-                var qty = layer.quantity || 1;
-                var op = layer.operator || '>=';
+                // Filler: solver-fillable slot within window
+                var qty = layer.qty || layer.quantity || 1;
+                var op  = layer.op  || layer.operator  || '>=';
                 windowedRules.push({
                     id: layer.id || uid(),
                     layerType: layerType,
@@ -216,15 +263,16 @@
                     _scarce: layer.scarce || layer._scarce || false,
                     _layer: layer
                 });
-            } else if (layer.quantity) {
+
+            } else if (layer.qty || layer.quantity) {
                 // Quantity-only rule (no time window)
                 frequencyRules.push({
                     id: layer.id || uid(),
                     layerType: layerType,
                     event: layer.event || null,
                     duration: duration,
-                    quantity: layer.quantity,
-                    operator: layer.operator || '>=',
+                    quantity: layer.qty || layer.quantity,
+                    operator: layer.op || layer.operator || '>=',
                     _layer: layer
                 });
             }
@@ -234,156 +282,122 @@
     }
 
     // =========================================================================
-    // PHASE 1: PLACE ANCHORS (swim staggered, others simultaneous)
+    // PHASE 1: PLACE ANCHORS
     // =========================================================================
-    // Anchors (swim, lunch, snack, dismissal) are placed first as locked slots.
+    // Places all anchor rules (pinned + soft-pinned) as locked slots.
     //
-    // Swim is special: staggered across bunks with change buffers.
-    // All other anchors are simultaneous across all bunks.
+    //   SWIM:        staggered per-bunk with pre/post change buffers
+    //   PINNED:      simultaneous, at startMin, full window width
+    //   SOFT-PINNED: simultaneous, own duration, at earliest free spot in window
 
     function placeAnchors(timelines, anchorRules, divName, dayName) {
         var changeBuf = getChangeBufferDuration();
-        var bunks = timelines.map(function (tl) { return tl.bunkName; });
 
         anchorRules.forEach(function (rule) {
             var isSwim = rule.layerType === 'swim';
 
             if (isSwim) {
                 // ── STAGGERED SWIM ──────────────────────────────────────────
-                // Sort bunks by number (Bunk 1, Bunk 2, ...) for deterministic order.
                 var sortedTimelines = timelines.slice().sort(function (a, b) {
                     var na = parseInt(a.bunkName.replace(/\D/g, '')) || 0;
                     var nb = parseInt(b.bunkName.replace(/\D/g, '')) || 0;
                     return na - nb;
                 });
 
-                // cursor = earliest we can place the next bunk's swim
-                var cursor = rule.startMin;
+                var cursor   = rule.startMin;
                 var swimWindow = rule.endMin;
-                var swimDur = rule.duration;
+                var swimDur  = rule.duration;
 
                 sortedTimelines.forEach(function (tl) {
-                    // Pre-change: if there's a change buffer before swim
-                    var preStart = cursor - changeBuf;
-                    var preEnd = cursor;
-
-                    // Check if pre-change fits (don't go before day start)
-                    var dayStart = tl.dayStart;
-                    if (changeBuf > 0 && preStart >= dayStart && !hasConflict(tl.slots, preStart, preEnd)) {
+                    // Pre-change
+                    if (changeBuf > 0 && cursor - changeBuf >= tl.dayStart &&
+                        !hasConflict(tl.slots, cursor - changeBuf, cursor)) {
                         tl.slots.push({
-                            startMin: preStart,
-                            endMin: preEnd,
-                            activity: 'Change',
-                            activityType: 'change',
-                            locked: true,
-                            source: 'swim-pre-change',
-                            _ruleId: rule.id
+                            startMin: cursor - changeBuf,
+                            endMin:   cursor,
+                            activity: 'Change', activityType: 'change',
+                            locked: true, source: 'swim-pre-change', _ruleId: rule.id
                         });
                     }
 
-                    // Swim slot
+                    // Swim — compress if overflows window
                     var swimStart = cursor;
-                    var swimEnd = swimStart + swimDur;
-
-                    // If swim overflows window, try to compress
-                    if (swimEnd > swimWindow) {
-                        swimStart = swimWindow - swimDur;
-                        swimEnd = swimWindow;
-                    }
+                    var swimEnd   = swimStart + swimDur;
+                    if (swimEnd > swimWindow) { swimStart = swimWindow - swimDur; swimEnd = swimWindow; }
 
                     tl.slots.push({
-                        startMin: swimStart,
-                        endMin: swimEnd,
-                        activity: rule.event || 'Swim',
-                        activityType: 'swim',
-                        locked: true,
-                        source: 'anchor-swim',
-                        _ruleId: rule.id
+                        startMin: swimStart, endMin: swimEnd,
+                        activity: rule.event || 'Swim', activityType: 'swim',
+                        locked: true, source: 'anchor-swim', _ruleId: rule.id
                     });
 
                     // Post-change
                     if (changeBuf > 0) {
                         tl.slots.push({
-                            startMin: swimEnd,
-                            endMin: swimEnd + changeBuf,
-                            activity: 'Change',
-                            activityType: 'change',
-                            locked: true,
-                            source: 'swim-post-change',
-                            _ruleId: rule.id
+                            startMin: swimEnd, endMin: swimEnd + changeBuf,
+                            activity: 'Change', activityType: 'change',
+                            locked: true, source: 'swim-post-change', _ruleId: rule.id
                         });
                     }
 
-                    // Advance cursor: next bunk starts after this bunk's post-change
                     cursor = swimEnd + changeBuf;
                 });
 
                 log('Swim staggered across ' + sortedTimelines.length + ' bunks. ' +
                     'Window: ' + fmtTime(rule.startMin) + '-' + fmtTime(rule.endMin));
 
-            } else if (rule.isWindowed) {
-                // ── WINDOWED ANCHOR (snacks) ────────────────────────────────
-                // Place a short locked slot (rule.duration) at the earliest
-                // free position within the window [windowMin, windowMax].
+            } else if (rule.placement === 'pinned') {
+                // ── SIMULTANEOUS PINNED (full window width) ─────────────────
                 timelines.forEach(function (tl) {
+                    tl.slots.push({
+                        startMin: rule.startMin,
+                        endMin:   rule.startMin + rule.duration,
+                        activity: rule.event || rule.layerType,
+                        activityType: rule.layerType,
+                        locked: true, source: 'anchor-pinned', _ruleId: rule.id
+                    });
+                });
+                log('Anchor "' + rule.layerType + '" placed simultaneously for all bunks at ' +
+                    fmtTime(rule.startMin) + ' (' + rule.duration + 'min)');
+
+            } else {
+                // ── SIMULTANEOUS SOFT-PINNED (own duration, earliest free spot) ─
+                timelines.forEach(function (tl) {
+                    var dur    = rule.duration;
                     var wStart = rule.windowMin;
-                    var wEnd = rule.windowMax;
-                    var dur = rule.duration || 10;
-                    // Find earliest conflict-free spot in window
-                    var placed = false;
+                    var wEnd   = rule.windowMax;
                     var cursor = wStart;
+                    var placed = false;
+
                     while (cursor + dur <= wEnd) {
                         if (!hasConflict(tl.slots, cursor, cursor + dur)) {
                             tl.slots.push({
-                                startMin: cursor,
-                                endMin: cursor + dur,
+                                startMin: cursor, endMin: cursor + dur,
                                 activity: rule.event || rule.layerType,
                                 activityType: rule.layerType,
-                                locked: true,
-                                source: 'anchor-windowed-' + rule.layerType,
-                                _ruleId: rule.id
+                                locked: true, source: 'anchor-soft-pinned', _ruleId: rule.id
                             });
                             placed = true;
                             break;
                         }
-                        cursor += 5; // step forward 5 min
+                        cursor += 5;
                     }
+
                     if (!placed) {
-                        // Fallback: place at window start regardless of conflict
+                        // Fallback: stamp at window start
                         tl.slots.push({
-                            startMin: wStart,
-                            endMin: wStart + dur,
+                            startMin: wStart, endMin: wStart + dur,
                             activity: rule.event || rule.layerType,
                             activityType: rule.layerType,
-                            locked: true,
-                            source: 'anchor-windowed-fallback',
-                            _ruleId: rule.id
+                            locked: true, source: 'anchor-soft-pinned-fallback', _ruleId: rule.id
                         });
                     }
                 });
-                log('Anchor "' + rule.layerType + '" (windowed ' + rule.duration + 'min) placed within ' +
+                log('Anchor "' + rule.layerType + '" (soft-pinned ' + rule.duration + 'min) placed within ' +
                     fmtTime(rule.windowMin) + '-' + fmtTime(rule.windowMax));
-
-            } else {
-                // ── SIMULTANEOUS EXACT ANCHOR (lunch, dismissal) ────────────
-                // Placed at exact startMin, spanning its own duration.
-                timelines.forEach(function (tl) {
-                    tl.slots.push({
-                        startMin: rule.startMin,
-                        endMin: rule.startMin + rule.duration,
-                        activity: rule.event || rule.layerType,
-                        activityType: rule.layerType,
-                        locked: true,
-                        source: 'anchor-' + rule.layerType,
-                        _ruleId: rule.id
-                    });
-                });
-                log('Anchor "' + rule.layerType + '" placed simultaneously for all bunks at ' +
-                    fmtTime(rule.startMin));
             }
         });
     }
-
     function hasConflict(slots, startMin, endMin) {
         return slots.some(function (s) {
             return overlaps(s.startMin, s.endMin, startMin, endMin);
