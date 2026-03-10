@@ -266,10 +266,7 @@
                 if (result?.divisionTimes && !window._divisionTimesLocked) {
                     // ★★★ v1.4: Don't overwrite per-bunk divisionTimes with stale localStorage ★★★
                     var _currentHasPerBunk = window.divisionTimes && Object.values(window.divisionTimes).some(function(dt) { return dt && dt._isPerBunk; });
-                    if (!_currentHasPerBunk) {
-                        window.divisionTimes = window.DivisionTimesSystem?.deserialize(result.divisionTimes) || {};
-                        log('Restored divisionTimes from localStorage');
-                    }
+                     if (!_currentHasPerBunk) {
                 }
 
                 return result;
