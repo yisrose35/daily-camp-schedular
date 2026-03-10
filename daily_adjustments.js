@@ -2903,6 +2903,7 @@ if (isAutoMode) {
             var divisions = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
             window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(result.skeleton, divisions);
             console.log('[Optimizer] Built divisionTimes for', Object.keys(window.divisionTimes).length, 'divisions');
+            window._autoDivisionTimesBuilt = true; // ★ prevent STEP 1 from overwriting
         }
         
         // ★★★ v3.2: Store bunk overrides where scheduler_core_main can find them ★★★
