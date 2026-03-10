@@ -2870,8 +2870,24 @@ if (isAutoMode) {
     if (!window.AutoBuildEngine) { await daShowAlert("Error: AutoBuildEngine not loaded."); return; }
     
     // Flatten daAutoLayers (keyed by grade) into a single layers array
-    const allLayers = [];
-    Object.keys(daAutoLayers).forEach(grade => {            (daAutoLayers[grade] || []).forEach(layer => {
+    // ★ Ensure daAutoLayers is loaded from localStorage if empty
+if (!daAutoLayers || Object.keys(daAutoLayers).length === 0) {
+    try {
+        var dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        var stored = localStorage.getItem('daAutoLayers_' + dateKey) 
+            || localStorage.getItem('daAutoLayers');
+        if (stored) {
+            daAutoLayers = JSON.parse(stored);
+            console.log('[Optimizer] Loaded daAutoLayers from localStorage:', Object.keys(daAutoLayers));
+        }
+    } catch(e) {
+        console.warn('[Optimizer] Failed to load daAutoLayers:', e);
+    }
+}
+
+const allLayers = [];
+Object.keys(daAutoLayers).forEach(grade => {          
+      (daAutoLayers[grade] || []).forEach(layer => {
                 allLayers.push({ ...layer, grade: grade });
             });
         });
