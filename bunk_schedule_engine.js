@@ -1492,34 +1492,49 @@ if (sdur && sdur > duration + 5) return;  // special is too long for slot
             constructBunkTimeline(timeline, requirements, rules, resourceTracker, warnings);
         });
 
-        // ── Phase 5: Conflict resolution ──────────────────────────────────
-        resolveResourceConflicts(timelines, resourceTracker, warnings);
+        // ── Phase 5-7: REMOVED ────────────────────────────────────────────
+        // Conflict resolution, activity assignment, and gap fill are now
+        // handled by the existing total_solver_engine pipeline.
+        // BunkScheduleEngine is responsible ONLY for placement decisions
+        // (when and what type). The solver decides which specific activity
+        // and field goes in each slot.
 
-        // ── Phase 6: Gap fill + specific activity assignment ──────────────
-        timelines.forEach(function (timeline) {
-            fillGapsAndAssignActivities(timeline, resourceTracker, warnings);
+        // ── Build output bunkTimelines ────────────────────────────────────
+        var bunkTimelines = {};
+        timelines.forEach(function(tl) {
+            bunkTimelines[tl.bunkName] = {
+                bunkName: tl.bunkName,
+                divisionName: tl.divisionName,
+                dayStart: tl.dayStart,
+                dayEnd: tl.dayEnd,
+                slots: tl.slots.map(function(s) {
+                    return {
+                        startMin: s.startMin,
+                        endMin: s.endMin,
+                        activity: s.activity || null,
+                        activityType: s.activityType,
+                        field: s.field || null,
+                        locked: s.locked || false,
+                        source: s.source,
+                        _ruleId: s._ruleId
+                    };
+                })
+            };
         });
-
-        // ── Phase 7: Validate + build output ──────────────────────────────
-        var output = validateAndBuildOutput(timelines, rulesByDiv, warnings);
-
-        // ── Update rotation history ────────────────────────────────────────
-        updateHistoryFromTimelines(output.bunkTimelines, dateStr);
 
         var elapsed = Math.round(performance.now() - t0);
         log('Build complete in ' + elapsed + 'ms. ' +
-            Object.keys(output.bunkTimelines).length + ' bunks scheduled. ' +
-            warnings.length + ' warnings.');
+            Object.keys(bunkTimelines).length + ' bunks. ' +
+            warnings.length + ' warnings. → handing off to solver.');
 
         if (warnings.length > 0) {
             log('Warnings:');
-            warnings.forEach(function (w) { log('  ⚠ ' + w); });
+            warnings.forEach(function(w) { log('  ⚠ ' + w); });
         }
 
         return {
-            bunkTimelines: output.bunkTimelines,
+            bunkTimelines: bunkTimelines,
             warnings: warnings,
-            diagnostics: output.diagnostics,
             _buildDate: dateStr,
             _buildVersion: VERSION,
             _elapsedMs: elapsed,
