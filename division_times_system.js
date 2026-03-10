@@ -638,7 +638,7 @@
                 // pass triggers this event. fixAllBunkSlotCounts modifies
                 // _perBunkSlots mid-loop which would corrupt refinement state.
                
-                }
+                
                 const slotFixes = fixAllBunkSlotCounts();
                 const pinnedFills = fillMissingPinnedSlots();
                 console.log(`[DivisionTimes] Post-generation: ${slotFixes.fixed} slot resizes, ${pinnedFills} pinned fills`);
