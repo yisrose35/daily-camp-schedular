@@ -248,8 +248,9 @@
         layers.forEach(function (layer) {
             if (!layer || !layer.type) return;
 
-            var isAnchor = layer.pinExact === true || layer.type === 'dismissal';
-            var duration = layer.periodMin || layer.durationMin || null;
+           var windowSize = (layer.endMin != null && layer.startMin != null) ? layer.endMin - layer.startMin : 0;
+var isAnchor = isLayerPinned(layer);
+var duration = layer.periodMin || layer.durationMin || (windowSize > 0 ? windowSize : null) || getLayerDurationMax(layer);
 
             if (!duration || duration <= 0) {
                 warn('Layer "' + (layer.event || layer.type) + '" has no duration — skipped');
