@@ -957,6 +957,7 @@
             window._preGenClearActive = true;
 
             console.log('[STEP 0] ★ WIPE COMPLETE — generating from clean slate');
+                }
         }
 
         // ★★★ 1. AUTO-DETECT ALLOWED DIVISIONS ★★★
