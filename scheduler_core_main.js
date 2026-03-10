@@ -1245,11 +1245,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
         console.log('[STEP 1] Building division-specific time slots...');
         
-        if (window.DivisionTimesSystem) {
-            window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(manualSkeleton, divisions);
-            console.log(`[STEP 1] Built divisionTimes for ${Object.keys(window.divisionTimes).length} divisions`);
-        
+       if (window.DivisionTimesSystem) {
+            if (window._autoDivisionTimesBuilt) {
+                console.log('[STEP 1] Skipping rebuild — auto pipeline already built divisionTimes');
+                window._autoDivisionTimesBuilt = false;
+            } else {
+                window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(manualSkeleton, divisions);
+                console.log(`[STEP 1] Built divisionTimes for ${Object.keys(window.divisionTimes).length} divisions`);
+            }
         } else {
+           
             console.warn('[STEP 1] DivisionTimesSystem not loaded, using legacy grid');
             const timePoints = new Set([540, 960]);
             manualSkeleton.forEach(item => {
