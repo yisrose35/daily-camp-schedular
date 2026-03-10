@@ -89,16 +89,25 @@
         return HARD_ANCHOR_TYPES.indexOf((layerType || '').toLowerCase()) >= 0;
     }
 
-    // Duration of the activity slot itself (not the window).
-    // Prefer periodMin — the DAW sets this to the activity run-time.
-    // durationMin on anchor layers often equals the full window width,
-    // which would cause a 10-min snack to be classified as pinned.
+    // Default activity durations for anchor types whose slot duration is NOT
+    // the same as their window (snacks is 10min inside a 30-60min window).
+    // All other anchors (swim, lunch, dismissal) fill their full window.
+    var ANCHOR_DEFAULT_DURATIONS = {
+        'snack': 10, 'snacks': 10
+    };
+
+    // Duration of the activity slot itself.
+    // For anchor types with a known default, use that instead of the window width,
+    // because the DAW stores periodMin = window width for all anchors.
     function getLayerDuration(layer) {
+        var lt = (layer.type || layer.event || '').toLowerCase();
+        if (ANCHOR_DEFAULT_DURATIONS[lt] != null) return ANCHOR_DEFAULT_DURATIONS[lt];
         return layer.periodMin || layer.durationMin || layer.duration || 30;
     }
 
-    // Max duration — same priority: periodMin before durationMin.
     function getLayerDurationMax(layer) {
+        var lt = (layer.type || layer.event || '').toLowerCase();
+        if (ANCHOR_DEFAULT_DURATIONS[lt] != null) return ANCHOR_DEFAULT_DURATIONS[lt];
         return layer.durationMax || layer.periodMin || layer.durationMin || layer.duration || getLayerDuration(layer);
     }
 
