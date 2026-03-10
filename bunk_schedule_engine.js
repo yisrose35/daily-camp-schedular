@@ -840,7 +840,7 @@ var isAnchor = ALWAYS_ANCHOR_TYPES.indexOf(lTypeLower) >= 0 || isLayerPinned(lay
     }
 
     // Score a gap for placing an activity — prefers natural day flow
-    function chooseBestGap(fittingGaps, duration, timeline, activityHint) {
+     function chooseBestGap(fittingGaps, duration, timeline, activityHint) {
         if (fittingGaps.length === 0) return null;
         if (fittingGaps.length === 1) return fittingGaps[0];
 
@@ -875,8 +875,20 @@ var isAnchor = ALWAYS_ANCHOR_TYPES.indexOf(lTypeLower) >= 0 || isLayerPinned(lay
         });
 
         scored.sort(function (a, b) { return b.score - a.score; });
-        return scored[0].gap;
+
+        // ★★★ BUNK JITTER: Each bunk picks a different gap from the ranked list ★★★
+        // Without this, all bunks in a division pick the same #1 gap (e.g. 12:40pm),
+        // overwhelming field capacity. With jitter, bunk 1 picks gap A, bunk 2 picks
+        // gap B, bunk 3 picks gap C, naturally spreading load across time windows.
+        var bunkNum = parseInt((timeline.bunkName || '').match(/\d+/)?.[0]) || 0;
+        var rotatedIdx = bunkNum % scored.length;
+        return scored[rotatedIdx].gap;
     }
+
+
+
+
+
 
     // =========================================================================
     // PHASE 5 — CROSS-BUNK RESOURCE CONFLICT RESOLUTION
@@ -1040,9 +1052,9 @@ var isAnchor = ALWAYS_ANCHOR_TYPES.indexOf(lTypeLower) >= 0 || isLayerPinned(lay
                 if (!isTimeAvailableForActivity(field.name, startMin, endMin)) return;
 
                 (field.activities || []).forEach(function (act) {
-                    var actDur = getActivityDuration(act);
-                    if (actDur && Math.abs(actDur - duration) > 15) return; // duration mismatch
-
+    var actDur = getActivityDuration(act);
+    // Only reject if the sport has a KNOWN duration that exceeds the slot
+    if (actDur && actDur > duration + 10) return; // sport too long for slot
                     var score = calcRotationScore(bunkName, act);
                     if (score === Infinity) return; // blocked
 
@@ -1078,10 +1090,14 @@ if (Array.isArray(special.availableDays) && special.availableDays.length > 0) {
     // in calcRotationScore (returns Infinity for same-day repeats).
 }
 
-                // Check duration
-                var sdur = getActivityDuration(special.name);
-                if (!sdur) return;
-                if (Math.abs(sdur - duration) > 15) return;
+               // Check duration — use slot duration as fallback if special has no configured duration
+var sdur = getActivityDuration(special.name);
+var effectiveDur = sdur || duration; // If no duration configured, fit to slot
+
+// Only reject if the special has a KNOWN duration that's way too long for the slot
+// (a 40min special can't meaningfully run in 20min, but a 30min one can adapt)
+if (sdur && sdur > duration + 5) return;  // special is too long for slot
+// Note: we allow specials SHORTER than the slot — remaining time becomes gap
 
                 // Check capacity
                 var capacity = getActivityCapacity(special.name);
