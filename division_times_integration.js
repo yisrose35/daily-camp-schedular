@@ -234,48 +234,45 @@
     // =========================================================================
 
     function patchLocalStorage() {
-        log('Patching localStorage handlers...');
+    log('Patching localStorage handlers...');
 
-        // Patch saveCurrentDailyData if it exists
-        const originalSaveCurrentDailyData = window.saveCurrentDailyData;
+    const originalSaveCurrentDailyData = window.saveCurrentDailyData;
 
-        if (typeof originalSaveCurrentDailyData === 'function') {
-            window.saveCurrentDailyData = function(key, value) {
-                // If saving full data, include divisionTimes
-                if (key === undefined && typeof value === 'object') {
-                    value.divisionTimes = window.DivisionTimesSystem?.serialize(window.divisionTimes) || {};
-                }
-                
-                return originalSaveCurrentDailyData.call(this, key, value);
-            };
-        }
-
-        // Patch loadCurrentDailyData if it exists
-        const originalLoadCurrentDailyData = window.loadCurrentDailyData;
-
-        if (typeof originalLoadCurrentDailyData === 'function') {
-            window.loadCurrentDailyData = function() {
-                const result = originalLoadCurrentDailyData ? 
-                    originalLoadCurrentDailyData.call(this) : {};
-
-                // ★★★ v1.3.1 FIX: Don't overwrite divisionTimes during generation ★★★
-                // During schedule generation, divisionTimes is freshly built with
-                // proper split-half slots. The localStorage version is stale and
-                // lacks split expansion, so restoring it mid-generation breaks
-                // slot lookups for split tiles and causes mis-indexed pinned events.
-                if (result?.divisionTimes && !window._divisionTimesLocked) {
-                    // ★★★ v1.4: Don't overwrite per-bunk divisionTimes with stale localStorage ★★★
-                    var _currentHasPerBunk = window.divisionTimes && Object.values(window.divisionTimes).some(function(dt) { return dt && dt._isPerBunk; });
-                     if (!_currentHasPerBunk) {
-                }
-
-                return result;
-            };
-        }
-
-        log('✅ Patched localStorage handlers');
+    if (typeof originalSaveCurrentDailyData === 'function') {
+        window.saveCurrentDailyData = function(key, value) {
+            if (key === undefined && typeof value === 'object') {
+                value.divisionTimes = window.DivisionTimesSystem?.serialize(window.divisionTimes) || {};
+            }
+            return originalSaveCurrentDailyData.call(this, key, value);
+        };
     }
 
+    const originalLoadCurrentDailyData = window.loadCurrentDailyData;
+
+    if (typeof originalLoadCurrentDailyData === 'function') {
+        window.loadCurrentDailyData = function() {
+            const result = originalLoadCurrentDailyData ?
+                originalLoadCurrentDailyData.call(this) : {};
+
+            // ★★★ v1.3.1 FIX: Don't overwrite divisionTimes during generation ★★★
+            // During schedule generation, divisionTimes is freshly built with
+            // proper split-half slots. The localStorage version is stale and
+            // lacks split expansion, so restoring it mid-generation breaks
+            // slot lookups for split tiles and causes mis-indexed pinned events.
+            if (result?.divisionTimes && !window._divisionTimesLocked) {
+                // ★★★ v1.4: Don't overwrite per-bunk divisionTimes with stale localStorage ★★★
+                var _currentHasPerBunk = window.divisionTimes && Object.values(window.divisionTimes).some(function(dt) { return dt && dt._isPerBunk; });
+                if (!_currentHasPerBunk) {
+                    window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(result.divisionTimes) || result.divisionTimes;
+                }
+            }
+
+            return result;
+        };
+    }
+
+    log('✅ Patched localStorage handlers');
+}
     // =========================================================================
     // PATCH: UI RENDERING
     // =========================================================================
