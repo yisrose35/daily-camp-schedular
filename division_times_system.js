@@ -632,13 +632,12 @@
    function setupGenerationCompleteHook() {
         window.addEventListener('campistry-generation-complete', function() {
             setTimeout(() => {
+                if (window._refinementInProgress) return;
                 // Skip if DayPlanEngine's refinement loop is running.
                 // refine() fires runSkeletonOptimizer() multiple times; each
                 // pass triggers this event. fixAllBunkSlotCounts modifies
                 // _perBunkSlots mid-loop which would corrupt refinement state.
-                if (window._refinementInProgress) {
-                    console.log('[DivisionTimes] Skipping post-gen fix — refinement in progress');
-                    return;
+               
                 }
                 const slotFixes = fixAllBunkSlotCounts();
                 const pinnedFills = fillMissingPinnedSlots();
