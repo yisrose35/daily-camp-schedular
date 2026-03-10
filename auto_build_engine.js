@@ -991,7 +991,7 @@ function buildForGrade(params) {
             // Pure sport fill
             while (cursor < gap.endMin) {
                 var rem = gap.endMin - cursor;
-                if (rem < minActivityDur) break;
+                if (rem < sportDurMin) break;
                 var bDur = Math.min(sportDurMax, rem);
                 if (bDur < sportDurMin && rem >= sportDurMin) bDur = sportDurMin;
                 if (bDur < minActivityDur) break;
