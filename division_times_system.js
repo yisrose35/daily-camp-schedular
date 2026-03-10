@@ -264,7 +264,9 @@
 
             // ★★★ v1.4 FIX: Use time-boundary approach to support per-bunk auto-build blocks
 // consolidateBlocks breaks when per-bunk blocks legitimately overlap each other
-const hasBunkSpecificBlocks = withExpandedSplits.some(b => b._bunk);
+const hasBunkSpecificBlocks = withExpandedSplits.some((a, i) =>
+    withExpandedSplits.some((b, j) => j > i && a.startMin < b.endMin && a.endMin > b.startMin)
+);
 
 let slotsForDiv;
 
