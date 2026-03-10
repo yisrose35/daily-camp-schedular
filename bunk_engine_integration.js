@@ -90,8 +90,11 @@
             onError('BunkScheduleEngine not loaded');
             return;
         }
-        if (!window.Solver?.solveSchedule) {
-            onError('total_solver_engine not loaded (window.Solver.solveSchedule missing)');
+        // total_solver_engine exposes its solver via window._SolverInternals.Solver
+        // (Part 1 sets _SolverInternals, Part 2 attaches solveSchedule to it)
+        var Solver = window._SolverInternals?.Solver;
+        if (!Solver?.solveSchedule) {
+            onError('total_solver_engine not loaded (window._SolverInternals.Solver.solveSchedule missing — ensure both part1 and part2 are loaded)');
             return;
         }
 
@@ -201,7 +204,7 @@
 
             // ── 8. Run the solver ─────────────────────────────────────────
             log('Handing off to Solver.solveSchedule()...');
-            window.Solver.solveSchedule(activityBlocks, config);
+            Solver.solveSchedule(activityBlocks, config);
 
             // ── 9. Update rotation history ────────────────────────────────
             window.RotationEngine?.clearHistoryCache?.();
