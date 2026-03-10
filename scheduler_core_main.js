@@ -833,7 +833,10 @@
         // Before ANY generation, wipe today's schedule for the divisions being generated.
         // Schedulers only wipe THEIR bunks. Owners/admins wipe everything.
         // This prevents stale data (old leagues, ghost assignments) from bleeding in.
-        {
+        {// ★ AUTO BUILD: Skip wipe — AutoBuildPrep already did a full wipe
+            if (window._skipGenerationWipe) {
+                console.log('[STEP 0] ⏭️ Skipping wipe — AutoBuildPrep already wiped');
+            } else {
             const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
             const role = window.AccessControl?.getCurrentRole?.() || 
                         window.CampistryDB?.getRole?.() || 'owner';
