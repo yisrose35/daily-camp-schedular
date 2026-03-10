@@ -229,7 +229,7 @@ function getRankedSpecials(bunkName, availableNames, fallbackDuration) {
             name: name,
             score: getRotationScore(bunkName, name),
             duration: dur || fallbackDuration || 30,
-            _durationKnown: dur !== null && dur > 0
+           _durationKnown: true  // always known — fallbackDuration covers the undefined case
         };
     });
     ranked.sort(function(a, b) { return a.score - b.score; });
@@ -808,11 +808,12 @@ function buildForGrade(params) {
             if (tw && !overlaps(gap.startMin, gap.endMin, tw.startMin, tw.endMin)) return;
 
             // ★★★ v5.1: Resolve duration using the fixed getSpecialDuration
-            var resolvedDur = getSpecialDuration(cfg.name);
-            if (!resolvedDur || resolvedDur <= 0) {
-                warn('    Skipping "' + cfg.name + '" — duration unknown, cannot size block correctly');
-                return;
-            }
+           // AFTER:
+var resolvedDur = getSpecialDuration(cfg.name);
+if (!resolvedDur || resolvedDur <= 0) {
+    resolvedDur = specialDurMin;
+    warn('    "' + cfg.name + '" has no duration configured — using layer duration (' + resolvedDur + 'min)');
+}
 
             // ★★★ v5.1: Only include if the special's duration fits within this gap
             if (resolvedDur > gapDur) return;
