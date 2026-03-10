@@ -2965,7 +2965,7 @@ Object.keys(daAutoLayers).forEach(grade => {
     
 
     // ★★★ PRE-GENERATION CLEAR (v4 — FULL WIPE) ★★★
-  const dateKey = window.currentScheduleDate;
+  
   console.log('[Optimizer] ★ PRE-GENERATION FULL WIPE for', dateKey);
 
   // 1. Clear window globals
