@@ -413,15 +413,18 @@
             return false;
         }
         
-        // Check maxUsage
-        const maxUsage = special.maxUsage || 0;
-        if (maxUsage === 0) return true; // No limit
+       // ★ Per-grade cap: grade-specific override takes precedence over global
+        const props2 = activityProps?.[special.name] || special.props || special;
+        let maxUsage = special.maxUsage || 0;
+        if (divisionName && props2.maxUsagePerGrade && props2.maxUsagePerGrade[divisionName] > 0) {
+            maxUsage = props2.maxUsagePerGrade[divisionName];
+        }
 
         const bunkHistory = historicalCounts[bunk] || {};
         const usedCount = bunkHistory[special.name] || 0;
-        
-        if (usedCount >= maxUsage) {
-            log(`      ${bunk}: maxed out ${special.name} (${usedCount}/${maxUsage})`);
+
+        if (maxUsage > 0 && usedCount >= maxUsage) {
+            log(`      ${bunk}: maxed out ${special.name} (${usedCount}/${maxUsage}${divisionName ? ' for ' + divisionName : ''})`);
             return false;
         }
         
@@ -455,10 +458,17 @@
         const sorted = [...usableSpecials].sort((a, b) => {
             const countA = bunkHistory[a.name] || 0;
             const countB = bunkHistory[b.name] || 0;
-            if (countA !== countB) return countA - countB;
+            // ★ Min frequency boost: activities where this bunk is below the floor
+            // are scored as if they have been used fewer times (higher priority)
+            const propsA = activityProps?.[a.name] || a;
+            const propsB = activityProps?.[b.name] || b;
+            const minFA = parseInt(propsA.minFrequency) || 0;
+            const minFB = parseInt(propsB.minFrequency) || 0;
+            const scoreA = countA - Math.max(0, minFA - countA) * 0.5;
+            const scoreB = countB - Math.max(0, minFB - countB) * 0.5;
+            if (scoreA !== scoreB) return scoreA - scoreB;
             return Math.random() - 0.5;
-        });
-        
+        });   
         return sorted[0];
     }
 
