@@ -1176,11 +1176,7 @@
                                     _committed: false
                                 });
                             }
-                        }
-                    }
-                } // end layers
-            } // end bunks
-        } // end grades
+                        
 
         log('[STEP 2.3] ✅ Tentative placement complete');
 
