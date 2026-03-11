@@ -1492,6 +1492,15 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       <button class="ms-daw-pop-op ${layer.op === '<=' ? 'active' : ''}" data-op="<=">≤</button>
       <input type="number" id="daw-pop-qty" value="${layer.qty}" min="1" max="10" style="width:50px;">
     </div>
+   ${layer.type === 'swim' ? `
+    <label>Max Per Bunk Per Week</label>
+    <div class="ms-daw-pop-row">
+      <button class="ms-daw-pop-op ms-daw-wop ${(layer.weeklyOp || '>=') === '>=' ? 'active' : ''}" data-wop=">=">≥</button>
+      <button class="ms-daw-pop-op ms-daw-wop ${layer.weeklyOp === '=' ? 'active' : ''}" data-wop="=">=</button>
+      <button class="ms-daw-pop-op ms-daw-wop ${layer.weeklyOp === '<=' ? 'active' : ''}" data-wop="<=">≤</button>
+      <input type="number" id="daw-pop-week-qty" value="${layer.timesPerWeek != null ? layer.timesPerWeek : ''}" min="1" max="7" style="width:50px;" placeholder="Any">
+      <span style="font-size:10px;color:#94a3b8;">days/wk</span>
+    </div>` : ''}
     <div class="ms-daw-pop-actions">      <button class="ms-daw-pop-btn ms-daw-pop-btn-save">Save</button>
       <button class="ms-daw-pop-btn ms-daw-pop-btn-del">Delete</button>
       <button class="ms-daw-pop-btn ms-daw-pop-btn-cancel">Close</button>
@@ -1526,9 +1535,21 @@ function showDAWPopover(bandEl, layer, grade, opts) {
     layer.durationMax = parseInt(popover.querySelector('#daw-pop-dur-max').value) || 50;
     layer.periodMin = layer.durationMin; // backward compat
     layer.qty = parseInt(popover.querySelector('#daw-pop-qty').value) || 1;
-    const activeOp = popover.querySelector('.ms-daw-pop-op.active');
+    const activeOp = popover.querySelector('.ms-daw-pop-op[data-op].active');
     if (activeOp) layer.op = activeOp.dataset.op;
-    
+
+    // Swim-only: Max Per Bunk Per Week
+    if (layer.type === 'swim') {
+      const activeWop = popover.querySelector('.ms-daw-wop[data-wop].active');
+      const weekQtyRaw = (popover.querySelector('#daw-pop-week-qty')?.value || '').trim();
+      const weekQtyVal = weekQtyRaw !== '' ? Math.max(1, Math.min(7, parseInt(weekQtyRaw) || 1)) : null;
+      layer.timesPerWeek = weekQtyVal;
+      layer.weeklyOp = weekQtyVal != null && activeWop ? activeWop.dataset.wop : '>=';
+    } else {
+      delete layer.timesPerWeek;
+      delete layer.weeklyOp;
+    }
+
     onSave();
     onRender();
   };
