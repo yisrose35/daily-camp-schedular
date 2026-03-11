@@ -616,6 +616,18 @@
         const leagueRotationTypes = ['league', 'sport', 'swim', 'special', 'slot', 'snacks'];
         const leagueGradeList = allGrades.filter(g => !allowedSet || allowedSet.has(String(g)));
 
+       // Pre-build a map of which grades share the same league
+        // so they get placed at the same time
+        const sharedLeagueTime = {}; // gradeName → placedStartMin (set when first grade in league is placed)
+        const gradeToLeagueName = {}; // gradeName → leagueName
+        leagueLayersToPlace.forEach(layer => {
+            const grade = layer.grade || layer.division;
+            const league = (window.masterLeagues || []).find(l =>
+                (l.divisions || []).includes(grade)
+            );
+            if (league) gradeToLeagueName[grade] = league.name;
+        });
+
         leagueLayersToPlace.forEach(layer => {
             const grade = layer.grade || layer.division;
             const bunks = getBunksForGrade(grade, divisions);
@@ -627,10 +639,48 @@
             const dur = layer.periodMin || 30;
             const lType = (layer.type || '').toLowerCase();
 
-            // Stagger league time by where 'league' falls in this grade's rotation offset
-            // Grade 0 gets league at position 0/6 of window, grade 1 at 1/6, etc.
-            const gradeIdx = leagueGradeList.indexOf(grade);
-            const totalGrades = leagueGradeList.length || 1;
+            // If another grade in the same league already placed, use their time
+            const leagueName = gradeToLeagueName[grade];
+            if (leagueName && sharedLeagueTime[leagueName] != null) {
+                const sharedStart = sharedLeagueTime[leagueName];
+                const sharedEnd = sharedStart + dur;
+                bunks.forEach(bunk => {
+                    bunkTimelines[bunk].push({
+                        startMin: sharedStart,
+                        endMin: sharedEnd,
+                        type: lType,
+                        event: layer.event || 'League Game',
+                        layer,
+                        _classification: 'windowed',
+                        _committed: true
+                    });
+                    bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
+                    leagueCount++;
+                });
+                log('[STEP 2.1b] ' + grade + ': joined shared league time at ' +
+                    Math.floor(sharedStart/60) + ':' + String(sharedStart%60).padStart(2,'0') +
+                    ' (same as ' + leagueName + ')');
+                return;
+            }
+           // Stagger league time by grade index, but treat shared-league grades
+            // as the same unit so they get the same offset
+            // Build a deduplicated list where shared-league grades count as one slot
+            const leagueUnits = []; // each entry is the "primary" grade for a league unit
+            leagueGradeList.forEach(g => {
+                const ln = gradeToLeagueName[g];
+                if (ln) {
+                    // Only add if no grade from this league is already in leagueUnits
+                    const alreadyAdded = leagueUnits.some(u => gradeToLeagueName[u] === ln);
+                    if (!alreadyAdded) leagueUnits.push(g);
+                } else {
+                    leagueUnits.push(g);
+                }
+            });
+            const primaryGrade = leagueName
+                ? leagueUnits.find(u => gradeToLeagueName[u] === leagueName) || grade
+                : grade;
+            const gradeIdx = leagueUnits.indexOf(primaryGrade);
+            const totalGrades = leagueUnits.length || 1;
             const usableWindow = windowEnd - windowStart - dur;
             const targetOffset = snapTo5(Math.round((gradeIdx / totalGrades) * usableWindow));
             const searchStart = windowStart + targetOffset;
@@ -678,6 +728,11 @@
             log('[STEP 2.1b] ' + grade + ': league placed at ' +
                 Math.floor(placedStart/60) + ':' + String(placedStart%60).padStart(2,'0') +
                 ' (' + dur + 'min) across ' + bunks.length + ' bunks');
+
+            // Record this time for other grades in the same league
+            if (leagueName && placedStart !== null) {
+                sharedLeagueTime[leagueName] = placedStart;
+            }
         });
 
         log('[STEP 2.1b] ✅ ' + leagueCount + ' league blocks placed');
@@ -1727,16 +1782,32 @@ if (leagueBlocks.length > 0) {
         fields: getFields(globalSettings),
         disabledFields: (globalSettings.app1?.disabledFields || globalSettings.disabledFields || []),
         leagueAssignments: window.leagueAssignments,
-        storeLeagueMatchups: function(divName, slots, matchups, gameLabel, sport, leagueName) {
-            if (!window.leagueAssignments[divName]) window.leagueAssignments[divName] = {};
-            for (const slotIdx of slots) {
-                window.leagueAssignments[divName][slotIdx] = {
+       storeLeagueMatchups: function(divName, slots, matchups, gameLabel, sport, leagueName) {
+            // Find the actual league divisions this league covers
+            // (Senior Leagues covers both 5th and 6th Grade)
+            const league = (window.masterLeagues || []).find(l => l.name === leagueName);
+            const coveredDivisions = (league?.divisions || [leagueName]).filter(d =>
+                autoSkeleton.some(b => b.division === d && b.type === 'league')
+            );
+            const targetDivisions = coveredDivisions.length > 0 ? coveredDivisions : [divName];
+
+            targetDivisions.forEach(div => {
+                // Find the league block startMin for this division from skeleton
+                const leagueBlock = autoSkeleton.find(b =>
+                    b.division === div && b.type === 'league'
+                );
+                if (!leagueBlock) return;
+
+                if (!window.leagueAssignments[div]) window.leagueAssignments[div] = {};
+                // Key by startMin instead of slot index — bridge resolves by time
+                window.leagueAssignments[div][leagueBlock.startMin] = {
                     matchups: matchups || [],
                     gameLabel: gameLabel || '',
                     sport: sport || '',
                     leagueName: leagueName || ''
                 };
-            }
+            });
+        }
         }
     };
 
@@ -1770,12 +1841,8 @@ if (leagueBlocks.length > 0) {
         Object.entries(window.leagueAssignments).forEach(([gradeName, gradeSlots]) => {
             const perBunkSlots = window.divisionTimes?.[gradeName]?._perBunkSlots;
             if (!perBunkSlots) return;
-            Object.entries(gradeSlots).forEach(([divSlotIdx, assignment]) => {
-                    // Find the league block for this grade in the skeleton to get the real startMin
-                    const leagueSkelBlock = autoSkeleton.find(b =>
-                        b.division === gradeName && b.type === 'league'
-                    );
-                    const targetStartMin = leagueSkelBlock?.startMin ?? null;
+            Object.entries(gradeSlots).forEach(([startMinKey, assignment]) => {
+                    const targetStartMin = parseInt(startMinKey);
                 Object.entries(perBunkSlots).forEach(([bunkId, bunkSlots]) => {
                     const bunkSlotIdx = bunkSlots.findIndex(s =>
                         targetStartMin !== null
