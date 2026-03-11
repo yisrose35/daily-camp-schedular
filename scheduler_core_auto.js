@@ -1023,6 +1023,20 @@
                                         const dur = position.end - position.start;
                                         position = { start: snapped, end: snapped + dur };
                                     }
+
+                                    // ★ Cross-grade conflict check
+                                    // If this position overlaps with a different grade doing the same special,
+                                    // and sharing rules don't allow it — reject and try next candidate
+                                    if (position && sharableType !== 'all') {
+                                        const crossGradeConflict = (tracker2?.assignments || []).some(a => {
+                                            if (gradeBunks.includes(String(a.bunk))) return false; // same grade — ok
+                                            return a.startMin < position.end && a.endMin > position.start;
+                                        });
+                                        if (crossGradeConflict) {
+                                            usedExclusions.add(candidate.name);
+                                            position = null;
+                                        }
+                                    }
                                 }
                                 if (!position) {
                                     // No gap fits this candidate — try next
