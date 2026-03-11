@@ -1827,42 +1827,48 @@
                 }
             }
 
-            // Bridge leagueAssignments[gradeName] → scheduleAssignments[bunk]
+           // Bridge leagueAssignments[gradeName] → scheduleAssignments[bunk]
+            // Uses skeleton startMin directly — no slot index resolution needed
             let leagueWriteCount = 0;
             Object.entries(window.leagueAssignments || {}).forEach(function(gradeEntry) {
                 const gradeName = gradeEntry[0];
                 const gradeSlots = gradeEntry[1];
-                const divLevelSlots = window.divisionTimes ? window.divisionTimes[gradeName] : null;
-                const perBunkSlots = divLevelSlots ? divLevelSlots._perBunkSlots : null;
+
+                // Get the real league time from the skeleton — single source of truth
+                const leagueSkelBlock = autoSkeleton.find(function(b) {
+                    return b.division === gradeName && b.type === 'league';
+                });
+                if (!leagueSkelBlock) return;
+                const leagueStartMin = leagueSkelBlock.startMin;
+
+                // Get the assignment — take the first value, all keys are the same game
+                const assignment = Object.values(gradeSlots)[0];
+                if (!assignment) return;
+
+                // Write to every bunk in this grade by matching startMin directly
+                const perBunkSlots = window.divisionTimes?.[gradeName]?._perBunkSlots;
                 if (!perBunkSlots) return;
-                const divSlotsArray = Array.isArray(divLevelSlots) ? divLevelSlots.slice() : [];
-                Object.entries(gradeSlots).forEach(function(slotEntry) {
-                    const slotIdxKey = slotEntry[0];
-                    const assignment = slotEntry[1];
-                    const divSlot = divSlotsArray[parseInt(slotIdxKey)];
-                    const targetStartMin = divSlot ? divSlot.startMin : null;
-                    if (targetStartMin === null) return;
-                    Object.entries(perBunkSlots).forEach(function(bunkEntry) {
-                        const bunkId = bunkEntry[0];
-                        const bunkSlots = bunkEntry[1];
-                        const finalIdx = bunkSlots.findIndex(function(s) {
-                            return s.startMin === targetStartMin;
-                        });
-                        if (finalIdx === -1) return;
-                        if (!window.scheduleAssignments[bunkId]) return;
-                        window.scheduleAssignments[bunkId][finalIdx] = {
-                            field: assignment.sport || 'League Game',
-                            sport: assignment.sport || null,
-                            _activity: 'League Game',
-                            _league: true,
-                            _leagueName: assignment.leagueName || '',
-                            _gameLabel: assignment.gameLabel || '',
-                            matchups: assignment.matchups || [],
-                            _fixed: false,
-                            continuation: false
-                        };
-                        leagueWriteCount++;
+
+                Object.entries(perBunkSlots).forEach(function(bunkEntry) {
+                    const bunkId = bunkEntry[0];
+                    const bunkSlots = bunkEntry[1];
+                    const finalIdx = bunkSlots.findIndex(function(s) {
+                        return s.startMin === leagueStartMin;
                     });
+                    if (finalIdx === -1) return;
+                    if (!window.scheduleAssignments[bunkId]) return;
+                    window.scheduleAssignments[bunkId][finalIdx] = {
+                        field: assignment.sport || 'League Game',
+                        sport: assignment.sport || null,
+                        _activity: 'League Game',
+                        _league: true,
+                        _leagueName: assignment.leagueName || '',
+                        _gameLabel: assignment.gameLabel || '',
+                        matchups: assignment.matchups || [],
+                        _fixed: false,
+                        continuation: false
+                    };
+                    leagueWriteCount++;
                 });
             });
             log('[STEP 3] Wrote ' + leagueWriteCount + ' league slots to scheduleAssignments');
