@@ -492,15 +492,8 @@
         // Open:     ratio < 0.25
         const classified = layers.map(layer => {
             const ratio = computeRatio(layer);
-            const lType = (layer.type || '').toLowerCase();
             let classification;
-
-            // ★★★ FIX: League layers are ALWAYS pinned — they must fire simultaneously
-            // across all bunks in the grade at the exact user-defined time.
-            // The windowed/open solver must never reposition them per-bunk independently.
-            if (lType === 'league' || lType === 'specialty_league') {
-                classification = 'pinned';
-            } else if (ratio >= 1) {
+            if (ratio >= 1) {
                 classification = 'pinned';
             } else if (ratio >= 0.25) {
                 classification = 'windowed';
@@ -575,22 +568,33 @@
         log('\n[STEP 2.1] Placing pinned layers...');
         let pinnedCount = 0;
 
-        pinnedLayers.forEach(layer => {
+       pinnedLayers.forEach(layer => {
             const grade = layer.grade || layer.division;
             const bunks = getBunksForGrade(grade, divisions);
             if (!bunks.length) return;
 
             if (allowedSet && !allowedSet.has(String(grade))) return;
 
+            const lType = (layer.type || '').toLowerCase();
+            const isLeague = lType === 'league' || lType === 'specialty_league';
+
+            // ★★★ FIX: League layers have a window (startMin→endMin) but a shorter
+            // duration (periodMin). Stamp at startMin for duration only — not the
+            // full window — so the rest of the day remains schedulable.
+            const blockStart = layer.startMin;
+            const blockEnd = isLeague
+                ? layer.startMin + (layer.periodMin || (layer.endMin - layer.startMin))
+                : layer.endMin;
+
             bunks.forEach(bunk => {
                 bunkTimelines[bunk].push({
-                    startMin: layer.startMin,
-                    endMin: layer.endMin,
-                    type: layer.type || 'pinned',
+                    startMin: blockStart,
+                    endMin: blockEnd,
+                    type: lType === 'league' ? 'league' : lType === 'specialty_league' ? 'specialty_league' : (layer.type || 'pinned'),
                     event: layer.event || 'Pinned',
                     layer,
                     _classification: 'pinned',
-                    _committed: true, // pinned blocks are always committed immediately
+                    _committed: true,
                     _bunkOverride: true,
                     _fixed: true
                 });
