@@ -607,10 +607,14 @@
         log('\n[STEP 2.1b] Placing league layers (grade-wide simultaneous)...');
         let leagueCount = 0;
 
-        const leagueLayersToPlace = [...windowedLayers, ...openLayers].filter(l => {
+       const leagueLayersToPlace = [...windowedLayers, ...openLayers].filter(l => {
             const t = (l.type || '').toLowerCase();
             return t === 'league' || t === 'specialty_league';
         });
+
+        // Build grade rotation order — same grades/types as Step 2.3 soft rotation
+        const leagueRotationTypes = ['league', 'sport', 'swim', 'special', 'slot', 'snacks'];
+        const leagueGradeList = allGrades.filter(g => !allowedSet || allowedSet.has(String(g)));
 
         leagueLayersToPlace.forEach(layer => {
             const grade = layer.grade || layer.division;
@@ -623,16 +627,34 @@
             const dur = layer.periodMin || 30;
             const lType = (layer.type || '').toLowerCase();
 
-            // Find first slot where ALL bunks in grade are simultaneously free
+            // Stagger league time by where 'league' falls in this grade's rotation offset
+            // Grade 0 gets league at position 0/6 of window, grade 1 at 1/6, etc.
+            const gradeIdx = leagueGradeList.indexOf(grade);
+            const totalGrades = leagueGradeList.length || 1;
+            const usableWindow = windowEnd - windowStart - dur;
+            const targetOffset = snapTo5(Math.round((gradeIdx / totalGrades) * usableWindow));
+            const searchStart = windowStart + targetOffset;
+
+            // Find first slot where ALL bunks in grade are simultaneously free,
+            // starting from the grade's target offset position
             let placedStart = null;
-            for (let ts = windowStart; ts + dur <= windowEnd; ts += 5) {
+            for (let ts = searchStart; ts + dur <= windowEnd; ts += 5) {
                 const te = ts + dur;
                 const allFree = bunks.every(bunk =>
                     !(bunkTimelines[bunk] || []).some(b => b.startMin < te && b.endMin > ts)
                 );
                 if (allFree) { placedStart = ts; break; }
             }
-
+            // Fallback: search from window start if target offset had no free gap
+            if (placedStart === null) {
+                for (let ts = windowStart; ts < searchStart; ts += 5) {
+                    const te = ts + dur;
+                    const allFree = bunks.every(bunk =>
+                        !(bunkTimelines[bunk] || []).some(b => b.startMin < te && b.endMin > ts)
+                    );
+                    if (allFree) { placedStart = ts; break; }
+                }
+            }
             if (placedStart === null) {
                 warn('[STEP 2.1b] No shared free gap for league in ' + grade);
                 return;
