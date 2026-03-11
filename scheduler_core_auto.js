@@ -530,9 +530,9 @@
         const specialCapacityTracker = {};
         todaysSpecials.forEach(s => {
             specialCapacityTracker[s.name] = {
-                remaining: getSpecialCapacity(s.name, activityProperties, globalSettings),
                 total: getSpecialCapacity(s.name, activityProperties, globalSettings),
-                assignedTo: {}
+                // assignments: array of {bunk, startMin, endMin} for overlap checking
+                assignments: []
             };
         });
 
@@ -803,9 +803,14 @@
             for (const candidate of queue) {
                 if (excludeNames && excludeNames.has(candidate.name)) continue;
 
-                // Daily capacity — how many bunks can use this special today
+                // Time-sliced capacity — only blocked if overlapping assignments hit the limit
+                // We don't know the exact time yet, so check against the layer window
                 const tracker = specialCapacityTracker[candidate.name];
-                if (!tracker || tracker.remaining <= 0) continue;
+                if (!tracker) continue;
+                const overlapping = tracker.assignments.filter(a =>
+                    a.startMin < windowEnd && a.endMin > windowStart
+                ).length;
+                if (overlapping >= tracker.total) continue;
 
                 // Already assigned to this bunk today
                 const alreadyAssigned = (bunkSpecialAssigned[bunk] && bunkSpecialAssigned[bunk][candidate.name]) || 0;
@@ -824,9 +829,9 @@
         }
 
         // Helper: claim a special for a bunk (reduces capacity)
-        function claimSpecial(bunk, specialEntry) {
+        function claimSpecial(bunk, specialEntry, startMin, endMin) {
             const tracker = specialCapacityTracker[specialEntry.name];
-            if (tracker) tracker.remaining--;
+            if (tracker) tracker.assignments.push({ bunk, startMin, endMin });
             if (!bunkSpecialAssigned[bunk]) bunkSpecialAssigned[bunk] = {};
             bunkSpecialAssigned[bunk][specialEntry.name] = (bunkSpecialAssigned[bunk][specialEntry.name] || 0) + 1;
         }
@@ -834,7 +839,10 @@
         // Helper: unclaim a special (for backtracking)
         function unclaimSpecial(bunk, specialName) {
             const tracker = specialCapacityTracker[specialName];
-            if (tracker) tracker.remaining++;
+            if (tracker) {
+                const idx = tracker.assignments.findIndex(a => a.bunk === bunk);
+                if (idx !== -1) tracker.assignments.splice(idx, 1);
+            }
             if (bunkSpecialAssigned[bunk] && bunkSpecialAssigned[bunk][specialName]) {
                 bunkSpecialAssigned[bunk][specialName]--;
                 if (bunkSpecialAssigned[bunk][specialName] <= 0) {
@@ -909,7 +917,7 @@
                                 continue;
                             }
 
-                            claimSpecial(bunk, candidate);
+                            claimSpecial(bunk, candidate, position.start, position.end);
                             usedExclusions.add(candidate.name);
 
                             placeTentativeBlock(bunk, {
@@ -943,7 +951,7 @@
                                 const nextPosition = findBestGapPosition(bunk, windowStart, windowEnd, nextCandidate.duration);
                                 if (!nextPosition) { keepFilling = false; break; }
 
-                                claimSpecial(bunk, nextCandidate);
+                               claimSpecial(bunk, nextCandidate, nextPosition.start, nextPosition.end);
                                 fillExclusions.add(nextCandidate.name);
 
                                 placeTentativeBlock(bunk, {
