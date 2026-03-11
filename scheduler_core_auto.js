@@ -803,14 +803,9 @@
             for (const candidate of queue) {
                 if (excludeNames && excludeNames.has(candidate.name)) continue;
 
-                // Time-sliced capacity — only blocked if overlapping assignments hit the limit
                 const tracker = specialCapacityTracker[candidate.name];
                 if (!tracker) continue;
-                const overlapping = tracker.assignments.filter(a =>
-                    a.startMin < winEnd && a.endMin > winStart
-                ).length;
-                if (overlapping >= tracker.total) continue;
-
+                // Capacity checked post-position in placement loop — not here
                 // Already assigned to this bunk today
                 const alreadyAssigned = (bunkSpecialAssigned[bunk] && bunkSpecialAssigned[bunk][candidate.name]) || 0;
                 if (alreadyAssigned > 0) continue;
@@ -909,16 +904,26 @@
                                 break;
                             }
 
-                            const position = findBestGapPosition(bunk, windowStart, windowEnd, candidate.duration);
+                            const position = candidate.duration
+                                ? findBestGapPosition(bunk, windowStart, windowEnd, candidate.duration)
+                                : findFlexGapPosition(bunk, windowStart, windowEnd);
                             if (!position) {
-                                // No room — try next special
+                                usedExclusions.add(candidate.name);
+                                continue;
+                            }
+
+                            // ★ Post-position capacity check — is this special free at THIS time?
+                            const tracker = specialCapacityTracker[candidate.name];
+                            const overlappingNow = tracker ? tracker.assignments.filter(a =>
+                                a.startMin < position.end && a.endMin > position.start
+                            ).length : 0;
+                            if (tracker && overlappingNow >= tracker.total) {
                                 usedExclusions.add(candidate.name);
                                 continue;
                             }
 
                             claimSpecial(bunk, candidate, position.start, position.end);
                             usedExclusions.add(candidate.name);
-
                             placeTentativeBlock(bunk, {
                                 startMin: position.start,
                                 endMin: position.end,
