@@ -899,30 +899,43 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
     /**
      * Calculate LIMIT score - for activities with usage limits
      */
-    RotationEngine.calculateLimitScore = function(bunkName, activityName, activityProperties) {
+    RotationEngine.calculateLimitScore = function(bunkName, activityName, activityProperties, divisionName) {
         var props = (activityProperties && activityProperties[activityName]) || {};
-        var maxUsage = props.maxUsage || 0;
 
-        if (maxUsage <= 0) return 0;
+        // ★ Per-grade cap: grade-specific override takes precedence over global
+        var maxUsage = props.maxUsage || 0;
+        if (divisionName && props.maxUsagePerGrade && props.maxUsagePerGrade[divisionName] > 0) {
+            maxUsage = props.maxUsagePerGrade[divisionName];
+        }
 
         var currentCount = RotationEngine.getActivityCount(bunkName, activityName);
 
-        if (currentCount >= maxUsage) {
-            return Infinity;
+        // Hard ceiling
+        if (maxUsage > 0) {
+            if (currentCount >= maxUsage) return Infinity;
+            if (currentCount >= maxUsage - 1) return CONFIG.NEAR_LIMIT_PENALTY;
+            if (currentCount >= maxUsage - 2) return CONFIG.LIMITED_ACTIVITY_PENALTY;
         }
 
-        if (currentCount >= maxUsage - 1) {
-            return CONFIG.NEAR_LIMIT_PENALTY;
-        }
-
-        if (currentCount >= maxUsage - 2) {
-            return CONFIG.LIMITED_ACTIVITY_PENALTY;
+        // ★ Min frequency: strong pull when bunk is below the floor
+        var minFreq = parseInt(props.minFrequency) || 0;
+        if (minFreq > 0) {
+            var shortage = minFreq - currentCount;
+            if (shortage > 0) return -(shortage * 8000);
         }
 
         return 0;
     };
 
-    // =========================================================================
+    // ★ Helper: resolve the effective max usage cap for a bunk's grade
+    RotationEngine.getEffectiveMaxUsage = function(activityName, divisionName, activityProperties) {
+        var props = (activityProperties && activityProperties[activityName]) || {};
+        var maxUsage = props.maxUsage || 0;
+        if (divisionName && props.maxUsagePerGrade && props.maxUsagePerGrade[divisionName] > 0) {
+            maxUsage = props.maxUsagePerGrade[divisionName];
+        }
+        return maxUsage;
+    };    // =========================================================================
     // ★★★ MAIN SCORING FUNCTION ★★★
     // =========================================================================
 
