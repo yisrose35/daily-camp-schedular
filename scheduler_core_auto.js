@@ -1670,7 +1670,8 @@ if (leagueBlocks.length > 0) {
         fieldsBySport: window.fieldsBySport || {},
         dailyLeagueSportsUsage: {},
         fillBlock: window.fillBlock || function() {},
-        fields: activityProperties ? Object.keys(activityProperties) : [],
+        fields: getFields(globalSettings),
+        disabledFields: (globalSettings.app1?.disabledFields || globalSettings.disabledFields || []),
         leagueAssignments: window.leagueAssignments,
         storeLeagueMatchups: function(divName, slots, matchups, gameLabel, sport, leagueName) {
             if (!window.leagueAssignments[divName]) window.leagueAssignments[divName] = {};
