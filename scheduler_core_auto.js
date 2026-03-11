@@ -979,11 +979,42 @@
                                 const candidate = getNextSpecial(bunk, usedExclusions, windowStart, windowEnd);
                                 if (!candidate) break;
 
-                                const position = candidate.duration
-                                    ? (findBestGapPosition(bunk, specialStaggeredStart, windowEnd, candidate.duration) ||
-                                       findBestGapPosition(bunk, windowStart, specialStaggeredStart, candidate.duration))
-                                    : (findFlexGapPosition(bunk, specialStaggeredStart, windowEnd) ||
-                                       findFlexGapPosition(bunk, windowStart, windowEnd));
+                                // Check if a same-grade bunk is already running this special
+                                // If so, join their session (same start time) instead of starting a new one
+                                const cfg = getSpecialConfig(candidate.name, globalSettings);
+                                const sharableType = cfg?.sharableWith?.type || 'not_sharable';
+                                const gradeBunks = getBunksForGrade(grade, divisions).map(String);
+                                const tracker2 = specialCapacityTracker[candidate.name];
+
+                                let position = null;
+
+                                // Try to join an existing session first
+                                if (sharableType === 'same_division' || sharableType === 'all') {
+                                    const existingSession = (tracker2?.assignments || []).find(a => {
+                                        if (!gradeBunks.includes(String(a.bunk))) return false;
+                                        // Check this bunk has a free gap at that exact time
+                                        const gaps = getFreeGaps(bunk, a.startMin, a.endMin);
+                                        return gaps.some(g => g.start <= a.startMin && g.end >= a.endMin);
+                                    });
+                                    if (existingSession) {
+                                        position = { start: existingSession.startMin, end: existingSession.endMin };
+                                    }
+                                }
+
+                                // No existing session to join — find a fresh gap
+                                if (!position) {
+                                    position = candidate.duration
+                                        ? (findBestGapPosition(bunk, specialStaggeredStart, windowEnd, candidate.duration) ||
+                                           findBestGapPosition(bunk, windowStart, specialStaggeredStart, candidate.duration))
+                                        : (findFlexGapPosition(bunk, specialStaggeredStart, windowEnd) ||
+                                           findFlexGapPosition(bunk, windowStart, windowEnd));
+                                    // Snap to 5-min boundary
+                                    if (position) {
+                                        const snapped = snapTo5(position.start);
+                                        const dur = position.end - position.start;
+                                        position = { start: snapped, end: snapped + dur };
+                                    }
+                                }
                                 if (!position) {
                                     // No gap fits this candidate — try next
                                     usedExclusions.add(candidate.name);
