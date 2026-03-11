@@ -1770,13 +1770,12 @@ if (leagueBlocks.length > 0) {
         Object.entries(window.leagueAssignments).forEach(([gradeName, gradeSlots]) => {
             const perBunkSlots = window.divisionTimes?.[gradeName]?._perBunkSlots;
             if (!perBunkSlots) return;
-            const divLevelSlots = Array.isArray(window.divisionTimes[gradeName])
-                ? window.divisionTimes[gradeName] : [];
-
             Object.entries(gradeSlots).forEach(([divSlotIdx, assignment]) => {
-                const divSlot = divLevelSlots[parseInt(divSlotIdx)];
-                const targetStartMin = divSlot?.startMin ?? null;
-
+                    // Find the league block for this grade in the skeleton to get the real startMin
+                    const leagueSkelBlock = autoSkeleton.find(b =>
+                        b.division === gradeName && b.type === 'league'
+                    );
+                    const targetStartMin = leagueSkelBlock?.startMin ?? null;
                 Object.entries(perBunkSlots).forEach(([bunkId, bunkSlots]) => {
                     const bunkSlotIdx = bunkSlots.findIndex(s =>
                         targetStartMin !== null
