@@ -798,17 +798,16 @@
         // Helper: get next available special from a bunk's ranked queue
         // that still has capacity, hasn't been assigned to this bunk today,
         // and hasn't exceeded the bunk's lifetime maxUsage for this special
-        function getNextSpecial(bunk, excludeNames) {
+        function getNextSpecial(bunk, excludeNames, winStart, winEnd) {
             const queue = bunkSpecialQueues[bunk] || [];
             for (const candidate of queue) {
                 if (excludeNames && excludeNames.has(candidate.name)) continue;
 
                 // Time-sliced capacity — only blocked if overlapping assignments hit the limit
-                // We don't know the exact time yet, so check against the layer window
                 const tracker = specialCapacityTracker[candidate.name];
                 if (!tracker) continue;
                 const overlapping = tracker.assignments.filter(a =>
-                    a.startMin < windowEnd && a.endMin > windowStart
+                    a.startMin < winEnd && a.endMin > winStart
                 ).length;
                 if (overlapping >= tracker.total) continue;
 
@@ -901,8 +900,8 @@
                         );
 
                         // Place minimum required first
-                        while (placedCount < requiredCount) {
-                            const candidate = getNextSpecial(bunk, usedExclusions);
+                       while (placedCount < requiredCount) {
+                            const candidate = getNextSpecial(bunk, usedExclusions, windowStart, windowEnd);
                             if (!candidate) {
                                 warn('[STEP 2.3] No available special for ' + bunk +
                                     ' in ' + grade + ' — needed ' + requiredCount +
@@ -945,7 +944,7 @@
                             const fillExclusions = new Set(usedExclusions);
 
                             while (keepFilling) {
-                                const nextCandidate = getNextSpecial(bunk, fillExclusions);
+                                const nextCandidate = getNextSpecial(bunk, fillExclusions, windowStart, windowEnd);
                                 if (!nextCandidate) { keepFilling = false; break; }
 
                                 const nextPosition = findBestGapPosition(bunk, windowStart, windowEnd, nextCandidate.duration);
