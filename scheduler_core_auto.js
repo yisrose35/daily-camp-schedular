@@ -1843,10 +1843,7 @@ if (leagueBlocks.length > 0) {
             if (!perBunkSlots) return;
            // Get division-level slots to resolve slot index → startMin
             const divLevelSlots = window.divisionTimes?.[gradeName];
-            const divSlotsArray = Array.isArray(divLevelSlots)
-                ? divLevelSlots
-                : Object.values(divLevelSlots || {}).filter(v => typeof v === 'object' && v.startMin);
-
+            const divSlotsArray = Array.isArray(divLevelSlots) ? [...divLevelSlots] : [];
             Object.entries(gradeSlots).forEach(([slotIdxKey, assignment]) => {
                 // Resolve slot index to startMin via division-level slots
                 const divSlot = divSlotsArray[parseInt(slotIdxKey)];
