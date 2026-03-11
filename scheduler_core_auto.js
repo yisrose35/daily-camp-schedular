@@ -987,7 +987,8 @@
                                     a.startMin < position.end && a.endMin > position.start
                                 ).length : 0;
 
-                                if (tracker && overlappingNow >= tracker.total) {
+                                if (tracker) log('[CAP] ' + candidate.name + ' bunk ' + bunk + ' overlappingNow=' + overlappingNow + ' total=' + tracker.total + ' assignments=' + tracker.assignments.length);
+                            if (tracker && overlappingNow >= tracker.total) {
                                     // At capacity at this time — try next special
                                     usedExclusions.add(candidate.name);
                                     continue;
