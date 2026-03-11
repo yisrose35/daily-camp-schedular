@@ -1842,12 +1842,10 @@ if (leagueBlocks.length > 0) {
             const perBunkSlots = window.divisionTimes?.[gradeName]?._perBunkSlots;
             if (!perBunkSlots) return;
             Object.entries(gradeSlots).forEach(([startMinKey, assignment]) => {
-                    const targetStartMin = parseInt(startMinKey);
+                const targetStartMin = parseInt(startMinKey);
                 Object.entries(perBunkSlots).forEach(([bunkId, bunkSlots]) => {
-                   const bunkSlotIdx = bunkSlots.findIndex(s => s.startMin === targetStartMin);
-                    const finalIdx = bunkSlotIdx;
+                    const finalIdx = bunkSlots.findIndex(s => s.startMin === targetStartMin);
                     if (finalIdx === -1 || !window.scheduleAssignments[bunkId]) return;
-
                     window.scheduleAssignments[bunkId][finalIdx] = {
                         field: assignment.sport || 'League Game',
                         sport: assignment.sport || null,
@@ -1869,7 +1867,6 @@ if (leagueBlocks.length > 0) {
 } else {
     log('[STEP 3] No league blocks — skipping');
 }
-
 const solverBlocks = schedulableSlotBlocks.filter(b =>
     b.type !== 'league' && b.type !== 'specialty_league'
 );
