@@ -622,7 +622,7 @@
         const gradeToLeagueName = {}; // gradeName → leagueName
         leagueLayersToPlace.forEach(layer => {
             const grade = layer.grade || layer.division;
-            const league = (window.masterLeagues || []).find(l =>
+            const league = (Array.isArray(window.masterLeagues) ? window.masterLeagues : Object.values(window.masterLeagues || {})).find(l =>
                 (l.divisions || []).includes(grade)
             );
             if (league) gradeToLeagueName[grade] = league.name;
@@ -1785,7 +1785,7 @@ if (leagueBlocks.length > 0) {
        storeLeagueMatchups: function(divName, slots, matchups, gameLabel, sport, leagueName) {
             // Find the actual league divisions this league covers
             // (Senior Leagues covers both 5th and 6th Grade)
-            const league = (window.masterLeagues || []).find(l => l.name === leagueName);
+            const league = (Array.isArray(window.masterLeagues) ? window.masterLeagues : Object.values(window.masterLeagues || {})).find(l => l.name === leagueName);
             const coveredDivisions = (league?.divisions || [leagueName]).filter(d =>
                 autoSkeleton.some(b => b.division === d && b.type === 'league')
             );
