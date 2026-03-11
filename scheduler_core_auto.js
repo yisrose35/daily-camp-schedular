@@ -962,27 +962,40 @@
 
                         if (type === 'special') {
                             // ── SPECIAL ──
+                            // Try each candidate in ranked order until one fits position + capacity
                             const usedExclusions = new Set(Object.keys(bunkSpecialAssigned[bunk] || {}));
-                            const candidate = getNextSpecial(bunk, usedExclusions, windowStart, windowEnd);
-                            if (!candidate) continue;
+                            let placed = false;
 
-                            const position = candidate.duration
-                                ? findBestGapPosition(bunk, windowStart, windowEnd, candidate.duration)
-                                : findFlexGapPosition(bunk, windowStart, windowEnd);
-                            if (!position) continue;
+                            while (!placed) {
+                                const candidate = getNextSpecial(bunk, usedExclusions, windowStart, windowEnd);
+                                if (!candidate) break; // no more candidates
 
-                            // Post-position capacity check
-                            const tracker = specialCapacityTracker[candidate.name];
-                            const overlappingNow = tracker ? tracker.assignments.filter(a =>
-                                a.startMin < position.end && a.endMin > position.start
-                            ).length : 0;
+                                // Find position for THIS candidate's duration
+                                const position = candidate.duration
+                                    ? findBestGapPosition(bunk, windowStart, windowEnd, candidate.duration)
+                                    : findFlexGapPosition(bunk, windowStart, windowEnd);
 
-                           if (tracker && overlappingNow >= tracker.total) {
-                                // At capacity at this time — try next special
-                                continue;
-                            }
+                                if (!position) {
+                                    // No gap fits this candidate — try next
+                                    usedExclusions.add(candidate.name);
+                                    continue;
+                                }
 
-                            claimSpecial(bunk, candidate, position.start, position.end);
+                                // Post-position capacity check
+                                const tracker = specialCapacityTracker[candidate.name];
+                                const overlappingNow = tracker ? tracker.assignments.filter(a =>
+                                    a.startMin < position.end && a.endMin > position.start
+                                ).length : 0;
+
+                                if (tracker && overlappingNow >= tracker.total) {
+                                    // At capacity at this time — try next special
+                                    usedExclusions.add(candidate.name);
+                                    continue;
+                                }
+
+                                // ✅ Found a candidate that fits — claim and place
+                                claimSpecial(bunk, candidate, position.start, position.end);
+                                placed = true;
                             placeTentativeBlock(bunk, {
                                 startMin: position.start,
                                 endMin:   position.end,
@@ -998,6 +1011,7 @@
                             });
                             need.placed++;
                             madeProgress = true;
+                            } // end while (!placed)
 
                         } else {
                             // ── NON-SPECIAL (swim, sport, league, etc.) ──
