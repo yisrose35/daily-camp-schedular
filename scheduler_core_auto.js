@@ -1744,9 +1744,9 @@
         log('[STEP 2] ✅ Live iterative solver complete');
 
         // =====================================================================
-// STEP 3 — LEAGUE ENGINES
-// =====================================================================
-// Build yesterdayHistory for league engine context
+        // STEP 3 — LEAGUE ENGINES
+        // =====================================================================
+
         const yesterdayHistory = (() => {
             const parts = (currentDate || '').split('-').map(Number);
             if (!parts[0]) return {};
@@ -1757,127 +1757,124 @@
                 String(d.getDate()).padStart(2, '0');
             return allDailyData[yKey]?.scheduleAssignments || {};
         })();
+
         log('\n[STEP 3] Running league engines...');
 
-const leagueBlocks = schedulableSlotBlocks.filter(b =>
-    b.type === 'league' || b.type === 'specialty_league'
-);
+        const leagueBlocks = schedulableSlotBlocks.filter(b =>
+            b.type === 'league' || b.type === 'specialty_league'
+        );
 
-if (leagueBlocks.length > 0) {
+        if (leagueBlocks.length > 0) {
 
-    const leagueContext = {
-        schedulableSlotBlocks: leagueBlocks,
-        fieldUsageBySlot,
-        activityProperties,
-        masterLeagues: window.masterLeagues || [],
-        disabledLeagues: window.disabledLeagues || [],
-        masterSpecialtyLeagues: window.masterSpecialtyLeagues || [],
-        disabledSpecialtyLeagues: window.disabledSpecialtyLeagues || [],
-        rotationHistory: window.rotationHistory || {},
-        yesterdayHistory,
-        divisions,
-        fieldsBySport: window.fieldsBySport || {},
-        dailyLeagueSportsUsage: {},
-        fillBlock: window.fillBlock || function() {},
-        fields: getFields(globalSettings),
-        disabledFields: (globalSettings.app1?.disabledFields || globalSettings.disabledFields || []),
-        leagueAssignments: window.leagueAssignments,
-       storeLeagueMatchups: function(divName, slots, matchups, gameLabel, sport, leagueName) {
-            // Find the actual league divisions this league covers
-            // (Senior Leagues covers both 5th and 6th Grade)
-            const league = (Array.isArray(window.masterLeagues) ? window.masterLeagues : Object.values(window.masterLeagues || {})).find(l => l.name === leagueName);
-            const coveredDivisions = (league?.divisions || [leagueName]).filter(d =>
-                autoSkeleton.some(b => b.division === d && b.type === 'league')
-            );
-            const targetDivisions = coveredDivisions.length > 0 ? coveredDivisions : [divName];
+            const masterLeaguesArr = Array.isArray(window.masterLeagues)
+                ? window.masterLeagues
+                : Object.values(window.masterLeagues || {});
 
-            targetDivisions.forEach(div => {
-                // Find the league block startMin for this division from skeleton
-                const leagueBlock = autoSkeleton.find(b =>
-                    b.division === div && b.type === 'league'
-                );
-                if (!leagueBlock) return;
+            const leagueContext = {
+                schedulableSlotBlocks: leagueBlocks,
+                fieldUsageBySlot,
+                activityProperties,
+                masterLeagues: masterLeaguesArr,
+                disabledLeagues: window.disabledLeagues || [],
+                masterSpecialtyLeagues: window.masterSpecialtyLeagues || [],
+                disabledSpecialtyLeagues: window.disabledSpecialtyLeagues || [],
+                rotationHistory: window.rotationHistory || {},
+                yesterdayHistory,
+                divisions,
+                fieldsBySport: window.fieldsBySport || {},
+                dailyLeagueSportsUsage: {},
+                fillBlock: window.fillBlock || function() {},
+                fields: getFields(globalSettings),
+                disabledFields: (globalSettings.app1?.disabledFields || globalSettings.disabledFields || []),
+                leagueAssignments: window.leagueAssignments,
+                storeLeagueMatchups: function(divName, slots, matchups, gameLabel, sport, leagueName) {
+                    const league = masterLeaguesArr.find(l => l.name === leagueName);
+                    const coveredDivisions = (league?.divisions || [leagueName]).filter(d =>
+                        autoSkeleton.some(b => b.division === d && b.type === 'league')
+                    );
+                    const targetDivisions = coveredDivisions.length > 0 ? coveredDivisions : [divName];
+                    targetDivisions.forEach(function(div) {
+                        const leagueBlock = autoSkeleton.find(b => b.division === div && b.type === 'league');
+                        if (!leagueBlock) return;
+                        if (!window.leagueAssignments[div]) window.leagueAssignments[div] = {};
+                        window.leagueAssignments[div][leagueBlock.startMin] = {
+                            matchups: matchups || [],
+                            gameLabel: gameLabel || '',
+                            sport: sport || '',
+                            leagueName: leagueName || ''
+                        };
+                    });
+                }
+            };
 
-                if (!window.leagueAssignments[div]) window.leagueAssignments[div] = {};
-                // Key by startMin instead of slot index — bridge resolves by time
-                window.leagueAssignments[div][leagueBlock.startMin] = {
-                    matchups: matchups || [],
-                    gameLabel: gameLabel || '',
-                    sport: sport || '',
-                    leagueName: leagueName || ''
-                };
-            });
-        }
-        }
-    };
+            if (window.SchedulerCoreSpecialtyLeagues && window.SchedulerCoreSpecialtyLeagues.processSpecialtyLeagues) {
+                try {
+                    leagueContext.schedulableSlotBlocks = leagueBlocks.filter(b => b.type === 'specialty_league');
+                    window.SchedulerCoreSpecialtyLeagues.processSpecialtyLeagues(leagueContext);
+                    log('[STEP 3] Specialty leagues complete');
+                } catch (e) {
+                    warn('[STEP 3] Specialty league error: ' + e.message);
+                }
+            }
 
-    // Specialty leagues first
-    if (window.SchedulerCoreSpecialtyLeagues?.processSpecialtyLeagues) {
-        try {
-            leagueContext.schedulableSlotBlocks = leagueBlocks.filter(b => b.type === 'specialty_league');
-            window.SchedulerCoreSpecialtyLeagues.processSpecialtyLeagues(leagueContext);
-            log('[STEP 3] Specialty leagues complete');
-        } catch (e) {
-            warn('[STEP 3] Specialty league error: ' + e.message);
-        }
-    }
+            if (window.SchedulerCoreLeagues && window.SchedulerCoreLeagues.processRegularLeagues) {
+                try {
+                    leagueContext.schedulableSlotBlocks = leagueBlocks.filter(b => b.type === 'league');
+                    window.SchedulerCoreLeagues.processRegularLeagues(leagueContext);
+                    log('[STEP 3] Regular leagues complete');
+                } catch (e) {
+                    warn('[STEP 3] Regular league error: ' + e.message);
+                }
+            }
 
-    // Regular leagues
-    if (window.SchedulerCoreLeagues?.processRegularLeagues) {
-        try {
-            leagueContext.schedulableSlotBlocks = leagueBlocks.filter(b => b.type === 'league');
-            window.SchedulerCoreLeagues.processRegularLeagues(leagueContext);
-            log('[STEP 3] Regular leagues complete');
-        } catch (e) {
-            warn('[STEP 3] Regular league error: ' + e.message);
-        }
-    }
-
-    // ★★★ FIX: Bridge leagueAssignments[gradeName] → scheduleAssignments[bunk]
-    // leagueAssignments is keyed by grade name from storeLeagueMatchups,
-    // but scheduleAssignments is keyed by bunk number. Bridge via _perBunkSlots.
-    if (window.leagueAssignments) {
-        let leagueWriteCount = 0;
-        Object.entries(window.leagueAssignments).forEach(([gradeName, gradeSlots]) => {
-            const perBunkSlots = window.divisionTimes?.[gradeName]?._perBunkSlots;
-            if (!perBunkSlots) return;
-           // Get division-level slots to resolve slot index → startMin
-            const divLevelSlots = window.divisionTimes?.[gradeName];
-            const divSlotsArray = Array.isArray(divLevelSlots) ? [...divLevelSlots] : [];
-            Object.entries(gradeSlots).forEach(([slotIdxKey, assignment]) => {
-                // Resolve slot index to startMin via division-level slots
-                const divSlot = divSlotsArray[parseInt(slotIdxKey)];
-                const targetStartMin = divSlot?.startMin ?? null;
-                if (targetStartMin === null) return;
-
-                Object.entries(perBunkSlots).forEach(([bunkId, bunkSlots]) => {
-                    const finalIdx = bunkSlots.findIndex(s => s.startMin === targetStartMin);                    if (finalIdx === -1 || !window.scheduleAssignments[bunkId]) return;
-                    window.scheduleAssignments[bunkId][finalIdx] = {
-                        field: assignment.sport || 'League Game',
-                        sport: assignment.sport || null,
-                        _activity: 'League Game',
-                        _league: true,
-                        _leagueName: assignment.leagueName || '',
-                        _gameLabel: assignment.gameLabel || '',
-                        matchups: assignment.matchups || [],
-                        _fixed: false,
-                        continuation: false
-                    };
-                    leagueWriteCount++;
+            // Bridge leagueAssignments[gradeName] → scheduleAssignments[bunk]
+            let leagueWriteCount = 0;
+            Object.entries(window.leagueAssignments || {}).forEach(function(gradeEntry) {
+                const gradeName = gradeEntry[0];
+                const gradeSlots = gradeEntry[1];
+                const divLevelSlots = window.divisionTimes ? window.divisionTimes[gradeName] : null;
+                const perBunkSlots = divLevelSlots ? divLevelSlots._perBunkSlots : null;
+                if (!perBunkSlots) return;
+                const divSlotsArray = Array.isArray(divLevelSlots) ? divLevelSlots.slice() : [];
+                Object.entries(gradeSlots).forEach(function(slotEntry) {
+                    const slotIdxKey = slotEntry[0];
+                    const assignment = slotEntry[1];
+                    const divSlot = divSlotsArray[parseInt(slotIdxKey)];
+                    const targetStartMin = divSlot ? divSlot.startMin : null;
+                    if (targetStartMin === null) return;
+                    Object.entries(perBunkSlots).forEach(function(bunkEntry) {
+                        const bunkId = bunkEntry[0];
+                        const bunkSlots = bunkEntry[1];
+                        const finalIdx = bunkSlots.findIndex(function(s) {
+                            return s.startMin === targetStartMin;
+                        });
+                        if (finalIdx === -1) return;
+                        if (!window.scheduleAssignments[bunkId]) return;
+                        window.scheduleAssignments[bunkId][finalIdx] = {
+                            field: assignment.sport || 'League Game',
+                            sport: assignment.sport || null,
+                            _activity: 'League Game',
+                            _league: true,
+                            _leagueName: assignment.leagueName || '',
+                            _gameLabel: assignment.gameLabel || '',
+                            matchups: assignment.matchups || [],
+                            _fixed: false,
+                            continuation: false
+                        };
+                        leagueWriteCount++;
+                    });
                 });
             });
-        });
-        log('[STEP 3] Wrote ' + leagueWriteCount + ' league slots to scheduleAssignments');
-        } // end if (window.leagueAssignments)
+            log('[STEP 3] Wrote ' + leagueWriteCount + ' league slots to scheduleAssignments');
 
-} else {
-    log('[STEP 3] No league blocks — skipping');
-}
-const solverBlocks = schedulableSlotBlocks.filter(b =>
-    b.type !== 'league' && b.type !== 'specialty_league'
-);
+        } else {
+            log('[STEP 3] No league blocks — skipping');
+        }
 
-log('[STEP 3] ✅ Leagues complete. ' + solverBlocks.length + ' blocks remain for solver');
+        const solverBlocks = schedulableSlotBlocks.filter(b =>
+            b.type !== 'league' && b.type !== 'specialty_league'
+        );
+        log('[STEP 3] ✅ Leagues complete. ' + solverBlocks.length + ' blocks remain for solver');
         // =====================================================================
         // STEP 4 — TOTAL SOLVER
         // =====================================================================
