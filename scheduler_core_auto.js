@@ -490,10 +490,16 @@
         // Pinned:   ratio === 1  (fills exactly)
         // Windowed: ratio >= 0.25 and < 1
         // Open:     ratio < 0.25
-        const classified = layers.map(layer => {
+       const classified = layers.map(layer => {
             const ratio = computeRatio(layer);
+            const lType = (layer.type || '').toLowerCase();
             let classification;
-            if (ratio >= 1) {
+            // ★★★ FIX: League layers must always be pinned so they reach Step 2.1
+            // where they get placed simultaneously across all bunks. If they fall
+            // through to windowed/open (Step 2.3) they get placed per-bunk independently.
+            if (lType === 'league' || lType === 'specialty_league') {
+                classification = 'pinned';
+            } else if (ratio >= 1) {
                 classification = 'pinned';
             } else if (ratio >= 0.25) {
                 classification = 'windowed';
