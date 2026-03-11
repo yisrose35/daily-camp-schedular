@@ -989,9 +989,18 @@
                                 let position = null;
 
                                 // Try to join an existing session first
-                                if (sharableType === 'same_division' || sharableType === 'all') {
+                                if (sharableType === 'same_division' || sharableType === 'all' ||
+                                    (sharableType === 'custom' && cfg?.sharableWith?.divisions?.length > 0)) {
                                     const existingSession = (tracker2?.assignments || []).find(a => {
-                                        if (!gradeBunks.includes(String(a.bunk))) return false;
+                                        // Enforce same_division — only join if same grade
+                                        if (sharableType === 'same_division') {
+                                            if (!gradeBunks.includes(String(a.bunk))) return false;
+                                        }
+                                        // Enforce custom with specific divisions
+                                        if (sharableType === 'custom' && cfg?.sharableWith?.divisions?.length > 0) {
+                                            const allowedDivs = cfg.sharableWith.divisions;
+                                            if (!allowedDivs.includes(grade)) return false;
+                                        }
                                         // Check this bunk has a free gap at that exact time
                                         const gaps = getFreeGaps(bunk, a.startMin, a.endMin);
                                         return gaps.some(g => g.start <= a.startMin && g.end >= a.endMin);
