@@ -110,8 +110,14 @@
         const originalRunSkeletonOptimizer = window.runSkeletonOptimizer;
 
         // Create wrapper that builds divisionTimes first
-       window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
-            
+      window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
+
+            // ★★★ AUTO MODE: full bypass — scheduler_core_auto.js owns the entire pipeline
+            if (window._daBuilderMode === 'auto' || window._divisionTimesLocked) {
+                console.log('[DivTimesIntegration] ⏭️ Auto mode — full bypass');
+                return false;
+            }
+
             // ★ AUTO BUILD: divisionTimes already built by AutoBuildPrep — skip rebuild
             if (window._autoBuildRunActive) {
                 console.log('[DivTimesIntegration] ⏭️ Auto mode — bypassing DT rebuild');
