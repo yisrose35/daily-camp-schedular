@@ -1567,7 +1567,9 @@
         log('[STEP 2.7] Built ' + schedulableSlotBlocks.length + ' schedulable blocks for solver');
         log('[STEP 2] ✅ Live iterative solver complete');
 
-        // STEP 3 — LEAGUE ENGINES
+        // =====================================================================
+// STEP 3 — LEAGUE ENGINES
+// =====================================================================
 log('\n[STEP 3] Running league engines...');
 
 const leagueBlocks = schedulableSlotBlocks.filter(b =>
@@ -1576,7 +1578,6 @@ const leagueBlocks = schedulableSlotBlocks.filter(b =>
 
 if (leagueBlocks.length > 0) {
 
-    // Build leagueContext matching what SchedulerCoreLeagues expects
     const leagueContext = {
         schedulableSlotBlocks: leagueBlocks,
         fieldUsageBySlot,
@@ -1594,9 +1595,7 @@ if (leagueBlocks.length > 0) {
         fields: activityProperties ? Object.keys(activityProperties) : [],
         leagueAssignments: window.leagueAssignments,
         storeLeagueMatchups: function(divName, slots, matchups, gameLabel, sport, leagueName) {
-            if (!window.leagueAssignments[divName]) {
-                window.leagueAssignments[divName] = {};
-            }
+            if (!window.leagueAssignments[divName]) window.leagueAssignments[divName] = {};
             for (const slotIdx of slots) {
                 window.leagueAssignments[divName][slotIdx] = {
                     matchups: matchups || [],
@@ -1630,40 +1629,34 @@ if (leagueBlocks.length > 0) {
         }
     }
 
-    // ★★★ FIX: Consolidate league assignments — keyed by grade name not bunk.
-    // leagueAssignments[divName][slotIdx] → find matching bunk blocks and
-    // write through to scheduleAssignments[bunk][bunkSlotIdx].
+    // ★★★ FIX: Bridge leagueAssignments[gradeName] → scheduleAssignments[bunk]
+    // leagueAssignments is keyed by grade name from storeLeagueMatchups,
+    // but scheduleAssignments is keyed by bunk number. Bridge via _perBunkSlots.
     if (window.leagueAssignments) {
-        leagueBlocks
-            .filter(b => b.type === 'league' || b.type === 'specialty_league')
-            .forEach(block => {
-                const divName = block.divName;
-                const bunk = block.bunk;
-                const bunkSlotIdx = block.slots[0];
+        let leagueWriteCount = 0;
+        Object.entries(window.leagueAssignments).forEach(([gradeName, gradeSlots]) => {
+            const perBunkSlots = window.divisionTimes?.[gradeName]?._perBunkSlots;
+            if (!perBunkSlots) return;
+            const divLevelSlots = Array.isArray(window.divisionTimes[gradeName])
+                ? window.divisionTimes[gradeName] : [];
 
-                // leagueAssignments is keyed by grade — find the entry
-                // whose slot time matches this block's time
-                const divAssignments = window.leagueAssignments[divName];
-                if (!divAssignments) return;
+            Object.entries(gradeSlots).forEach(([divSlotIdx, assignment]) => {
+                const divSlot = divLevelSlots[parseInt(divSlotIdx)];
+                const targetStartMin = divSlot?.startMin ?? null;
 
-                // Find the slotIdx in leagueAssignments whose time matches block
-                const perBunkSlots = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)] || [];
-                const bunkSlot = perBunkSlots[bunkSlotIdx];
-                if (!bunkSlot) return;
+                Object.entries(perBunkSlots).forEach(([bunkId, bunkSlots]) => {
+                    const bunkSlotIdx = bunkSlots.findIndex(s =>
+                        targetStartMin !== null
+                            ? s.startMin === targetStartMin
+                            : s.slotIndex === parseInt(divSlotIdx)
+                    );
+                    const finalIdx = bunkSlotIdx !== -1
+                        ? bunkSlotIdx
+                        : (parseInt(divSlotIdx) < bunkSlots.length ? parseInt(divSlotIdx) : -1);
 
-                // Match by time against divisionTimes div-level slots
-                const divLevelSlots = window.divisionTimes?.[divName] || [];
-                const matchingDivSlotIdx = Object.keys(divAssignments).find(idx => {
-                    const ds = divLevelSlots[parseInt(idx)];
-                    return ds && ds.startMin === bunkSlot.startMin;
-                });
+                    if (finalIdx === -1 || !window.scheduleAssignments[bunkId]) return;
 
-                const assignment = matchingDivSlotIdx != null
-                    ? divAssignments[matchingDivSlotIdx]
-                    : divAssignments[bunkSlotIdx]; // fallback
-
-                if (assignment && window.scheduleAssignments[bunk]) {
-                    window.scheduleAssignments[bunk][bunkSlotIdx] = {
+                    window.scheduleAssignments[bunkId][finalIdx] = {
                         field: assignment.sport || 'League Game',
                         sport: assignment.sport || null,
                         _activity: 'League Game',
@@ -1674,21 +1667,22 @@ if (leagueBlocks.length > 0) {
                         _fixed: false,
                         continuation: false
                     };
-                    log('[STEP 3] Wrote league assignment to bunk ' + bunk + ' slot ' + bunkSlotIdx);
-                }
+                    leagueWriteCount++;
+                });
             });
+        });
+        log('[STEP 3] Wrote ' + leagueWriteCount + ' league slots to scheduleAssignments');
     }
 
 } else {
     log('[STEP 3] No league blocks — skipping');
 }
-        // Remove league blocks from schedulableSlotBlocks (solver doesn't touch them)
-        const solverBlocks = schedulableSlotBlocks.filter(b =>
-            b.type !== 'league' && b.type !== 'specialty_league'
-        );
 
-        log('[STEP 3] ✅ Leagues complete. ' + solverBlocks.length + ' blocks remain for solver');
+const solverBlocks = schedulableSlotBlocks.filter(b =>
+    b.type !== 'league' && b.type !== 'specialty_league'
+);
 
+log('[STEP 3] ✅ Leagues complete. ' + solverBlocks.length + ' blocks remain for solver');
         // =====================================================================
         // STEP 4 — TOTAL SOLVER
         // =====================================================================
