@@ -1567,51 +1567,121 @@
         log('[STEP 2.7] Built ' + schedulableSlotBlocks.length + ' schedulable blocks for solver');
         log('[STEP 2] ✅ Live iterative solver complete');
 
-        // =====================================================================
         // STEP 3 — LEAGUE ENGINES
-        // =====================================================================
-        log('\n[STEP 3] Running league engines...');
+log('\n[STEP 3] Running league engines...');
 
-        // Identify league blocks from the skeleton
-        const leagueBlocks = schedulableSlotBlocks.filter(b =>
-            b.type === 'league' || b.type === 'specialty_league'
-        );
+const leagueBlocks = schedulableSlotBlocks.filter(b =>
+    b.type === 'league' || b.type === 'specialty_league'
+);
 
-        if (leagueBlocks.length > 0) {
-            // Specialty leagues first
-            if (window.runSpecialtyLeagues) {
-                try {
-                    await window.runSpecialtyLeagues(leagueBlocks.filter(b => b.type === 'specialty_league'));
-                    log('[STEP 3] Specialty leagues complete');
-                } catch (e) {
-                    warn('[STEP 3] Specialty league error: ' + e.message);
-                }
+if (leagueBlocks.length > 0) {
+
+    // Build leagueContext matching what SchedulerCoreLeagues expects
+    const leagueContext = {
+        schedulableSlotBlocks: leagueBlocks,
+        fieldUsageBySlot,
+        activityProperties,
+        masterLeagues: window.masterLeagues || [],
+        disabledLeagues: window.disabledLeagues || [],
+        masterSpecialtyLeagues: window.masterSpecialtyLeagues || [],
+        disabledSpecialtyLeagues: window.disabledSpecialtyLeagues || [],
+        rotationHistory: window.rotationHistory || {},
+        yesterdayHistory,
+        divisions,
+        fieldsBySport: window.fieldsBySport || {},
+        dailyLeagueSportsUsage: {},
+        fillBlock: window.fillBlock || function() {},
+        fields: activityProperties ? Object.keys(activityProperties) : [],
+        leagueAssignments: window.leagueAssignments,
+        storeLeagueMatchups: function(divName, slots, matchups, gameLabel, sport, leagueName) {
+            if (!window.leagueAssignments[divName]) {
+                window.leagueAssignments[divName] = {};
             }
-
-            // Regular leagues
-            if (window.runLeagues) {
-                try {
-                    await window.runLeagues(leagueBlocks.filter(b => b.type === 'league'));
-                    log('[STEP 3] Regular leagues complete');
-                } catch (e) {
-                    warn('[STEP 3] Regular league error: ' + e.message);
-                }
+            for (const slotIdx of slots) {
+                window.leagueAssignments[divName][slotIdx] = {
+                    matchups: matchups || [],
+                    gameLabel: gameLabel || '',
+                    sport: sport || '',
+                    leagueName: leagueName || ''
+                };
             }
-
-            // Consolidate league assignments
-            if (window.leagueAssignments) {
-                leagueBlocks.forEach(block => {
-                    const assignment = window.leagueAssignments[block.bunk] &&
-                                      window.leagueAssignments[block.bunk][block.slots[0]];
-                    if (assignment) {
-                        window.scheduleAssignments[block.bunk][block.slots[0]] = assignment;
-                    }
-                });
-            }
-        } else {
-            log('[STEP 3] No league blocks — skipping');
         }
+    };
 
+    // Specialty leagues first
+    if (window.SchedulerCoreSpecialtyLeagues?.processSpecialtyLeagues) {
+        try {
+            leagueContext.schedulableSlotBlocks = leagueBlocks.filter(b => b.type === 'specialty_league');
+            window.SchedulerCoreSpecialtyLeagues.processSpecialtyLeagues(leagueContext);
+            log('[STEP 3] Specialty leagues complete');
+        } catch (e) {
+            warn('[STEP 3] Specialty league error: ' + e.message);
+        }
+    }
+
+    // Regular leagues
+    if (window.SchedulerCoreLeagues?.processRegularLeagues) {
+        try {
+            leagueContext.schedulableSlotBlocks = leagueBlocks.filter(b => b.type === 'league');
+            window.SchedulerCoreLeagues.processRegularLeagues(leagueContext);
+            log('[STEP 3] Regular leagues complete');
+        } catch (e) {
+            warn('[STEP 3] Regular league error: ' + e.message);
+        }
+    }
+
+    // ★★★ FIX: Consolidate league assignments — keyed by grade name not bunk.
+    // leagueAssignments[divName][slotIdx] → find matching bunk blocks and
+    // write through to scheduleAssignments[bunk][bunkSlotIdx].
+    if (window.leagueAssignments) {
+        leagueBlocks
+            .filter(b => b.type === 'league' || b.type === 'specialty_league')
+            .forEach(block => {
+                const divName = block.divName;
+                const bunk = block.bunk;
+                const bunkSlotIdx = block.slots[0];
+
+                // leagueAssignments is keyed by grade — find the entry
+                // whose slot time matches this block's time
+                const divAssignments = window.leagueAssignments[divName];
+                if (!divAssignments) return;
+
+                // Find the slotIdx in leagueAssignments whose time matches block
+                const perBunkSlots = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)] || [];
+                const bunkSlot = perBunkSlots[bunkSlotIdx];
+                if (!bunkSlot) return;
+
+                // Match by time against divisionTimes div-level slots
+                const divLevelSlots = window.divisionTimes?.[divName] || [];
+                const matchingDivSlotIdx = Object.keys(divAssignments).find(idx => {
+                    const ds = divLevelSlots[parseInt(idx)];
+                    return ds && ds.startMin === bunkSlot.startMin;
+                });
+
+                const assignment = matchingDivSlotIdx != null
+                    ? divAssignments[matchingDivSlotIdx]
+                    : divAssignments[bunkSlotIdx]; // fallback
+
+                if (assignment && window.scheduleAssignments[bunk]) {
+                    window.scheduleAssignments[bunk][bunkSlotIdx] = {
+                        field: assignment.sport || 'League Game',
+                        sport: assignment.sport || null,
+                        _activity: 'League Game',
+                        _league: true,
+                        _leagueName: assignment.leagueName || '',
+                        _gameLabel: assignment.gameLabel || '',
+                        matchups: assignment.matchups || [],
+                        _fixed: false,
+                        continuation: false
+                    };
+                    log('[STEP 3] Wrote league assignment to bunk ' + bunk + ' slot ' + bunkSlotIdx);
+                }
+            });
+    }
+
+} else {
+    log('[STEP 3] No league blocks — skipping');
+}
         // Remove league blocks from schedulableSlotBlocks (solver doesn't touch them)
         const solverBlocks = schedulableSlotBlocks.filter(b =>
             b.type !== 'league' && b.type !== 'specialty_league'
