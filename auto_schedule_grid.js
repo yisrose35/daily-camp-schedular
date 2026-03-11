@@ -371,12 +371,95 @@ function renderDivisionGrid(divName, divInfo, bunks, isEditable) {
             }
         }
 
-        bunkCol.appendChild(bunkBody);
+      bunkCol.appendChild(bunkBody);
         gridBody.appendChild(bunkCol);
     });
 
-    container.appendChild(gridBody);
+    // ── League Overlay: spans all bunk columns as one combined cell ──
+    (function renderLeagueOverlays() {
+        var perBunkSlots = window.divisionTimes?.[divName]?._perBunkSlots;
+        if (!perBunkSlots) return;
 
+        // Find all league slots across any bunk (they all share the same time)
+        var leagueSlots = [];
+        var seen = {};
+        bunks.forEach(function(bunk) {
+            var bunkSlots = perBunkSlots[String(bunk)] || [];
+            bunkSlots.forEach(function(slot, idx) {
+                var assignment = (window.scheduleAssignments?.[String(bunk)] || [])[idx];
+                if (assignment && assignment._league && !seen[slot.startMin]) {
+                    seen[slot.startMin] = true;
+                    leagueSlots.push({ slot: slot, assignment: assignment });
+                }
+            });
+        });
+
+        if (leagueSlots.length === 0) return;
+
+        // The overlay sits on top of all bunk columns — position relative to gridBody
+        var overlayLayer = document.createElement('div');
+        overlayLayer.style.cssText = 'position:absolute; top:36px; left:70px; right:0; bottom:0; pointer-events:none; z-index:5;';
+
+        leagueSlots.forEach(function(entry) {
+            var slot = entry.slot;
+            var assignment = entry.assignment;
+
+            var top = (slot.startMin - dayStart) * PIXELS_PER_MINUTE;
+            var height = (slot.endMin - slot.startMin) * PIXELS_PER_MINUTE;
+
+            // Build matchup lines
+            var matchups = assignment.matchups || [];
+            var sport = assignment.sport || '';
+            var gameLabel = assignment._gameLabel || '';
+
+            var matchupHTML = matchups.map(function(m) {
+                // Format: "Team1 vs Team2 @ Field (Sport)" → "Team1 vs Team2 - Sport - Field"
+                var text = String(m);
+                var sportStr = sport;
+                var fieldStr = '';
+                var parsed = text.match(/^(.+?)\s*@\s*(.+?)\s*\((.+?)\)$/);
+                if (parsed) {
+                    var teams = parsed[1].trim();
+                    fieldStr = parsed[2].trim();
+                    sportStr = parsed[3].trim();
+                    text = teams + ' — ' + sportStr + ' — ' + fieldStr;
+                }
+                return '<div style="font-size:0.78rem; font-weight:600; color:#075985; padding:3px 0; border-bottom:1px solid rgba(2,132,199,0.15);">' + text + '</div>';
+            }).join('');
+
+            var overlay = document.createElement('div');
+            overlay.style.cssText = [
+                'position:absolute',
+                'top:' + top + 'px',
+                'left:2px',
+                'right:2px',
+                'height:' + (height - 4) + 'px',
+                'background:linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%)',
+                'border:2px solid #0284c7',
+                'border-radius:6px',
+                'padding:6px 10px',
+                'pointer-events:auto',
+                'overflow:hidden',
+                'box-shadow:0 2px 8px rgba(2,132,199,0.2)'
+            ].join(';');
+
+            overlay.innerHTML = [
+                '<div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">',
+                '  <span style="font-size:0.7rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#0369a1; background:rgba(2,132,199,0.15); padding:2px 8px; border-radius:999px;">🏆 League Game</span>',
+                gameLabel ? '<span style="font-size:0.7rem; color:#0369a1; font-weight:600;">' + gameLabel + '</span>' : '',
+                '</div>',
+                matchupHTML || '<div style="font-size:0.78rem; color:#0369a1;">No matchups assigned</div>'
+            ].join('');
+
+            overlayLayer.appendChild(overlay);
+        });
+
+        // Make gridBody relative so overlay positions correctly
+        gridBody.style.position = 'relative';
+        gridBody.appendChild(overlayLayer);
+    })();
+
+    container.appendChild(gridBody);
     // Shadow + spacing
     container.style.cssText = 'border-radius:8px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.1); margin-bottom:20px; background:#fff;';
 
