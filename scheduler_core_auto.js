@@ -1637,7 +1637,18 @@
         // =====================================================================
 // STEP 3 — LEAGUE ENGINES
 // =====================================================================
-log('\n[STEP 3] Running league engines...');
+// Build yesterdayHistory for league engine context
+        const yesterdayHistory = (() => {
+            const parts = (currentDate || '').split('-').map(Number);
+            if (!parts[0]) return {};
+            const d = new Date(parts[0], parts[1] - 1, parts[2]);
+            d.setDate(d.getDate() - 1);
+            const yKey = d.getFullYear() + '-' +
+                String(d.getMonth() + 1).padStart(2, '0') + '-' +
+                String(d.getDate()).padStart(2, '0');
+            return allDailyData[yKey]?.scheduleAssignments || {};
+        })();
+        log('\n[STEP 3] Running league engines...');
 
 const leagueBlocks = schedulableSlotBlocks.filter(b =>
     b.type === 'league' || b.type === 'specialty_league'
