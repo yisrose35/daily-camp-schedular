@@ -6,12 +6,15 @@
 // - Pass existing locks to scheduler core
 // - Save locks after generation
 // - Apply edit restrictions
+//
+// v1.1 SECURITY: Removed eval(originalHandler). Inline onclick is now resolved
+//      via allowlist (invokeOriginalHandlerSafely) — only known fn names, no args.
 // ============================================================================
 
 (function() {
     'use strict';
 
-    console.log("🔗 RBAC Integration v1.0 loading...");
+    console.log("🔗 RBAC Integration v1.1 loading...");
 
     // =========================================================================
     // INITIALIZATION
@@ -61,6 +64,27 @@
                 console.warn(`🔗 Module ${module} not found after ${maxWait}ms`);
             }
         }
+    }
+
+    /**
+     * Safely map an inline onclick string to a known global function (no eval).
+     * Only allows zero-argument calls to allowlisted names.
+     * @param {string} handlerStr - e.g. "generateSchedule()" or "runOptimizer()"
+     * @returns {function|null} The function to call, or null if not allowed
+     */
+    const ALLOWED_GENERATE_HANDLERS = [
+        'generateSchedule', 'handleGenerate', 'runOptimizer', 'runSkeletonOptimizer'
+    ];
+    function invokeOriginalHandlerSafely(handlerStr) {
+        if (!handlerStr || typeof handlerStr !== 'string') return null;
+        const trimmed = handlerStr.trim();
+        // Only match simple fn() or fn () with no arguments
+        const match = trimmed.match(/^(\w+)\s*\(\s*\)\s*$/);
+        if (!match) return null;
+        const fnName = match[1];
+        if (!ALLOWED_GENERATE_HANDLERS.includes(fnName)) return null;
+        const fn = window[fnName];
+        return typeof fn === 'function' ? fn : null;
     }
 
     // =========================================================================
@@ -176,15 +200,20 @@
         window.existingFieldLocks = existingLocks;
 
         try {
-            // Call original generation logic
+            // Call original generation logic (no eval — use allowlist for safety)
             if (typeof window.generateSchedule === 'function') {
                 await window.generateSchedule();
             } else if (typeof window.handleGenerate === 'function') {
                 await window.handleGenerate();
-            } else if (originalOnClick) {
+            } else if (originalOnClick && typeof originalOnClick === 'function') {
                 await originalOnClick();
-            } else if (originalHandler) {
-                eval(originalHandler);
+            } else if (originalHandler && typeof originalHandler === 'string') {
+                const fn = invokeOriginalHandlerSafely(originalHandler);
+                if (fn) await fn();
+                else {
+                    console.error("🔗 Generate button had inline handler but it was not in allowlist:", originalHandler);
+                    return;
+                }
             } else {
                 console.error("🔗 No generation function found!");
                 return;
