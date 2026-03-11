@@ -1862,7 +1862,7 @@ if (leagueBlocks.length > 0) {
             });
         });
         log('[STEP 3] Wrote ' + leagueWriteCount + ' league slots to scheduleAssignments');
-    }
+    
 
 } else {
     log('[STEP 3] No league blocks — skipping');
