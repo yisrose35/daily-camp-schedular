@@ -616,7 +616,68 @@
         });
 
         log('[STEP 2.1] ✅ Placed ' + pinnedCount + ' pinned blocks across camp');
+// -----------------------------------------------------------------
+        // STEP 2.1b — PLACE LEAGUE LAYERS (grade-wide simultaneous)
+        // Must run after pinned anchors (lunch/swim/dismissal already placed)
+        // but before per-bunk windowed placement so leagues get first pick
+        // of remaining free time.
+        // -----------------------------------------------------------------
+        log('\n[STEP 2.1b] Placing league layers (grade-wide simultaneous)...');
+        let leagueCount = 0;
 
+        const leagueLayersToPlace = [...windowedLayers, ...openLayers].filter(l => {
+            const t = (l.type || '').toLowerCase();
+            return t === 'league' || t === 'specialty_league';
+        });
+
+        leagueLayersToPlace.forEach(layer => {
+            const grade = layer.grade || layer.division;
+            const bunks = getBunksForGrade(grade, divisions);
+            if (!bunks.length) return;
+            if (allowedSet && !allowedSet.has(String(grade))) return;
+
+            const windowStart = layer.startMin;
+            const windowEnd = layer.endMin;
+            const dur = layer.periodMin || 30;
+            const lType = (layer.type || '').toLowerCase();
+
+            // Find first slot where ALL bunks in grade are simultaneously free
+            let placedStart = null;
+            for (let ts = windowStart; ts + dur <= windowEnd; ts += 5) {
+                const te = ts + dur;
+                const allFree = bunks.every(bunk =>
+                    !(bunkTimelines[bunk] || []).some(b => b.startMin < te && b.endMin > ts)
+                );
+                if (allFree) { placedStart = ts; break; }
+            }
+
+            if (placedStart === null) {
+                warn('[STEP 2.1b] No shared free gap for league in ' + grade);
+                return;
+            }
+
+            const placedEnd = placedStart + dur;
+            bunks.forEach(bunk => {
+                bunkTimelines[bunk].push({
+                    startMin: placedStart,
+                    endMin: placedEnd,
+                    type: lType,
+                    event: layer.event || 'League Game',
+                    layer,
+                    _classification: 'windowed',
+                    _committed: true,
+                    _fixed: true
+                });
+                bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
+                leagueCount++;
+            });
+
+            log('[STEP 2.1b] ' + grade + ': league placed at ' +
+                Math.floor(placedStart/60) + ':' + String(placedStart%60).padStart(2,'0') +
+                ' (' + dur + 'min) across ' + bunks.length + ' bunks');
+        });
+
+        log('[STEP 2.1b] ✅ ' + leagueCount + ' league blocks placed');
         // -----------------------------------------------------------------
         // STEP 2.2a — QUERY ROTATION ENGINE FOR RANKED SPECIALS PER BUNK
         // -----------------------------------------------------------------
@@ -912,7 +973,11 @@
         const bunkNeeds = {};
         gradeSortedForPlacement.forEach(grade => {
             const bunks = getBunksForGrade(grade, divisions);
-            const gradeLayers = nonPinnedLayers.filter(l => (l.grade || l.division) === grade);
+            const gradeLayers = nonPinnedLayers.filter(l => {
+    if ((l.grade || l.division) !== grade) return false;
+    const t = (l.type || '').toLowerCase();
+    return t !== 'league' && t !== 'specialty_league';
+})
             gradeLayers.sort((a, b) => b._ratio - a._ratio);
             bunks.forEach(bunk => {
                 bunkNeeds[bunk] = gradeLayers.map(layer => ({
@@ -1155,7 +1220,11 @@
 
         allGrades.forEach(grade => {
             const bunks = getBunksForGrade(grade, divisions);
-            const gradeLayers = nonPinnedLayers.filter(l => (l.grade || l.division) === grade);
+            const gradeLayers = nonPinnedLayers.filter(l => {
+    if ((l.grade || l.division) !== grade) return false;
+    const t = (l.type || '').toLowerCase();
+    return t !== 'league' && t !== 'specialty_league';
+})
 
             bunks.forEach(bunk => {
                 gradeLayers.forEach(layer => {
