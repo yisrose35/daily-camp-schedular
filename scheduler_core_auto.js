@@ -82,10 +82,12 @@
     }
 
     // Compute layer ratio = periodMin / (endMin - startMin)
-    function computeRatio(layer) {
+   function computeRatio(layer) {
         const win = (layer.endMin || 0) - (layer.startMin || 0);
         if (win <= 0) return 1;
         const dur = layer.periodMin || layer.duration || layer.durationMin || 0;
+        // No duration + tight window (≤ 30 min) = treat as pinned anchor (lunch, dismissal, etc.)
+        if (dur === 0 && win <= 30) return 1;
         return dur / win;
     }
 
