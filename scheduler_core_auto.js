@@ -960,21 +960,30 @@
                         const _classification = layer._classification;
                         const event       = layer.event || layer.name || layer.type || 'Activity';
 
-                        if (type === 'special') {
+                       if (type === 'special') {
                             // ── SPECIAL ──
                             // Try each candidate in ranked order until one fits position + capacity
                             const usedExclusions = new Set(Object.keys(bunkSpecialAssigned[bunk] || {}));
                             let placed = false;
 
+                            // Stagger special search start by bunk index
+                            const allBunksList2 = gradeSortedForPlacement.flatMap(g => getBunksForGrade(g, divisions));
+                            const bunkIdx2 = allBunksList2.indexOf(bunk);
+                            const specialWindowSize = windowEnd - windowStart;
+                            const specialStaggerOffset = specialWindowSize > 0
+                                ? snapTo5(Math.floor((bunkIdx2 / allBunksList2.length) * specialWindowSize))
+                                : 0;
+                            const specialStaggeredStart = windowStart + specialStaggerOffset;
+
                             while (!placed) {
                                 const candidate = getNextSpecial(bunk, usedExclusions, windowStart, windowEnd);
-                                if (!candidate) break; // no more candidates
+                                if (!candidate) break;
 
-                                // Find position for THIS candidate's duration
                                 const position = candidate.duration
-                                    ? findBestGapPosition(bunk, windowStart, windowEnd, candidate.duration)
-                                    : findFlexGapPosition(bunk, windowStart, windowEnd);
-
+                                    ? (findBestGapPosition(bunk, specialStaggeredStart, windowEnd, candidate.duration) ||
+                                       findBestGapPosition(bunk, windowStart, specialStaggeredStart, candidate.duration))
+                                    : (findFlexGapPosition(bunk, specialStaggeredStart, windowEnd) ||
+                                       findFlexGapPosition(bunk, windowStart, windowEnd));
                                 if (!position) {
                                     // No gap fits this candidate — try next
                                     usedExclusions.add(candidate.name);
