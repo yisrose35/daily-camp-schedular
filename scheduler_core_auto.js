@@ -970,8 +970,8 @@
                             const allBunksList2 = gradeSortedForPlacement.flatMap(g => getBunksForGrade(g, divisions));
                             const bunkIdx2 = allBunksList2.indexOf(bunk);
                             const specialWindowSize = windowEnd - windowStart;
-                            const specialStaggerOffset = specialWindowSize > 0
-                                ? snapTo5(Math.floor((bunkIdx2 / allBunksList2.length) * specialWindowSize))
+                           const specialStaggerOffset = specialWindowSize > 0
+                                ? snapTo5(Math.round((bunkIdx2 / allBunksList2.length) * specialWindowSize))
                                 : 0;
                             const specialStaggeredStart = windowStart + specialStaggerOffset;
 
