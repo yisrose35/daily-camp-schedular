@@ -1133,52 +1133,7 @@
                         }
 
                    } else {
-                        // ── NON-SPECIAL LAYER (sport, activity, league, custom, etc.) ──
-                        // duration === null means flex: fill whatever gap fits, snapped to 5 min
-                        // Place minimum required count
-                        while (placedCount < requiredCount) {
-                            const position = duration != null
-                                ? findBestGapPosition(bunk, windowStart, windowEnd, duration)
-                                : findFlexGapPosition(bunk, windowStart, windowEnd);
-                            if (!position) {
-                                warn('[STEP 2.3] No room for "' + event + '" in ' + bunk +
-                                    ' (needed ' + requiredCount + ', placed ' + placedCount + ')');
-                                break;
-                            }
-
-                            placeTentativeBlock(bunk, {
-                                startMin: position.start,
-                                endMin: position.end,
-                                type: type || 'slot',
-                                event: event || 'Activity',
-                                layer,
-                                _classification,
-                                _committed: false
-                            });
-                            placedCount++;
-                        }
-
-                        // If operator >= and quantity > 1, keep filling
-                        if ((op === '>=' || op === '≥') && requiredCount > 1) {
-                            let keepFilling = true;
-                            while (keepFilling) {
-                                const nextPos = duration != null
-                                    ? findBestGapPosition(bunk, windowStart, windowEnd, duration)
-                                    : findFlexGapPosition(bunk, windowStart, windowEnd);
-                                if (!nextPos) { keepFilling = false; break; }
-                                placeTentativeBlock(bunk, {
-                                    startMin: nextPos.start,
-                                    endMin: nextPos.end,
-                                    type: type || 'slot',
-                                    event: event || 'Activity',
-                                    layer,
-                                    _classification,
-                                    _committed: false
-                                });
-                            }
-                        
-
-        log('[STEP 2.3] ✅ Tentative placement complete');
+                        log('[STEP 2.3] ✅ Tentative placement complete');
 
         // -----------------------------------------------------------------
         // STEP 2.4 — BACKTRACK AND RETRY
