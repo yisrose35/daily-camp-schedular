@@ -85,7 +85,8 @@
     function computeRatio(layer) {
         const win = (layer.endMin || 0) - (layer.startMin || 0);
         if (win <= 0) return 1;
-        return (layer.periodMin || 0) / win;
+        const dur = layer.periodMin || layer.duration || layer.durationMin || 0;
+        return dur / win;
     }
 
     // Deep clone a plain object
@@ -763,6 +764,23 @@
             return null;
         }
 
+        // Helper: find the largest available gap within the window (no fixed duration)
+        // Returns the gap snapped to 5-min boundaries — used for sport/activity layers
+        // that have no explicit periodMin.
+        function findFlexGapPosition(bunk, windowStart, windowEnd) {
+            const gaps = getFreeGaps(bunk, windowStart, windowEnd);
+            let best = null;
+            for (const gap of gaps) {
+                const snappedStart = Math.ceil(gap.start / 5) * 5;
+                const snappedEnd   = Math.floor(gap.end   / 5) * 5;
+                if (snappedEnd - snappedStart < 5) continue;
+                if (!best || (snappedEnd - snappedStart) > (best.end - best.start)) {
+                    best = { start: snappedStart, end: snappedEnd };
+                }
+            }
+            return best;
+        }
+
         // Helper: place a block tentatively into a bunk's timeline
         function placeTentativeBlock(bunk, block) {
             bunkTimelines[bunk].push(block);
@@ -849,13 +867,18 @@
 
             for (const bunk of sortedBunks) {
 
-                for (const layer of gradeLayers) {
-                    const { startMin: windowStart, endMin: windowEnd, periodMin: duration,
-                            type, event, operator, quantity, _classification } = layer;
+               for (const layer of gradeLayers) {
+                    const windowStart     = layer.startMin;
+                    const windowEnd       = layer.endMin;
+                    const duration        = layer.periodMin || layer.duration || layer.durationMin || null; // null = flex
+                    const type            = layer.type;
+                    const event           = layer.event || layer.name || layer.type || 'Activity';
+                    const operator        = layer.operator || layer.op || '=';
+                    const quantity        = layer.quantity != null ? layer.quantity : (layer.qty != null ? layer.qty : 1);
+                    const _classification = layer._classification;
 
                     const requiredCount = quantity || 1;
                     const op = operator || '=';
-
                     let placedCount = 0;
 
                     if (type === 'special') {
@@ -939,11 +962,14 @@
                             }
                         }
 
-                    } else {
+                   } else {
                         // ── NON-SPECIAL LAYER (sport, activity, league, custom, etc.) ──
+                        // duration === null means flex: fill whatever gap fits, snapped to 5 min
                         // Place minimum required count
                         while (placedCount < requiredCount) {
-                            const position = findBestGapPosition(bunk, windowStart, windowEnd, duration);
+                            const position = duration != null
+                                ? findBestGapPosition(bunk, windowStart, windowEnd, duration)
+                                : findFlexGapPosition(bunk, windowStart, windowEnd);
                             if (!position) {
                                 warn('[STEP 2.3] No room for "' + event + '" in ' + bunk +
                                     ' (needed ' + requiredCount + ', placed ' + placedCount + ')');
@@ -966,7 +992,9 @@
                         if ((op === '>=' || op === '≥') && requiredCount > 1) {
                             let keepFilling = true;
                             while (keepFilling) {
-                                const nextPos = findBestGapPosition(bunk, windowStart, windowEnd, duration);
+                                const nextPos = duration != null
+                                    ? findBestGapPosition(bunk, windowStart, windowEnd, duration)
+                                    : findFlexGapPosition(bunk, windowStart, windowEnd);
                                 if (!nextPos) { keepFilling = false; break; }
                                 placeTentativeBlock(bunk, {
                                     startMin: nextPos.start,
