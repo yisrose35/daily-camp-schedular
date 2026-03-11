@@ -1016,9 +1016,22 @@
 
                         } else {
                             // ── NON-SPECIAL (swim, sport, league, etc.) ──
+                            // Stagger start position by bunk index to spread activities across the day
+                            const allBunksList = gradeSortedForPlacement.flatMap(g => getBunksForGrade(g, divisions));
+                            const bunkIdx = allBunksList.indexOf(bunk);
+                            const windowSize = windowEnd - windowStart;
+                            const staggerOffset = windowSize > 0
+                                ? Math.floor((bunkIdx / allBunksList.length) * windowSize)
+                                : 0;
+                            const staggeredStart = windowStart + snapTo5(staggerOffset);
+
+                            // Try staggered start first, fall back to first available gap
                             const position = duration
-                                ? findBestGapPosition(bunk, windowStart, windowEnd, duration)
-                                : findFlexGapPosition(bunk, windowStart, windowEnd);
+                                ? (findBestGapPosition(bunk, staggeredStart, windowEnd, duration) ||
+                                   findBestGapPosition(bunk, windowStart, staggeredStart, duration) ||
+                                   findBestGapPosition(bunk, windowStart, windowEnd, duration))
+                                : (findFlexGapPosition(bunk, staggeredStart, windowEnd) ||
+                                   findFlexGapPosition(bunk, windowStart, windowEnd));
                             if (!position) continue;
 
                             if (!hasActivityCapacity(type, position.start, position.end)) {
