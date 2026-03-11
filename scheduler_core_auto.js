@@ -845,32 +845,188 @@
             }
         }
 
-        // Process grades most constrained first
+       // ── STEP 2.3 ROUND-ROBIN PLACEMENT ENGINE ──
+        // Each round: visit every bunk once, place ONE activity per need.
+        // This staggers timelines naturally so specials/activities land at
+        // different times for different bunks — enabling time-sliced capacity reuse.
+
+        // Capacity tracker for non-special activity types
+        // Pulled from layer config if present, otherwise unlimited
+        const activityCapacityTracker = {};
+        function getTypeCapacity(type) {
+            // Check global settings for capacity config
+            const cfg = (globalSettings.app1?.activityCapacity || {})[type];
+            return cfg || 9999; // default unlimited
+        }
+        function claimActivitySlot(type, bunk, startMin, endMin) {
+            if (!activityCapacityTracker[type]) {
+                activityCapacityTracker[type] = { total: getTypeCapacity(type), assignments: [] };
+            }
+            activityCapacityTracker[type].assignments.push({ bunk, startMin, endMin });
+        }
+        function hasActivityCapacity(type, startMin, endMin) {
+            const tracker = activityCapacityTracker[type];
+            if (!tracker) return true;
+            const overlapping = tracker.assignments.filter(a =>
+                a.startMin < endMin && a.endMin > startMin
+            ).length;
+            return overlapping < tracker.total;
+        }
+        function willHaveCapacityLater(type, afterMin, windowEnd, duration) {
+            const tracker = activityCapacityTracker[type];
+            if (!tracker) return true;
+            // Scan forward in 5-min steps to see if a slot opens up
+            for (let t = afterMin; t + duration <= windowEnd; t += 5) {
+                const overlapping = tracker.assignments.filter(a =>
+                    a.startMin < t + duration && a.endMin > t
+                ).length;
+                if (overlapping < tracker.total) return true;
+            }
+            return false;
+        }
+
+        // Build needs list per bunk
+        const nonPinnedLayers = [...windowedLayers, ...openLayers];
         const gradeSortedForPlacement = sortGradesByConstraint(
             allGrades, layersByGrade, bunkSpecialQueues
         );
 
-        // For each grade, process all windowed and open layers together in constraint order
-        const nonPinnedLayers = [...windowedLayers, ...openLayers];
-
-        for (const grade of gradeSortedForPlacement) {
+        // bunkNeeds[bunk] = array of { layer, placed, required, op }
+        const bunkNeeds = {};
+        gradeSortedForPlacement.forEach(grade => {
             const bunks = getBunksForGrade(grade, divisions);
-            if (!bunks.length) continue;
-
-            const gradeLayers = nonPinnedLayers.filter(l =>
-                (l.grade || l.division) === grade
-            );
-
-            if (!gradeLayers.length) continue;
-
-            // Sort by ratio descending (most constrained first within grade)
+            const gradeLayers = nonPinnedLayers.filter(l => (l.grade || l.division) === grade);
             gradeLayers.sort((a, b) => b._ratio - a._ratio);
+            bunks.forEach(bunk => {
+                bunkNeeds[bunk] = gradeLayers.map(layer => ({
+                    layer,
+                    placed: 0,
+                    required: layer.qty != null ? layer.qty : (layer.quantity != null ? layer.quantity : 1),
+                    op: layer.op || layer.operator || '='
+                }));
+            });
+        });
 
-            // Sort bunks most constrained first
-            const sortedBunks = sortBunksByConstraint(bunks, bunkSpecialQueues);
+        // Round-robin loop — keep going until no progress made
+        let madeProgress = true;
+        let roundCount = 0;
+        const MAX_ROUNDS = 30;
 
-            for (const bunk of sortedBunks) {
+        while (madeProgress && roundCount < MAX_ROUNDS) {
+            madeProgress = false;
+            roundCount++;
+            log('[STEP 2.3] Round ' + roundCount);
 
+            for (const grade of gradeSortedForPlacement) {
+                const bunks = sortBunksByConstraint(
+                    getBunksForGrade(grade, divisions), bunkSpecialQueues
+                );
+
+                for (const bunk of bunks) {
+                    const needs = bunkNeeds[bunk] || [];
+
+                    for (const need of needs) {
+                        const { layer, op, required } = need;
+                        // Skip if fully satisfied
+                        if (op === '=' && need.placed >= required) continue;
+                        if (op === '>=' && need.placed >= required && roundCount > 1) continue;
+
+                        const windowStart = layer.startMin;
+                        const windowEnd   = layer.endMin;
+                        const type        = layer.type;
+                        const duration    = layer.periodMin || layer.durationMin || layer.duration || null;
+                        const _classification = layer._classification;
+                        const event       = layer.event || layer.name || layer.type || 'Activity';
+
+                        if (type === 'special') {
+                            // ── SPECIAL ──
+                            const usedExclusions = new Set(Object.keys(bunkSpecialAssigned[bunk] || {}));
+                            const candidate = getNextSpecial(bunk, usedExclusions, windowStart, windowEnd);
+                            if (!candidate) continue;
+
+                            const position = candidate.duration
+                                ? findBestGapPosition(bunk, windowStart, windowEnd, candidate.duration)
+                                : findFlexGapPosition(bunk, windowStart, windowEnd);
+                            if (!position) continue;
+
+                            // Post-position capacity check
+                            const tracker = specialCapacityTracker[candidate.name];
+                            const overlappingNow = tracker ? tracker.assignments.filter(a =>
+                                a.startMin < position.end && a.endMin > position.start
+                            ).length : 0;
+
+                            if (tracker && overlappingNow >= tracker.total) {
+                                // Full right now — check if it'll free up later this bunk's day
+                                const laterDur = candidate.duration || 30;
+                                const freeLater = tracker.assignments.some(a => {
+                                    // A slot opens after an existing assignment ends
+                                    const openAt = a.endMin;
+                                    if (openAt >= windowEnd - laterDur) return false;
+                                    const futureOverlap = tracker.assignments.filter(b =>
+                                        b.startMin < openAt + laterDur && b.endMin > openAt
+                                    ).length;
+                                    return futureOverlap < tracker.total;
+                                });
+                                if (freeLater) continue; // skip this round, try again later
+                                // Truly unavailable — exclude and move on
+                                continue;
+                            }
+
+                            claimSpecial(bunk, candidate, position.start, position.end);
+                            placeTentativeBlock(bunk, {
+                                startMin: position.start,
+                                endMin:   position.end,
+                                type:     'special',
+                                event:    candidate.name,
+                                layer,
+                                _classification,
+                                _assignedSpecial: candidate.name,
+                                _specialDuration: candidate.duration,
+                                _specialLocation: candidate.location,
+                                _activityLocked:  true,
+                                _bunkOverride:    true
+                            });
+                            need.placed++;
+                            madeProgress = true;
+
+                        } else {
+                            // ── NON-SPECIAL (swim, sport, league, etc.) ──
+                            const position = duration
+                                ? findBestGapPosition(bunk, windowStart, windowEnd, duration)
+                                : findFlexGapPosition(bunk, windowStart, windowEnd);
+                            if (!position) continue;
+
+                            if (!hasActivityCapacity(type, position.start, position.end)) {
+                                // Check if capacity opens up later in this bunk's window
+                                const dur = duration || (position.end - position.start);
+                                if (willHaveCapacityLater(type, position.end, windowEnd, dur)) {
+                                    continue; // wait for next round
+                                }
+                                // No future capacity — place anyway (unlimited effective cap)
+                            }
+
+                            claimActivitySlot(type, bunk, position.start, position.end);
+                            placeTentativeBlock(bunk, {
+                                startMin: position.start,
+                                endMin:   position.end,
+                                type,
+                                event,
+                                layer,
+                                _classification,
+                                _activityLocked: true
+                            });
+                            need.placed++;
+                            madeProgress = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        log('[STEP 2.3] ✅ Round-robin complete after ' + roundCount + ' rounds');
+
+        // ── old closing braces replaced by round-robin — remove these: ──
+        // (delete the old closing `}` for bunk loop and layer loop here)
                for (const layer of gradeLayers) {
                     const windowStart     = layer.startMin;
                     const windowEnd       = layer.endMin;
