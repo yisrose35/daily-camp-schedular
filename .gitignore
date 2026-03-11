@@ -1,2 +1,5 @@
 # Local copy of security audit (do not push)
 *Vulner.txt
+
+# Supabase config (real keys — never commit)
+config.js

@@ -34,11 +34,17 @@
     // =========================================================================
     // CONFIGURATION - SINGLE SOURCE OF TRUTH
     // =========================================================================
+    // Prefer window.__CAMPISTRY_SUPABASE__ (set by config.js) so the anon key
+    // can be kept out of the repo. config.js is gitignored; use config.example.js
+    // as a template. If __CAMPISTRY_SUPABASE__ is not set, fallback is used
+    // (for local dev). For production, use config.js and remove fallback below.
+    // =========================================================================
 
+    const _injected = typeof window !== 'undefined' && window.__CAMPISTRY_SUPABASE__;
     const CONFIG = {
-        SUPABASE_URL: "https://bzqmhcumuarrbueqttfh.supabase.co",
-        SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cW1oY3VtdWFycmJ1ZXF0dGZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDg3NDAsImV4cCI6MjA4MjEyNDc0MH0.5WpFBj1s1937XNZ0yxLdlBWO7xolPtf7oB10LDLONsI",
-        
+        SUPABASE_URL: (_injected && window.__CAMPISTRY_SUPABASE__.url) || "https://bzqmhcumuarrbueqttfh.supabase.co",
+        SUPABASE_ANON_KEY: (_injected && window.__CAMPISTRY_SUPABASE__.anonKey) || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cW1oY3VtdWFycmJ1ZXF0dGZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDg3NDAsImV4cCI6MjA4MjEyNDc0MH0.5WpFBj1s1937XNZ0yxLdlBWO7xolPtf7oB10LDLONsI",
+
         // Local storage keys
         CACHE_KEYS: {
             CAMP_ID: 'campistry_camp_id',
@@ -47,7 +53,7 @@
             ROLE: 'campistry_role',
             IS_TEAM_MEMBER: 'campistry_is_team_member'
         },
-        
+
         // Debug mode - set to true to see detailed logs
         DEBUG: true
     };
