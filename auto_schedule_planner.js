@@ -768,20 +768,22 @@ function openPopover(layerId, bandEl) {
     '</div><input type="number" class="al-pop-input al-pop-qty" id="al-pop-qty" value="' + (layer.quantity || 1) + '" min="1" max="10"></div>' +
    '<div class="al-popover-row"><label>Pin Time</label><button class="al-pin-toggle' + (isPinned ? ' active' : '') + '" id="al-pop-pin"><span class="al-pin-icon">\uD83D\uDCCC</span><span id="al-pin-label">' + (isPinned ? 'Exact Time' : 'Flexible') + '</span></button></div>' +
     (isPinned ? '<div style="font-size:10px;color:#92400e;background:#fffbeb;border-radius:6px;padding:6px 10px;margin:0 0 8px 78px;">\u26A0\uFE0F Must occur at exactly <b>' + fmtTime(layer.startMin) + '\u2013' + fmtTime(layer.endMin) + '</b></div>' : '') +
-    '<div class="al-popover-divider"></div>' +
-    '<div class="al-popover-section-title">Weekly Recurrence</div>' +
-    '<div class="al-popover-row">' +
-      '<label>Per Week</label>' +
-      '<div class="al-pop-ops">' +
-        '<button class="al-pop-op' + ((layer.weeklyOp || '\u2265') === '\u2265' ? ' active' : '') + '" data-wop="\u2265">\u2265</button>' +
-        '<button class="al-pop-op' + ((layer.weeklyOp) === '\u2264' ? ' active' : '') + '" data-wop="\u2264">\u2264</button>' +
-        '<button class="al-pop-op' + ((layer.weeklyOp) === '=' ? ' active' : '') + '" data-wop="=">=</button>' +
-      '</div>' +
-      '<input type="number" class="al-pop-input al-pop-qty" id="al-pop-week-qty"' +
-        ' value="' + (layer.timesPerWeek != null ? layer.timesPerWeek : '') + '"' +
-        ' min="1" max="7" placeholder="Any">' +
-      '<span style="font-size:10px;color:#94a3b8;margin-left:4px;">days/wk<br><span style="color:#64748b;">blank&nbsp;=&nbsp;every&nbsp;day</span></span>' +
-    '</div>' +
+    (layer.type === 'swim' ?
+      '<div class="al-popover-divider"></div>' +
+      '<div class="al-popover-section-title">Max Per Bunk Per Week</div>' +
+      '<div class="al-popover-row">' +
+        '<label>Per Week</label>' +
+        '<div class="al-pop-ops">' +
+          '<button class="al-pop-op' + ((layer.weeklyOp || '\u2265') === '\u2265' ? ' active' : '') + '" data-wop="\u2265">\u2265</button>' +
+          '<button class="al-pop-op' + ((layer.weeklyOp) === '\u2264' ? ' active' : '') + '" data-wop="\u2264">\u2264</button>' +
+          '<button class="al-pop-op' + ((layer.weeklyOp) === '=' ? ' active' : '') + '" data-wop="=">=</button>' +
+        '</div>' +
+        '<input type="number" class="al-pop-input al-pop-qty" id="al-pop-week-qty"' +
+          ' value="' + (layer.timesPerWeek != null ? layer.timesPerWeek : '') + '"' +
+          ' min="1" max="7" placeholder="Any">' +
+        '<span style="font-size:10px;color:#94a3b8;margin-left:4px;">days/wk<br><span style="color:#64748b;">blank&nbsp;=&nbsp;no&nbsp;limit</span></span>' +
+      '</div>'
+    : '') +
     '<div class="al-popover-actions"><button class="al-btn al-btn-danger al-btn-sm" id="al-pop-delete">\uD83D\uDDD1 Delete</button><button class="al-btn al-btn-primary al-btn-sm" id="al-pop-done">\u2713 Done</button></div>';
 
   document.body.appendChild(popoverEl);
@@ -830,10 +832,14 @@ function openPopover(layerId, bandEl) {
     layer.quantity = qVal;
     layer.operator = opVal;
     layer.pinExact = pinned;
-    layer.timesPerWeek = weekQtyVal;
-    layer.weeklyOp = weekQtyVal != null ? wopVal : '\u2265';
-    hasChanges = true; saveDraftLayers(); closePopover(); render();
-  };
+   if (layer.type === 'swim') {
+      layer.timesPerWeek = weekQtyVal;
+      layer.weeklyOp = weekQtyVal != null ? wopVal : '\u2265';
+    } else {
+      delete layer.timesPerWeek;
+      delete layer.weeklyOp;
+    }
+    hasChanges = true; saveDraftLayers(); closePopover(); render();  };
 }
 
 function closePopover() {
