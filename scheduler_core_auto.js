@@ -1844,15 +1844,8 @@ if (leagueBlocks.length > 0) {
             Object.entries(gradeSlots).forEach(([startMinKey, assignment]) => {
                     const targetStartMin = parseInt(startMinKey);
                 Object.entries(perBunkSlots).forEach(([bunkId, bunkSlots]) => {
-                    const bunkSlotIdx = bunkSlots.findIndex(s =>
-                        targetStartMin !== null
-                            ? s.startMin === targetStartMin
-                            : s.slotIndex === parseInt(divSlotIdx)
-                    );
-                    const finalIdx = bunkSlotIdx !== -1
-                        ? bunkSlotIdx
-                        : (parseInt(divSlotIdx) < bunkSlots.length ? parseInt(divSlotIdx) : -1);
-
+                   const bunkSlotIdx = bunkSlots.findIndex(s => s.startMin === targetStartMin);
+                    const finalIdx = bunkSlotIdx;
                     if (finalIdx === -1 || !window.scheduleAssignments[bunkId]) return;
 
                     window.scheduleAssignments[bunkId][finalIdx] = {
