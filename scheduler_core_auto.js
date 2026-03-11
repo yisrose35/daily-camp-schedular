@@ -977,20 +977,8 @@
                                 a.startMin < position.end && a.endMin > position.start
                             ).length : 0;
 
-                            if (tracker && overlappingNow >= tracker.total) {
-                                // Full right now — check if it'll free up later this bunk's day
-                                const laterDur = candidate.duration || 30;
-                                const freeLater = tracker.assignments.some(a => {
-                                    // A slot opens after an existing assignment ends
-                                    const openAt = a.endMin;
-                                    if (openAt >= windowEnd - laterDur) return false;
-                                    const futureOverlap = tracker.assignments.filter(b =>
-                                        b.startMin < openAt + laterDur && b.endMin > openAt
-                                    ).length;
-                                    return futureOverlap < tracker.total;
-                                });
-                                if (freeLater) continue; // skip this round, try again later
-                                // Truly unavailable — exclude and move on
+                           if (tracker && overlappingNow >= tracker.total) {
+                                // At capacity at this time — try next special
                                 continue;
                             }
 
