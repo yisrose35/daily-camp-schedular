@@ -1841,11 +1841,20 @@ if (leagueBlocks.length > 0) {
         Object.entries(window.leagueAssignments).forEach(([gradeName, gradeSlots]) => {
             const perBunkSlots = window.divisionTimes?.[gradeName]?._perBunkSlots;
             if (!perBunkSlots) return;
-            Object.entries(gradeSlots).forEach(([startMinKey, assignment]) => {
-                const targetStartMin = parseInt(startMinKey);
+           // Get division-level slots to resolve slot index → startMin
+            const divLevelSlots = window.divisionTimes?.[gradeName];
+            const divSlotsArray = Array.isArray(divLevelSlots)
+                ? divLevelSlots
+                : Object.values(divLevelSlots || {}).filter(v => typeof v === 'object' && v.startMin);
+
+            Object.entries(gradeSlots).forEach(([slotIdxKey, assignment]) => {
+                // Resolve slot index to startMin via division-level slots
+                const divSlot = divSlotsArray[parseInt(slotIdxKey)];
+                const targetStartMin = divSlot?.startMin ?? null;
+                if (targetStartMin === null) return;
+
                 Object.entries(perBunkSlots).forEach(([bunkId, bunkSlots]) => {
-                    const finalIdx = bunkSlots.findIndex(s => s.startMin === targetStartMin);
-                    if (finalIdx === -1 || !window.scheduleAssignments[bunkId]) return;
+                    const finalIdx = bunkSlots.findIndex(s => s.startMin === targetStartMin);                    if (finalIdx === -1 || !window.scheduleAssignments[bunkId]) return;
                     window.scheduleAssignments[bunkId][finalIdx] = {
                         field: assignment.sport || 'League Game',
                         sport: assignment.sport || null,
