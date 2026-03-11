@@ -907,6 +907,28 @@
             });
         });
 
+       // ── SOFT ROTATION PRE-PASS ──
+        // Assign each grade a different "first priority" activity type.
+        // This nudges grades to attempt different activities in the first round,
+        // naturally staggering timelines across the morning.
+        // It's purely a reordering of bunkNeeds — not a hard constraint.
+        const activityTypes = [...new Set(nonPinnedLayers.map(l => l.type))];
+        gradeSortedForPlacement.forEach((grade, gradeIdx) => {
+            const bunks = getBunksForGrade(grade, divisions);
+            // Rotate activity type priority by grade index
+            const priorityType = activityTypes[gradeIdx % activityTypes.length];
+            bunks.forEach(bunk => {
+                const needs = bunkNeeds[bunk] || [];
+                // Move priority type to front, keep everything else in original order
+                bunkNeeds[bunk] = [
+                    ...needs.filter(n => n.layer.type === priorityType),
+                    ...needs.filter(n => n.layer.type !== priorityType)
+                ];
+            });
+        });
+        log('[STEP 2.3] Soft rotation pre-pass: ' + gradeSortedForPlacement.map((g, i) =>
+            g + '→' + activityTypes[i % activityTypes.length]).join(', '));
+
         // Round-robin loop — keep going until no progress made
         let madeProgress = true;
         let roundCount = 0;
