@@ -492,8 +492,15 @@
         // Open:     ratio < 0.25
         const classified = layers.map(layer => {
             const ratio = computeRatio(layer);
+            const lType = (layer.type || '').toLowerCase();
             let classification;
-            if (ratio >= 1) {
+
+            // ★★★ FIX: League layers are ALWAYS pinned — they must fire simultaneously
+            // across all bunks in the grade at the exact user-defined time.
+            // The windowed/open solver must never reposition them per-bunk independently.
+            if (lType === 'league' || lType === 'specialty_league') {
+                classification = 'pinned';
+            } else if (ratio >= 1) {
                 classification = 'pinned';
             } else if (ratio >= 0.25) {
                 classification = 'windowed';
