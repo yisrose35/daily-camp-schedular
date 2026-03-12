@@ -450,7 +450,7 @@
     /**
      * Pick the best special for a bunk (least used by this bunk)
      */
-    function pickBestSpecialForBunk(bunk, usableSpecials, historicalCounts) {
+    function pickBestSpecialForBunk(bunk, usableSpecials, historicalCounts, activityProps) {
         if (usableSpecials.length === 0) return null;
         
         const bunkHistory = historicalCounts[bunk] || {};
@@ -787,7 +787,7 @@
                     const usable = getUsableSpecialsForBunk(bunk, divisionName, specialsBlockA, historical, activityProps, slotsA);
                     
                     if (usable.length > 0) {
-                        const chosen = pickBestSpecialForBunk(bunk, usable, historical);
+                       const chosen = pickBestSpecialForBunk(bunk, usable, historical, activityProps);
                         
                         if (chosen) {
                             block1[bunk] = chosen.name;
@@ -857,7 +857,7 @@
                         const usable = getUsableSpecialsForBunk(bunk, divisionName, specialsBlockB, historical, activityProps, slotsB);
                         
                         if (usable.length > 0) {
-                            const chosen = pickBestSpecialForBunk(bunk, usable, historical);
+                           const chosen = pickBestSpecialForBunk(bunk, usable, historical, activityProps);
                             
                             if (chosen) {
                                 block2[bunk] = chosen.name;
