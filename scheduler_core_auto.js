@@ -1684,7 +1684,36 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
                     });
             });
         });
-
+// Write swim/snacks/dismissal-type blocks that are windowed (not pinned) but still fixed
+        const fixedTypes = ['swim', 'snacks', 'lunch', 'dismissal'];
+        allGrades.forEach(grade => {
+            const divSlots = window.divisionTimes && window.divisionTimes[grade];
+            const perBunkSlots = divSlots && divSlots._perBunkSlots;
+            if (!perBunkSlots) return;
+            const bunks = getBunksForGrade(grade, divisions);
+            bunks.forEach(bunk => {
+                const bunkSlotArr = perBunkSlots[String(bunk)] || [];
+                const timeline = bunkTimelines[bunk] || [];
+                timeline
+                    .filter(b => fixedTypes.includes((b.type || '').toLowerCase()) && b._committed)
+                    .forEach(block => {
+                        const slotIdx = bunkSlotArr.findIndex(s =>
+                            s.startMin === block.startMin && s.endMin === block.endMin
+                        );
+                        if (slotIdx === -1) return;
+                        if (window.scheduleAssignments[String(bunk)][slotIdx]) return;
+                        window.scheduleAssignments[String(bunk)][slotIdx] = {
+                            field: block.event,
+                            sport: null,
+                            _activity: block.event,
+                            _fixed: true,
+                            _pinned: true,
+                            _bunkOverride: true,
+                            continuation: false
+                        };
+                    });
+            });
+        });
         // LOCK divisionTimes — nothing may overwrite from this point
         window._divisionTimesLocked = true;
         window._autoDivisionTimesBuilt = true;
