@@ -1309,9 +1309,25 @@
                                     const remainingMin = freeSlice.slice(i+1).reduce((s, f2) =>
                                         s + (f2.layer.durationMin || f2.layer.periodMin || f2.layer.duration || GAP_MIN_DUR), 0);
                                     const available = aStart - groupCursor - remainingMin;
-                                    const dur = isLast
-                                        ? (aStart - groupCursor)  // last one stretches exactly to aStart
-                                        : snapTo5(Math.max(fdMin, Math.min(fdMax, available)));
+                                    let dur;
+                                    if (isLast) {
+                                        const rawDur = aStart - groupCursor;
+                                        if (rawDur <= fdMax) {
+                                            dur = Math.max(fdMin, rawDur);
+                                        } else {
+                                            // Exceeds dMax — shift start forward so block ends at aStart
+                                            const shiftedStart = aStart - fdMax;
+                                            if (shiftedStart >= win.start && shiftedStart >= groupCursor) {
+                                                plan.push({ need: fn, startMin: shiftedStart, endMin: aStart });
+                                                groupCursor = aStart;
+                                                freeIdx++;
+                                                return; // continue forEach
+                                            }
+                                            dur = fdMax; // clamp, slot will fill remainder
+                                        }
+                                    } else {
+                                        dur = snapTo5(Math.max(fdMin, Math.min(fdMax, available)));
+                                    }
                                     if (dur >= fdMin) {
                                         plan.push({ need: fn, startMin: groupCursor, endMin: groupCursor + dur });
                                         groupCursor += dur;
