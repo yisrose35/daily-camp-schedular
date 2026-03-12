@@ -1375,7 +1375,95 @@
                                     position.end = position.start + durationMax;
                                 }
                             }
-                            if (!position) continue;
+                           if (!position) continue;
+
+                            // ── Look-ahead: check if this placement creates unfillable gaps ──
+                            // Simulate placing this block and check remaining gaps in the window
+                            // can still accommodate other pending needs for this bunk
+                            const pendingNeeds = needs.filter(n => {
+                                if (n === need) return false;
+                                if (n.op === '=' && n.placed >= n.required) return false;
+                                return true;
+                            });
+
+                            if (pendingNeeds.length > 0) {
+                                // Temporarily place the block
+                                const tempBlock = {
+                                    startMin: position.start,
+                                    endMin: position.end,
+                                    type, event, layer, _classification,
+                                    _temp: true
+                                };
+                                placeTentativeBlock(bunk, tempBlock);
+
+                                // Check each pending need can still find a valid gap
+                                let causesDeadlock = false;
+                                for (const pending of pendingNeeds) {
+                                    const pWinStart = pending.layer.startMin;
+                                    const pWinEnd   = pending.layer.endMin;
+                                    const pDurMin   = pending.layer.durationMin || pending.layer.periodMin || pending.layer.duration || null;
+                                    if (!pDurMin) continue; // no minimum — always fits somewhere
+
+                                    // Check if any gap in this pending layer's window can fit its durationMin
+                                    const gaps = getFreeGaps(bunk, pWinStart, pWinEnd);
+                                    const canFit = gaps.some(g => (g.end - g.start) >= pDurMin);
+                                    if (!canFit) {
+                                        causesDeadlock = true;
+                                        break;
+                                    }
+                                }
+
+                                // Remove temp block
+                                removeTentativeBlock(bunk, tempBlock);
+
+                                if (causesDeadlock) {
+                                    // This position creates a deadlock — try placing at a different offset
+                                    // Shift the search start forward by the block duration and retry
+                                    const altPosition = targetDuration
+                                        ? (findBestGapPosition(bunk, position.end, windowEnd, targetDuration) ||
+                                           findBestGapPosition(bunk, windowStart, position.start, targetDuration) ||
+                                           (targetDuration !== durationMin &&
+                                               findBestGapPosition(bunk, windowStart, windowEnd, durationMin)))
+                                        : findFlexGapPosition(bunk, position.end, windowEnd, durationMin);
+
+                                    if (altPosition && durationMax) {
+                                        const altDur = altPosition.end - altPosition.start;
+                                        if (altDur > durationMax) altPosition.end = altPosition.start + durationMax;
+                                    }
+
+                                    if (altPosition) {
+                                        // Verify alt position doesn't also deadlock
+                                        const tempBlock2 = {
+                                            startMin: altPosition.start,
+                                            endMin: altPosition.end,
+                                            type, event, layer, _classification,
+                                            _temp: true
+                                        };
+                                        placeTentativeBlock(bunk, tempBlock2);
+
+                                        let altDeadlocks = false;
+                                        for (const pending of pendingNeeds) {
+                                            const pWinStart = pending.layer.startMin;
+                                            const pWinEnd   = pending.layer.endMin;
+                                            const pDurMin   = pending.layer.durationMin || pending.layer.periodMin || pending.layer.duration || null;
+                                            if (!pDurMin) continue;
+                                            const gaps = getFreeGaps(bunk, pWinStart, pWinEnd);
+                                            const canFit = gaps.some(g => (g.end - g.start) >= pDurMin);
+                                            if (!canFit) { altDeadlocks = true; break; }
+                                        }
+
+                                        removeTentativeBlock(bunk, tempBlock2);
+
+                                        if (!altDeadlocks) {
+                                            // Alt position is better — use it
+                                            position.start = altPosition.start;
+                                            position.end   = altPosition.end;
+                                        }
+                                        // If alt also deadlocks, proceed with original — best effort
+                                    }
+                                    // If no alt found, proceed with original — best effort
+                                }
+                            }
 
                             if (!hasActivityCapacity(type, position.start, position.end)) {
                                 // Check if capacity opens up later in this bunk's window
