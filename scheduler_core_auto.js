@@ -1240,28 +1240,50 @@
                     // Sort by ratio descending (most constrained first)
                     otherNeeds.sort((a, b) => b.layer._ratio - a.layer._ratio);
 
-                    let placeCursor = win.start;
+                   let placeCursor = win.start;
+
+                    // Sort purely by ratio descending — most constrained first
+                    // ratio = duration/window so snacks (10min in 60min = 0.167) 
+                    // beats sport (30min in 330min = 0.09) and goes first
+                    otherNeeds.sort((a, b) => b.layer._ratio - a.layer._ratio);
+
                     for (const need of otherNeeds) {
+                        if (need.placed >= need.required) continue;
                         const { layer } = need;
                         const dMin = layer.durationMin || layer.periodMin || layer.duration || GAP_MIN_DUR;
                         const dMax = layer.durationMax || layer.periodMin || layer.duration || GAP_MAX_DUR;
-                        const remaining = win.end - placeCursor;
-                        const remainingNeeds = otherNeeds.filter(n => n !== need && n.placed < n.required).length + 1;
 
-                        // Ideal size: distribute available space evenly
-                        const idealDur = snapTo5(Math.floor(remaining / remainingNeeds));
-                        const targetDur = Math.max(dMin, Math.min(dMax, idealDur));
+                        // How many needs still need placement including this one
+                        const stillPending = otherNeeds.filter(n => n !== need && n.placed < n.required);
+                        const remainingNeeds = stillPending.length + 1;
 
-                        // Clamp so we don't overshoot the window
-                        const actualDur = Math.min(targetDur, remaining);
-                        if (actualDur < dMin) continue; // not enough room
+                        // How much time do the other pending needs minimally need
+                        const otherMinNeeded = stillPending.reduce((sum, n) => {
+                            const nStart = Math.max(placeCursor, n.layer.startMin);
+                            return sum + (n.layer.durationMin || n.layer.periodMin || n.layer.duration || GAP_MIN_DUR);
+                        }, 0);
 
-                        // Respect layer window boundaries
+                        // Effective start respects layer window
                         const effectiveStart = Math.max(placeCursor, layer.startMin);
-                        const effectiveEnd   = Math.min(placeCursor + actualDur, layer.endMin, win.end);
-                        if (effectiveEnd - effectiveStart < dMin) continue;
 
-                        const type  = layer.type;
+                        // Don't place so late that other needs can't fit after us
+                        const latestEnd = win.end - otherMinNeeded;
+                        const effectiveEnd = Math.min(effectiveStart + dMax, layer.endMin, win.end, latestEnd);
+
+                        // Ideal size: take as much of remaining space as allowed
+                        // leaving enough for other pending needs
+                        const availableForThis = effectiveEnd - effectiveStart;
+                       if (availableForThis < dMin) {
+                            placeCursor = effectiveStart;
+                            continue;
+                        }
+
+                        const targetDur = snapTo5(Math.max(dMin, Math.min(dMax, availableForThis)));
+                        const actualEnd = effectiveStart + targetDur;
+
+                        // Don't hardcode gap fills — let Step 2.5 gap-fill handle
+                        // any remaining space after all needs are placed
+                        placeCursor = effectiveStart;                        const type  = layer.type;
                         const event = layer.event || layer.name || layer.type || 'Activity';
                         const _classification = layer._classification;
 
