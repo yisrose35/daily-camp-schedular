@@ -160,7 +160,12 @@ function validateSpecialActivity(activity, activityName) {
             enabled: activity.multiPart.enabled === true,
             totalParts: (function() { var tp = parseInt(activity.multiPart.totalParts, 10); return (!isNaN(tp) && tp >= 2 && tp <= 10) ? tp : 2; })(),
             daysBetween: (function() { var db = parseInt(activity.multiPart.daysBetween, 10); return (!isNaN(db) && db >= 1 && db <= 14) ? db : 3; })()
-        } : { enabled: false, totalParts: 2, daysBetween: 3 }
+         } : { enabled: false, totalParts: 2, daysBetween: 3 },
+        minFrequency: (activity.minFrequency != null && parseInt(activity.minFrequency, 10) > 0)
+            ? parseInt(activity.minFrequency, 10) : null,
+        minFrequencyPeriod: activity.minFrequencyPeriod || 'week',
+        maxUsagePerGrade: (activity.maxUsagePerGrade && typeof activity.maxUsagePerGrade === 'object')
+            ? activity.maxUsagePerGrade : {}
     };
 }
 
