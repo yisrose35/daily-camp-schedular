@@ -610,56 +610,7 @@
             });
         }
 
-       // ── Score a completed set of bunk timelines ──────────────────────────
-        // Lower = better. 0 = perfect.
-        function scoreTimelines(timelines, iterWarnings) {
-            let score = 0;
-            Object.values(timelines).forEach(timeline => {
-                timeline.forEach(block => {
-                    if (!block.layer) return;
-                    const dur    = block.endMin - block.startMin;
-                    const minDur = block.layer.durationMin || block.layer.periodMin || block.layer.duration || 0;
-                    const maxDur = block.layer.durationMax || block.layer.periodMin || block.layer.duration || Infinity;
-                    if (minDur && dur < minDur) score += (minDur - dur) * 10;
-                    if (maxDur < Infinity && dur > maxDur) score += (dur - maxDur) * 5;
-                });
-                for (let i = 0; i < timeline.length - 1; i++) {
-                    const gap = timeline[i + 1].startMin - timeline[i].endMin;
-                    if (gap > 0) score += gap * 3;
-                }
-            });
-            iterWarnings.forEach(w => {
-                if (w.type === 'placement_failure') score += 500;
-                if (w.type === 'overlap')           score += 1000;
-                if (w.type === 'remaining_gap')     score += 50;
-            });
-            return score;
-        }
-
-        // ── Reset all mutable Step-2 state between iterations ────────────────
-        function resetIterState() {
-            allGrades.forEach(grade => {
-                getBunksForGrade(grade, divisions).forEach(bunk => {
-                    bunkTimelines[bunk] = [];
-                    bunkSpecialAssigned[bunk] = {};
-                });
-            });
-            todaysSpecials.forEach(s => {
-                if (specialCapacityTracker[s.name]) {
-                    specialCapacityTracker[s.name].assignments = [];
-                }
-            });
-            Object.keys(activityCapacityTracker).forEach(k => {
-                delete activityCapacityTracker[k];
-            });
-            Object.values(bunkNeeds).forEach(needs => {
-                needs.forEach(n => { n.placed = 0; });
-            });
-            Object.keys(sharedLeagueTime).forEach(k => {
-                delete sharedLeagueTime[k];
-            });
-        }
-
+       
         log('\n══════════════════════════════════════════════════════════');
         log('ITERATIVE BEST-PICK — cap: ' + MAX_ITERATIONS +
             ' | stale stop: ' + STALE_STOP + ' iterations');
