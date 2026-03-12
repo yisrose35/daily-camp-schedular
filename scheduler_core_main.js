@@ -812,6 +812,7 @@
             }
         });
 
+        window.__smartCapTracker = sharedCapacityTracker; // debug
         return schedulableSlotBlocks;
     }
 
