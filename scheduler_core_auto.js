@@ -579,7 +579,7 @@
                     startMin: layer.startMin,
                     endMin: layer.endMin,
                     type: layer.type || 'pinned',
-                    event: layer.event || 'Pinned',
+                    event: layer.event || layer.name || layer.type || 'Pinned',
                     layer,
                     _classification: 'pinned',
                     _committed: true,
