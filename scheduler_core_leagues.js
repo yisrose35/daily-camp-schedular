@@ -1230,7 +1230,7 @@ window._debugLeagueTimeData = timeData;
                     if (!blocksForDiv) return;
 
                     blocksForDiv.forEach(block => {
-        if (block.startMin !== timeKey) return;
+        if (Number(block.startMin) !== Number(timeKey)) return;
         const pick = {
                             field: `League: ${league.name}`,
                             sport: `Game ${gameNumber}`,
