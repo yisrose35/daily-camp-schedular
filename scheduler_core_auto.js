@@ -905,13 +905,14 @@
         // Helper: find the largest available gap within the window (no fixed duration)
         // Returns the gap snapped to 5-min boundaries — used for sport/activity layers
         // that have no explicit periodMin.
-        function findFlexGapPosition(bunk, windowStart, windowEnd) {
+        function findFlexGapPosition(bunk, windowStart, windowEnd, minDuration) {
+            const floor = minDuration || 5;
             const gaps = getFreeGaps(bunk, windowStart, windowEnd);
             let best = null;
             for (const gap of gaps) {
                 const snappedStart = Math.ceil(gap.start / 5) * 5;
                 const snappedEnd   = Math.floor(gap.end   / 5) * 5;
-                if (snappedEnd - snappedStart < 5) continue;
+                if (snappedEnd - snappedStart < floor) continue; // ★ respect minimum
                 if (!best || (snappedEnd - snappedStart) > (best.end - best.start)) {
                     best = { start: snappedStart, end: snappedEnd };
                 }
@@ -1229,12 +1230,23 @@
                             const staggeredStart = windowStart + snapTo5(staggerOffset);
 
                             // Try staggered start first, fall back to first available gap
-                            const position = duration
-                                ? (findBestGapPosition(bunk, staggeredStart, windowEnd, duration) ||
-                                   findBestGapPosition(bunk, windowStart, staggeredStart, duration) ||
-                                   findBestGapPosition(bunk, windowStart, windowEnd, duration))
-                                : (findFlexGapPosition(bunk, staggeredStart, windowEnd) ||
-                                   findFlexGapPosition(bunk, windowStart, windowEnd));
+                           const durationMin = layer.durationMin || layer.periodMin || layer.duration || null;
+                            const durationMax = layer.durationMax || layer.periodMin || layer.duration || null;
+
+                            const position = durationMin
+                                ? (findBestGapPosition(bunk, staggeredStart, windowEnd, durationMin) ||
+                                   findBestGapPosition(bunk, windowStart, staggeredStart, durationMin) ||
+                                   findBestGapPosition(bunk, windowStart, windowEnd, durationMin))
+                                : (findFlexGapPosition(bunk, staggeredStart, windowEnd, durationMin) ||
+                                   findFlexGapPosition(bunk, windowStart, windowEnd, durationMin));
+
+                            // ★ If position found but gap is larger than durationMax, cap it
+                            if (position && durationMax) {
+                                const gapDur = position.end - position.start;
+                                if (gapDur > durationMax) {
+                                    position.end = position.start + durationMax;
+                                }
+                            }
                             if (!position) continue;
 
                             if (!hasActivityCapacity(type, position.start, position.end)) {
