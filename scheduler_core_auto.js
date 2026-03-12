@@ -1178,137 +1178,193 @@
         log('[STEP 2.3] Soft rotation pre-pass: ' + gradeSortedForPlacement.map((g, i) =>
             g + '→' + activityTypes[i % activityTypes.length]).join(', '));
 
-        // Round-robin loop — keep going until no progress made
-        let madeProgress = true;
-        let roundCount = 0;
-        const MAX_ROUNDS = 30;
+       // ── Window-aware bin-packer ──────────────────────────────────────────
+        // For each bunk, find free windows between pinned blocks, collect all
+        // pending needs that belong in each window, size and place them in one
+        // planned pass with no gaps.
 
-        while (madeProgress && roundCount < MAX_ROUNDS) {
-            madeProgress = false;
-            roundCount++;
-            log('[STEP 2.3] Round ' + roundCount);
+        for (const grade of gradeSortedForPlacement) {
+            const bunks = sortBunksByConstraint(
+                getBunksForGrade(grade, divisions), bunkSpecialQueues
+            );
 
-            for (const grade of gradeSortedForPlacement) {
-                const bunks = sortBunksByConstraint(
-                    getBunksForGrade(grade, divisions), bunkSpecialQueues
-                );
+            for (const bunk of bunks) {
+                const needs = bunkNeeds[bunk] || [];
 
-                for (const bunk of bunks) {
-                    const needs = bunkNeeds[bunk] || [];
+                // ── Find free windows between pinned/committed blocks ──────────
+                const divStart = parseTimeToMinutes(divisions[grade]?.startTime) || 660;
+                const divEnd   = parseTimeToMinutes(divisions[grade]?.endTime)   || 990;
 
-                    for (const need of needs) {
-                        const { layer, op, required } = need;
-                        // Skip if fully satisfied
-                        if (op === '=' && need.placed >= required) continue;
-                        if (op === '>=' && need.placed >= required && roundCount > 1) continue;
+                const committed = (bunkTimelines[bunk] || [])
+                    .filter(b => b._committed || b._fixed || b._classification === 'pinned')
+                    .sort((a, b) => a.startMin - b.startMin);
 
-                        const windowStart = layer.startMin;
-                        const windowEnd   = layer.endMin;
-                        const type        = layer.type;
-                        const duration    = layer.periodMin || layer.durationMin || layer.duration || null;
+                const freeWindows = [];
+                let cursor = divStart;
+                committed.forEach(b => {
+                    if (b.startMin > cursor) {
+                        freeWindows.push({ start: cursor, end: b.startMin });
+                    }
+                    cursor = Math.max(cursor, b.endMin);
+                });
+                if (cursor < divEnd) freeWindows.push({ start: cursor, end: divEnd });
+
+                // ── For each free window, collect and pack pending needs ───────
+                for (const win of freeWindows) {
+                    const winDur = win.end - win.start;
+
+                    // Collect needs whose layer window overlaps this free window
+                    const windowNeeds = needs.filter(n => {
+                        if (n.op !== '<=' && n.op !== '≤' && n.placed >= n.required) return false;
+                        const lStart = n.layer.startMin;
+                        const lEnd   = n.layer.endMin;
+                        return lStart < win.end && lEnd > win.start;
+                    });
+
+                    if (windowNeeds.length === 0) continue;
+
+                    // Separate specials from non-specials
+                    const specialNeeds = windowNeeds.filter(n => n.layer.type === 'special');
+                    const otherNeeds   = windowNeeds.filter(n => n.layer.type !== 'special');
+
+                    // ── Place non-specials first (bin-pack) ───────────────────
+                    // Calculate total minimum time needed
+                    const totalMinNeeded = otherNeeds.reduce((sum, n) => {
+                        const dMin = n.layer.durationMin || n.layer.periodMin || n.layer.duration || 0;
+                        return sum + dMin * Math.max(1, n.required - n.placed);
+                    }, 0);
+
+                    const slack = Math.max(0, winDur - totalMinNeeded);
+
+                    // Size each need proportionally within [dMin, dMax]
+                    // Sort by ratio descending (most constrained first)
+                    otherNeeds.sort((a, b) => b.layer._ratio - a.layer._ratio);
+
+                    let placeCursor = win.start;
+                    for (const need of otherNeeds) {
+                        const { layer } = need;
+                        const dMin = layer.durationMin || layer.periodMin || layer.duration || GAP_MIN_DUR;
+                        const dMax = layer.durationMax || layer.periodMin || layer.duration || GAP_MAX_DUR;
+                        const remaining = win.end - placeCursor;
+                        const remainingNeeds = otherNeeds.filter(n => n !== need && n.placed < n.required).length + 1;
+
+                        // Ideal size: distribute available space evenly
+                        const idealDur = snapTo5(Math.floor(remaining / remainingNeeds));
+                        const targetDur = Math.max(dMin, Math.min(dMax, idealDur));
+
+                        // Clamp so we don't overshoot the window
+                        const actualDur = Math.min(targetDur, remaining);
+                        if (actualDur < dMin) continue; // not enough room
+
+                        // Respect layer window boundaries
+                        const effectiveStart = Math.max(placeCursor, layer.startMin);
+                        const effectiveEnd   = Math.min(placeCursor + actualDur, layer.endMin, win.end);
+                        if (effectiveEnd - effectiveStart < dMin) continue;
+
+                        const type  = layer.type;
+                        const event = layer.event || layer.name || layer.type || 'Activity';
                         const _classification = layer._classification;
-                        const event       = layer.event || layer.name || layer.type || 'Activity';
 
-                       if (type === 'special') {
-                            // ── SPECIAL ──
-                            // Try each candidate in ranked order until one fits position + capacity
-                            const usedExclusions = new Set(Object.keys(bunkSpecialAssigned[bunk] || {}));
-                            let placed = false;
+                        if (!hasActivityCapacity(type, effectiveStart, effectiveEnd)) {
+                            if (!willHaveCapacityLater(type, effectiveEnd, win.end, dMin)) {
+                                // No capacity — skip but don't advance cursor
+                            }
+                            continue;
+                        }
 
-                            // Stagger special search start by bunk index
-                            const allBunksList2 = gradeSortedForPlacement.flatMap(g => getBunksForGrade(g, divisions));
-                            const bunkIdx2 = allBunksList2.indexOf(bunk);
-                            const specialWindowSize = windowEnd - windowStart;
-                           const specialStaggerOffset = specialWindowSize > 0
-                                ? snapTo5(Math.round((bunkIdx2 / allBunksList2.length) * specialWindowSize))
-                                : 0;
-                            const specialStaggeredStart = windowStart + specialStaggerOffset;
+                        claimActivitySlot(type, bunk, effectiveStart, effectiveEnd);
+                        const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(type);
+                        placeTentativeBlock(bunk, {
+                            startMin: effectiveStart,
+                            endMin:   effectiveEnd,
+                            type,
+                            event,
+                            layer,
+                            _classification,
+                            _activityLocked: _isTimeLocked
+                        });
+                        need.placed++;
+                        placeCursor = effectiveEnd;
+                    }
 
-                            while (!placed) {
-                                const candidate = getNextSpecial(bunk, usedExclusions, windowStart, windowEnd);
-                                if (!candidate) break;
+                    // ── Place specials (capacity-aware, within window) ─────────
+                    for (const need of specialNeeds) {
+                        if (need.placed >= need.required) continue;
+                        const { layer } = need;
+                        const _classification = layer._classification;
 
-                                // Check if a same-grade bunk is already running this special
-                                // If so, join their session (same start time) instead of starting a new one
-                                const cfg = getSpecialConfig(candidate.name, globalSettings);
-                                const sharableType = cfg?.sharableWith?.type || 'not_sharable';
-                                const gradeBunks = getBunksForGrade(grade, divisions).map(String);
-                                const tracker2 = specialCapacityTracker[candidate.name];
+                        const usedExclusions = new Set(Object.keys(bunkSpecialAssigned[bunk] || {}));
+                        let placed = false;
 
-                                let position = null;
+                        while (!placed) {
+                            const candidate = getNextSpecial(bunk, usedExclusions, win.start, win.end);
+                            if (!candidate) break;
 
-                                // Try to join an existing session first
-                                if (sharableType === 'same_division' || sharableType === 'all' ||
-                                    (sharableType === 'custom' && cfg?.sharableWith?.divisions?.length > 0)) {
-                                    const existingSession = (tracker2?.assignments || []).find(a => {
-                                        // Enforce same_division — only join if same grade
-                                        if (sharableType === 'same_division') {
-                                            if (!gradeBunks.includes(String(a.bunk))) return false;
-                                        }
-                                        // Enforce custom with specific divisions
-                                        if (sharableType === 'custom' && cfg?.sharableWith?.divisions?.length > 0) {
-                                            const allowedDivs = cfg.sharableWith.divisions;
-                                            if (!allowedDivs.includes(grade)) return false;
-                                        }
-                                        // Check this bunk has a free gap at that exact time
-                                        const gaps = getFreeGaps(bunk, a.startMin, a.endMin);
-                                        return gaps.some(g => g.start <= a.startMin && g.end >= a.endMin);
+                            const cfg = getSpecialConfig(candidate.name, globalSettings);
+                            const sharableType = cfg?.sharableWith?.type || 'not_sharable';
+                            const gradeBunks = getBunksForGrade(grade, divisions).map(String);
+                            const tracker2 = specialCapacityTracker[candidate.name];
+
+                            let position = null;
+
+                            // Try joining existing session first
+                            if (sharableType === 'same_division' || sharableType === 'all' ||
+                                (sharableType === 'custom' && cfg?.sharableWith?.divisions?.length > 0)) {
+                                const existingSession = (tracker2?.assignments || []).find(a => {
+                                    if (sharableType === 'same_division') {
+                                        if (!gradeBunks.includes(String(a.bunk))) return false;
+                                    }
+                                    const gaps = getFreeGaps(bunk, a.startMin, a.endMin);
+                                    return gaps.some(g => g.start <= a.startMin && g.end >= a.endMin);
+                                });
+                                if (existingSession) {
+                                    position = { start: existingSession.startMin, end: existingSession.endMin };
+                                }
+                            }
+
+                            // Find a fresh gap
+                            if (!position) {
+                                const remaining = win.end - placeCursor;
+                                position = candidate.duration
+                                    ? (findBestGapPosition(bunk, placeCursor, win.end, candidate.duration, candidate.duration) ||
+                                       findBestGapPosition(bunk, win.start, win.end, candidate.duration, candidate.duration))
+                                    : findFlexGapPosition(bunk, placeCursor, win.end);
+
+                                if (position) {
+                                    const snapped = snapTo5(position.start);
+                                    const dur = position.end - position.start;
+                                    position = { start: snapped, end: snapped + dur };
+                                }
+
+                                if (position && sharableType !== 'all') {
+                                    const crossGradeConflict = (tracker2?.assignments || []).some(a => {
+                                        if (gradeBunks.includes(String(a.bunk))) return false;
+                                        return a.startMin < position.end && a.endMin > position.start;
                                     });
-                                    if (existingSession) {
-                                        position = { start: existingSession.startMin, end: existingSession.endMin };
+                                    if (crossGradeConflict) {
+                                        usedExclusions.add(candidate.name);
+                                        position = null;
                                     }
                                 }
+                            }
 
-                                // No existing session to join — find a fresh gap
-                                if (!position) {
-                                    position = candidate.duration
-                                        ? (findBestGapPosition(bunk, specialStaggeredStart, windowEnd, candidate.duration) ||
-                                           findBestGapPosition(bunk, windowStart, specialStaggeredStart, candidate.duration))
-                                        : (findFlexGapPosition(bunk, specialStaggeredStart, windowEnd) ||
-                                           findFlexGapPosition(bunk, windowStart, windowEnd));
-                                    // Snap to 5-min boundary
-                                    if (position) {
-                                        const snapped = snapTo5(position.start);
-                                        const dur = position.end - position.start;
-                                        position = { start: snapped, end: snapped + dur };
-                                    }
+                            if (!position) {
+                                usedExclusions.add(candidate.name);
+                                continue;
+                            }
 
-                                    // ★ Cross-grade conflict check
-                                    // If this position overlaps with a different grade doing the same special,
-                                    // and sharing rules don't allow it — reject and try next candidate
-                                    if (position && sharableType !== 'all') {
-                                        const crossGradeConflict = (tracker2?.assignments || []).some(a => {
-                                            if (gradeBunks.includes(String(a.bunk))) return false; // same grade — ok
-                                            return a.startMin < position.end && a.endMin > position.start;
-                                        });
-                                        if (crossGradeConflict) {
-                                            usedExclusions.add(candidate.name);
-                                            position = null;
-                                        }
-                                    }
-                                }
-                                if (!position) {
-                                    // No gap fits this candidate — try next
-                                    usedExclusions.add(candidate.name);
-                                    continue;
-                                }
+                            const tracker = specialCapacityTracker[candidate.name];
+                            const overlappingNow = tracker ? tracker.assignments.filter(a =>
+                                a.startMin < position.end && a.endMin > position.start
+                            ).length : 0;
 
-                                // Post-position capacity check
-                                const tracker = specialCapacityTracker[candidate.name];
-                                const overlappingNow = tracker ? tracker.assignments.filter(a =>
-                                    a.startMin < position.end && a.endMin > position.start
-                                ).length : 0;
-
-                               
                             if (tracker && overlappingNow >= tracker.total) {
-                                    // At capacity at this time — try next special
-                                    usedExclusions.add(candidate.name);
-                                    continue;
-                                }
+                                usedExclusions.add(candidate.name);
+                                continue;
+                            }
 
-                                // ✅ Found a candidate that fits — claim and place
-                                claimSpecial(bunk, candidate, position.start, position.end);
-                                placed = true;
+                            claimSpecial(bunk, candidate, position.start, position.end);
+                            placed = true;
                             placeTentativeBlock(bunk, {
                                 startMin: position.start,
                                 endMin:   position.end,
@@ -1323,179 +1379,15 @@
                                 _bunkOverride:    true
                             });
                             need.placed++;
-                            madeProgress = true;
-                            } // end while (!placed)
-
-                        } else {
-                            // ── NON-SPECIAL (swim, sport, league, etc.) ──
-                            // Stagger start position by bunk index to spread activities across the day
-                            const allBunksList = gradeSortedForPlacement.flatMap(g => getBunksForGrade(g, divisions));
-                            const bunkIdx = allBunksList.indexOf(bunk);
-                            const windowSize = windowEnd - windowStart;
-                            const staggerOffset = windowSize > 0
-                                ? Math.floor(((bunkIdx + _iterSeed) / allBunksList.length) * windowSize) % windowSize
-                                : 0;
-                            const staggeredStart = windowStart + snapTo5(staggerOffset);
-
-                           // Try staggered start first, fall back to first available gap
-                            const durationMin = layer.durationMin || layer.periodMin || layer.duration || null;
-                            const durationMax = layer.durationMax || layer.periodMin || layer.duration || null;
-
-                            // ── Smart sizing ──────────────────────────────────────────────────
-                            // Instead of always placing at durationMin, figure out how much free
-                            // space remains in this window and divide it evenly among remaining
-                            // placements of this layer type, clamped to [durationMin, durationMax].
-                            let targetDuration = durationMin;
-                            if (durationMin && durationMax && durationMin !== durationMax) {
-                                const totalFreeInWindow = getFreeGaps(bunk, windowStart, windowEnd)
-                                    .reduce((sum, g) => sum + (g.end - g.start), 0);
-                                const remainingNeeded = (need.required - need.placed);
-                                if (remainingNeeded > 0 && totalFreeInWindow > 0) {
-                                    const idealDur = snapTo5(Math.floor(totalFreeInWindow / remainingNeeded));
-                                    targetDuration = Math.max(durationMin, Math.min(durationMax, idealDur));
-                                }
-                            }
-
-                            const position = targetDuration
-                                ? (findBestGapPosition(bunk, staggeredStart, windowEnd, targetDuration) ||
-                                   findBestGapPosition(bunk, windowStart, staggeredStart, targetDuration) ||
-                                   findBestGapPosition(bunk, windowStart, windowEnd, targetDuration) ||
-                                   // fallback to durationMin if targetDuration didn't fit
-                                   (targetDuration !== durationMin && (
-                                       findBestGapPosition(bunk, staggeredStart, windowEnd, durationMin) ||
-                                       findBestGapPosition(bunk, windowStart, windowEnd, durationMin)
-                                   )))
-                                : (findFlexGapPosition(bunk, staggeredStart, windowEnd, durationMin) ||
-                                   findFlexGapPosition(bunk, windowStart, windowEnd, durationMin));
-
-                            // ★ If position found but gap is larger than durationMax, cap it
-                            if (position && durationMax) {
-                                const gapDur = position.end - position.start;
-                                if (gapDur > durationMax) {
-                                    position.end = position.start + durationMax;
-                                }
-                            }
-                           if (!position) continue;
-
-                            // ── Look-ahead: check if this placement creates unfillable gaps ──
-                            // Simulate placing this block and check remaining gaps in the window
-                            // can still accommodate other pending needs for this bunk
-                            const pendingNeeds = needs.filter(n => {
-                                if (n === need) return false;
-                                if (n.op === '=' && n.placed >= n.required) return false;
-                                return true;
-                            });
-
-                            if (pendingNeeds.length > 0) {
-                                // Temporarily place the block
-                                const tempBlock = {
-                                    startMin: position.start,
-                                    endMin: position.end,
-                                    type, event, layer, _classification,
-                                    _temp: true
-                                };
-                                placeTentativeBlock(bunk, tempBlock);
-
-                                // Check each pending need can still find a valid gap
-                                let causesDeadlock = false;
-                                for (const pending of pendingNeeds) {
-                                    const pWinStart = pending.layer.startMin;
-                                    const pWinEnd   = pending.layer.endMin;
-                                    const pDurMin   = pending.layer.durationMin || pending.layer.periodMin || pending.layer.duration || null;
-                                    if (!pDurMin) continue; // no minimum — always fits somewhere
-
-                                    // Check if any gap in this pending layer's window can fit its durationMin
-                                    const gaps = getFreeGaps(bunk, pWinStart, pWinEnd);
-                                    const canFit = gaps.some(g => (g.end - g.start) >= pDurMin);
-                                    if (!canFit) {
-                                        causesDeadlock = true;
-                                        break;
-                                    }
-                                }
-
-                                // Remove temp block
-                                removeTentativeBlock(bunk, tempBlock);
-
-                                if (causesDeadlock) {
-                                    // This position creates a deadlock — try placing at a different offset
-                                    // Shift the search start forward by the block duration and retry
-                                    const altPosition = targetDuration
-                                        ? (findBestGapPosition(bunk, position.end, windowEnd, targetDuration) ||
-                                           findBestGapPosition(bunk, windowStart, position.start, targetDuration) ||
-                                           (targetDuration !== durationMin &&
-                                               findBestGapPosition(bunk, windowStart, windowEnd, durationMin)))
-                                        : findFlexGapPosition(bunk, position.end, windowEnd, durationMin);
-
-                                    if (altPosition && durationMax) {
-                                        const altDur = altPosition.end - altPosition.start;
-                                        if (altDur > durationMax) altPosition.end = altPosition.start + durationMax;
-                                    }
-
-                                    if (altPosition) {
-                                        // Verify alt position doesn't also deadlock
-                                        const tempBlock2 = {
-                                            startMin: altPosition.start,
-                                            endMin: altPosition.end,
-                                            type, event, layer, _classification,
-                                            _temp: true
-                                        };
-                                        placeTentativeBlock(bunk, tempBlock2);
-
-                                        let altDeadlocks = false;
-                                        for (const pending of pendingNeeds) {
-                                            const pWinStart = pending.layer.startMin;
-                                            const pWinEnd   = pending.layer.endMin;
-                                            const pDurMin   = pending.layer.durationMin || pending.layer.periodMin || pending.layer.duration || null;
-                                            if (!pDurMin) continue;
-                                            const gaps = getFreeGaps(bunk, pWinStart, pWinEnd);
-                                            const canFit = gaps.some(g => (g.end - g.start) >= pDurMin);
-                                            if (!canFit) { altDeadlocks = true; break; }
-                                        }
-
-                                        removeTentativeBlock(bunk, tempBlock2);
-
-                                        if (!altDeadlocks) {
-                                            // Alt position is better — use it
-                                            position.start = altPosition.start;
-                                            position.end   = altPosition.end;
-                                        }
-                                        // If alt also deadlocks, proceed with original — best effort
-                                    }
-                                    // If no alt found, proceed with original — best effort
-                                }
-                            }
-
-                            if (!hasActivityCapacity(type, position.start, position.end)) {
-                                // Check if capacity opens up later in this bunk's window
-                                const dur = duration || (position.end - position.start);
-                                if (willHaveCapacityLater(type, position.end, windowEnd, dur)) {
-                                    continue; // wait for next round
-                                }
-                                // No future capacity — place anyway (unlimited effective cap)
-                            }
-
-                            claimActivitySlot(type, bunk, position.start, position.end);
-            const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(type);
-            placeTentativeBlock(bunk, {
-                startMin: position.start,
-                endMin:   position.end,
-                type,
-                event,
-                layer,
-                _classification,
-                _activityLocked: _isTimeLocked
-            });
-                            need.placed++;
-                            madeProgress = true;
+                            placeCursor = Math.max(placeCursor, position.end);
                         }
                     }
                 }
             }
         }
 
-        log('[STEP 2.3] ✅ Round-robin complete after ' + roundCount + ' rounds');
-
-       log('[STEP 2.3] ✅ Tentative placement complete');
+        log('[STEP 2.3] ✅ Bin-pack placement complete');
+        log('[STEP 2.3] ✅ Tentative placement complete');
         // -----------------------------------------------------------------
         // STEP 2.4 — BACKTRACK AND RETRY
         // -----------------------------------------------------------------
