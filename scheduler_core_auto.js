@@ -669,7 +669,146 @@
         // STEP 2 — LIVE ITERATIVE SOLVER
         // =====================================================================
         log('\n[STEP 2] Live iterative solver — building day for entire camp...');
+// ── Helper functions — defined outside loop ──────────────────────────
 
+        function getFreeGaps(bunk, windowStart, windowEnd) {
+            const timeline = bunkTimelines[bunk] || [];
+            const occupied = timeline
+                .filter(b => overlaps(b.startMin, b.endMin, windowStart, windowEnd))
+                .map(b => ({ start: Math.max(b.startMin, windowStart), end: Math.min(b.endMin, windowEnd) }))
+                .sort((a, b) => a.start - b.start);
+            const gaps = [];
+            let cursor = windowStart;
+            for (const occ of occupied) {
+                if (occ.start > cursor) gaps.push({ start: cursor, end: occ.start });
+                cursor = Math.max(cursor, occ.end);
+            }
+            if (cursor < windowEnd) gaps.push({ start: cursor, end: windowEnd });
+            return gaps.filter(g => g.end - g.start >= 5);
+        }
+
+        function findBestGapPosition(bunk, windowStart, windowEnd, duration) {
+            const gaps = getFreeGaps(bunk, windowStart, windowEnd);
+            for (const gap of gaps) {
+                if (gap.end - gap.start >= duration) {
+                    return { start: gap.start, end: gap.start + duration };
+                }
+            }
+            return null;
+        }
+
+        function findFlexGapPosition(bunk, windowStart, windowEnd, minDuration) {
+            const floor = minDuration || 5;
+            const gaps = getFreeGaps(bunk, windowStart, windowEnd);
+            let best = null;
+            for (const gap of gaps) {
+                const snappedStart = Math.ceil(gap.start / 5) * 5;
+                const snappedEnd   = Math.floor(gap.end   / 5) * 5;
+                if (snappedEnd - snappedStart < floor) continue;
+                if (!best || (snappedEnd - snappedStart) > (best.end - best.start)) {
+                    best = { start: snappedStart, end: snappedEnd };
+                }
+            }
+            return best;
+        }
+
+        function placeTentativeBlock(bunk, block) {
+            bunkTimelines[bunk].push(block);
+            bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
+        }
+
+        function removeTentativeBlock(bunk, block) {
+            const idx = bunkTimelines[bunk].indexOf(block);
+            if (idx !== -1) bunkTimelines[bunk].splice(idx, 1);
+        }
+
+        function getNextSpecial(bunk, excludeNames, winStart, winEnd) {
+            const queue = bunkSpecialQueues[bunk] || [];
+            for (const candidate of queue) {
+                if (excludeNames && excludeNames.has(candidate.name)) continue;
+                const tracker = specialCapacityTracker[candidate.name];
+                if (!tracker) continue;
+                const alreadyAssigned = (bunkSpecialAssigned[bunk] && bunkSpecialAssigned[bunk][candidate.name]) || 0;
+                if (alreadyAssigned > 0) continue;
+                if (candidate.maxUsage && candidate.maxUsage > 0) {
+                    const periodCount = getPeriodCount(bunk, candidate.name, candidate.maxUsagePeriod || 'half');
+                    if (periodCount >= candidate.maxUsage) continue;
+                }
+                return candidate;
+            }
+            return null;
+        }
+
+        function claimSpecial(bunk, specialEntry, startMin, endMin) {
+            const tracker = specialCapacityTracker[specialEntry.name];
+            if (tracker) tracker.assignments.push({ bunk, startMin, endMin });
+            if (!bunkSpecialAssigned[bunk]) bunkSpecialAssigned[bunk] = {};
+            bunkSpecialAssigned[bunk][specialEntry.name] = (bunkSpecialAssigned[bunk][specialEntry.name] || 0) + 1;
+        }
+
+        function unclaimSpecial(bunk, specialName) {
+            const tracker = specialCapacityTracker[specialName];
+            if (tracker) {
+                const idx = tracker.assignments.findIndex(a => a.bunk === bunk);
+                if (idx !== -1) tracker.assignments.splice(idx, 1);
+            }
+            if (bunkSpecialAssigned[bunk] && bunkSpecialAssigned[bunk][specialName]) {
+                bunkSpecialAssigned[bunk][specialName]--;
+                if (bunkSpecialAssigned[bunk][specialName] <= 0) {
+                    delete bunkSpecialAssigned[bunk][specialName];
+                }
+            }
+        }
+
+        function getTypeCapacity(type) {
+            const cfg = (globalSettings.app1?.activityCapacity || {})[type];
+            return cfg || 9999;
+        }
+
+        function claimActivitySlot(type, bunk, startMin, endMin) {
+            if (!activityCapacityTracker[type]) {
+                activityCapacityTracker[type] = { total: getTypeCapacity(type), assignments: [] };
+            }
+            activityCapacityTracker[type].assignments.push({ bunk, startMin, endMin });
+        }
+
+        function hasActivityCapacity(type, startMin, endMin) {
+            const tracker = activityCapacityTracker[type];
+            if (!tracker) return true;
+            const overlapping = tracker.assignments.filter(a =>
+                a.startMin < endMin && a.endMin > startMin
+            ).length;
+            return overlapping < tracker.total;
+        }
+
+        function willHaveCapacityLater(type, afterMin, windowEnd, duration) {
+            const tracker = activityCapacityTracker[type];
+            if (!tracker) return true;
+            for (let t = afterMin; t + duration <= windowEnd; t += 5) {
+                const overlapping = tracker.assignments.filter(a =>
+                    a.startMin < t + duration && a.endMin > t
+                ).length;
+                if (overlapping < tracker.total) return true;
+            }
+            return false;
+        }
+
+        function getGapCapForGrade(grade, gapStart, gapEnd) {
+            const gradeLayers = layersByGrade[grade] || [];
+            const mid = (gapStart + gapEnd) / 2;
+            let cap = GAP_MAX_DUR;
+            gradeLayers.forEach(layer => {
+                const s = layer.startMin ?? 0;
+                const e = layer.endMin   ?? 9999;
+                if (s <= mid && e >= mid) {
+                    const lCap = layer.durationMax || layer.periodMin || layer.duration || GAP_MAX_DUR;
+                    cap = Math.min(cap, lCap);
+                }
+            });
+            return Math.max(cap, GAP_MIN_DUR);
+        }
+
+        do { // ← ITERATION LOOP START
         do { // ← ITERATION LOOP START — wraps Steps 2.1 through 2.5b
 
         // Shared live capacity tracker (global across camp)
@@ -1006,156 +1145,7 @@
         // All placements here are TENTATIVE until Step 2.6 validates the entire camp.
         // Committed pinned blocks from Step 2.1 are the only hard anchors.
 
-        // Helper: get free gaps in a bunk's timeline within a window
-        function getFreeGaps(bunk, windowStart, windowEnd) {
-            const timeline = bunkTimelines[bunk] || [];
-            // Collect occupied ranges within the window
-            const occupied = timeline
-                .filter(b => overlaps(b.startMin, b.endMin, windowStart, windowEnd))
-                .map(b => ({ start: Math.max(b.startMin, windowStart), end: Math.min(b.endMin, windowEnd) }))
-                .sort((a, b) => a.start - b.start);
-
-            const gaps = [];
-            let cursor = windowStart;
-            for (const occ of occupied) {
-                if (occ.start > cursor) gaps.push({ start: cursor, end: occ.start });
-                cursor = Math.max(cursor, occ.end);
-            }
-            if (cursor < windowEnd) gaps.push({ start: cursor, end: windowEnd });
-            return gaps.filter(g => g.end - g.start >= 5); // min 5 min gap
-        }
-
-        // Helper: find the best gap position for a block of a given duration within a window
-        function findBestGapPosition(bunk, windowStart, windowEnd, duration) {
-            const gaps = getFreeGaps(bunk, windowStart, windowEnd);
-            for (const gap of gaps) {
-                if (gap.end - gap.start >= duration) {
-                    return { start: gap.start, end: gap.start + duration };
-                }
-            }
-            return null;
-        }
-
-        // Helper: find the largest available gap within the window (no fixed duration)
-        // Returns the gap snapped to 5-min boundaries — used for sport/activity layers
-        // that have no explicit periodMin.
-        function findFlexGapPosition(bunk, windowStart, windowEnd, minDuration) {
-            const floor = minDuration || 5;
-            const gaps = getFreeGaps(bunk, windowStart, windowEnd);
-            let best = null;
-            for (const gap of gaps) {
-                const snappedStart = Math.ceil(gap.start / 5) * 5;
-                const snappedEnd   = Math.floor(gap.end   / 5) * 5;
-                if (snappedEnd - snappedStart < floor) continue; // ★ respect minimum
-                if (!best || (snappedEnd - snappedStart) > (best.end - best.start)) {
-                    best = { start: snappedStart, end: snappedEnd };
-                }
-            }
-            return best;
-        }
-
-        // Helper: place a block tentatively into a bunk's timeline
-        function placeTentativeBlock(bunk, block) {
-            bunkTimelines[bunk].push(block);
-            bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
-        }
-
-        // Helper: remove a tentative block from a bunk's timeline
-        function removeTentativeBlock(bunk, block) {
-            const idx = bunkTimelines[bunk].indexOf(block);
-            if (idx !== -1) bunkTimelines[bunk].splice(idx, 1);
-        }
-
-        // Helper: get next available special from a bunk's ranked queue
-        // that still has capacity, hasn't been assigned to this bunk today,
-        // and hasn't exceeded the bunk's lifetime maxUsage for this special
-        function getNextSpecial(bunk, excludeNames, winStart, winEnd) {
-            const queue = bunkSpecialQueues[bunk] || [];
-            for (const candidate of queue) {
-                if (excludeNames && excludeNames.has(candidate.name)) continue;
-
-                const tracker = specialCapacityTracker[candidate.name];
-                if (!tracker) continue;
-                // Capacity checked post-position in placement loop — not here
-                // Already assigned to this bunk today
-                const alreadyAssigned = (bunkSpecialAssigned[bunk] && bunkSpecialAssigned[bunk][candidate.name]) || 0;
-                if (alreadyAssigned > 0) continue;
-
-                // ★ Tertiary maxUsage guard at placement time — period-aware
-                // Catches any edge case where the queue wasn't filtered in 2.2a
-                if (candidate.maxUsage && candidate.maxUsage > 0) {
-                    const periodCount = getPeriodCount(bunk, candidate.name, candidate.maxUsagePeriod || 'half');
-                    if (periodCount >= candidate.maxUsage) continue;
-                }
-
-                return candidate;
-            }
-            return null;
-        }
-
-        // Helper: claim a special for a bunk (reduces capacity)
-        function claimSpecial(bunk, specialEntry, startMin, endMin) {
-            const tracker = specialCapacityTracker[specialEntry.name];
-            if (tracker) tracker.assignments.push({ bunk, startMin, endMin });
-            if (!bunkSpecialAssigned[bunk]) bunkSpecialAssigned[bunk] = {};
-            bunkSpecialAssigned[bunk][specialEntry.name] = (bunkSpecialAssigned[bunk][specialEntry.name] || 0) + 1;
-        }
-
-        // Helper: unclaim a special (for backtracking)
-        function unclaimSpecial(bunk, specialName) {
-            const tracker = specialCapacityTracker[specialName];
-            if (tracker) {
-                const idx = tracker.assignments.findIndex(a => a.bunk === bunk);
-                if (idx !== -1) tracker.assignments.splice(idx, 1);
-            }
-            if (bunkSpecialAssigned[bunk] && bunkSpecialAssigned[bunk][specialName]) {
-                bunkSpecialAssigned[bunk][specialName]--;
-                if (bunkSpecialAssigned[bunk][specialName] <= 0) {
-                    delete bunkSpecialAssigned[bunk][specialName];
-                }
-            }
-        }
-
-       // ── STEP 2.3 ROUND-ROBIN PLACEMENT ENGINE ──
-        // Each round: visit every bunk once, place ONE activity per need.
-        // This staggers timelines naturally so specials/activities land at
-        // different times for different bunks — enabling time-sliced capacity reuse.
-
-        // Capacity tracker for non-special activity types
-        // Pulled from layer config if present, otherwise unlimited
-
-            
-        function getTypeCapacity(type) {
-            // Check global settings for capacity config
-            const cfg = (globalSettings.app1?.activityCapacity || {})[type];
-            return cfg || 9999; // default unlimited
-        }
-        function claimActivitySlot(type, bunk, startMin, endMin) {
-            if (!activityCapacityTracker[type]) {
-                activityCapacityTracker[type] = { total: getTypeCapacity(type), assignments: [] };
-            }
-            activityCapacityTracker[type].assignments.push({ bunk, startMin, endMin });
-        }
-        function hasActivityCapacity(type, startMin, endMin) {
-            const tracker = activityCapacityTracker[type];
-            if (!tracker) return true;
-            const overlapping = tracker.assignments.filter(a =>
-                a.startMin < endMin && a.endMin > startMin
-            ).length;
-            return overlapping < tracker.total;
-        }
-        function willHaveCapacityLater(type, afterMin, windowEnd, duration) {
-            const tracker = activityCapacityTracker[type];
-            if (!tracker) return true;
-            // Scan forward in 5-min steps to see if a slot opens up
-            for (let t = afterMin; t + duration <= windowEnd; t += 5) {
-                const overlapping = tracker.assignments.filter(a =>
-                    a.startMin < t + duration && a.endMin > t
-                ).length;
-                if (overlapping < tracker.total) return true;
-            }
-            return false;
-        }
+     
 
         // Build needs list per bunk
         const nonPinnedLayers = [...windowedLayers, ...openLayers];
@@ -1561,21 +1551,7 @@
         const GAP_MAX_DUR     = 60;  // largest a single gap-fill slot can be
         const GAP_ABSORB_TAIL = 15;  // remainders ≤ this are merged into the previous slot
 
-        // Get the tightest durationMax from the grade's layers for this gap window
-        function getGapCapForGrade(grade, gapStart, gapEnd) {
-            const gradeLayers = layersByGrade[grade] || [];
-            const mid = (gapStart + gapEnd) / 2;
-            let cap = GAP_MAX_DUR;
-            gradeLayers.forEach(layer => {
-                const s = layer.startMin ?? 0;
-                const e = layer.endMin   ?? 9999;
-                if (s <= mid && e >= mid) {
-                    const lCap = layer.durationMax || layer.periodMin || layer.duration || GAP_MAX_DUR;
-                    cap = Math.min(cap, lCap);
-                }
-            });
-            return Math.max(cap, GAP_MIN_DUR);
-        }
+       
 
         let gapsFilled = 0;
 
