@@ -164,8 +164,10 @@ function validateSpecialActivity(activity, activityName) {
         minFrequency: (activity.minFrequency != null && parseInt(activity.minFrequency, 10) > 0)
             ? parseInt(activity.minFrequency, 10) : null,
         minFrequencyPeriod: activity.minFrequencyPeriod || 'week',
-        maxUsagePerGrade: (activity.maxUsagePerGrade && typeof activity.maxUsagePerGrade === 'object')
-            ? activity.maxUsagePerGrade : {}
+       maxUsagePerGrade: (activity.maxUsagePerGrade && typeof activity.maxUsagePerGrade === 'object')
+            ? activity.maxUsagePerGrade : {},
+        availableDays: Array.isArray(activity.availableDays) && activity.availableDays.length > 0
+            ? activity.availableDays : []
     };
 }
 
@@ -176,7 +178,7 @@ function createDefaultActivity(name) {
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
         rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
         multiPart: { enabled: false, totalParts: 2, daysBetween: 3, parts: [] },
-        minFrequency: null, minFrequencyPeriod: 'week', maxUsagePerGrade: {} };
+        minFrequency: null, minFrequencyPeriod: 'week', maxUsagePerGrade: {}, availableDays: [] };
 }
 
 function validateAllActivities(activities) { if (!Array.isArray(activities)) return []; return activities.map(a => validateSpecialActivity(a, a?.name)); }
@@ -531,7 +533,56 @@ function summaryMultiPart(item) {
     if (!item.multiPart?.enabled) return 'Single session';
     return item.multiPart.totalParts + '-part activity';
 }
+function summaryDays(item) {
+    const days = item.availableDays;
+    if (!days || !Array.isArray(days) || days.length === 0 || days.length === 7) return 'All days';
+    return days.join(', ');
+}
 
+function renderDayAvailability(item) {
+    const container = document.createElement('div');
+    const allDays = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    const updateSummary = () => {
+        const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (s) s.textContent = summaryDays(item);
+    };
+    if (!Array.isArray(item.availableDays) || item.availableDays.length === 0) {
+        item.availableDays = [...allDays];
+    }
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size:0.82rem; color:#6B7280; margin-bottom:12px;';
+    note.textContent = 'Restrict which days of the week this special can be scheduled.';
+    container.appendChild(note);
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:flex; flex-wrap:wrap; gap:6px;';
+    allDays.forEach(day => {
+        const active = item.availableDays.includes(day);
+        const chip = document.createElement('span');
+        chip.className = 'chip ' + (active ? 'active' : 'inactive');
+        chip.textContent = day.slice(0, 3);
+        chip.style.cssText = 'cursor:pointer; padding:5px 12px; border-radius:999px; font-size:0.82rem; border:1px solid ' + (active ? '#147D91' : '#E5E7EB') + '; background:' + (active ? '#e6f4f7' : '#fff') + '; color:' + (active ? '#0F5F6E' : '#6B7280') + '; font-weight:' + (active ? '600' : '400') + ';';
+        chip.onclick = () => {
+            if (item.availableDays.includes(day)) {
+                if (item.availableDays.length === 1) return; // keep at least one
+                item.availableDays = item.availableDays.filter(d => d !== day);
+            } else {
+                item.availableDays.push(day);
+            }
+            saveData();
+            container.innerHTML = '';
+            container.appendChild(note.cloneNode(true));
+            const newGrid = renderDayAvailability(item).querySelector('div') || container;
+            saveData();
+            // re-render cleanly
+            const p = container.parentElement;
+            if (p) { p.innerHTML = ''; p.appendChild(renderDayAvailability(item)); }
+            updateSummary();
+        };
+        grid.appendChild(chip);
+    });
+    container.appendChild(grid);
+    return container;
+}
 // =========================================================================
 // RENDER: Full Grade Settings
 // =========================================================================
