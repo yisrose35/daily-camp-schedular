@@ -1215,7 +1215,7 @@ function renderMaxUsageSettings(item) {
                 (item.minFrequencyPeriod === '2weeks' ? 'every 2 weeks' : 'per week') + '.';
             minDetail.appendChild(minNote);
             container.appendChild(minDetail);
-        }
+        
     }
 
     rebuild();
