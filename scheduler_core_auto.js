@@ -1247,15 +1247,16 @@
                             }
 
                             claimActivitySlot(type, bunk, position.start, position.end);
-                            placeTentativeBlock(bunk, {
-                                startMin: position.start,
-                                endMin:   position.end,
-                                type,
-                                event,
-                                layer,
-                                _classification,
-                                _activityLocked: true
-                            });
+            const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(type);
+            placeTentativeBlock(bunk, {
+                startMin: position.start,
+                endMin:   position.end,
+                type,
+                event,
+                layer,
+                _classification,
+                _activityLocked: _isTimeLocked
+            });
                             need.placed++;
                             madeProgress = true;
                         }
