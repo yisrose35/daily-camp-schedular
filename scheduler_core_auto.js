@@ -1232,133 +1232,192 @@
                     // - Calculate ideal sizes to fill the window with zero gaps
 
                     if (otherNeeds.length > 0) {
-                        // Split into anchored (restricted window) and free (full window)
-                        const anchored = otherNeeds.filter(n =>
-                            n.layer.startMin > win.start || n.layer.endMin < win.end
-                        ).sort((a, b) => a.layer.startMin - b.layer.startMin);
+                        const anchored = otherNeeds
+                            .filter(n => n.layer.startMin > win.start || n.layer.endMin < win.end)
+                            .sort((a, b) => a.layer.startMin - b.layer.startMin);
+                        const free = otherNeeds
+                            .filter(n => n.layer.startMin <= win.start && n.layer.endMin >= win.end)
+                            .sort((a, b) => b.layer._ratio - a.layer._ratio);
 
-                        const free = otherNeeds.filter(n =>
-                            n.layer.startMin <= win.start && n.layer.endMin >= win.end
-                        ).sort((a, b) => b.layer._ratio - a.layer._ratio);
+                        // ── Tetris solver ─────────────────────────────────────
+                        // Try every valid 5-min position for each anchored need,
+                        // score each arrangement by total gap minutes,
+                        // commit the zero-gap winner.
 
-                        // Build a planned sequence:
-                        // - anchored needs are fixed at their window positions
-                        // - free needs fill the gaps between anchored needs
-                        // - sizes are calculated to leave zero gaps
+                       function scorePlan(plan) {
+                            let score = 0;
+                            const sorted = plan.slice().sort((a, b) => a.startMin - b.startMin);
 
-                        // First pass: figure out total time consumed by anchored needs
-                        const anchoredMinTime = anchored.reduce((sum, n) => {
-                            return sum + (n.layer.durationMin || n.layer.periodMin || n.layer.duration || GAP_MIN_DUR);
-                        }, 0);
+                            // Penalize actual gaps between blocks
+                            for (let i = 0; i < sorted.length - 1; i++) {
+                                const g = sorted[i+1].startMin - sorted[i].endMin;
+                                if (g > 0) score += g * 100; // naked gap = very bad
+                            }
 
-                        // Time available for free needs
-                        const freeTime = Math.max(0, winDur - anchoredMinTime);
-                        const freeCount = free.length;
+                            // Penalize tail gap
+                            if (sorted.length > 0) {
+                                const tail = win.end - sorted[sorted.length-1].endMin;
+                                if (tail > 0) score += tail * 100;
+                            }
 
-                        // Size each free need to evenly fill available space
-                        const perFreeIdeal = freeCount > 0 ? snapTo5(Math.floor(freeTime / freeCount)) : 0;
+                            // Penalize slots smaller than GAP_MIN_DUR — unfillable
+                            plan.forEach(p => {
+                                if (p._isSlot) {
+                                    const dur = p.endMin - p.startMin;
+                                    if (dur < GAP_MIN_DUR) {
+                                        score += (GAP_MIN_DUR - dur) * 200; // very heavy penalty
+                                    } else {
+                                        score += dur * 0.01; // tiny penalty — prefer smaller slots
+                                    }
+                                }
+                            });
 
-                        // Build the full ordered plan: interleave free and anchored
-                        // Walk left to right, inserting free needs before each anchored need
-                        const plan = []; // { need, startMin, endMin }
-                        let planCursor = win.start;
-                        let freeIdx = 0;
+                            return score;
+                        }
 
-                        for (const anchoredNeed of anchored) {
-                            const anchorStart = Math.max(planCursor, anchoredNeed.layer.startMin);
-                            const anchorDMin  = anchoredNeed.layer.durationMin || anchoredNeed.layer.periodMin || anchoredNeed.layer.duration || GAP_MIN_DUR;
-                            const anchorDMax  = anchoredNeed.layer.durationMax || anchoredNeed.layer.duration || GAP_MAX_DUR;
+                        function buildPlan(anchorPositions) {
+                            // anchorPositions: { need -> startMin }
+                            const plan = [];
+                            let cursor = win.start;
+                            let freeIdx = 0;
 
-                            // Fill gap before this anchor with free needs
-                            const gapBeforeAnchor = anchorStart - planCursor;
-                            while (freeIdx < free.length && gapBeforeAnchor > 0) {
+                            for (const an of anchored) {
+                                const aStart  = anchorPositions.get(an);
+                                const aDMin   = an.layer.durationMin || an.layer.periodMin || an.layer.duration || GAP_MIN_DUR;
+                                const aDMax   = an.layer.durationMax || an.layer.duration || GAP_MAX_DUR;
+                                const gapBefore = aStart - cursor;
+
+                                // Fill space before anchor with free needs sized to reach exactly aStart
+                                const freeSlice = [];
+                                let tempIdx = freeIdx;
+                                let accMin = 0;
+                                while (tempIdx < free.length) {
+                                    const fn = free[tempIdx];
+                                    const fdMin = fn.layer.durationMin || fn.layer.periodMin || fn.layer.duration || GAP_MIN_DUR;
+                                    if (accMin + fdMin <= gapBefore) {
+                                        freeSlice.push(fn);
+                                        accMin += fdMin;
+                                        tempIdx++;
+                                    } else break;
+                                }
+
+                                let groupCursor = cursor;
+                                freeSlice.forEach((fn, i) => {
+                                    const fdMin = fn.layer.durationMin || fn.layer.periodMin || fn.layer.duration || GAP_MIN_DUR;
+                                    const fdMax = fn.layer.durationMax || fn.layer.duration || GAP_MAX_DUR;
+                                    const isLast = i === freeSlice.length - 1;
+                                    const remainingMin = freeSlice.slice(i+1).reduce((s, f2) =>
+                                        s + (f2.layer.durationMin || f2.layer.periodMin || f2.layer.duration || GAP_MIN_DUR), 0);
+                                    const available = aStart - groupCursor - remainingMin;
+                                    const dur = isLast
+                                        ? (aStart - groupCursor)  // last one stretches exactly to aStart
+                                        : snapTo5(Math.max(fdMin, Math.min(fdMax, available)));
+                                    if (dur >= fdMin) {
+                                        plan.push({ need: fn, startMin: groupCursor, endMin: groupCursor + dur });
+                                        groupCursor += dur;
+                                        freeIdx++;
+                                    }
+                                });
+                                cursor = groupCursor;
+
+                                // Place anchor — size it to fill until next anchor or window end
+                                const nextAnIdx = anchored.indexOf(an) + 1;
+                                const nextAnStart = nextAnIdx < anchored.length
+                                    ? anchorPositions.get(anchored[nextAnIdx])
+                                    : win.end;
+                                const remainingFreeMin = free.slice(freeIdx).reduce((s, fn) =>
+                                    s + (fn.layer.durationMin || fn.layer.periodMin || fn.layer.duration || GAP_MIN_DUR), 0);
+                                const aEnd = Math.min(
+                                    aStart + aDMax,
+                                    an.layer.endMin,
+                                    nextAnStart - remainingFreeMin
+                                );
+                                const aDur = snapTo5(Math.max(aDMin, aEnd - aStart));
+                                plan.push({ need: an, startMin: aStart, endMin: aStart + aDur });
+                                cursor = aStart + aDur;
+                            }
+
+                            // Fill tail with remaining free needs
+                            while (freeIdx < free.length) {
                                 const fn = free[freeIdx];
                                 const fdMin = fn.layer.durationMin || fn.layer.periodMin || fn.layer.duration || GAP_MIN_DUR;
                                 const fdMax = fn.layer.durationMax || fn.layer.duration || GAP_MAX_DUR;
-                                const spaceLeft = anchorStart - planCursor;
+                                const spaceLeft = win.end - cursor;
                                 if (spaceLeft < fdMin) break;
-                                const dur = snapTo5(Math.max(fdMin, Math.min(fdMax, spaceLeft)));
-                                plan.push({ need: fn, startMin: planCursor, endMin: planCursor + dur });
-                                planCursor += dur;
+                                const remaining = free.slice(freeIdx+1).reduce((s, f2) =>
+                                    s + (f2.layer.durationMin || f2.layer.periodMin || f2.layer.duration || GAP_MIN_DUR), 0);
+                                const dur = snapTo5(Math.max(fdMin, Math.min(fdMax, spaceLeft - remaining)));
+                                plan.push({ need: fn, startMin: cursor, endMin: cursor + dur });
+                                cursor += dur;
                                 freeIdx++;
                             }
 
-                            // Place the anchored need — size it to reach next anchor or window end
-                            // Look ahead: what's the next anchor's start?
-                            const nextAnchorIdx = anchored.indexOf(anchoredNeed) + 1;
-                            const nextAnchorStart = nextAnchorIdx < anchored.length
-                                ? Math.max(anchorStart + anchorDMin, anchored[nextAnchorIdx].layer.startMin)
-                                : win.end;
-
-                            // How much free time remains after this anchor for remaining free needs
-                            const remainingFreeNeeds = free.length - freeIdx;
-                            const remainingFreeMin = free.slice(freeIdx).reduce((sum, fn) => {
-                                return sum + (fn.layer.durationMin || fn.layer.periodMin || fn.layer.duration || GAP_MIN_DUR);
-                            }, 0);
-
-                            const anchorEnd = Math.min(
-                                anchorStart + anchorDMax,
-                                anchoredNeed.layer.endMin,
-                                nextAnchorStart - remainingFreeMin
-                            );
-                            const anchorDur = snapTo5(Math.max(anchorDMin, anchorEnd - anchorStart));
-
-                            plan.push({ need: anchoredNeed, startMin: anchorStart, endMin: anchorStart + anchorDur });
-                            planCursor = anchorStart + anchorDur;
+                            return plan;
                         }
 
-                        // Fill remaining space with any leftover free needs
-                        while (freeIdx < free.length) {
-                            const fn = free[freeIdx];
-                            const fdMin = fn.layer.durationMin || fn.layer.periodMin || fn.layer.duration || GAP_MIN_DUR;
-                            const fdMax = fn.layer.durationMax || fn.layer.duration || GAP_MAX_DUR;
-                            const spaceLeft = win.end - planCursor;
-                            if (spaceLeft < fdMin) break;
-
-                            // Size to fill remaining space evenly among remaining free needs
-                            const remainingFree = free.length - freeIdx;
-                            const idealDur = snapTo5(Math.floor(spaceLeft / remainingFree));
-                            const dur = Math.max(fdMin, Math.min(fdMax, idealDur));
-
-                            plan.push({ need: fn, startMin: planCursor, endMin: planCursor + dur });
-                            planCursor += dur;
-                            freeIdx++;
+                        // Generate all valid 5-min positions for each anchored need
+                        function getPositions(an) {
+                            const aDMin = an.layer.durationMin || an.layer.periodMin || an.layer.duration || GAP_MIN_DUR;
+                            const earliest = an.layer.startMin;
+                            const latest   = Math.min(an.layer.endMin - aDMin, win.end - aDMin);
+                            const positions = [];
+                            for (let p = earliest; p <= latest; p += 5) positions.push(p);
+                            return positions;
                         }
 
-                        // Fill any remaining tail gap in the window
-                        if (planCursor < win.end && win.end - planCursor >= GAP_MIN_DUR) {
-                            // Extend last planned block to fill to win.end
-                            if (plan.length > 0) {
-                                const last = plan[plan.length - 1];
-                                const lastDMax = last.need.layer.durationMax || last.need.layer.duration || GAP_MAX_DUR;
-                                const extended = last.endMin + (win.end - planCursor);
-                                if (extended - last.startMin <= lastDMax) {
-                                    last.endMin = win.end;
-                                    planCursor = win.end;
+                        // Try all position combinations, pick zero-gap winner
+                        let bestPlan = null;
+                        let bestScore = Infinity;
+
+                        if (anchored.length === 0) {
+                            bestPlan = buildPlan(new Map());
+                        } else {
+                            // Build position arrays for each anchored need
+                            const posArrays = anchored.map(an => getPositions(an));
+
+                            // Iterate all combinations
+                            function tryAll(idx, current) {
+                                if (bestScore === 0) return; // already found perfect
+                                if (idx === anchored.length) {
+                                    const posMap = new Map();
+                                    anchored.forEach((an, i) => posMap.set(an, current[i]));
+                                    const plan = buildPlan(posMap);
+                                    const score = scorePlan(plan);
+                                    if (score < bestScore) {
+                                        bestScore = score;
+                                        bestPlan = plan;
+                                    }
+                                    return;
+                                }
+                                for (const pos of posArrays[idx]) {
+                                    // Prune: position must be after previous anchor ends
+                                    if (idx > 0) {
+                                        const prevPos  = current[idx-1];
+                                        const prevAn   = anchored[idx-1];
+                                        const prevDMin = prevAn.layer.durationMin || prevAn.layer.periodMin || prevAn.layer.duration || GAP_MIN_DUR;
+                                        if (pos < prevPos + prevDMin) continue;
+                                    }
+                                    current[idx] = pos;
+                                    tryAll(idx + 1, current);
+                                    if (bestScore === 0) return;
                                 }
                             }
+                            tryAll(0, new Array(anchored.length));
                         }
 
-                        // ── Commit the plan ──────────────────────────────────
-                        for (const slot of plan) {
+                        // ── Commit the best plan ─────────────────────────────
+                        for (const slot of (bestPlan || [])) {
                             const { need, startMin, endMin } = slot;
-                            if (endMin <= startMin) continue;
+                            if (!need || endMin <= startMin) continue;
                             const { layer } = need;
                             const type  = layer.type;
                             const event = layer.event || layer.name || layer.type || 'Activity';
                             const _classification = layer._classification;
-
                             if (!hasActivityCapacity(type, startMin, endMin)) continue;
-
                             claimActivitySlot(type, bunk, startMin, endMin);
                             placeTentativeBlock(bunk, {
-                                startMin,
-                                endMin,
-                                type,
-                                event,
-                                layer,
-                                _classification,
-                                _committed: true
+                                startMin, endMin, type, event, layer,
+                                _classification, _committed: true
                             });
                             need.placed++;
                         }
