@@ -1797,7 +1797,7 @@
             (improved ? ' ★ NEW BEST' : '') +
             ' | best=' + bestScore + ' | stale=' + staleCount);
 
-        let shouldStop = bestScore <= PERFECT_SCORE || staleCount >= STALE_STOP;
+       
 
         if (!shouldStop && totalIters < MAX_ITERATIONS) {
             _iterSeed++;
@@ -1806,7 +1806,8 @@
             // Jump back to Step 2.1 by looping — achieved via the do/while below
         }
 
-        } while (!shouldStop && totalIters < MAX_ITERATIONS);        // ────────────────────────────────────────────────────────────────────
+       } while (bestScore > PERFECT_SCORE && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS);
+        // ────────────────────────────────────────────────────────────────────
 
         log('══════════════════════════════════════════════════════════');
         log('BEST SCORE: ' + bestScore + ' after ' + totalIters + ' iteration(s)');
