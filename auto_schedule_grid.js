@@ -452,7 +452,6 @@
         var wrap = document.createElement('div');
         wrap.className = 'asg-wrap';
 
-        // Division config
         var divConfig = (window.divisions || {})[divName] || divInfo || {};
         var divColor  = divConfig.color || '#147D91';
         var increment = getIncrement();
@@ -464,6 +463,8 @@
         }
         var dayStart = parseTime(divConfig.startTime) || 540;
         var dayEnd   = parseTime(divConfig.endTime)   || 960;
+        var totalMin = dayEnd - dayStart;
+        var totalH   = totalMin * PX_PER_MIN;
 
         // ── HEADER ──────────────────────────────
         var hdr = document.createElement('div');
@@ -500,306 +501,365 @@
         var scroll = document.createElement('div');
         scroll.className = 'asg-scroll';
 
-        // ── CSS GRID ─────────────────────────────
-        // Columns: 64px ruler + bunkColWidth per bunk
-        var bunkColW = Math.max(88, Math.min(150, Math.floor(780 / Math.max(bunks.length, 1))));
-        var gridCols = '64px ' + bunks.map(function () { return bunkColW + 'px'; }).join(' ');
+        // ── OUTER CONTAINER ──────────────────────
+        // Uses flexbox: ruler column (fixed) + bunk columns (flex)
+        var bunkColW = Math.max(100, Math.min(160, Math.floor(860 / Math.max(bunks.length, 1))));
 
-        // Build time ticks
-        var ticks = [];
-        for (var tm = dayStart; tm <= dayEnd; tm += increment) ticks.push(tm);
+        var container = document.createElement('div');
+        container.style.cssText = [
+            'display:flex',
+            'flex-direction:row',
+            'position:relative',
+            'min-width:' + (64 + bunks.length * bunkColW) + 'px',
+            'background:#fff'
+        ].join(';');
 
-        // League slots for this division
-        var leagueSlots = getLeagueSlotsForDiv(divName, bunks);
-        // Map startMin → league data for quick lookup
-        var leagueByStart = {};
-        leagueSlots.forEach(function (ls) { leagueByStart[ls.startMin] = ls; });
-
-        // Per-bunk activity lists (pre-computed)
-        var bunkActivities = {};
-        bunks.forEach(function (b) { bunkActivities[b] = getBunkActivities(b, divName); });
-
-        // ─────────────────────────────────────────
-        // Build grid rows
-        // We iterate tick by tick; for each tick we either:
-        //   (a) render a normal row (ruler cell + N bunk cells), or
-        //   (b) start a league row that spans the league duration
-        // ─────────────────────────────────────────
-
-        var grid = document.createElement('div');
-        grid.className = 'asg-grid';
-        grid.style.gridTemplateColumns = gridCols;
-
-        // Row 1: header
-        var HEADER_H = 36;
-        grid.style.gridTemplateRows = HEADER_H + 'px'; // will be extended by content
+        // ── RULER COLUMN ─────────────────────────
+        var ruler = document.createElement('div');
+        ruler.style.cssText = [
+            'width:64px',
+            'flex-shrink:0',
+            'position:relative',
+            'border-right:1px solid #e5e7eb',
+            'background:#f9fafb',
+            'z-index:2'
+        ].join(';');
 
         // Ruler header
         var rulerHead = document.createElement('div');
-        rulerHead.className = 'asg-ruler-head';
-        rulerHead.style.height = HEADER_H + 'px';
+        rulerHead.style.cssText = [
+            'height:36px',
+            'display:flex',
+            'align-items:center',
+            'justify-content:center',
+            'font-size:0.7rem',
+            'font-weight:600',
+            'color:#6b7280',
+            'border-bottom:2px solid #e5e7eb',
+            'position:sticky',
+            'top:0',
+            'z-index:5',
+            'background:#f9fafb'
+        ].join(';');
         rulerHead.textContent = 'Time';
-        grid.appendChild(rulerHead);
+        ruler.appendChild(rulerHead);
 
-        // Bunk headers
-        bunks.forEach(function (bunk, ci) {
+        // Ruler body — absolutely positioned tick marks
+        var rulerBody = document.createElement('div');
+        rulerBody.style.cssText = [
+            'position:relative',
+            'height:' + totalH + 'px'
+        ].join(';');
+
+        // League slots
+        var leagueSlots = getLeagueSlotsForDiv(divName, bunks);
+        var leagueByStart = {};
+        leagueSlots.forEach(function (ls) { leagueByStart[ls.startMin] = ls; });
+
+        // Draw ruler ticks
+        for (var tm = dayStart; tm <= dayEnd; tm += increment) {
+            var topPx = (tm - dayStart) * PX_PER_MIN;
+            var isMajor = tm % 60 === 0;
+            var showLabel = isMajor || increment <= 30;
+
+            // Check if inside league
+            var inLeague = false;
+            for (var ls2 in leagueByStart) {
+                var lsData = leagueByStart[parseInt(ls2)];
+                if (tm > parseInt(ls2) && tm < lsData.endMin) { inLeague = true; break; }
+            }
+
+            var tick = document.createElement('div');
+            tick.style.cssText = [
+                'position:absolute',
+                'top:' + topPx + 'px',
+                'left:0',
+                'right:0',
+                'height:' + (increment * PX_PER_MIN) + 'px',
+                'border-top:1px solid ' + (isMajor ? '#e5e7eb' : '#f3f4f6'),
+                'display:flex',
+                'align-items:flex-start',
+                'padding:2px 6px 0',
+                inLeague ? 'background:#1e3a8a;' : ''
+            ].join(';');
+
+            if (showLabel) {
+                var lbl = document.createElement('span');
+                lbl.style.cssText = [
+                    'font-size:' + (isMajor ? '0.7rem' : '0.63rem'),
+                    'color:' + (inLeague ? 'rgba(255,255,255,0.7)' : (isMajor ? '#4b5563' : '#9ca3af')),
+                    'font-weight:' + (isMajor ? '600' : '400'),
+                    'white-space:nowrap'
+                ].join(';');
+                lbl.textContent = toLabel(tm);
+                tick.appendChild(lbl);
+            }
+            rulerBody.appendChild(tick);
+        }
+
+        ruler.appendChild(rulerBody);
+        container.appendChild(ruler);
+
+        // ── BUNK COLUMNS AREA ────────────────────
+        // One row of headers + one shared body with absolutely-positioned bunk columns
+        var columnsWrap = document.createElement('div');
+        columnsWrap.style.cssText = [
+            'display:flex',
+            'flex-direction:column',
+            'flex:1'
+        ].join(';');
+
+        // Bunk header row
+        var headerRow = document.createElement('div');
+        headerRow.style.cssText = [
+            'display:flex',
+            'flex-direction:row',
+            'height:36px',
+            'flex-shrink:0',
+            'position:sticky',
+            'top:0',
+            'z-index:4',
+            'background:#f9fafb',
+            'border-bottom:2px solid #e5e7eb'
+        ].join(';');
+
+        bunks.forEach(function (bunk) {
             var bh = document.createElement('div');
-            bh.className = 'asg-bunk-head';
-            bh.style.gridColumn = String(ci + 2);
-            bh.style.height = HEADER_H + 'px';
+            bh.style.cssText = [
+                'width:' + bunkColW + 'px',
+                'flex-shrink:0',
+                'display:flex',
+                'align-items:center',
+                'justify-content:center',
+                'font-size:0.72rem',
+                'font-weight:700',
+                'color:#1f2937',
+                'border-right:1px solid #f0f0f0',
+                'text-align:center',
+                'padding:0 4px'
+            ].join(';');
             bh.textContent = bunk;
-            grid.appendChild(bh);
+            headerRow.appendChild(bh);
         });
+        columnsWrap.appendChild(headerRow);
 
-        // Track which minutes are covered by a league block (so we skip their ticks)
-        var leagueCoveredUntil = {}; // bunk → minute covered until
+        // Body row — contains all bunk columns + league overlays
+        var bodyRow = document.createElement('div');
+        bodyRow.style.cssText = [
+            'display:flex',
+            'flex-direction:row',
+            'position:relative',
+            'height:' + totalH + 'px'
+        ].join(';');
 
-        // We need to track absolute row index for CSS grid placement.
-        // Row 1 = header. Subsequent rows = time ticks.
-        // However, because league rows have variable height (px, not grid rows),
-        // we render them as a single tall grid cell spanning 1 grid-row but with
-        // explicit height set in px. Same for all cells — each tick row is increment*PX_PER_MIN tall.
+        // Per-bunk activity lists
+        var bunkActivities = {};
+        bunks.forEach(function (b) { bunkActivities[b] = getBunkActivities(b, divName); });
 
-        var tickRowH = increment * PX_PER_MIN; // px per grid row after header
+        // Draw each bunk column
+        bunks.forEach(function (bunk, ci) {
+            var col = document.createElement('div');
+            col.style.cssText = [
+                'width:' + bunkColW + 'px',
+                'flex-shrink:0',
+                'position:relative',
+                'border-right:1px solid #f0f0f0',
+                'height:' + totalH + 'px'
+            ].join(';');
 
-        var skipUntil = {}; // startMin → endMin (league coverage per tick range)
+            // Background tick lines (visual grid)
+            for (var tm2 = dayStart; tm2 <= dayEnd; tm2 += increment) {
+                var lineTop = (tm2 - dayStart) * PX_PER_MIN;
+                var line = document.createElement('div');
+                line.style.cssText = [
+                    'position:absolute',
+                    'top:' + lineTop + 'px',
+                    'left:0',
+                    'right:0',
+                    'height:0',
+                    'border-top:1px solid ' + (tm2 % 60 === 0 ? '#e5e7eb' : '#f3f4f6'),
+                    'pointer-events:none'
+                ].join(';');
+                col.appendChild(line);
+            }
 
-        ticks.forEach(function (tickMin, rowIdx) {
-            var gridRow = rowIdx + 2; // +2 because row 1 is header
-            var cellH   = tickRowH;
+            // Activity blocks — absolutely positioned by startMin
+            var acts = bunkActivities[bunk];
+            acts.forEach(function (act) {
+                if (act.isLeague) return; // league handled by overlay
 
-            // ── Check if this tick starts a league block ──────────
-            var ls = leagueByStart[tickMin];
-            if (ls) {
-                var leagueH = (ls.endMin - ls.startMin) * PX_PER_MIN;
+                var blockTop = (act.startMin - dayStart) * PX_PER_MIN;
+                var blockH   = act.duration * PX_PER_MIN;
+                if (blockH < 2) return;
 
-                // Ruler cell (styled for league)
-                var lRuler = document.createElement('div');
-                lRuler.className = 'asg-league-time-ruler';
-                lRuler.style.cssText += 'grid-row:' + gridRow + '; height:' + leagueH + 'px;';
-                var lRulerLabel = document.createElement('span');
-                lRulerLabel.className = 'asg-time-label';
-                lRulerLabel.textContent = toLabel(tickMin);
-                lRuler.appendChild(lRulerLabel);
-                grid.appendChild(lRuler);
+                var style = blockStyle(act.entry);
+                var name  = act.entry?._activity || act.entry?.field || '';
+                var sub   = act.entry?.sport || '';
 
-                // League content cell — spans all bunk columns
-                var lRow = document.createElement('div');
-                lRow.className = 'asg-league-row';
-                lRow.style.cssText =
-                    'grid-row:' + gridRow + ';' +
-                    'grid-column: 2 / ' + (bunks.length + 2) + ';' +
-                    'height:' + leagueH + 'px;';
+                var blk = document.createElement('div');
+                blk.className = 'asg-block';
+                blk.style.cssText = [
+                    'position:absolute',
+                    'top:' + (blockTop + 2) + 'px',
+                    'left:3px',
+                    'right:3px',
+                    'height:' + (blockH - 4) + 'px',
+                    'background:' + style.bg,
+                    'border:1px solid ' + style.border,
+                    'color:' + style.text,
+                    'border-radius:5px',
+                    'overflow:hidden',
+                    'display:flex',
+                    'flex-direction:column',
+                    'justify-content:center',
+                    'padding:3px 6px',
+                    'box-sizing:border-box',
+                    'cursor:default',
+                    'z-index:1'
+                ].join(';');
 
-                // Header bar
-                var lHdr = document.createElement('div');
-                lHdr.className = 'asg-league-header';
-
-                var badge = document.createElement('div');
-                badge.className = 'asg-league-badge';
-                badge.innerHTML = '🏆 League Game';
-                lHdr.appendChild(badge);
-
-                if (ls.leagueName) {
-                    var lName = document.createElement('span');
-                    lName.className = 'asg-league-name';
-                    lName.textContent = ls.leagueName;
-                    lHdr.appendChild(lName);
-                }
-
-                var timeRange = document.createElement('span');
-                timeRange.style.cssText = 'margin-left:auto; font-size:0.65rem; color:rgba(255,255,255,0.55); white-space:nowrap; flex-shrink:0;';
-                timeRange.textContent = toLabel(ls.startMin) + ' – ' + toLabel(ls.endMin);
-                lHdr.appendChild(timeRange);
-
-                if (ls.gameLabel) {
-                    var lLabel = document.createElement('span');
-                    lLabel.className = 'asg-league-label';
-                    lLabel.textContent = ls.gameLabel;
-                    lHdr.appendChild(lLabel);
-                }
-
-                lRow.appendChild(lHdr);
-
-                // Matchups grid
-                var muGrid = document.createElement('div');
-                muGrid.className = 'asg-league-matchups';
-
-                if (!ls.matchups || ls.matchups.length === 0) {
-                    var empty = document.createElement('div');
-                    empty.className = 'asg-league-empty';
-                    empty.textContent = 'Matchups not yet assigned';
-                    muGrid.appendChild(empty);
+                if (blockH >= 40) {
+                    var nameEl = document.createElement('div');
+                    nameEl.className = 'asg-block-name';
+                    nameEl.style.color = style.text;
+                    nameEl.textContent = name;
+                    blk.appendChild(nameEl);
+                    if (sub && sub !== name) {
+                        var subEl = document.createElement('div');
+                        subEl.className = 'asg-block-sub';
+                        subEl.style.color = style.text;
+                        subEl.textContent = sub;
+                        blk.appendChild(subEl);
+                    }
+                    if (blockH >= 55) {
+                        var durEl = document.createElement('div');
+                        durEl.className = 'asg-block-sub';
+                        durEl.style.color = style.text;
+                        durEl.textContent = act.duration + 'min';
+                        blk.appendChild(durEl);
+                    }
+                } else if (blockH >= 22) {
+                    var nameEl2 = document.createElement('div');
+                    nameEl2.className = 'asg-block-name';
+                    nameEl2.style.color = style.text;
+                    nameEl2.style.fontSize = '0.63rem';
+                    nameEl2.textContent = name;
+                    blk.appendChild(nameEl2);
                 } else {
-                    ls.matchups.forEach(function (raw) {
-                        var mu = parseMatchup(raw, ls.sport);
-
-                        var card = document.createElement('div');
-                        card.className = 'asg-matchup-card';
-
-                        if (mu.sport) {
-                            var pill = document.createElement('div');
-                            pill.className = 'asg-matchup-sport-pill';
-                            pill.textContent = mu.sport;
-                            card.appendChild(pill);
-                        }
-
-                        var body = document.createElement('div');
-                        body.className = 'asg-matchup-body';
-
-                        var teams = document.createElement('div');
-                        teams.className = 'asg-matchup-teams';
-                        // Bold the "vs" separator
-                        var parts = mu.teams.split(/\s+vs\.?\s+/i);
-                        if (parts.length === 2) {
-                            teams.innerHTML = esc(parts[0]) +
-                                '<span style="font-weight:400; opacity:0.6; margin:0 4px;">vs</span>' +
-                                esc(parts[1]);
-                        } else {
-                            teams.textContent = mu.teams;
-                        }
-                        body.appendChild(teams);
-
-                        if (mu.field) {
-                            var field = document.createElement('div');
-                            field.className = 'asg-matchup-field';
-                            field.innerHTML = '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="opacity:0.6"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>' +
-                                esc(mu.field);
-                            body.appendChild(field);
-                        }
-
-                        card.appendChild(body);
-                        muGrid.appendChild(card);
-                    });
+                    blk.title = name;
                 }
 
-                lRow.appendChild(muGrid);
-                grid.appendChild(lRow);
-
-                // Mark ticks covered by this league block so bunk cells are skipped
-                skipUntil[tickMin] = ls.endMin;
-                return; // done with this tick
-            }
-
-            // ── Check if this tick is inside a league block ───────
-            // (i.e. a tick that falls within a league we already rendered)
-            var insideLeague = false;
-            for (var lStart in skipUntil) {
-                if (tickMin > parseInt(lStart) && tickMin < skipUntil[lStart]) {
-                    insideLeague = true;
-                    break;
-                }
-            }
-            if (insideLeague) return; // skip — covered by the league row above
-
-            // ── Normal tick row ───────────────────────────────────
-            var isMajor = tickMin % 60 === 0;
-
-            // Ruler cell
-            var rCell = document.createElement('div');
-            rCell.className = 'asg-time-cell' + (isMajor ? ' major' : '');
-            rCell.style.cssText = 'grid-row:' + gridRow + '; height:' + cellH + 'px;';
-            var rLabel = document.createElement('span');
-            rLabel.className = 'asg-time-label';
-            rLabel.textContent = isMajor ? toLabel(tickMin) : (tickMin % 30 === 0 ? toLabel(tickMin) : '');
-            rCell.appendChild(rLabel);
-            grid.appendChild(rCell);
-
-            // Bunk cells
-            bunks.forEach(function (bunk, ci) {
-                var cell = document.createElement('div');
-                cell.className = 'asg-bunk-cell';
-                cell.style.cssText = 'grid-row:' + gridRow + '; grid-column:' + (ci + 2) + '; height:' + cellH + 'px;';
-
-                // Find activities that overlap this tick window
-                var tickEnd = tickMin + increment;
-                var acts = bunkActivities[bunk].filter(function (a) {
-                    return !a.isLeague && a.startMin < tickEnd && a.endMin > tickMin;
-                });
-
-                acts.forEach(function (act) {
-                    // Clip to this tick cell's bounds
-                    var clipStart = Math.max(act.startMin, tickMin);
-                    var clipEnd   = Math.min(act.endMin, tickEnd);
-                    var clipTop   = (clipStart - tickMin) * PX_PER_MIN;
-                    var clipH     = (clipEnd - clipStart) * PX_PER_MIN;
-                    if (clipH < 2) return;
-
-                    // Only render the block's LABEL in the first tick it appears in
-                    var isFirst = act.startMin >= tickMin && act.startMin < tickEnd;
-                    // For continuation: draw a connector strip without label
-                    var style = blockStyle(act.entry);
-
-                    var blk = document.createElement('div');
-                    blk.className = 'asg-block';
-                    blk.style.cssText +=
-                        'top:' + clipTop + 'px;' +
-                        'height:' + (clipH - 2) + 'px;' +
-                        'background:' + style.bg + ';' +
-                        'border:1px solid ' + style.border + ';' +
-                        'color:' + style.text + ';';
-
-                    if (isFirst) {
-                        var totalH = act.duration * PX_PER_MIN;
-                        var name = act.entry?._activity || act.entry?.field || '';
-                        var sub  = act.entry?.sport || '';
-
-                        if (totalH >= 40) {
-                            var nameEl = document.createElement('div');
-                            nameEl.className = 'asg-block-name';
-                            nameEl.style.color = style.text;
-                            nameEl.textContent = name;
-                            blk.appendChild(nameEl);
-                            if (sub && sub !== name) {
-                                var subEl = document.createElement('div');
-                                subEl.className = 'asg-block-sub';
-                                subEl.style.color = style.text;
-                                subEl.textContent = sub;
-                                blk.appendChild(subEl);
-                            }
-                            if (totalH >= 55) {
-                                var durEl = document.createElement('div');
-                                durEl.className = 'asg-block-sub';
-                                durEl.style.color = style.text;
-                                durEl.textContent = act.duration + 'min';
-                                blk.appendChild(durEl);
-                            }
-                        } else if (totalH >= 22) {
-                            var nameEl2 = document.createElement('div');
-                            nameEl2.className = 'asg-block-name';
-                            nameEl2.style.color = style.text;
-                            nameEl2.textContent = name;
-                            blk.appendChild(nameEl2);
-                        } else {
-                            blk.title = name + ' (' + act.duration + 'min)';
-                        }
-                    }
-
-                    blk.title = (act.entry?._activity || act.entry?.field || '') +
-                        '\n' + toLabel(act.startMin) + ' – ' + toLabel(act.endMin) +
-                        ' (' + act.duration + 'min)';
-
-                    cell.appendChild(blk);
-                });
-
-                // Free stripe if no activities in this tick
-                if (acts.length === 0) {
-                    var free = document.createElement('div');
-                    free.className = 'asg-free';
-                    free.style.cssText += 'top:1px; height:' + (cellH - 2) + 'px;';
-                    if (cellH >= 20) {
-                        var fLabel = document.createElement('span');
-                        fLabel.textContent = 'Free';
-                        free.appendChild(fLabel);
-                    }
-                    cell.appendChild(free);
-                }
-
-                grid.appendChild(cell);
+                blk.title = name + '\n' + toLabel(act.startMin) + ' – ' + toLabel(act.endMin) + ' (' + act.duration + 'min)';
+                col.appendChild(blk);
             });
+
+            bodyRow.appendChild(col);
         });
 
-        scroll.appendChild(grid);
+        // ── LEAGUE OVERLAYS ───────────────────────
+        // Rendered as absolutely-positioned full-width bars over all bunk columns
+        leagueSlots.forEach(function (ls) {
+            var leagueTop = (ls.startMin - dayStart) * PX_PER_MIN;
+            var leagueH   = (ls.endMin - ls.startMin) * PX_PER_MIN;
+
+            var overlay = document.createElement('div');
+            overlay.className = 'asg-league-row';
+            overlay.style.cssText = [
+                'position:absolute',
+                'top:' + leagueTop + 'px',
+                'left:0',
+                'right:0',
+                'height:' + leagueH + 'px',
+                'z-index:3',
+                'border-radius:0'
+            ].join(';');
+
+            // Header bar
+            var lHdr = document.createElement('div');
+            lHdr.className = 'asg-league-header';
+
+            var badge = document.createElement('div');
+            badge.className = 'asg-league-badge';
+            badge.innerHTML = '🏆 League Game';
+            lHdr.appendChild(badge);
+
+            if (ls.leagueName) {
+                var lName = document.createElement('span');
+                lName.className = 'asg-league-name';
+                lName.textContent = ls.leagueName;
+                lHdr.appendChild(lName);
+            }
+
+            var timeRange = document.createElement('span');
+            timeRange.style.cssText = 'margin-left:auto; font-size:0.65rem; color:rgba(255,255,255,0.55); white-space:nowrap; flex-shrink:0;';
+            timeRange.textContent = toLabel(ls.startMin) + ' – ' + toLabel(ls.endMin);
+            lHdr.appendChild(timeRange);
+
+            if (ls.gameLabel) {
+                var lLabel = document.createElement('span');
+                lLabel.className = 'asg-league-label';
+                lLabel.textContent = ls.gameLabel;
+                lHdr.appendChild(lLabel);
+            }
+
+            overlay.appendChild(lHdr);
+
+            // Matchups
+            var muGrid = document.createElement('div');
+            muGrid.className = 'asg-league-matchups';
+
+            if (!ls.matchups || ls.matchups.length === 0) {
+                var empty = document.createElement('div');
+                empty.className = 'asg-league-empty';
+                empty.textContent = 'Matchups not yet assigned';
+                muGrid.appendChild(empty);
+            } else {
+                ls.matchups.forEach(function (raw) {
+                    var mu = parseMatchup(raw, ls.sport);
+                    var card = document.createElement('div');
+                    card.className = 'asg-matchup-card';
+
+                    if (mu.sport) {
+                        var pill = document.createElement('div');
+                        pill.className = 'asg-matchup-sport-pill';
+                        pill.textContent = mu.sport;
+                        card.appendChild(pill);
+                    }
+
+                    var body = document.createElement('div');
+                    body.className = 'asg-matchup-body';
+
+                    var teams = document.createElement('div');
+                    teams.className = 'asg-matchup-teams';
+                    var parts = mu.teams.split(/\s+vs\.?\s+/i);
+                    if (parts.length === 2) {
+                        teams.innerHTML = esc(parts[0]) +
+                            '<span style="font-weight:400; opacity:0.6; margin:0 4px;">vs</span>' +
+                            esc(parts[1]);
+                    } else {
+                        teams.textContent = mu.teams;
+                    }
+                    body.appendChild(teams);
+
+                    if (mu.field) {
+                        var field = document.createElement('div');
+                        field.className = 'asg-matchup-field';
+                        field.innerHTML = '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="opacity:0.6"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>' + esc(mu.field);
+                        body.appendChild(field);
+                    }
+
+                    card.appendChild(body);
+                    muGrid.appendChild(card);
+                });
+            }
+
+            overlay.appendChild(muGrid);
+            bodyRow.appendChild(overlay);
+        });
+
+        columnsWrap.appendChild(bodyRow);
+        container.appendChild(columnsWrap);
+        scroll.appendChild(container);
         wrap.appendChild(scroll);
         return wrap;
     }
