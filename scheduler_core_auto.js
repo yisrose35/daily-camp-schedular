@@ -1179,9 +1179,11 @@
             g + '→' + activityTypes[i % activityTypes.length]).join(', '));
 
        // ── Window-aware bin-packer ──────────────────────────────────────────
-        // For each bunk, find free windows between pinned blocks, collect all
-        // pending needs that belong in each window, size and place them in one
-        // planned pass with no gaps.
+        // For each bunk:
+        // 1. Find free windows between pinned/committed blocks
+        // 2. Collect all pending needs whose layer window overlaps each free window
+        // 3. Plan exact placement sequence — no gaps, respect dMin/dMax/window
+        // 4. Place everything in one committed pass
 
         for (const grade of gradeSortedForPlacement) {
             const bunks = sortBunksByConstraint(
@@ -1190,131 +1192,183 @@
 
             for (const bunk of bunks) {
                 const needs = bunkNeeds[bunk] || [];
-
-                // ── Find free windows between pinned/committed blocks ──────────
                 const divStart = parseTimeToMinutes(divisions[grade]?.startTime) || 660;
                 const divEnd   = parseTimeToMinutes(divisions[grade]?.endTime)   || 990;
 
+                // ── Step A: find all free windows between committed blocks ────
                 const committed = (bunkTimelines[bunk] || [])
                     .filter(b => b._committed || b._fixed || b._classification === 'pinned')
                     .sort((a, b) => a.startMin - b.startMin);
 
                 const freeWindows = [];
-                let cursor = divStart;
+                let cur = divStart;
                 committed.forEach(b => {
-                    if (b.startMin > cursor) {
-                        freeWindows.push({ start: cursor, end: b.startMin });
-                    }
-                    cursor = Math.max(cursor, b.endMin);
+                    if (b.startMin > cur) freeWindows.push({ start: cur, end: b.startMin });
+                    cur = Math.max(cur, b.endMin);
                 });
-                if (cursor < divEnd) freeWindows.push({ start: cursor, end: divEnd });
+                if (cur < divEnd) freeWindows.push({ start: cur, end: divEnd });
 
-                // ── For each free window, collect and pack pending needs ───────
+                // ── Step B: for each free window, plan and place ─────────────
                 for (const win of freeWindows) {
                     const winDur = win.end - win.start;
 
-                    // Collect needs whose layer window overlaps this free window
+                    // Collect unplaced needs that overlap this window
                     const windowNeeds = needs.filter(n => {
-                        if (n.op !== '<=' && n.op !== '≤' && n.placed >= n.required) return false;
-                        const lStart = n.layer.startMin;
-                        const lEnd   = n.layer.endMin;
-                        return lStart < win.end && lEnd > win.start;
+                        if (n.placed >= n.required) return false;
+                        return n.layer.startMin < win.end && n.layer.endMin > win.start;
                     });
-
                     if (windowNeeds.length === 0) continue;
 
-                    // Separate specials from non-specials
+                    // Separate specials (capacity-managed separately) from others
                     const specialNeeds = windowNeeds.filter(n => n.layer.type === 'special');
                     const otherNeeds   = windowNeeds.filter(n => n.layer.type !== 'special');
 
-                    // ── Place non-specials first (bin-pack) ───────────────────
-                    // Calculate total minimum time needed
-                    const totalMinNeeded = otherNeeds.reduce((sum, n) => {
-                        const dMin = n.layer.durationMin || n.layer.periodMin || n.layer.duration || 0;
-                        return sum + dMin * Math.max(1, n.required - n.placed);
-                    }, 0);
+                    // ── Plan non-specials ─────────────────────────────────────
+                    // Strategy:
+                    // - Identify which needs have a restricted window (startMin > win.start
+                    //   or endMin < win.end) — these are "anchored" needs
+                    // - Sort all needs so anchored ones are placed at their natural position
+                    //   and free ones fill around them
+                    // - Calculate ideal sizes to fill the window with zero gaps
 
-                    const slack = Math.max(0, winDur - totalMinNeeded);
+                    if (otherNeeds.length > 0) {
+                        // Split into anchored (restricted window) and free (full window)
+                        const anchored = otherNeeds.filter(n =>
+                            n.layer.startMin > win.start || n.layer.endMin < win.end
+                        ).sort((a, b) => a.layer.startMin - b.layer.startMin);
 
-                    // Size each need proportionally within [dMin, dMax]
-                    // Sort by ratio descending (most constrained first)
-                    otherNeeds.sort((a, b) => b.layer._ratio - a.layer._ratio);
+                        const free = otherNeeds.filter(n =>
+                            n.layer.startMin <= win.start && n.layer.endMin >= win.end
+                        ).sort((a, b) => b.layer._ratio - a.layer._ratio);
 
-                   let placeCursor = win.start;
+                        // Build a planned sequence:
+                        // - anchored needs are fixed at their window positions
+                        // - free needs fill the gaps between anchored needs
+                        // - sizes are calculated to leave zero gaps
 
-                    // Sort purely by ratio descending — most constrained first
-                    // ratio = duration/window so snacks (10min in 60min = 0.167) 
-                    // beats sport (30min in 330min = 0.09) and goes first
-                    otherNeeds.sort((a, b) => b.layer._ratio - a.layer._ratio);
-
-                    for (const need of otherNeeds) {
-                        if (need.placed >= need.required) continue;
-                        const { layer } = need;
-                        const dMin = layer.durationMin || layer.periodMin || layer.duration || GAP_MIN_DUR;
-                        const dMax = layer.durationMax || layer.periodMin || layer.duration || GAP_MAX_DUR;
-
-                        // How many needs still need placement including this one
-                        const stillPending = otherNeeds.filter(n => n !== need && n.placed < n.required);
-                        const remainingNeeds = stillPending.length + 1;
-
-                        // How much time do the other pending needs minimally need
-                        const otherMinNeeded = stillPending.reduce((sum, n) => {
-                            const nStart = Math.max(placeCursor, n.layer.startMin);
+                        // First pass: figure out total time consumed by anchored needs
+                        const anchoredMinTime = anchored.reduce((sum, n) => {
                             return sum + (n.layer.durationMin || n.layer.periodMin || n.layer.duration || GAP_MIN_DUR);
                         }, 0);
 
-                        // Effective start respects layer window
-                        const effectiveStart = Math.max(placeCursor, layer.startMin);
+                        // Time available for free needs
+                        const freeTime = Math.max(0, winDur - anchoredMinTime);
+                        const freeCount = free.length;
 
-                        // Don't place so late that other needs can't fit after us
-                        const latestEnd = win.end - otherMinNeeded;
-                        const effectiveEnd = Math.min(effectiveStart + dMax, layer.endMin, win.end, latestEnd);
+                        // Size each free need to evenly fill available space
+                        const perFreeIdeal = freeCount > 0 ? snapTo5(Math.floor(freeTime / freeCount)) : 0;
 
-                        // Ideal size: take as much of remaining space as allowed
-                        // leaving enough for other pending needs
-                        const availableForThis = effectiveEnd - effectiveStart;
-                       if (availableForThis < dMin) {
-                            placeCursor = effectiveStart;
-                            continue;
-                        }
+                        // Build the full ordered plan: interleave free and anchored
+                        // Walk left to right, inserting free needs before each anchored need
+                        const plan = []; // { need, startMin, endMin }
+                        let planCursor = win.start;
+                        let freeIdx = 0;
 
-                        const targetDur = snapTo5(Math.max(dMin, Math.min(dMax, availableForThis)));
-                        const actualEnd = effectiveStart + targetDur;
+                        for (const anchoredNeed of anchored) {
+                            const anchorStart = Math.max(planCursor, anchoredNeed.layer.startMin);
+                            const anchorDMin  = anchoredNeed.layer.durationMin || anchoredNeed.layer.periodMin || anchoredNeed.layer.duration || GAP_MIN_DUR;
+                            const anchorDMax  = anchoredNeed.layer.durationMax || anchoredNeed.layer.duration || GAP_MAX_DUR;
 
-                        // Don't hardcode gap fills — let Step 2.5 gap-fill handle
-                        // any remaining space after all needs are placed
-                        placeCursor = effectiveStart;                        const type  = layer.type;
-                        const event = layer.event || layer.name || layer.type || 'Activity';
-                        const _classification = layer._classification;
-
-                        if (!hasActivityCapacity(type, effectiveStart, effectiveEnd)) {
-                            if (!willHaveCapacityLater(type, effectiveEnd, win.end, dMin)) {
-                                // No capacity — skip but don't advance cursor
+                            // Fill gap before this anchor with free needs
+                            const gapBeforeAnchor = anchorStart - planCursor;
+                            while (freeIdx < free.length && gapBeforeAnchor > 0) {
+                                const fn = free[freeIdx];
+                                const fdMin = fn.layer.durationMin || fn.layer.periodMin || fn.layer.duration || GAP_MIN_DUR;
+                                const fdMax = fn.layer.durationMax || fn.layer.duration || GAP_MAX_DUR;
+                                const spaceLeft = anchorStart - planCursor;
+                                if (spaceLeft < fdMin) break;
+                                const dur = snapTo5(Math.max(fdMin, Math.min(fdMax, spaceLeft)));
+                                plan.push({ need: fn, startMin: planCursor, endMin: planCursor + dur });
+                                planCursor += dur;
+                                freeIdx++;
                             }
-                            continue;
+
+                            // Place the anchored need — size it to reach next anchor or window end
+                            // Look ahead: what's the next anchor's start?
+                            const nextAnchorIdx = anchored.indexOf(anchoredNeed) + 1;
+                            const nextAnchorStart = nextAnchorIdx < anchored.length
+                                ? Math.max(anchorStart + anchorDMin, anchored[nextAnchorIdx].layer.startMin)
+                                : win.end;
+
+                            // How much free time remains after this anchor for remaining free needs
+                            const remainingFreeNeeds = free.length - freeIdx;
+                            const remainingFreeMin = free.slice(freeIdx).reduce((sum, fn) => {
+                                return sum + (fn.layer.durationMin || fn.layer.periodMin || fn.layer.duration || GAP_MIN_DUR);
+                            }, 0);
+
+                            const anchorEnd = Math.min(
+                                anchorStart + anchorDMax,
+                                anchoredNeed.layer.endMin,
+                                nextAnchorStart - remainingFreeMin
+                            );
+                            const anchorDur = snapTo5(Math.max(anchorDMin, anchorEnd - anchorStart));
+
+                            plan.push({ need: anchoredNeed, startMin: anchorStart, endMin: anchorStart + anchorDur });
+                            planCursor = anchorStart + anchorDur;
                         }
 
-                        claimActivitySlot(type, bunk, effectiveStart, effectiveEnd);
-                        const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(type);
-                        placeTentativeBlock(bunk, {
-                            startMin: effectiveStart,
-                            endMin:   effectiveEnd,
-                            type,
-                            event,
-                            layer,
-                            _classification,
-                            _activityLocked: _isTimeLocked
-                        });
-                        need.placed++;
-                        placeCursor = effectiveEnd;
+                        // Fill remaining space with any leftover free needs
+                        while (freeIdx < free.length) {
+                            const fn = free[freeIdx];
+                            const fdMin = fn.layer.durationMin || fn.layer.periodMin || fn.layer.duration || GAP_MIN_DUR;
+                            const fdMax = fn.layer.durationMax || fn.layer.duration || GAP_MAX_DUR;
+                            const spaceLeft = win.end - planCursor;
+                            if (spaceLeft < fdMin) break;
+
+                            // Size to fill remaining space evenly among remaining free needs
+                            const remainingFree = free.length - freeIdx;
+                            const idealDur = snapTo5(Math.floor(spaceLeft / remainingFree));
+                            const dur = Math.max(fdMin, Math.min(fdMax, idealDur));
+
+                            plan.push({ need: fn, startMin: planCursor, endMin: planCursor + dur });
+                            planCursor += dur;
+                            freeIdx++;
+                        }
+
+                        // Fill any remaining tail gap in the window
+                        if (planCursor < win.end && win.end - planCursor >= GAP_MIN_DUR) {
+                            // Extend last planned block to fill to win.end
+                            if (plan.length > 0) {
+                                const last = plan[plan.length - 1];
+                                const lastDMax = last.need.layer.durationMax || last.need.layer.duration || GAP_MAX_DUR;
+                                const extended = last.endMin + (win.end - planCursor);
+                                if (extended - last.startMin <= lastDMax) {
+                                    last.endMin = win.end;
+                                    planCursor = win.end;
+                                }
+                            }
+                        }
+
+                        // ── Commit the plan ──────────────────────────────────
+                        for (const slot of plan) {
+                            const { need, startMin, endMin } = slot;
+                            if (endMin <= startMin) continue;
+                            const { layer } = need;
+                            const type  = layer.type;
+                            const event = layer.event || layer.name || layer.type || 'Activity';
+                            const _classification = layer._classification;
+
+                            if (!hasActivityCapacity(type, startMin, endMin)) continue;
+
+                            claimActivitySlot(type, bunk, startMin, endMin);
+                            placeTentativeBlock(bunk, {
+                                startMin,
+                                endMin,
+                                type,
+                                event,
+                                layer,
+                                _classification,
+                                _committed: true
+                            });
+                            need.placed++;
+                        }
                     }
 
-                    // ── Place specials (capacity-aware, within window) ─────────
+                    // ── Place specials (capacity-aware) ───────────────────────
                     for (const need of specialNeeds) {
                         if (need.placed >= need.required) continue;
                         const { layer } = need;
                         const _classification = layer._classification;
-
                         const usedExclusions = new Set(Object.keys(bunkSpecialAssigned[bunk] || {}));
                         let placed = false;
 
@@ -1325,68 +1379,46 @@
                             const cfg = getSpecialConfig(candidate.name, globalSettings);
                             const sharableType = cfg?.sharableWith?.type || 'not_sharable';
                             const gradeBunks = getBunksForGrade(grade, divisions).map(String);
-                            const tracker2 = specialCapacityTracker[candidate.name];
+                            const tracker = specialCapacityTracker[candidate.name];
 
                             let position = null;
 
-                            // Try joining existing session first
-                            if (sharableType === 'same_division' || sharableType === 'all' ||
-                                (sharableType === 'custom' && cfg?.sharableWith?.divisions?.length > 0)) {
-                                const existingSession = (tracker2?.assignments || []).find(a => {
-                                    if (sharableType === 'same_division') {
-                                        if (!gradeBunks.includes(String(a.bunk))) return false;
-                                    }
+                            // Try joining an existing session first
+                            if (sharableType === 'same_division' || sharableType === 'all') {
+                                const existing = (tracker?.assignments || []).find(a => {
+                                    if (sharableType === 'same_division' && !gradeBunks.includes(String(a.bunk))) return false;
                                     const gaps = getFreeGaps(bunk, a.startMin, a.endMin);
                                     return gaps.some(g => g.start <= a.startMin && g.end >= a.endMin);
                                 });
-                                if (existingSession) {
-                                    position = { start: existingSession.startMin, end: existingSession.endMin };
-                                }
+                                if (existing) position = { start: existing.startMin, end: existing.endMin };
                             }
 
-                            // Find a fresh gap
+                            // Otherwise find a fresh gap
                             if (!position) {
-                                const remaining = win.end - placeCursor;
                                 position = candidate.duration
-                                    ? (findBestGapPosition(bunk, placeCursor, win.end, candidate.duration, candidate.duration) ||
-                                       findBestGapPosition(bunk, win.start, win.end, candidate.duration, candidate.duration))
-                                    : findFlexGapPosition(bunk, placeCursor, win.end);
-
-                                if (position) {
-                                    const snapped = snapTo5(position.start);
-                                    const dur = position.end - position.start;
-                                    position = { start: snapped, end: snapped + dur };
-                                }
+                                    ? findBestGapPosition(bunk, win.start, win.end, candidate.duration, candidate.duration)
+                                    : findFlexGapPosition(bunk, win.start, win.end);
 
                                 if (position && sharableType !== 'all') {
-                                    const crossGradeConflict = (tracker2?.assignments || []).some(a => {
+                                    const crossGrade = (tracker?.assignments || []).some(a => {
                                         if (gradeBunks.includes(String(a.bunk))) return false;
                                         return a.startMin < position.end && a.endMin > position.start;
                                     });
-                                    if (crossGradeConflict) {
-                                        usedExclusions.add(candidate.name);
-                                        position = null;
-                                    }
+                                    if (crossGrade) { usedExclusions.add(candidate.name); position = null; }
                                 }
                             }
 
-                            if (!position) {
-                                usedExclusions.add(candidate.name);
-                                continue;
-                            }
+                            if (!position) { usedExclusions.add(candidate.name); continue; }
 
-                            const tracker = specialCapacityTracker[candidate.name];
-                            const overlappingNow = tracker ? tracker.assignments.filter(a =>
+                            const overlapping = (tracker?.assignments || []).filter(a =>
                                 a.startMin < position.end && a.endMin > position.start
-                            ).length : 0;
-
-                            if (tracker && overlappingNow >= tracker.total) {
+                            ).length;
+                            if (tracker && overlapping >= tracker.total) {
                                 usedExclusions.add(candidate.name);
                                 continue;
                             }
 
                             claimSpecial(bunk, candidate, position.start, position.end);
-                            placed = true;
                             placeTentativeBlock(bunk, {
                                 startMin: position.start,
                                 endMin:   position.end,
@@ -1395,13 +1427,10 @@
                                 layer,
                                 _classification,
                                 _assignedSpecial: candidate.name,
-                                _specialDuration: candidate.duration,
-                                _specialLocation: candidate.location,
-                                _activityLocked:  true,
-                                _bunkOverride:    true
+                                _committed: true
                             });
                             need.placed++;
-                            placeCursor = Math.max(placeCursor, position.end);
+                            placed = true;
                         }
                     }
                 }
