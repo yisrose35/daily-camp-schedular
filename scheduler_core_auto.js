@@ -1403,10 +1403,32 @@
             });
         });
 
-        // -----------------------------------------------------------------
+       // -----------------------------------------------------------------
         // STEP 2.5 — GAP FILL
+        // ★ FIX: subdivide large gaps + absorb micro-gaps instead of
+        //   creating oversized or undersized slots
         // -----------------------------------------------------------------
         log('\n[STEP 2.5] Gap filling...');
+
+        const GAP_MIN_DUR     = 20;  // gaps shorter than this are dropped entirely
+        const GAP_MAX_DUR     = 60;  // largest a single gap-fill slot can be
+        const GAP_ABSORB_TAIL = 15;  // remainders ≤ this are merged into the previous slot
+
+        // Get the tightest durationMax from the grade's layers for this gap window
+        function getGapCapForGrade(grade, gapStart, gapEnd) {
+            const gradeLayers = layersByGrade[grade] || [];
+            const mid = (gapStart + gapEnd) / 2;
+            let cap = GAP_MAX_DUR;
+            gradeLayers.forEach(layer => {
+                const s = layer.startMin ?? 0;
+                const e = layer.endMin   ?? 9999;
+                if (s <= mid && e >= mid) {
+                    const lCap = layer.durationMax || layer.periodMin || layer.duration || GAP_MAX_DUR;
+                    cap = Math.min(cap, lCap);
+                }
+            });
+            return Math.max(cap, GAP_MIN_DUR);
+        }
 
         let gapsFilled = 0;
 
@@ -1418,23 +1440,57 @@
             bunks.forEach(bunk => {
                 const gaps = getFreeGaps(bunk, gradeStart, gradeEnd);
                 gaps.forEach(gap => {
-                    placeTentativeBlock(bunk, {
-                        startMin: gap.start,
-                        endMin: gap.end,
-                        type: 'slot',
-                        event: 'General Activity Slot',
-                        layer: null,
-                        _classification: 'gap',
-                        _fromGapDetection: true,
-                        _committed: true
+                    const gapDur = gap.end - gap.start;
+
+                    // ★ Drop micro-gaps — too small to be a real activity
+                    if (gapDur < GAP_MIN_DUR) {
+                        log(`[STEP 2.5] Micro-gap dropped (${gapDur}min @ ${gap.start}) for ${bunk}`);
+                        return;
+                    }
+
+                    const maxDur = getGapCapForGrade(grade, gap.start, gap.end);
+                    let cursor = gap.start;
+                    const created = [];
+
+                    // ★ Subdivide large gaps into capped chunks
+                    while (cursor < gap.end) {
+                        const remaining = gap.end - cursor;
+
+                        // Absorb small tail into previous chunk rather than orphaning it
+                        if (remaining <= GAP_ABSORB_TAIL && created.length > 0) {
+                            created[created.length - 1].endMin = gap.end;
+                            break;
+                        }
+
+                        if (remaining < GAP_MIN_DUR) break;
+
+                        const slotDur = Math.min(maxDur, remaining);
+                        created.push({
+                            startMin: cursor,
+                            endMin:   cursor + slotDur,
+                            type: 'slot',
+                            event: 'General Activity Slot',
+                            layer: null,
+                            _classification: 'gap',
+                            _fromGapDetection: true,
+                            _committed: true
+                        });
+                        cursor += slotDur;
+                    }
+
+                    created.forEach(block => {
+                        placeTentativeBlock(bunk, block);
+                        gapsFilled++;
                     });
-                    gapsFilled++;
+
+                    if (created.length > 1) {
+                        log(`[STEP 2.5] Gap ${gap.start}-${gap.end} (${gapDur}min) → ${created.length} slots of ≤${maxDur}min for ${bunk}`);
+                    }
                 });
             });
         });
 
-        log('[STEP 2.5] ✅ Filled ' + gapsFilled + ' gaps with General Activity Slot');
-
+        log('[STEP 2.5] ✅ Filled ' + gapsFilled + ' gap slots across camp');
         // -----------------------------------------------------------------
         // STEP 2.6 — VALIDATE
         // -----------------------------------------------------------------
