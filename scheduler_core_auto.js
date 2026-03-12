@@ -553,27 +553,55 @@
 
         log('\n══════════════════════════════════════════════════════════');
         // Lower = better. 0 = perfect.
-        function scoreTimelines(timelines, iterWarnings) {
+       function scoreTimelines(timelines, iterWarnings) {
             let score = 0;
-            Object.values(timelines).forEach(timeline => {
+
+            Object.entries(timelines).forEach(([bunk, timeline]) => {
+                // ── Duration violations ──────────────────────────────────────
                 timeline.forEach(block => {
                     if (!block.layer) return;
                     const dur    = block.endMin - block.startMin;
                     const minDur = block.layer.durationMin || block.layer.periodMin || block.layer.duration || 0;
                     const maxDur = block.layer.durationMax || block.layer.periodMin || block.layer.duration || Infinity;
-                    if (minDur && dur < minDur) score += (minDur - dur) * 10; // heavy — duration violation
-                    if (maxDur < Infinity && dur > maxDur) score += (dur - maxDur) * 5;
+                    if (minDur && dur < minDur) score += (minDur - dur) * 20;  // heavy — duration too short
+                    if (maxDur < Infinity && dur > maxDur) score += (dur - maxDur) * 10; // over max
                 });
-                for (let i = 0; i < timeline.length - 1; i++) {
-                    const gap = timeline[i + 1].startMin - timeline[i].endMin;
-                    if (gap > 0) score += gap * 3; // any remaining gap
+
+                // ── Gaps between blocks ──────────────────────────────────────
+                const sorted = [...timeline].sort((a, b) => a.startMin - b.startMin);
+                for (let i = 0; i < sorted.length - 1; i++) {
+                    const gap = sorted[i + 1].startMin - sorted[i].endMin;
+                    if (gap > 0) score += gap * 5; // any gap is bad
                 }
+
+                // ── Undersized gap-fill slots ────────────────────────────────
+                // A slot smaller than GAP_MIN_DUR means the placer created an
+                // unfillable hole — heavily penalise so this iteration loses
+                timeline.forEach(block => {
+                    if (block._fromGapDetection) {
+                        const dur = block.endMin - block.startMin;
+                        if (dur < GAP_MIN_DUR) score += (GAP_MIN_DUR - dur) * 50;
+                    }
+                });
+
+                // ── Unmet needs penalty ──────────────────────────────────────
+                // If bunkNeeds has unplaced required layers, score heavily
+                const needs = bunkNeeds[bunk] || [];
+                needs.forEach(n => {
+                    if (n.op !== '<=' && n.op !== '≤') {
+                        const deficit = Math.max(0, n.required - n.placed);
+                        if (deficit > 0) score += deficit * 300;
+                    }
+                });
             });
+
+            // ── Warning penalties ────────────────────────────────────────────
             iterWarnings.forEach(w => {
                 if (w.type === 'placement_failure') score += 500;
                 if (w.type === 'overlap')           score += 1000;
                 if (w.type === 'remaining_gap')     score += 50;
             });
+
             return score;
         }
 
