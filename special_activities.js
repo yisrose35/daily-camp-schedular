@@ -256,7 +256,7 @@ function initSpecialActivitiesTab() {
               </div>
               <div style="flex:1.4; min-width:340px;">
                 <div class="setup-subtitle">Special Configuration</div>
-                <div id="specials-detail-pane" style="margin-top:8px;"></div>
+               <div id="specials-detail-pane" style="margin-top:8px; max-height:calc(100vh - 220px); overflow-y:auto; padding-right:4px;"></div>
               </div>
             </div>
           </section>
