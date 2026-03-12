@@ -519,6 +519,10 @@
         log('[STEP 1.5] Classified: ' + pinnedLayers.length + ' pinned, ' +
             windowedLayers.length + ' windowed, ' + openLayers.length + ' open');
         log('[STEP 1.5] ✅ Classification complete');
+        // Declare allGrades early — needed by iterative wrapper functions
+        const allGrades = Object.keys(divisions).filter(g =>
+            !allowedSet || allowedSet.has(String(g))
+        );
 
         // =====================================================================
         // ITERATIVE BEST-PICK WRAPPER
@@ -632,10 +636,7 @@
         // Structure: { bunkName: { specialName: count } }
         const bunkSpecialAssigned = {};
 
-        // All grades
-        const allGrades = Object.keys(divisions).filter(g =>
-            !allowedSet || allowedSet.has(String(g))
-        );
+       
 
         // Initialize bunk timelines and assigned trackers
         allGrades.forEach(grade => {
