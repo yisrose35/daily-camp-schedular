@@ -808,7 +808,7 @@
             return Math.max(cap, GAP_MIN_DUR);
         }
 
-        do { // ← ITERATION LOOP START
+      
         do { // ← ITERATION LOOP START — wraps Steps 2.1 through 2.5b
 
         // Shared live capacity tracker (global across camp)
