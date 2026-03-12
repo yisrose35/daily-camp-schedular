@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RBAC Integration Tests</title>
+    <style>
+        body { font-family: system-ui, sans-serif; padding: 20px; max-width: 640px; }
+        h1 { font-size: 1.25rem; margin-bottom: 16px; }
+        .test { margin: 8px 0; padding: 8px 12px; border-radius: 6px; }
+        .pass { background: #dcfce7; color: #166534; }
+        .fail { background: #fee2e2; color: #991b1b; }
+        #summary { margin-top: 16px; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <h1>RBAC Integration — invokeOriginalHandlerSafely tests</h1>
+    <p>Ensures the eval() fix didn't break allowed handlers and still blocks dangerous input.</p>
+    <div id="results"></div>
+    <div id="summary"></div>
+
+    <!-- Mocks so rbac_integration.js doesn't throw when it runs -->
+    <script>
+        window.AccessControl = {
+            initialize: function() { return Promise.resolve(); },
+            canEditAnything: function() { return true; },
+            verifyBeforeWrite: function() { return Promise.resolve(true); }
+        };
+        window.DivisionSelector = {
+            initialize: function() { return Promise.resolve(); },
+            renderDivisionSelector: function() {}
+        };
+        window.EditRestrictions = {
+            initialize: function() { return Promise.resolve(); },
+            showAccessDeniedToast: function() {}
+        };
+        window.generateSchedule = function() {};
+        window.handleGenerate = function() {};
+        window.runOptimizer = function() {};
+        window.runSkeletonOptimizer = function() {};
+    </script>
+    <script src="../rbac_integration.js"></script>
+    <script>
+        (function() {
+            var fn = window.__testInvokeOriginalHandlerSafely;
+            if (typeof fn !== 'function') {
+                document.getElementById('results').innerHTML = '<div class="test fail">FAIL: __testInvokeOriginalHandlerSafely not found. Did rbac_integration.js load?</div>';
+                document.getElementById('summary').textContent = '0 passed, 1 failed';
+                return;
+            }
+
+            var passed = 0;
+            var failed = 0;
+            var out = [];
+
+            function assert(condition, name, message) {
+                if (condition) { passed++; out.push('<div class="test pass">PASS: ' + name + '</div>'); }
+                else { failed++; out.push('<div class="test fail">FAIL: ' + name + (message ? ' — ' + message : '') + '</div>'); }
+            }
+
+            // Allowed: zero-argument calls to allowlisted names
+            assert(fn('generateSchedule()') === window.generateSchedule, 'generateSchedule() returns function');
+            assert(fn('handleGenerate()') === window.handleGenerate, 'handleGenerate() returns function');
+            assert(fn('runOptimizer()') === window.runOptimizer, 'runOptimizer() returns function');
+            assert(fn('runSkeletonOptimizer()') === window.runSkeletonOptimizer, 'runSkeletonOptimizer() returns function');
+            assert(fn('generateSchedule ()') === window.generateSchedule, 'generateSchedule () with space returns function');
+
+            // Rejected: not in allowlist (no eval)
+            assert(fn('evil()') === null, 'evil() returns null');
+            assert(fn('alert(1)') === null, 'alert(1) returns null');
+            assert(fn('fetch("https://evil.com")') === null, 'fetch(...) returns null');
+            assert(fn('generateSchedule(1)') === null, 'generateSchedule(1) with args returns null');
+            assert(fn('generateSchedule("x")') === null, 'generateSchedule("x") returns null');
+
+            // Rejected: invalid input
+            assert(fn('') === null, 'empty string returns null');
+            assert(fn(null) === null, 'null returns null');
+            assert(fn(undefined) === null, 'undefined returns null');
+            assert(fn(123) === null, 'number returns null');
+
+            document.getElementById('results').innerHTML = out.join('');
+            document.getElementById('summary').textContent = passed + ' passed, ' + failed + ' failed';
+            document.getElementById('summary').className = failed ? 'fail' : 'pass';
+        })();
+    </script>
+</body>
+</html>

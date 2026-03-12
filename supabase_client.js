@@ -34,16 +34,14 @@
     // =========================================================================
     // CONFIGURATION - SINGLE SOURCE OF TRUTH
     // =========================================================================
-    // Prefer window.__CAMPISTRY_SUPABASE__ (set by config.js) so the anon key
-    // can be kept out of the repo. config.js is gitignored; use config.example.js
-    // as a template. If __CAMPISTRY_SUPABASE__ is not set, fallback is used
-    // (for local dev). For production, use config.js and remove fallback below.
+    // URL and anon key MUST come from config.js (gitignored). Copy config.example.js
+    // to config.js and set your Supabase url/anonKey. No fallback — key is not in repo.
     // =========================================================================
 
     const _injected = typeof window !== 'undefined' && window.__CAMPISTRY_SUPABASE__;
     const CONFIG = {
-        SUPABASE_URL: (_injected && window.__CAMPISTRY_SUPABASE__.url) || "https://bzqmhcumuarrbueqttfh.supabase.co",
-        SUPABASE_ANON_KEY: (_injected && window.__CAMPISTRY_SUPABASE__.anonKey) || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cW1oY3VtdWFycmJ1ZXF0dGZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDg3NDAsImV4cCI6MjA4MjEyNDc0MH0.5WpFBj1s1937XNZ0yxLdlBWO7xolPtf7oB10LDLONsI",
+        SUPABASE_URL: (_injected && window.__CAMPISTRY_SUPABASE__.url) || '',
+        SUPABASE_ANON_KEY: (_injected && window.__CAMPISTRY_SUPABASE__.anonKey) || '',
 
         // Local storage keys
         CACHE_KEYS: {
@@ -94,6 +92,11 @@
 
     function initClient() {
         if (_client) return _client;
+
+        if (!CONFIG.SUPABASE_URL || !CONFIG.SUPABASE_ANON_KEY) {
+            logError('Missing Supabase config. Copy config.example.js to config.js and set url + anonKey.');
+            return null;
+        }
 
         try {
             if (typeof supabase !== 'undefined' && typeof supabase.createClient === 'function') {

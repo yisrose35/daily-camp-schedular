@@ -87,6 +87,11 @@
         return typeof fn === 'function' ? fn : null;
     }
 
+    // Expose for test suite (test_rbac_integration.html)
+    if (typeof window !== 'undefined') {
+        window.__testInvokeOriginalHandlerSafely = invokeOriginalHandlerSafely;
+    }
+
     // =========================================================================
     // GENERATE BUTTON HOOK
     // =========================================================================
