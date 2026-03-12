@@ -793,6 +793,10 @@
             return false;
         }
 
+       const GAP_MIN_DUR     = 20;
+        const GAP_MAX_DUR     = 60;
+        const GAP_ABSORB_TAIL = 15;
+
         function getGapCapForGrade(grade, gapStart, gapEnd) {
             const gradeLayers = layersByGrade[grade] || [];
             const mid = (gapStart + gapEnd) / 2;
@@ -1547,9 +1551,7 @@
         // -----------------------------------------------------------------
         log('\n[STEP 2.5] Gap filling...');
 
-        const GAP_MIN_DUR     = 20;  // gaps shorter than this are dropped entirely
-        const GAP_MAX_DUR     = 60;  // largest a single gap-fill slot can be
-        const GAP_ABSORB_TAIL = 15;  // remainders ≤ this are merged into the previous slot
+        
 
        
 
