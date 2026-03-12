@@ -1874,7 +1874,7 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
                         _leagueName: assignment.leagueName || '',
                         _gameLabel: assignment.gameLabel || '',
                         matchups: assignment.matchups || [],
-                        _fixed: false,
+                        _fixed: true,
                         continuation: false
                     };
                     leagueWriteCount++;
