@@ -1634,6 +1634,14 @@
 
                         // ★ Option 3: shift later block earlier (no duration change, may cascade)
                         } else if (!nextIsFixed) {
+                            const nextMinDur = next.layer
+                                ? (next.layer.durationMin || next.layer.periodMin || next.layer.duration || 0)
+                                : 0;
+                            const shiftedDur = nextDur - gap;
+                            if (nextMinDur > 0 && shiftedDur < nextMinDur) {
+                                // Shifting would violate durationMin — skip, leave gap
+                                continue;
+                            }
                             log(`[STEP 2.5b] Pass ${passCount} — shift earlier: "${next.event}" ${next.startMin}→${curr.endMin} on ${bunk}`);
                             next.startMin = curr.endMin;
                             next.endMin   = next.endMin - gap;
