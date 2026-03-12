@@ -533,6 +533,9 @@ function summaryMultiPart(item) {
     if (!item.multiPart?.enabled) return 'Single session';
     return item.multiPart.totalParts + '-part activity';
 }
+    function summaryPrepDuration(item) {
+    return (item.prepDuration || 0) > 0 ? item.prepDuration + 'min prep' : 'None';
+}
 function summaryDays(item) {
     const days = item.availableDays;
     if (!days || !Array.isArray(days) || days.length === 0 || days.length === 7) return 'All days';
