@@ -549,8 +549,7 @@
         // MAIN ASSIGNMENT LOGIC (V44.1 - RAINY DAY FILTERING)
         // =====================================================================
 
-        generateAssignments(bunks, job, historical = {}, specialNames = [], activityProps = {}, masterFields = [], dailyFieldAvailability = {}, yesterdayHistory = {}) {
-            
+       generateAssignments(bunks, job, historical = {}, specialNames = [], activityProps = {}, masterFields = [], dailyFieldAvailability = {}, yesterdayHistory = {}, sharedCapacityTracker = {}) {     
             log("\n" + "=".repeat(70));
             log(`SMART TILE V44.1: ${job.division}`);
             log(`Main1: ${job.main1}, Main2: ${job.main2}`);
@@ -646,9 +645,18 @@
                 }
             }
             
+           // ★ V44.2: Subtract slots already claimed by other divisions this run
+            specialsBlockA.forEach(s => {
+                const key = `${s.name}|${job.blockA.startMin}|${job.blockA.endMin}`;
+                const alreadyUsed = sharedCapacityTracker[key] || 0;
+                if (alreadyUsed > 0) {
+                    log(`    ↘ ${s.name} Block A: capacity ${s.capacity} → ${Math.max(0, s.capacity - alreadyUsed)} (${alreadyUsed} used by other grades)`);
+                    s.capacity = Math.max(0, s.capacity - alreadyUsed);
+                    s.remainingSlots = s.capacity;
+                }
+            });
             const capacityA = getTotalSpecialCapacity(specialsBlockA);
             log(`Block A capacity for ${divisionName}: ${capacityA} slots from ${specialsBlockA.map(s => `${s.name}(${s.capacity})`).join(', ') || 'none'}`);
-
             // -----------------------------------------------------------------
             // STEP 2: Get available specials for BLOCK B (DIVISION-FILTERED!)
             // -----------------------------------------------------------------
@@ -670,9 +678,18 @@
                     specialsBlockB = specialsBlockB.filter(s => isSame(s.name, effectiveB.special));
                 }
                 
+               // ★ V44.2: Subtract slots already claimed by other divisions this run
+                specialsBlockB.forEach(s => {
+                    const key = `${s.name}|${job.blockB.startMin}|${job.blockB.endMin}`;
+                    const alreadyUsed = sharedCapacityTracker[key] || 0;
+                    if (alreadyUsed > 0) {
+                        log(`    ↘ ${s.name} Block B: capacity ${s.capacity} → ${Math.max(0, s.capacity - alreadyUsed)} (${alreadyUsed} used by other grades)`);
+                        s.capacity = Math.max(0, s.capacity - alreadyUsed);
+                        s.remainingSlots = s.capacity;
+                    }
+                });
                 capacityB = getTotalSpecialCapacity(specialsBlockB);
-                log(`Block B capacity for ${divisionName}: ${capacityB} slots from ${specialsBlockB.map(s => `${s.name}(${s.capacity})`).join(', ') || 'none'}`);
-            }
+                log(`Block B capacity for ${divisionName}: ${capacityB} slots from ${specialsBlockB.map(s => `${s.name}(${s.capacity})`).join(', ') || 'none'}`);            }
 
             // -----------------------------------------------------------------
             // STEP 3: Pre-screen bunks for eligibility
@@ -812,6 +829,14 @@
                     bunks.forEach(b => specialWinnersA.add(b));
                 }
             }
+            // ★ V44.2: Record Block A consumption for other divisions
+            Object.entries(block1).forEach(([bunk, act]) => {
+                if (!act || isSame(act, fbAct) || isSame(act, effectiveA.open)) return;
+                if (specialsBlockA.some(s => isSame(s.name, act))) {
+                    const key = `${act}|${job.blockA.startMin}|${job.blockA.endMin}`;
+                    sharedCapacityTracker[key] = (sharedCapacityTracker[key] || 0) + 1;
+                }
+            });
             log(`\n  Block A Summary: ${specialWinnersA.size} got specials, ${bunks.length - specialWinnersA.size} got ${effectiveA.open || fbAct}`);
 
             // -----------------------------------------------------------------
@@ -883,6 +908,14 @@
                         bunks.forEach(bunk => { block2[bunk] = fullGradeActB; });
                     }
                 }
+                // ★ V44.2: Record Block B consumption for other divisions
+                Object.entries(block2).forEach(([bunk, act]) => {
+                    if (!act || isSame(act, fbAct) || isSame(act, effectiveB?.open)) return;
+                    if (specialsBlockB.some(s => isSame(s.name, act))) {
+                        const key = `${act}|${job.blockB.startMin}|${job.blockB.endMin}`;
+                        sharedCapacityTracker[key] = (sharedCapacityTracker[key] || 0) + 1;
+                    }
+                });
                 const specialsInB = Object.values(block2).filter(act => 
                     specialsBlockB.some(s => s.name === act)
                 ).length;
@@ -982,6 +1015,5 @@
         return available;
     };
 
-    console.log("[SmartTile] V44.1 loaded (with rainy day filtering fix)");
-
+    console.log("[SmartTile] V44.2 loaded (cross-division capacity tracking)");
 })();
