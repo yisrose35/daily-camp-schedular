@@ -1224,7 +1224,7 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
                     // Record matchup for matchup_variety tracking
                     recordMatchup(league.name, a.team1, a.team2, history);
                 });
-
+window._debugLeagueTimeData = timeData;
                 leagueDivisions.forEach(divName => {
                     const blocksForDiv = timeData.byDivision[divName];
                     if (!blocksForDiv) return;
