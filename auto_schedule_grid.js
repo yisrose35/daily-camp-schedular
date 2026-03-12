@@ -183,6 +183,8 @@
 .asg-wrap {
     border-radius: 10px;
     overflow: hidden;
+    width: 100%;
+    box-sizing: border-box;
     box-shadow: 0 2px 12px rgba(0,0,0,0.08);
     margin-bottom: 24px;
     background: #fff;
@@ -208,6 +210,8 @@
 /* Grid scroll wrapper */
 .asg-scroll {
     overflow-x: auto;
+    width: 100%;
+    box-sizing: border-box;
     border: 1px solid #e5e7eb;
     border-top: none;
     border-radius: 0 0 10px 10px;
@@ -499,7 +503,9 @@
 
         // ── SCROLL WRAPPER ───────────────────────
         var scroll = document.createElement('div');
-        scroll.className = 'asg-scroll';
+       scroll.className = 'asg-scroll';
+        scroll.style.width = '100%';
+        scroll.style.boxSizing = 'border-box';
 
         // ── OUTER CONTAINER ──────────────────────
         // Uses flexbox: ruler column (fixed) + bunk columns (flex)
@@ -606,7 +612,9 @@
         columnsWrap.style.cssText = [
             'display:flex',
             'flex-direction:column',
-            'flex:1'
+            'flex:1',
+            'min-width:0',
+            'overflow:hidden'
         ].join(';');
 
         // Bunk header row
