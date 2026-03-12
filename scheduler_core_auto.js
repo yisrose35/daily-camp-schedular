@@ -1799,14 +1799,13 @@
 
        
 
-        if (!shouldStop && totalIters < MAX_ITERATIONS) {
+       if (bestScore > PERFECT_SCORE && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS) {
             _iterSeed++;
             warnings.length = 0; // clear for next iteration
             resetIterState();
-            // Jump back to Step 2.1 by looping — achieved via the do/while below
         }
 
-       } while (bestScore > PERFECT_SCORE && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS);
+        } while (bestScore > PERFECT_SCORE && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS);
         // ────────────────────────────────────────────────────────────────────
 
         log('══════════════════════════════════════════════════════════');
