@@ -503,14 +503,14 @@
 
         // ── OUTER CONTAINER ──────────────────────
         // Uses flexbox: ruler column (fixed) + bunk columns (flex)
-        var bunkColW = Math.max(100, Math.min(160, Math.floor(860 / Math.max(bunks.length, 1))));
+       var bunkColW = 0; // will use flex:1 — calculated after render if needed
 
         var container = document.createElement('div');
         container.style.cssText = [
             'display:flex',
             'flex-direction:row',
             'position:relative',
-            'min-width:' + (64 + bunks.length * bunkColW) + 'px',
+            'width:100%',
             'background:#fff'
         ].join(';');
 
@@ -626,8 +626,8 @@
         bunks.forEach(function (bunk) {
             var bh = document.createElement('div');
             bh.style.cssText = [
-                'width:' + bunkColW + 'px',
-                'flex-shrink:0',
+                'flex:1',
+                'min-width:80px',
                 'display:flex',
                 'align-items:center',
                 'justify-content:center',
@@ -660,8 +660,8 @@
         bunks.forEach(function (bunk, ci) {
             var col = document.createElement('div');
             col.style.cssText = [
-                'width:' + bunkColW + 'px',
-                'flex-shrink:0',
+                'flex:1',
+                'min-width:80px',
                 'position:relative',
                 'border-right:1px solid #f0f0f0',
                 'height:' + totalH + 'px'
