@@ -1529,20 +1529,34 @@
                     const created = [];
 
                     // ★ Subdivide large gaps into capped chunks
-                    while (cursor < gap.end) {
+                   while (cursor < gap.end) {
                         const remaining = gap.end - cursor;
 
-                        // Absorb small tail into previous chunk rather than orphaning it
-                        if (remaining <= GAP_ABSORB_TAIL && created.length > 0) {
-                            created[created.length - 1].endMin = gap.end;
+                        // If remaining would create a chunk smaller than GAP_MIN_DUR,
+                        // absorb it into the previous chunk instead
+                        if (remaining < GAP_MIN_DUR) {
+                            if (created.length > 0) {
+                                created[created.length - 1].endMin = gap.end;
+                            }
                             break;
                         }
 
-                        if (remaining < GAP_MIN_DUR) break;
+                        // If taking GAP_MAX_DUR would leave a remainder too small,
+                        // take less now so the remainder is at least GAP_MIN_DUR
+                        let slotDur = Math.min(maxDur, remaining);
+                        const wouldRemain = remaining - slotDur;
+                        if (wouldRemain > 0 && wouldRemain < GAP_MIN_DUR) {
+                            slotDur = remaining - GAP_MIN_DUR;
+                        }
 
-                        const slotDur = Math.min(maxDur, remaining);
-                        created.push({
-                            startMin: cursor,
+                        if (slotDur < GAP_MIN_DUR) {
+                            if (created.length > 0) {
+                                created[created.length - 1].endMin = gap.end;
+                            }
+                            break;
+                        }
+
+                        created.push({                            startMin: cursor,
                             endMin:   cursor + slotDur,
                             type: 'slot',
                             event: 'General Activity Slot',
