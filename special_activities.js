@@ -366,7 +366,7 @@ function section(title, summary, builder) {
     wrap.appendChild(head); wrap.appendChild(body); return wrap;
 }
 
-/ v5.0: flat labeled group — sections sit directly under the label, no outer click
+// v5.0: flat labeled group — sections sit directly under the label, no outer click
 function sectionGroup(label, sections) {
     const group = document.createElement('div');
     group.className = 'sa-group';
