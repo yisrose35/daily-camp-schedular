@@ -800,8 +800,9 @@ divisionTimes[divName] = slotsForDiv;
                 return;
             }
             
-            const expectedSlots = divisionTimes[divName]?.length || 0;
-            const actualSlots = slots?.length || 0;
+            const perBunkSlots = divisionTimes[divName]?._perBunkSlots?.[bunk];
+const expectedSlots = perBunkSlots ? perBunkSlots.length : (divisionTimes[divName]?.length || 0);
+const actualSlots = slots?.length || 0;
             
             if (expectedSlots === 0) {
                 errorCount++;
