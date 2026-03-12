@@ -206,7 +206,12 @@ function initSpecialActivitiesTab() {
         #special_activities input:checked + .slider:before { transform: translateX(14px); }
         #special_activities .sa-group { margin-bottom: 18px; }
         #special_activities .sa-group-header { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #9CA3AF; padding: 0 2px 6px 2px; margin-bottom: 4px; border-bottom: 1px solid #F3F4F6; }
-        .rainy-list { background: linear-gradient(to bottom, #f0f9ff, #fff) !important; border-color: #7dd3fc !important; }
+        #special_activities .detail-section { border: 1px solid #E5E7EB; border-radius: 10px; overflow: hidden; margin-bottom: 6px; }
+        #special_activities .detail-section-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; cursor: pointer; background: #fff; transition: background 0.15s; user-select: none; }
+        #special_activities .detail-section-header:hover { background: #F9FAFB; }
+        #special_activities .detail-section-title { font-weight: 600; font-size: 0.88rem; color: #1F2937; }
+        #special_activities .detail-section-summary { font-size: 0.78rem; color: #9CA3AF; margin-top: 2px; }
+        #special_activities .detail-section-body { padding: 14px; border-top: 1px solid #F3F4F6; display: none; }        .rainy-list { background: linear-gradient(to bottom, #f0f9ff, #fff) !important; border-color: #7dd3fc !important; }
         .rainy-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 0.7rem; color: #0284c7; background: #e0f2fe; padding: 2px 8px; border-radius: 999px; margin-left: 8px; }
         .weather-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 0.65rem; padding: 2px 6px; border-radius: 999px; margin-left: 6px; }
         .weather-badge.indoor { color: #0A4A56; background: #e6f4f7; }
