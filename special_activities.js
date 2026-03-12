@@ -908,6 +908,210 @@ function renderMaxUsageSettings(item) {
             countRow.appendChild(countIn); countRow.appendChild(periodSel);
             ceilDetail.appendChild(countRow);
 
+            // per-grade toggle
+            const ceilPerGradeTogRow = document.createElement('div');
+            ceilPerGradeTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin:10px 0 6px 0;';
+            const ceilPgTog = document.createElement('label'); ceilPgTog.className = 'switch';
+            const ceilPgCb = document.createElement('input'); ceilPgCb.type = 'checkbox';
+            const hasGradeOverrides = Object.keys(item.maxUsagePerGrade || {}).length > 0;
+            ceilPgCb.checked = hasGradeOverrides;
+            const ceilPgSl = document.createElement('span'); ceilPgSl.className = 'slider';
+            ceilPgTog.appendChild(ceilPgCb); ceilPgTog.appendChild(ceilPgSl);
+            const ceilPgLbl = document.createElement('span');
+            ceilPgLbl.style.cssText = 'font-size:0.82rem; color:#374151;';
+            ceilPgLbl.textContent = 'Different max per grade';
+            ceilPerGradeTogRow.appendChild(ceilPgTog); ceilPerGradeTogRow.appendChild(ceilPgLbl);
+            ceilDetail.appendChild(ceilPerGradeTogRow);
+
+            const ceilGradeGrid = document.createElement('div');
+            ceilGradeGrid.style.display = hasGradeOverrides ? 'flex' : 'none';
+            ceilGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
+            const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            if (!item.maxUsagePerGrade) item.maxUsagePerGrade = {};
+            allDivs.forEach(function(div) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                const lbl = document.createElement('span');
+                lbl.style.cssText = 'font-size:0.82rem; color:#374151; flex:1;';
+                lbl.textContent = div;
+                const inp = document.createElement('input');
+                inp.type = 'number'; inp.min = '0'; inp.max = '99';
+                inp.placeholder = String(parseInt(item.maxUsage) || '—');
+                const gv = item.maxUsagePerGrade[div];
+                if (gv > 0) inp.value = gv;
+                inp.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.85rem;';
+                inp.onchange = () => {
+                    const v = parseInt(inp.value);
+                    if (v > 0) item.maxUsagePerGrade[div] = v;
+                    else delete item.maxUsagePerGrade[div];
+                    saveData(); updateSummary();
+                };
+                const clrBtn = document.createElement('button');
+                clrBtn.textContent = '✕'; clrBtn.title = 'Clear override';
+                clrBtn.style.cssText = 'background:none; border:none; color:#D1D5DB; cursor:pointer; font-size:0.8rem; padding:2px 4px; line-height:1;';
+                clrBtn.onmouseover = () => clrBtn.style.color = '#9CA3AF';
+                clrBtn.onmouseout = () => clrBtn.style.color = '#D1D5DB';
+                clrBtn.onclick = () => { inp.value = ''; delete item.maxUsagePerGrade[div]; saveData(); updateSummary(); };
+                row.appendChild(lbl); row.appendChild(inp); row.appendChild(clrBtn);
+                ceilGradeGrid.appendChild(row);
+            });
+            ceilPgCb.onchange = () => {
+                if (!ceilPgCb.checked) {
+                    item.maxUsagePerGrade = {};
+                    saveData(); updateSummary();
+                }
+                ceilGradeGrid.style.display = ceilPgCb.checked ? 'flex' : 'none';
+                ceilGradeGrid.style.flexDirection = 'column';
+                ceilGradeGrid.style.gap = '5px';
+                ceilGradeGrid.style.marginTop = '6px';
+            };
+            ceilDetail.appendChild(ceilGradeGrid);
+            container.appendChild(ceilDetail);
+        }
+
+        // ── B: MINIMUM (FLOOR) ────────────────────────────────────────────
+        const divider = document.createElement('div');
+        divider.style.cssText = 'border-top:1px solid #F3F4F6; margin:16px 0 14px 0;';
+        container.appendChild(divider);
+
+        const floorLabel = document.createElement('div');
+        floorLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
+        floorLabel.textContent = 'Minimum (floor)';
+        container.appendChild(floorLabel);
+
+        const minF = parseInt(item.minFrequency) || 0;
+        const minEnabled = minF > 0;
+
+        const minTogRow = document.createElement('div');
+        minTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:' + (minEnabled ? '12px' : '4px') + ';';
+        const minTog = document.createElement('label'); minTog.className = 'switch';
+        const minCb = document.createElement('input'); minCb.type = 'checkbox'; minCb.checked = minEnabled;
+        const minSl = document.createElement('span'); minSl.className = 'slider';
+        minTog.appendChild(minCb); minTog.appendChild(minSl);
+        const minLbl = document.createElement('span');
+        minLbl.style.cssText = 'font-size:0.88rem; color:#374151;';
+        minLbl.textContent = 'Require a minimum frequency for every bunk';
+        minTogRow.appendChild(minTog); minTogRow.appendChild(minLbl);
+        container.appendChild(minTogRow);
+        minCb.onchange = () => { item.minFrequency = minCb.checked ? 1 : null; saveData(); rebuild(); updateSummary(); };
+
+        if (minEnabled) {
+            const minDetail = document.createElement('div');
+            minDetail.style.cssText = 'padding-left:12px; border-left:2px solid #0ea5e9; margin-bottom:4px;';
+
+            const minRow = document.createElement('div');
+            minRow.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px;';
+            minRow.innerHTML = '<span style="font-size:0.85rem; color:#374151;">At least:</span>';
+            const minIn = document.createElement('input');
+            minIn.type = 'number'; minIn.min = '1'; minIn.max = '14'; minIn.value = minF || 1;
+            minIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+            const minSuffix = document.createElement('span');
+            minSuffix.style.cssText = 'font-size:0.85rem; color:#374151;';
+            minSuffix.textContent = 'time(s) per';
+            const minPeriodSel = document.createElement('select');
+            minPeriodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
+            [{ value:'week', label:'week' }, { value:'2weeks', label:'2 weeks' }].forEach(function(p) {
+                const opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
+                if ((item.minFrequencyPeriod || 'week') === p.value) opt.selected = true;
+                minPeriodSel.appendChild(opt);
+            });
+            minIn.onchange = () => { item.minFrequency = Math.max(1, parseInt(minIn.value) || 1); saveData(); updateSummary(); };
+            minPeriodSel.onchange = () => { item.minFrequencyPeriod = minPeriodSel.value; saveData(); updateSummary(); };
+            minRow.appendChild(minIn); minRow.appendChild(minSuffix); minRow.appendChild(minPeriodSel);
+            minDetail.appendChild(minRow);
+
+            const minNote = document.createElement('div');
+            minNote.style.cssText = 'font-size:0.78rem; color:#0369a1; background:#e0f2fe; padding:8px 10px; border-radius:6px; line-height:1.5; margin-bottom:10px;';
+            minNote.innerHTML = 'The scheduler will actively push to get every bunk this activity at least <strong>' +
+                (item.minFrequency || 1) + 'x</strong> ' +
+                (item.minFrequencyPeriod === '2weeks' ? 'every 2 weeks' : 'per week') + '.';
+            minDetail.appendChild(minNote);
+
+            // per-grade min toggle
+            const minPerGradeTogRow = document.createElement('div');
+            minPerGradeTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin:4px 0 6px 0;';
+            const minPgTog = document.createElement('label'); minPgTog.className = 'switch';
+            const minPgCb = document.createElement('input'); minPgCb.type = 'checkbox';
+            const hasMinGradeOverrides = Object.keys(item.minFrequencyPerGrade || {}).length > 0;
+            minPgCb.checked = hasMinGradeOverrides;
+            const minPgSl = document.createElement('span'); minPgSl.className = 'slider';
+            minPgTog.appendChild(minPgCb); minPgTog.appendChild(minPgSl);
+            const minPgLbl = document.createElement('span');
+            minPgLbl.style.cssText = 'font-size:0.82rem; color:#374151;';
+            minPgLbl.textContent = 'Different minimum per grade';
+            minPerGradeTogRow.appendChild(minPgTog); minPerGradeTogRow.appendChild(minPgLbl);
+            minDetail.appendChild(minPerGradeTogRow);
+
+            const minGradeGrid = document.createElement('div');
+            minGradeGrid.style.display = hasMinGradeOverrides ? 'flex' : 'none';
+            minGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
+            const minAllDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            if (!item.minFrequencyPerGrade) item.minFrequencyPerGrade = {};
+            minAllDivs.forEach(function(div) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                const lbl = document.createElement('span');
+                lbl.style.cssText = 'font-size:0.82rem; color:#374151; flex:1;';
+                lbl.textContent = div;
+                const inp = document.createElement('input');
+                inp.type = 'number'; inp.min = '0'; inp.max = '99';
+                inp.placeholder = String(parseInt(item.minFrequency) || '—');
+                const gv = item.minFrequencyPerGrade[div];
+                if (gv > 0) inp.value = gv;
+                inp.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.85rem;';
+                inp.onchange = () => {
+                    const v = parseInt(inp.value);
+                    if (v > 0) item.minFrequencyPerGrade[div] = v;
+                    else delete item.minFrequencyPerGrade[div];
+                    saveData(); updateSummary();
+                };
+                const clrBtn = document.createElement('button');
+                clrBtn.textContent = '✕'; clrBtn.title = 'Clear override';
+                clrBtn.style.cssText = 'background:none; border:none; color:#D1D5DB; cursor:pointer; font-size:0.8rem; padding:2px 4px; line-height:1;';
+                clrBtn.onmouseover = () => clrBtn.style.color = '#9CA3AF';
+                clrBtn.onmouseout = () => clrBtn.style.color = '#D1D5DB';
+                clrBtn.onclick = () => { inp.value = ''; delete item.minFrequencyPerGrade[div]; saveData(); updateSummary(); };
+                row.appendChild(lbl); row.appendChild(inp); row.appendChild(clrBtn);
+                minGradeGrid.appendChild(row);
+            });
+            minPgCb.onchange = () => {
+                if (!minPgCb.checked) {
+                    item.minFrequencyPerGrade = {};
+                    saveData(); updateSummary();
+                }
+                minGradeGrid.style.display = minPgCb.checked ? 'flex' : 'none';
+                minGradeGrid.style.flexDirection = 'column';
+                minGradeGrid.style.gap = '5px';
+                minGradeGrid.style.marginTop = '6px';
+            };
+            minDetail.appendChild(minGradeGrid);
+            container.appendChild(minDetail);
+        }
+    }
+            const ceilDetail = document.createElement('div');
+            ceilDetail.style.cssText = 'padding-left:12px; border-left:2px solid #147D91; margin-bottom:14px;';
+
+            const countRow = document.createElement('div');
+            countRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap;';
+            countRow.innerHTML = '<span style="font-size:0.85rem; color:#374151;">Max:</span>';
+            const countIn = document.createElement('input');
+            countIn.type = 'number'; countIn.min = '1'; countIn.max = '99'; countIn.value = parseInt(item.maxUsage) || 1;
+            countIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+            countIn.onchange = () => { item.maxUsage = Math.max(1, parseInt(countIn.value) || 1); saveData(); updateSummary(); };
+
+            const periodSel = document.createElement('select');
+            periodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
+            [{ value:'half', label:'per half' }, { value:'1week', label:'per week' },
+             { value:'2weeks', label:'per 2 weeks' }, { value:'3weeks', label:'per 3 weeks' },
+             { value:'4weeks', label:'per 4 weeks' }].forEach(function(p) {
+                const opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
+                if ((item.maxUsagePeriod || 'half') === p.value) opt.selected = true;
+                periodSel.appendChild(opt);
+            });
+            periodSel.onchange = () => { item.maxUsagePeriod = periodSel.value; saveData(); updateSummary(); };
+            countRow.appendChild(countIn); countRow.appendChild(periodSel);
+            ceilDetail.appendChild(countRow);
+
             // per-grade overrides
             const gradeSubHead = document.createElement('div');
             gradeSubHead.style.cssText = 'font-size:0.78rem; font-weight:600; color:#6B7280; margin:10px 0 4px 0;';
