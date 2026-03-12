@@ -1728,13 +1728,20 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
                         schedulableSlotBlocks.push({
                             divName: grade,
                             bunk: String(bunk),
-                            event: (() => {
-                                const t = (block.type || '').toLowerCase();
-                                const e = (block.event || '').toLowerCase();
-                                if (t === 'sport' || t === 'sports' || e === 'sport' || e === 'sports') return 'Sports Slot';
-                                if (t === 'special' || t === 'specials') return 'Special Activity';
-                                return 'General Activity Slot';
-                            })(),
+                           event: (() => {
+                const t = (block.type || '').toLowerCase();
+                const e = (block.event || '').toLowerCase();
+                if (t === 'sport' || t === 'sports' || e === 'sport' || e === 'sports') return 'Sports Slot';
+                if (t === 'special' || t === 'specials') return 'Special Activity';
+                const gradeLayers = (dailyAutoLayers[currentDate] || {})[grade] || [];
+                const isSportLayer = gradeLayers.some(l =>
+                    l.type === 'sport' &&
+                    block.startMin >= l.startMin &&
+                    block.endMin <= l.endMin
+                );
+                if (isSportLayer) return 'Sports Slot';
+                return 'General Activity Slot';
+            })(),
                             type: 'slot',
                             startTime: minutesToTimeLabel(block.startMin),
                             endTime: minutesToTimeLabel(block.endMin),
@@ -1773,8 +1780,8 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
             b.type === 'league' || b.type === 'specialty_league'
         );
 
-        if (leagueBlocks.length > 0) {
-
+        const hasLeagueAssignments = Object.keys(window.leagueAssignments || {}).length > 0;
+        if (leagueBlocks.length > 0 || hasLeagueAssignments) {
             const masterLeaguesArr = Array.isArray(window.masterLeagues)
                 ? window.masterLeagues
                 : Object.values(window.masterLeagues || {});
