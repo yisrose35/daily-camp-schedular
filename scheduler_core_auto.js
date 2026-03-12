@@ -1778,12 +1778,15 @@
 
        
 
-       if (bestScore > PERFECT_SCORE && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS) {
+       // Debug exports — captured at end of each iteration
+        window._bunkNeeds     = JSON.parse(JSON.stringify(bunkNeeds));
+        window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
+
+        if (bestScore > PERFECT_SCORE && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS) {
             _iterSeed++;
             warnings.length = 0; // clear for next iteration
             resetIterState();
         }
-
         } while (bestScore > PERFECT_SCORE && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS);
         // ────────────────────────────────────────────────────────────────────
 
