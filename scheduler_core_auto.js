@@ -1906,8 +1906,8 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
 
                 // Build activityProperties from fields + specials
                 const builtActivityProperties = window.buildActivityProperties
-                    ? window.buildActivityProperties(masterFields, masterSpecials)
-                    : {};
+    ? window.buildActivityProperties(masterSpecials, masterFields)
+    : {};
                 window.activityProperties = builtActivityProperties;
 
                 // rotationHistory is structured as { bunks: {}, leagues: {} } — solver wants the bunks map
