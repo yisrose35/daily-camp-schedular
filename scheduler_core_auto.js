@@ -1733,7 +1733,8 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
                 const e = (block.event || '').toLowerCase();
                 if (t === 'sport' || t === 'sports' || e === 'sport' || e === 'sports') return 'Sports Slot';
                 if (t === 'special' || t === 'specials') return 'Special Activity';
-                const gradeLayers = (dailyAutoLayers[currentDate] || {})[grade] || [];
+               const _dal = window.loadGlobalSettings?.()?.app1?.dailyAutoLayers || {};
+const gradeLayers = (_dal[currentDate] || {})[grade] || [];
                 const isSportLayer = gradeLayers.some(l =>
                     l.type === 'sport' &&
                     block.startMin >= l.startMin &&
