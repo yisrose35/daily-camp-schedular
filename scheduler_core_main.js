@@ -592,13 +592,188 @@
             })
             : smartJobs;
 
-       console.log(`[SmartTile] Processing ${filteredJobs.length} smart tile jobs (filtered from ${smartJobs.length})`);
+      console.log(`[SmartTile] Processing ${filteredJobs.length} smart tile jobs (filtered from ${smartJobs.length})`);
 
-        // ★ V44.2: Cross-division capacity tracker — shared across all jobs
-        // Keys: "SpecialName|startMin|endMin" → slots already consumed this run
-        const sharedCapacityTracker = {};
+        // =====================================================================
+        // ★ V44.3: CAMP-WIDE PRE-ALLOCATION
+        // Before running any job, figure out across ALL time windows:
+        //   - How many special slots exist (division-aware)
+        //   - Which bunks are most deserving (fairness ranked)
+        //   - Pre-assign "special" or "fallback" to every bunk in every window
+        // Jobs then read from this pre-allocation instead of deciding independently
+        // =====================================================================
+
+        // Step A: Group jobs by time window key "startMin|endMin"
+        // A time window can have multiple divisions running smart tiles simultaneously
+        const jobsByTimeWindow = {};
+        filteredJobs.forEach(job => {
+            // Block A window
+            const keyA = `${job.blockA.startMin}|${job.blockA.endMin}`;
+            if (!jobsByTimeWindow[keyA]) jobsByTimeWindow[keyA] = [];
+            jobsByTimeWindow[keyA].push({ job, block: 'A', blockInfo: job.blockA });
+
+            // Block B window (if exists)
+            if (job.blockB) {
+                const keyB = `${job.blockB.startMin}|${job.blockB.endMin}`;
+                if (!jobsByTimeWindow[keyB]) jobsByTimeWindow[keyB] = [];
+                jobsByTimeWindow[keyB].push({ job, block: 'B', blockInfo: job.blockB });
+            }
+        });
+
+        console.log(`[SmartTile V44.3] Time windows to pre-allocate: ${Object.keys(jobsByTimeWindow).length}`);
+
+        // Step B: For each time window, calculate total available special slots
+        // and rank all bunks across all participating divisions
+        // preAllocation[divisionName][bunkName][blockKey] = 'special' | 'fallback'
+        const preAllocation = {};
+
+        Object.entries(jobsByTimeWindow).forEach(([windowKey, entries]) => {
+            const [startMin, endMin] = windowKey.split('|').map(Number);
+
+            console.log(`\n[PreAlloc] Window ${windowKey} (${entries.length} division(s)):`);
+
+            // B1: Collect ALL available specials across all divisions in this window
+            // keeping division restrictions in mind
+            // Result: Map of specialName -> { totalCapacity, divisionsAllowed: Set }
+            const specialPoolMap = {};
+
+            entries.forEach(({ job }) => {
+                const divName = job.division;
+                const divSpecials = getAvailableSpecialsForTimeBlock(
+                    startMin, endMin, divName,
+                    activityProperties, dailyFieldAvailability
+                );
+                divSpecials.forEach(s => {
+                    if (!specialPoolMap[s.name]) {
+                        specialPoolMap[s.name] = {
+                            capacity: s.capacity,
+                            remaining: s.capacity,
+                            divisionsAllowed: new Set(),
+                            props: s.props
+                        };
+                    }
+                    specialPoolMap[s.name].divisionsAllowed.add(divName);
+                });
+            });
+
+            const totalSpecialSlots = Object.values(specialPoolMap)
+                .reduce((sum, s) => sum + s.capacity, 0);
+
+            console.log(`[PreAlloc]   Total special slots: ${totalSpecialSlots}`);
+            console.log(`[PreAlloc]   Specials: ${Object.entries(specialPoolMap).map(([n,s]) => `${n}(${s.capacity})`).join(', ')}`);
+
+            // B2: Collect ALL bunks across all divisions in this window
+            // with their fairness scores
+            const allBunkEntries = []; // { bunk, divName, job, fairnessScore }
+
+            const priorityQueue = loadPriorityQueue();
+
+            entries.forEach(({ job }) => {
+                const divName = job.division;
+                const bunkList = divisions[divName]?.bunks || [];
+                const divPriority = priorityQueue[divName] || [];
+
+                bunkList.forEach(bunk => {
+                    // Calculate fairness score (lower = more deserving)
+                    const bunkHist = historicalCounts[bunk] || {};
+                    
+                    // Count how many specials this bunk has had total
+                    const totalSpecialUsage = Object.keys(specialPoolMap).reduce((sum, sName) => {
+                        return sum + (bunkHist[sName] || 0);
+                    }, 0);
+
+                    // Priority queue membership (higher priority = more deserving)
+                    const inPriority = divPriority.includes(bunk) ? 1 : 0;
+
+                    // Yesterday's special usage
+                    const hadSpecialYesterday = Object.keys(specialPoolMap).some(sName => {
+                        const sched = yesterdayHistory?.schedule?.[bunk] || [];
+                        return Array.isArray(sched) && sched.some(e => 
+                            (e?._activity || '').toLowerCase() === sName.toLowerCase()
+                        );
+                    }) ? 1 : 0;
+
+                    // Fairness score: priority queue members first, then least usage, then no yesterday
+                    // Lower score = more deserving of a special slot
+                    const fairnessScore = (inPriority ? 0 : 100) + totalSpecialUsage * 10 + hadSpecialYesterday;
+
+                    // Check if this bunk can actually use ANY special in this window
+                    const canUseAny = Object.entries(specialPoolMap).some(([sName, sData]) => {
+                        if (!sData.divisionsAllowed.has(divName)) return false;
+                        const slotsForWindow = window.SchedulerCoreUtils?.findSlotsForRange(startMin, endMin) || [];
+                        return canBunkUseSpecial(bunk, divName, 
+                            { name: sName, maxUsage: sData.props?.maxUsage || 0, props: sData.props },
+                            historicalCounts, activityProperties, slotsForWindow
+                        );
+                    });
+
+                    if (canUseAny) {
+                        allBunkEntries.push({ bunk, divName, job, fairnessScore, totalSpecialUsage });
+                    }
+                });
+            });
+
+            // B3: Sort all bunks by fairness (most deserving first)
+            allBunkEntries.sort((a, b) => a.fairnessScore - b.fairnessScore || Math.random() - 0.5);
+
+            console.log(`[PreAlloc]   Eligible bunks: ${allBunkEntries.length}, Total slots: ${totalSpecialSlots}`);
+
+            // B4: Allocate special slots to top bunks until capacity exhausted
+            const slotsForWindow = window.SchedulerCoreUtils?.findSlotsForRange(startMin, endMin) || [];
+            
+            allBunkEntries.forEach(entry => {
+                const { bunk, divName } = entry;
+
+                // Find a special this bunk can actually use that still has remaining slots
+                const availableForBunk = Object.entries(specialPoolMap)
+                    .filter(([sName, sData]) => {
+                        if (sData.remaining <= 0) return false;
+                        if (!sData.divisionsAllowed.has(divName)) return false;
+                        return canBunkUseSpecial(bunk, divName,
+                            { name: sName, maxUsage: sData.props?.maxUsage || 0, props: sData.props },
+                            historicalCounts, activityProperties, slotsForWindow
+                        );
+                    })
+                    .map(([sName, sData]) => ({ name: sName, ...sData }));
+
+                if (!preAllocation[divName]) preAllocation[divName] = {};
+                if (!preAllocation[divName][bunk]) preAllocation[divName][bunk] = {};
+
+                if (availableForBunk.length > 0) {
+                    // Pick the specific special (least used by this bunk)
+                    const bunkHist = historicalCounts[bunk] || {};
+                    availableForBunk.sort((a, b) => (bunkHist[a.name] || 0) - (bunkHist[b.name] || 0));
+                    const chosen = availableForBunk[0];
+                    chosen.remaining--;
+                    preAllocation[divName][bunk][windowKey] = { result: 'special', specialName: chosen.name };
+                    console.log(`[PreAlloc]   ✅ ${divName}/${bunk} → ${chosen.name} (remaining: ${chosen.remaining})`);
+                } else {
+                    preAllocation[divName][bunk][windowKey] = { result: 'fallback' };
+                    console.log(`[PreAlloc]   ⬇️ ${divName}/${bunk} → fallback (no slots left)`);
+                }
+            });
+
+            // Any bunks not in allBunkEntries (ineligible) also get fallback
+            entries.forEach(({ job }) => {
+                const divName = job.division;
+                const bunkList = divisions[divName]?.bunks || [];
+                bunkList.forEach(bunk => {
+                    if (!preAllocation[divName]?.[bunk]?.[windowKey]) {
+                        if (!preAllocation[divName]) preAllocation[divName] = {};
+                        if (!preAllocation[divName][bunk]) preAllocation[divName][bunk] = {};
+                        preAllocation[divName][bunk][windowKey] = { result: 'fallback' };
+                    }
+                });
+            });
+        });
+
+        console.log(`\n[SmartTile V44.3] Pre-allocation complete. Passing to jobs...`);
+        window.__smartPreAllocation = preAllocation; // debug
+
+        const sharedCapacityTracker = {}; // kept for legacy compat
 
         filteredJobs.forEach((job, jobIdx) => {
+
             console.log(`\n[SmartTile] Job ${jobIdx + 1}: ${job.division}`);
 
             const divName = job.division;
@@ -618,7 +793,8 @@
                 null,
                 dailyFieldAvailability,
                 yesterdayHistory,
-                sharedCapacityTracker  // ★ V44.2: cross-division capacity
+                sharedCapacityTracker,
+                preAllocation[job.division] || {}
             );
 
             if (!result) {
