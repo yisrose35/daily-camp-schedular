@@ -1157,66 +1157,7 @@ function renderMaxUsageSettings(item) {
             container.appendChild(ceilDetail);
         }
 
-        // ── B: MINIMUM (FLOOR) ────────────────────────────────────────────
-        const divider = document.createElement('div');
-        divider.style.cssText = 'border-top:1px solid #F3F4F6; margin:16px 0 14px 0;';
-        container.appendChild(divider);
-
-        const floorLabel = document.createElement('div');
-        floorLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
-        floorLabel.textContent = 'Minimum (floor)';
-        container.appendChild(floorLabel);
-
-        const minF = parseInt(item.minFrequency) || 0;
-        const minEnabled = minF > 0;
-
-        const minTogRow = document.createElement('div');
-        minTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:' + (minEnabled ? '12px' : '4px') + ';';
-        const minTog = document.createElement('label'); minTog.className = 'switch';
-        const minCb = document.createElement('input'); minCb.type = 'checkbox'; minCb.checked = minEnabled;
-        const minSl = document.createElement('span'); minSl.className = 'slider';
-        minTog.appendChild(minCb); minTog.appendChild(minSl);
-        const minLbl = document.createElement('span');
-        minLbl.style.cssText = 'font-size:0.88rem; color:#374151;';
-        minLbl.textContent = 'Require a minimum frequency for every bunk';
-        minTogRow.appendChild(minTog); minTogRow.appendChild(minLbl);
-        container.appendChild(minTogRow);
-        minCb.onchange = () => { item.minFrequency = minCb.checked ? 1 : null; saveData(); rebuild(); updateSummary(); };
-
-        if (minEnabled) {
-            const minDetail = document.createElement('div');
-            minDetail.style.cssText = 'padding-left:12px; border-left:2px solid #0ea5e9; margin-bottom:4px;';
-
-            const minRow = document.createElement('div');
-            minRow.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px;';
-            minRow.innerHTML = '<span style="font-size:0.85rem; color:#374151;">At least:</span>';
-            const minIn = document.createElement('input');
-            minIn.type = 'number'; minIn.min = '1'; minIn.max = '14'; minIn.value = minF || 1;
-            minIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
-            const minSuffix = document.createElement('span');
-            minSuffix.style.cssText = 'font-size:0.85rem; color:#374151;';
-            minSuffix.textContent = 'time(s) per';
-            const minPeriodSel = document.createElement('select');
-            minPeriodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
-            [{ value:'week', label:'week' }, { value:'2weeks', label:'2 weeks' }].forEach(function(p) {
-                const opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
-                if ((item.minFrequencyPeriod || 'week') === p.value) opt.selected = true;
-                minPeriodSel.appendChild(opt);
-            });
-            minIn.onchange = () => { item.minFrequency = Math.max(1, parseInt(minIn.value) || 1); saveData(); updateSummary(); };
-            minPeriodSel.onchange = () => { item.minFrequencyPeriod = minPeriodSel.value; saveData(); updateSummary(); };
-            minRow.appendChild(minIn); minRow.appendChild(minSuffix); minRow.appendChild(minPeriodSel);
-            minDetail.appendChild(minRow);
-
-            const minNote = document.createElement('div');
-            minNote.style.cssText = 'font-size:0.78rem; color:#0369a1; background:#e0f2fe; padding:8px 10px; border-radius:6px; line-height:1.5;';
-            minNote.innerHTML = 'The scheduler will actively push to get every bunk this activity at least <strong>' +
-                (item.minFrequency || 1) + 'x</strong> ' +
-                (item.minFrequencyPeriod === '2weeks' ? 'every 2 weeks' : 'per week') + '.';
-            minDetail.appendChild(minNote);
-            container.appendChild(minDetail);
         
-    }
 
     rebuild();
     return container;
