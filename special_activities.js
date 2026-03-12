@@ -471,7 +471,7 @@ function renderDetailPane() {
     detailPaneEl.appendChild(sectionGroup('How', howSections));
 }
    
-}
+
 
 // =========================================================================
 // SUMMARY HELPERS
