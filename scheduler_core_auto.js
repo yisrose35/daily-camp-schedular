@@ -521,9 +521,93 @@
         log('[STEP 1.5] ✅ Classification complete');
 
         // =====================================================================
+        // ITERATIVE BEST-PICK WRAPPER
+        // Runs Steps 2.1–2.5b up to MAX_ITERATIONS times with varying seeds.
+        // Each iteration is a full independent build — all mutable state is
+        // reset between runs. Steps 3–5 run once on the best result.
+        // =====================================================================
+
+        const MAX_ITERATIONS  = 1000;
+        const PERFECT_SCORE   = 0;
+        const STALE_STOP      = 75; // stop if no improvement for this many consecutive iterations
+
+        let _iterSeed    = 0; // read by stagger offset in Step 2.3
+        let bestScore    = Infinity;
+        let bestTimelines = null;
+        let bestWarnings  = [];
+        let staleCount   = 0;
+        let totalIters   = 0;
+
+        // ── Score a completed set of bunk timelines ──────────────────────────
+        // Lower = better. 0 = perfect.
+        function scoreTimelines(timelines, iterWarnings) {
+            let score = 0;
+            Object.values(timelines).forEach(timeline => {
+                timeline.forEach(block => {
+                    if (!block.layer) return;
+                    const dur    = block.endMin - block.startMin;
+                    const minDur = block.layer.durationMin || block.layer.periodMin || block.layer.duration || 0;
+                    const maxDur = block.layer.durationMax || block.layer.periodMin || block.layer.duration || Infinity;
+                    if (minDur && dur < minDur) score += (minDur - dur) * 10; // heavy — duration violation
+                    if (maxDur < Infinity && dur > maxDur) score += (dur - maxDur) * 5;
+                });
+                for (let i = 0; i < timeline.length - 1; i++) {
+                    const gap = timeline[i + 1].startMin - timeline[i].endMin;
+                    if (gap > 0) score += gap * 3; // any remaining gap
+                }
+            });
+            iterWarnings.forEach(w => {
+                if (w.type === 'placement_failure') score += 500;
+                if (w.type === 'overlap')           score += 1000;
+                if (w.type === 'remaining_gap')     score += 50;
+            });
+            return score;
+        }
+
+        // ── Reset all mutable Step-2 state between iterations ────────────────
+        function resetIterState() {
+            // Clear bunk timelines
+            allGrades.forEach(grade => {
+                getBunksForGrade(grade, divisions).forEach(bunk => {
+                    bunkTimelines[bunk] = [];
+                    bunkSpecialAssigned[bunk] = {};
+                });
+            });
+
+            // Reset special capacity tracker assignments (keep totals)
+            todaysSpecials.forEach(s => {
+                if (specialCapacityTracker[s.name]) {
+                    specialCapacityTracker[s.name].assignments = [];
+                }
+            });
+
+            // Reset activity capacity tracker entirely
+            Object.keys(activityCapacityTracker).forEach(k => {
+                delete activityCapacityTracker[k];
+            });
+
+            // Reset bunkNeeds placed counters
+            Object.values(bunkNeeds).forEach(needs => {
+                needs.forEach(n => { n.placed = 0; });
+            });
+
+            // Reset league shared time map
+            Object.keys(sharedLeagueTime).forEach(k => {
+                delete sharedLeagueTime[k];
+            });
+        }
+
+        log('\n══════════════════════════════════════════════════════════');
+        log('ITERATIVE BEST-PICK — cap: ' + MAX_ITERATIONS +
+            ' | stale stop: ' + STALE_STOP + ' iterations');
+        log('══════════════════════════════════════════════════════════');
+
+        // =====================================================================
         // STEP 2 — LIVE ITERATIVE SOLVER
         // =====================================================================
         log('\n[STEP 2] Live iterative solver — building day for entire camp...');
+
+        do { // ← ITERATION LOOP START — wraps Steps 2.1 through 2.5b
 
         // Shared live capacity tracker (global across camp)
         // Structure: { specialName: { remaining: N, assignedTo: { bunkName: count } } }
@@ -1225,7 +1309,7 @@
                             const bunkIdx = allBunksList.indexOf(bunk);
                             const windowSize = windowEnd - windowStart;
                             const staggerOffset = windowSize > 0
-                                ? Math.floor((bunkIdx / allBunksList.length) * windowSize)
+                                ? Math.floor(((bunkIdx + _iterSeed) / allBunksList.length) * windowSize) % windowSize
                                 : 0;
                             const staggeredStart = windowStart + snapTo5(staggerOffset);
 
@@ -1637,6 +1721,55 @@
         });
 
         log('[STEP 2.5b] ✅ Closed ' + seamsClosed + ' seams across camp');
+
+        // ── Score this iteration and track best ──────────────────────────────
+        const iterWarnings = [];
+        const iterScore = scoreTimelines(bunkTimelines, iterWarnings);
+        totalIters++;
+
+        const improved = iterScore < bestScore;
+        if (improved) {
+            bestScore    = iterScore;
+            bestTimelines = {};
+            allGrades.forEach(grade => {
+                getBunksForGrade(grade, divisions).forEach(bunk => {
+                    bestTimelines[bunk] = bunkTimelines[bunk].map(b => ({ ...b }));
+                });
+            });
+            bestWarnings = [...warnings]; // capture warnings from this iteration
+            staleCount = 0;
+        } else {
+            staleCount++;
+        }
+
+        log('[ITER ' + totalIters + '] score=' + iterScore +
+            (improved ? ' ★ NEW BEST' : '') +
+            ' | best=' + bestScore + ' | stale=' + staleCount);
+
+        const shouldStop = bestScore <= PERFECT_SCORE || staleCount >= STALE_STOP;
+
+        if (!shouldStop && totalIters < MAX_ITERATIONS) {
+            _iterSeed++;
+            warnings.length = 0; // clear for next iteration
+            resetIterState();
+            // Jump back to Step 2.1 by looping — achieved via the do/while below
+        }
+
+        } while (!shouldStop && totalIters < MAX_ITERATIONS);
+        // ────────────────────────────────────────────────────────────────────
+
+        log('══════════════════════════════════════════════════════════');
+        log('BEST SCORE: ' + bestScore + ' after ' + totalIters + ' iteration(s)');
+        log('══════════════════════════════════════════════════════════');
+
+        // Restore the best iteration's timelines into live state for Steps 3–5
+        allGrades.forEach(grade => {
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                bunkTimelines[bunk] = bestTimelines[bunk] || [];
+            });
+        });
+        warnings.length = 0;
+        bestWarnings.forEach(w => warnings.push(w));
         
         // -----------------------------------------------------------------
         // STEP 2.6 — VALIDATE
