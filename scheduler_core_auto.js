@@ -1309,14 +1309,34 @@
                                 : 0;
                             const staggeredStart = windowStart + snapTo5(staggerOffset);
 
-                            // Try staggered start first, fall back to first available gap
-                           const durationMin = layer.durationMin || layer.periodMin || layer.duration || null;
+                           // Try staggered start first, fall back to first available gap
+                            const durationMin = layer.durationMin || layer.periodMin || layer.duration || null;
                             const durationMax = layer.durationMax || layer.periodMin || layer.duration || null;
 
-                            const position = durationMin
-                                ? (findBestGapPosition(bunk, staggeredStart, windowEnd, durationMin) ||
-                                   findBestGapPosition(bunk, windowStart, staggeredStart, durationMin) ||
-                                   findBestGapPosition(bunk, windowStart, windowEnd, durationMin))
+                            // ── Smart sizing ──────────────────────────────────────────────────
+                            // Instead of always placing at durationMin, figure out how much free
+                            // space remains in this window and divide it evenly among remaining
+                            // placements of this layer type, clamped to [durationMin, durationMax].
+                            let targetDuration = durationMin;
+                            if (durationMin && durationMax && durationMin !== durationMax) {
+                                const totalFreeInWindow = getFreeGaps(bunk, windowStart, windowEnd)
+                                    .reduce((sum, g) => sum + (g.end - g.start), 0);
+                                const remainingNeeded = (need.required - need.placed);
+                                if (remainingNeeded > 0 && totalFreeInWindow > 0) {
+                                    const idealDur = snapTo5(Math.floor(totalFreeInWindow / remainingNeeded));
+                                    targetDuration = Math.max(durationMin, Math.min(durationMax, idealDur));
+                                }
+                            }
+
+                            const position = targetDuration
+                                ? (findBestGapPosition(bunk, staggeredStart, windowEnd, targetDuration) ||
+                                   findBestGapPosition(bunk, windowStart, staggeredStart, targetDuration) ||
+                                   findBestGapPosition(bunk, windowStart, windowEnd, targetDuration) ||
+                                   // fallback to durationMin if targetDuration didn't fit
+                                   (targetDuration !== durationMin && (
+                                       findBestGapPosition(bunk, staggeredStart, windowEnd, durationMin) ||
+                                       findBestGapPosition(bunk, windowStart, windowEnd, durationMin)
+                                   )))
                                 : (findFlexGapPosition(bunk, staggeredStart, windowEnd, durationMin) ||
                                    findFlexGapPosition(bunk, windowStart, windowEnd, durationMin));
 
