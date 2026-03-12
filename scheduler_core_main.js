@@ -592,7 +592,11 @@
             })
             : smartJobs;
 
-        console.log(`[SmartTile] Processing ${filteredJobs.length} smart tile jobs (filtered from ${smartJobs.length})`);
+       console.log(`[SmartTile] Processing ${filteredJobs.length} smart tile jobs (filtered from ${smartJobs.length})`);
+
+        // ★ V44.2: Cross-division capacity tracker — shared across all jobs
+        // Keys: "SpecialName|startMin|endMin" → slots already consumed this run
+        const sharedCapacityTracker = {};
 
         filteredJobs.forEach((job, jobIdx) => {
             console.log(`\n[SmartTile] Job ${jobIdx + 1}: ${job.division}`);
@@ -613,7 +617,8 @@
                 activityProperties,
                 null,
                 dailyFieldAvailability,
-                yesterdayHistory
+                yesterdayHistory,
+                sharedCapacityTracker  // ★ V44.2: cross-division capacity
             );
 
             if (!result) {
