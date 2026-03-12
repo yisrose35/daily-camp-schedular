@@ -1230,7 +1230,8 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
                     if (!blocksForDiv) return;
 
                     blocksForDiv.forEach(block => {
-                        const pick = {
+        if (block.startMin !== timeKey) return;
+        const pick = {
                             field: `League: ${league.name}`,
                             sport: `Game ${gameNumber}`,
                             _activity: `League: ${league.name}`,
