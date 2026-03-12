@@ -519,10 +519,19 @@
         log('[STEP 1.5] Classified: ' + pinnedLayers.length + ' pinned, ' +
             windowedLayers.length + ' windowed, ' + openLayers.length + ' open');
         log('[STEP 1.5] ✅ Classification complete');
-        // Declare allGrades early — needed by iterative wrapper functions
+        // Declare allGrades and all mutable Step-2 state early
+        // so the iterative wrapper's resetIterState() can reference them
         const allGrades = Object.keys(divisions).filter(g =>
             !allowedSet || allowedSet.has(String(g))
         );
+
+        const bunkTimelines = {};
+        const bunkSpecialQueues = {};
+        const bunkSpecialAssigned = {};
+        const specialCapacityTracker = {};
+        const activityCapacityTracker = {};
+        const sharedLeagueTime = {};
+        const bunkNeeds = {};
 
         // =====================================================================
         // ITERATIVE BEST-PICK WRAPPER
@@ -540,9 +549,9 @@
         let bestTimelines = null;
         let bestWarnings  = [];
         let staleCount   = 0;
-        let totalIters   = 0;
+       let totalIters   = 0;
 
-        // ── Score a completed set of bunk timelines ──────────────────────────
+        log('\n══════════════════════════════════════════════════════════');
         // Lower = better. 0 = perfect.
         function scoreTimelines(timelines, iterWarnings) {
             let score = 0;
@@ -601,6 +610,56 @@
             });
         }
 
+       // ── Score a completed set of bunk timelines ──────────────────────────
+        // Lower = better. 0 = perfect.
+        function scoreTimelines(timelines, iterWarnings) {
+            let score = 0;
+            Object.values(timelines).forEach(timeline => {
+                timeline.forEach(block => {
+                    if (!block.layer) return;
+                    const dur    = block.endMin - block.startMin;
+                    const minDur = block.layer.durationMin || block.layer.periodMin || block.layer.duration || 0;
+                    const maxDur = block.layer.durationMax || block.layer.periodMin || block.layer.duration || Infinity;
+                    if (minDur && dur < minDur) score += (minDur - dur) * 10;
+                    if (maxDur < Infinity && dur > maxDur) score += (dur - maxDur) * 5;
+                });
+                for (let i = 0; i < timeline.length - 1; i++) {
+                    const gap = timeline[i + 1].startMin - timeline[i].endMin;
+                    if (gap > 0) score += gap * 3;
+                }
+            });
+            iterWarnings.forEach(w => {
+                if (w.type === 'placement_failure') score += 500;
+                if (w.type === 'overlap')           score += 1000;
+                if (w.type === 'remaining_gap')     score += 50;
+            });
+            return score;
+        }
+
+        // ── Reset all mutable Step-2 state between iterations ────────────────
+        function resetIterState() {
+            allGrades.forEach(grade => {
+                getBunksForGrade(grade, divisions).forEach(bunk => {
+                    bunkTimelines[bunk] = [];
+                    bunkSpecialAssigned[bunk] = {};
+                });
+            });
+            todaysSpecials.forEach(s => {
+                if (specialCapacityTracker[s.name]) {
+                    specialCapacityTracker[s.name].assignments = [];
+                }
+            });
+            Object.keys(activityCapacityTracker).forEach(k => {
+                delete activityCapacityTracker[k];
+            });
+            Object.values(bunkNeeds).forEach(needs => {
+                needs.forEach(n => { n.placed = 0; });
+            });
+            Object.keys(sharedLeagueTime).forEach(k => {
+                delete sharedLeagueTime[k];
+            });
+        }
+
         log('\n══════════════════════════════════════════════════════════');
         log('ITERATIVE BEST-PICK — cap: ' + MAX_ITERATIONS +
             ' | stale stop: ' + STALE_STOP + ' iterations');
@@ -615,7 +674,7 @@
 
         // Shared live capacity tracker (global across camp)
         // Structure: { specialName: { remaining: N, assignedTo: { bunkName: count } } }
-        const specialCapacityTracker = {};
+       
         todaysSpecials.forEach(s => {
             specialCapacityTracker[s.name] = {
                 total: getSpecialCapacity(s.name, activityProperties, globalSettings),
@@ -624,17 +683,7 @@
             };
         });
 
-        // Per-bunk day timelines (tentative)
-        // Structure: { bunkName: [ { startMin, endMin, type, event, layer, _classification, _assignedSpecial, _committed } ] }
-        const bunkTimelines = {};
-
-        // Per-bunk ranked special queues
-        // Structure: { bunkName: [ { name, score, duration, isScarce, remainingCapacity } ] }
-        const bunkSpecialQueues = {};
-
-        // Track how many times each special has been assigned to each bunk today
-        // Structure: { bunkName: { specialName: count } }
-        const bunkSpecialAssigned = {};
+        
 
        
 
@@ -703,7 +752,7 @@
 
        // Pre-build a map of which grades share the same league
         // so they get placed at the same time
-        const sharedLeagueTime = {}; // gradeName → placedStartMin (set when first grade in league is placed)
+    
         const gradeToLeagueName = {}; // gradeName → leagueName
         leagueLayersToPlace.forEach(layer => {
             const grade = layer.grade || layer.division;
@@ -1074,7 +1123,8 @@
 
         // Capacity tracker for non-special activity types
         // Pulled from layer config if present, otherwise unlimited
-        const activityCapacityTracker = {};
+
+            
         function getTypeCapacity(type) {
             // Check global settings for capacity config
             const cfg = (globalSettings.app1?.activityCapacity || {})[type];
@@ -1114,7 +1164,7 @@
         );
 
         // bunkNeeds[bunk] = array of { layer, placed, required, op }
-        const bunkNeeds = {};
+        
         gradeSortedForPlacement.forEach(grade => {
             const bunks = getBunksForGrade(grade, divisions);
             const gradeLayers = nonPinnedLayers.filter(l => {
