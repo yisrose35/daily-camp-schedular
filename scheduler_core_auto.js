@@ -1491,6 +1491,141 @@
         });
 
         log('[STEP 2.5] ✅ Filled ' + gapsFilled + ' gap slots across camp');
+        log('[STEP 2.5] ✅ Filled ' + gapsFilled + ' gaps with General Activity Slot');
+
+       // -----------------------------------------------------------------
+        // STEP 2.5b — SEAM CLOSING
+        // Walks every bunk's timeline and closes micro-gaps between adjacent
+        // blocks. Priority order:
+        //   1. Extend earlier block forward (if durationMax allows)
+        //   2. Extend later block backward (if durationMax allows)
+        //   3. Shift later block's startMin earlier (slides whole block, no duration change)
+        //   4. If later block is fixed — replan all non-fixed blocks in the
+        //      window between the last fixed block and this one, then re-run seam check
+        // Repeats passes until no seams remain or MAX_PASSES hit.
+        // -----------------------------------------------------------------
+        log('\n[STEP 2.5b] Seam closing...');
+
+        const SEAM_CLOSE_THRESHOLD = 15;
+        let seamsClosed = 0;
+
+        allGrades.forEach(grade => {
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                const timeline = bunkTimelines[bunk];
+                if (!timeline || timeline.length < 2) return;
+
+                let passChanged = true;
+                let passCount = 0;
+                const MAX_PASSES = 20;
+
+                while (passChanged && passCount < MAX_PASSES) {
+                    passChanged = false;
+                    passCount++;
+                    timeline.sort((a, b) => a.startMin - b.startMin);
+
+                    for (let i = 0; i < timeline.length - 1; i++) {
+                        const curr = timeline[i];
+                        const next = timeline[i + 1];
+                        const gap = next.startMin - curr.endMin;
+
+                        if (gap <= 0 || gap > SEAM_CLOSE_THRESHOLD) continue;
+
+                        const currDur    = curr.endMin - curr.startMin;
+                        const currMaxDur = curr.layer
+                            ? (curr.layer.durationMax || curr.layer.periodMin || curr.layer.duration || Infinity)
+                            : Infinity;
+
+                        const nextDur    = next.endMin - next.startMin;
+                        const nextMaxDur = next.layer
+                            ? (next.layer.durationMax || next.layer.periodMin || next.layer.duration || Infinity)
+                            : Infinity;
+
+                        const nextIsFixed = next._fixed || next._classification === 'pinned';
+
+                        // ★ Option 1: extend earlier block forward
+                        if (currDur + gap <= currMaxDur) {
+                            log(`[STEP 2.5b] Pass ${passCount} — extend earlier: "${curr.event}" ${curr.endMin}→${next.startMin} on ${bunk}`);
+                            curr.endMin = next.startMin;
+                            seamsClosed++;
+                            passChanged = true;
+
+                        // ★ Option 2: extend later block backward (starts earlier, runs longer)
+                        } else if (!nextIsFixed && nextDur + gap <= nextMaxDur) {
+                            log(`[STEP 2.5b] Pass ${passCount} — extend later back: "${next.event}" ${next.startMin}→${curr.endMin} on ${bunk}`);
+                            next.startMin = curr.endMin;
+                            seamsClosed++;
+                            passChanged = true;
+
+                        // ★ Option 3: shift later block earlier (no duration change, may cascade)
+                        } else if (!nextIsFixed) {
+                            log(`[STEP 2.5b] Pass ${passCount} — shift earlier: "${next.event}" ${next.startMin}→${curr.endMin} on ${bunk}`);
+                            next.startMin = curr.endMin;
+                            next.endMin   = next.endMin - gap;
+                            seamsClosed++;
+                            passChanged = true;
+
+                        // ★ Option 4: later block is fixed and immovable — replan the window
+                        } else {
+                            warn(`[STEP 2.5b] Pass ${passCount} — fixed block "${next.event}" at ${next.startMin} ` +
+                                `on ${bunk} has ${gap}min unsealed gap before it — replanning window`);
+
+                            // Find the window to replan: from the end of the last fixed block
+                            // before curr, up to next.startMin
+                            let windowStart = 0;
+                            for (let j = i - 1; j >= 0; j--) {
+                                if (timeline[j]._fixed || timeline[j]._classification === 'pinned') {
+                                    windowStart = timeline[j].endMin;
+                                    break;
+                                }
+                            }
+                            const windowEnd = next.startMin;
+
+                            // Pull out all non-fixed blocks in this window
+                            const blocksToReplan = timeline.filter(b =>
+                                b !== next &&
+                                !b._fixed &&
+                                b._classification !== 'pinned' &&
+                                b.startMin >= windowStart &&
+                                b.endMin <= windowEnd
+                            );
+
+                            if (blocksToReplan.length === 0) {
+                                warn(`[STEP 2.5b] No replannable blocks in window ${windowStart}-${windowEnd} on ${bunk} — leaving gap`);
+                                continue;
+                            }
+
+                            // Remove them all from the timeline
+                            blocksToReplan.forEach(b => removeTentativeBlock(bunk, b));
+
+                            // Re-pack them sequentially from windowStart, 
+                            // respecting each block's duration exactly
+                            let cursor = windowStart;
+                            blocksToReplan.forEach(b => {
+                                const dur = b.endMin - b.startMin;
+                                b.startMin = cursor;
+                                b.endMin   = cursor + dur;
+                                placeTentativeBlock(bunk, b);
+                                cursor = b.endMin;
+                            });
+
+                            log(`[STEP 2.5b] Replanned ${blocksToReplan.length} blocks in window ` +
+                                `${windowStart}-${windowEnd} on ${bunk}, cursor now at ${cursor}`);
+
+                            seamsClosed++;
+                            passChanged = true;
+                            break; // restart pass — timeline has changed significantly
+                        }
+                    }
+                }
+
+                if (passCount >= MAX_PASSES) {
+                    warn(`[STEP 2.5b] ${bunk} hit MAX_PASSES (${MAX_PASSES}) — some seams may remain`);
+                }
+            });
+        });
+
+        log('[STEP 2.5b] ✅ Closed ' + seamsClosed + ' seams across camp');
+        
         // -----------------------------------------------------------------
         // STEP 2.6 — VALIDATE
         // -----------------------------------------------------------------
