@@ -680,13 +680,21 @@
                 const candidates = [..._specialPool.entries()]
                     .filter(([name, rem]) => rem > 0 && divSpecials.includes(name))
                     .sort((a, b) => (hist[a[0]] || 0) - (hist[b[0]] || 0));
-                if (candidates.length > 0) {
-                    const [chosenName] = candidates[0];
-                    _specialPool.set(chosenName, _specialPool.get(chosenName) - 1);
-                    smartTileBudget[bk] = chosenName; // specific special name, not just true
-                } else {
-                    smartTileBudget[bk] = false;
+                const _slots = window.SchedulerCoreUtils?.findSlotsForRange?.(startMin, endMin, entry.divName) || [];
+                let _assigned = false;
+                for (const [candidateName] of candidates) {
+                    if (window.GlobalFieldLocks?.isFieldLocked(candidateName, _slots, entry.divName)) continue;
+                    _specialPool.set(candidateName, _specialPool.get(candidateName) - 1);
+                    smartTileBudget[bk] = candidateName;
+                    _assigned = true;
+                    window.GlobalFieldLocks?.lockField(candidateName, _slots, {
+                        lockedBy: 'smart_tile_budget',
+                        division: entry.divName,
+                        activity: `${candidateName} (smart tile budget)`
+                    });
+                    break;
                 }
+                if (!_assigned) smartTileBudget[bk] = false;
             });
 
             console.log(`[SmartTile V44.3] Window ${wk}: ${totalCapacity} special slots across ${_bunkRankings.length} bunks (${fallbackableJobs.map(j => j.division).join(', ')})`);
@@ -1012,7 +1020,21 @@
                         _isFallbackable: _isFallbackable
                     });
 
-                } else {
+               } else {
+                    if (knownSpecialNames.has(activityLabel.toLowerCase().trim()) &&
+                        window.GlobalFieldLocks?.isFieldLocked(activityLabel, slots, divName)) {
+                        const _fb2 = job.fallbackActivity || '';
+                        console.log(`[SmartTile V44.3] ${bunk} -> SPECIAL LOCKED → fallback: ${_fb2 || 'Sports Slot'}`);
+                        if (_fb2 && needsGeneration(_fb2)) {
+                            const _fbType = _fb2.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
+                            schedulableSlotBlocks.push({ divName, bunk, event: _fbType, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
+                        } else if (_fb2) {
+                            window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _fb2, sport: null, _fixed: true, _activity: _fb2 }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                        } else {
+                            schedulableSlotBlocks.push({ divName, bunk, event: 'Sports Slot', startTime: startMin, endTime: endMin, slots, fromSmartTile: true });
+                        }
+                        return;
+                    }
                     console.log(`[SmartTile] ${bunk} -> DIRECT FILL: ${activityLabel}`);
 
                    window.fillBlock({
