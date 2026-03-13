@@ -897,10 +897,12 @@
                     }
                     return;
                 }
-                if (typeof _budgetVal === 'string') {
+               if (typeof _budgetVal === 'string') {
                     console.log(`[SmartTile V44.3] ${bunk} -> PRE-ASSIGNED: ${_budgetVal} (adapter said: ${activityLabel})`);
+                    _registerClaim(_budgetVal, startMin, endMin);
                     window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _budgetVal, sport: null, _fixed: true, _activity: _budgetVal }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                     return;
+                
                 }
 
                // ★★★ FULL GRADE: Fill ALL bunks in division ★★★
@@ -1050,20 +1052,29 @@
                         _isFallbackable: _isFallbackable
                     });
 
-               } else {
-                    if (knownSpecialNames.has(activityLabel.toLowerCase().trim()) &&
-                        window.GlobalFieldLocks?.isFieldLocked(activityLabel, slots, divName)) {
-                        const _fb2 = job.fallbackActivity || '';
-                        console.log(`[SmartTile V44.3] ${bunk} -> SPECIAL LOCKED → fallback: ${_fb2 || 'Sports Slot'}`);
-                        if (_fb2 && needsGeneration(_fb2)) {
-                            const _fbType = _fb2.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
-                            schedulableSlotBlocks.push({ divName, bunk, event: _fbType, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
-                        } else if (_fb2) {
-                            window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _fb2, sport: null, _fixed: true, _activity: _fb2 }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                        } else {
-                            schedulableSlotBlocks.push({ divName, bunk, event: 'Sports Slot', startTime: startMin, endTime: endMin, slots, fromSmartTile: true });
+              } else {
+                    if (knownSpecialNames.has(activityLabel.toLowerCase().trim())) {
+                        const _maxCap = (() => {
+                            const props = activityProperties[activityLabel] || activityProperties[Object.keys(activityProperties).find(k => k.toLowerCase() === activityLabel.toLowerCase())] || {};
+                            const s = props.sharableWith;
+                            if (!s || s.type === 'not_sharable') return 1;
+                            if (s.type === 'custom') return parseInt(s.capacity) || 1;
+                            return 999;
+                        })();
+                        if (!_canClaim(activityLabel, startMin, endMin, _maxCap)) {
+                            const _fb2 = job.fallbackActivity || '';
+                            console.log(`[SmartTile V44.3] ${bunk} -> SPECIAL CLAIMED → fallback: ${_fb2 || 'Sports Slot'}`);
+                            if (_fb2 && needsGeneration(_fb2)) {
+                                const _fbType = _fb2.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
+                                schedulableSlotBlocks.push({ divName, bunk, event: _fbType, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
+                            } else if (_fb2) {
+                                window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _fb2, sport: null, _fixed: true, _activity: _fb2 }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                            } else {
+                                schedulableSlotBlocks.push({ divName, bunk, event: 'Sports Slot', startTime: startMin, endTime: endMin, slots, fromSmartTile: true });
+                            }
+                            return;
                         }
-                        return;
+                        _registerClaim(activityLabel, startMin, endMin);
                     }
                     console.log(`[SmartTile] ${bunk} -> DIRECT FILL: ${activityLabel}`);
 
