@@ -33,8 +33,8 @@
     const IGNORED_FIELDS = [
         'free', 'no field', 'no game', 'unassigned league',
         'lunch', 'snacks', 'dismissal', 'regroup', 'free play',
-        'mincha', 'davening', 'lineup', 'bus', 'swim', 'pool',
-        'canteen', 'gameroom', 'game room', 'transition', 'buffer'
+        'mincha', 'davening', 'bus', 'swim', 'pool', 'rest period', 'rest'
+        'transition', 'buffer'
     ];
 
     // Activities to ignore in same-day repetition checks
