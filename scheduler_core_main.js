@@ -634,8 +634,13 @@
             const overlapping = existing.filter(c => c.startMin < endMin && c.endMin > startMin);
             if (overlapping.length === 0) return true;
             const sw = _getSharableWith(name);
-            // Not sharable: hard cap of 1 regardless of division
-            if (!sw || sw.type === 'not_sharable') return overlapping.length < maxCap;
+            // Not sharable: hard cap of 1, cross-division always blocked
+            if (!sw || sw.type === 'not_sharable') {
+                const crossDiv = overlapping.find(c => c.divName !== requesterDiv);
+                if (crossDiv) return false;
+                const sameDivClaims = overlapping.filter(c => c.divName === requesterDiv);
+                return sameDivClaims.length < 1;
+            }
             // Same-division only: block if any OTHER division already claimed it
             if (sw.type === 'same_division' || sw.type === 'division_only') {
                 const crossDiv = overlapping.find(c => c.divName && c.divName !== requesterDiv);
