@@ -1290,7 +1290,7 @@ else penalty += 200;
             var blk = activityBlocks[bi], sc = [];
             for (var ci of dom) { var c = allCands[ci]; if (!isPickStillValid(blk,c)) continue;
                 var an = normName(c.activityName);
-                if (an&&an!=='free'&&an!=='free play') { var gd = globalBunkActs.get(blk.bunk); if (gd&&gd.has(an)) continue; }
+               if (an&&an!=='free'&&an!=='free play') { var gd = globalBunkActs.get(blk.bunk); if (gd&&gd.has(an)) continue; var _preTd=S.getActivitiesDoneToday(blk.bunk,blk.slots?.[0]??999); if(_preTd.has(an)) continue; }
                 S.setScratchPick(c); var cost = S.calculatePenaltyCost(blk,S.setScratchPick(c)); if (cost<900000) sc.push({bi:bi,ci:ci,cost:cost}); }
             sc.sort(function(a,b){return a.cost-b.cost;});
             blockOpts.push({bi:bi,options:sc,domainSize:sc.length});
@@ -1344,7 +1344,7 @@ else penalty += 200;
                 var grpUse=fieldUsageGrp.get(fn2)||0;
                 var existUse=(b2.startTime!==undefined&&b2.endTime!==undefined)?S.getFieldUsageFromTimeIndex(fn2,b2.startTime,b2.endTime,b2.bunk):0;
                 var canFit=false;
-                if (st==='not_sharable') { canFit=(existUse+grpUse<cap); }
+               if (st==='not_sharable') { var _nsBatchUse=0; if(b2.startTime!==undefined&&b2.endTime!==undefined){for(var _nsri=0;_nsri<results.length;_nsri++){var _nsr=results[_nsri];if(_nsr.candIdx===-1||normName(_nsr.pick.field)!==fn2)continue;var _nsrb=activityBlocks[_nsr.blockIdx];if(_nsrb.bunk===b2.bunk)continue;if(_nsrb.startTime<b2.endTime&&_nsrb.endTime>b2.startTime)_nsBatchUse++;}} canFit=(existUse+grpUse+_nsBatchUse<cap); }
                 else if (st==='same_division'||st==='custom') {
                     var xc=S.checkCrossDivisionTimeConflict(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk);
                     if (!xc&&b2.divName) { for (var ri=0;ri<results.length;ri++) { var r=results[ri]; if (r.candIdx===-1||normName(r.pick.field)!==fn2) continue; var rb=activityBlocks[r.blockIdx]; if (rb.divName&&rb.divName!==b2.divName&&rb.startTime<b2.endTime&&rb.endTime>b2.startTime) { xc=true; break; } } }
