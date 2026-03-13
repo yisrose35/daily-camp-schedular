@@ -821,12 +821,7 @@
                         }
                     }
                 });
-                ineligibleBunks.forEach(bunk => {
-                    block1[bunk] = effectiveA.open;
-                    log(`  ${bunk} -> ${effectiveA.open} (INELIGIBLE)`);
-                });
-            }
-                ineligibleBunks.forEach(bunk => {
+               ineligibleBunks.forEach(bunk => {
                     block1[bunk] = effectiveA.open;
                     log(`  ${bunk} -> ${effectiveA.open} (INELIGIBLE)`);
                 });
