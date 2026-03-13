@@ -1001,9 +1001,11 @@
             );
         },
         
-        // Expose swim/pool helpers
+      // Expose swim/pool helpers
         isSwimOrPool: isSwimOrPool,
-        getCanonicalSwimName: getCanonicalSwimName
+        getCanonicalSwimName: getCanonicalSwimName,
+        // ★ V44.3: Exposed for camp-wide budget calculation
+        getAvailableSpecialsForTimeBlock: getAvailableSpecialsForTimeBlock
     };
 
     // =========================================================================
