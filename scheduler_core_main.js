@@ -705,10 +705,10 @@
 
             entries.forEach(({ job }) => {
                 const divName = job.division;
-                const divSpecials = getAvailableSpecialsForTimeBlock(
+                const divSpecials = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(
                     startMin, endMin, divName,
                     activityProperties, dailyFieldAvailability
-                );
+                ) || [];
                 divSpecials.forEach(s => {
                     if (!specialPoolMap[s.name]) {
                         specialPoolMap[s.name] = {
