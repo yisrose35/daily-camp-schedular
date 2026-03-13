@@ -666,17 +666,9 @@
 
         window.__smartTileBudget = smartTileBudget; // debug
 
-        filteredJobs.forEach((job, jobIdx) => {
-
         // =====================================================================
-        // ★ V44.3: CAMP-WIDE PRE-ALLOCATION
-        // Before running any job, figure out across ALL time windows:
-        //   - How many special slots exist (division-aware)
-        //   - Which bunks are most deserving (fairness ranked)
-        //   - Pre-assign "special" or "fallback" to every bunk in every window
-        // Jobs then read from this pre-allocation instead of deciding independently
+        // ★ V44.3: CAMP-WIDE PRE-ALLOCATION (budget calculated above)
         // =====================================================================
-
         // Step A: Group jobs by time window key "startMin|endMin"
         // A time window can have multiple divisions running smart tiles simultaneously
         const jobsByTimeWindow = {};
