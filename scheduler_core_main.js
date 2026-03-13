@@ -622,9 +622,19 @@
         const _globalPriority = window.loadGlobalSettings?.()?.smartTilePriority || {};
         const _allSpecialNames = (window.getGlobalSpecialActivities?.() || []).map(s => s.name);
 
-       // Time-based claim tracker: "specialName|startMin|endMin" → count used
-        // Prevents same special from being assigned to multiple divisions at same time
-        const _specialTimeClaims = {};
+       // Overlap-based claim tracker — works even when divisions have slightly different boundaries
+        const _specialClaims = {}; // specialName.lower → [{startMin, endMin}]
+        function _canClaim(name, startMin, endMin, maxCap) {
+            const lower = name.toLowerCase();
+            const existing = _specialClaims[lower] || [];
+            const overlapping = existing.filter(c => c.startMin < endMin && c.endMin > startMin);
+            return overlapping.length < maxCap;
+        }
+        function _registerClaim(name, startMin, endMin) {
+            const lower = name.toLowerCase();
+            if (!_specialClaims[lower]) _specialClaims[lower] = [];
+            _specialClaims[lower].push({ startMin, endMin });
+        }
 
         Object.entries(_windowJobs).forEach(([wk, wJobs]) => {
             const [startMin, endMin] = wk.split('|').map(Number);
@@ -686,17 +696,15 @@
                     .sort((a, b) => (hist[a[0]] || 0) - (hist[b[0]] || 0));
                let _assigned = false;
                 for (const [candidateName] of candidates) {
-                    const _claimKey = `${candidateName.toLowerCase()}|${startMin}|${endMin}`;
                     const _maxCap = _uniqueSpecials.get(candidateName) || 1;
-                    const _currentClaims = _specialTimeClaims[_claimKey] || 0;
-                    if (_currentClaims >= _maxCap) continue;
+                    if (!_canClaim(candidateName, startMin, endMin, _maxCap)) continue;
                     _specialPool.set(candidateName, _specialPool.get(candidateName) - 1);
-                    _specialTimeClaims[_claimKey] = _currentClaims + 1;
+                    _registerClaim(candidateName, startMin, endMin);
                     smartTileBudget[bk] = candidateName;
                     _assigned = true;
                     break;
                 }
-                if (!_assigned) smartTileBudget[bk] = false;            });
+                if (!_assigned) smartTileBudget[bk] = false;});
 
             console.log(`[SmartTile V44.3] Window ${wk}: ${totalCapacity} special slots across ${_bunkRankings.length} bunks (${fallbackableJobs.map(j => j.division).join(', ')})`);
         });
