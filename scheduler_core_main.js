@@ -865,63 +865,7 @@
                     return;
                 }
 
-                // ★ V44.3: Budget intercept — must run before generateAssignments choices take effect
-                const _bk = `${divName}|${bunk}|${startMin}|${endMin}`;
-                const _budgetVal = smartTileBudget[_bk];
-                const _fbAct = job.fallbackActivity || '';
-                if (_budgetVal !== undefined && _fbAct) {
-                    if (_budgetVal === false) {
-                        if (needsGeneration(_fbAct)) {
-                            const fbSlotType = _fbAct.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
-                            console.log(`[SmartTile V44.3] ${bunk} -> NO BUDGET → ${fbSlotType}`);
-                            schedulableSlotBlocks.push({ divName, bunk, event: fbSlotType, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
-                        } else {
-                            console.log(`[SmartTile V44.3] ${bunk} -> NO BUDGET → DIRECT FILL: ${_fbAct}`);
-                            window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _fbAct, sport: null, _fixed: true, _activity: _fbAct }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                        }
-                        return;
-                    }
-                    if (typeof _budgetVal === 'string') {
-                        console.log(`[SmartTile V44.3] ${bunk} -> PRE-ASSIGNED: ${_budgetVal} (adapter said: ${activityLabel})`);
-                        window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _budgetVal, sport: null, _fixed: true, _activity: _budgetVal }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                        return;
-                    }
-                }
-
-                // ★ V44.3: Override with pre-assigned budget value BEFORE any other logic
-                const _bk = `${divName}|${bunk}|${startMin}|${endMin}`;
-                const _budgetVal = smartTileBudget[_bk];
-                if (_budgetVal === false || (_budgetVal === undefined && job.fallbackActivity)) {
-                    // No budget — route to fallback immediately
-                    const _fbAct = job.fallbackActivity || '';
-                    if (_fbAct) {
-                        if (needsGeneration(_fbAct)) {
-                            const fbSlotType = _fbAct.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
-                            console.log(`[SmartTile V44.3] ${bunk} -> NO BUDGET → ${fbSlotType}`);
-                            schedulableSlotBlocks.push({ divName, bunk, event: fbSlotType, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
-                        } else {
-                            console.log(`[SmartTile V44.3] ${bunk} -> NO BUDGET → DIRECT FILL: ${_fbAct}`);
-                            window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _fbAct, sport: null, _fixed: true, _activity: _fbAct }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                        }
-                        return;
-                    }
-                } else if (typeof _budgetVal === 'string') {
-                    // Pre-assigned specific special — fill directly, ignore what generateAssignments picked
-                    console.log(`[SmartTile V44.3] ${bunk} -> PRE-ASSIGNED: ${_budgetVal} (was: ${activityLabel})`);
-                    window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _budgetVal, sport: null, _fixed: true, _activity: _budgetVal }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                    return;
-                }
-               
-                    console.warn(`[SmartTile] No slots for ${bunk} at ${startMin}-${endMin}`);
-                    return;
-                }
-
-                const existing = window.scheduleAssignments[bunk]?.[slots[0]];
-                if (existing && existing._bunkOverride) {
-                    console.log(`[SmartTile] ${bunk} has bunk override, skipping`);
-                    return;
-                }
-// ★★★ FULL GRADE: Fill ALL bunks in division ★★★
+               // ★★★ FULL GRADE: Fill ALL bunks in division ★★★
                const _isFG = window.isFullGradeForDivision ? window.isFullGradeForDivision(activityLabel, divName) : (activityProperties[activityLabel]?.fullGrade || activityProperties[activityLabel]?._fullGrade);
 
                 if (_isFG && !needsGeneration(activityLabel)) {
