@@ -2719,13 +2719,35 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             fieldUsageBySlot
         }, allowedDivisionsSet || allowedDivisions);
 
-        schedulableSlotBlocks.push(...smartTileBlocks);
+       schedulableSlotBlocks.push(...smartTileBlocks);
         console.log(`[SmartTile] Added ${smartTileBlocks.length} blocks to scheduler`);
+
+        // =========================================================================
+        // STEP 6.5: REMOVE SOLVER BLOCKS FOR SLOTS ALREADY FILLED BY SMART TILES
+        // =========================================================================
+        // Smart tile direct fills (e.g. Swim) write to scheduleAssignments via fillBlock,
+        // but gap-detection blocks from Step 3.5 remain in the array. The solver would
+        // overwrite those fills. Remove any block whose slot is already occupied.
+        {
+            const preFilt = schedulableSlotBlocks.length;
+            for (let _fi = schedulableSlotBlocks.length - 1; _fi >= 0; _fi--) {
+                const _fb = schedulableSlotBlocks[_fi];
+                if (!_fb.bunk || !_fb.slots?.length) continue;
+                const _ex = window.scheduleAssignments[_fb.bunk]?.[_fb.slots[0]];
+                if (_ex && !_ex.continuation && !_ex._isTransition) {
+                    const _act = (_ex._activity || _ex.field || '').toLowerCase().trim();
+                    if (_act && _act !== 'free' && _act !== 'free play' && _act !== 'free (timeout)') {
+                        schedulableSlotBlocks.splice(_fi, 1);
+                    }
+                }
+            }
+            const removed = preFilt - schedulableSlotBlocks.length;
+            if (removed > 0) console.log(`[STEP 6.5] Filtered ${removed} blocks already filled by smart tiles / pinned events`);
+        }
 
         // =========================================================================
         // STEP 7: RUN TOTAL SOLVER FOR REMAINING ACTIVITIES
         // =========================================================================
-
         console.log("\n[STEP 7] Running Total Solver for remaining activities...");
 
         // ★★★ DIAGNOSTIC: Check D2 slots 5 & 7 status before filter ★★★
