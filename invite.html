@@ -389,16 +389,17 @@
         </div>
     </div>
     
+    <script src="config.js"></script>
     <!-- Supabase SDK -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     
     <script>
         // =====================================================================
-        // CONFIGURATION
+        // CONFIGURATION — from config.js only (no key in repo)
         // =====================================================================
-        
-        const SUPABASE_URL = 'https://bzqmhcumuarrbueqttfh.supabase.co';
-        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cW1oY3VtdWFycmJ1ZXF0dGZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDg3NDAsImV4cCI6MjA4MjEyNDc0MH0.5WpFBj1s1937XNZ0yxLdlBWO7xolPtf7oB10LDLONsI';
+        var _supa = typeof window !== 'undefined' && window.__CAMPISTRY_SUPABASE__;
+        const SUPABASE_URL = (_supa && _supa.url) || '';
+        const SUPABASE_ANON_KEY = (_supa && _supa.anonKey) || '';
         
         let supabaseClient;
         let inviteData = null;

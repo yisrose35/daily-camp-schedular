@@ -227,7 +227,7 @@
             var capacity = 1, sharingType = 'not_sharable', prefList = null, prefExclusive = false;
             if (fieldProps.sharableWith) {
                 var sw = fieldProps.sharableWith;
-                if (sw.type === 'not_sharable') { capacity = 1; sharingType = 'not_sharable'; }
+                if (sw.type === 'not_sharable') { capacity = parseInt(sw.capacity) || 1; sharingType = 'not_sharable'; }
                 else if (sw.type === 'all') { capacity = parseInt(sw.capacity) || 999; sharingType = 'all'; }
                 else if (sw.type === 'same_division') { capacity = parseInt(sw.capacity) || 2; sharingType = 'same_division'; }
                 else if (sw.type === 'custom') { capacity = parseInt(sw.capacity) || 2; sharingType = 'custom'; }
@@ -1305,7 +1305,7 @@ else penalty += 200;
             var blk = activityBlocks[bi], sc = [];
             for (var ci of dom) { var c = allCands[ci]; if (!isPickStillValid(blk,c)) continue;
                 var an = normName(c.activityName);
-                if (an&&an!=='free'&&an!=='free play') { var gd = globalBunkActs.get(blk.bunk); if (gd&&gd.has(an)) continue; }
+               if (an&&an!=='free'&&an!=='free play') { var gd = globalBunkActs.get(blk.bunk); if (gd&&gd.has(an)) continue; var _preTd=S.getActivitiesDoneToday(blk.bunk,blk.slots?.[0]??999); if(_preTd.has(an)) continue; }
                 S.setScratchPick(c); var cost = S.calculatePenaltyCost(blk,S.setScratchPick(c)); if (cost<900000) sc.push({bi:bi,ci:ci,cost:cost}); }
             sc.sort(function(a,b){return a.cost-b.cost;});
             blockOpts.push({bi:bi,options:sc,domainSize:sc.length});
@@ -1359,7 +1359,7 @@ else penalty += 200;
                 var grpUse=fieldUsageGrp.get(fn2)||0;
                 var existUse=(b2.startTime!==undefined&&b2.endTime!==undefined)?S.getFieldUsageFromTimeIndex(fn2,b2.startTime,b2.endTime,b2.bunk):0;
                 var canFit=false;
-                if (st==='not_sharable') { canFit=(existUse+grpUse<cap); }
+               if (st==='not_sharable') { var _nsBatchUse=0; if(b2.startTime!==undefined&&b2.endTime!==undefined){for(var _nsri=0;_nsri<results.length;_nsri++){var _nsr=results[_nsri];if(_nsr.candIdx===-1||normName(_nsr.pick.field)!==fn2)continue;var _nsrb=activityBlocks[_nsr.blockIdx];if(_nsrb.bunk===b2.bunk)continue;if(_nsrb.startTime<b2.endTime&&_nsrb.endTime>b2.startTime)_nsBatchUse++;}} canFit=(existUse+grpUse+_nsBatchUse<cap); }
                 else if (st==='same_division'||st==='custom') {
                     var xc=S.checkCrossDivisionTimeConflict(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk);
                     if (!xc&&b2.divName) { for (var ri=0;ri<results.length;ri++) { var r=results[ri]; if (r.candIdx===-1||normName(r.pick.field)!==fn2) continue; var rb=activityBlocks[r.blockIdx]; if (rb.divName&&rb.divName!==b2.divName&&rb.startTime<b2.endTime&&rb.endTime>b2.startTime) { xc=true; break; } } }
@@ -1522,8 +1522,7 @@ else penalty += 200;
             var fresh=[];
             for (var ci=0;ci<allCands.length;ci++) { var c=allCands[ci]; if (disabled.indexOf(c.field)!==-1) continue; if (window.GlobalFieldLocks?.isFieldLocked(c.field,slots)) continue; if (S.isFieldLockedByTime(c.field,sM,eM,bDiv)) continue; if (S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue;
                 var fp=S._fieldPropertyMap.get(c.field),cap=fp?fp.capacity:S.getFieldCapacity(c.field),st=fp?fp.sharingType:S.getSharingType(c.field);
-                if (st==='not_sharable') { if (S.getFieldUsageFromTimeIndex(c._fieldNorm,sM,eM,bunk)>=cap) continue; } else { if (S.countSameDivisionUsage(c.field,bDiv,sM,eM,bunk)>=cap) continue; }
-                var td=S.getActivitiesDoneToday(bunk,slots[0]??999),cAn=normName(c.activityName); if (cAn&&cAn!=='free'&&cAn!=='free play'&&td.has(cAn)) continue;
+                if (st==='not_sharable') { if (S.getFieldUsageFromTimeIndex(c._fieldNorm,sM,eM,bunk)>=cap) continue; if(S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue; } else { if (S.countSameDivisionUsage(c.field,bDiv,sM,eM,bunk)>=cap) continue; }                var td=S.getActivitiesDoneToday(bunk,slots[0]??999),cAn=normName(c.activityName); if (cAn&&cAn!=='free'&&cAn!=='free play'&&td.has(cAn)) continue;
                 if (!actProps[c.field]&&!actProps[c.activityName]&&c.type!=='special') continue;
                 if (window.SchedulerCoreUtils?.canBlockFit && !(S._isRainyDay && S._rainyTimeBypasses.has(c.field)) && !window.SchedulerCoreUtils.canBlockFit(blk,c.field,actProps,null,c.activityName,false)) continue;
                 S.setScratchPick(c); var cost=S.calculatePenaltyCost(blk,S.setScratchPick(c)); if (cost<900000) fresh.push({ci:ci,cost:cost});
@@ -1817,12 +1816,13 @@ else penalty += 200;
             var c = allCands[ci], fn = c.field, an = normName(c.activityName);
             if (an && an !== 'free' && todayDone.has(an)) continue;
             if (window.GlobalFieldLocks?.isFieldLocked(fn, slots, blockDiv)) continue;
-            if (startMin !== undefined && endMin !== undefined) {
+            if (startMin !== undefined && endMin !== undefined) {f
                 if (S.isFieldLockedByTime(fn, startMin, endMin, blockDiv)) continue;
                 if (S.checkCrossDivisionTimeConflict(fn, blockDiv, startMin, endMin, bunk)) continue;
             }
             var fp = S._fieldPropertyMap.get(fn), cap = fp ? fp.capacity : S.getFieldCapacity(fn), st = fp ? fp.sharingType : S.getSharingType(fn);
             if (startMin !== undefined && endMin !== undefined) {
+                if (S.checkCrossDivisionTimeConflict(fn, blockDiv, startMin, endMin, bunk)) continue;
                 if (st === 'not_sharable') { if (S.getFieldUsageFromTimeIndex(normName(fn), startMin, endMin, bunk) >= cap) continue; }
                 else { if (S.countSameDivisionUsage(fn, blockDiv, startMin, endMin, bunk) >= cap) continue; }
             }

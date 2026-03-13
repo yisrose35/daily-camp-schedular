@@ -592,9 +592,251 @@
             })
             : smartJobs;
 
-        console.log(`[SmartTile] Processing ${filteredJobs.length} smart tile jobs (filtered from ${smartJobs.length})`);
+     console.log(`[SmartTile] Processing ${filteredJobs.length} smart tile jobs (filtered from ${smartJobs.length})`);
+
+        // =====================================================================
+        // ★ V44.3: CAMP-WIDE SPECIAL BUDGET PRE-CALCULATION
+        // For each time window, total up available special slots (division-aware),
+        // rank ALL bunks across ALL divisions by fairness, and mark the top N
+        // as having budget. Everyone else routes to fallback before the solver runs.
+        // Key format: "divName|bunk|startMin|endMin" → true (has budget) / false (no budget)
+        // =====================================================================
+        const smartTileBudget = {};
+
+        // Helper — is this activity label a special-type that needs generation?
+        const _isSpecialLabel = v => !!v && v.toLowerCase().trim().includes('special');
+
+        // Group jobs by time window key so we can pool capacity across divisions
+        const _windowJobs = {};
+        filteredJobs.forEach(job => {
+            [job.blockA, job.blockB].forEach(block => {
+                if (!block) return;
+                const wk = `${block.startMin}|${block.endMin}`;
+                if (!_windowJobs[wk]) _windowJobs[wk] = [];
+                if (!_windowJobs[wk].find(j => j.division === job.division)) {
+                    _windowJobs[wk].push(job);
+                }
+            });
+        });
+
+        const _globalPriority = window.loadGlobalSettings?.()?.smartTilePriority || {};
+        const _allSpecialNames = (window.getGlobalSpecialActivities?.() || []).map(s => s.name);
+
+      // Overlap-based claim tracker — division-aware, respects cross-division shareability
+        const _specialClaims = {}; // specialName.lower → [{startMin, endMin, divName}]
+        function _getSharableWith(name) {
+            const key = Object.keys(activityProperties || {}).find(k => k.toLowerCase() === name.toLowerCase());
+            return (activityProperties?.[name] || activityProperties?.[key] || {}).sharableWith || null;
+        }
+        function _canClaim(name, startMin, endMin, maxCap, requesterDiv) {
+            const lower = name.toLowerCase();
+            const existing = _specialClaims[lower] || [];
+            const overlapping = existing.filter(c => c.startMin < endMin && c.endMin > startMin);
+            if (overlapping.length === 0) return true;
+            const sw = _getSharableWith(name);
+            // Not sharable: hard cap of 1, cross-division always blocked
+            if (!sw || sw.type === 'not_sharable') {
+                const crossDiv = overlapping.find(c => c.divName !== requesterDiv);
+                if (crossDiv) return false;
+                const sameDivClaims = overlapping.filter(c => c.divName === requesterDiv);
+                return sameDivClaims.length < 1;
+            }
+            // Same-division only: block if any OTHER division already claimed it
+            if (sw.type === 'same_division' || sw.type === 'division_only') {
+                const crossDiv = overlapping.find(c => c.divName && c.divName !== requesterDiv);
+                if (crossDiv) return false;
+                return overlapping.length < maxCap;
+            }
+            // Unlimited cross-division sharing
+            if (sw.type === 'all') return true;
+            // Custom capacity: allow up to cap (cross-division)
+            return overlapping.length < maxCap;
+        }
+        function _registerClaim(name, startMin, endMin, divName) {
+            const lower = name.toLowerCase();
+            if (!_specialClaims[lower]) _specialClaims[lower] = [];
+            _specialClaims[lower].push({ startMin, endMin, divName });
+        }
+
+        Object.entries(_windowJobs).forEach(([wk, wJobs]) => {
+            const [startMin, endMin] = wk.split('|').map(Number);
+
+            // Only process windows where at least one job has a fallback-able special main
+            const fallbackableJobs = wJobs.filter(j => _isSpecialLabel(j.fallbackFor) || _isSpecialLabel(j.main2));
+            if (fallbackableJobs.length === 0) return;
+
+            // Total special capacity for this window — deduplicated by name
+            // A special with capacity=1 counts as 1 slot regardless of how many divisions can use it
+            const _uniqueSpecials = new Map();
+            fallbackableJobs.forEach(job => {
+                const available = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(
+                    startMin, endMin, job.division, activityProperties, dailyFieldAvailability
+                ) || [];
+                available.forEach(a => {
+                    if (!_uniqueSpecials.has(a.name)) {
+                        _uniqueSpecials.set(a.name, a.capacity);
+                    }
+                });
+            });
+            const totalCapacity = [..._uniqueSpecials.values()].reduce((s, c) => s + c, 0);
+
+            // Collect all bunks across fallbackable divisions and rank by fairness
+            const _bunkRankings = [];
+            fallbackableJobs.forEach(job => {
+                const divName = job.division;
+                const bunkList = divisions[divName]?.bunks || [];
+                const divPriority = _globalPriority[divName] || [];
+                bunkList.forEach(bunk => {
+                    const bunkHist = historicalCounts[bunk] || {};
+                    const totalUsage = _allSpecialNames.reduce((s, n) => s + (bunkHist[n] || 0), 0);
+                    const priorityBonus = divPriority.includes(bunk) ? 0 : 100;
+                    _bunkRankings.push({ bunk, divName, score: priorityBonus + totalUsage });
+                });
+            });
+
+            // Build per-division special availability map
+            const _divSpecialMap = new Map();
+            fallbackableJobs.forEach(job => {
+                const avail = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(
+                    startMin, endMin, job.division, activityProperties, dailyFieldAvailability
+                ) || [];
+                _divSpecialMap.set(job.division, avail.map(a => a.name));
+            });
+
+            // Build special pool with deduplicated capacity
+            const _specialPool = new Map();
+            _uniqueSpecials.forEach((cap, name) => _specialPool.set(name, cap));
+
+            // Sort most deserving first, assign specific specials top-down
+            _bunkRankings.sort((a, b) => a.score - b.score || Math.random() - 0.5);
+            _bunkRankings.forEach(entry => {
+                const bk = `${entry.divName}|${entry.bunk}|${startMin}|${endMin}`;
+                const hist = historicalCounts[entry.bunk] || {};
+                const divSpecials = _divSpecialMap.get(entry.divName) || [];
+                const candidates = [..._specialPool.entries()]
+                    .filter(([name, rem]) => rem > 0 && divSpecials.includes(name))
+                    .sort((a, b) => (hist[a[0]] || 0) - (hist[b[0]] || 0));
+               let _assigned = false;
+               for (const [candidateName] of candidates) {
+                    const _maxCap = _uniqueSpecials.get(candidateName) || 1;
+                    if (!_canClaim(candidateName, startMin, endMin, _maxCap, entry.divName)) continue;
+                    _specialPool.set(candidateName, _specialPool.get(candidateName) - 1);
+                    _registerClaim(candidateName, startMin, endMin, entry.divName);
+                    smartTileBudget[bk] = candidateName;
+                    _assigned = true;
+                    break;
+                }
+                if (!_assigned) smartTileBudget[bk] = false;});
+
+            console.log(`[SmartTile V44.3] Window ${wk}: ${totalCapacity} special slots across ${_bunkRankings.length} bunks (${fallbackableJobs.map(j => j.division).join(', ')})`);
+        });
+
+        window.__smartTileBudget = smartTileBudget; // debug
+
+        // =====================================================================
+        // ★ V44.3: CAMP-WIDE PRE-ALLOCATION (budget calculated above)
+        // =====================================================================
+        // Step A: Group jobs by time window key "startMin|endMin"
+        // A time window can have multiple divisions running smart tiles simultaneously
+        const jobsByTimeWindow = {};
+        filteredJobs.forEach(job => {
+            // Block A window
+            const keyA = `${job.blockA.startMin}|${job.blockA.endMin}`;
+            if (!jobsByTimeWindow[keyA]) jobsByTimeWindow[keyA] = [];
+            jobsByTimeWindow[keyA].push({ job, block: 'A', blockInfo: job.blockA });
+
+            // Block B window (if exists)
+            if (job.blockB) {
+                const keyB = `${job.blockB.startMin}|${job.blockB.endMin}`;
+                if (!jobsByTimeWindow[keyB]) jobsByTimeWindow[keyB] = [];
+                jobsByTimeWindow[keyB].push({ job, block: 'B', blockInfo: job.blockB });
+            }
+        });
+
+        console.log(`[SmartTile V44.3] Time windows to pre-allocate: ${Object.keys(jobsByTimeWindow).length}`);
+
+        // Step B: For each time window, calculate total available special slots
+        // and rank all bunks across all participating divisions
+        // preAllocation[divisionName][bunkName][blockKey] = 'special' | 'fallback'
+        const preAllocation = {};
+
+        Object.entries(jobsByTimeWindow).forEach(([windowKey, entries]) => {
+            const [startMin, endMin] = windowKey.split('|').map(Number);
+
+            console.log(`\n[PreAlloc] Window ${windowKey} (${entries.length} division(s)):`);
+
+            // B1: Collect ALL available specials across all divisions in this window
+            // keeping division restrictions in mind
+            // Result: Map of specialName -> { totalCapacity, divisionsAllowed: Set }
+            const specialPoolMap = {};
+
+            entries.forEach(({ job }) => {
+                const divName = job.division;
+                const divSpecials = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(
+                    startMin, endMin, divName,
+                    activityProperties, dailyFieldAvailability
+                ) || [];
+                divSpecials.forEach(s => {
+                    if (!specialPoolMap[s.name]) {
+                        specialPoolMap[s.name] = {
+                            capacity: s.capacity,
+                            remaining: s.capacity,
+                            divisionsAllowed: new Set(),
+                            props: s.props
+                        };
+                    }
+                    specialPoolMap[s.name].divisionsAllowed.add(divName);
+                });
+            });
+
+            const totalSpecialSlots = Object.values(specialPoolMap)
+                .reduce((sum, s) => sum + s.capacity, 0);
+
+            console.log(`[PreAlloc]   Total special slots: ${totalSpecialSlots}`);
+            console.log(`[PreAlloc]   Specials: ${Object.entries(specialPoolMap).map(([n,s]) => `${n}(${s.capacity})`).join(', ')}`);
+
+            // B2: Collect ALL bunks across all divisions in this window
+            // with their fairness scores
+            const allBunkEntries = []; // { bunk, divName, job, fairnessScore }
+
+           const priorityQueue = window.loadGlobalSettings?.()?.smartTilePriority || {};
+
+            entries.forEach(({ job }) => {
+                const divName = job.division;
+                const bunkList = divisions[divName]?.bunks || [];
+                const divPriority = priorityQueue[divName] || [];
+
+               bunkList.forEach(bunk => {
+                    const bunkHist = historicalCounts[bunk] || {};
+                    const totalUsage = _allSpecialNames.reduce((s, n) => s + (bunkHist[n] || 0), 0);
+                    const priorityBonus = divPriority.includes(bunk) ? 0 : 100;
+                    allBunkEntries.push({ bunk, divName, score: priorityBonus + totalUsage });
+                });
+            });
+
+            // B3: Sort most deserving first
+            allBunkEntries.sort((a, b) => a.score - b.score || Math.random() - 0.5);
+
+            console.log(`[PreAlloc]   Bunks: ${allBunkEntries.length}, Total slots: ${totalSpecialSlots}`);
+
+            // B4: Assign budget top-down until capacity exhausted
+            let remaining = totalSpecialSlots;
+            allBunkEntries.forEach(({ bunk, divName }) => {
+                if (!preAllocation[divName]) preAllocation[divName] = {};
+                if (!preAllocation[divName][bunk]) preAllocation[divName][bunk] = {};
+                preAllocation[divName][bunk][windowKey] = remaining > 0
+                    ? { result: 'special' }
+                    : { result: 'fallback' };
+                if (remaining > 0) remaining--;
+            });        });
+
+        console.log(`\n[SmartTile V44.3] Pre-allocation complete. Passing to jobs...`);
+        window.__smartPreAllocation = preAllocation; // debug
+
+        const sharedCapacityTracker = {}; // kept for legacy compat
 
         filteredJobs.forEach((job, jobIdx) => {
+
             console.log(`\n[SmartTile] Job ${jobIdx + 1}: ${job.division}`);
 
             const divName = job.division;
@@ -613,7 +855,9 @@
                 activityProperties,
                 null,
                 dailyFieldAvailability,
-                yesterdayHistory
+                yesterdayHistory,
+                sharedCapacityTracker,
+                preAllocation[job.division] || {}
             );
 
             if (!result) {
@@ -644,7 +888,7 @@
                 return false;
             }
 
-            function routeActivity(bunk, activityLabel, blockInfo) {
+         function routeActivity(bunk, activityLabel, blockInfo) {
                 const startMin = blockInfo.startMin;
                 const endMin = blockInfo.endMin;
                 const slots = Utils.findSlotsForRange(startMin, endMin, divName);
@@ -659,7 +903,35 @@
                     console.log(`[SmartTile] ${bunk} has bunk override, skipping`);
                     return;
                 }
-// ★★★ FULL GRADE: Fill ALL bunks in division ★★★
+
+               // ★ V44.3: Budget intercept — only for generic slot types (Sports/Special/Activity)
+                // Direct-fill activities like Swim bypass the budget system entirely
+                const _bk = `${divName}|${bunk}|${startMin}|${endMin}`;
+                const _budgetVal = smartTileBudget[_bk];
+                const _fbAct = job.fallbackActivity || '';
+                const _isDirectFill = activityLabel && !needsGeneration(activityLabel) && !knownSpecialNames.has(activityLabel.toLowerCase().trim());
+                if (_budgetVal === false && !_isDirectFill) {
+                    if (_fbAct && needsGeneration(_fbAct)) {
+                        const fbSlotType = _fbAct.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
+                        console.log(`[SmartTile V44.3] ${bunk} -> NO BUDGET → ${fbSlotType}`);
+                        schedulableSlotBlocks.push({ divName, bunk, event: fbSlotType, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
+                    } else if (_fbAct) {
+                        console.log(`[SmartTile V44.3] ${bunk} -> NO BUDGET → DIRECT FILL: ${_fbAct}`);
+                        window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _fbAct, sport: null, _fixed: true, _activity: _fbAct }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                    }
+                    return;
+                }
+             if (typeof _budgetVal === 'string' && !_isDirectFill) {
+                    console.log(`[SmartTile V44.3] ${bunk} -> PRE-ASSIGNED: ${_budgetVal} (adapter said: ${activityLabel})`);
+                    _registerClaim(_budgetVal, startMin, endMin, divName);
+                    window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _budgetVal, sport: null, _fixed: true, _activity: _budgetVal }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                    return;
+                
+                
+                
+                }
+
+               // ★★★ FULL GRADE: Fill ALL bunks in division ★★★
                const _isFG = window.isFullGradeForDivision ? window.isFullGradeForDivision(activityLabel, divName) : (activityProperties[activityLabel]?.fullGrade || activityProperties[activityLabel]?._fullGrade);
 
                 if (_isFG && !needsGeneration(activityLabel)) {
@@ -754,18 +1026,82 @@
                     if (lower.includes("sport")) slotType = "Sports Slot";
                     else if (lower.includes("special")) slotType = "Special Activity";
 
-                    console.log(`[SmartTile] ${bunk} -> GENERATE: ${slotType}`);
+                    // ★ V44.3: Check camp-wide budget for special slots
+                    const _fbAct = job.fallbackActivity || '';
+                    const _isFallbackable = slotType === 'Special Activity' && _fbAct;
 
+                   if (_isFallbackable) {
+                        const budgetVal = smartTileBudget[`${divName}|${bunk}|${startMin}|${endMin}`];
+
+                        if (budgetVal === false) {
+                            // No budget — route to fallback
+                            if (needsGeneration(_fbAct)) {
+                                const fbLower = _fbAct.toLowerCase();
+                                const fbSlotType = fbLower.includes('sport') ? 'Sports Slot' : 'General Activity Slot';
+                                console.log(`[SmartTile V44.3] ${bunk} -> NO BUDGET → ${fbSlotType} (fallback: ${_fbAct})`);
+                                schedulableSlotBlocks.push({
+                                    divName, bunk,
+                                    event: fbSlotType,
+                                    startTime: startMin, endTime: endMin, slots,
+                                    fromSmartTile: true,
+                                    _smartTileFallback: true
+                                });
+                            } else {
+                                console.log(`[SmartTile V44.3] ${bunk} -> NO BUDGET → DIRECT FILL: ${_fbAct}`);
+                                window.fillBlock({
+                                    divName, bunk, startTime: startMin, endTime: endMin, slots
+                                }, {
+                                    field: _fbAct, sport: null, _fixed: true, _activity: _fbAct
+                                }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                            }
+                            return;
+                        }
+
+                        if (typeof budgetVal === 'string') {
+                            // Pre-assigned specific special — fill directly, solver never touches it
+                            console.log(`[SmartTile V44.3] ${bunk} -> PRE-ASSIGNED: ${budgetVal}`);
+                            window.fillBlock({
+                                divName, bunk, startTime: startMin, endTime: endMin, slots
+                            }, {
+                                field: budgetVal, sport: null, _fixed: true, _activity: budgetVal
+                            }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                            return;
+                        }
+                    }
+                    console.log(`[SmartTile] ${bunk} -> GENERATE: ${slotType}`);
                     schedulableSlotBlocks.push({
-                        divName,
-                        bunk,
+                        divName, bunk,
                         event: slotType,
-                        startTime: startMin,
-                        endTime: endMin,
-                        slots,
-                        fromSmartTile: true
+                        startTime: startMin, endTime: endMin, slots,
+                        fromSmartTile: true,
+                        _fallbackActivity: _fbAct,
+                        _isFallbackable: _isFallbackable
                     });
-                } else {
+
+              } else {
+                    if (knownSpecialNames.has(activityLabel.toLowerCase().trim())) {
+                        const _maxCap = (() => {
+                            const props = activityProperties[activityLabel] || activityProperties[Object.keys(activityProperties).find(k => k.toLowerCase() === activityLabel.toLowerCase())] || {};
+                            const s = props.sharableWith;
+                            if (!s || s.type === 'not_sharable') return 1;
+                            if (s.type === 'custom') return parseInt(s.capacity) || 1;
+                            return 999;
+                        })();
+                       if (!_canClaim(activityLabel, startMin, endMin, _maxCap, divName)) {
+                            const _fb2 = job.fallbackActivity || '';
+                            console.log(`[SmartTile V44.3] ${bunk} -> SPECIAL CLAIMED → fallback: ${_fb2 || 'Sports Slot'}`);
+                            if (_fb2 && needsGeneration(_fb2)) {
+                                const _fbType = _fb2.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
+                                schedulableSlotBlocks.push({ divName, bunk, event: _fbType, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
+                            } else if (_fb2) {
+                                window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _fb2, sport: null, _fixed: true, _activity: _fb2 }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                            } else {
+                                schedulableSlotBlocks.push({ divName, bunk, event: 'Sports Slot', startTime: startMin, endTime: endMin, slots, fromSmartTile: true });
+                            }
+                            return;
+                        }
+                      _registerClaim(activityLabel, startMin, endMin, divName);
+                    }
                     console.log(`[SmartTile] ${bunk} -> DIRECT FILL: ${activityLabel}`);
 
                    window.fillBlock({
@@ -807,6 +1143,7 @@
             }
         });
 
+        window.__smartCapTracker = sharedCapacityTracker; // debug
         return schedulableSlotBlocks;
     }
 
@@ -816,7 +1153,7 @@
 
     window.runSkeletonOptimizer = async function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
         console.log("\n" + "=".repeat(70));
-        console.log("★★★ OPTIMIZER STARTED (v17.11 - RBAC + CAPACITY FIX) ★★★");
+       console.log("★★★ OPTIMIZER STARTED (v17.12 - SMART TILE CAMP-WIDE BUDGET) ★★★")
         // ★★★ SCHEDULER RESTRICTION ★★★
         if (window.AccessControl?.filterDivisionsForGeneration) {
             allowedDivisions = window.AccessControl.filterDivisionsForGeneration(allowedDivisions);
@@ -2408,13 +2745,35 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             fieldUsageBySlot
         }, allowedDivisionsSet || allowedDivisions);
 
-        schedulableSlotBlocks.push(...smartTileBlocks);
+       schedulableSlotBlocks.push(...smartTileBlocks);
         console.log(`[SmartTile] Added ${smartTileBlocks.length} blocks to scheduler`);
+
+        // =========================================================================
+        // STEP 6.5: REMOVE SOLVER BLOCKS FOR SLOTS ALREADY FILLED BY SMART TILES
+        // =========================================================================
+        // Smart tile direct fills (e.g. Swim) write to scheduleAssignments via fillBlock,
+        // but gap-detection blocks from Step 3.5 remain in the array. The solver would
+        // overwrite those fills. Remove any block whose slot is already occupied.
+        {
+            const preFilt = schedulableSlotBlocks.length;
+            for (let _fi = schedulableSlotBlocks.length - 1; _fi >= 0; _fi--) {
+                const _fb = schedulableSlotBlocks[_fi];
+                if (!_fb.bunk || !_fb.slots?.length) continue;
+                const _ex = window.scheduleAssignments[_fb.bunk]?.[_fb.slots[0]];
+                if (_ex && !_ex.continuation && !_ex._isTransition) {
+                    const _act = (_ex._activity || _ex.field || '').toLowerCase().trim();
+                    if (_act && _act !== 'free' && _act !== 'free play' && _act !== 'free (timeout)') {
+                        schedulableSlotBlocks.splice(_fi, 1);
+                    }
+                }
+            }
+            const removed = preFilt - schedulableSlotBlocks.length;
+            if (removed > 0) console.log(`[STEP 6.5] Filtered ${removed} blocks already filled by smart tiles / pinned events`);
+        }
 
         // =========================================================================
         // STEP 7: RUN TOTAL SOLVER FOR REMAINING ACTIVITIES
         // =========================================================================
-
         console.log("\n[STEP 7] Running Total Solver for remaining activities...");
 
         // ★★★ DIAGNOSTIC: Check D2 slots 5 & 7 status before filter ★★★
