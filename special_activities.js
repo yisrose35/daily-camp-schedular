@@ -160,7 +160,14 @@ function validateSpecialActivity(activity, activityName) {
             enabled: activity.multiPart.enabled === true,
             totalParts: (function() { var tp = parseInt(activity.multiPart.totalParts, 10); return (!isNaN(tp) && tp >= 2 && tp <= 10) ? tp : 2; })(),
             daysBetween: (function() { var db = parseInt(activity.multiPart.daysBetween, 10); return (!isNaN(db) && db >= 1 && db <= 14) ? db : 3; })()
-        } : { enabled: false, totalParts: 2, daysBetween: 3 }
+         } : { enabled: false, totalParts: 2, daysBetween: 3 },
+        minFrequency: (activity.minFrequency != null && parseInt(activity.minFrequency, 10) > 0)
+            ? parseInt(activity.minFrequency, 10) : null,
+        minFrequencyPeriod: activity.minFrequencyPeriod || 'week',
+       maxUsagePerGrade: (activity.maxUsagePerGrade && typeof activity.maxUsagePerGrade === 'object')
+            ? activity.maxUsagePerGrade : {},
+        availableDays: Array.isArray(activity.availableDays) && activity.availableDays.length > 0
+            ? activity.availableDays : []
     };
 }
 
@@ -170,7 +177,8 @@ function createDefaultActivity(name) {
         maxUsage: null, maxUsagePeriod: 'half', frequencyWeeks: 0, rainyDayExclusive: false, prepDuration: 0,
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
         rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
-        multiPart: { enabled: false, totalParts: 2, daysBetween: 3 } };
+        multiPart: { enabled: false, totalParts: 2, daysBetween: 3, parts: [] },
+        minFrequency: null, minFrequencyPeriod: 'week', maxUsagePerGrade: {}, availableDays: [] };
 }
 
 function validateAllActivities(activities) { if (!Array.isArray(activities)) return []; return activities.map(a => validateSpecialActivity(a, a?.name)); }
@@ -198,16 +206,14 @@ function initSpecialActivitiesTab() {
         #special_activities .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
         #special_activities .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
         #special_activities input:checked + .slider:before { transform: translateX(14px); }
-        #special_activities .outer-accordion { border:1px solid #E5E7EB; border-radius:10px; overflow:hidden; margin-bottom:12px; background:#fff; }
-        #special_activities .outer-accordion-header { display:flex; justify-content:space-between; align-items:center; padding:12px 14px; cursor:pointer; user-select:none; transition:background 0.15s; }
-        #special_activities .outer-accordion-header:hover { background:#F9FAFB; }
-        #special_activities .outer-accordion-header .oa-title { font-size:0.95rem; font-weight:600; color:#1F2937; }
-        #special_activities .outer-accordion-header .oa-hint { font-size:0.75rem; color:#9CA3AF; margin-top:1px; }
-        #special_activities .outer-accordion-body { display:none; border-top:1px solid #F3F4F6; }
-        #special_activities .outer-accordion-body .detail-section { border-bottom:1px solid #F3F4F6; }
-        #special_activities .outer-accordion-body .detail-section:last-child { border-bottom:none; }
-        #special_activities .outer-accordion-body .detail-section-header { padding-left:26px; }
-        .rainy-list { background: linear-gradient(to bottom, #f0f9ff, #fff) !important; border-color: #7dd3fc !important; }
+        #special_activities .sa-group { margin-bottom: 18px; }
+        #special_activities .sa-group-header { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #9CA3AF; padding: 0 2px 6px 2px; margin-bottom: 4px; border-bottom: 1px solid #F3F4F6; }
+        #special_activities .detail-section { border: 1px solid #E5E7EB; border-radius: 10px; overflow: hidden; margin-bottom: 6px; }
+        #special_activities .detail-section-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; cursor: pointer; background: #fff; transition: background 0.15s; user-select: none; }
+        #special_activities .detail-section-header:hover { background: #F9FAFB; }
+        #special_activities .detail-section-title { font-weight: 600; font-size: 0.88rem; color: #1F2937; }
+        #special_activities .detail-section-summary { font-size: 0.78rem; color: #9CA3AF; margin-top: 2px; }
+        #special_activities .detail-section-body { padding: 14px; border-top: 1px solid #F3F4F6; display: none; }        .rainy-list { background: linear-gradient(to bottom, #f0f9ff, #fff) !important; border-color: #7dd3fc !important; }
         .rainy-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 0.7rem; color: #0284c7; background: #e0f2fe; padding: 2px 8px; border-radius: 999px; margin-left: 8px; }
         .weather-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 0.65rem; padding: 2px 6px; border-radius: 999px; margin-left: 6px; }
         .weather-badge.indoor { color: #0A4A56; background: #e6f4f7; }
@@ -250,7 +256,7 @@ function initSpecialActivitiesTab() {
               </div>
               <div style="flex:1.4; min-width:340px;">
                 <div class="setup-subtitle">Special Configuration</div>
-                <div id="specials-detail-pane" style="margin-top:8px;"></div>
+               <div id="specials-detail-pane" style="margin-top:8px; max-height:calc(100vh - 220px); overflow-y:auto; padding-right:4px;"></div>
               </div>
             </div>
           </section>
@@ -367,24 +373,16 @@ function section(title, summary, builder) {
     wrap.appendChild(head); wrap.appendChild(body); return wrap;
 }
 
-// v3.4: Outer accordion — collapsible group that contains inner sub-accordions
-function sectionGroup(label, hint, sections) {
-    const group = document.createElement("div"); group.className = "outer-accordion";
-    const head = document.createElement("div"); head.className = "outer-accordion-header";
-    const textDiv = document.createElement("div");
-    textDiv.innerHTML = '<div class="oa-title">' + escapeHtml(label) + '</div>' + (hint ? '<div class="oa-hint">' + escapeHtml(hint) + '</div>' : '');
-    const caret = document.createElement("span");
-    caret.innerHTML = '<svg width="18" height="18" fill="none" stroke="#9CA3AF" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>';
-    caret.style.transition = "transform 0.2s";
-    head.appendChild(textDiv); head.appendChild(caret);
-    const body = document.createElement("div"); body.className = "outer-accordion-body";
-    sections.forEach(s => body.appendChild(s));
-    head.onclick = () => {
-        const open = body.style.display === "block";
-        body.style.display = open ? "none" : "block";
-        caret.style.transform = open ? "rotate(0deg)" : "rotate(-180deg)";
-    };
-    group.appendChild(head); group.appendChild(body); return group;
+// v5.0: flat labeled group — sections sit directly under the label, no outer click
+function sectionGroup(label, sections) {
+    const group = document.createElement('div');
+    group.className = 'sa-group';
+    const header = document.createElement('div');
+    header.className = 'sa-group-header';
+    header.textContent = label;
+    group.appendChild(header);
+    sections.forEach(s => group.appendChild(s));
+    return group;
 }
 
 function renderDetailPane() {
@@ -445,40 +443,61 @@ function renderDetailPane() {
     avail.innerHTML = '<span>Special is <strong>' + (item.available ? 'AVAILABLE' : 'UNAVAILABLE') + '</strong></span><span style="font-size:0.8rem; opacity:0.8;">Toggle in master list</span>';
     detailPaneEl.appendChild(avail);
 
-    // v4.0: REDESIGNED SECTION LAYOUT — clearer grouping
-    // Group 1: WHERE — physical location
-    detailPaneEl.appendChild(sectionGroup("Where", "Physical location for this activity", [
-        section("Field / Location", summaryLocation(item), () => renderLocationSettings(item))
+    // v5.0: WHO / WHERE / WHEN / HOW — flat labeled groups, single-level accordion
+
+    // ── WHO ───────────────────────────────────────────────────────────────────
+    detailPaneEl.appendChild(sectionGroup('Who', [
+        section('Grade Access', summaryAccess(item), () => renderAccess(item))
     ]));
 
-    // Group 2: WHO & HOW — scheduling mode (full grade vs individual) + grade access
-    detailPaneEl.appendChild(sectionGroup("Who & How", summarySchedulingMode(item), [
-        section("Scheduling Mode", summarySchedulingMode(item), () => renderSchedulingMode(item)),
-        section("Grade Access", summaryAccess(item), () => renderAccess(item))
+    // ── WHERE ─────────────────────────────────────────────────────────────────
+    detailPaneEl.appendChild(sectionGroup('Where', [
+        section('Field / Location', summaryLocation(item), () => renderLocationSettings(item))
     ]));
 
-    // Group 3: WHEN — time rules + weather
-    const whenSections = [section("Time Availability", summaryTime(item), () => renderTimeRules(item))];
-    if (!isRainyDayItem) whenSections.push(section("Weather & Rainy Day", summaryWeather(item), () => renderWeatherSettings(item)));
-    detailPaneEl.appendChild(sectionGroup("When", "Time rules & availability", whenSections));
+    // ── WHEN ──────────────────────────────────────────────────────────────────
+    const whenSections = [
+        section('Time Availability', summaryTime(item), () => renderTimeRules(item)),
+        section('Day Availability', summaryDays(item), () => renderDayAvailability(item))
+    ];
+    if (!isRainyDayItem) {
+        whenSections.push(section('Weather & Rainy Day', summaryWeather(item), () => renderWeatherSettings(item)));
+    }
+    detailPaneEl.appendChild(sectionGroup('When', whenSections));
 
-   // Group 4: ADVANCED — usage caps + duration + multi-part
-    detailPaneEl.appendChild(sectionGroup("Advanced", "Usage limits, prep time & multi-part", [
-        section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
-        section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)),
-        section("Multi-Parts", summaryMultiPart(item), () => renderMultiPartSettings(item))
-    ]));
+    // ── HOW ───────────────────────────────────────────────────────────────────
+    const howSections = [
+        section('Scheduling Mode', summarySchedulingMode(item), () => renderSchedulingMode(item)),
+        section('Usage & Frequency', summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
+        section('Prep Duration', summaryPrepDuration(item), () => renderPrepDurationSettings(item)),
+        section('Multi-Part Activity', summaryMultiPart(item), () => renderMultiPartSettings(item))
+    ];
+    if (window.getCampBuilderMode?.() === 'auto' || window._daBuilderMode === 'auto') {
+        howSections.splice(1, 0, section('Activity Duration', summaryDuration(item), () => renderDurationSettings(item)));
+    }
+    detailPaneEl.appendChild(sectionGroup('How', howSections));
 }
+   
+
 
 // =========================================================================
 // SUMMARY HELPERS
 // =========================================================================
 function summaryMaxUsage(item) {
+    var parts = [];
     var m = parseInt(item.maxUsage) || 0;
-    if (m <= 0) return 'No limit';
-    var period = item.maxUsagePeriod || 'half';
-    var periodLabels = { 'half': 'per half', '1week': 'per week', '2weeks': 'per 2 weeks', '3weeks': 'per 3 weeks', '4weeks': 'per 4 weeks' };
-    return 'Max ' + m + ' time' + (m > 1 ? 's' : '') + ' ' + (periodLabels[period] || 'per half');
+    if (m > 0) {
+        var period = item.maxUsagePeriod || 'half';
+        var periodLabels = { 'half': 'per half', '1week': 'per week', '2weeks': 'per 2 wks', '3weeks': 'per 3 wks', '4weeks': 'per 4 wks' };
+        parts.push('Max ' + m + ' ' + (periodLabels[period] || 'per half'));
+    }
+    var minF = parseInt(item.minFrequency) || 0;
+    if (minF > 0) {
+        parts.push('Min ' + minF + 'x ' + (item.minFrequencyPeriod === '2weeks' ? 'per 2 wks' : 'per week'));
+    }
+    var gradeCount = Object.keys(item.maxUsagePerGrade || {}).filter(function(k) { return (item.maxUsagePerGrade[k] || 0) > 0; }).length;
+    if (gradeCount > 0) parts.push(gradeCount + ' grade override' + (gradeCount > 1 ? 's' : ''));
+    return parts.length ? parts.join(' · ') : 'No limit';
 }
 function summaryFullGrade(item) { return item.fullGrade ? 'Full grade together' : 'Individual bunks'; }
 function summarySharing(item) { if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "1 bunk at a time"; return 'Up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks at once'; }
@@ -514,7 +533,59 @@ function summaryMultiPart(item) {
     if (!item.multiPart?.enabled) return 'Single session';
     return item.multiPart.totalParts + '-part activity';
 }
+    function summaryPrepDuration(item) {
+    return (item.prepDuration || 0) > 0 ? item.prepDuration + 'min prep' : 'None';
+}
+function summaryDays(item) {
+    const days = item.availableDays;
+    if (!days || !Array.isArray(days) || days.length === 0 || days.length === 7) return 'All days';
+    return days.join(', ');
+}
 
+function renderDayAvailability(item) {
+    const container = document.createElement('div');
+    const allDays = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    const updateSummary = () => {
+        const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (s) s.textContent = summaryDays(item);
+    };
+    if (!Array.isArray(item.availableDays) || item.availableDays.length === 0) {
+        item.availableDays = [...allDays];
+    }
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size:0.82rem; color:#6B7280; margin-bottom:12px;';
+    note.textContent = 'Restrict which days of the week this special can be scheduled.';
+    container.appendChild(note);
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:flex; flex-wrap:wrap; gap:6px;';
+    allDays.forEach(day => {
+        const active = item.availableDays.includes(day);
+        const chip = document.createElement('span');
+        chip.className = 'chip ' + (active ? 'active' : 'inactive');
+        chip.textContent = day.slice(0, 3);
+        chip.style.cssText = 'cursor:pointer; padding:5px 12px; border-radius:999px; font-size:0.82rem; border:1px solid ' + (active ? '#147D91' : '#E5E7EB') + '; background:' + (active ? '#e6f4f7' : '#fff') + '; color:' + (active ? '#0F5F6E' : '#6B7280') + '; font-weight:' + (active ? '600' : '400') + ';';
+        chip.onclick = () => {
+            if (item.availableDays.includes(day)) {
+                if (item.availableDays.length === 1) return; // keep at least one
+                item.availableDays = item.availableDays.filter(d => d !== day);
+            } else {
+                item.availableDays.push(day);
+            }
+            saveData();
+            container.innerHTML = '';
+            container.appendChild(note.cloneNode(true));
+            const newGrid = renderDayAvailability(item).querySelector('div') || container;
+            saveData();
+            // re-render cleanly
+            const p = container.parentElement;
+            if (p) { p.innerHTML = ''; p.appendChild(renderDayAvailability(item)); }
+            updateSummary();
+        };
+        grid.appendChild(chip);
+    });
+    container.appendChild(grid);
+    return container;
+}
 // =========================================================================
 // RENDER: Full Grade Settings
 // =========================================================================
@@ -779,131 +850,248 @@ function renderSchedulingMode(item) {
 }
 
 // =========================================================================
-// RENDER: Max Usage Settings — v3.3 rewrite with period dropdown
+// RENDER: Usage & Frequency — v5.0: ceiling + per-grade + floor
 // =========================================================================
 function renderMaxUsageSettings(item) {
-    const container = document.createElement("div");
+    const container = document.createElement('div');
     const updateSummary = () => {
         const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
         if (s) s.textContent = summaryMaxUsage(item);
     };
 
-    const currentVal = parseInt(item.maxUsage) || 0;
-    const isEnabled = currentVal > 0;
+    function rebuild() {
+        container.innerHTML = '';
 
-    // Toggle row
-    const toggleRow = document.createElement("div");
-    toggleRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:16px;";
-    const tog = document.createElement("label"); tog.className = "switch";
-    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = isEnabled;
-    const sl = document.createElement("span"); sl.className = "slider";
-    tog.appendChild(cb); tog.appendChild(sl);
-    const label = document.createElement("span");
-    label.style.cssText = "font-weight:500; font-size:0.9rem;";
-    label.textContent = "Limit how many times a bunk can do this";
-    toggleRow.appendChild(tog); toggleRow.appendChild(label);
-    container.appendChild(toggleRow);
+        // ── A: MAXIMUM (CEILING) ──────────────────────────────────────────
+        const ceilLabel = document.createElement('div');
+        ceilLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
+        ceilLabel.textContent = 'Maximum (ceiling)';
+        container.appendChild(ceilLabel);
 
-    const detailDiv = document.createElement("div");
-    detailDiv.style.cssText = "margin-top:4px; padding-left:12px; border-left:2px solid #147D91;";
+        const ceilEnabled = (parseInt(item.maxUsage) || 0) > 0;
 
-    const renderDetails = () => {
-        detailDiv.innerHTML = "";
-        if (!cb.checked) {
-            detailDiv.style.display = "none";
-            return;
-        }
-        detailDiv.style.display = "block";
+        const ceilTogRow = document.createElement('div');
+        ceilTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:' + (ceilEnabled ? '12px' : '4px') + ';';
+        const ceilTog = document.createElement('label'); ceilTog.className = 'switch';
+        const ceilCb = document.createElement('input'); ceilCb.type = 'checkbox'; ceilCb.checked = ceilEnabled;
+        const ceilSl = document.createElement('span'); ceilSl.className = 'slider';
+        ceilTog.appendChild(ceilCb); ceilTog.appendChild(ceilSl);
+        const ceilLbl = document.createElement('span');
+        ceilLbl.style.cssText = 'font-size:0.88rem; color:#374151;';
+        ceilLbl.textContent = 'Limit how many times a bunk can do this';
+        ceilTogRow.appendChild(ceilTog); ceilTogRow.appendChild(ceilLbl);
+        container.appendChild(ceilTogRow);
+        ceilCb.onchange = () => { item.maxUsage = ceilCb.checked ? 1 : null; saveData(); rebuild(); updateSummary(); };
 
-        // Max count row
-        const row = document.createElement("div");
-        row.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:12px;";
-        row.innerHTML = '<span style="font-size:0.85rem;">Max times per bunk:</span>';
-        const numIn = document.createElement("input");
-        numIn.type = "number"; numIn.min = "1"; numIn.max = "50";
-        numIn.value = parseInt(item.maxUsage) || 1;
-        numIn.style.cssText = "width:60px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;";
-        numIn.onchange = () => {
-            item.maxUsage = Math.min(50, Math.max(1, parseInt(numIn.value) || 1));
-            numIn.value = item.maxUsage;
-            saveData();
-            updateNote();
-            updateSummary();
-        };
-        row.appendChild(numIn);
-        detailDiv.appendChild(row);
+        if (ceilEnabled) {
+            const ceilDetail = document.createElement('div');
+            ceilDetail.style.cssText = 'padding-left:12px; border-left:2px solid #147D91; margin-bottom:14px;';
 
-        // Period dropdown row
-        const periodRow = document.createElement("div");
-        periodRow.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:12px;";
-        periodRow.innerHTML = '<span style="font-size:0.85rem;">Reset period:</span>';
-        const periodSel = document.createElement("select");
-        periodSel.style.cssText = "padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;";
-        const periods = [
-            { value: 'half', label: 'Entire half (no reset)' },
-            { value: '1week', label: 'Every week' },
-            { value: '2weeks', label: 'Every 2 weeks' },
-            { value: '3weeks', label: 'Every 3 weeks' },
-            { value: '4weeks', label: 'Every 4 weeks' }
-        ];
-        periods.forEach(p => {
-            const opt = document.createElement("option");
-            opt.value = p.value; opt.textContent = p.label;
-            if ((item.maxUsagePeriod || 'half') === p.value) opt.selected = true;
-            periodSel.appendChild(opt);
-        });
-        periodSel.onchange = () => {
-            item.maxUsagePeriod = periodSel.value;
-            saveData();
-            updateNote();
-            updateSummary();
-        };
-        periodRow.appendChild(periodSel);
-        detailDiv.appendChild(periodRow);
+            const countRow = document.createElement('div');
+            countRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap;';
+            countRow.innerHTML = '<span style="font-size:0.85rem; color:#374151;">Max:</span>';
+            const countIn = document.createElement('input');
+            countIn.type = 'number'; countIn.min = '1'; countIn.max = '99'; countIn.value = parseInt(item.maxUsage) || 1;
+            countIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+            countIn.onchange = () => { item.maxUsage = Math.max(1, parseInt(countIn.value) || 1); saveData(); updateSummary(); };
 
-        // Explanation note
-        const note = document.createElement("div");
-        note.id = "max-usage-note";
-        note.style.cssText = "color:#6B7280; font-size:0.8rem; padding:10px; background:#f0f9fb; border-radius:8px; line-height:1.5;";
-        detailDiv.appendChild(note);
+            const periodSel = document.createElement('select');
+            periodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
+            [{ value:'half', label:'per half' }, { value:'1week', label:'per week' },
+             { value:'2weeks', label:'per 2 weeks' }, { value:'3weeks', label:'per 3 weeks' },
+             { value:'4weeks', label:'per 4 weeks' }].forEach(function(p) {
+                const opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
+                if ((item.maxUsagePeriod || 'half') === p.value) opt.selected = true;
+                periodSel.appendChild(opt);
+            });
+            periodSel.onchange = () => { item.maxUsagePeriod = periodSel.value; saveData(); updateSummary(); };
+            countRow.appendChild(countIn); countRow.appendChild(periodSel);
+            ceilDetail.appendChild(countRow);
 
-        const updateNote = () => {
-            const count = parseInt(item.maxUsage) || 1;
-            const period = item.maxUsagePeriod || 'half';
-            const periodTexts = {
-                'half': 'across the entire half. Resets when you start a new half.',
-                '1week': 'per week. Counter resets every Monday.',
-                '2weeks': 'per 2-week period. Counter resets every other Monday.',
-                '3weeks': 'per 3-week period.',
-                '4weeks': 'per 4-week (monthly) period.'
+            // per-grade toggle
+            const ceilPerGradeTogRow = document.createElement('div');
+            ceilPerGradeTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin:10px 0 6px 0;';
+            const ceilPgTog = document.createElement('label'); ceilPgTog.className = 'switch';
+            const ceilPgCb = document.createElement('input'); ceilPgCb.type = 'checkbox';
+            const hasGradeOverrides = Object.keys(item.maxUsagePerGrade || {}).length > 0;
+            ceilPgCb.checked = hasGradeOverrides;
+            const ceilPgSl = document.createElement('span'); ceilPgSl.className = 'slider';
+            ceilPgTog.appendChild(ceilPgCb); ceilPgTog.appendChild(ceilPgSl);
+            const ceilPgLbl = document.createElement('span');
+            ceilPgLbl.style.cssText = 'font-size:0.82rem; color:#374151;';
+            ceilPgLbl.textContent = 'Different max per grade';
+            ceilPerGradeTogRow.appendChild(ceilPgTog); ceilPerGradeTogRow.appendChild(ceilPgLbl);
+            ceilDetail.appendChild(ceilPerGradeTogRow);
+
+            const ceilGradeGrid = document.createElement('div');
+            ceilGradeGrid.style.display = hasGradeOverrides ? 'flex' : 'none';
+            ceilGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
+            const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            if (!item.maxUsagePerGrade) item.maxUsagePerGrade = {};
+            allDivs.forEach(function(div) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                const lbl = document.createElement('span');
+                lbl.style.cssText = 'font-size:0.82rem; color:#374151; flex:1;';
+                lbl.textContent = div;
+                const inp = document.createElement('input');
+                inp.type = 'number'; inp.min = '0'; inp.max = '99';
+                inp.placeholder = String(parseInt(item.maxUsage) || '—');
+                const gv = item.maxUsagePerGrade[div];
+                if (gv > 0) inp.value = gv;
+                inp.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.85rem;';
+                inp.onchange = () => {
+                    const v = parseInt(inp.value);
+                    if (v > 0) item.maxUsagePerGrade[div] = v;
+                    else delete item.maxUsagePerGrade[div];
+                    saveData(); updateSummary();
+                };
+                const clrBtn = document.createElement('button');
+                clrBtn.textContent = '✕'; clrBtn.title = 'Clear override';
+                clrBtn.style.cssText = 'background:none; border:none; color:#D1D5DB; cursor:pointer; font-size:0.8rem; padding:2px 4px; line-height:1;';
+                clrBtn.onmouseover = () => clrBtn.style.color = '#9CA3AF';
+                clrBtn.onmouseout = () => clrBtn.style.color = '#D1D5DB';
+                clrBtn.onclick = () => { inp.value = ''; delete item.maxUsagePerGrade[div]; saveData(); updateSummary(); };
+                row.appendChild(lbl); row.appendChild(inp); row.appendChild(clrBtn);
+                ceilGradeGrid.appendChild(row);
+            });
+            ceilPgCb.onchange = () => {
+                if (!ceilPgCb.checked) {
+                    item.maxUsagePerGrade = {};
+                    saveData(); updateSummary();
+                }
+                ceilGradeGrid.style.display = ceilPgCb.checked ? 'flex' : 'none';
+                ceilGradeGrid.style.flexDirection = 'column';
+                ceilGradeGrid.style.gap = '5px';
+                ceilGradeGrid.style.marginTop = '6px';
             };
-            const noteEl = detailDiv.querySelector('#max-usage-note');
-            if (noteEl) {
-                noteEl.innerHTML = 'Each bunk can be scheduled for <strong>' + count +
-                    '</strong> time' + (count > 1 ? 's' : '') + ' max ' +
-                    (periodTexts[period] || periodTexts['half']) +
-                    '<br><span style="font-size:0.75rem; color:#9CA3AF;">Tracked via rotation history.</span>';
-            }
-        };
-        updateNote();
-    };
-
-    cb.onchange = () => {
-        if (cb.checked) {
-            item.maxUsage = parseInt(item.maxUsage) || 1;
-        } else {
-            item.maxUsage = null;
+            ceilDetail.appendChild(ceilGradeGrid);
+            container.appendChild(ceilDetail);
         }
-        saveData();
-        renderDetails();
-        updateSummary();
-    };
 
-    container.appendChild(detailDiv);
-    renderDetails();
+        // ── B: MINIMUM (FLOOR) ────────────────────────────────────────────
+        const divider = document.createElement('div');
+        divider.style.cssText = 'border-top:1px solid #F3F4F6; margin:16px 0 14px 0;';
+        container.appendChild(divider);
+
+        const floorLabel = document.createElement('div');
+        floorLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
+        floorLabel.textContent = 'Minimum (floor)';
+        container.appendChild(floorLabel);
+
+        const minF = parseInt(item.minFrequency) || 0;
+        const minEnabled = minF > 0;
+
+        const minTogRow = document.createElement('div');
+        minTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:' + (minEnabled ? '12px' : '4px') + ';';
+        const minTog = document.createElement('label'); minTog.className = 'switch';
+        const minCb = document.createElement('input'); minCb.type = 'checkbox'; minCb.checked = minEnabled;
+        const minSl = document.createElement('span'); minSl.className = 'slider';
+        minTog.appendChild(minCb); minTog.appendChild(minSl);
+        const minLbl = document.createElement('span');
+        minLbl.style.cssText = 'font-size:0.88rem; color:#374151;';
+        minLbl.textContent = 'Require a minimum frequency for every bunk';
+        minTogRow.appendChild(minTog); minTogRow.appendChild(minLbl);
+        container.appendChild(minTogRow);
+        minCb.onchange = () => { item.minFrequency = minCb.checked ? 1 : null; saveData(); rebuild(); updateSummary(); };
+
+        if (minEnabled) {
+            const minDetail = document.createElement('div');
+            minDetail.style.cssText = 'padding-left:12px; border-left:2px solid #0ea5e9; margin-bottom:4px;';
+
+            const minRow = document.createElement('div');
+            minRow.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px;';
+            minRow.innerHTML = '<span style="font-size:0.85rem; color:#374151;">At least:</span>';
+            const minIn = document.createElement('input');
+            minIn.type = 'number'; minIn.min = '1'; minIn.max = '14'; minIn.value = minF || 1;
+            minIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+            const minSuffix = document.createElement('span');
+            minSuffix.style.cssText = 'font-size:0.85rem; color:#374151;';
+            minSuffix.textContent = 'time(s) per';
+            const minPeriodSel = document.createElement('select');
+            minPeriodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
+            [{ value:'week', label:'week' }, { value:'2weeks', label:'2 weeks' }].forEach(function(p) {
+                const opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
+                if ((item.minFrequencyPeriod || 'week') === p.value) opt.selected = true;
+                minPeriodSel.appendChild(opt);
+            });
+            minIn.onchange = () => { item.minFrequency = Math.max(1, parseInt(minIn.value) || 1); saveData(); updateSummary(); };
+            minPeriodSel.onchange = () => { item.minFrequencyPeriod = minPeriodSel.value; saveData(); updateSummary(); };
+            minRow.appendChild(minIn); minRow.appendChild(minSuffix); minRow.appendChild(minPeriodSel);
+            minDetail.appendChild(minRow);
+
+            const minNote = document.createElement('div');
+            minNote.style.cssText = 'font-size:0.78rem; color:#0369a1; background:#e0f2fe; padding:8px 10px; border-radius:6px; line-height:1.5; margin-bottom:10px;';
+            minNote.innerHTML = 'The scheduler will actively push to get every bunk this activity at least <strong>' +
+                (item.minFrequency || 1) + 'x</strong> ' +
+                (item.minFrequencyPeriod === '2weeks' ? 'every 2 weeks' : 'per week') + '.';
+            minDetail.appendChild(minNote);
+
+            // per-grade min toggle
+            const minPerGradeTogRow = document.createElement('div');
+            minPerGradeTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin:4px 0 6px 0;';
+            const minPgTog = document.createElement('label'); minPgTog.className = 'switch';
+            const minPgCb = document.createElement('input'); minPgCb.type = 'checkbox';
+            const hasMinGradeOverrides = Object.keys(item.minFrequencyPerGrade || {}).length > 0;
+            minPgCb.checked = hasMinGradeOverrides;
+            const minPgSl = document.createElement('span'); minPgSl.className = 'slider';
+            minPgTog.appendChild(minPgCb); minPgTog.appendChild(minPgSl);
+            const minPgLbl = document.createElement('span');
+            minPgLbl.style.cssText = 'font-size:0.82rem; color:#374151;';
+            minPgLbl.textContent = 'Different minimum per grade';
+            minPerGradeTogRow.appendChild(minPgTog); minPerGradeTogRow.appendChild(minPgLbl);
+            minDetail.appendChild(minPerGradeTogRow);
+
+            const minGradeGrid = document.createElement('div');
+            minGradeGrid.style.display = hasMinGradeOverrides ? 'flex' : 'none';
+            minGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
+            const minAllDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            if (!item.minFrequencyPerGrade) item.minFrequencyPerGrade = {};
+            minAllDivs.forEach(function(div) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                const lbl = document.createElement('span');
+                lbl.style.cssText = 'font-size:0.82rem; color:#374151; flex:1;';
+                lbl.textContent = div;
+                const inp = document.createElement('input');
+                inp.type = 'number'; inp.min = '0'; inp.max = '99';
+                inp.placeholder = String(parseInt(item.minFrequency) || '—');
+                const gv = item.minFrequencyPerGrade[div];
+                if (gv > 0) inp.value = gv;
+                inp.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.85rem;';
+                inp.onchange = () => {
+                    const v = parseInt(inp.value);
+                    if (v > 0) item.minFrequencyPerGrade[div] = v;
+                    else delete item.minFrequencyPerGrade[div];
+                    saveData(); updateSummary();
+                };
+                const clrBtn = document.createElement('button');
+                clrBtn.textContent = '✕'; clrBtn.title = 'Clear override';
+                clrBtn.style.cssText = 'background:none; border:none; color:#D1D5DB; cursor:pointer; font-size:0.8rem; padding:2px 4px; line-height:1;';
+                clrBtn.onmouseover = () => clrBtn.style.color = '#9CA3AF';
+                clrBtn.onmouseout = () => clrBtn.style.color = '#D1D5DB';
+                clrBtn.onclick = () => { inp.value = ''; delete item.minFrequencyPerGrade[div]; saveData(); updateSummary(); };
+                row.appendChild(lbl); row.appendChild(inp); row.appendChild(clrBtn);
+                minGradeGrid.appendChild(row);
+            });
+            minPgCb.onchange = () => {
+                if (!minPgCb.checked) {
+                    item.minFrequencyPerGrade = {};
+                    saveData(); updateSummary();
+                }
+                minGradeGrid.style.display = minPgCb.checked ? 'flex' : 'none';
+                minGradeGrid.style.flexDirection = 'column';
+                minGradeGrid.style.gap = '5px';
+                minGradeGrid.style.marginTop = '6px';
+            };
+            minDetail.appendChild(minGradeGrid);
+            container.appendChild(minDetail);
+        }
+    }
+
+    rebuild();
     return container;
 }
-
 // =========================================================================
 // RENDER: Sharing — toggle pattern matching fields.js
 // =========================================================================
