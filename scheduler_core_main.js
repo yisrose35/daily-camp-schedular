@@ -658,13 +658,35 @@
                 });
             });
 
-            // Sort most deserving first, then assign budget top-down
+            // Build per-division special availability map
+            const _divSpecialMap = new Map();
+            fallbackableJobs.forEach(job => {
+                const avail = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(
+                    startMin, endMin, job.division, activityProperties, dailyFieldAvailability
+                ) || [];
+                _divSpecialMap.set(job.division, avail.map(a => a.name));
+            });
+
+            // Build special pool with deduplicated capacity
+            const _specialPool = new Map();
+            _uniqueSpecials.forEach((cap, name) => _specialPool.set(name, cap));
+
+            // Sort most deserving first, assign specific specials top-down
             _bunkRankings.sort((a, b) => a.score - b.score || Math.random() - 0.5);
-            let remaining = totalCapacity;
             _bunkRankings.forEach(entry => {
                 const bk = `${entry.divName}|${entry.bunk}|${startMin}|${endMin}`;
-                smartTileBudget[bk] = remaining > 0;
-                if (remaining > 0) remaining--;
+                const hist = historicalCounts[entry.bunk] || {};
+                const divSpecials = _divSpecialMap.get(entry.divName) || [];
+                const candidates = [..._specialPool.entries()]
+                    .filter(([name, rem]) => rem > 0 && divSpecials.includes(name))
+                    .sort((a, b) => (hist[a[0]] || 0) - (hist[b[0]] || 0));
+                if (candidates.length > 0) {
+                    const [chosenName] = candidates[0];
+                    _specialPool.set(chosenName, _specialPool.get(chosenName) - 1);
+                    smartTileBudget[bk] = chosenName; // specific special name, not just true
+                } else {
+                    smartTileBudget[bk] = false;
+                }
             });
 
             console.log(`[SmartTile V44.3] Window ${wk}: ${totalCapacity} special slots across ${_bunkRankings.length} bunks (${fallbackableJobs.map(j => j.division).join(', ')})`);
@@ -941,12 +963,12 @@
                     const _fbAct = job.fallbackActivity || '';
                     const _isFallbackable = slotType === 'Special Activity' && _fbAct;
 
-                    if (_isFallbackable) {
+                   if (_isFallbackable) {
                         const bk = `${divName}|${bunk}|${startMin}|${endMin}`;
-                        const hasBudget = smartTileBudget[bk];
+                        const budgetVal = smartTileBudget[bk];
 
-                        if (hasBudget === false) {
-                            // Budget exhausted — route directly to fallback
+                        if (budgetVal === false) {
+                            // No budget — route to fallback
                             if (needsGeneration(_fbAct)) {
                                 const fbLower = _fbAct.toLowerCase();
                                 const fbSlotType = fbLower.includes('sport') ? 'Sports Slot' : 'General Activity Slot';
@@ -968,8 +990,18 @@
                             }
                             return;
                         }
-                    }
 
+                        if (typeof budgetVal === 'string') {
+                            // Pre-assigned specific special — fill directly, solver never touches it
+                            console.log(`[SmartTile V44.3] ${bunk} -> PRE-ASSIGNED: ${budgetVal}`);
+                            window.fillBlock({
+                                divName, bunk, startTime: startMin, endTime: endMin, slots
+                            }, {
+                                field: budgetVal, sport: null, _fixed: true, _activity: budgetVal
+                            }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                            return;
+                        }
+                    }
                     console.log(`[SmartTile] ${bunk} -> GENERATE: ${slotType}`);
                     schedulableSlotBlocks.push({
                         divName, bunk,
