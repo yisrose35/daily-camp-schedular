@@ -549,9 +549,7 @@
         // MAIN ASSIGNMENT LOGIC (V44.1 - RAINY DAY FILTERING)
         // =====================================================================
 
-        generateAssignments(bunks, job, historical = {}, specialNames = [], activityProps = {}, masterFields = [], dailyFieldAvailability = {}, yesterdayHistory = {}) {
-            
-            log("\n" + "=".repeat(70));
+        generateAssignments(bunks, job, historical = {}, specialNames = [], activityProps = {}, masterFields = [], dailyFieldAvailability = {}, yesterdayHistory = {}, sharedCapacityTracker = {}, divPreAllocation = {}) {            log("\n" + "=".repeat(70));
             log(`SMART TILE V44.1: ${job.division}`);
             log(`Main1: ${job.main1}, Main2: ${job.main2}`);
             log(`Fallback: ${job.fallbackActivity} (for ${job.fallbackFor})`);
@@ -646,9 +644,18 @@
                 }
             }
             
+           // ★ V44.3: Subtract slots already claimed by other divisions this run
+            specialsBlockA.forEach(s => {
+                const key = `${s.name}|${job.blockA.startMin}|${job.blockA.endMin}`;
+                const alreadyUsed = sharedCapacityTracker[key] || 0;
+                if (alreadyUsed > 0) {
+                    log(`    ↘ ${s.name} Block A: capacity ${s.capacity} → ${Math.max(0, s.capacity - alreadyUsed)} (${alreadyUsed} used by other grades)`);
+                    s.capacity = Math.max(0, s.capacity - alreadyUsed);
+                    s.remainingSlots = s.capacity;
+                }
+            });
             const capacityA = getTotalSpecialCapacity(specialsBlockA);
             log(`Block A capacity for ${divisionName}: ${capacityA} slots from ${specialsBlockA.map(s => `${s.name}(${s.capacity})`).join(', ') || 'none'}`);
-
             // -----------------------------------------------------------------
             // STEP 2: Get available specials for BLOCK B (DIVISION-FILTERED!)
             // -----------------------------------------------------------------
@@ -670,9 +677,18 @@
                     specialsBlockB = specialsBlockB.filter(s => isSame(s.name, effectiveB.special));
                 }
                 
+               // ★ V44.3: Subtract slots already claimed by other divisions this run
+                specialsBlockB.forEach(s => {
+                    const key = `${s.name}|${job.blockB.startMin}|${job.blockB.endMin}`;
+                    const alreadyUsed = sharedCapacityTracker[key] || 0;
+                    if (alreadyUsed > 0) {
+                        log(`    ↘ ${s.name} Block B: capacity ${s.capacity} → ${Math.max(0, s.capacity - alreadyUsed)} (${alreadyUsed} used by other grades)`);
+                        s.capacity = Math.max(0, s.capacity - alreadyUsed);
+                        s.remainingSlots = s.capacity;
+                    }
+                });
                 capacityB = getTotalSpecialCapacity(specialsBlockB);
-                log(`Block B capacity for ${divisionName}: ${capacityB} slots from ${specialsBlockB.map(s => `${s.name}(${s.capacity})`).join(', ') || 'none'}`);
-            }
+                log(`Block B capacity for ${divisionName}: ${capacityB} slots from ${specialsBlockB.map(s => `${s.name}(${s.capacity})`).join(', ') || 'none'}`);            }
 
             // -----------------------------------------------------------------
             // STEP 3: Pre-screen bunks for eligibility
@@ -769,32 +785,43 @@
                     block1[bunk] = fbAct;
                     log(`  ${bunk} -> ${fbAct} (ALL LOCKED)`);
                 });
-            } else {
-                // Reset remaining slots
+           } else {
                 specialsBlockA.forEach(s => s.remainingSlots = s.capacity);
+                const windowKeyA = `${job.blockA.startMin}|${job.blockA.endMin}`;
 
                 sortedEligible.forEach(bunk => {
-                    const usable = getUsableSpecialsForBunk(bunk, divisionName, specialsBlockA, historical, activityProps, slotsA);
-                    
-                    if (usable.length > 0) {
-                        const chosen = pickBestSpecialForBunk(bunk, usable, historical);
-                        
-                        if (chosen) {
-                            block1[bunk] = chosen.name;
-                            specialWinnersA.add(bunk);
-                            chosen.remainingSlots--;
-                            log(`  ${bunk} -> ${chosen.name} ⭐ (${chosen.remainingSlots} left for ${chosen.name})`);
+                    const preAlloc = divPreAllocation[bunk]?.[windowKeyA];
+
+                    if (preAlloc?.result === 'special' && preAlloc.specialName) {
+                        // Pre-allocation said this bunk gets a specific special
+                        block1[bunk] = preAlloc.specialName;
+                        specialWinnersA.add(bunk);
+                        log(`  ${bunk} -> ${preAlloc.specialName} ⭐ (pre-allocated)`);
+                    } else if (preAlloc?.result === 'fallback') {
+                        // Pre-allocation said fallback
+                        block1[bunk] = effectiveA.open;
+                        log(`  ${bunk} -> ${effectiveA.open} (pre-alloc: fallback)`);
+                    } else {
+                        // No pre-allocation entry — fall back to original logic
+                        const usable = getUsableSpecialsForBunk(bunk, divisionName, specialsBlockA, historical, activityProps, slotsA);
+                        if (usable.length > 0) {
+                            const chosen = pickBestSpecialForBunk(bunk, usable, historical);
+                            if (chosen) {
+                                block1[bunk] = chosen.name;
+                                specialWinnersA.add(bunk);
+                                chosen.remainingSlots--;
+                                log(`  ${bunk} -> ${chosen.name} ⭐ (fallback logic)`);
+                            } else {
+                                block1[bunk] = effectiveA.open;
+                                log(`  ${bunk} -> ${effectiveA.open}`);
+                            }
                         } else {
                             block1[bunk] = effectiveA.open;
-                            log(`  ${bunk} -> ${effectiveA.open}`);
+                            log(`  ${bunk} -> ${effectiveA.open} (no capacity)`);
                         }
-                    } else {
-                        block1[bunk] = effectiveA.open;
-                        log(`  ${bunk} -> ${effectiveA.open} (no capacity)`);
                     }
                 });
-
-                ineligibleBunks.forEach(bunk => {
+               ineligibleBunks.forEach(bunk => {
                     block1[bunk] = effectiveA.open;
                     log(`  ${bunk} -> ${effectiveA.open} (INELIGIBLE)`);
                 });
@@ -812,6 +839,14 @@
                     bunks.forEach(b => specialWinnersA.add(b));
                 }
             }
+            // ★ V44.3: Record Block A consumption for other divisions
+            Object.entries(block1).forEach(([bunk, act]) => {
+                if (!act || isSame(act, fbAct) || isSame(act, effectiveA.open)) return;
+                if (specialsBlockA.some(s => isSame(s.name, act))) {
+                    const key = `${act}|${job.blockA.startMin}|${job.blockA.endMin}`;
+                    sharedCapacityTracker[key] = (sharedCapacityTracker[key] || 0) + 1;
+                }
+            });
             log(`\n  Block A Summary: ${specialWinnersA.size} got specials, ${bunks.length - specialWinnersA.size} got ${effectiveA.open || fbAct}`);
 
             // -----------------------------------------------------------------
@@ -843,29 +878,37 @@
                     log("\nLosers from A try for SPECIAL:");
                     const losersFromA = sortedEligible.filter(b => !specialWinnersA.has(b));
 
+                   const windowKeyB = `${job.blockB.startMin}|${job.blockB.endMin}`;
                     losersFromA.forEach(bunk => {
-                        const usable = getUsableSpecialsForBunk(bunk, divisionName, specialsBlockB, historical, activityProps, slotsB);
-                        
-                        if (usable.length > 0) {
-                            const chosen = pickBestSpecialForBunk(bunk, usable, historical);
-                            
-                            if (chosen) {
-                                block2[bunk] = chosen.name;
-                                chosen.remainingSlots--;
-                                log(`  ${bunk} -> ${chosen.name} ⭐ (${chosen.remainingSlots} left)`);
-                                nextDayPriority = nextDayPriority.filter(p => p !== bunk);
+                        const preAlloc = divPreAllocation[bunk]?.[windowKeyB];
+
+                        if (preAlloc?.result === 'special' && preAlloc.specialName) {
+                            block2[bunk] = preAlloc.specialName;
+                            log(`  ${bunk} -> ${preAlloc.specialName} ⭐ (pre-allocated)`);
+                            nextDayPriority = nextDayPriority.filter(p => p !== bunk);
+                        } else if (preAlloc?.result === 'fallback') {
+                            block2[bunk] = fbAct;
+                            log(`  ${bunk} -> ${fbAct} (pre-alloc: fallback)`);
+                            if (!nextDayPriority.includes(bunk)) nextDayPriority.push(bunk);
+                        } else {
+                            // No pre-allocation — fall back to original logic
+                            const usable = getUsableSpecialsForBunk(bunk, divisionName, specialsBlockB, historical, activityProps, slotsB);
+                            if (usable.length > 0) {
+                                const chosen = pickBestSpecialForBunk(bunk, usable, historical);
+                                if (chosen) {
+                                    block2[bunk] = chosen.name;
+                                    chosen.remainingSlots--;
+                                    log(`  ${bunk} -> ${chosen.name} ⭐ (fallback logic)`);
+                                    nextDayPriority = nextDayPriority.filter(p => p !== bunk);
+                                } else {
+                                    block2[bunk] = fbAct;
+                                    log(`  ${bunk} -> ${fbAct} (FALLBACK)`);
+                                    if (!nextDayPriority.includes(bunk)) nextDayPriority.push(bunk);
+                                }
                             } else {
                                 block2[bunk] = fbAct;
-                                log(`  ${bunk} -> ${fbAct} (FALLBACK)`);
-                                if (!nextDayPriority.includes(bunk)) {
-                                    nextDayPriority.push(bunk);
-                                }
-                            }
-                        } else {
-                            block2[bunk] = fbAct;
-                            log(`  ${bunk} -> ${fbAct} (FALLBACK - no usable)`);
-                            if (!nextDayPriority.includes(bunk)) {
-                                nextDayPriority.push(bunk);
+                                log(`  ${bunk} -> ${fbAct} (FALLBACK - no usable)`);
+                                if (!nextDayPriority.includes(bunk)) nextDayPriority.push(bunk);
                             }
                         }
                     });
@@ -883,6 +926,14 @@
                         bunks.forEach(bunk => { block2[bunk] = fullGradeActB; });
                     }
                 }
+                // ★ V44.3: Record Block B consumption for other divisions
+                Object.entries(block2).forEach(([bunk, act]) => {
+                    if (!act || isSame(act, fbAct) || isSame(act, effectiveB?.open)) return;
+                    if (specialsBlockB.some(s => isSame(s.name, act))) {
+                        const key = `${act}|${job.blockB.startMin}|${job.blockB.endMin}`;
+                        sharedCapacityTracker[key] = (sharedCapacityTracker[key] || 0) + 1;
+                    }
+                });
                 const specialsInB = Object.values(block2).filter(act => 
                     specialsBlockB.some(s => s.name === act)
                 ).length;
@@ -945,9 +996,11 @@
             );
         },
         
-        // Expose swim/pool helpers
+      // Expose swim/pool helpers
         isSwimOrPool: isSwimOrPool,
-        getCanonicalSwimName: getCanonicalSwimName
+        getCanonicalSwimName: getCanonicalSwimName,
+        // ★ V44.3: Exposed for camp-wide budget calculation
+        getAvailableSpecialsForTimeBlock: getAvailableSpecialsForTimeBlock
     };
 
     // =========================================================================
@@ -982,6 +1035,5 @@
         return available;
     };
 
-    console.log("[SmartTile] V44.1 loaded (with rainy day filtering fix)");
-
+    console.log("[SmartTile] V44.3 loaded (cross-division capacity tracking)");
 })();
