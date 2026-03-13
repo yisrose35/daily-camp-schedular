@@ -739,99 +739,29 @@
                 const bunkList = divisions[divName]?.bunks || [];
                 const divPriority = priorityQueue[divName] || [];
 
-                bunkList.forEach(bunk => {
-                    // Calculate fairness score (lower = more deserving)
+               bunkList.forEach(bunk => {
                     const bunkHist = historicalCounts[bunk] || {};
-                    
-                    // Count how many specials this bunk has had total
-                    const totalSpecialUsage = Object.keys(specialPoolMap).reduce((sum, sName) => {
-                        return sum + (bunkHist[sName] || 0);
-                    }, 0);
-
-                    // Priority queue membership (higher priority = more deserving)
-                    const inPriority = divPriority.includes(bunk) ? 1 : 0;
-
-                    // Yesterday's special usage
-                    const hadSpecialYesterday = Object.keys(specialPoolMap).some(sName => {
-                        const sched = yesterdayHistory?.schedule?.[bunk] || [];
-                        return Array.isArray(sched) && sched.some(e => 
-                            (e?._activity || '').toLowerCase() === sName.toLowerCase()
-                        );
-                    }) ? 1 : 0;
-
-                    // Fairness score: priority queue members first, then least usage, then no yesterday
-                    // Lower score = more deserving of a special slot
-                    const fairnessScore = (inPriority ? 0 : 100) + totalSpecialUsage * 10 + hadSpecialYesterday;
-
-                    // Check if this bunk can actually use ANY special in this window
-                    const canUseAny = Object.entries(specialPoolMap).some(([sName, sData]) => {
-                        if (!sData.divisionsAllowed.has(divName)) return false;
-                        const slotsForWindow = window.SchedulerCoreUtils?.findSlotsForRange(startMin, endMin) || [];
-                        return canBunkUseSpecial(bunk, divName, 
-                            { name: sName, maxUsage: sData.props?.maxUsage || 0, props: sData.props },
-                            historicalCounts, activityProperties, slotsForWindow
-                        );
-                    });
-
-                    if (canUseAny) {
-                        allBunkEntries.push({ bunk, divName, job, fairnessScore, totalSpecialUsage });
-                    }
+                    const totalUsage = _allSpecialNames.reduce((s, n) => s + (bunkHist[n] || 0), 0);
+                    const priorityBonus = divPriority.includes(bunk) ? 0 : 100;
+                    allBunkEntries.push({ bunk, divName, score: priorityBonus + totalUsage });
                 });
             });
 
-            // B3: Sort all bunks by fairness (most deserving first)
-            allBunkEntries.sort((a, b) => a.fairnessScore - b.fairnessScore || Math.random() - 0.5);
+            // B3: Sort most deserving first
+            allBunkEntries.sort((a, b) => a.score - b.score || Math.random() - 0.5);
 
-            console.log(`[PreAlloc]   Eligible bunks: ${allBunkEntries.length}, Total slots: ${totalSpecialSlots}`);
+            console.log(`[PreAlloc]   Bunks: ${allBunkEntries.length}, Total slots: ${totalSpecialSlots}`);
 
-            // B4: Allocate special slots to top bunks until capacity exhausted
-            const slotsForWindow = window.SchedulerCoreUtils?.findSlotsForRange(startMin, endMin) || [];
-            
-            allBunkEntries.forEach(entry => {
-                const { bunk, divName } = entry;
-
-                // Find a special this bunk can actually use that still has remaining slots
-                const availableForBunk = Object.entries(specialPoolMap)
-                    .filter(([sName, sData]) => {
-                        if (sData.remaining <= 0) return false;
-                        if (!sData.divisionsAllowed.has(divName)) return false;
-                        return canBunkUseSpecial(bunk, divName,
-                            { name: sName, maxUsage: sData.props?.maxUsage || 0, props: sData.props },
-                            historicalCounts, activityProperties, slotsForWindow
-                        );
-                    })
-                    .map(([sName, sData]) => ({ name: sName, ...sData }));
-
+            // B4: Assign budget top-down until capacity exhausted
+            let remaining = totalSpecialSlots;
+            allBunkEntries.forEach(({ bunk, divName }) => {
                 if (!preAllocation[divName]) preAllocation[divName] = {};
                 if (!preAllocation[divName][bunk]) preAllocation[divName][bunk] = {};
-
-                if (availableForBunk.length > 0) {
-                    // Pick the specific special (least used by this bunk)
-                    const bunkHist = historicalCounts[bunk] || {};
-                    availableForBunk.sort((a, b) => (bunkHist[a.name] || 0) - (bunkHist[b.name] || 0));
-                    const chosen = availableForBunk[0];
-                    chosen.remaining--;
-                    preAllocation[divName][bunk][windowKey] = { result: 'special', specialName: chosen.name };
-                    console.log(`[PreAlloc]   ✅ ${divName}/${bunk} → ${chosen.name} (remaining: ${chosen.remaining})`);
-                } else {
-                    preAllocation[divName][bunk][windowKey] = { result: 'fallback' };
-                    console.log(`[PreAlloc]   ⬇️ ${divName}/${bunk} → fallback (no slots left)`);
-                }
-            });
-
-            // Any bunks not in allBunkEntries (ineligible) also get fallback
-            entries.forEach(({ job }) => {
-                const divName = job.division;
-                const bunkList = divisions[divName]?.bunks || [];
-                bunkList.forEach(bunk => {
-                    if (!preAllocation[divName]?.[bunk]?.[windowKey]) {
-                        if (!preAllocation[divName]) preAllocation[divName] = {};
-                        if (!preAllocation[divName][bunk]) preAllocation[divName][bunk] = {};
-                        preAllocation[divName][bunk][windowKey] = { result: 'fallback' };
-                    }
-                });
-            });
-        });
+                preAllocation[divName][bunk][windowKey] = remaining > 0
+                    ? { result: 'special' }
+                    : { result: 'fallback' };
+                if (remaining > 0) remaining--;
+            });        });
 
         console.log(`\n[SmartTile V44.3] Pre-allocation complete. Passing to jobs...`);
         window.__smartPreAllocation = preAllocation; // debug
