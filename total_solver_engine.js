@@ -621,11 +621,26 @@
         else { var actPrefProps = activityProperties[act]; if (actPrefProps?.preferences?.enabled && (actPrefProps.preferences.list || []).indexOf(blockDivName) === -1 && actPrefProps.preferences.exclusive) return 999999; }
         var rotationPenalty = getPrecomputedRotationScore(bunk, act);
         if (rotationPenalty === Infinity) return 999999;
-        var specialRule = activityProperties[act];
-        if (specialRule?.maxUsage > 0) {
-            var hist = getActivityCount(bunk, act);
-            var todayCount = getActivitiesDoneToday(bunk, slots[0] || 999).has(actNorm) ? 1 : 0;
-            if (hist + todayCount >= specialRule.maxUsage) return 999999;
+       var specialRule = activityProperties[act];
+        if (specialRule) {
+            // ★ Per-grade cap: use grade-specific override if available
+            var _effectiveMax = specialRule.maxUsage || 0;
+            var _blockDiv = block?._divName || blockDivName;
+            if (_blockDiv && specialRule.maxUsagePerGrade && specialRule.maxUsagePerGrade[_blockDiv] > 0) {
+                _effectiveMax = specialRule.maxUsagePerGrade[_blockDiv];
+            }
+            if (_effectiveMax > 0) {
+                var hist = getActivityCount(bunk, act);
+                var todayCount = getActivitiesDoneToday(bunk, slots[0] || 999).has(actNorm) ? 1 : 0;
+                if (hist + todayCount >= _effectiveMax) return 999999;
+            }
+            // ★ Min frequency: strong bonus when bunk is below the floor
+            var _minFreq = parseInt(specialRule.minFrequency) || 0;
+            if (_minFreq > 0) {
+                var _curCount = getActivityCount(bunk, act);
+                var _shortage = _minFreq - _curCount;
+                if (_shortage > 0) penalty -= (_shortage * 8000);
+            }
         }
 
         // ★ v3.7: Multi-Part gate + follow-up urgency
