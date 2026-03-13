@@ -629,14 +629,20 @@
             const fallbackableJobs = wJobs.filter(j => _isSpecialLabel(j.fallbackFor) || _isSpecialLabel(j.main2));
             if (fallbackableJobs.length === 0) return;
 
-            // Total special capacity for this window, division-aware
-            let totalCapacity = 0;
+            // Total special capacity for this window — deduplicated by name
+            // A special with capacity=1 counts as 1 slot regardless of how many divisions can use it
+            const _uniqueSpecials = new Map();
             fallbackableJobs.forEach(job => {
                 const available = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(
                     startMin, endMin, job.division, activityProperties, dailyFieldAvailability
                 ) || [];
-                totalCapacity += available.reduce((s, a) => s + a.capacity, 0);
+                available.forEach(a => {
+                    if (!_uniqueSpecials.has(a.name)) {
+                        _uniqueSpecials.set(a.name, a.capacity);
+                    }
+                });
             });
+            const totalCapacity = [..._uniqueSpecials.values()].reduce((s, c) => s + c, 0);
 
             // Collect all bunks across fallbackable divisions and rank by fairness
             const _bunkRankings = [];
