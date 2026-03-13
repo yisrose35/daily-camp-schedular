@@ -882,11 +882,13 @@
                     return;
                 }
 
-                // ★ V44.3: Budget intercept
+               // ★ V44.3: Budget intercept — only for generic slot types (Sports/Special/Activity)
+                // Direct-fill activities like Swim bypass the budget system entirely
                 const _bk = `${divName}|${bunk}|${startMin}|${endMin}`;
                 const _budgetVal = smartTileBudget[_bk];
                 const _fbAct = job.fallbackActivity || '';
-                if (_budgetVal === false) {
+                const _isDirectFill = activityLabel && !needsGeneration(activityLabel) && !knownSpecialNames.has(activityLabel.toLowerCase().trim());
+                if (_budgetVal === false && !_isDirectFill) {
                     if (_fbAct && needsGeneration(_fbAct)) {
                         const fbSlotType = _fbAct.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
                         console.log(`[SmartTile V44.3] ${bunk} -> NO BUDGET → ${fbSlotType}`);
@@ -897,11 +899,13 @@
                     }
                     return;
                 }
-               if (typeof _budgetVal === 'string') {
+              if (typeof _budgetVal === 'string' && !_isDirectFill) {
                     console.log(`[SmartTile V44.3] ${bunk} -> PRE-ASSIGNED: ${_budgetVal} (adapter said: ${activityLabel})`);
                     _registerClaim(_budgetVal, startMin, endMin);
                     window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _budgetVal, sport: null, _fixed: true, _activity: _budgetVal }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                     return;
+                
+                
                 
                 }
 
