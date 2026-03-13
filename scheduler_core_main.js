@@ -622,6 +622,10 @@
         const _globalPriority = window.loadGlobalSettings?.()?.smartTilePriority || {};
         const _allSpecialNames = (window.getGlobalSpecialActivities?.() || []).map(s => s.name);
 
+       // Time-based claim tracker: "specialName|startMin|endMin" → count used
+        // Prevents same special from being assigned to multiple divisions at same time
+        const _specialTimeClaims = {};
+
         Object.entries(_windowJobs).forEach(([wk, wJobs]) => {
             const [startMin, endMin] = wk.split('|').map(Number);
 
@@ -680,22 +684,19 @@
                 const candidates = [..._specialPool.entries()]
                     .filter(([name, rem]) => rem > 0 && divSpecials.includes(name))
                     .sort((a, b) => (hist[a[0]] || 0) - (hist[b[0]] || 0));
-                const _slots = window.SchedulerCoreUtils?.findSlotsForRange?.(startMin, endMin, entry.divName) || [];
-                let _assigned = false;
+               let _assigned = false;
                 for (const [candidateName] of candidates) {
-                    if (window.GlobalFieldLocks?.isFieldLocked(candidateName, _slots, entry.divName)) continue;
+                    const _claimKey = `${candidateName.toLowerCase()}|${startMin}|${endMin}`;
+                    const _maxCap = _uniqueSpecials.get(candidateName) || 1;
+                    const _currentClaims = _specialTimeClaims[_claimKey] || 0;
+                    if (_currentClaims >= _maxCap) continue;
                     _specialPool.set(candidateName, _specialPool.get(candidateName) - 1);
+                    _specialTimeClaims[_claimKey] = _currentClaims + 1;
                     smartTileBudget[bk] = candidateName;
                     _assigned = true;
-                    window.GlobalFieldLocks?.lockField(candidateName, _slots, {
-                        lockedBy: 'smart_tile_budget',
-                        division: entry.divName,
-                        activity: `${candidateName} (smart tile budget)`
-                    });
                     break;
                 }
-                if (!_assigned) smartTileBudget[bk] = false;
-            });
+                if (!_assigned) smartTileBudget[bk] = false;            });
 
             console.log(`[SmartTile V44.3] Window ${wk}: ${totalCapacity} special slots across ${_bunkRankings.length} bunks (${fallbackableJobs.map(j => j.division).join(', ')})`);
         });
