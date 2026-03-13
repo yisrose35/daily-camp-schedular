@@ -732,7 +732,7 @@
             // with their fairness scores
             const allBunkEntries = []; // { bunk, divName, job, fairnessScore }
 
-            const priorityQueue = loadPriorityQueue();
+           const priorityQueue = window.loadGlobalSettings?.()?.smartTilePriority || {};
 
             entries.forEach(({ job }) => {
                 const divName = job.division;
