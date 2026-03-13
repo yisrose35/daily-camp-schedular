@@ -33,15 +33,16 @@
     const IGNORED_FIELDS = [
         'free', 'no field', 'no game', 'unassigned league',
         'lunch', 'snacks', 'dismissal', 'regroup', 'free play',
-        'mincha', 'davening', 'bus', 'swim', 'pool', 'rest period', 'rest'
+        'mincha', 'davening', 'bus', 'swim', 'pool', 'rest period', 'rest',
         'transition', 'buffer'
     ];
 
     // Activities to ignore in same-day repetition checks
     const IGNORED_ACTIVITIES = [
-        'free', 'lunch', 'snacks', 'dismissal', 'regroup', 'free play',
-        'mincha', 'davening', 'lineup', 'bus', 'transition', 'buffer',
-        'canteen', 'gameroom', 'game room', 'swim', 'pool'
+        'free', 'no field', 'no game', 'unassigned league',
+        'lunch', 'snacks', 'dismissal', 'regroup', 'free play',
+        'mincha', 'davening', 'bus', 'swim', 'pool', 'rest period', 'rest',
+        'transition', 'buffer'
     ];
 
     // =========================================================================
