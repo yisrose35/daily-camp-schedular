@@ -1021,8 +1021,7 @@
                     const _isFallbackable = slotType === 'Special Activity' && _fbAct;
 
                    if (_isFallbackable) {
-                        const bk = `${divName}|${bunk}|${startMin}|${endMin}`;
-                        const budgetVal = smartTileBudget[bk];
+                        const budgetVal = smartTileBudget[`${divName}|${bunk}|${startMin}|${endMin}`];
 
                         if (budgetVal === false) {
                             // No budget — route to fallback
