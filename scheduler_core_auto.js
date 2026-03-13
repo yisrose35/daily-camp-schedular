@@ -1538,8 +1538,8 @@
 
                     // Count how many of this layer's type were placed for this bunk
                     const placed = bunkTimelines[bunk].filter(b =>
-                        b.layer === layer && !b._committed
-                    ).length;
+    b.layer === layer && b._committed
+).length;
 
                     const minRequired = (op === '<=' || op === '≤') ? 0 : required;
 
