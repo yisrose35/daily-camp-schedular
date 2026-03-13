@@ -622,18 +622,35 @@
         const _globalPriority = window.loadGlobalSettings?.()?.smartTilePriority || {};
         const _allSpecialNames = (window.getGlobalSpecialActivities?.() || []).map(s => s.name);
 
-       // Overlap-based claim tracker — works even when divisions have slightly different boundaries
-        const _specialClaims = {}; // specialName.lower → [{startMin, endMin}]
-        function _canClaim(name, startMin, endMin, maxCap) {
+      // Overlap-based claim tracker — division-aware, respects cross-division shareability
+        const _specialClaims = {}; // specialName.lower → [{startMin, endMin, divName}]
+        function _getSharableWith(name) {
+            const key = Object.keys(activityProperties || {}).find(k => k.toLowerCase() === name.toLowerCase());
+            return (activityProperties?.[name] || activityProperties?.[key] || {}).sharableWith || null;
+        }
+        function _canClaim(name, startMin, endMin, maxCap, requesterDiv) {
             const lower = name.toLowerCase();
             const existing = _specialClaims[lower] || [];
             const overlapping = existing.filter(c => c.startMin < endMin && c.endMin > startMin);
+            if (overlapping.length === 0) return true;
+            const sw = _getSharableWith(name);
+            // Not sharable: hard cap of 1 regardless of division
+            if (!sw || sw.type === 'not_sharable') return overlapping.length < maxCap;
+            // Same-division only: block if any OTHER division already claimed it
+            if (sw.type === 'same_division' || sw.type === 'division_only') {
+                const crossDiv = overlapping.find(c => c.divName && c.divName !== requesterDiv);
+                if (crossDiv) return false;
+                return overlapping.length < maxCap;
+            }
+            // Unlimited cross-division sharing
+            if (sw.type === 'all') return true;
+            // Custom capacity: allow up to cap (cross-division)
             return overlapping.length < maxCap;
         }
-        function _registerClaim(name, startMin, endMin) {
+        function _registerClaim(name, startMin, endMin, divName) {
             const lower = name.toLowerCase();
             if (!_specialClaims[lower]) _specialClaims[lower] = [];
-            _specialClaims[lower].push({ startMin, endMin });
+            _specialClaims[lower].push({ startMin, endMin, divName });
         }
 
         Object.entries(_windowJobs).forEach(([wk, wJobs]) => {
@@ -695,11 +712,11 @@
                     .filter(([name, rem]) => rem > 0 && divSpecials.includes(name))
                     .sort((a, b) => (hist[a[0]] || 0) - (hist[b[0]] || 0));
                let _assigned = false;
-                for (const [candidateName] of candidates) {
+               for (const [candidateName] of candidates) {
                     const _maxCap = _uniqueSpecials.get(candidateName) || 1;
-                    if (!_canClaim(candidateName, startMin, endMin, _maxCap)) continue;
+                    if (!_canClaim(candidateName, startMin, endMin, _maxCap, entry.divName)) continue;
                     _specialPool.set(candidateName, _specialPool.get(candidateName) - 1);
-                    _registerClaim(candidateName, startMin, endMin);
+                    _registerClaim(candidateName, startMin, endMin, entry.divName);
                     smartTileBudget[bk] = candidateName;
                     _assigned = true;
                     break;
@@ -899,9 +916,9 @@
                     }
                     return;
                 }
-              if (typeof _budgetVal === 'string' && !_isDirectFill) {
+             if (typeof _budgetVal === 'string' && !_isDirectFill) {
                     console.log(`[SmartTile V44.3] ${bunk} -> PRE-ASSIGNED: ${_budgetVal} (adapter said: ${activityLabel})`);
-                    _registerClaim(_budgetVal, startMin, endMin);
+                    _registerClaim(_budgetVal, startMin, endMin, divName);
                     window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _budgetVal, sport: null, _fixed: true, _activity: _budgetVal }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                     return;
                 
@@ -1065,7 +1082,7 @@
                             if (s.type === 'custom') return parseInt(s.capacity) || 1;
                             return 999;
                         })();
-                        if (!_canClaim(activityLabel, startMin, endMin, _maxCap)) {
+                       if (!_canClaim(activityLabel, startMin, endMin, _maxCap, divName)) {
                             const _fb2 = job.fallbackActivity || '';
                             console.log(`[SmartTile V44.3] ${bunk} -> SPECIAL CLAIMED → fallback: ${_fb2 || 'Sports Slot'}`);
                             if (_fb2 && needsGeneration(_fb2)) {
@@ -1078,7 +1095,7 @@
                             }
                             return;
                         }
-                        _registerClaim(activityLabel, startMin, endMin);
+                      _registerClaim(activityLabel, startMin, endMin, divName);
                     }
                     console.log(`[SmartTile] ${bunk} -> DIRECT FILL: ${activityLabel}`);
 
