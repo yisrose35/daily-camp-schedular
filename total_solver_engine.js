@@ -1341,18 +1341,21 @@ else penalty += 200;
                 }
                 var fn2=c2._fieldNorm, fName=c2.field;
                 var fp=S._fieldPropertyMap.get(fName), cap=fp?fp.capacity:S.getFieldCapacity(fName), st=fp?fp.sharingType:S.getSharingType(fName);
-                var grpUse=fieldUsageGrp.get(fn2)||0;
+               var grpUse=fieldUsageGrp.get(fn2)||0;
                 var existUse=(b2.startTime!==undefined&&b2.endTime!==undefined)?S.getFieldUsageFromTimeIndex(fn2,b2.startTime,b2.endTime,b2.bunk):0;
+                var totalUse=existUse+grpUse;
                 var canFit=false;
-                if (st==='not_sharable') { canFit=(existUse+grpUse<cap); }
+                if (totalUse>=cap) { canFit=false; }
+                else if (st==='not_sharable') { canFit=true; }
                 else if (st==='same_division'||st==='custom') {
                     var xc=S.checkCrossDivisionTimeConflict(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk);
                     if (!xc&&b2.divName) { for (var ri=0;ri<results.length;ri++) { var r=results[ri]; if (r.candIdx===-1||normName(r.pick.field)!==fn2) continue; var rb=activityBlocks[r.blockIdx]; if (rb.divName&&rb.divName!==b2.divName&&rb.startTime<b2.endTime&&rb.endTime>b2.startTime) { xc=true; break; } } }
                     if (!xc) { var am=S.checkSameFieldActivityMismatch(fName,b2.startTime,b2.endTime,c2.activityName,b2.bunk); if (!am) { var cAn2=normName(c2.activityName); for (var ri2=0;ri2<results.length;ri2++) { var r2=results[ri2]; if (r2.candIdx===-1||normName(r2.pick.field)!==fn2) continue; var rb2=activityBlocks[r2.blockIdx]; if (rb2.startTime<b2.endTime&&rb2.endTime>b2.startTime) { var ra=normName(r2.pick._activity); if (ra&&cAn2&&ra!==cAn2) { am=ra; break; } } } }
-                   if (!am) { var sdgu=0; if (b2.divName) { for (var ri3=0;ri3<results.length;ri3++) { var r3=results[ri3]; if (r3.candIdx===-1||normName(r3.pick.field)!==fn2) continue; var rb3=activityBlocks[r3.blockIdx]; if (rb3.divName===b2.divName&&rb3.startTime<b2.endTime&&rb3.endTime>b2.startTime) sdgu++; } } canFit=(S.countSameDivisionUsage(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk)+sdgu<cap)&&(existUse+grpUse<cap); } }                } else {
+                    if (!am) canFit=true; }
+                } else {
                     var xca=S.checkCrossDivisionTimeConflict(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk);
                     if (!xca&&b2.divName) { for (var ria=0;ria<results.length;ria++) { var ra2=results[ria]; if (ra2.candIdx===-1||normName(ra2.pick.field)!==fn2) continue; var rba=activityBlocks[ra2.blockIdx]; if (rba.divName&&rba.divName!==b2.divName&&rba.startTime<b2.endTime&&rba.endTime>b2.startTime) { xca=true; break; } } }
-                    canFit=!xca&&(existUse+grpUse<cap);
+                    canFit=!xca;
                 }
                // ★★★ v15.3: fullGrade capacity bypass — same grade bypasses capacity ★★★
                var _isFGCapBypass = c2._fullGrade || (window.isFullGradeForDivision ? window.isFullGradeForDivision(c2.activityName, b2.divName || '') : actProps[c2.activityName]?.fullGrade);
