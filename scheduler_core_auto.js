@@ -1025,7 +1025,8 @@
                 todaysSpecials.forEach(s => {
                     let score = 0;
                     const scarce = isScarce(s.name, dayName, globalSettings);
-                    const duration = getSpecialDuration(s.name, activityProperties, globalSettings, layer);
+                   const specialLayer = [...windowedLayers, ...openLayers].find(l => l.type === 'special' && (l.grade || l.division) === grade);
+const duration = getSpecialDuration(s.name, activityProperties, globalSettings, specialLayer);
 
                     if (!duration || duration <= 0) {
                         warn('[STEP 2.2a] ' + s.name + ' has no resolvable duration — skipping');
