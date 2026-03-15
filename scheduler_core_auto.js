@@ -2480,8 +2480,8 @@ Object.keys(window.scheduleAssignments).forEach(function(bunk) {
     });
 });
 
-console.log('POST-STRIP slot 3:', window.scheduleAssignments?.['1']?.[3]);
-console.log('POST-STRIP slot 8:', window.scheduleAssignments?.['1']?.[8]);
+console.log('🔴🔴🔴 POST-STRIP slot 3:', window.scheduleAssignments?.['1']?.[3]);
+console.log('🔴🔴🔴 POST-STRIP slot 8:', window.scheduleAssignments?.['1']?.[8]);
 
 Solver.solveSchedule(activityBlocks, solverConfig);
 // Restore original after solver runs
