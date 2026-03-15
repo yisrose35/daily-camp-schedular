@@ -2420,7 +2420,7 @@ allGrades.forEach(grade => {
     });
 });
 
-window.Solver.solveSchedule(activityBlocks, solverConfig);
+Solver.solveSchedule(activityBlocks, solverConfig);
 
                 // Count what was filled
                 let solverFilled = 0;
