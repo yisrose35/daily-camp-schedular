@@ -2422,18 +2422,19 @@ window.fieldsBySport = fieldsBySport;
                 log('[STEP 4] rotationHistory bunks: ' + Object.keys(rotationHistory).length);
                 log('[STEP 4] activityBlocks: ' + activityBlocks.length);
 
-                const solverConfig = {
-                    activityProperties: builtActivityProperties,
-                    rotationHistory,
-                    divisions,
-                    masterFields,
-                    masterSpecials,
-                    dateStr:        currentDate || window.currentScheduleDate || '',
-                    disabledFields: gs.app1?.disabledFields || gs.disabledFields || [],
-                    yesterdayHistory,
-                    isRainy,
-                    _autoMode: true
-                };
+               const solverConfig = {
+    activityProperties: builtActivityProperties,
+    rotationHistory,
+    divisions,
+    masterFields,
+    masterSpecials,
+    fieldsBySport,
+    dateStr:        currentDate || window.currentScheduleDate || '',
+    disabledFields: gs.app1?.disabledFields || gs.disabledFields || [],
+    yesterdayHistory,
+    isRainy,
+    _autoMode: true
+};
 
                // ★ AUTO MODE: Initialize fieldUsageBySlot from locked slots so canBlockFit
 // has correct occupancy data keyed by per-bunk slot indices.
