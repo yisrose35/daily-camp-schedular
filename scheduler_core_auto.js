@@ -2441,8 +2441,8 @@ window.fieldsBySport = fieldsBySport;
 };
 
                
-// ★ AUTO MODE: clear fieldUsageBySlot — solver builds its own conflict tracking
-window.fieldUsageBySlot = {};
+// ★ AUTO MODE: build fieldUsageBySlot from current state so canBlockFit sees existing usage
+window.fieldUsageBySlot = window.buildFieldUsageBySlot ? window.buildFieldUsageBySlot() : {};
 
 const _origLoadAndFilter = window.SchedulerCoreUtils.loadAndFilterData;
 window.SchedulerCoreUtils.loadAndFilterData = function() {
