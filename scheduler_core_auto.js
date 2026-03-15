@@ -2407,12 +2407,12 @@ window.fieldsBySport = fieldsBySport;
 
                 // Convert solverBlocks → activityBlocks
                 // solverBlocks have startTime/endTime already in minutes from Step 2.7
-                const activityBlocks = solverBlocks.map(function(b) {
+               const activityBlocks = solverBlocks.map(function(b) {
     const pbs = window.divisionTimes?.[b.divName]?._perBunkSlots?.[b.bunk] || [];
     const slotStartMin = pbs[b.slots?.[0]]?.startMin;
     return {
         bunk:        b.bunk,
-        divName:     b.divName,
+        divName:     b.divName + '_' + b.bunk, // ★ unique per bunk — prevents group assignment
         slots:       b.slots,
         startTime:   b.startTime,
         endTime:     b.endTime,
