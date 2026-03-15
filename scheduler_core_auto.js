@@ -2395,7 +2395,32 @@ const gradeLayers = (_dal[currentDate] || {})[grade] || [];
                     _autoMode: true
                 };
 
-                Solver.solveSchedule(activityBlocks, solverConfig);
+               // ★ AUTO MODE: Initialize fieldUsageBySlot from locked slots so canBlockFit
+// has correct occupancy data keyed by per-bunk slot indices.
+window.fieldUsageBySlot = window.fieldUsageBySlot || {};
+allGrades.forEach(grade => {
+    const divSlots = window.divisionTimes[grade];
+    const perBunkSlots = divSlots?._perBunkSlots;
+    if (!perBunkSlots) return;
+    const bunks = getBunksForGrade(grade, divisions);
+    bunks.forEach(bunk => {
+        const bunkSlotArr = perBunkSlots[String(bunk)] || [];
+        const sa = window.scheduleAssignments[String(bunk)] || [];
+        sa.forEach((assignment, slotIdx) => {
+            if (!assignment || !assignment._fixed) return;
+            const fieldName = assignment.field || assignment._activity;
+            if (!fieldName) return;
+            if (!window.fieldUsageBySlot[slotIdx]) window.fieldUsageBySlot[slotIdx] = {};
+            if (!window.fieldUsageBySlot[slotIdx][fieldName]) {
+                window.fieldUsageBySlot[slotIdx][fieldName] = { count: 0, bunks: {} };
+            }
+            window.fieldUsageBySlot[slotIdx][fieldName].count++;
+            window.fieldUsageBySlot[slotIdx][fieldName].bunks[String(bunk)] = true;
+        });
+    });
+});
+
+window.Solver.solveSchedule(activityBlocks, solverConfig);
 
                 // Count what was filled
                 let solverFilled = 0;
