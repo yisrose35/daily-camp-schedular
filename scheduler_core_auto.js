@@ -2463,11 +2463,19 @@ allGrades.forEach(grade => {
     });
 });
 
-// Patch loadAndFilterData to inject correct fieldsBySport for auto mode
 const _origLoadAndFilter = window.SchedulerCoreUtils.loadAndFilterData;
 window.SchedulerCoreUtils.loadAndFilterData = function() {
     const result = _origLoadAndFilter.apply(this, arguments);
     result.fieldsBySport = fieldsBySport;
+    // ★ auto mode: specials fully resolved in Step 2.7 — exclude from planner
+    result.masterSpecials = [];
+    result.specialActivityNames = [];
+    result.activities = (result.activities || []).filter(function(a) {
+        return (a.type || '').toLowerCase() !== 'special';
+    });
+    result.allActivities = (result.allActivities || []).filter(function(a) {
+        return (a.type || '').toLowerCase() !== 'special';
+    });
     return result;
 };
 
