@@ -188,14 +188,15 @@
             }
         }
 // Fall back to layer's own duration constraints
-if (layer) {
-    const d = layer.periodMin || layer.durationMin || layer.duration;
-    if (d && parseInt(d, 10) > 0) return parseInt(d, 10);
-    // If layer only has a window, use half of it capped at 60
-    if (layer.startMin != null && layer.endMin != null) {
-        const half = Math.round((layer.endMin - layer.startMin) / 2);
-        return Math.min(60, Math.max(20, snapTo5(half)));
-    }
+        if (layer) {
+            const d = layer.periodMin || layer.durationMin || layer.duration;
+            if (d && parseInt(d, 10) > 0) return parseInt(d, 10);
+            // If layer only has a window, use half of it capped at 60
+            if (layer.startMin != null && layer.endMin != null) {
+                const half = Math.round((layer.endMin - layer.startMin) / 2);
+                return Math.min(60, Math.max(20, snapTo5(half)));
+            }
+        }
 
         return null;
     }
