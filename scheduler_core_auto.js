@@ -2501,7 +2501,18 @@ Object.keys(window.scheduleAssignments).forEach(function(bunk) {
 console.log('🔴🔴🔴 POST-STRIP slot 3:', window.scheduleAssignments?.['1']?.[3]);
 console.log('🔴🔴🔴 POST-STRIP slot 8:', window.scheduleAssignments?.['1']?.[8]);
 
+// ★ Strip specials from window.activityProperties so solver doesn't use them
+const _origWindowAP = window.activityProperties;
+const strippedAP = {};
+Object.entries(window.activityProperties || {}).forEach(function([k, v]) {
+    const isSpecial = masterSpecials.some(function(s) { return s.name === k; });
+    if (!isSpecial) strippedAP[k] = v;
+});
+window.activityProperties = strippedAP;
+
 Solver.solveSchedule(activityBlocks, solverConfig);
+
+window.activityProperties = _origWindowAP;
 // Restore original after solver runs
 window.SchedulerCoreUtils.loadAndFilterData = _origLoadAndFilter;
                 window._SolverInternals.precomputeResourceMaps = _origPrecompute;
