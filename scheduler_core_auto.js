@@ -164,7 +164,7 @@
     }
 
     // Duration of a special — checks all known property names + live registry fallback
-    function getSpecialDuration(specialName, activityProperties, globalSettings) {
+   function getSpecialDuration(specialName, activityProperties, globalSettings, layer) {
         // 1. activityProperties (runtime-enriched map)
         const props = activityProperties && activityProperties[specialName];
         if (props) {
@@ -187,6 +187,18 @@
                 if (d && parseInt(d, 10) > 0) return parseInt(d, 10);
             }
         }
+
+       // Fallback: use layer's periodMin, or a reasonable default (45min)
+        if (layer) {
+            const d = layer.periodMin || layer.duration;
+            if (d && d > 0) return d;
+            // Window length as last resort, capped at 60min
+            const win = (layer.endMin || 0) - (layer.startMin || 0);
+            if (win > 0) return Math.min(win, 60);
+        }
+
+        return null;
+    }
 
         return null;
     }
@@ -485,6 +497,9 @@
             layersByGrade[grade].push(layer);
         });
 
+        
+        // Normalize missing event label from type
+        layers.forEach(l => { if (!l.event && !l.name) l.event = l.type; });
         // Classify each layer
         // ratio = periodMin / (endMin - startMin)
         // Pinned:   ratio === 1  (fills exactly)
@@ -1015,10 +1030,16 @@
                 todaysSpecials.forEach(s => {
                     let score = 0;
                     const scarce = isScarce(s.name, dayName, globalSettings);
+                   const layerForSpecial = [...windowedLayers, ...openLayers].find(l => l.type === 'special' && (l.grade || l.division) === grade);
                     const duration = getSpecialDuration(s.name, activityProperties, globalSettings);
+                    const minDuration = duration || layerForSpecial?.durationMin || layerForSpecial?.periodMin || null;
+                    const maxDuration = duration || layerForSpecial?.durationMax || layerForSpecial?.duration || minDuration || null;
 
-                    if (!duration || duration <= 0) {
-                        warn('[STEP 2.2a] ' + s.name + ' has no resolvable duration — skipping');
+                    if (!minDuration || minDuration <= 0) {
+                        if (!_warnedNoDuration.has(s.name)) {
+                            warn('[STEP 2.2a] ' + s.name + ' has no resolvable duration — skipping');
+                            _warnedNoDuration.add(s.name);
+                        }
                         return;
                     }
 
