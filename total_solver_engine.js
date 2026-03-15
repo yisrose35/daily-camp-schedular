@@ -1157,7 +1157,7 @@ else penalty += 200;
                 if (slots.length > 0 && ds[slots[0]]) { startMin = ds[slots[0]].startMin; var ls = ds[slots[slots.length-1]]; endMin = ls ? ls.endMin : (startMin+40); block.startTime = startMin; block.endTime = endMin; }
             }
             var hasTime = startMin !== undefined && endMin !== undefined;
-            var gk = (startMin||'?')+'-'+(endMin||'?')+'-'+blockDiv;
+           var gk = (block._autoMode ? (block.bunk + '|') : '') + (startMin||'?')+'-'+(endMin||'?')+'-'+blockDiv;
             if (!slotGroups.has(gk)) slotGroups.set(gk, []);
             slotGroups.get(gk).push(bi);
             for (var ci2 = 0; ci2 < numCands; ci2++) {
