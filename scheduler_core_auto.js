@@ -2461,7 +2461,18 @@ allGrades.forEach(grade => {
     });
 });
 
+// Patch loadAndFilterData to inject correct fieldsBySport for auto mode
+const _origLoadAndFilter = window.SchedulerCoreUtils.loadAndFilterData;
+window.SchedulerCoreUtils.loadAndFilterData = function() {
+    const result = _origLoadAndFilter.apply(this, arguments);
+    result.fieldsBySport = fieldsBySport;
+    return result;
+};
+
 Solver.solveSchedule(activityBlocks, solverConfig);
+
+// Restore original after solver runs
+window.SchedulerCoreUtils.loadAndFilterData = _origLoadAndFilter;
 
                 // Count what was filled
                 let solverFilled = 0;
