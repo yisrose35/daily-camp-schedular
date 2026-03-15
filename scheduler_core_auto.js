@@ -2471,6 +2471,15 @@ window.SchedulerCoreUtils.loadAndFilterData = function() {
     return result;
 };
 
+// Strip stale non-fixed entries so solver doesn't skip them
+Object.keys(window.scheduleAssignments).forEach(function(bunk) {
+    (window.scheduleAssignments[bunk] || []).forEach(function(s, i) {
+        if (s && !s._fixed && !s._league && !s._autoSpecial) {
+            window.scheduleAssignments[bunk][i] = null;
+        }
+    });
+});
+
 Solver.solveSchedule(activityBlocks, solverConfig);
 
 // Restore original after solver runs
