@@ -911,7 +911,7 @@ else penalty += 200;
         _activityPlan.clear(); _scarcityMap.clear();
         var bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || {};
         var divTimeGroups = {};
-        for (var bi = 0; bi < activityBlocks.length; bi++) { var blk = activityBlocks[bi]; if (!blk.divName) blk.divName = getBunkDivision(blk.bunk) || ''; var key = blk.divName + '|' + (blk.startTime || '?') + '-' + (blk.endTime || '?'); if (!divTimeGroups[key]) divTimeGroups[key] = []; divTimeGroups[key].push(bi); }
+        for (var bi = 0; bi < activityBlocks.length; bi++) { var blk = activityBlocks[bi]; if (!blk.divName) blk.divName = getBunkDivision(blk.bunk) || ''; var key = (blk._autoMode ? (blk.bunk + '|') : '') + blk.divName + '|' + (blk.startTime || '?') + '-' + (blk.endTime || '?'); if (!divTimeGroups[key]) divTimeGroups[key] = []; divTimeGroups[key].push(bi); }
         for (var groupKey in divTimeGroups) {
             var blockIndices = divTimeGroups[groupKey]; if (blockIndices.length === 0) continue;
             var sampleBlock = activityBlocks[blockIndices[0]];
