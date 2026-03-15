@@ -2424,12 +2424,12 @@ window.fieldsBySport = fieldsBySport;
                 log('[STEP 4] rotationHistory bunks: ' + Object.keys(rotationHistory).length);
                 log('[STEP 4] activityBlocks: ' + activityBlocks.length);
 
-               const solverConfig = {
+              const solverConfig = {
     activityProperties: builtActivityProperties,
     rotationHistory,
     divisions,
     masterFields,
-    masterSpecials,
+    masterSpecials: [], // ★ auto mode: specials fully resolved in Step 2.7 — exclude from planner
     fieldsBySport,
     dateStr:        currentDate || window.currentScheduleDate || '',
     disabledFields: gs.app1?.disabledFields || gs.disabledFields || [],
