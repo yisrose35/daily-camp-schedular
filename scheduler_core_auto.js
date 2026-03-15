@@ -1977,11 +1977,28 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
             const perBunkSlots = divSlots && divSlots._perBunkSlots;
             const bunks = getBunksForGrade(grade, divisions);
 
-            bunks.forEach(bunk => {
-                const bunkSlots = perBunkSlots && perBunkSlots[String(bunk)];
-                const slotCount = bunkSlots ? bunkSlots.length : (divSlots ? divSlots.length : 0);
-                window.scheduleAssignments[String(bunk)] = new Array(slotCount).fill(null);
-            });
+           bunks.forEach(bunk => {
+    const bunkSlots = perBunkSlots && perBunkSlots[String(bunk)];
+    const slotCount = bunkSlots ? bunkSlots.length : (divSlots ? divSlots.length : 0);
+    window.scheduleAssignments[String(bunk)] = new Array(slotCount).fill(null);
+
+    // ★ TEMP DEBUG: watch bunk 1 slot 3 for Free writes
+    if (String(bunk) === '1') {
+        Object.defineProperty(window.scheduleAssignments['1'], '3', {
+            get() { return this.__3; },
+            set(v) {
+                if (v && v.field === 'Free') {
+                    console.error('🚨 Free written to bunk 1 slot 3');
+                    console.trace();
+                    debugger;
+                }
+                this.__3 = v;
+            },
+            configurable: true
+        });
+        window.scheduleAssignments['1'].__3 = null;
+    }
+});
         });
 
         // NOW write special blocks directly to scheduleAssignments — fully locked
