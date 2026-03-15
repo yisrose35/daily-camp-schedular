@@ -514,7 +514,7 @@
     // =================================================================
 
     Utils.isTimeAvailable = function (slotIndex, props) {
-        if (!window.unifiedTimes?.[slotIndex]) return false;
+       if (!window.unifiedTimes?.[slotIndex]) return props.available !== false;
         const slot = window.unifiedTimes[slotIndex];
         const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
         const slotEnd = new Date(slot.end).getHours() * 60 + new Date(slot.end).getMinutes();
