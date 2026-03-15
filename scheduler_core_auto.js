@@ -1010,6 +1010,7 @@
         // STEP 2.2a — QUERY ROTATION ENGINE FOR RANKED SPECIALS PER BUNK
         // -----------------------------------------------------------------
         log('\n[STEP 2.2a] Querying RotationEngine for special rankings...');
+        const _warnedNoDuration = new Set();
 
         // Find which grades have at least one special layer
         const gradesWithSpecials = new Set(
@@ -1264,7 +1265,7 @@
                         // score each arrangement by total gap minutes,
                         // commit the zero-gap winner.
 
-                       function scorePlan(plan) {
+                        const scorePlan = (plan) => {
                             let score = 0;
                             const sorted = plan.slice().sort((a, b) => a.startMin - b.startMin);
 
@@ -1295,7 +1296,7 @@
                             return score;
                         }
 
-                        function buildPlan(anchorPositions) {
+                       const buildPlan = (anchorPositions) => {
                             // anchorPositions: { need -> startMin }
                             const plan = [];
                             let cursor = win.start;
@@ -1392,7 +1393,7 @@
                         }
 
                         // Generate all valid 5-min positions for each anchored need
-                        function getPositions(an) {
+                       const getPositions = (an) => {
                             const aDMin = an.layer.durationMin || an.layer.periodMin || an.layer.duration || GAP_MIN_DUR;
                             const earliest = an.layer.startMin;
                             const latest   = Math.min(an.layer.endMin - aDMin, win.end - aDMin);
@@ -1412,7 +1413,7 @@
                             const posArrays = anchored.map(an => getPositions(an));
 
                             // Iterate all combinations
-                            function tryAll(idx, current) {
+                            const tryAll = (idx, current) => {
                                 if (bestScore === 0) return; // already found perfect
                                 if (idx === anchored.length) {
                                     const posMap = new Map();
