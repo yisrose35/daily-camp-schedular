@@ -967,7 +967,8 @@ else penalty += 200;
             var fgActivity = null;
             for (var fgBunk in allocated) {
                 var fgAct = allocated[fgBunk];
-               var _fgCheckDiv = activityBlocks[fgBIdx]?.divName || '';
+               var _fgCheckBIdx = blockIndices.find(function(bi2) { return activityBlocks[bi2].bunk === fgBunk; });
+               var _fgCheckDiv = (_fgCheckBIdx !== undefined ? activityBlocks[_fgCheckBIdx]?.divName : '') || '';
                var _isFGPlanner = window.isFullGradeForDivision ? window.isFullGradeForDivision(fgAct, _fgCheckDiv) : (activityProperties[fgAct]?.fullGrade || activityProperties[fgAct]?._fullGrade);
                if (fgAct && _isFGPlanner) {
                     fgActivity = fgAct;
