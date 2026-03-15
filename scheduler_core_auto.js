@@ -197,8 +197,7 @@
             if (win > 0) return Math.min(win, 60);
         }
 
-        return null;
-    }
+        
 
         return null;
     }
