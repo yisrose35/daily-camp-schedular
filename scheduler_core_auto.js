@@ -2360,10 +2360,10 @@ const gradeLayers = (_dal[currentDate] || {})[grade] || [];
 
         const Solver = window.TotalSolverEngine || window.TotalSolver || window.totalSolverEngine;
 
-        if (Solver && typeof Solver.solveSchedule === 'function') {
+       if (Solver && typeof Solver.solveSchedule === 'function') {
             try {
-                const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
-                const masterFields   = gs.app1?.fields            || gs.fields            || window.fields            || [];
+                console.log('🔴 STEP 4 try block entered');
+                const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};                const masterFields   = gs.app1?.fields            || gs.fields            || window.fields            || [];
                 const masterSpecials = gs.app1?.specialActivities || gs.specialActivities || window.specialActivities || [];
 
                // Build activityProperties from fields + specials
