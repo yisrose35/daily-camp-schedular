@@ -2442,32 +2442,8 @@ window.fieldsBySport = fieldsBySport;
 };
 
                
-// ★ AUTO MODE: fieldUsageBySlot must be keyed by startMin, not slot index
-// Per-bunk slot indices are not camp-wide — slot 3 for bunk 1 ≠ slot 3 for bunk 9
+// ★ AUTO MODE: clear fieldUsageBySlot — solver builds its own conflict tracking
 window.fieldUsageBySlot = {};
-allGrades.forEach(grade => {
-    const divSlots = window.divisionTimes[grade];
-    const perBunkSlots = divSlots?._perBunkSlots;
-    if (!perBunkSlots) return;
-    const bunks = getBunksForGrade(grade, divisions);
-    bunks.forEach(bunk => {
-        const bunkSlotArr = perBunkSlots[String(bunk)] || [];
-        const sa = window.scheduleAssignments[String(bunk)] || [];
-        sa.forEach((assignment, slotIdx) => {
-            if (!assignment || !assignment._fixed) return;
-            const fieldName = assignment.field || assignment._activity;
-            if (!fieldName) return;
-            const startMin = bunkSlotArr[slotIdx]?.startMin;
-            if (startMin == null) return;
-            if (!window.fieldUsageBySlot[startMin]) window.fieldUsageBySlot[startMin] = {};
-            if (!window.fieldUsageBySlot[startMin][fieldName]) {
-                window.fieldUsageBySlot[startMin][fieldName] = { count: 0, bunks: {} };
-            }
-            window.fieldUsageBySlot[startMin][fieldName].count++;
-            window.fieldUsageBySlot[startMin][fieldName].bunks[String(bunk)] = true;
-        });
-    });
-});
 
 const _origLoadAndFilter = window.SchedulerCoreUtils.loadAndFilterData;
 window.SchedulerCoreUtils.loadAndFilterData = function() {
