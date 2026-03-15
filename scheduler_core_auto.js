@@ -2441,8 +2441,7 @@ window.fieldsBySport = fieldsBySport;
 };
 
                
-// ★ AUTO MODE: build fieldUsageBySlot from current state so canBlockFit sees existing usage
-window.fieldUsageBySlot = window.buildFieldUsageBySlot ? window.buildFieldUsageBySlot() : {};
+
 
 const _origLoadAndFilter = window.SchedulerCoreUtils.loadAndFilterData;
 window.SchedulerCoreUtils.loadAndFilterData = function() {
@@ -2478,6 +2477,8 @@ Object.keys(window.scheduleAssignments).forEach(function(bunk) {
         }
     });
 });
+                // ★ AUTO MODE: build fieldUsageBySlot from current state so canBlockFit sees existing usage
+window.fieldUsageBySlot = window.buildFieldUsageBySlot ? window.buildFieldUsageBySlot() : {};
 
 console.log('🔴🔴🔴 POST-STRIP slot 3:', window.scheduleAssignments?.['1']?.[3]);
 console.log('🔴🔴🔴 POST-STRIP slot 8:', window.scheduleAssignments?.['1']?.[8]);
