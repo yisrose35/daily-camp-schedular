@@ -2483,9 +2483,11 @@ const _origPrecompute = window._SolverInternals.precomputeResourceMaps;
 window._SolverInternals.precomputeResourceMaps = function() {
     _origPrecompute.apply(this, arguments);
     if (window._SolverInternals.allCandidateOptions) {
-        window._SolverInternals.allCandidateOptions =
-            window._SolverInternals.allCandidateOptions.filter(c => c.type !== 'special');
+    const arr = window._SolverInternals.allCandidateOptions;
+    for (let i = arr.length - 1; i >= 0; i--) {
+        if (arr[i].type === 'special') arr.splice(i, 1);
     }
+}
 };
 // Strip stale non-fixed entries so solver doesn't skip them
 Object.keys(window.scheduleAssignments).forEach(function(bunk) {
