@@ -164,7 +164,7 @@
     }
 
     // Duration of a special — checks all known property names + live registry fallback
-    function getSpecialDuration(specialName, activityProperties, globalSettings) {
+   function getSpecialDuration(specialName, activityProperties, globalSettings, layer) {
         // 1. activityProperties (runtime-enriched map)
         const props = activityProperties && activityProperties[specialName];
         if (props) {
@@ -187,6 +187,15 @@
                 if (d && parseInt(d, 10) > 0) return parseInt(d, 10);
             }
         }
+// Fall back to layer's own duration constraints
+if (layer) {
+    const d = layer.periodMin || layer.durationMin || layer.duration;
+    if (d && parseInt(d, 10) > 0) return parseInt(d, 10);
+    // If layer only has a window, use half of it capped at 60
+    if (layer.startMin != null && layer.endMin != null) {
+        const half = Math.round((layer.endMin - layer.startMin) / 2);
+        return Math.min(60, Math.max(20, snapTo5(half)));
+    }
 
         return null;
     }
@@ -1015,7 +1024,7 @@
                 todaysSpecials.forEach(s => {
                     let score = 0;
                     const scarce = isScarce(s.name, dayName, globalSettings);
-                    const duration = getSpecialDuration(s.name, activityProperties, globalSettings);
+                    const duration = getSpecialDuration(s.name, activityProperties, globalSettings, layer);
 
                     if (!duration || duration <= 0) {
                         warn('[STEP 2.2a] ' + s.name + ' has no resolvable duration — skipping');
