@@ -2412,7 +2412,7 @@ window.fieldsBySport = fieldsBySport;
     const slotStartMin = pbs[b.slots?.[0]]?.startMin;
     return {
         bunk:        b.bunk,
-        divName:     b.divName + '_' + b.bunk, // ★ unique per bunk — prevents group assignment
+       divName:     b.divName,
         slots:       b.slots,
         startTime:   b.startTime,
         endTime:     b.endTime,
