@@ -2353,11 +2353,40 @@ const gradeLayers = (_dal[currentDate] || {})[grade] || [];
                 const masterFields   = gs.app1?.fields            || gs.fields            || window.fields            || [];
                 const masterSpecials = gs.app1?.specialActivities || gs.specialActivities || window.specialActivities || [];
 
-                // Build activityProperties from fields + specials
-                const builtActivityProperties = window.buildActivityProperties
+               // Build activityProperties from fields + specials
+const builtActivityProperties = window.buildActivityProperties
     ? window.buildActivityProperties(masterSpecials, masterFields)
     : {};
-                window.activityProperties = builtActivityProperties;
+// Inject field activities so solver can find sport/activity candidates
+masterFields.forEach(function(field) {
+    (field.activities || []).forEach(function(actName) {
+        if (!builtActivityProperties[actName]) {
+            builtActivityProperties[actName] = {
+                available: true,
+                sharable: false,
+                sharableWith: { type: 'not_sharable' },
+                preferredDivisions: [],
+                allowedDivisions: [],
+                _fromField: true
+            };
+        }
+        if (!builtActivityProperties[actName]._fields) {
+            builtActivityProperties[actName]._fields = [];
+        }
+        builtActivityProperties[actName]._fields.push(field.name);
+    });
+});
+window.activityProperties = builtActivityProperties;
+
+// Build fieldsBySport from field.activities (solver expects this structure)
+const fieldsBySport = {};
+masterFields.forEach(function(field) {
+    (field.activities || []).forEach(function(actName) {
+        if (!fieldsBySport[actName]) fieldsBySport[actName] = [];
+        fieldsBySport[actName].push(field.name);
+    });
+});
+window.fieldsBySport = fieldsBySport;
 
                 // rotationHistory is structured as { bunks: {}, leagues: {} } — solver wants the bunks map
                 const rhRaw = window.loadRotationHistory?.() || {};
