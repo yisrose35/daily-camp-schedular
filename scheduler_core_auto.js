@@ -2480,8 +2480,10 @@ Object.keys(window.scheduleAssignments).forEach(function(bunk) {
     });
 });
 
-Solver.solveSchedule(activityBlocks, solverConfig);
+console.log('POST-STRIP slot 3:', window.scheduleAssignments?.['1']?.[3]);
+console.log('POST-STRIP slot 8:', window.scheduleAssignments?.['1']?.[8]);
 
+Solver.solveSchedule(activityBlocks, solverConfig);
 // Restore original after solver runs
 window.SchedulerCoreUtils.loadAndFilterData = _origLoadAndFilter;
 
