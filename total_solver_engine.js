@@ -1170,7 +1170,8 @@ else penalty += 200;
                 var skipTimeCheck = S._isRainyDay && S._rainyTimeBypasses.has(fn);
                 var fp = S._fieldPropertyMap.get(fn);
                 if (fp?.prefExclusive && fp.prefList && fp.prefList.indexOf(blockDiv) === -1) continue;
-              if (!skipTimeCheck) { var fits = window.SchedulerCoreUtils?.canBlockFit?.(block, fn, actProps, window.fieldUsageBySlot, c2.activityName, false); if (fits === false) continue; }                    var cap = fp ? fp.capacity : S.getFieldCapacity(fn);
+               if (!skipTimeCheck && window.unifiedTimes) { var fits = window.SchedulerCoreUtils?.canBlockFit?.(block, fn, actProps, window.fieldUsageBySlot, c2.activityName, false); if (fits === false) continue; }                if (hasTime) {
+                    var cap = fp ? fp.capacity : S.getFieldCapacity(fn);
                     var st = fp ? fp.sharingType : S.getSharingType(fn);
                     if (S.checkCrossDivisionTimeConflict(fn, blockDiv, startMin, endMin, bunk)) continue;
                     if (st === 'not_sharable') { if (S.getFieldUsageFromTimeIndex(fnorm, startMin, endMin, bunk) >= cap) continue; }
@@ -1340,19 +1341,21 @@ else penalty += 200;
                 }
                 var fn2=c2._fieldNorm, fName=c2.field;
                 var fp=S._fieldPropertyMap.get(fName), cap=fp?fp.capacity:S.getFieldCapacity(fName), st=fp?fp.sharingType:S.getSharingType(fName);
-              var grpUse=fieldUsageGrp.get(fn2)||0;
+               var grpUse=fieldUsageGrp.get(fn2)||0;
                 var existUse=(b2.startTime!==undefined&&b2.endTime!==undefined)?S.getFieldUsageFromTimeIndex(fn2,b2.startTime,b2.endTime,b2.bunk):0;
+                var totalUse=existUse+grpUse;
                 var canFit=false;
-                if (st==='not_sharable') { canFit=(existUse+grpUse<cap); }
+                if (totalUse>=cap) { canFit=false; }
+                else if (st==='not_sharable') { canFit=true; }
                 else if (st==='same_division'||st==='custom') {
                     var xc=S.checkCrossDivisionTimeConflict(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk);
                     if (!xc&&b2.divName) { for (var ri=0;ri<results.length;ri++) { var r=results[ri]; if (r.candIdx===-1||normName(r.pick.field)!==fn2) continue; var rb=activityBlocks[r.blockIdx]; if (rb.divName&&rb.divName!==b2.divName&&rb.startTime<b2.endTime&&rb.endTime>b2.startTime) { xc=true; break; } } }
                     if (!xc) { var am=S.checkSameFieldActivityMismatch(fName,b2.startTime,b2.endTime,c2.activityName,b2.bunk); if (!am) { var cAn2=normName(c2.activityName); for (var ri2=0;ri2<results.length;ri2++) { var r2=results[ri2]; if (r2.candIdx===-1||normName(r2.pick.field)!==fn2) continue; var rb2=activityBlocks[r2.blockIdx]; if (rb2.startTime<b2.endTime&&rb2.endTime>b2.startTime) { var ra=normName(r2.pick._activity); if (ra&&cAn2&&ra!==cAn2) { am=ra; break; } } } }
-                    if (!am) { var sdgu=0; if (b2.divName) { for (var ri3=0;ri3<results.length;ri3++) { var r3=results[ri3]; if (r3.candIdx===-1||normName(r3.pick.field)!==fn2) continue; var rb3=activityBlocks[r3.blockIdx]; if (rb3.divName===b2.divName&&rb3.startTime<b2.endTime&&rb3.endTime>b2.startTime) sdgu++; } } canFit=(S.countSameDivisionUsage(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk)+sdgu<cap); } }
+                    if (!am) canFit=true; }
                 } else {
                     var xca=S.checkCrossDivisionTimeConflict(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk);
                     if (!xca&&b2.divName) { for (var ria=0;ria<results.length;ria++) { var ra2=results[ria]; if (ra2.candIdx===-1||normName(ra2.pick.field)!==fn2) continue; var rba=activityBlocks[ra2.blockIdx]; if (rba.divName&&rba.divName!==b2.divName&&rba.startTime<b2.endTime&&rba.endTime>b2.startTime) { xca=true; break; } } }
-                    canFit=!xca&&(existUse+grpUse<cap);
+                    canFit=!xca;
                 }
                // ★★★ v15.3: fullGrade capacity bypass — same grade bypasses capacity ★★★
                var _isFGCapBypass = c2._fullGrade || (window.isFullGradeForDivision ? window.isFullGradeForDivision(c2.activityName, b2.divName || '') : actProps[c2.activityName]?.fullGrade);
@@ -1509,7 +1512,8 @@ else penalty += 200;
                 if (st==='not_sharable') { if (S.getFieldUsageFromTimeIndex(c._fieldNorm,sM,eM,bunk)>=cap) continue; } else { if (S.countSameDivisionUsage(c.field,bDiv,sM,eM,bunk)>=cap) continue; }
                 var td=S.getActivitiesDoneToday(bunk,slots[0]??999),cAn=normName(c.activityName); if (cAn&&cAn!=='free'&&cAn!=='free play'&&td.has(cAn)) continue;
                 if (!actProps[c.field]&&!actProps[c.activityName]&&c.type!=='special') continue;
-               if (window.SchedulerCoreUtils?.canBlockFit && !(S._isRainyDay && S._rainyTimeBypasses.has(c.field)) && !window.SchedulerCoreUtils.canBlockFit(blk,c.field,actProps,null,c.activityName,false)) continue;            }
+                if (window.unifiedTimes && window.SchedulerCoreUtils?.canBlockFit && !(S._isRainyDay && S._rainyTimeBypasses.has(c.field)) && !window.SchedulerCoreUtils.canBlockFit(blk,c.field,actProps,null,c.activityName,false)) continue;                S.setScratchPick(c); var cost=S.calculatePenaltyCost(blk,S.setScratchPick(c)); if (cost<900000) fresh.push({ci:ci,cost:cost});
+            }
             if (fresh.length>0) { fresh.sort(function(a,b){return a.cost-b.cost;}); var pk=S.clonePick(allCands[fresh[0].ci]); S.undoPickFromSchedule(blk,S._assignments.get(bi).pick); S._assignments.set(bi,{candIdx:fresh[0].ci,pick:pk,cost:fresh[0].cost}); S.applyPickToSchedule(blk,pk); var pfn=normName(pk.field); S.addToFieldTimeIndex(pfn,sM,eM,bunk,bDiv,normName(pk._activity)); var pan=normName(pk._activity); if (pan&&pan!==pfn) S.addToFieldTimeIndex(pan,sM,eM,bunk,bDiv,pan); S.invalidateRotationCacheForBunk(bunk); S._todayCache.clear(); resolved++; continue; }
             // Phase 2: Displacement (abbreviated for space — same logic as v12.4)
             for (var obi=0;obi<activityBlocks.length;obi++) {
