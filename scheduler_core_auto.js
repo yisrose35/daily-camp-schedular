@@ -2478,7 +2478,15 @@ window.SchedulerCoreUtils.loadAndFilterData = function() {
     });
     return result;
 };
-
+// Hook precomputeResourceMaps to strip specials from allCandidateOptions after it's built
+const _origPrecompute = window._SolverInternals.precomputeResourceMaps;
+window._SolverInternals.precomputeResourceMaps = function() {
+    _origPrecompute.apply(this, arguments);
+    if (window._SolverInternals.allCandidateOptions) {
+        window._SolverInternals.allCandidateOptions =
+            window._SolverInternals.allCandidateOptions.filter(c => c.type !== 'special');
+    }
+};
 // Strip stale non-fixed entries so solver doesn't skip them
 Object.keys(window.scheduleAssignments).forEach(function(bunk) {
     (window.scheduleAssignments[bunk] || []).forEach(function(s, i) {
@@ -2494,6 +2502,7 @@ console.log('🔴🔴🔴 POST-STRIP slot 8:', window.scheduleAssignments?.['1']
 Solver.solveSchedule(activityBlocks, solverConfig);
 // Restore original after solver runs
 window.SchedulerCoreUtils.loadAndFilterData = _origLoadAndFilter;
+                window._SolverInternals.precomputeResourceMaps = _origPrecompute;
 
                 // Count what was filled
                 let solverFilled = 0;
