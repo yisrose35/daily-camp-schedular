@@ -1025,143 +1025,7 @@
 
         log('[STEP 2.1] ✅ Placed ' + pinnedCount + ' pinned blocks across camp');
 // -----------------------------------------------------------------
-        // STEP 2.1b — PLACE LEAGUE LAYERS (grade-wide simultaneous)
-        // Must run after pinned anchors (lunch/swim/dismissal already placed)
-        // but before per-bunk windowed placement so leagues get first pick
-        // of remaining free time.
-        // -----------------------------------------------------------------
-        log('\n[STEP 2.1b] Placing league layers (grade-wide simultaneous)...');
-        let leagueCount = 0;
-
-       const leagueLayersToPlace = [...windowedLayers, ...openLayers].filter(l => {
-            const t = (l.type || '').toLowerCase();
-            return t === 'league' || t === 'specialty_league';
-        });
-
-        // Build grade rotation order — same grades/types as Step 2.3 soft rotation
-        const leagueRotationTypes = ['league', 'sport', 'swim', 'special', 'slot', 'snacks'];
-        const leagueGradeList = allGrades.filter(g => !allowedSet || allowedSet.has(String(g)));
-
-       // Pre-build a map of which grades share the same league
-        // so they get placed at the same time
-    
-        const gradeToLeagueName = {}; // gradeName → leagueName
-        leagueLayersToPlace.forEach(layer => {
-            const grade = layer.grade || layer.division;
-            const league = (Array.isArray(window.masterLeagues) ? window.masterLeagues : Object.values(window.masterLeagues || {})).find(l =>
-                (l.divisions || []).includes(grade)
-            );
-            if (league) gradeToLeagueName[grade] = league.name;
-        });
-
-        leagueLayersToPlace.forEach(layer => {
-            const grade = layer.grade || layer.division;
-            const bunks = getBunksForGrade(grade, divisions);
-            if (!bunks.length) return;
-            if (allowedSet && !allowedSet.has(String(grade))) return;
-
-            const windowStart = layer.startMin;
-            const windowEnd = layer.endMin;
-            const dur = layer.periodMin || 30;
-            const lType = (layer.type || '').toLowerCase();
-
-            // If another grade in the same league already placed, use their time
-            const leagueName = gradeToLeagueName[grade];
-            if (leagueName && sharedLeagueTime[leagueName] != null) {
-                const sharedStart = sharedLeagueTime[leagueName];
-                const sharedEnd = sharedStart + dur;
-                bunks.forEach(bunk => {
-                    bunkTimelines[bunk].push({
-                        startMin: sharedStart,
-                        endMin: sharedEnd,
-                        type: lType,
-                        event: layer.event || 'League Game',
-                        layer,
-                        _classification: 'windowed',
-                        _committed: true
-                    });
-                    bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
-                    leagueCount++;
-                });
-                log('[STEP 2.1b] ' + grade + ': joined shared league time at ' +
-                    Math.floor(sharedStart/60) + ':' + String(sharedStart%60).padStart(2,'0') +
-                    ' (same as ' + leagueName + ')');
-                return;
-            }
-           // Stagger league time by grade index, but treat shared-league grades
-            // as the same unit so they get the same offset
-            // Build a deduplicated list where shared-league grades count as one slot
-            const leagueUnits = []; // each entry is the "primary" grade for a league unit
-            leagueGradeList.forEach(g => {
-                const ln = gradeToLeagueName[g];
-                if (ln) {
-                    // Only add if no grade from this league is already in leagueUnits
-                    const alreadyAdded = leagueUnits.some(u => gradeToLeagueName[u] === ln);
-                    if (!alreadyAdded) leagueUnits.push(g);
-                } else {
-                    leagueUnits.push(g);
-                }
-            });
-            const primaryGrade = leagueName
-                ? leagueUnits.find(u => gradeToLeagueName[u] === leagueName) || grade
-                : grade;
-            const gradeIdx = leagueUnits.indexOf(primaryGrade);
-            const totalGrades = leagueUnits.length || 1;
-            const usableWindow = windowEnd - windowStart - dur;
-            const targetOffset = snapTo5(Math.round((gradeIdx / totalGrades) * usableWindow));
-            const searchStart = windowStart + targetOffset;
-
-            // Find first slot where ALL bunks in grade are simultaneously free,
-            // starting from the grade's target offset position
-            let placedStart = null;
-            for (let ts = searchStart; ts + dur <= windowEnd; ts += 5) {
-                const te = ts + dur;
-                const allFree = bunks.every(bunk =>
-                    !(bunkTimelines[bunk] || []).some(b => b.startMin < te && b.endMin > ts)
-                );
-                if (allFree) { placedStart = ts; break; }
-            }
-            // Fallback: search from window start if target offset had no free gap
-            if (placedStart === null) {
-                for (let ts = windowStart; ts < searchStart; ts += 5) {
-                    const te = ts + dur;
-                    const allFree = bunks.every(bunk =>
-                        !(bunkTimelines[bunk] || []).some(b => b.startMin < te && b.endMin > ts)
-                    );
-                    if (allFree) { placedStart = ts; break; }
-                }
-            }
-            if (placedStart === null) {
-                warn('[STEP 2.1b] No shared free gap for league in ' + grade);
-                return;
-            }
-
-            const placedEnd = placedStart + dur;
-            bunks.forEach(bunk => {
-                bunkTimelines[bunk].push({
-                    startMin: placedStart,
-                    endMin: placedEnd,
-                    type: lType,
-                    event: layer.event || 'League Game',
-                    layer,
-                    _classification: 'windowed',
-                    _committed: true
-                });
-                bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
-                leagueCount++;
-            });
-
-            log('[STEP 2.1b] ' + grade + ': league placed at ' +
-                Math.floor(placedStart/60) + ':' + String(placedStart%60).padStart(2,'0') +
-                ' (' + dur + 'min) across ' + bunks.length + ' bunks');
-
-            // Record this time for other grades in the same league
-            if (leagueName && placedStart !== null) {
-                sharedLeagueTime[leagueName] = placedStart;
-            }
-        });
-
-        log('[STEP 2.1b] ✅ ' + leagueCount + ' league blocks placed');
+        
         // -----------------------------------------------------------------
         // STEP 2.2a — QUERY ROTATION ENGINE FOR RANKED SPECIALS PER BUNK
         // -----------------------------------------------------------------
@@ -1292,30 +1156,57 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
             ' bunks in queue, ' + scarceSpecials.length + ' scarce specials protected');
 
         // -----------------------------------------------------------------
-        // STEP 2.3 — LIVE PLACEMENT ENGINE
+        // STEP 2.3 — UNIFIED SKELETON PLACEMENT ENGINE
         // -----------------------------------------------------------------
-        log('\n[STEP 2.3] Live placement engine — camp-wide simultaneous placement...');
-
-        // All placements here are TENTATIVE until Step 2.6 validates the entire camp.
-        // Committed pinned blocks from Step 2.1 are the only hard anchors.
-
-     
-
-        // Build needs list per bunk
+        log('\n[STEP 2.3] Unified skeleton placement engine...');
+ 
+        // ── Build flexible type layers per grade ─────────────────────────
+        // Collect what each grade needs (excluding pinned)
         const nonPinnedLayers = [...windowedLayers, ...openLayers];
+ 
+        const gradeFlexTypes = {}; // grade → array of distinct type strings
+        allGrades.forEach(grade => {
+            const types = new Set();
+            nonPinnedLayers.forEach(l => {
+                if ((l.grade || l.division) !== grade) return;
+                types.add((l.type || '').toLowerCase());
+            });
+            gradeFlexTypes[grade] = [...types];
+        });
+ 
+        // ── Generate skeleton per grade (shuffled by _iterSeed) ──────────
+        // The skeleton is a TYPE SEQUENCE that defines preferred placement
+        // order. Different iterations try different orderings.
+        function generateSkeleton(grade, seed) {
+            const types = [...(gradeFlexTypes[grade] || [])];
+            if (types.length === 0) return [];
+ 
+            // Fisher-Yates shuffle seeded by grade index + iteration seed
+            const gradeIdx = allGrades.indexOf(grade);
+            let s = ((seed + 1) * (gradeIdx + 1) * 2654435761) >>> 0; // hash
+            function rand() {
+                s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+                return (s >>> 0) / 4294967296;
+            }
+ 
+            for (let i = types.length - 1; i > 0; i--) {
+                const j = Math.floor(rand() * (i + 1));
+                [types[i], types[j]] = [types[j], types[i]];
+            }
+ 
+            return types;
+        }
+ 
         const gradeSortedForPlacement = sortGradesByConstraint(
             allGrades, layersByGrade, bunkSpecialQueues
         );
-
-        // bunkNeeds[bunk] = array of { layer, placed, required, op }
-        
+ 
+        // ── Build needs list per bunk ────────────────────────────────────
         gradeSortedForPlacement.forEach(grade => {
             const bunks = getBunksForGrade(grade, divisions);
-            const gradeLayers = nonPinnedLayers.filter(l => {
-    if ((l.grade || l.division) !== grade) return false;
-    const t = (l.type || '').toLowerCase();
-    return t !== 'league' && t !== 'specialty_league';
-})
+            const gradeLayers = nonPinnedLayers.filter(l =>
+                (l.grade || l.division) === grade
+            );
             gradeLayers.sort((a, b) => b._ratio - a._ratio);
             bunks.forEach(bunk => {
                 bunkNeeds[bunk] = gradeLayers.map(layer => ({
@@ -1326,340 +1217,443 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                 }));
             });
         });
-
-       // ── SOFT ROTATION PRE-PASS ──
-        // Assign each grade a different "first priority" activity type.
-        // This nudges grades to attempt different activities in the first round,
-        // naturally staggering timelines across the morning.
-        // It's purely a reordering of bunkNeeds — not a hard constraint.
-        const activityTypes = [...new Set(nonPinnedLayers.map(l => l.type))];
-        gradeSortedForPlacement.forEach((grade, gradeIdx) => {
-            const bunks = getBunksForGrade(grade, divisions);
-            // Rotate activity type priority by grade index
-            const priorityType = activityTypes[gradeIdx % activityTypes.length];
-            bunks.forEach(bunk => {
-                const needs = bunkNeeds[bunk] || [];
-                // Move priority type to front, keep everything else in original order
-                bunkNeeds[bunk] = [
-                    ...needs.filter(n => n.layer.type === priorityType),
-                    ...needs.filter(n => n.layer.type !== priorityType)
-                ];
-            });
-        });
-        log('[STEP 2.3] Soft rotation pre-pass: ' + gradeSortedForPlacement.map((g, i) =>
-            g + '→' + activityTypes[i % activityTypes.length]).join(', '));
-// ── Elevate field relievers in placement order ──────────────────
-        // Swim and off-field specials are the biggest levers for evening
-        // out field demand. Place them EARLY (before sport/slot) so the
-        // contention scorer has maximum flexibility to stagger them.
-        // This overrides the ratio-based sort for these specific types.
+ 
+        // ── Skeleton generation ──────────────────────────────────────────
+        const gradeSkeletons = {};
         gradeSortedForPlacement.forEach(grade => {
-            const bunks = getBunksForGrade(grade, divisions);
-            bunks.forEach(bunk => {
-                const needs = bunkNeeds[bunk] || [];
-                const relievers = [];  // swim, off-field specials
-                const rest = [];
-
-                for (const need of needs) {
-                    const t = (need.layer.type || '').toLowerCase();
-                    if (t === 'swim') {
-                        relievers.push(need);
-                    } else if (t === 'special') {
-                        // Check if this special is on a field — if so, it's a consumer
-                        const loc = getLocationForSpecial(
-                            need.layer.event || need.layer.name || '',
-                            activityProperties, globalSettings
-                        );
-                        const isOnField = loc && (
-                            (activityProperties[loc] && activityProperties[loc].type === 'field') ||
-                            (globalSettings?.app1?.fields || []).some(f => f.name === loc)
-                        );
-                        if (isOnField) {
-                            rest.push(need);
-                        } else {
-                            relievers.push(need);
-                        }
-                    } else {
-                        rest.push(need);
-                    }
-                }
-
-                bunkNeeds[bunk] = [...relievers, ...rest];
-            });
+            gradeSkeletons[grade] = generateSkeleton(grade, _iterSeed);
         });
-        log('[STEP 2.3] Reliever elevation: swim/off-field specials moved to front of placement queue');
-       // ── Window-aware bin-packer ──────────────────────────────────────────
-        // For each bunk, find free windows between pinned blocks, collect all
-        // pending needs that belong in each window, size and place them in one
-        // planned pass with no gaps.
-
-        for (const grade of gradeSortedForPlacement) {
-            const bunks = sortBunksByConstraint(
-                getBunksForGrade(grade, divisions), bunkSpecialQueues
+ 
+        log('[STEP 2.3] Skeletons: ' + gradeSortedForPlacement.map(g =>
+            g + '→[' + gradeSkeletons[g].join(',') + ']').join(' | '));
+ 
+        // ── Shuffle grade processing order by seed ───────────────────────
+        const gradeOrder = [...gradeSortedForPlacement];
+        {
+            let s = ((_iterSeed + 7) * 2246822519) >>> 0;
+            function rand2() {
+                s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+                return (s >>> 0) / 4294967296;
+            }
+            for (let i = gradeOrder.length - 1; i > 0; i--) {
+                const j = Math.floor(rand2() * (i + 1));
+                [gradeOrder[i], gradeOrder[j]] = [gradeOrder[j], gradeOrder[i]];
+            }
+        }
+ 
+        // ── League pre-processing ────────────────────────────────────────
+        // Build league → grades map so shared leagues get the same time
+        const gradeToLeagueName = {};
+        const leagueLayersMap = {}; // grade → league layer
+        nonPinnedLayers.forEach(layer => {
+            const t = (layer.type || '').toLowerCase();
+            if (t !== 'league' && t !== 'specialty_league') return;
+            const grade = layer.grade || layer.division;
+            leagueLayersMap[grade] = layer;
+            const league = (Array.isArray(window.masterLeagues)
+                ? window.masterLeagues
+                : Object.values(window.masterLeagues || {})).find(l =>
+                (l.divisions || []).includes(grade)
             );
-
-            for (const bunk of bunks) {
-                const needs = bunkNeeds[bunk] || [];
-
-                // ── Find free windows between pinned/committed blocks ──────────
-                const divStart = parseTimeToMinutes(divisions[grade]?.startTime) || 660;
-                const divEnd   = parseTimeToMinutes(divisions[grade]?.endTime)   || 990;
-
-                const committed = (bunkTimelines[bunk] || [])
-                    .filter(b => b._committed || b._fixed || b._classification === 'pinned')
-                    .sort((a, b) => a.startMin - b.startMin);
-
-                const freeWindows = [];
-                let cursor = divStart;
-                committed.forEach(b => {
-                    if (b.startMin > cursor) {
-                        freeWindows.push({ start: cursor, end: b.startMin });
-                    }
-                    cursor = Math.max(cursor, b.endMin);
-                });
-                if (cursor < divEnd) freeWindows.push({ start: cursor, end: divEnd });
-
-                // ── For each free window, collect and pack pending needs ───────
-                for (const win of freeWindows) {
-                    const winDur = win.end - win.start;
-
-                    // Collect needs whose layer window overlaps this free window
-                    const windowNeeds = needs.filter(n => {
-                        if (n.op !== '<=' && n.op !== '≤' && n.placed >= n.required) return false;
-                        const lStart = n.layer.startMin;
-                        const lEnd   = n.layer.endMin;
-                        return lStart < win.end && lEnd > win.start;
+            if (league) gradeToLeagueName[grade] = league.name;
+        });
+ 
+        // ── Helper: find best time for league (all bunks free, scored) ───
+        function placeLeagueForGrade(grade, layer) {
+            const bunks = getBunksForGrade(grade, divisions);
+            const dur = layer.periodMin || layer.durationMin || layer.duration || 30;
+            const windowStart = layer.startMin;
+            const windowEnd = layer.endMin;
+            const lType = (layer.type || '').toLowerCase();
+            const leagueName = gradeToLeagueName[grade];
+ 
+            // If shared league already placed by another grade, use that time
+            if (leagueName && sharedLeagueTime[leagueName] != null) {
+                const sharedStart = sharedLeagueTime[leagueName];
+                const sharedEnd = sharedStart + dur;
+                bunks.forEach(bunk => {
+                    bunkTimelines[bunk].push({
+                        startMin: sharedStart, endMin: sharedEnd,
+                        type: lType, event: layer.event || 'League Game',
+                        layer, _classification: 'windowed', _committed: true
                     });
-
-                    if (windowNeeds.length === 0) continue;
-
-                    // Separate specials from non-specials
-                    const specialNeeds = windowNeeds.filter(n => n.layer.type === 'special');
-                    const otherNeeds   = windowNeeds.filter(n => n.layer.type !== 'special');
-
-                    // ── Place non-specials first (bin-pack) ───────────────────
-                    // Calculate total minimum time needed
-                    const totalMinNeeded = otherNeeds.reduce((sum, n) => {
-                        const dMin = n.layer.durationMin || n.layer.periodMin || n.layer.duration || 0;
-                        return sum + dMin * Math.max(1, n.required - n.placed);
-                    }, 0);
-
-                    const slack = Math.max(0, winDur - totalMinNeeded);
-
-                    // Size each need proportionally within [dMin, dMax]
-                    // Sort by ratio descending (most constrained first)
-                    otherNeeds.sort((a, b) => b.layer._ratio - a.layer._ratio);
-
-                   let placeCursor = win.start;
-
-                    // Sort purely by ratio descending — most constrained first
-                    // ratio = duration/window so snacks (10min in 60min = 0.167) 
-                    // beats sport (30min in 330min = 0.09) and goes first
-                    otherNeeds.sort((a, b) => b.layer._ratio - a.layer._ratio);
-
-                    for (const need of otherNeeds) {
-                        if (need.placed >= need.required) continue;
-                        const { layer } = need;
-                        const dMin = layer.durationMin || layer.periodMin || layer.duration || GAP_MIN_DUR;
-                        const dMax = layer.durationMax || layer.periodMin || layer.duration || GAP_MAX_DUR;
-
-                        // How many needs still need placement including this one
-                        const stillPending = otherNeeds.filter(n => n !== need && n.placed < n.required);
-                        const remainingNeeds = stillPending.length + 1;
-
-                        // How much time do the other pending needs minimally need
-                        const otherMinNeeded = stillPending.reduce((sum, n) => {
-                            const nStart = Math.max(placeCursor, n.layer.startMin);
-                            return sum + (n.layer.durationMin || n.layer.periodMin || n.layer.duration || GAP_MIN_DUR);
-                        }, 0);
-
-                       // Effective start respects layer window
-                        let effectiveStart = Math.max(placeCursor, layer.startMin);
-                        const type  = layer.type;
-                        const event = layer.event || layer.name || layer.type || 'Activity';
-
-                        // Don't place so late that other needs can't fit after us
-                        const latestEnd = win.end - otherMinNeeded;
-                        const effectiveEnd = Math.min(effectiveStart + dMax, layer.endMin, win.end, latestEnd);
-
-                        // Ideal size: take as much of remaining space as allowed
-                        // leaving enough for other pending needs
-                       const availableForThis = effectiveEnd - effectiveStart;
-                        if (availableForThis < dMin) {
-                            placeCursor = effectiveStart;
-                            continue;
-                        }
+                    bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
+                });
+                return sharedStart;
+            }
  
-                        const targetDur = snapTo5(Math.max(dMin, Math.min(dMax, availableForThis)));
+            // Find all valid positions, score by contention
+            let bestStart = null;
+            let bestScore = Infinity;
  
-                        // ── Contention-aware nudge ───────────────────────────
-                        // For types that consume or relieve fields, probe
-                        // alternate start positions within the available window
-                        // and pick the one with the best contention score.
-                        const placementImpact = getPlacementImpact(type, event);
-                        if (placementImpact !== 'neutral') {
-                            const searchEnd = effectiveEnd - targetDur;
-                            if (searchEnd > effectiveStart) {
-                                let bestStart = effectiveStart;
-                                let bestCSScore = scorePositionByContention(
-                                    effectiveStart, effectiveStart + targetDur, type, bunk, event
-                                );
+            for (let ts = windowStart; ts + dur <= windowEnd; ts += 5) {
+                const te = ts + dur;
+                const allFree = bunks.every(bunk =>
+                    !(bunkTimelines[bunk] || []).some(b => b.startMin < te && b.endMin > ts)
+                );
+                if (!allFree) continue;
  
-                                for (let probe = effectiveStart + 5; probe <= searchEnd; probe += 5) {
-                                    const probeEnd = probe + targetDur;
-                                    // Verify the probe position is actually free
-                                    const probeGaps = getFreeGaps(bunk, probe, probeEnd);
-                                    const probeFree = probeGaps.reduce((s, g) => s + (g.end - g.start), 0);
-                                    if (probeFree < targetDur) continue;
+                // Score: league is a field consumer
+                const score = scorePositionByContention(ts, te, 'league', null, null);
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestStart = ts;
+                }
+            }
  
-                                    const pScore = scorePositionByContention(probe, probeEnd, type, bunk, event);
-                                    if (pScore < bestCSScore) {
-                                        bestCSScore = pScore;
-                                        bestStart = probe;
-                                    }
-                                }
+            if (bestStart === null) {
+                warn('[STEP 2.3] No shared free gap for league in ' + grade);
+                return null;
+            }
  
-                                // Confirm the chosen start is genuinely free
-                                if (bestStart !== effectiveStart) {
-                                    const confirmGaps = getFreeGaps(bunk, bestStart, bestStart + targetDur);
-                                    const confirmFree = confirmGaps.reduce((s, g) => s + (g.end - g.start), 0);
-                                    if (confirmFree >= targetDur) {
-                                        effectiveStart = bestStart;
-                                    }
-                                }
-                            }
-                        }
+            const placedEnd = bestStart + dur;
+            bunks.forEach(bunk => {
+                bunkTimelines[bunk].push({
+                    startMin: bestStart, endMin: placedEnd,
+                    type: lType, event: layer.event || 'League Game',
+                    layer, _classification: 'windowed', _committed: true
+                });
+                bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
+            });
  
-                        const actualEnd = effectiveStart + targetDur;
-
-                        // Don't hardcode gap fills — let Step 2.5 gap-fill handle
-                        // any remaining space after all needs are placed
-                        placeCursor = effectiveStart;
-                        const _classification = layer._classification;
-
-                        if (!hasActivityCapacity(type, effectiveStart, effectiveEnd)) {
-                            if (!willHaveCapacityLater(type, effectiveEnd, win.end, dMin)) {
-                                // No capacity — skip but don't advance cursor
-                            }
-                            continue;
-                        }
-
-                        claimActivitySlot(type, bunk, effectiveStart, effectiveEnd);
-                        const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(type);
-                        placeTentativeBlock(bunk, {
-                            startMin: effectiveStart,
-                            endMin:   effectiveEnd,
-                            type,
-                            event,
-                            layer,
-                            _classification,
-                            _activityLocked: _isTimeLocked
-                        });
-                        need.placed++;
-                        placeCursor = effectiveEnd;
+            if (leagueName) sharedLeagueTime[leagueName] = bestStart;
+            log('[STEP 2.3] ' + grade + ': league at ' +
+                Math.floor(bestStart / 60) + ':' + String(bestStart % 60).padStart(2, '0') +
+                ' (' + dur + 'min) — contention score ' + bestScore);
+            return bestStart;
+        }
+ 
+        // ── Helper: find best swim position for a single bunk ────────────
+        function placeSwimForBunk(bunk, layer) {
+            const dur = layer.periodMin || layer.durationMin || layer.duration || 45;
+            const windowStart = layer.startMin;
+            const windowEnd = layer.endMin;
+ 
+            return findBestGapPosition(bunk, windowStart, windowEnd, dur, 'swim', null);
+        }
+ 
+        // ── Helper: place a special for a bunk ───────────────────────────
+        function placeSpecialForBunk(bunk, grade, layer, windowStart, windowEnd) {
+            const usedExclusions = new Set(Object.keys(bunkSpecialAssigned[bunk] || {}));
+            const gradeBunks = getBunksForGrade(grade, divisions).map(String);
+ 
+            const candidate = getNextSpecial(bunk, usedExclusions, windowStart, windowEnd);
+            if (!candidate) return null;
+ 
+            const cfg = getSpecialConfig(candidate.name, globalSettings);
+            const sharableType = cfg?.sharableWith?.type || 'not_sharable';
+            const tracker2 = specialCapacityTracker[candidate.name];
+ 
+            let position = null;
+ 
+            // Try joining existing session
+            if (sharableType === 'same_division' || sharableType === 'all' ||
+                (sharableType === 'custom' && cfg?.sharableWith?.divisions?.length > 0)) {
+                const existingSession = (tracker2?.assignments || []).find(a => {
+                    if (sharableType === 'same_division') {
+                        if (!gradeBunks.includes(String(a.bunk))) return false;
                     }
-
-                    // ── Place specials (capacity-aware, within window) ─────────
-                    for (const need of specialNeeds) {
-                        if (need.placed >= need.required) continue;
-                        const { layer } = need;
-                        const _classification = layer._classification;
-
-                        const usedExclusions = new Set(Object.keys(bunkSpecialAssigned[bunk] || {}));
-                        let placed = false;
-
-                        while (!placed) {
-                            const candidate = getNextSpecial(bunk, usedExclusions, win.start, win.end);
-                            if (!candidate) break;
-
-                            const cfg = getSpecialConfig(candidate.name, globalSettings);
-                            const sharableType = cfg?.sharableWith?.type || 'not_sharable';
-                            const gradeBunks = getBunksForGrade(grade, divisions).map(String);
-                            const tracker2 = specialCapacityTracker[candidate.name];
-
-                            let position = null;
-
-                            // Try joining existing session first
-                            if (sharableType === 'same_division' || sharableType === 'all' ||
-                                (sharableType === 'custom' && cfg?.sharableWith?.divisions?.length > 0)) {
-                                const existingSession = (tracker2?.assignments || []).find(a => {
-                                    if (sharableType === 'same_division') {
-                                        if (!gradeBunks.includes(String(a.bunk))) return false;
-                                    }
-                                    const gaps = getFreeGaps(bunk, a.startMin, a.endMin);
-                                    return gaps.some(g => g.start <= a.startMin && g.end >= a.endMin);
-                                });
-                                if (existingSession) {
-                                    position = { start: existingSession.startMin, end: existingSession.endMin };
-                                }
-                            }
-
-                            // Find a fresh gap
-                            if (!position) {
-                                const remaining = win.end - placeCursor;
-                                position = candidate.duration
-                                    ? (findBestGapPosition(bunk, placeCursor, win.end, candidate.duration, 'special', candidate.name) ||
-                                        findBestGapPosition(bunk, win.start, win.end, candidate.duration, 'special', candidate.name))
-                                    : findFlexGapPosition(bunk, placeCursor, win.end);
-
-                                if (position) {
-                                    const snapped = snapTo5(position.start);
-                                    const dur = position.end - position.start;
-                                    position = { start: snapped, end: snapped + dur };
-                                }
-
-                                if (position && sharableType !== 'all') {
-                                    const crossGradeConflict = (tracker2?.assignments || []).some(a => {
-                                        if (gradeBunks.includes(String(a.bunk))) return false;
-                                        return a.startMin < position.end && a.endMin > position.start;
-                                    });
-                                    if (crossGradeConflict) {
-                                        usedExclusions.add(candidate.name);
-                                        position = null;
-                                    }
-                                }
-                            }
-
-                            if (!position) {
-                                usedExclusions.add(candidate.name);
-                                continue;
-                            }
-
-                            const tracker = specialCapacityTracker[candidate.name];
-                            const overlappingNow = tracker ? tracker.assignments.filter(a =>
-                                a.startMin < position.end && a.endMin > position.start
-                            ).length : 0;
-
-                            if (tracker && overlappingNow >= tracker.total) {
-                                usedExclusions.add(candidate.name);
-                                continue;
-                            }
-
-                            claimSpecial(bunk, candidate, position.start, position.end);
-                            placed = true;
+                    const gaps = getFreeGaps(bunk, a.startMin, a.endMin);
+                    return gaps.some(g => g.start <= a.startMin && g.end >= a.endMin);
+                });
+                if (existingSession) {
+                    position = { start: existingSession.startMin, end: existingSession.endMin };
+                }
+            }
+ 
+            // Find fresh gap with contention scoring
+            if (!position) {
+                position = candidate.duration
+                    ? (findBestGapPosition(bunk, windowStart, windowEnd, candidate.duration, 'special', candidate.name) ||
+                       findBestGapPosition(bunk, layer.startMin, layer.endMin, candidate.duration, 'special', candidate.name))
+                    : findFlexGapPosition(bunk, windowStart, windowEnd);
+ 
+                if (position) {
+                    const snapped = snapTo5(position.start);
+                    const dur = position.end - position.start;
+                    position = { start: snapped, end: snapped + dur };
+                }
+ 
+                // Cross-grade conflict check
+                if (position && sharableType !== 'all') {
+                    const crossGradeConflict = (tracker2?.assignments || []).some(a => {
+                        if (gradeBunks.includes(String(a.bunk))) return false;
+                        return a.startMin < position.end && a.endMin > position.start;
+                    });
+                    if (crossGradeConflict) position = null;
+                }
+            }
+ 
+            if (!position) return null;
+ 
+            // Capacity check
+            const tracker = specialCapacityTracker[candidate.name];
+            const overlappingNow = tracker ? tracker.assignments.filter(a =>
+                a.startMin < position.end && a.endMin > position.start
+            ).length : 0;
+ 
+            if (tracker && overlappingNow >= tracker.total) return null;
+ 
+            // Commit
+            claimSpecial(bunk, candidate, position.start, position.end);
+            return {
+                startMin: position.start,
+                endMin: position.end,
+                type: 'special',
+                event: candidate.name,
+                layer,
+                _classification: layer._classification,
+                _assignedSpecial: candidate.name,
+                _specialDuration: candidate.duration,
+                _specialLocation: candidate.location,
+                _activityLocked: true,
+                _bunkOverride: true
+            };
+        }
+ 
+        // ── Helper: place a sport/slot block for a bunk ──────────────────
+        function placeSportForBunk(bunk, layer, windowStart, windowEnd) {
+            const type = layer.type;
+            const event = layer.event || layer.name || layer.type || 'Activity';
+            const dMin = layer.durationMin || layer.periodMin || layer.duration || GAP_MIN_DUR;
+            const dMax = layer.durationMax || layer.periodMin || layer.duration || GAP_MAX_DUR;
+ 
+            // Find best gap with contention scoring
+            const position = findBestGapPosition(bunk, windowStart, windowEnd, dMin, type, null);
+            if (!position) return null;
+ 
+            // Size the block: take up to dMax or available space
+            const gapEnd = (() => {
+                const gaps = getFreeGaps(bunk, position.start, windowEnd);
+                const gap = gaps.find(g => g.start <= position.start && g.end > position.start);
+                return gap ? gap.end : position.end;
+            })();
+ 
+            const availableSpace = gapEnd - position.start;
+            const targetDur = snapTo5(Math.max(dMin, Math.min(dMax, availableSpace)));
+ 
+            if (!hasActivityCapacity(type, position.start, position.start + targetDur)) {
+                return null;
+            }
+ 
+            claimActivitySlot(type, bunk, position.start, position.start + targetDur);
+ 
+            const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(type);
+            return {
+                startMin: position.start,
+                endMin: position.start + targetDur,
+                type, event, layer,
+                _classification: layer._classification,
+                _activityLocked: _isTimeLocked
+            };
+        }
+ 
+        // ═════════════════════════════════════════════════════════════════
+        // MAIN PLACEMENT LOOP — Process grades in shuffled order
+        // ═════════════════════════════════════════════════════════════════
+ 
+        for (const grade of gradeOrder) {
+            const bunks = getBunksForGrade(grade, divisions);
+            const skeleton = gradeSkeletons[grade];
+            const needs = bunkNeeds[bunks[0]] || []; // reference needs (same layers for all bunks in grade)
+ 
+            const divStart = parseTimeToMinutes(divisions[grade]?.startTime) || 660;
+            const divEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 990;
+ 
+            log('[STEP 2.3] Processing ' + grade + ' skeleton: [' + skeleton.join(', ') + ']');
+ 
+            // Walk the skeleton type sequence
+            for (const skeletonType of skeleton) {
+                const typeLC = skeletonType.toLowerCase();
+ 
+                // ── LEAGUE: grade-wide simultaneous ──────────────────────
+                if (typeLC === 'league' || typeLC === 'specialty_league') {
+                    const leagueLayer = leagueLayersMap[grade];
+                    if (leagueLayer) {
+                        placeLeagueForGrade(grade, leagueLayer);
+                    }
+                    continue;
+                }
+ 
+                // ── SWIM: per-bunk staggered, contention-scored ──────────
+                if (typeLC === 'swim') {
+                    const swimLayer = nonPinnedLayers.find(l =>
+                        (l.grade || l.division) === grade &&
+                        (l.type || '').toLowerCase() === 'swim'
+                    );
+                    if (!swimLayer) continue;
+ 
+                    // Sort bunks for stagger (by bunk number)
+                    const sortedBunks = [...bunks].sort((a, b) =>
+                        (parseInt(String(a).replace(/\D/g, '')) || 0) -
+                        (parseInt(String(b).replace(/\D/g, '')) || 0)
+                    );
+ 
+                    for (const bunk of sortedBunks) {
+                        const position = placeSwimForBunk(bunk, swimLayer);
+                        if (position) {
                             placeTentativeBlock(bunk, {
                                 startMin: position.start,
-                                endMin:   position.end,
-                                type:     'special',
-                                event:    candidate.name,
-                                layer,
-                                _classification,
-                                _assignedSpecial: candidate.name,
-                                _specialDuration: candidate.duration,
-                                _specialLocation: candidate.location,
-                                _activityLocked:  true,
-                                _bunkOverride:    true
+                                endMin: position.end,
+                                type: 'swim',
+                                event: swimLayer.event || 'Swim',
+                                layer: swimLayer,
+                                _classification: swimLayer._classification,
+                                _activityLocked: true
                             });
-                            need.placed++;
-                            placeCursor = Math.max(placeCursor, position.end);
+ 
+                            // Track swim need as placed
+                            const swimNeed = (bunkNeeds[bunk] || []).find(n =>
+                                (n.layer.type || '').toLowerCase() === 'swim'
+                            );
+                            if (swimNeed) swimNeed.placed++;
+                        }
+                    }
+                    continue;
+                }
+ 
+                // ── SPECIAL: per-bunk, capacity-aware, rotation-scored ───
+                if (typeLC === 'special') {
+                    const specialLayer = nonPinnedLayers.find(l =>
+                        (l.grade || l.division) === grade && l.type === 'special'
+                    );
+                    if (!specialLayer) continue;
+ 
+                    for (const bunk of bunks) {
+                        const specialNeed = (bunkNeeds[bunk] || []).find(n =>
+                            n.layer.type === 'special' && n.placed < n.required
+                        );
+                        if (!specialNeed) continue;
+ 
+                        // Find the best window (between committed blocks)
+                        const committed = (bunkTimelines[bunk] || [])
+                            .filter(b => b._committed || b._fixed)
+                            .sort((a, b) => a.startMin - b.startMin);
+ 
+                        let placed = false;
+                        // Try each free window
+                        const freeWindows = [];
+                        let cursor = divStart;
+                        committed.forEach(b => {
+                            if (b.startMin > cursor) freeWindows.push({ start: cursor, end: b.startMin });
+                            cursor = Math.max(cursor, b.endMin);
+                        });
+                        if (cursor < divEnd) freeWindows.push({ start: cursor, end: divEnd });
+ 
+                        for (const win of freeWindows) {
+                            if (placed) break;
+                            const block = placeSpecialForBunk(bunk, grade, specialLayer, win.start, win.end);
+                            if (block) {
+                                placeTentativeBlock(bunk, block);
+                                specialNeed.placed++;
+                                placed = true;
+                            }
+                        }
+                    }
+                    continue;
+                }
+ 
+                // ── SPORT / SLOT / OTHER: per-bunk, contention-scored ────
+                {
+                    const typeLayer = nonPinnedLayers.find(l =>
+                        (l.grade || l.division) === grade &&
+                        (l.type || '').toLowerCase() === typeLC
+                    );
+                    if (!typeLayer) continue;
+ 
+                    for (const bunk of bunks) {
+                        const need = (bunkNeeds[bunk] || []).find(n =>
+                            (n.layer.type || '').toLowerCase() === typeLC && n.placed < n.required
+                        );
+                        if (!need) continue;
+ 
+                        // Find free windows
+                        const committed = (bunkTimelines[bunk] || [])
+                            .filter(b => b._committed || b._fixed || b._classification === 'pinned')
+                            .sort((a, b) => a.startMin - b.startMin);
+ 
+                        const tentative = (bunkTimelines[bunk] || [])
+                            .filter(b => !b._committed && !b._fixed)
+                            .sort((a, b) => a.startMin - b.startMin);
+ 
+                        const allPlaced = [...committed, ...tentative].sort((a, b) => a.startMin - b.startMin);
+ 
+                        const freeWindows = [];
+                        let cursor = divStart;
+                        allPlaced.forEach(b => {
+                            if (b.startMin > cursor) freeWindows.push({ start: cursor, end: b.startMin });
+                            cursor = Math.max(cursor, b.endMin);
+                        });
+                        if (cursor < divEnd) freeWindows.push({ start: cursor, end: divEnd });
+ 
+                        for (const win of freeWindows) {
+                            if (need.placed >= need.required) break;
+ 
+                            const block = placeSportForBunk(bunk, need.layer, win.start, win.end);
+                            if (block) {
+                                placeTentativeBlock(bunk, block);
+                                need.placed++;
+                            }
+                        }
+                    }
+                }
+            }
+ 
+            // ── Fill remaining gaps within this grade ─────────────────────
+            // After skeleton types are placed, any bunk with unmet needs
+            // gets additional blocks in remaining gaps
+            for (const bunk of bunks) {
+                const unmetNeeds = (bunkNeeds[bunk] || []).filter(n => {
+                    if (n.op === '<=' || n.op === '≤') return false;
+                    return n.placed < n.required;
+                });
+ 
+                for (const need of unmetNeeds) {
+                    const typeLC = (need.layer.type || '').toLowerCase();
+ 
+                    // Build current free windows
+                    const allPlaced = (bunkTimelines[bunk] || []).sort((a, b) => a.startMin - b.startMin);
+                    const freeWindows = [];
+                    let cursor = divStart;
+                    allPlaced.forEach(b => {
+                        if (b.startMin > cursor) freeWindows.push({ start: cursor, end: b.startMin });
+                        cursor = Math.max(cursor, b.endMin);
+                    });
+                    if (cursor < divEnd) freeWindows.push({ start: cursor, end: divEnd });
+ 
+                    for (const win of freeWindows) {
+                        if (need.placed >= need.required) break;
+ 
+                        if (typeLC === 'special') {
+                            const block = placeSpecialForBunk(bunk, grade, need.layer, win.start, win.end);
+                            if (block) {
+                                placeTentativeBlock(bunk, block);
+                                need.placed++;
+                            }
+                        } else if (typeLC === 'swim') {
+                            const position = placeSwimForBunk(bunk, need.layer);
+                            if (position) {
+                                placeTentativeBlock(bunk, {
+                                    startMin: position.start, endMin: position.end,
+                                    type: 'swim', event: need.layer.event || 'Swim',
+                                    layer: need.layer, _classification: need.layer._classification,
+                                    _activityLocked: true
+                                });
+                                need.placed++;
+                            }
+                        } else {
+                            const block = placeSportForBunk(bunk, need.layer, win.start, win.end);
+                            if (block) {
+                                placeTentativeBlock(bunk, block);
+                                need.placed++;
+                            }
                         }
                     }
                 }
             }
         }
-
-        log('[STEP 2.3] ✅ Bin-pack placement complete');
-        log('[STEP 2.3] ✅ Tentative placement complete');
+ 
+        log('[STEP 2.3] ✅ Skeleton placement complete');
         // -----------------------------------------------------------------
         // STEP 2.4 — BACKTRACK AND RETRY
         // -----------------------------------------------------------------
