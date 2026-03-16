@@ -1610,12 +1610,17 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                         const minBlocks = Math.ceil(remaining / maxDur);
                         const maxBlocks = Math.floor(remaining / _gapFloor);
                         let slotDur;
-                        if (maxBlocks >= minBlocks && minBlocks > 0) {
+                       if (maxBlocks >= minBlocks && minBlocks > 0) {
                             const useBlocks = minBlocks;
                             slotDur = Math.round(remaining / useBlocks);
                             slotDur = Math.max(_gapFloor, Math.min(maxDur, slotDur));
+                            // ★ Snap to 5-minute increments (round down to avoid exceeding maxDur)
+                            slotDur = Math.floor(slotDur / 5) * 5;
+                            if (slotDur < _gapFloor) slotDur = _gapFloor;
                         } else {
                             slotDur = Math.min(maxDur, remaining);
+                            slotDur = Math.floor(slotDur / 5) * 5;
+                            if (slotDur < _gapFloor) slotDur = _gapFloor;
                         }
 
                         if (slotDur < _gapFloor) {
