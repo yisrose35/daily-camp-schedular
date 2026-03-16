@@ -1434,8 +1434,10 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                             return sum + (n.layer.durationMin || n.layer.periodMin || n.layer.duration || GAP_MIN_DUR);
                         }, 0);
 
-                        // Effective start respects layer window
-                        const effectiveStart = Math.max(placeCursor, layer.startMin);
+                       // Effective start respects layer window
+                        let effectiveStart = Math.max(placeCursor, layer.startMin);
+                        const type  = layer.type;
+                        const event = layer.event || layer.name || layer.type || 'Activity';
 
                         // Don't place so late that other needs can't fit after us
                         const latestEnd = win.end - otherMinNeeded;
@@ -1493,8 +1495,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
 
                         // Don't hardcode gap fills — let Step 2.5 gap-fill handle
                         // any remaining space after all needs are placed
-                        placeCursor = effectiveStart;                        const type  = layer.type;
-                        const event = layer.event || layer.name || layer.type || 'Activity';
+                        placeCursor = effectiveStart;
                         const _classification = layer._classification;
 
                         if (!hasActivityCapacity(type, effectiveStart, effectiveEnd)) {
