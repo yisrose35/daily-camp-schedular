@@ -1559,7 +1559,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                                 const remaining = win.end - placeCursor;
                                 position = candidate.duration
                                     ? (findBestGapPosition(bunk, placeCursor, win.end, candidate.duration, 'special', candidate.name) ||
-//                                        findBestGapPosition(bunk, win.start, win.end, candidate.duration, 'special', candidate.name))
+                                        findBestGapPosition(bunk, win.start, win.end, candidate.duration, 'special', candidate.name))
                                     : findFlexGapPosition(bunk, placeCursor, win.end);
 
                                 if (position) {
