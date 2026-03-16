@@ -706,9 +706,10 @@
                 var blockH   = act.duration * PX_PER_MIN;
                 if (blockH < 2) return;
 
-                var style = blockStyle(act.entry);
+               var style = blockStyle(act.entry);
                 var name  = act.entry?._activity || act.entry?.field || '';
-                var sub   = act.entry?.sport || '';
+                var fieldName = act.entry?.field || '';
+                var sub   = (fieldName && fieldName !== name && fieldName !== 'Free') ? fieldName : '';
 
                 var blk = document.createElement('div');
                 blk.className = 'asg-block';
