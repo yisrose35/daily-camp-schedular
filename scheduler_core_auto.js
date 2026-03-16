@@ -1348,7 +1348,46 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         });
         log('[STEP 2.3] Soft rotation pre-pass: ' + gradeSortedForPlacement.map((g, i) =>
             g + '→' + activityTypes[i % activityTypes.length]).join(', '));
+// ── Elevate field relievers in placement order ──────────────────
+        // Swim and off-field specials are the biggest levers for evening
+        // out field demand. Place them EARLY (before sport/slot) so the
+        // contention scorer has maximum flexibility to stagger them.
+        // This overrides the ratio-based sort for these specific types.
+        gradeSortedForPlacement.forEach(grade => {
+            const bunks = getBunksForGrade(grade, divisions);
+            bunks.forEach(bunk => {
+                const needs = bunkNeeds[bunk] || [];
+                const relievers = [];  // swim, off-field specials
+                const rest = [];
 
+                for (const need of needs) {
+                    const t = (need.layer.type || '').toLowerCase();
+                    if (t === 'swim') {
+                        relievers.push(need);
+                    } else if (t === 'special') {
+                        // Check if this special is on a field — if so, it's a consumer
+                        const loc = getLocationForSpecial(
+                            need.layer.event || need.layer.name || '',
+                            activityProperties, globalSettings
+                        );
+                        const isOnField = loc && (
+                            (activityProperties[loc] && activityProperties[loc].type === 'field') ||
+                            (globalSettings?.app1?.fields || []).some(f => f.name === loc)
+                        );
+                        if (isOnField) {
+                            rest.push(need);
+                        } else {
+                            relievers.push(need);
+                        }
+                    } else {
+                        rest.push(need);
+                    }
+                }
+
+                bunkNeeds[bunk] = [...relievers, ...rest];
+            });
+        });
+        log('[STEP 2.3] Reliever elevation: swim/off-field specials moved to front of placement queue');
        // ── Window-aware bin-packer ──────────────────────────────────────────
         // For each bunk, find free windows between pinned blocks, collect all
         // pending needs that belong in each window, size and place them in one
