@@ -606,12 +606,42 @@
             });
 
             // ── Warning penalties ────────────────────────────────────────────
-            iterWarnings.forEach(w => {
+             iterWarnings.forEach(w => {
                 if (w.type === 'placement_failure') score += 500;
                 if (w.type === 'overlap')           score += 1000;
                 if (w.type === 'remaining_gap')     score += 50;
             });
-
+ 
+            // ── Field contention penalty ─────────────────────────────────
+            // Penalise iterations where sport/field demand exceeds capacity.
+            // Uses getFieldImpact per block so specials-on-fields count as
+            // consumers while off-field specials do not.
+            const campStart = Math.min(...Object.values(divisions).map(d =>
+                parseTimeToMinutes(d.startTime) || 660
+            ));
+            const campEnd = Math.max(...Object.values(divisions).map(d =>
+                parseTimeToMinutes(d.endTime) || 990
+            ));
+ 
+            for (let t = campStart; t < campEnd; t += CONTENTION_SLICE) {
+                const sliceEnd = Math.min(t + CONTENTION_SLICE, campEnd);
+                let sportCount = 0;
+ 
+                Object.entries(timelines).forEach(([bunk, timeline]) => {
+                    for (const block of timeline) {
+                        if (getFieldImpact(block) !== 'consumer') continue;
+                        if (block.startMin < sliceEnd && block.endMin > t) {
+                            sportCount++;
+                            break;
+                        }
+                    }
+                });
+ 
+                if (sportCount > FIELD_CAPACITY) {
+                    score += (sportCount - FIELD_CAPACITY) * 200;
+                }
+            }
+ 
             return score;
         }
 
@@ -676,14 +706,27 @@
             return gaps.filter(g => g.end - g.start >= 5);
         }
 
-        function findBestGapPosition(bunk, windowStart, windowEnd, duration) {
+       function findBestGapPosition(bunk, windowStart, windowEnd, duration, blockType, specialName) {
             const gaps = getFreeGaps(bunk, windowStart, windowEnd);
+            let bestPos = null;
+            let bestScore = Infinity;
+ 
             for (const gap of gaps) {
-                if (gap.end - gap.start >= duration) {
-                    return { start: gap.start, end: gap.start + duration };
+                if (gap.end - gap.start < duration) continue;
+ 
+                const latestStart = gap.end - duration;
+                for (let cs = gap.start; cs <= latestStart; cs += 5) {
+                    const ce = cs + duration;
+                    const score = scorePositionByContention(cs, ce, blockType, bunk, specialName);
+ 
+                    if (score < bestScore) {
+                        bestScore = score;
+                        bestPos = { start: cs, end: ce };
+                    }
                 }
             }
-            return null;
+ 
+            return bestPos;
         }
 
         function findFlexGapPosition(bunk, windowStart, windowEnd, minDuration) {
@@ -801,7 +844,124 @@
             return Math.max(cap, GAP_MIN_DUR);
         }
 
-      
+       // ── Field contention helpers ────────────────────────────────────
+        const FIELD_CAPACITY = 26;   // approx concurrent sport-field slots
+        const CONTENTION_SLICE = 10; // minutes per evaluation slice
+ 
+        // Check if a special activity lives on a physical field.
+        // If its location matches a known field in activityProperties,
+        // it consumes a field even though it's typed as 'special'.
+        function isSpecialOnField(blockOrName) {
+            // Accept either a timeline block object or a special name string
+            const loc = typeof blockOrName === 'string'
+                ? getLocationForSpecial(blockOrName, activityProperties, globalSettings)
+                : (blockOrName._specialLocation || null);
+ 
+            if (!loc) return false;
+ 
+            // Check if this location is a known field
+            const props = activityProperties[loc];
+            if (props && props.type === 'field') return true;
+ 
+            // Also check if it appears in the fields list directly
+            const fields = globalSettings?.app1?.fields || [];
+            return fields.some(f => f.name === loc);
+        }
+ 
+        // Classify a timeline block as field-consumer or field-reliever.
+        // Returns 'consumer', 'reliever', or 'neutral'.
+        function getFieldImpact(block) {
+            const t = (block.type || '').toLowerCase();
+ 
+            // Explicit field consumers
+            if (t === 'sport' || t === 'sports' || t === 'slot' ||
+                t === 'league' || t === 'specialty_league') {
+                return 'consumer';
+            }
+ 
+            // Swim always relieves fields
+            if (t === 'swim') return 'reliever';
+ 
+            // Specials: depends on whether they occupy a physical field
+            if (t === 'special') {
+                return isSpecialOnField(block) ? 'consumer' : 'reliever';
+            }
+ 
+            // Everything else (lunch, snacks, dismissal, change, pinned)
+            // is neutral — bunk isn't using a field but isn't "relieving" either
+            return 'neutral';
+        }
+ 
+        // Classify a block TYPE + optional special name for scoring during
+        // placement (before the block exists in the timeline).
+        // Used by scorePositionByContention.
+        function getPlacementImpact(blockType, specialName) {
+            const t = (blockType || '').toLowerCase();
+ 
+            if (t === 'sport' || t === 'sports' || t === 'slot' ||
+                t === 'league' || t === 'specialty_league') {
+                return 'consumer';
+            }
+ 
+            if (t === 'swim') return 'reliever';
+ 
+            if (t === 'special') {
+                if (specialName && isSpecialOnField(specialName)) return 'consumer';
+                return 'reliever';
+            }
+ 
+            return 'neutral';
+        }
+ 
+        // Count bunks with field-consuming blocks in a time window.
+        // Higher number = more field pressure.
+        function getFieldDemand(startMin, endMin, excludeBunk) {
+            let peakDemand = 0;
+ 
+            for (let t = startMin; t < endMin; t += CONTENTION_SLICE) {
+                const sliceEnd = Math.min(t + CONTENTION_SLICE, endMin);
+                let demandThisSlice = 0;
+ 
+                for (const grade of allGrades) {
+                    const bunks = getBunksForGrade(grade, divisions);
+                    for (const bk of bunks) {
+                        if (bk === excludeBunk) continue;
+                        const timeline = bunkTimelines[bk] || [];
+                        for (const block of timeline) {
+                            if (getFieldImpact(block) !== 'consumer') continue;
+                            if (block.startMin < sliceEnd && block.endMin > t) {
+                                demandThisSlice++;
+                                break; // one block per bunk per slice
+                            }
+                        }
+                    }
+                }
+ 
+                if (demandThisSlice > peakDemand) peakDemand = demandThisSlice;
+            }
+ 
+            return peakDemand;
+        }
+ 
+        // Score a candidate position for placement.
+        // For CONSUMERS: lower demand = better = lower score.
+        // For RELIEVERS: higher demand = better = lower score (inverted).
+        // For NEUTRAL: return 0 (no preference).
+        // Returns a number where LOWER = better placement.
+        function scorePositionByContention(startMin, endMin, blockType, excludeBunk, specialName) {
+            const impact = getPlacementImpact(blockType, specialName);
+            if (impact === 'neutral') return 0;
+ 
+            const demand = getFieldDemand(startMin, endMin, excludeBunk);
+ 
+            if (impact === 'reliever') {
+                // Relievers WANT high demand — invert so high demand = low score
+                return -demand;
+            } else {
+                // Consumers WANT low demand — direct mapping
+                return demand;
+            }
+        }
         do { // ← ITERATION LOOP START — wraps Steps 2.1 through 2.5b
 
         // Shared live capacity tracker (global across camp)
@@ -1283,13 +1443,52 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
 
                         // Ideal size: take as much of remaining space as allowed
                         // leaving enough for other pending needs
-                        const availableForThis = effectiveEnd - effectiveStart;
-                       if (availableForThis < dMin) {
+                       const availableForThis = effectiveEnd - effectiveStart;
+                        if (availableForThis < dMin) {
                             placeCursor = effectiveStart;
                             continue;
                         }
-
+ 
                         const targetDur = snapTo5(Math.max(dMin, Math.min(dMax, availableForThis)));
+ 
+                        // ── Contention-aware nudge ───────────────────────────
+                        // For types that consume or relieve fields, probe
+                        // alternate start positions within the available window
+                        // and pick the one with the best contention score.
+                        const placementImpact = getPlacementImpact(type, event);
+                        if (placementImpact !== 'neutral') {
+                            const searchEnd = effectiveEnd - targetDur;
+                            if (searchEnd > effectiveStart) {
+                                let bestStart = effectiveStart;
+                                let bestCSScore = scorePositionByContention(
+                                    effectiveStart, effectiveStart + targetDur, type, bunk, event
+                                );
+ 
+                                for (let probe = effectiveStart + 5; probe <= searchEnd; probe += 5) {
+                                    const probeEnd = probe + targetDur;
+                                    // Verify the probe position is actually free
+                                    const probeGaps = getFreeGaps(bunk, probe, probeEnd);
+                                    const probeFree = probeGaps.reduce((s, g) => s + (g.end - g.start), 0);
+                                    if (probeFree < targetDur) continue;
+ 
+                                    const pScore = scorePositionByContention(probe, probeEnd, type, bunk, event);
+                                    if (pScore < bestCSScore) {
+                                        bestCSScore = pScore;
+                                        bestStart = probe;
+                                    }
+                                }
+ 
+                                // Confirm the chosen start is genuinely free
+                                if (bestStart !== effectiveStart) {
+                                    const confirmGaps = getFreeGaps(bunk, bestStart, bestStart + targetDur);
+                                    const confirmFree = confirmGaps.reduce((s, g) => s + (g.end - g.start), 0);
+                                    if (confirmFree >= targetDur) {
+                                        effectiveStart = bestStart;
+                                    }
+                                }
+                            }
+                        }
+ 
                         const actualEnd = effectiveStart + targetDur;
 
                         // Don't hardcode gap fills — let Step 2.5 gap-fill handle
@@ -1359,8 +1558,8 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                             if (!position) {
                                 const remaining = win.end - placeCursor;
                                 position = candidate.duration
-                                    ? (findBestGapPosition(bunk, placeCursor, win.end, candidate.duration, candidate.duration) ||
-                                       findBestGapPosition(bunk, win.start, win.end, candidate.duration, candidate.duration))
+                                    ? (findBestGapPosition(bunk, placeCursor, win.end, candidate.duration, 'special', candidate.name) ||
+//                                        findBestGapPosition(bunk, win.start, win.end, candidate.duration, 'special', candidate.name))
                                     : findFlexGapPosition(bunk, placeCursor, win.end);
 
                                 if (position) {
@@ -1492,8 +1691,8 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
 
                             // Find a position in bunk's window
                             const position = findBestGapPosition(
-                                bunk, layer.startMin, layer.endMin, candidate.duration
-                            );
+        bunk, layer.startMin, layer.endMin, candidate.duration, 'special', candidate.name
+     );
                             if (!position) continue;
 
                             // Swap — claim for bunk
