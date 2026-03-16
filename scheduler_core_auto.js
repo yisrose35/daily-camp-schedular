@@ -1457,8 +1457,13 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
             const skeleton = gradeSkeletons[grade];
             const needs = bunkNeeds[bunks[0]] || []; // reference needs (same layers for all bunks in grade)
  
-            const divStart = parseTimeToMinutes(divisions[grade]?.startTime) || 660;
-            const divEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 990;
+           const divStart = parseTimeToMinutes(divisions[grade]?.startTime) || 660;
+            const rawDivEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 990;
+            // Effective end = start of last pinned block (dismissal), so nothing is placed after it
+            const lastPinned = (bunkTimelines[bunks[0]] || [])
+                .filter(b => b._classification === 'pinned')
+                .sort((a, b) => b.startMin - a.startMin)[0];
+            const divEnd = (lastPinned && lastPinned.startMin < rawDivEnd) ? lastPinned.startMin : rawDivEnd;
  
             log('[STEP 2.3] Processing ' + grade + ' skeleton: [' + skeleton.join(', ') + ']');
  
@@ -1467,10 +1472,19 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                 const typeLC = skeletonType.toLowerCase();
  
                 // ── LEAGUE: grade-wide simultaneous ──────────────────────
-                if (typeLC === 'league' || typeLC === 'specialty_league') {
+               if (typeLC === 'league' || typeLC === 'specialty_league') {
                     const leagueLayer = leagueLayersMap[grade];
                     if (leagueLayer) {
-                        placeLeagueForGrade(grade, leagueLayer);
+                        const leagueStart = placeLeagueForGrade(grade, leagueLayer);
+                        // Mark league need as placed for every bunk in grade
+                        if (leagueStart != null) {
+                            for (const bk of bunks) {
+                                const ln = (bunkNeeds[bk] || []).find(n =>
+                                    (n.layer.type || '').toLowerCase() === typeLC
+                                );
+                                if (ln) ln.placed = ln.required;
+                            }
+                        }
                     }
                     continue;
                 }
@@ -1605,6 +1619,9 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
             for (const bunk of bunks) {
                 const unmetNeeds = (bunkNeeds[bunk] || []).filter(n => {
                     if (n.op === '<=' || n.op === '≤') return false;
+                    // League is placed grade-wide by placeLeagueForGrade — never backfill
+                    const t = (n.layer.type || '').toLowerCase();
+                    if (t === 'league' || t === 'specialty_league') return false;
                     return n.placed < n.required;
                 });
  
@@ -1903,7 +1920,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         // -----------------------------------------------------------------
         log('\n[STEP 2.5b] Seam closing...');
 
-        const SEAM_CLOSE_THRESHOLD = 15;
+       const SEAM_CLOSE_THRESHOLD = 30;
         let seamsClosed = 0;
 
         allGrades.forEach(grade => {
@@ -2057,9 +2074,10 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
 
        
 
-       // Debug exports — captured at end of each iteration
+     // Debug exports — captured at end of each iteration
         window._bunkNeeds     = JSON.parse(JSON.stringify(bunkNeeds));
         window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
+        window._autoBuildTimelines = JSON.parse(JSON.stringify(bunkTimelines));
 
         if (bestScore > PERFECT_SCORE && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS) {
             _iterSeed++;
