@@ -1585,32 +1585,40 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                         return;
                     }
 
-                    const maxDur = getGapCapForGrade(grade, gap.start, gap.end);
+                   const maxDur = getGapCapForGrade(grade, gap.start, gap.end);
+                    // ★ Use sport layer durationMin as floor for gap chunks (not GAP_MIN_DUR)
+                    const _gapGradeLayers = (layersByGrade[grade] || []);
+                    const _gapSportLayer = _gapGradeLayers.find(l => l.type === 'sport');
+                    const _gapFloor = _gapSportLayer ? (_gapSportLayer.durationMin || _gapSportLayer.periodMin || GAP_MIN_DUR) : GAP_MIN_DUR;
                     let cursor = gap.start;
                     const created = [];
 
-                    // ★ Subdivide large gaps into capped chunks
+                    // ★ Subdivide large gaps into capped chunks (smart packing)
                    while (cursor < gap.end) {
                         const remaining = gap.end - cursor;
 
-                        // If remaining would create a chunk smaller than GAP_MIN_DUR,
-                        // absorb it into the previous chunk instead
-                        if (remaining < GAP_MIN_DUR) {
+                        // If remaining is below sport minimum, absorb into previous chunk
+                        if (remaining < _gapFloor) {
                             if (created.length > 0) {
                                 created[created.length - 1].endMin = gap.end;
                             }
                             break;
                         }
 
-                        // If taking GAP_MAX_DUR would leave a remainder too small,
-                        // take less now so the remainder is at least GAP_MIN_DUR
-                        let slotDur = Math.min(maxDur, remaining);
-                        const wouldRemain = remaining - slotDur;
-                        if (wouldRemain > 0 && wouldRemain < GAP_MIN_DUR) {
-                            slotDur = remaining - GAP_MIN_DUR;
+                        // ★ Smart packing: calculate ideal number of blocks
+                        // so all blocks are between _gapFloor and maxDur
+                        const minBlocks = Math.ceil(remaining / maxDur);
+                        const maxBlocks = Math.floor(remaining / _gapFloor);
+                        let slotDur;
+                        if (maxBlocks >= minBlocks && minBlocks > 0) {
+                            const useBlocks = minBlocks;
+                            slotDur = Math.round(remaining / useBlocks);
+                            slotDur = Math.max(_gapFloor, Math.min(maxDur, slotDur));
+                        } else {
+                            slotDur = Math.min(maxDur, remaining);
                         }
 
-                        if (slotDur < GAP_MIN_DUR) {
+                        if (slotDur < _gapFloor) {
                             if (created.length > 0) {
                                 created[created.length - 1].endMin = gap.end;
                             }
