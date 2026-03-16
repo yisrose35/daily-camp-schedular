@@ -1267,8 +1267,7 @@ else penalty += 200;
                 S._assignedBlocks.add(ga2.blockIdx); S._assignments.set(ga2.blockIdx,{candIdx:ga2.candIdx,pick:ga2.pick,cost:ga2.cost});
                 S.applyPickToSchedule(blk,ga2.pick);
                 var fn = normName(ga2.pick.field);
-                if (blk.startTime!==undefined&&blk.endTime!==undefined) { var an = normName(ga2.pick._activity); S.addToFieldTimeIndex(fn,blk.startTime,blk.endTime,blk.bunk,blk.divName,an); if (an&&an!==fn) S.addToFieldTimeIndex(an,blk.startTime,blk.endTime,blk.bunk,blk.divName,an); }
-                S.invalidateRotationCacheForBunk(blk.bunk);
+               if (blk.startTime!==undefined&&blk.endTime!==undefined) { var an = normName(ga2.pick._activity); var _existingEntries=S._fieldTimeIndex.get(fn)||[]; var _alreadyAdded=_existingEntries.some(function(e){return e.bunk===blk.bunk&&e.startMin===blk.startTime&&e.endMin===blk.endTime;}); if(!_alreadyAdded){S.addToFieldTimeIndex(fn,blk.startTime,blk.endTime,blk.bunk,blk.divName,an); if (an&&an!==fn) S.addToFieldTimeIndex(an,blk.startTime,blk.endTime,blk.bunk,blk.divName,an);} }                S.invalidateRotationCacheForBunk(blk.bunk);
                 propagateAssignment(activityBlocks,ga2.blockIdx,ga2.pick);
                 var tracker = normName(ga2.pick._activity||ga2.pick.field);
                 if (tracker&&tracker!=='free'&&tracker!=='free play') { if (!globalBunkActs.has(blk.bunk)) globalBunkActs.set(blk.bunk,new Set()); globalBunkActs.get(blk.bunk).add(tracker); }
@@ -1322,13 +1321,17 @@ else penalty += 200;
                 if (!fgDup) { var fgLive = S.getActivitiesDoneToday(b2.bunk,b2.slots?.[0]??999); if (!fgLive.has(fgAn)) {
                     // ★★★ v15.3: Clone pick properly + update ALL tracking maps ★★★
                     var fgClone = { field: fgExist.pick.field, sport: fgExist.pick.sport, _activity: fgExist.pick._activity, _type: fgExist.pick._type, _fullGrade: true };
-                    results.push({blockIdx:bo.bi,candIdx:fgExist.candIdx,pick:fgClone,cost:fgExist.cost});
+                  results.push({blockIdx:bo.bi,candIdx:fgExist.candIdx,pick:fgClone,cost:fgExist.cost});
                     if (!bunkActsGrp.has(b2.bunk)) bunkActsGrp.set(b2.bunk,new Set()); bunkActsGrp.get(b2.bunk).add(fgAn);
                     var fgFn = normName(fgClone.field);
                     fieldUsageGrp.set(fgFn, (fieldUsageGrp.get(fgFn)||0)+1);
                     if (!fieldDivsGrp.has(fgFn)) fieldDivsGrp.set(fgFn,new Set()); fieldDivsGrp.get(fgFn).add(b2.divName||'');
-                    assigned = true; console.log('[FULL_GRADE] Forced '+b2.bunk+' → '+fgClone._activity+' (grade: '+b2.divName+')');
-                } }
+                    // ★ Immediately update time index for fullGrade assignment
+                    if (b2.startTime!==undefined&&b2.endTime!==undefined) {
+                        S.addToFieldTimeIndex(fgFn,b2.startTime,b2.endTime,b2.bunk,b2.divName||'',fgAn||fgFn);
+                        if (fgAn&&fgAn!==fgFn) S.addToFieldTimeIndex(fgAn,b2.startTime,b2.endTime,b2.bunk,b2.divName||'',fgAn);
+                    }
+                    assigned = true; console.log('[FULL_GRADE] Forced '+b2.bunk+' → '+fgClone._activity+' (grade: '+b2.divName+')');                } }
             }
             if (assigned) continue;
             for (var oi=0;oi<bo.options.length;oi++) {
@@ -1383,7 +1386,11 @@ else penalty += 200;
                     if (!fieldDivsGrp.has(fn2)) fieldDivsGrp.set(fn2,new Set()); fieldDivsGrp.get(fn2).add(b2.divName||'');
                     if (!bunkActsGrp.has(b2.bunk)) bunkActsGrp.set(b2.bunk,new Set());
                     var aAn=normName(c2.activityName); if (aAn&&aAn!=='free') bunkActsGrp.get(b2.bunk).add(aAn);
-                    // ★ v15.3: Record fullGrade — check both property names
+                    // ★ Immediately update time index so subsequent checks see this assignment
+                    if (b2.startTime!==undefined&&b2.endTime!==undefined) {
+                        S.addToFieldTimeIndex(fn2,b2.startTime,b2.endTime,b2.bunk,b2.divName||'',aAn||fn2);
+                        if (aAn&&aAn!==fn2) S.addToFieldTimeIndex(aAn,b2.startTime,b2.endTime,b2.bunk,b2.divName||'',aAn);
+                    }                    // ★ v15.3: Record fullGrade — check both property names
                     var _isFGRecord = newPk._fullGrade || (window.isFullGradeForDivision ? window.isFullGradeForDivision(c2.activityName, b2.divName || '') : (actProps[c2.activityName]?.fullGrade || actProps[c2.activityName]?._fullGrade));
                     if (_isFGRecord) { fullGradeMap.set(fgKey,{pick:newPk,candIdx:opt.ci,cost:opt.cost}); }
                     assigned=true; break;
@@ -1410,6 +1417,16 @@ else penalty += 200;
                                 fieldUsageGrp.set(fn2,(fieldUsageGrp.get(fn2)||0)+1); if (!fieldDivsGrp.has(fn2)) fieldDivsGrp.set(fn2,new Set()); fieldDivsGrp.get(fn2).add(b2.divName||'');
                                 if (!bunkActsGrp.has(b2.bunk)) bunkActsGrp.set(b2.bunk,new Set()); var augAn=normName(c2.activityName); if (augAn&&augAn!=='free') bunkActsGrp.get(b2.bunk).add(augAn);
                                 if (!bunkActsGrp.has(hBlk.bunk)) bunkActsGrp.set(hBlk.bunk,new Set()); var hAn=normName(ac.activityName); if (hAn&&hAn!=='free') bunkActsGrp.get(hBlk.bunk).add(hAn);
+                                // ★ Update time index for augmenting path
+                                if (b2.startTime!==undefined&&b2.endTime!==undefined) {
+                                    S.addToFieldTimeIndex(fn2,b2.startTime,b2.endTime,b2.bunk,b2.divName||'',augAn||fn2);
+                                    if (augAn&&augAn!==fn2) S.addToFieldTimeIndex(augAn,b2.startTime,b2.endTime,b2.bunk,b2.divName||'',augAn);
+                                }
+                                if (hBlk.startTime!==undefined&&hBlk.endTime!==undefined) {
+                                    var hFn=normName(ac.field);
+                                    S.addToFieldTimeIndex(hFn,hBlk.startTime,hBlk.endTime,hBlk.bunk,hBlk.divName||'',hAn||hFn);
+                                    if (hAn&&hAn!==hFn) S.addToFieldTimeIndex(hAn,hBlk.startTime,hBlk.endTime,hBlk.bunk,hBlk.divName||'',hAn);
+                                }
                                 assigned=true; S._perfCounters.augmentingPathSuccesses++; break;
                             }
                         } }
