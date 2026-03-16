@@ -1273,6 +1273,8 @@ else penalty += 200;
                 if (tracker&&tracker!=='free'&&tracker!=='free play') { if (!globalBunkActs.has(blk.bunk)) globalBunkActs.set(blk.bunk,new Set()); globalBunkActs.get(blk.bunk).add(tracker); }
                 blocksAssigned++;
             }
+           // Force-sort time index after group to ensure binary search works for next group
+            for (var [_ftk, _ftv] of S._fieldTimeIndex) { _ftv.sort(function(a, b) { return a.startMin - b.startMin; }); }
             S._todayCache.clear(); groupsSolved++;
         }
         return blocksAssigned;
