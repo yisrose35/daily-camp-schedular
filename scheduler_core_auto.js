@@ -1570,9 +1570,10 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
 
                     for (const bunk of sortedBunks) {
                         const position = findBestGapPosition(bunk, swimWinStart, swimWinEnd, swimDur, 'swim', null);
-                        if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' window=' + swimWinStart + '-' + swimWinEnd + ' dur=' + swimDur + ' → position=' + (position ? position.start + '-' + position.end : 'null'));
+                       if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' window=' + swimWinStart + '-' + swimWinEnd + ' dur=' + swimDur + ' → position=' + (position ? position.start + '-' + position.end : 'null'));
                         if (position) {
-                            const _swimBlock = {
+                            var _preCount = bunkTimelines[bunk].length;
+                            var _swimBlock = {
                                 startMin: position.start,
                                 endMin: position.end,
                                 type: 'swim',
@@ -1581,6 +1582,8 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                                 _classification: swimLayer._classification,
                                 _activityLocked: true
                             };
+                            var added = placeTentativeBlock(bunk, _swimBlock);
+                            if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' added=' + added + ' timeline=' + _preCount + '→' + bunkTimelines[bunk].length + ' inArray=' + bunkTimelines[bunk].includes(_swimBlock));
                             const added = placeTentativeBlock(bunk, _swimBlock);
                             if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' added=' + added + ' timelineLen=' + _preCount + '→' + bunkTimelines[bunk].length + ' blockInTimeline=' + bunkTimelines[bunk].includes(_swimBlock));
 
