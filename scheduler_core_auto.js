@@ -576,7 +576,19 @@
                     if (minDur && dur < minDur) score += (minDur - dur) * 20;  // heavy — duration too short
                     if (maxDur < Infinity && dur > maxDur) score += (dur - maxDur) * 10; // over max
                 });
-
+// ── Out-of-bounds penalty ────────────────────────────────────
+                const gradeKey = Object.entries(divisions).find(([g, d]) =>
+                    (d.bunks || []).map(String).includes(String(bunk))
+                )?.[0];
+                if (gradeKey) {
+                    const dStart = parseTimeToMinutes(divisions[gradeKey]?.startTime) || 540;
+                    const dEnd   = parseTimeToMinutes(divisions[gradeKey]?.endTime)   || 960;
+                    timeline.forEach(block => {
+                        if (block.endMin <= dStart || block.startMin >= dEnd) {
+                            score += 10000; // massive penalty — this iteration is garbage
+                        }
+                    });
+                }
                 // ── Gaps between blocks ──────────────────────────────────────
                 const sorted = [...timeline].sort((a, b) => a.startMin - b.startMin);
                 for (let i = 0; i < sorted.length - 1; i++) {
@@ -744,7 +756,22 @@
             return best;
         }
 
-        function placeTentativeBlock(bunk, block) {
+       function placeTentativeBlock(bunk, block) {
+            // ★ FIX: reject blocks placed outside the camp day
+            const grade = block.layer?.grade || block.layer?.division;
+            if (grade && divisions[grade]) {
+                const dStart = parseTimeToMinutes(divisions[grade].startTime) || 540;
+                const dEnd   = parseTimeToMinutes(divisions[grade].endTime)   || 960;
+                if (block.endMin <= dStart || block.startMin >= dEnd) {
+                    warn('[placeTentativeBlock] REJECTED out-of-bounds block: ' +
+                        block.event + ' ' + block.startMin + '-' + block.endMin +
+                        ' for ' + bunk + ' (day=' + dStart + '-' + dEnd + ')');
+                    return;
+                }
+                // Clamp blocks that partially overflow
+                if (block.startMin < dStart) block.startMin = dStart;
+                if (block.endMin > dEnd)     block.endMin = dEnd;
+            }
             bunkTimelines[bunk].push(block);
             bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
         }
