@@ -2812,17 +2812,16 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
                 const bunkSlotArr = (perBunkSlots && perBunkSlots[String(bunk)]) ||
                     (window._perBunkSlots?.[grade]?.[String(bunk)]) || [];
 
-               bunkSlotArr
-                    .filter(s =>
-                        (s._classification || s.type || '') !== 'pinned' &&
-                        (s.type || '') !== 'special' &&
-                        !s._activityLocked
-                    )
-                    .forEach((block, pbIdx) => {
+              bunkSlotArr
+                    .forEach((block, originalIdx) => {
+                        // Skip pinned, special, locked entries
+                        if ((block._classification || block.type || '') === 'pinned') return;
+                        if ((block.type || '') === 'special') return;
+                        if (block._activityLocked) return;
 
-                       // Auto mode: scheduleAssignments[bunk] is indexed by per-bunk slot index
+                        // Auto mode: scheduleAssignments[bunk] is indexed by per-bunk slot index
                         // (initialized from _perBunkSlots in this same Step 2.7) — no remapping needed
-                        const slotIdx = pbIdx;
+                        const slotIdx = originalIdx;
 
                         // Skip if already filled (pinned or special wrote here)
                         // Treat 'Free' entries as empty — they're stale fallbacks, not real assignments
