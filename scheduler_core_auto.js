@@ -1449,34 +1449,47 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         }
  
         // ═════════════════════════════════════════════════════════════════
-        // MAIN PLACEMENT LOOP — Process grades in shuffled order
+        // MAIN PLACEMENT LOOP — Cross-grade interleaved by type
+        // ★ Process type-by-type across all grades so the contention scorer
+        //   sees each grade's relievers (swim) before the next grade places
+        //   theirs. This naturally staggers swim/specials across the day.
         // ═════════════════════════════════════════════════════════════════
- 
-        for (const grade of gradeOrder) {
-            const bunks = getBunksForGrade(grade, divisions);
-            const skeleton = gradeSkeletons[grade];
-            const needs = bunkNeeds[bunks[0]] || []; // reference needs (same layers for all bunks in grade)
- 
-           const divStart = parseTimeToMinutes(divisions[grade]?.startTime) || 660;
-            const rawDivEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 990;
-            // Effective end = start of last pinned block (dismissal), so nothing is placed after it
-            const lastPinned = (bunkTimelines[bunks[0]] || [])
-                .filter(b => b._classification === 'pinned')
-                .sort((a, b) => b.startMin - a.startMin)[0];
-            const divEnd = (lastPinned && lastPinned.startMin < rawDivEnd) ? lastPinned.startMin : rawDivEnd;
- 
-            log('[STEP 2.3] Processing ' + grade + ' skeleton: [' + skeleton.join(', ') + ']');
- 
-            // Walk the skeleton type sequence
-            for (const skeletonType of skeleton) {
-                const typeLC = skeletonType.toLowerCase();
- 
+
+        // Collect all unique skeleton types across all grades
+        const _allTypes = new Set();
+        for (const _g of gradeOrder) { (gradeSkeletons[_g] || []).forEach(t => _allTypes.add(t)); }
+
+        // Order: relievers first (swim), then leagues, then specials, then consumers (sport)
+        const _typeOrder = ['swim', 'league', 'specialty_league', 'special', 'sport', 'sports', 'slot'];
+        const _sortedTypes = [..._allTypes].sort((a, b) => {
+            const ai = _typeOrder.indexOf(a.toLowerCase());
+            const bi = _typeOrder.indexOf(b.toLowerCase());
+            return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+        });
+
+        log('[STEP 2.3] Interleaved type order: [' + _sortedTypes.join(', ') + ']');
+
+        // ── Phase 1: Place each type across all grades ───────────────────
+        for (const skeletonType of _sortedTypes) {
+            const typeLC = skeletonType.toLowerCase();
+
+            for (const grade of gradeOrder) {
+                // Skip if this grade doesn't have this type in its skeleton
+                if (!(gradeSkeletons[grade] || []).includes(skeletonType)) continue;
+
+                const bunks = getBunksForGrade(grade, divisions);
+                const divStart = parseTimeToMinutes(divisions[grade]?.startTime) || 660;
+                const rawDivEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 990;
+                const lastPinned = (bunkTimelines[bunks[0]] || [])
+                    .filter(b => b._classification === 'pinned')
+                    .sort((a, b) => b.startMin - a.startMin)[0];
+                const divEnd = (lastPinned && lastPinned.startMin < rawDivEnd) ? lastPinned.startMin : rawDivEnd;
+
                 // ── LEAGUE: grade-wide simultaneous ──────────────────────
-               if (typeLC === 'league' || typeLC === 'specialty_league') {
+                if (typeLC === 'league' || typeLC === 'specialty_league') {
                     const leagueLayer = leagueLayersMap[grade];
                     if (leagueLayer) {
                         const leagueStart = placeLeagueForGrade(grade, leagueLayer);
-                        // Mark league need as placed for every bunk in grade
                         if (leagueStart != null) {
                             for (const bk of bunks) {
                                 const ln = (bunkNeeds[bk] || []).find(n =>
@@ -1488,7 +1501,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                     }
                     continue;
                 }
- 
+
                 // ── SWIM: per-bunk staggered, contention-scored ──────────
                 if (typeLC === 'swim') {
                     const swimLayer = nonPinnedLayers.find(l =>
@@ -1496,13 +1509,12 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                         (l.type || '').toLowerCase() === 'swim'
                     );
                     if (!swimLayer) continue;
- 
-                    // Sort bunks for stagger (by bunk number)
+
                     const sortedBunks = [...bunks].sort((a, b) =>
                         (parseInt(String(a).replace(/\D/g, '')) || 0) -
                         (parseInt(String(b).replace(/\D/g, '')) || 0)
                     );
- 
+
                     for (const bunk of sortedBunks) {
                         const position = placeSwimForBunk(bunk, swimLayer);
                         if (position) {
@@ -1515,8 +1527,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                                 _classification: swimLayer._classification,
                                 _activityLocked: true
                             });
- 
-                            // Track swim need as placed
+
                             const swimNeed = (bunkNeeds[bunk] || []).find(n =>
                                 (n.layer.type || '').toLowerCase() === 'swim'
                             );
@@ -1525,27 +1536,25 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                     }
                     continue;
                 }
- 
+
                 // ── SPECIAL: per-bunk, capacity-aware, rotation-scored ───
                 if (typeLC === 'special') {
                     const specialLayer = nonPinnedLayers.find(l =>
                         (l.grade || l.division) === grade && l.type === 'special'
                     );
                     if (!specialLayer) continue;
- 
+
                     for (const bunk of bunks) {
                         const specialNeed = (bunkNeeds[bunk] || []).find(n =>
                             n.layer.type === 'special' && n.placed < n.required
                         );
                         if (!specialNeed) continue;
- 
-                        // Find the best window (between committed blocks)
+
                         const committed = (bunkTimelines[bunk] || [])
                             .filter(b => b._committed || b._fixed)
                             .sort((a, b) => a.startMin - b.startMin);
- 
+
                         let placed = false;
-                        // Try each free window
                         const freeWindows = [];
                         let cursor = divStart;
                         committed.forEach(b => {
@@ -1553,7 +1562,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                             cursor = Math.max(cursor, b.endMin);
                         });
                         if (cursor < divEnd) freeWindows.push({ start: cursor, end: divEnd });
- 
+
                         for (const win of freeWindows) {
                             if (placed) break;
                             const block = placeSpecialForBunk(bunk, grade, specialLayer, win.start, win.end);
@@ -1566,7 +1575,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                     }
                     continue;
                 }
- 
+
                 // ── SPORT / SLOT / OTHER: per-bunk, contention-scored ────
                 {
                     const typeLayer = nonPinnedLayers.find(l =>
@@ -1574,24 +1583,23 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                         (l.type || '').toLowerCase() === typeLC
                     );
                     if (!typeLayer) continue;
- 
+
                     for (const bunk of bunks) {
                         const need = (bunkNeeds[bunk] || []).find(n =>
                             (n.layer.type || '').toLowerCase() === typeLC && n.placed < n.required
                         );
                         if (!need) continue;
- 
-                        // Find free windows
+
                         const committed = (bunkTimelines[bunk] || [])
                             .filter(b => b._committed || b._fixed || b._classification === 'pinned')
                             .sort((a, b) => a.startMin - b.startMin);
- 
+
                         const tentative = (bunkTimelines[bunk] || [])
                             .filter(b => !b._committed && !b._fixed)
                             .sort((a, b) => a.startMin - b.startMin);
- 
+
                         const allPlaced = [...committed, ...tentative].sort((a, b) => a.startMin - b.startMin);
- 
+
                         const freeWindows = [];
                         let cursor = divStart;
                         allPlaced.forEach(b => {
@@ -1599,10 +1607,10 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                             cursor = Math.max(cursor, b.endMin);
                         });
                         if (cursor < divEnd) freeWindows.push({ start: cursor, end: divEnd });
- 
+
                         for (const win of freeWindows) {
                             if (need.placed >= need.required) break;
- 
+
                             const block = placeSportForBunk(bunk, need.layer, win.start, win.end);
                             if (block) {
                                 placeTentativeBlock(bunk, block);
@@ -1612,23 +1620,31 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                     }
                 }
             }
- 
-            // ── Fill remaining gaps within this grade ─────────────────────
-            // After skeleton types are placed, any bunk with unmet needs
-            // gets additional blocks in remaining gaps
+        }
+
+        // ── Phase 2: Fill remaining gaps per grade ───────────────────────
+        // After all types are placed across all grades, backfill any bunk
+        // with unmet needs in remaining free windows.
+        for (const grade of gradeOrder) {
+            const bunks = getBunksForGrade(grade, divisions);
+            const divStart = parseTimeToMinutes(divisions[grade]?.startTime) || 660;
+            const rawDivEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 990;
+            const lastPinned = (bunkTimelines[bunks[0]] || [])
+                .filter(b => b._classification === 'pinned')
+                .sort((a, b) => b.startMin - a.startMin)[0];
+            const divEnd = (lastPinned && lastPinned.startMin < rawDivEnd) ? lastPinned.startMin : rawDivEnd;
+
             for (const bunk of bunks) {
                 const unmetNeeds = (bunkNeeds[bunk] || []).filter(n => {
                     if (n.op === '<=' || n.op === '≤') return false;
-                    // League is placed grade-wide by placeLeagueForGrade — never backfill
                     const t = (n.layer.type || '').toLowerCase();
                     if (t === 'league' || t === 'specialty_league') return false;
                     return n.placed < n.required;
                 });
- 
+
                 for (const need of unmetNeeds) {
                     const typeLC = (need.layer.type || '').toLowerCase();
- 
-                    // Build current free windows
+
                     const allPlaced = (bunkTimelines[bunk] || []).sort((a, b) => a.startMin - b.startMin);
                     const freeWindows = [];
                     let cursor = divStart;
@@ -1637,10 +1653,10 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                         cursor = Math.max(cursor, b.endMin);
                     });
                     if (cursor < divEnd) freeWindows.push({ start: cursor, end: divEnd });
- 
+
                     for (const win of freeWindows) {
                         if (need.placed >= need.required) break;
- 
+
                         if (typeLC === 'special') {
                             const block = placeSpecialForBunk(bunk, grade, need.layer, win.start, win.end);
                             if (block) {
@@ -1669,7 +1685,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                 }
             }
         }
- 
+
         log('[STEP 2.3] ✅ Skeleton placement complete');
         // -----------------------------------------------------------------
         // STEP 2.4 — BACKTRACK AND RETRY
@@ -1942,7 +1958,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                         const next = timeline[i + 1];
                         const gap = next.startMin - curr.endMin;
 
-                        if (gap <= 0 || gap > SEAM_CLOSE_THRESHOLD) continue;
+                       if (gap <= 0 || gap > SEAM_CLOSE_THRESHOLD) continue;
 
                         const currDur    = curr.endMin - curr.startMin;
                         const currMaxDur = curr.layer
