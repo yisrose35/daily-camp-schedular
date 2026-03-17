@@ -1574,14 +1574,16 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                         if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' window=' + swimWinStart + '-' + swimWinEnd + ' dur=' + swimDur + ' → position=' + (position ? position.start + '-' + position.end : 'null'));
                         if (position) {
                             var _preCount = bunkTimelines[bunk].length;
-                            var _swimBlock = {
+                           var _swimBlock = {
                                 startMin: position.start,
                                 endMin: position.end,
                                 type: 'swim',
                                 event: swimLayer.event || 'Swim',
                                 layer: swimLayer,
-                                _classification: swimLayer._classification,
-                                _activityLocked: true
+                                _classification: 'pinned',
+                                _activityLocked: true,
+                                _fixed: true,
+                                _committed: true
                             };
                             var _swimAdded = placeTentativeBlock(bunk, _swimBlock);
                             if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' added=' + _swimAdded + ' timeline=' + _preCount + '→' + bunkTimelines[bunk].length + ' inArray=' + bunkTimelines[bunk].includes(_swimBlock));
