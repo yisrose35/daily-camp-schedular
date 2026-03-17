@@ -2625,21 +2625,17 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
             if (!perBunkSlots) return;
 
             const bunks = getBunksForGrade(grade, divisions);
-            bunks.forEach(bunk => {
-                const bunkSlotArr = perBunkSlots[String(bunk)] || [];
-                const timeline = bunkTimelines[bunk] || [];
+           bunks.forEach(bunk => {
+                const bunkSlotArr = (perBunkSlots && perBunkSlots[String(bunk)]) ||
+                    (window._perBunkSlots?.[grade]?.[String(bunk)]) || [];
 
-               timeline
-                    .filter(b =>
-                        b._classification !== 'pinned' &&
-                        b.type !== 'special' &&
-                        !b._activityLocked
+               bunkSlotArr
+                    .filter(s =>
+                        (s._classification || s.type || '') !== 'pinned' &&
+                        (s.type || '') !== 'special' &&
+                        !s._activityLocked
                     )
-                    .forEach(block => {
-                        const pbIdx = bunkSlotArr.findIndex(s =>
-                            s.startMin === block.startMin && s.endMin === block.endMin
-                        );
-                        if (pbIdx === -1) return;
+                    .forEach((block, pbIdx) => {
 
                        // Auto mode: scheduleAssignments[bunk] is indexed by per-bunk slot index
                         // (initialized from _perBunkSlots in this same Step 2.7) — no remapping needed
