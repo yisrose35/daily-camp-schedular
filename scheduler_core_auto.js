@@ -955,31 +955,51 @@
  
         // Count bunks with field-consuming blocks in a time window.
         // Higher number = more field pressure.
-        function getFieldDemand(startMin, endMin, excludeBunk) {
+       function getFieldDemand(startMin, endMin, excludeBunk) {
             let peakDemand = 0;
- 
+
             for (let t = startMin; t < endMin; t += CONTENTION_SLICE) {
                 const sliceEnd = Math.min(t + CONTENTION_SLICE, endMin);
                 let demandThisSlice = 0;
- 
+
                 for (const grade of allGrades) {
+                    const gStart = parseTimeToMinutes(divisions[grade]?.startTime) || 660;
+                    const gEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 990;
+
+                    // Skip if this time slice is outside this grade's day
+                    if (t >= gEnd || sliceEnd <= gStart) continue;
+
                     const bunks = getBunksForGrade(grade, divisions);
                     for (const bk of bunks) {
                         if (bk === excludeBunk) continue;
                         const timeline = bunkTimelines[bk] || [];
+
+                        let hasBlock = false;
+                        let isConsumer = false;
+
                         for (const block of timeline) {
-                            if (getFieldImpact(block) !== 'consumer') continue;
                             if (block.startMin < sliceEnd && block.endMin > t) {
-                                demandThisSlice++;
-                                break; // one block per bunk per slice
+                                hasBlock = true;
+                                if (getFieldImpact(block) === 'consumer') {
+                                    isConsumer = true;
+                                }
+                                break;
                             }
                         }
+
+                        if (isConsumer) {
+                            demandThisSlice++;
+                        } else if (!hasBlock) {
+                            // Projected demand: unscheduled time assumed to need a field
+                            demandThisSlice++;
+                        }
+                        // else: has a non-consumer block (swim, special, lunch) → off the field
                     }
                 }
- 
+
                 if (demandThisSlice > peakDemand) peakDemand = demandThisSlice;
             }
- 
+
             return peakDemand;
         }
  
