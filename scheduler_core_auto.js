@@ -1572,7 +1572,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                         const position = findBestGapPosition(bunk, swimWinStart, swimWinEnd, swimDur, 'swim', null);
                         if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' window=' + swimWinStart + '-' + swimWinEnd + ' dur=' + swimDur + ' → position=' + (position ? position.start + '-' + position.end : 'null'));
                         if (position) {
-                            placeTentativeBlock(bunk, {
+                            const _swimBlock = {
                                 startMin: position.start,
                                 endMin: position.end,
                                 type: 'swim',
@@ -1580,7 +1580,9 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                                 layer: swimLayer,
                                 _classification: swimLayer._classification,
                                 _activityLocked: true
-                            });
+                            };
+                            const added = placeTentativeBlock(bunk, _swimBlock);
+                            if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' added=' + added + ' timelineLen=' + _preCount + '→' + bunkTimelines[bunk].length + ' blockInTimeline=' + bunkTimelines[bunk].includes(_swimBlock));
 
                             const swimNeed = (bunkNeeds[bunk] || []).find(n =>
                                 (n.layer.type || '').toLowerCase() === 'swim'
