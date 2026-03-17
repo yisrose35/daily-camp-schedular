@@ -2610,13 +2610,31 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
                         !b._activityLocked
                     )
                     .forEach(block => {
-                        const slotIdx = bunkSlotArr.findIndex(s =>
+                        const pbIdx = bunkSlotArr.findIndex(s =>
                             s.startMin === block.startMin && s.endMin === block.endMin
                         );
-                        if (slotIdx === -1) return;
+                        if (pbIdx === -1) return;
+
+                        // Map per-bunk index to shared divisionTimes index for scheduleAssignments
+                        const sharedSlots = window.divisionTimes?.[grade] || [];
+                        let slotIdx = pbIdx;
+                        if (sharedSlots.length > 0) {
+                            const sharedIdx = sharedSlots.findIndex(s =>
+                                s.startMin <= block.startMin && s.endMin >= block.endMin
+                            );
+                            if (sharedIdx >= 0) slotIdx = sharedIdx;
+                            else {
+                                // No shared slot covers this time — find closest overlap
+                                const overlapIdx = sharedSlots.findIndex(s =>
+                                    s.startMin < block.endMin && s.endMin > block.startMin
+                                );
+                                if (overlapIdx >= 0) slotIdx = overlapIdx;
+                            }
+                        }
 
                         // Skip if already filled (pinned or special wrote here)
                         if (window.scheduleAssignments[String(bunk)][slotIdx]) return;
+
 
                         const skipTypes = ['swim', 'snacks', 'lunch', 'dismissal', 'pinned', 'league', 'specialty_league'];
                         if (skipTypes.includes((block.type || '').toLowerCase())) return;
