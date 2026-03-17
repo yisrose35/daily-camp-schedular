@@ -1240,21 +1240,64 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         function generateSkeleton(grade, seed) {
             const types = [...(gradeFlexTypes[grade] || [])];
             if (types.length === 0) return [];
- 
-            // Fisher-Yates shuffle seeded by grade index + iteration seed
-            const gradeIdx = allGrades.indexOf(grade);
-            let s = ((seed + 1) * (gradeIdx + 1) * 2654435761) >>> 0; // hash
-            function rand() {
-                s ^= s << 13; s ^= s >> 17; s ^= s << 5;
-                return (s >>> 0) / 4294967296;
+
+            // ── Category rotation for cross-grade staggering ─────────
+            // Goal: different grades do different activity CATEGORIES at
+            // the same time (while 1st does sport, 2nd does special, 3rd
+            // does swim). This prevents resource depletion.
+            //
+            // How: build a canonical category order, then ROTATE it by
+            // the grade's index. The _iterSeed picks which base permutation
+            // to start from, but the offset between grades is always
+            // systematic (grade 0 = offset 0, grade 1 = offset 1, etc.)
+            //
+            // Categories: group types into swim / special / sport-like.
+            // Non-staggerable types (league, specialty_league) keep their
+            // natural priority and aren't part of the rotation.
+
+            const STAGGER_CATEGORIES = {
+                swim: 0,
+                special: 1,
+                sport: 2, sports: 2, slot: 2
+            };
+
+            // Split into staggerable and non-staggerable
+            const staggerable = [];
+            const fixed = []; // league, specialty_league — placed separately
+            types.forEach(t => {
+                if (STAGGER_CATEGORIES[t.toLowerCase()] !== undefined) {
+                    staggerable.push(t);
+                } else {
+                    fixed.push(t);
+                }
+            });
+
+            // Sort staggerable by category index for canonical order
+            staggerable.sort((a, b) =>
+                (STAGGER_CATEGORIES[a.toLowerCase()] ?? 99) -
+                (STAGGER_CATEGORIES[b.toLowerCase()] ?? 99)
+            );
+
+            // Use seed to pick a base permutation of the canonical order
+            // (so different iterations try different starting arrangements)
+            const numPerms = staggerable.length; // e.g. 3 for [swim, special, sport]
+            if (numPerms > 1) {
+                const baseRotation = seed % numPerms;
+                // Rotate the base by seed amount
+                for (let r = 0; r < baseRotation; r++) {
+                    staggerable.push(staggerable.shift());
+                }
+
+                // Now rotate by grade index — this is what creates the stagger
+                const gradeIdx = allGrades.indexOf(grade);
+                const gradeRotation = gradeIdx % numPerms;
+                for (let r = 0; r < gradeRotation; r++) {
+                    staggerable.push(staggerable.shift());
+                }
             }
- 
-            for (let i = types.length - 1; i > 0; i--) {
-                const j = Math.floor(rand() * (i + 1));
-                [types[i], types[j]] = [types[j], types[i]];
-            }
- 
-            return types;
+
+            // Recombine: staggerable types in rotated order, then fixed
+            return [...staggerable, ...fixed];
         }
  
         const gradeSortedForPlacement = sortGradesByConstraint(
