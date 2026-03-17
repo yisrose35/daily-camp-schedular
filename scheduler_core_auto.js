@@ -733,13 +733,31 @@
             return gaps.filter(g => g.end - g.start >= 5);
         }
 
-       function findBestGapPosition(bunk, windowStart, windowEnd, duration, blockType, specialName) {
+      function findBestGapPosition(bunk, windowStart, windowEnd, duration, blockType, specialName) {
             const gaps = getFreeGaps(bunk, windowStart, windowEnd);
             let bestPos = null;
             let bestScore = Infinity;
  
             for (const gap of gaps) {
-           // ★ FIX: sanity check — never return a position outside the requested window
+                if (gap.end - gap.start < duration) continue;
+ 
+                const latestStart = gap.end - duration;
+                for (let cs = gap.start; cs <= latestStart; cs += 5) {
+                    const ce = cs + duration;
+
+                    // ★ Skip positions that leave unusable residual gaps
+                    if (!isResidualViable(gap.start, gap.end, cs, ce)) continue;
+
+                    const score = scorePositionByContention(cs, ce, blockType, bunk, specialName);
+ 
+                    if (score < bestScore) {
+                        bestScore = score;
+                        bestPos = { start: cs, end: ce };
+                    }
+                }
+            }
+
+            // ★ FIX: sanity check — never return a position outside the requested window
             if (bestPos && (bestPos.start < windowStart || bestPos.end > windowEnd)) {
                 warn('[findBestGapPosition] CORRECTING out-of-window result: ' +
                     bestPos.start + '-' + bestPos.end + ' (window=' + windowStart + '-' + windowEnd + ')');
@@ -749,16 +767,13 @@
         }
 
         // ── Residual gap viability check ─────────────────────────────────
-        // Returns true if placing a block at start→end inside a gap leaves
-        // no orphan fragments that are too small for any activity.
-        // Fragments of 0 are fine (block is flush with gap edge).
-        // Fragments > 0 but < GAP_MIN_DUR are "dead zones" — unusable.
         function isResidualViable(gapStart, gapEnd, blockStart, blockEnd) {
             const before = blockStart - gapStart;
             const after  = gapEnd - blockEnd;
             if (before > 0 && before < GAP_MIN_DUR) return false;
             if (after  > 0 && after  < GAP_MIN_DUR) return false;
             return true;
+        }
 
         function findFlexGapPosition(bunk, windowStart, windowEnd, minDuration) {
             const floor = minDuration || 5;
