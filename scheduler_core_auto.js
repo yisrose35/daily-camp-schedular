@@ -2257,7 +2257,115 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         });
 
         log('[STEP 2.5b] ✅ Closed ' + seamsClosed + ' seams across camp');
+// -----------------------------------------------------------------
+        // STEP 2.5c — EDGE GAP ABSORPTION
+        // Handles gaps that 2.5b couldn't close because adjacent blocks are
+        // fixed/swim/league. Strategy:
+        //   1. Micro gaps (<GAP_MIN_DUR): extend nearest non-fixed neighbor
+        //   2. Small gaps (GAP_MIN_DUR to GAP_MAX_DUR): create activity slot
+        //      even if below the sport layer floor
+        //   3. Leading/trailing day-edge gaps: create activity slots
+        // -----------------------------------------------------------------
+        log('\n[STEP 2.5c] Edge gap absorption...');
+        let edgeGapsFilled = 0;
 
+        allGrades.forEach(grade => {
+            const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+            const gradeEnd   = parseTimeToMinutes(divisions[grade]?.endTime)   || 960;
+            const bunks = getBunksForGrade(grade, divisions);
+
+            bunks.forEach(bunk => {
+                const timeline = bunkTimelines[bunk];
+                if (!timeline || timeline.length === 0) return;
+                timeline.sort((a, b) => a.startMin - b.startMin);
+
+                const gaps = getFreeGaps(bunk, gradeStart, gradeEnd);
+                if (gaps.length === 0) return;
+
+                gaps.forEach(gap => {
+                    const dur = gap.end - gap.start;
+                    if (dur <= 0) return;
+
+                    // ── Strategy 1: Micro gap — absorb into neighbor ─────────
+                    if (dur < GAP_MIN_DUR) {
+                        // Find adjacent blocks
+                        const before = timeline.filter(b => b.endMin === gap.start);
+                        const after  = timeline.filter(b => b.startMin === gap.end);
+                        const prev = before[0];
+                        const next = after[0];
+
+                        // Try extending a non-fixed, non-swim/league neighbor
+                        const noExtendTypes = ['swim', 'league', 'specialty_league', 'lunch', 'dismissal'];
+
+                        if (prev && !prev._fixed && !noExtendTypes.includes((prev.type || '').toLowerCase())) {
+                            const prevMaxDur = prev.layer
+                                ? (prev.layer.durationMax || prev.layer.periodMin || prev.layer.duration || Infinity)
+                                : Infinity;
+                            if ((prev.endMin - prev.startMin) + dur <= prevMaxDur) {
+                                prev.endMin = gap.end;
+                                edgeGapsFilled++;
+                                log('[STEP 2.5c] Absorbed ' + dur + 'min micro-gap into prev "' + prev.event + '" on ' + bunk);
+                                return;
+                            }
+                        }
+
+                        if (next && !next._fixed && !next._classification !== 'pinned' &&
+                            !noExtendTypes.includes((next.type || '').toLowerCase())) {
+                            const nextMaxDur = next.layer
+                                ? (next.layer.durationMax || next.layer.periodMin || next.layer.duration || Infinity)
+                                : Infinity;
+                            if ((next.endMin - next.startMin) + dur <= nextMaxDur) {
+                                next.startMin = gap.start;
+                                edgeGapsFilled++;
+                                log('[STEP 2.5c] Absorbed ' + dur + 'min micro-gap into next "' + next.event + '" on ' + bunk);
+                                return;
+                            }
+                        }
+
+                        // Last resort: create a mini slot even below GAP_MIN_DUR
+                        // (5-19 min slots are better than visible gaps)
+                        if (dur >= 5) {
+                            placeTentativeBlock(bunk, {
+                                startMin: gap.start, endMin: gap.end,
+                                type: 'slot', event: 'General Activity Slot',
+                                layer: null, _classification: 'gap',
+                                _fromGapDetection: true, _committed: true, _microGap: true
+                            });
+                            edgeGapsFilled++;
+                            log('[STEP 2.5c] Created ' + dur + 'min micro-slot on ' + bunk + ' at ' + gap.start);
+                        }
+                        return;
+                    }
+
+                    // ── Strategy 2: Fillable gap (≥GAP_MIN_DUR) ─────────────
+                    // These were missed by Step 2.5 in this iteration.
+                    // Create activity slot(s) with relaxed floor (GAP_MIN_DUR).
+                    const maxDur = getGapCapForGrade(grade, gap.start, gap.end);
+                    let cursor = gap.start;
+
+                    while (cursor < gap.end) {
+                        const remaining = gap.end - cursor;
+                        if (remaining < 5) break;
+
+                        // Use GAP_MIN_DUR as floor, but accept smaller remainders
+                        let slotDur = Math.min(maxDur, remaining);
+                        slotDur = Math.floor(slotDur / 5) * 5;
+                        if (slotDur < 5) break;
+
+                        placeTentativeBlock(bunk, {
+                            startMin: cursor, endMin: cursor + slotDur,
+                            type: 'slot', event: 'General Activity Slot',
+                            layer: null, _classification: 'gap',
+                            _fromGapDetection: true, _committed: true
+                        });
+                        edgeGapsFilled++;
+                        cursor += slotDur;
+                    }
+                });
+            });
+        });
+
+        log('[STEP 2.5c] ✅ Absorbed/filled ' + edgeGapsFilled + ' edge gaps');
         // ── Score this iteration and track best ──────────────────────────────
         const iterWarnings = [];
         const iterScore = scoreTimelines(bunkTimelines, iterWarnings);
