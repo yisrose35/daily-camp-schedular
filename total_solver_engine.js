@@ -1170,7 +1170,9 @@ else penalty += 200;
                 var skipTimeCheck = S._isRainyDay && S._rainyTimeBypasses.has(fn);
                 var fp = S._fieldPropertyMap.get(fn);
                 if (fp?.prefExclusive && fp.prefList && fp.prefList.indexOf(blockDiv) === -1) continue;
-               if (!skipTimeCheck && window.unifiedTimes) { var fits = window.SchedulerCoreUtils?.canBlockFit?.(block, fn, actProps, window.fieldUsageBySlot, c2.activityName, false); if (fits === false) continue; }                    var cap = fp ? fp.capacity : S.getFieldCapacity(fn);
+              if (!skipTimeCheck && window.unifiedTimes) { var fits = window.SchedulerCoreUtils?.canBlockFit?.(block, fn, actProps, window.fieldUsageBySlot, c2.activityName, false); if (fits === false) continue; }
+                if (hasTime) {
+                    var cap = fp ? fp.capacity : S.getFieldCapacity(fn);
                     var st = fp ? fp.sharingType : S.getSharingType(fn);
                     if (S.checkCrossDivisionTimeConflict(fn, blockDiv, startMin, endMin, bunk)) continue;
                     if (st === 'not_sharable') { if (S.getFieldUsageFromTimeIndex(fnorm, startMin, endMin, bunk) >= cap) continue; }
