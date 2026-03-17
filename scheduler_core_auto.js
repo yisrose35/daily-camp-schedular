@@ -1570,6 +1570,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
 
                     for (const bunk of sortedBunks) {
                         const position = findBestGapPosition(bunk, swimWinStart, swimWinEnd, swimDur, 'swim', null);
+                        if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' window=' + swimWinStart + '-' + swimWinEnd + ' dur=' + swimDur + ' → position=' + (position ? position.start + '-' + position.end : 'null'));
                         if (position) {
                             placeTentativeBlock(bunk, {
                                 startMin: position.start,
