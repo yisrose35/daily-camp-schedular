@@ -2445,6 +2445,16 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
             });
 
             log('[STEP 2.7] Built _perBunkSlots for all grades');
+
+            // ★ Backup _perBunkSlots to a standalone global so deserialization
+            // of divisionTimes (which strips custom array properties) can't kill it
+            window._perBunkSlots = {};
+            allGrades.forEach(grade => {
+                const divSlots = window.divisionTimes[grade];
+                if (divSlots && divSlots._perBunkSlots) {
+                    window._perBunkSlots[grade] = divSlots._perBunkSlots;
+                }
+            });
         } else {            err('[STEP 2.7] DivisionTimesSystem not available — cannot build _perBunkSlots');
             warnings.push({ type: 'critical', message: 'DivisionTimesSystem not loaded' });
         }
@@ -2452,11 +2462,12 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
         // Initialize scheduleAssignments per bunk from _perBunkSlots
         allGrades.forEach(grade => {
             const divSlots = window.divisionTimes && window.divisionTimes[grade];
-            const perBunkSlots = divSlots && divSlots._perBunkSlots;
+           const perBunkSlots = (divSlots && divSlots._perBunkSlots) || window._perBunkSlots?.[grade];
+            
             const bunks = getBunksForGrade(grade, divisions);
-
-           bunks.forEach(bunk => {
-    const bunkSlots = perBunkSlots && perBunkSlots[String(bunk)];
+            bunks.forEach(bunk => {
+                const bunkSlotArr = (perBunkSlots && perBunkSlots[String(bunk)]) ||
+                    (window._perBunkSlots?.[grade]?.[String(bunk)]) || [];
     const slotCount = bunkSlots ? bunkSlots.length : (divSlots ? divSlots.length : 0);
     window.scheduleAssignments[String(bunk)] = new Array(slotCount).fill(null);
 
@@ -2472,7 +2483,7 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
 
         allGrades.forEach(grade => {
             const divSlots = window.divisionTimes && window.divisionTimes[grade];
-            const perBunkSlots = divSlots && divSlots._perBunkSlots;
+            const perBunkSlots = (divSlots && divSlots._perBunkSlots) || window._perBunkSlots?.[grade];
             if (!perBunkSlots) return;
 
             const bunks = getBunksForGrade(grade, divisions);
@@ -2533,7 +2544,7 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
 
         allGrades.forEach(grade => {
             const divSlots = window.divisionTimes && window.divisionTimes[grade];
-            const perBunkSlots = divSlots && divSlots._perBunkSlots;
+           const perBunkSlots = (divSlots && divSlots._perBunkSlots) || window._perBunkSlots?.[grade];
             if (!perBunkSlots) return;
 
             const bunks = getBunksForGrade(grade, divisions);
@@ -2569,7 +2580,7 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
         const fixedTypes = ['swim', 'snacks', 'lunch', 'dismissal'];
         allGrades.forEach(grade => {
             const divSlots = window.divisionTimes && window.divisionTimes[grade];
-            const perBunkSlots = divSlots && divSlots._perBunkSlots;
+            const perBunkSlots = (divSlots && divSlots._perBunkSlots) || window._perBunkSlots?.[grade];
             if (!perBunkSlots) return;
             const bunks = getBunksForGrade(grade, divisions);
             bunks.forEach(bunk => {
@@ -2610,7 +2621,7 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
 
         allGrades.forEach(grade => {
             const divSlots = window.divisionTimes && window.divisionTimes[grade];
-            const perBunkSlots = divSlots && divSlots._perBunkSlots;
+            const perBunkSlots = (divSlots && divSlots._perBunkSlots) || window._perBunkSlots?.[grade];
             if (!perBunkSlots) return;
 
             const bunks = getBunksForGrade(grade, divisions);
@@ -2635,7 +2646,13 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
                         const slotIdx = pbIdx;
 
                         // Skip if already filled (pinned or special wrote here)
-                        if (window.scheduleAssignments[String(bunk)][slotIdx]) return;
+                        // Treat 'Free' entries as empty — they're stale fallbacks, not real assignments
+                        const _existing = window.scheduleAssignments[String(bunk)][slotIdx];
+                        if (_existing && _existing.field !== 'Free') return;
+                        // Null out stale Free so solver starts clean
+                        if (_existing && _existing.field === 'Free' && !_existing._fixed) {
+                            window.scheduleAssignments[String(bunk)][slotIdx] = null;
+                        }
 
 
                         const skipTypes = ['swim', 'snacks', 'lunch', 'dismissal', 'pinned', 'league', 'specialty_league'];
