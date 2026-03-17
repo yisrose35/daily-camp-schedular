@@ -1568,7 +1568,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                     const swimWinStart = Math.max(swimLayer.startMin || 0, divStart);
                     const swimWinEnd = Math.min(swimLayer.endMin || 990, divEnd);
 
-                    for (const bunk of sortedBunks) {
+                   
                        for (const bunk of sortedBunks) {
                         const position = findBestGapPosition(bunk, swimWinStart, swimWinEnd, swimDur, 'swim', null);
                         if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' window=' + swimWinStart + '-' + swimWinEnd + ' dur=' + swimDur + ' → position=' + (position ? position.start + '-' + position.end : 'null'));
