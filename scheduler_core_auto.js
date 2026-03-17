@@ -1461,9 +1461,22 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
             const event = layer.event || layer.name || layer.type || 'Activity';
             const dMin = layer.durationMin || layer.periodMin || layer.duration || GAP_MIN_DUR;
             const dMax = layer.durationMax || layer.periodMin || layer.duration || GAP_MAX_DUR;
- 
+
+            // ★ FIX: Intersect free window with layer's own time window
+            // Without this, open/windowed layers get placed in any free gap
+            // regardless of where the user defined them (e.g. snacks at 2-3pm
+            // placed at 11:45am because there's a gap after swim).
+            const layerWinStart = layer.startMin;
+            const layerWinEnd   = layer.endMin;
+            if (layerWinStart != null && layerWinEnd != null) {
+                windowStart = Math.max(windowStart, layerWinStart);
+                windowEnd   = Math.min(windowEnd, layerWinEnd);
+                if (windowStart >= windowEnd) return null; // no overlap
+            }
+
             // Find best gap with contention scoring
             const position = findBestGapPosition(bunk, windowStart, windowEnd, dMin, type, null);
+
             if (!position) return null;
  
             // Size the block: take up to dMax or available space
@@ -2035,9 +2048,25 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                         const nextIsFixed = next._fixed || next._classification === 'pinned';
                         const currIsFixed = curr._fixed || curr._classification === 'pinned';
 
-                        // ★ Option 0: FIXED↔FIXED — shift later block backward within its window
-                        if (currIsFixed && nextIsFixed) {
-                            const nextWindowMin = next.layer?.startMin ?? next.layer?.windowMin ?? next.startMin;
+                        // ★ Option 0: Both blocks are fixed/pinned — compact by sliding later block back
+                        // Skip grade-wide simultaneous blocks (league, swim) — their times are shared across bunks
+                        const _noSlideTypes = ['league', 'specialty_league', 'swim'];
+                        const _nextTypeLC = (next.type || '').toLowerCase();
+                        const _currTypeLC = (curr.type || '').toLowerCase();
+
+                        if (currIsFixed && nextIsFixed &&
+                            !_noSlideTypes.includes(_nextTypeLC) &&
+                            !_noSlideTypes.includes(_currTypeLC)) {
+                            log(`[STEP 2.5b] Pass ${passCount} — compact fixed: "${next.event}" ${next.startMin}→${curr.endMin} on ${bunk} (closing ${gap}min gap after "${curr.event}")`);
+                            next.startMin = curr.endMin;
+                            next.endMin   = curr.endMin + nextDur;
+                            seamsClosed++;
+                            passChanged = true;
+                            continue;
+                        }
+
+                        // ★ Option 1: extend earlier block forward
+                        if (currDur + gap <= currMaxDur) {                            const nextWindowMin = next.layer?.startMin ?? next.layer?.windowMin ?? next.startMin;
                             const shiftTarget = curr.endMin;
 
                             if (shiftTarget >= nextWindowMin) {
