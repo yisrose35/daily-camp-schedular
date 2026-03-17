@@ -738,6 +738,12 @@
                 }
             }
  
+            // ★ FIX: sanity check — never return a position outside the requested window
+            if (bestPos && (bestPos.start < windowStart || bestPos.end > windowEnd)) {
+                warn('[findBestGapPosition] CORRECTING out-of-window result: ' +
+                    bestPos.start + '-' + bestPos.end + ' (window=' + windowStart + '-' + windowEnd + ')');
+                bestPos = null;
+            }
             return bestPos;
         }
 
@@ -756,21 +762,28 @@
             return best;
         }
 
-       function placeTentativeBlock(bunk, block) {
-            // ★ FIX: reject blocks placed outside the camp day
+      function placeTentativeBlock(bunk, block) {
+            // ★ FIX: clamp blocks to grade day boundaries
             const grade = block.layer?.grade || block.layer?.division;
             if (grade && divisions[grade]) {
                 const dStart = parseTimeToMinutes(divisions[grade].startTime) || 540;
                 const dEnd   = parseTimeToMinutes(divisions[grade].endTime)   || 960;
+                // Completely outside — reject
                 if (block.endMin <= dStart || block.startMin >= dEnd) {
-                    warn('[placeTentativeBlock] REJECTED out-of-bounds block: ' +
-                        block.event + ' ' + block.startMin + '-' + block.endMin +
-                        ' for ' + bunk + ' (day=' + dStart + '-' + dEnd + ')');
+                    warn('[placeTentativeBlock] REJECTED ' + block.event + ' ' +
+                        block.startMin + '-' + block.endMin + ' for ' + bunk +
+                        ' (day=' + dStart + '-' + dEnd + ')');
                     return;
                 }
-                // Clamp blocks that partially overflow
-                if (block.startMin < dStart) block.startMin = dStart;
-                if (block.endMin > dEnd)     block.endMin = dEnd;
+                // Partially outside — clamp
+                if (block.startMin < dStart) {
+                    warn('[placeTentativeBlock] CLAMPED start ' + block.startMin + '→' + dStart + ' for ' + block.event + ' on ' + bunk);
+                    block.startMin = dStart;
+                }
+                if (block.endMin > dEnd) {
+                    warn('[placeTentativeBlock] CLAMPED end ' + block.endMin + '→' + dEnd + ' for ' + block.event + ' on ' + bunk);
+                    block.endMin = dEnd;
+                }
             }
             bunkTimelines[bunk].push(block);
             bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
@@ -1351,15 +1364,14 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         }
  
         // ── Helper: find best swim position for a single bunk ────────────
-       function placeSwimForBunk(bunk, layer) {
+      function placeSwimForBunk(bunk, layer) {
             const dur = layer.periodMin || layer.durationMin || layer.duration || 45;
-            // ★ FIX: clamp swim window to grade day boundaries — raw layer.startMin
-            //   may be 0 (midnight) if the template didn't compute stagger offsets.
+            // ★ FIX: clamp to grade day boundaries (mirrors Step 2.3 swim logic)
             const grade = layer.grade || layer.division;
-            const divStart = parseTimeToMinutes(divisions[grade]?.startTime) || 660;
-            const divEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 990;
-            const windowStart = Math.max(layer.startMin || 0, divStart);
-            const windowEnd = Math.min(layer.endMin || 990, divEnd);
+            const dStart = parseTimeToMinutes(divisions[grade]?.startTime) || 660;
+            const dEnd   = parseTimeToMinutes(divisions[grade]?.endTime)   || 990;
+            const windowStart = Math.max(layer.startMin || 0, dStart);
+            const windowEnd   = Math.min(layer.endMin || 990, dEnd);
  
             return findBestGapPosition(bunk, windowStart, windowEnd, dur, 'swim', null);
         }
