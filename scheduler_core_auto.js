@@ -1324,10 +1324,15 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         }
  
         // ── Helper: find best swim position for a single bunk ────────────
-        function placeSwimForBunk(bunk, layer) {
+       function placeSwimForBunk(bunk, layer) {
             const dur = layer.periodMin || layer.durationMin || layer.duration || 45;
-            const windowStart = layer.startMin;
-            const windowEnd = layer.endMin;
+            // ★ FIX: clamp swim window to grade day boundaries — raw layer.startMin
+            //   may be 0 (midnight) if the template didn't compute stagger offsets.
+            const grade = layer.grade || layer.division;
+            const divStart = parseTimeToMinutes(divisions[grade]?.startTime) || 660;
+            const divEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 990;
+            const windowStart = Math.max(layer.startMin || 0, divStart);
+            const windowEnd = Math.min(layer.endMin || 990, divEnd);
  
             return findBestGapPosition(bunk, windowStart, windowEnd, dur, 'swim', null);
         }
