@@ -2468,7 +2468,7 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
             bunks.forEach(bunk => {
                 const bunkSlotArr = (perBunkSlots && perBunkSlots[String(bunk)]) ||
                     (window._perBunkSlots?.[grade]?.[String(bunk)]) || [];
-    const slotCount = bunkSlots ? bunkSlots.length : (divSlots ? divSlots.length : 0);
+   const slotCount = bunkSlotArr ? bunkSlotArr.length : (divSlots ? divSlots.length : 0);
     window.scheduleAssignments[String(bunk)] = new Array(slotCount).fill(null);
 
    
