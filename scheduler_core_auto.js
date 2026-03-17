@@ -1510,13 +1510,22 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                     );
                     if (!swimLayer) continue;
 
+                    // ★ Clamp swim window to grade day boundaries
+                    const swimWindowStart = Math.max(swimLayer.startMin || 0, divStart);
+                    const swimWindowEnd = Math.min(swimLayer.endMin || 990, divEnd);
+
                     const sortedBunks = [...bunks].sort((a, b) =>
                         (parseInt(String(a).replace(/\D/g, '')) || 0) -
                         (parseInt(String(b).replace(/\D/g, '')) || 0)
                     );
 
+                    // ★ Clamp swim window to grade day boundaries
+                    const swimDur = swimLayer.periodMin || swimLayer.durationMin || swimLayer.duration || 45;
+                    const swimWinStart = Math.max(swimLayer.startMin || 0, divStart);
+                    const swimWinEnd = Math.min(swimLayer.endMin || 990, divEnd);
+
                     for (const bunk of sortedBunks) {
-                        const position = placeSwimForBunk(bunk, swimLayer);
+                        const position = findBestGapPosition(bunk, swimWinStart, swimWinEnd, swimDur, 'swim', null);
                         if (position) {
                             placeTentativeBlock(bunk, {
                                 startMin: position.start,
