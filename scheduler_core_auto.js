@@ -1569,8 +1569,9 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                     const swimWinEnd = Math.min(swimLayer.endMin || 990, divEnd);
 
                     for (const bunk of sortedBunks) {
+                       for (const bunk of sortedBunks) {
                         const position = findBestGapPosition(bunk, swimWinStart, swimWinEnd, swimDur, 'swim', null);
-                       if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' window=' + swimWinStart + '-' + swimWinEnd + ' dur=' + swimDur + ' → position=' + (position ? position.start + '-' + position.end : 'null'));
+                        if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' window=' + swimWinStart + '-' + swimWinEnd + ' dur=' + swimDur + ' → position=' + (position ? position.start + '-' + position.end : 'null'));
                         if (position) {
                             var _preCount = bunkTimelines[bunk].length;
                             var _swimBlock = {
@@ -1582,15 +1583,15 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                                 _classification: swimLayer._classification,
                                 _activityLocked: true
                             };
-                           var _swimAdded = placeTentativeBlock(bunk, _swimBlock);
-                            if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' added=' + _swimAdded + ' timeline=' + _preCount + '→' + bunkTimelines[bunk].length + ' inArray=' + bunkTimelines[bunk].includes(_swimBlock));                            if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' added=' + added + ' timeline=' + _preCount + '→' + bunkTimelines[bunk].length + ' inArray=' + bunkTimelines[bunk].includes(_swimBlock));
-                            const added = placeTentativeBlock(bunk, _swimBlock);
-                            if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' added=' + added + ' timelineLen=' + _preCount + '→' + bunkTimelines[bunk].length + ' blockInTimeline=' + bunkTimelines[bunk].includes(_swimBlock));
+                            var _swimAdded = placeTentativeBlock(bunk, _swimBlock);
+                            if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' added=' + _swimAdded + ' timeline=' + _preCount + '→' + bunkTimelines[bunk].length + ' inArray=' + bunkTimelines[bunk].includes(_swimBlock));
 
-                            const swimNeed = (bunkNeeds[bunk] || []).find(n =>
-                                (n.layer.type || '').toLowerCase() === 'swim'
-                            );
-                            if (swimNeed) swimNeed.placed++;
+                            if (_swimAdded !== false) {
+                                const swimNeed = (bunkNeeds[bunk] || []).find(n =>
+                                    (n.layer.type || '').toLowerCase() === 'swim'
+                                );
+                                if (swimNeed) swimNeed.placed++;
+                            }
                         }
                     }
                     continue;
