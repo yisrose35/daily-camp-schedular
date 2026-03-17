@@ -2033,9 +2033,39 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                             : Infinity;
 
                         const nextIsFixed = next._fixed || next._classification === 'pinned';
+                        const currIsFixed = curr._fixed || curr._classification === 'pinned';
 
-                        // ★ Option 1: extend earlier block forward
-                        if (currDur + gap <= currMaxDur) {
+                        // ★ Option 0: FIXED↔FIXED — shift later block backward if its window allows
+                        // Both blocks are fixed/pinned but the later one came from a windowed layer
+                        // whose windowMin allows it to start earlier. Slide it back to close the gap.
+                        if (currIsFixed && nextIsFixed && gap > 0) {
+                            const nextWindowMin = next.layer?.startMin ?? next.layer?.windowMin ?? -Infinity;
+                            const shiftTarget = curr.endMin; // butt up against previous block
+
+                            if (shiftTarget >= nextWindowMin) {
+                                log('[STEP 2.5b] Pass ' + passCount + ' — FIXED↔FIXED shift: "' +
+                                    next.event + '" ' + next.startMin + '→' + shiftTarget + ' on ' + bunk);
+                                next.endMin   = shiftTarget + nextDur;
+                                next.startMin = shiftTarget;
+                                seamsClosed++;
+                                passChanged = true;
+                                continue;
+                            }
+                            // Can't shift — try extending curr forward if its window allows
+                            const currWindowMax = curr.layer?.endMin ?? curr.layer?.windowMax ?? curr.endMin;
+                            if (curr.endMin + gap <= currWindowMax) {
+                                log('[STEP 2.5b] Pass ' + passCount + ' — FIXED↔FIXED extend: "' +
+                                    curr.event + '" endMin ' + curr.endMin + '→' + next.startMin + ' on ' + bunk);
+                                curr.endMin = next.startMin;
+                                seamsClosed++;
+                                passChanged = true;
+                                continue;
+                            }
+                            // Neither can move — gap remains
+                            continue;
+                        }
+
+                        // ★ Option 1: extend earlier block forward                        if (currDur + gap <= currMaxDur) {
                             log(`[STEP 2.5b] Pass ${passCount} — extend earlier: "${curr.event}" ${curr.endMin}→${next.startMin} on ${bunk}`);
                             curr.endMin = next.startMin;
                             seamsClosed++;
