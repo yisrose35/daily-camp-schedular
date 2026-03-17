@@ -2615,22 +2615,9 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
                         );
                         if (pbIdx === -1) return;
 
-                        // Map per-bunk index to shared divisionTimes index for scheduleAssignments
-                        const sharedSlots = window.divisionTimes?.[grade] || [];
-                        let slotIdx = pbIdx;
-                        if (sharedSlots.length > 0) {
-                            const sharedIdx = sharedSlots.findIndex(s =>
-                                s.startMin <= block.startMin && s.endMin >= block.endMin
-                            );
-                            if (sharedIdx >= 0) slotIdx = sharedIdx;
-                            else {
-                                // No shared slot covers this time — find closest overlap
-                                const overlapIdx = sharedSlots.findIndex(s =>
-                                    s.startMin < block.endMin && s.endMin > block.startMin
-                                );
-                                if (overlapIdx >= 0) slotIdx = overlapIdx;
-                            }
-                        }
+                       // Auto mode: scheduleAssignments[bunk] is indexed by per-bunk slot index
+                        // (initialized from _perBunkSlots in this same Step 2.7) — no remapping needed
+                        const slotIdx = pbIdx;
 
                         // Skip if already filled (pinned or special wrote here)
                         if (window.scheduleAssignments[String(bunk)][slotIdx]) return;
