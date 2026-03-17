@@ -753,7 +753,7 @@
                 }
             }
  
-            // ★ FIX: sanity check — never return a position outside the requested window
+           // ★ FIX: sanity check — never return a position outside the requested window
             if (bestPos && (bestPos.start < windowStart || bestPos.end > windowEnd)) {
                 warn('[findBestGapPosition] CORRECTING out-of-window result: ' +
                     bestPos.start + '-' + bestPos.end + ' (window=' + windowStart + '-' + windowEnd + ')');
@@ -761,6 +761,18 @@
             }
             return bestPos;
         }
+
+        // ── Residual gap viability check ─────────────────────────────────
+        // Returns true if placing a block at start→end inside a gap leaves
+        // no orphan fragments that are too small for any activity.
+        // Fragments of 0 are fine (block is flush with gap edge).
+        // Fragments > 0 but < GAP_MIN_DUR are "dead zones" — unusable.
+        function isResidualViable(gapStart, gapEnd, blockStart, blockEnd) {
+            const before = blockStart - gapStart;
+            const after  = gapEnd - blockEnd;
+            if (before > 0 && before < GAP_MIN_DUR) return false;
+            if (after  > 0 && after  < GAP_MIN_DUR) return false;
+            return true;
 
         function findFlexGapPosition(bunk, windowStart, windowEnd, minDuration) {
             const floor = minDuration || 5;
