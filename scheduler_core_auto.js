@@ -2421,7 +2421,82 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         });
         warnings.length = 0;
         bestWarnings.forEach(w => warnings.push(w));
-        
+        // -----------------------------------------------------------------
+        // POST-LOOP GAP PATCH — run on winning timelines before formalization
+        // Catches any gaps the best iteration left behind
+        // -----------------------------------------------------------------
+        log('\n[POST-LOOP] Patching gaps in best iteration timelines...');
+        let postLoopFilled = 0;
+
+        allGrades.forEach(grade => {
+            const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+            const gradeEnd   = parseTimeToMinutes(divisions[grade]?.endTime)   || 960;
+            const bunks = getBunksForGrade(grade, divisions);
+
+            bunks.forEach(bunk => {
+                const timeline = bunkTimelines[bunk];
+                if (!timeline || timeline.length === 0) return;
+                timeline.sort((a, b) => a.startMin - b.startMin);
+
+                const gaps = getFreeGaps(bunk, gradeStart, gradeEnd);
+                gaps.forEach(gap => {
+                    const dur = gap.end - gap.start;
+                    if (dur < 5) return;
+
+                    // Try absorbing micro gaps into neighbors first
+                    if (dur < GAP_MIN_DUR) {
+                        const noExtend = ['swim', 'league', 'specialty_league', 'lunch', 'dismissal'];
+                        const prev = timeline.find(b => b.endMin === gap.start);
+                        const next = timeline.find(b => b.startMin === gap.end);
+
+                        if (prev && !prev._fixed && !noExtend.includes((prev.type || '').toLowerCase())) {
+                            const maxDur = prev.layer
+                                ? (prev.layer.durationMax || prev.layer.periodMin || prev.layer.duration || Infinity)
+                                : Infinity;
+                            if ((prev.endMin - prev.startMin) + dur <= maxDur) {
+                                prev.endMin = gap.end;
+                                postLoopFilled++;
+                                log('[POST-LOOP] Absorbed ' + dur + 'min into prev "' + prev.event + '" on ' + bunk);
+                                return;
+                            }
+                        }
+                        if (next && !next._fixed && next._classification !== 'pinned' &&
+                            !noExtend.includes((next.type || '').toLowerCase())) {
+                            const maxDur = next.layer
+                                ? (next.layer.durationMax || next.layer.periodMin || next.layer.duration || Infinity)
+                                : Infinity;
+                            if ((next.endMin - next.startMin) + dur <= maxDur) {
+                                next.startMin = gap.start;
+                                postLoopFilled++;
+                                log('[POST-LOOP] Absorbed ' + dur + 'min into next "' + next.event + '" on ' + bunk);
+                                return;
+                            }
+                        }
+                    }
+
+                    // Create slot(s) for any remaining gap ≥5min
+                    const maxDur = getGapCapForGrade(grade, gap.start, gap.end);
+                    let cursor = gap.start;
+                    while (cursor < gap.end) {
+                        const remaining = gap.end - cursor;
+                        if (remaining < 5) break;
+                        let slotDur = Math.min(maxDur, remaining);
+                        slotDur = Math.floor(slotDur / 5) * 5;
+                        if (slotDur < 5) break;
+
+                        placeTentativeBlock(bunk, {
+                            startMin: cursor, endMin: cursor + slotDur,
+                            type: 'slot', event: 'General Activity Slot',
+                            layer: null, _classification: 'gap',
+                            _fromGapDetection: true, _committed: true
+                        });
+                        postLoopFilled++;
+                        cursor += slotDur;
+                    }
+                });
+            });
+        });
+        log('[POST-LOOP] ✅ Patched ' + postLoopFilled + ' gaps in best timelines');
         // -----------------------------------------------------------------
         // STEP 2.6 — VALIDATE
         // -----------------------------------------------------------------
