@@ -589,11 +589,26 @@
                         }
                     });
                 }
-                // ── Gaps between blocks ──────────────────────────────────────
+               // ── Gaps between blocks (including day-edge gaps) ────────────
                 const sorted = [...timeline].sort((a, b) => a.startMin - b.startMin);
+                const gradeKey2 = Object.entries(divisions).find(([g, d]) =>
+                    (d.bunks || []).map(String).includes(String(bunk))
+                )?.[0];
+                const dayStart = gradeKey2 ? (parseTimeToMinutes(divisions[gradeKey2]?.startTime) || 540) : 540;
+                const dayEnd   = gradeKey2 ? (parseTimeToMinutes(divisions[gradeKey2]?.endTime)   || 960) : 960;
+
+                // Leading gap: day start → first block
+                if (sorted.length > 0 && sorted[0].startMin > dayStart) {
+                    score += (sorted[0].startMin - dayStart) * 15;
+                }
+                // Inter-block gaps
                 for (let i = 0; i < sorted.length - 1; i++) {
                     const gap = sorted[i + 1].startMin - sorted[i].endMin;
-                    if (gap > 0) score += gap * 5; // any gap is bad
+                    if (gap > 0) score += gap * 15;
+                }
+                // Trailing gap: last block → day end
+                if (sorted.length > 0 && sorted[sorted.length - 1].endMin < dayEnd) {
+                    score += (dayEnd - sorted[sorted.length - 1].endMin) * 15;
                 }
 
                 // ── Undersized gap-fill slots ────────────────────────────────
