@@ -550,9 +550,9 @@
         // reset between runs. Steps 3–5 run once on the best result.
         // =====================================================================
 
-        const MAX_ITERATIONS  = 1000;
+        const MAX_ITERATIONS  = 60;
         const PERFECT_SCORE   = 0;
-        const STALE_STOP      = 75; // stop if no improvement for this many consecutive iterations
+        const STALE_STOP      = 12; // stop if no improvement for this many consecutive iterations
 
         let _iterSeed    = 0; // read by stagger offset in Step 2.3
         let bestScore    = Infinity;
@@ -2093,16 +2093,15 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
             staleCount++;
         }
 
-        log('[ITER ' + totalIters + '] score=' + iterScore +
-            (improved ? ' ★ NEW BEST' : '') +
-            ' | best=' + bestScore + ' | stale=' + staleCount);
+        if (improved || totalIters <= 3 || totalIters % 10 === 0) {
+            log('[ITER ' + totalIters + '] score=' + iterScore +
+                (improved ? ' ★ NEW BEST' : '') +
+                ' | best=' + bestScore + ' | stale=' + staleCount);
+        }
 
        
 
-     // Debug exports — captured at end of each iteration
-        window._bunkNeeds     = JSON.parse(JSON.stringify(bunkNeeds));
-        window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
-        window._autoBuildTimelines = JSON.parse(JSON.stringify(bunkTimelines));
+    // Debug exports — only on final iteration (perf: skip deep clone in hot loop)
 
         if (bestScore > PERFECT_SCORE && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS) {
             _iterSeed++;
@@ -2115,6 +2114,11 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         log('══════════════════════════════════════════════════════════');
         log('BEST SCORE: ' + bestScore + ' after ' + totalIters + ' iteration(s)');
         log('══════════════════════════════════════════════════════════');
+
+        // Debug exports — once after loop (moved from hot loop for perf)
+        window._bunkNeeds     = JSON.parse(JSON.stringify(bunkNeeds));
+        window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
+        window._autoBuildTimelines = JSON.parse(JSON.stringify(bunkTimelines));
 
         // Restore the best iteration's timelines into live state for Steps 3–5
         allGrades.forEach(grade => {
