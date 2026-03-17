@@ -739,20 +739,6 @@
             let bestScore = Infinity;
  
             for (const gap of gaps) {
-                if (gap.end - gap.start < duration) continue;
- 
-                const latestStart = gap.end - duration;
-                for (let cs = gap.start; cs <= latestStart; cs += 5) {
-                    const ce = cs + duration;
-                    const score = scorePositionByContention(cs, ce, blockType, bunk, specialName);
- 
-                    if (score < bestScore) {
-                        bestScore = score;
-                        bestPos = { start: cs, end: ce };
-                    }
-                }
-            }
- 
            // ★ FIX: sanity check — never return a position outside the requested window
             if (bestPos && (bestPos.start < windowStart || bestPos.end > windowEnd)) {
                 warn('[findBestGapPosition] CORRECTING out-of-window result: ' +
