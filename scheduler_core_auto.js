@@ -556,7 +556,8 @@
 
         let _iterSeed    = 0; // read by stagger offset in Step 2.3
         let bestScore    = Infinity;
-        let bestTimelines = null;
+       let bestTimelines = null;
+        let _savedNonPinnedLayers = null;
         let bestWarnings  = [];
         let staleCount   = 0;
        let totalIters   = 0;
@@ -1272,7 +1273,8 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
  
         // ── Build flexible type layers per grade ─────────────────────────
         // Collect what each grade needs (excluding pinned)
-        const nonPinnedLayers = [...windowedLayers, ...openLayers];
+       const nonPinnedLayers = [...windowedLayers, ...openLayers];
+        _savedNonPinnedLayers = nonPinnedLayers;
  
         const gradeFlexTypes = {}; // grade → array of distinct type strings
         allGrades.forEach(grade => {
@@ -2656,7 +2658,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
             const bunks = getBunksForGrade(grade, divisions);
             const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
             const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
-            const gradeLayers = nonPinnedLayers.filter(l => {
+            const gradeLayers = _savedNonPinnedLayers.filter(l => {
                 if ((l.grade || l.division) !== grade) return false;
                 const t = (l.type || '').toLowerCase();
                 return t !== 'league' && t !== 'specialty_league';
