@@ -2594,9 +2594,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         });
 
         // Debug exports — once after loop, AFTER restoring best timelines
-        window._bunkNeeds     = JSON.parse(JSON.stringify(bunkNeeds));
-        window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
-        window._autoBuildTimelines = JSON.parse(JSON.stringify(bunkTimelines));
+        
         warnings.length = 0;
        bestWarnings.forEach(w => warnings.push(w));
 
