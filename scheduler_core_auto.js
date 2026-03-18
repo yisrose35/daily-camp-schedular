@@ -1968,111 +1968,14 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                     }
 
                } else {
-                    // Non-special: try to split an existing slot block to make room
-                    const layerDur = layer.periodMin || layer.durationMin || layer.duration || 10;
-                    const layerType = (layer.type || '').toLowerCase();
-                    const layerEvent = layer.event || layer.name || layer.type || layerType;
-                    const winStart = layer.startMin || 0;
-                    const winEnd = layer.endMin || 1440;
-                    let resolved = false;
-
-                    // Find splittable slot blocks within the layer's time window
-                    const timeline = bunkTimelines[bunk] || [];
-                    const candidates = timeline
-                        .filter(b => {
-                            if ((b.type || '').toLowerCase() !== 'slot') return false;
-                            if (b._fixed || b._classification === 'pinned') return false;
-                            // Block must overlap with layer window
-                            const overlapStart = Math.max(b.startMin, winStart);
-                            const overlapEnd = Math.min(b.endMin, winEnd);
-                            if (overlapEnd - overlapStart < layerDur) return false;
-                            // Remaining slot after carve-out must be >= GAP_MIN_DUR or zero
-                            const blockDur = b.endMin - b.startMin;
-                            const remainder = blockDur - layerDur;
-                            return remainder === 0 || remainder >= (GAP_MIN_DUR || 10);
-                        })
-                        .sort((a, b) => {
-                            // Prefer blocks closest to layer window center
-                            const aMid = (a.startMin + a.endMin) / 2;
-                            const bMid = (b.startMin + b.endMin) / 2;
-                            const winMid = (winStart + winEnd) / 2;
-                            return Math.abs(aMid - winMid) - Math.abs(bMid - winMid);
-                        });
-
-                    for (const slotBlock of candidates) {
-                        // Carve from the START of the slot block
-                        const carveStart = Math.max(slotBlock.startMin, winStart);
-                        const carveEnd = carveStart + layerDur;
-                        if (carveEnd > slotBlock.endMin || carveEnd > winEnd) continue;
-
-                        const remainderDur = slotBlock.endMin - carveEnd;
-
-                        // Place the missing layer block
-                        const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(layerType);
-                        placeTentativeBlock(bunk, {
-                            startMin: carveStart,
-                            endMin: carveEnd,
-                            type: layerType,
-                            event: layerEvent,
-                            layer,
-                            _classification: layer._classification,
-                            _activityLocked: _isTimeLocked,
-                            _committed: false,
-                            _fromEnforcement: true
-                        });
-
-                        // Shrink the original slot block
-                        if (remainderDur >= (GAP_MIN_DUR || 10)) {
-                            slotBlock.startMin = carveEnd;
-                        } else {
-                            // Remove the slot entirely (carved block replaces it)
-                            const idx = timeline.indexOf(slotBlock);
-                            if (idx !== -1) timeline.splice(idx, 1);
-                        }
-
-                        resolved = true;
-                        log('[STEP 2.4] Enforced: carved ' + layerDur + 'min ' + layerEvent +
-                            ' from slot at ' + carveStart + '-' + (carveStart + layerDur) + ' for ' + bunk);
-                        break;
-                    }
-
-                    if (!resolved) {
-                        // Last resort: try finding ANY gap via findBestGapPosition
-                        const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                        const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
-                        const position = findBestGapPosition(bunk, 
-                            Math.max(winStart, gradeStart), 
-                            Math.min(winEnd, gradeEnd), 
-                            layerDur, layerType, null);
-                        if (position) {
-                            const _isTimeLocked2 = ['swim', 'snacks', 'lunch', 'dismissal'].includes(layerType);
-                            placeTentativeBlock(bunk, {
-                                startMin: position.start,
-                                endMin: position.end,
-                                type: layerType,
-                                event: layerEvent,
-                                layer,
-                                _classification: layer._classification,
-                                _activityLocked: _isTimeLocked2,
-                                _committed: false,
-                                _fromEnforcement: true
-                            });
-                            resolved = true;
-                            log('[STEP 2.4] Enforced: placed ' + layerEvent + ' in gap ' +
-                                position.start + '-' + position.end + ' for ' + bunk);
-                        }
-                    }
-
-                    if (!resolved) {
-                        warnings.push({
-                            type: 'placement_failure',
-                            bunk,
-                            grade,
-                            layer: layer.event,
-                            message: 'Could not satisfy minimum quantity ' + required +
-                                ' — no splittable slot found in window ' + winStart + '-' + winEnd
-                        });
-                    }
+                    // Non-special: Step 2.4b enforcement handles recovery
+                    warnings.push({
+                        type: 'placement_failure',
+                        bunk,
+                        grade,
+                        layer: layer.event,
+                        message: 'Could not satisfy minimum quantity ' + required
+                    });
                 }
             });
         } else {
