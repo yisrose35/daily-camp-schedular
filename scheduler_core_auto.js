@@ -2119,10 +2119,8 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                     const winStart = Math.max(layer.startMin || 0, gradeStart);
                     const winEnd = Math.min(layer.endMin || 1440, gradeEnd);
 
-                    // Count placed blocks for this layer
-                    const timeline = bunkTimelines[bunk] || [];
-                    const placedCount = timeline.filter(b => (b.type || '').toLowerCase() === layerType).length;
-                    let deficit = minRequired - placedCount;
+                    // Count placed blocks — use type match (handles cloned layer refs)
+                    let deficit = minRequired - alreadyByType;
                     if (deficit <= 0) return;
 
                     while (deficit > 0) {
