@@ -1285,6 +1285,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
 
             const STAGGER_CATEGORIES = {
                 swim: 0,
+                snacks: 0,
                 special: 1,
                 sport: 2, sports: 2, slot: 2
             };
@@ -1608,7 +1609,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         for (const _g of gradeOrder) { (gradeSkeletons[_g] || []).forEach(t => _allTypes.add(t)); }
 
         // Order: relievers first (swim), then leagues, then specials, then consumers (sport)
-        const _typeOrder = ['swim', 'league', 'specialty_league', 'special', 'sport', 'sports', 'slot'];
+       const _typeOrder = ['swim', 'snacks', 'league', 'specialty_league', 'special', 'sport', 'sports', 'slot'];
         const _sortedTypes = [..._allTypes].sort((a, b) => {
             const ai = _typeOrder.indexOf(a.toLowerCase());
             const bi = _typeOrder.indexOf(b.toLowerCase());
