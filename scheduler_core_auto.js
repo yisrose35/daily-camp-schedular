@@ -755,6 +755,21 @@
                         bestPos = { start: cs, end: ce };
                     }
                 }
+           }
+
+            // Absorb small residual gaps by expanding the block to fill them
+            if (bestPos) {
+                const bestGap = gaps.find(g => g.start <= bestPos.start && g.end >= bestPos.end);
+                if (bestGap) {
+                    const before = bestPos.start - bestGap.start;
+                    const after = bestGap.end - bestPos.end;
+                    if (before > 0 && before < GAP_MIN_DUR) {
+                        bestPos.start = bestGap.start; // expand backward
+                    }
+                    if (after > 0 && after < GAP_MIN_DUR) {
+                        bestPos.end = bestGap.end; // expand forward
+                    }
+                }
             }
 
             // ★ FIX: sanity check — never return a position outside the requested window
@@ -770,8 +785,15 @@
         function isResidualViable(gapStart, gapEnd, blockStart, blockEnd) {
             const before = blockStart - gapStart;
             const after  = gapEnd - blockEnd;
-            if (before > 0 && before < GAP_MIN_DUR) return false;
-            if (after  > 0 && after  < GAP_MIN_DUR) return false;
+            // Allow residuals that are 0, or >= GAP_MIN_DUR.
+            // Small residuals (1 to GAP_MIN_DUR-1) are only rejected if they
+            // exist on BOTH sides — a single small residual can be absorbed
+            // by expanding the block duration (handled by the caller).
+            const beforeBad = before > 0 && before < GAP_MIN_DUR;
+            const afterBad  = after > 0 && after < GAP_MIN_DUR;
+            // If only one side has a bad residual, allow it — caller can expand
+            // If both sides are bad, reject — can't absorb both
+            if (beforeBad && afterBad) return false;
             return true;
         }
 
