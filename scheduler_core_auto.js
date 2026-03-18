@@ -1589,9 +1589,54 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
             }
 
             // Find best gap with contention scoring
-            const position = findBestGapPosition(bunk, windowStart, windowEnd, dMin, type, null);
+           let position = findBestGapPosition(bunk, windowStart, windowEnd, dMin, type, null);
 
-            if (!position) return null;
+            // If no free gap, split a flexible block to make room
+            if (!position) {
+                const timeline = bunkTimelines[bunk] || [];
+                const splittableTypes = ['slot', 'sport', 'sports', 'special'];
+                const splitPriority = { slot: 0, sport: 1, sports: 1, special: 2 };
+                const candidates = timeline
+                    .filter(b => {
+                        const bType = (b.type || '').toLowerCase();
+                        if (!splittableTypes.includes(bType)) return false;
+                        if (b._fixed || b._classification === 'pinned') return false;
+                        if (b._activityLocked) return false;
+                        if (bType === type.toLowerCase()) return false;
+                        const overlapStart = Math.max(b.startMin, windowStart);
+                        const overlapEnd = Math.min(b.endMin, windowEnd);
+                        if (overlapEnd - overlapStart < dMin) return false;
+                        const remainder = (b.endMin - b.startMin) - dMin;
+                        return remainder === 0 || remainder >= GAP_MIN_DUR;
+                    })
+                    .sort((a, b) => {
+                        const aPri = splitPriority[(a.type || '').toLowerCase()] ?? 99;
+                        const bPri = splitPriority[(b.type || '').toLowerCase()] ?? 99;
+                        if (aPri !== bPri) return aPri - bPri;
+                        return (b.endMin - b.startMin) - (a.endMin - a.startMin);
+                    });
+
+                for (const block of candidates) {
+                    const carveStart = Math.max(block.startMin, windowStart);
+                    const carveEnd = carveStart + dMin;
+                    if (carveEnd > block.endMin || carveEnd > windowEnd) continue;
+
+                    const remainderDur = block.endMin - carveEnd;
+                    if (remainderDur >= GAP_MIN_DUR) {
+                        block.startMin = carveEnd;
+                    } else {
+                        const idx = timeline.indexOf(block);
+                        if (idx !== -1) timeline.splice(idx, 1);
+                    }
+
+                    position = { start: carveStart, end: carveEnd };
+                    log('[STEP 2.3] Split ' + block.type + ' to place ' + type +
+                        ' at ' + carveStart + '-' + carveEnd + ' for ' + bunk);
+                    break;
+                }
+
+                if (!position) return null;
+            }
  
             // Size the block: take up to dMax or available space
             const gapEnd = (() => {
