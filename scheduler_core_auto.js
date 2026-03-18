@@ -2119,9 +2119,11 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                     const winStart = Math.max(layer.startMin || 0, gradeStart);
                     const winEnd = Math.min(layer.endMin || 1440, gradeEnd);
 
-                    // Count placed blocks — use type match (handles cloned layer refs)
+                    const timeline = bunkTimelines[bunk] || [];
+                    const alreadyByType = timeline.filter(b => (b.type || '').toLowerCase() === layerType).length;
+                    if (alreadyByType >= minRequired) return;
+
                     let deficit = minRequired - alreadyByType;
-                    if (deficit <= 0) return;
 
                     while (deficit > 0) {
                         // Strategy 1: find a free gap in the layer's window
@@ -2172,7 +2174,6 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                                 const aPri = splitPriority[(a.type || '').toLowerCase()] ?? 99;
                                 const bPri = splitPriority[(b.type || '').toLowerCase()] ?? 99;
                                 if (aPri !== bPri) return aPri - bPri;
-                                // Within same priority, prefer largest block (most room to split)
                                 return (b.endMin - b.startMin) - (a.endMin - a.startMin);
                             });
 
@@ -2195,7 +2196,6 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                                 _fromEnforcement: true
                             });
 
-                            // Shrink the donor block
                             const remainderDur = block.endMin - carveEnd;
                             if (remainderDur >= (GAP_MIN_DUR || 10)) {
                                 block.startMin = carveEnd;
@@ -2221,7 +2221,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                                 layer: layerEvent,
                                 message: 'No room in window ' + winStart + '-' + winEnd
                             });
-                            break; // stop trying this layer for this bunk
+                            break;
                         }
                     }
                 });
@@ -2229,7 +2229,6 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         });
 
         log('[STEP 2.4b] ✅ Enforced ' + enforcementCount + ' blocks');
-
        // -----------------------------------------------------------------
         // STEP 2.5 — GAP FILL
         // ★ FIX: subdivide large gaps + absorb micro-gaps instead of
