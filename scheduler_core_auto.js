@@ -2598,7 +2598,147 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
         window._autoBuildTimelines = JSON.parse(JSON.stringify(bunkTimelines));
         warnings.length = 0;
-        bestWarnings.forEach(w => warnings.push(w));
+       bestWarnings.forEach(w => warnings.push(w));
+
+        // -----------------------------------------------------------------
+        // POST-LOOP LAYER ENFORCEMENT
+        // The best iteration's timelines may be missing layers that other
+        // iterations placed. Re-check by actual type count (not bunkNeeds,
+        // which reflects the last iteration, not the best).
+        // -----------------------------------------------------------------
+        log('\n[POST-ENFORCEMENT] Verifying all layers in best iteration...');
+        let postEnforcementCount = 0;
+
+        allGrades.forEach(grade => {
+            const bunks = getBunksForGrade(grade, divisions);
+            const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+            const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+            const gradeLayers = nonPinnedLayers.filter(l => {
+                if ((l.grade || l.division) !== grade) return false;
+                const t = (l.type || '').toLowerCase();
+                return t !== 'league' && t !== 'specialty_league';
+            });
+
+            bunks.forEach(bunk => {
+                gradeLayers.forEach(layer => {
+                    const required = layer.quantity || 1;
+                    const op = layer.operator || '=';
+                    const minRequired = (op === '<=' || op === '≤') ? 0 : required;
+                    if (minRequired <= 0) return;
+
+                    const layerType = (layer.type || '').toLowerCase();
+                    const layerEvent = layer.event || layer.name || layer.type || layerType;
+                    const layerDur = layer.periodMin || layer.durationMin || layer.duration || 10;
+                    const winStart = Math.max(layer.startMin || 0, gradeStart);
+                    const winEnd = Math.min(layer.endMin || 1440, gradeEnd);
+
+                    const timeline = bunkTimelines[bunk] || [];
+                    const alreadyByType = timeline.filter(b => (b.type || '').toLowerCase() === layerType).length;
+                    if (alreadyByType >= minRequired) return;
+
+                    let deficit = minRequired - alreadyByType;
+
+                    while (deficit > 0) {
+                        const gaps = getFreeGaps(bunk, winStart, winEnd);
+                        let placed = false;
+
+                        for (const gap of gaps) {
+                            if (gap.end - gap.start >= layerDur) {
+                                const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(layerType);
+                                placeTentativeBlock(bunk, {
+                                    startMin: gap.start,
+                                    endMin: gap.start + layerDur,
+                                    type: layerType,
+                                    event: layerEvent,
+                                    layer,
+                                    _classification: layer._classification,
+                                    _activityLocked: _isTimeLocked,
+                                    _committed: true,
+                                    _fromEnforcement: true
+                                });
+                                postEnforcementCount++;
+                                deficit--;
+                                placed = true;
+                                log('[POST-ENFORCEMENT] Placed ' + layerEvent + ' in gap ' +
+                                    gap.start + '-' + (gap.start + layerDur) + ' for ' + bunk);
+                                break;
+                            }
+                        }
+                        if (placed) continue;
+
+                        const splittableTypes = ['slot', 'sport', 'sports', 'special'];
+                        const splitPriority = { slot: 0, sport: 1, sports: 1, special: 2 };
+                        const candidates = timeline
+                            .filter(b => {
+                                const bType = (b.type || '').toLowerCase();
+                                if (!splittableTypes.includes(bType)) return false;
+                                if (b._fixed || b._classification === 'pinned') return false;
+                                if (b._activityLocked) return false;
+                                if (bType === layerType) return false;
+                                const overlapStart = Math.max(b.startMin, winStart);
+                                const overlapEnd = Math.min(b.endMin, winEnd);
+                                if (overlapEnd - overlapStart < layerDur) return false;
+                                const remainder = (b.endMin - b.startMin) - layerDur;
+                                return remainder === 0 || remainder >= (GAP_MIN_DUR || 10);
+                            })
+                            .sort((a, b) => {
+                                const aPri = splitPriority[(a.type || '').toLowerCase()] ?? 99;
+                                const bPri = splitPriority[(b.type || '').toLowerCase()] ?? 99;
+                                if (aPri !== bPri) return aPri - bPri;
+                                return (b.endMin - b.startMin) - (a.endMin - a.startMin);
+                            });
+
+                        let split = false;
+                        for (const block of candidates) {
+                            const carveStart = Math.max(block.startMin, winStart);
+                            const carveEnd = carveStart + layerDur;
+                            if (carveEnd > block.endMin || carveEnd > winEnd) continue;
+
+                            const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(layerType);
+                            placeTentativeBlock(bunk, {
+                                startMin: carveStart,
+                                endMin: carveEnd,
+                                type: layerType,
+                                event: layerEvent,
+                                layer,
+                                _classification: layer._classification,
+                                _activityLocked: _isTimeLocked,
+                                _committed: true,
+                                _fromEnforcement: true
+                            });
+
+                            const remainderDur = block.endMin - carveEnd;
+                            if (remainderDur >= (GAP_MIN_DUR || 10)) {
+                                block.startMin = carveEnd;
+                            } else {
+                                const idx = timeline.indexOf(block);
+                                if (idx !== -1) timeline.splice(idx, 1);
+                            }
+
+                            postEnforcementCount++;
+                            deficit--;
+                            split = true;
+                            log('[POST-ENFORCEMENT] Split ' + block.type + ' to place ' + layerEvent +
+                                ' at ' + carveStart + '-' + carveEnd + ' for ' + bunk);
+                            break;
+                        }
+
+                        if (!split) {
+                            warn('[POST-ENFORCEMENT] Could not enforce ' + layerEvent + ' for ' + bunk);
+                            break;
+                        }
+                    }
+                });
+            });
+        });
+
+        log('[POST-ENFORCEMENT] ✅ Enforced ' + postEnforcementCount + ' blocks');
+
+        // Update debug exports after post-enforcement
+        window._bunkNeeds     = JSON.parse(JSON.stringify(bunkNeeds));
+        window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
+        window._autoBuildTimelines = JSON.parse(JSON.stringify(bunkTimelines));
+
         // -----------------------------------------------------------------
         // POST-LOOP GAP PATCH — run on winning timelines before formalization
         // Catches any gaps the best iteration left behind
