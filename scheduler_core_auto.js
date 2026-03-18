@@ -2121,7 +2121,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
 
                     // Count placed blocks for this layer
                     const timeline = bunkTimelines[bunk] || [];
-                    const placedCount = timeline.filter(b => b.layer === layer).length;
+                    const placedCount = timeline.filter(b => (b.type || '').toLowerCase() === layerType).length;
                     let deficit = minRequired - placedCount;
                     if (deficit <= 0) return;
 
