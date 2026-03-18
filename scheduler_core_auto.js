@@ -2420,18 +2420,17 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         log('══════════════════════════════════════════════════════════');
         log('BEST SCORE: ' + bestScore + ' after ' + totalIters + ' iteration(s)');
         log('══════════════════════════════════════════════════════════');
-
-        // Debug exports — once after loop (moved from hot loop for perf)
-        window._bunkNeeds     = JSON.parse(JSON.stringify(bunkNeeds));
-        window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
-        window._autoBuildTimelines = JSON.parse(JSON.stringify(bunkTimelines));
-
-        // Restore the best iteration's timelines into live state for Steps 3–5
+// Restore the best iteration's timelines into live state for Steps 3–5
         allGrades.forEach(grade => {
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 bunkTimelines[bunk] = bestTimelines[bunk] || [];
             });
         });
+
+        // Debug exports — once after loop, AFTER restoring best timelines
+        window._bunkNeeds     = JSON.parse(JSON.stringify(bunkNeeds));
+        window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
+        window._autoBuildTimelines = JSON.parse(JSON.stringify(bunkTimelines));
         warnings.length = 0;
         bestWarnings.forEach(w => warnings.push(w));
         // -----------------------------------------------------------------
