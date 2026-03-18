@@ -2086,6 +2086,152 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
             });
         });
 
+        // -----------------------------------------------------------------
+        // STEP 2.4b — LAYER ENFORCEMENT
+        // Guarantees every non-pinned layer's minimum quantity is met for
+        // every bunk. Runs AFTER commit, BEFORE gap-fill, so free gaps
+        // are still available. If no gap exists, splits the largest
+        // flexible block (slot > sport > special) within the layer's window.
+        // -----------------------------------------------------------------
+        log('\n[STEP 2.4b] Layer enforcement — guaranteeing all layer minimums...');
+        let enforcementCount = 0;
+
+        allGrades.forEach(grade => {
+            const bunks = getBunksForGrade(grade, divisions);
+            const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+            const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+            const gradeLayers = nonPinnedLayers.filter(l => {
+                if ((l.grade || l.division) !== grade) return false;
+                const t = (l.type || '').toLowerCase();
+                return t !== 'league' && t !== 'specialty_league';
+            });
+
+            bunks.forEach(bunk => {
+                gradeLayers.forEach(layer => {
+                    const required = layer.quantity || 1;
+                    const op = layer.operator || '=';
+                    const minRequired = (op === '<=' || op === '≤') ? 0 : required;
+                    if (minRequired <= 0) return;
+
+                    const layerType = (layer.type || '').toLowerCase();
+                    const layerEvent = layer.event || layer.name || layer.type || layerType;
+                    const layerDur = layer.periodMin || layer.durationMin || layer.duration || 10;
+                    const winStart = Math.max(layer.startMin || 0, gradeStart);
+                    const winEnd = Math.min(layer.endMin || 1440, gradeEnd);
+
+                    // Count placed blocks for this layer
+                    const timeline = bunkTimelines[bunk] || [];
+                    const placedCount = timeline.filter(b => b.layer === layer).length;
+                    let deficit = minRequired - placedCount;
+                    if (deficit <= 0) return;
+
+                    while (deficit > 0) {
+                        // Strategy 1: find a free gap in the layer's window
+                        const gaps = getFreeGaps(bunk, winStart, winEnd);
+                        let placed = false;
+
+                        for (const gap of gaps) {
+                            if (gap.end - gap.start >= layerDur) {
+                                const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(layerType);
+                                placeTentativeBlock(bunk, {
+                                    startMin: gap.start,
+                                    endMin: gap.start + layerDur,
+                                    type: layerType,
+                                    event: layerEvent,
+                                    layer,
+                                    _classification: layer._classification,
+                                    _activityLocked: _isTimeLocked,
+                                    _committed: true,
+                                    _fromEnforcement: true
+                                });
+                                enforcementCount++;
+                                deficit--;
+                                placed = true;
+                                log('[STEP 2.4b] Placed ' + layerEvent + ' in gap ' +
+                                    gap.start + '-' + (gap.start + layerDur) + ' for ' + bunk);
+                                break;
+                            }
+                        }
+                        if (placed) continue;
+
+                        // Strategy 2: split a flexible block within the window
+                        const splittableTypes = ['slot', 'sport', 'sports', 'special'];
+                        const splitPriority = { slot: 0, sport: 1, sports: 1, special: 2 };
+                        const candidates = timeline
+                            .filter(b => {
+                                const bType = (b.type || '').toLowerCase();
+                                if (!splittableTypes.includes(bType)) return false;
+                                if (b._fixed || b._classification === 'pinned') return false;
+                                if (b._activityLocked) return false;
+                                if (bType === layerType) return false;
+                                const overlapStart = Math.max(b.startMin, winStart);
+                                const overlapEnd = Math.min(b.endMin, winEnd);
+                                if (overlapEnd - overlapStart < layerDur) return false;
+                                const remainder = (b.endMin - b.startMin) - layerDur;
+                                return remainder === 0 || remainder >= (GAP_MIN_DUR || 10);
+                            })
+                            .sort((a, b) => {
+                                const aPri = splitPriority[(a.type || '').toLowerCase()] ?? 99;
+                                const bPri = splitPriority[(b.type || '').toLowerCase()] ?? 99;
+                                if (aPri !== bPri) return aPri - bPri;
+                                // Within same priority, prefer largest block (most room to split)
+                                return (b.endMin - b.startMin) - (a.endMin - a.startMin);
+                            });
+
+                        let split = false;
+                        for (const block of candidates) {
+                            const carveStart = Math.max(block.startMin, winStart);
+                            const carveEnd = carveStart + layerDur;
+                            if (carveEnd > block.endMin || carveEnd > winEnd) continue;
+
+                            const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(layerType);
+                            placeTentativeBlock(bunk, {
+                                startMin: carveStart,
+                                endMin: carveEnd,
+                                type: layerType,
+                                event: layerEvent,
+                                layer,
+                                _classification: layer._classification,
+                                _activityLocked: _isTimeLocked,
+                                _committed: true,
+                                _fromEnforcement: true
+                            });
+
+                            // Shrink the donor block
+                            const remainderDur = block.endMin - carveEnd;
+                            if (remainderDur >= (GAP_MIN_DUR || 10)) {
+                                block.startMin = carveEnd;
+                            } else {
+                                const idx = timeline.indexOf(block);
+                                if (idx !== -1) timeline.splice(idx, 1);
+                            }
+
+                            enforcementCount++;
+                            deficit--;
+                            split = true;
+                            log('[STEP 2.4b] Split ' + block.type + ' to place ' + layerEvent +
+                                ' at ' + carveStart + '-' + carveEnd + ' for ' + bunk);
+                            break;
+                        }
+
+                        if (!split) {
+                            warn('[STEP 2.4b] Could not enforce ' + layerEvent + ' for ' + bunk +
+                                ' — no gap or splittable block in window ' + winStart + '-' + winEnd);
+                            warnings.push({
+                                type: 'enforcement_failure',
+                                bunk, grade,
+                                layer: layerEvent,
+                                message: 'No room in window ' + winStart + '-' + winEnd
+                            });
+                            break; // stop trying this layer for this bunk
+                        }
+                    }
+                });
+            });
+        });
+
+        log('[STEP 2.4b] ✅ Enforced ' + enforcementCount + ' blocks');
+
        // -----------------------------------------------------------------
         // STEP 2.5 — GAP FILL
         // ★ FIX: subdivide large gaps + absorb micro-gaps instead of
