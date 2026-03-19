@@ -1498,29 +1498,39 @@
                     const regionDur = region.end - region.start;
 
                     // ★ Strategy 0: If region is entirely < slotMin AND has no draft blocks,
-                    // absorb it into an adjacent fixed block instead of creating a micro-slot
+                    // absorb it into an adjacent fixed block — BUT respect dMax
                     if (regionDur > 0 && regionDur < slotMin && region.blocks.length === 0) {
-                        // Try extending the fixed block BEFORE this region
                         const prevFixed = template.filter(b => b._final && b.endMin === region.start);
                         const nextFixed = fixedBlocks.find(b => b.startMin === region.end);
 
                         let regionAbsorbed = false;
-                        // Extend prev forward
+                        // Extend prev forward (only if within dMax)
                         if (prevFixed.length > 0 && !prevFixed[0]._gradeWide) {
-                            prevFixed[0].endMin = region.end;
-                            prevFixed[0].duration = prevFixed[0].endMin - prevFixed[0].startMin;
-                            regionAbsorbed = true;
-                        }
-                        // Extend next backward
-                        else if (nextFixed && !nextFixed._gradeWide) {
-                            const nextInTemplate = template.find(b => b._final && b.startMin === region.end);
-                            if (nextInTemplate) {
-                                nextInTemplate.startMin = region.start;
-                                nextInTemplate.duration = nextInTemplate.endMin - nextInTemplate.startMin;
+                            const pf = prevFixed[0];
+                            const pfC = resolveConstraints(pf.layer, pf.type);
+                            const pfNewDur = (pf.endMin - pf.startMin) + regionDur;
+                            if (pfNewDur <= pfC.dMax + 5) { // +5 grace for snapping
+                                pf.endMin = region.end;
+                                pf.duration = pf.endMin - pf.startMin;
                                 regionAbsorbed = true;
                             }
                         }
-                        if (regionAbsorbed) return; // skip this region entirely
+                        // Extend next backward (only if within dMax)
+                        if (!regionAbsorbed && nextFixed && !nextFixed._gradeWide) {
+                            const nextInTemplate = template.find(b => b._final && b.startMin === region.end);
+                            if (nextInTemplate) {
+                                const nfC = resolveConstraints(nextInTemplate.layer, nextInTemplate.type);
+                                const nfNewDur = (nextInTemplate.endMin - nextInTemplate.startMin) + regionDur;
+                                if (nfNewDur <= nfC.dMax + 5) {
+                                    nextInTemplate.startMin = region.start;
+                                    nextInTemplate.duration = nextInTemplate.endMin - nextInTemplate.startMin;
+                                    regionAbsorbed = true;
+                                }
+                            }
+                        }
+                        // If neither neighbor can absorb within dMax, leave as dead space
+                        // (swim soft anchor will find a better position next iteration)
+                        if (regionAbsorbed) return;
                     }
 
                     // Sort: linked pairs stay together, specials before sports
@@ -1563,23 +1573,23 @@
 
                         if (remaining < slotMin) {
                             // ★ FIX: Don't create dead space. Instead:
-                            // Strategy 1: Expand the last placed block to fill the gap
+                            // Strategy 1: Expand the last placed block within its dMax
                             const lastBlock = template.length > 0 ? template[template.length - 1] : null;
                             let absorbed = false;
 
                             if (lastBlock && lastBlock._final && lastBlock.startMin >= region.start) {
-                                // Check if it's a flex-duration special or sport that can stretch
-                                const lbDMax = lastBlock.dMax || (lastBlock.isFlexDuration ? (shoppingList.sports.constraints.dMax || 60) : 0);
+                                const lbC = resolveConstraints(lastBlock.layer, lastBlock.type);
                                 const lbCurrentDur = lastBlock.endMin - lastBlock.startMin;
+                                const lbNewDur = lbCurrentDur + remaining;
 
-                                if (lastBlock.isFlexDuration && lbCurrentDur + remaining <= (lbDMax || 60)) {
-                                    // Flex special — stretch it
+                                if (lastBlock.isFlexDuration && lbNewDur <= lbC.dMax) {
+                                    // Flex special — stretch within its layer range
                                     lastBlock.endMin = regionEnd;
                                     lastBlock.duration = lastBlock.endMin - lastBlock.startMin;
                                     regionCursor = regionEnd;
                                     absorbed = true;
-                                } else if (!lastBlock._activityLocked && !lastBlock._fixed && lbCurrentDur + remaining <= (lbDMax + 10 || 70)) {
-                                    // Non-locked block (sport/GA) — stretch it
+                                } else if (!lastBlock._activityLocked && !lastBlock._fixed && lbNewDur <= lbC.dMax + 5) {
+                                    // Non-locked block (sport/GA) — stretch within dMax + small grace
                                     lastBlock.endMin = regionEnd;
                                     lastBlock.duration = lastBlock.endMin - lastBlock.startMin;
                                     regionCursor = regionEnd;
@@ -1598,6 +1608,9 @@
                                 );
 
                                 if (regionDraftBlocks.length > 0 && regionFillerBlocks.length === 0) {
+                                    // Save original positions in case we need to undo
+                                    const origPositions = regionDraftBlocks.map(b => ({ startMin: b.startMin, endMin: b.endMin }));
+
                                     // Shift everything right so gap is at start
                                     let shiftCursor = regionEnd;
                                     for (let si = regionDraftBlocks.length - 1; si >= 0; si--) {
@@ -1608,43 +1621,82 @@
                                         shiftCursor = sb.startMin;
                                     }
                                     // Now the gap is at region.start → shiftCursor
-                                    // Try extending the block BEFORE this region
-                                    const prevBlock = template.filter(b =>
-                                        b._final && b.endMin === region.start
-                                    )[0];
+                                    const prevBlock = template.filter(b => b._final && b.endMin === region.start)[0];
                                     if (prevBlock && !prevBlock._gradeWide) {
-                                        const pbDMax = prevBlock.dMax || 60;
-                                        const pbDur = prevBlock.endMin - prevBlock.startMin;
-                                        if (pbDur + remaining <= pbDMax + 10) {
+                                        const pbC = resolveConstraints(prevBlock.layer, prevBlock.type);
+                                        const pbNewDur = (prevBlock.endMin - prevBlock.startMin) + remaining;
+                                        if (pbNewDur <= pbC.dMax + 5) {
                                             prevBlock.endMin = shiftCursor;
                                             prevBlock.duration = prevBlock.endMin - prevBlock.startMin;
                                             absorbed = true;
                                         }
                                     }
+                                    // If absorption failed, undo the shift
+                                    if (!absorbed) {
+                                        regionDraftBlocks.forEach((b, idx) => {
+                                            b.startMin = origPositions[idx].startMin;
+                                            b.endMin = origPositions[idx].endMin;
+                                        });
+                                    }
                                 }
                             }
 
-                            // ★ Strategy 3: Universal fallback — extend a block in this region
-                            // to fill the gap. ANY extension is better than a sub-dMin dead slot.
+                            // ★ Strategy 3: Extend a block in this region within its dMax
                             if (!absorbed) {
                                 const blocksInRegion = template.filter(b =>
                                     b._final && b.startMin >= region.start && b.endMin <= regionEnd
                                 );
                                 if (blocksInRegion.length > 0) {
-                                    // Check if gap is at the end (last block doesn't reach regionEnd)
+                                    // Try end-gap: extend last block forward
                                     const lastInR = blocksInRegion[blocksInRegion.length - 1];
                                     if (lastInR.endMin < regionEnd) {
-                                        lastInR.endMin = regionEnd;
-                                        lastInR.duration = lastInR.endMin - lastInR.startMin;
-                                        absorbed = true;
+                                        const lC = resolveConstraints(lastInR.layer, lastInR.type);
+                                        const lNewDur = regionEnd - lastInR.startMin;
+                                        if (lNewDur <= lC.dMax + 5) {
+                                            lastInR.endMin = regionEnd;
+                                            lastInR.duration = lNewDur;
+                                            absorbed = true;
+                                        }
                                     }
-                                    // Check if gap is at the start (first block doesn't start at region.start)
+                                    // Try start-gap: extend first block backward
                                     if (!absorbed) {
                                         const firstInR = blocksInRegion[0];
                                         if (firstInR.startMin > region.start) {
-                                            firstInR.startMin = region.start;
-                                            firstInR.duration = firstInR.endMin - firstInR.startMin;
-                                            absorbed = true;
+                                            const fC = resolveConstraints(firstInR.layer, firstInR.type);
+                                            const fNewDur = firstInR.endMin - region.start;
+                                            if (fNewDur <= fC.dMax + 5) {
+                                                firstInR.startMin = region.start;
+                                                firstInR.duration = fNewDur;
+                                                absorbed = true;
+                                            }
+                                        }
+                                    }
+                                    // Try spreading across multiple blocks
+                                    if (!absorbed) {
+                                        let gapToFill = regionEnd - (blocksInRegion[blocksInRegion.length - 1].endMin);
+                                        if (gapToFill <= 0) gapToFill = blocksInRegion[0].startMin - region.start;
+                                        if (gapToFill > 0) {
+                                            // Distribute gap across all blocks that can grow
+                                            for (const blk of blocksInRegion) {
+                                                if (gapToFill <= 0) break;
+                                                const bC = resolveConstraints(blk.layer, blk.type);
+                                                const canGrow = bC.dMax - (blk.endMin - blk.startMin);
+                                                if (canGrow > 0) {
+                                                    const give = Math.min(canGrow, gapToFill);
+                                                    blk.duration = (blk.endMin - blk.startMin) + give;
+                                                    gapToFill -= give;
+                                                }
+                                            }
+                                            // Re-layout: pack sequentially from region start
+                                            if (gapToFill <= 0) {
+                                                let packCursor = region.start;
+                                                blocksInRegion.forEach(blk => {
+                                                    blk.startMin = packCursor;
+                                                    blk.endMin = packCursor + blk.duration;
+                                                    packCursor = blk.endMin;
+                                                });
+                                                absorbed = (packCursor >= regionEnd - 2); // within rounding
+                                            }
                                         }
                                     }
                                 }
