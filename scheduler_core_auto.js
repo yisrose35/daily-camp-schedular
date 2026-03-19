@@ -2777,18 +2777,26 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                             const carveEnd = carveStart + layerDur;
                             if (carveEnd > block.endMin || carveEnd > winEnd) continue;
 
-                            const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(layerType);
-                            placeTentativeBlock(bunk, {
-                                startMin: carveStart,
-                                endMin: carveEnd,
-                                type: layerType,
-                                event: layerEvent,
-                                layer,
-                                _classification: layer._classification,
-                                _activityLocked: _isTimeLocked,
-                                _committed: true,
-                                _fromEnforcement: true
-                            });
+                            if (layerType === 'special') {
+                                const specialBlock = placeSpecialForBunk(bunk, grade, layer, carveStart, carveEnd);
+                                if (!specialBlock) continue;
+                                specialBlock._committed = true;
+                                specialBlock._fromEnforcement = true;
+                                placeTentativeBlock(bunk, specialBlock);
+                            } else {
+                                const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(layerType);
+                                placeTentativeBlock(bunk, {
+                                    startMin: carveStart,
+                                    endMin: carveEnd,
+                                    type: layerType,
+                                    event: layerEvent,
+                                    layer,
+                                    _classification: layer._classification,
+                                    _activityLocked: _isTimeLocked,
+                                    _committed: true,
+                                    _fromEnforcement: true
+                                });
+                            }
 
                             const remainderDur = block.endMin - carveEnd;
                             if (remainderDur >= (GAP_MIN_DUR || 10)) {
