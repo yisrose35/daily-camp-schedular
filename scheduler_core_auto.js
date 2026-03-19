@@ -2155,14 +2155,14 @@
                             // Try 1: extend prev forward (most natural)
                             if (prev && !prev._gradeWide) {
                                 const pc = resolveConstraints(prev.layer, prev.type);
-                                if ((prev.endMin - prev.startMin) + dur <= pdMaxWithGrace(c)) {
+                                if ((prev.endMin - prev.startMin) + dur <= dMaxWithGrace(pc)) {
                                     prev.endMin = gap.end; changed = true; continue;
                                 }
                             }
                             // Try 2: extend next backward
                             if (next && !next._gradeWide && next._classification !== 'pinned') {
                                 const nc = resolveConstraints(next.layer, next.type);
-                                if ((next.endMin - next.startMin) + dur <= ndMaxWithGrace(c)) {
+                                if ((next.endMin - next.startMin) + dur <= dMaxWithGrace(nc)) {
                                     next.startMin = gap.start; changed = true; continue;
                                 }
                             }
