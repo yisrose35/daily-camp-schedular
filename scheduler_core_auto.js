@@ -1727,23 +1727,24 @@
 
         // ── Safety net: seam closing ─────────────────────────────────
         allGrades.forEach(grade => {
+            const sportLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'sport') || null;
+            const seamThreshold = sportLayer ? resolveConstraints(sportLayer, 'sport').dMin : 30;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const tl = bunkTimelines[bunk];
                 if (!tl || tl.length < 2) return;
                 tl.sort((a, b) => a.startMin - b.startMin);
                 for (let i = 0; i < tl.length - 1; i++) {
                     const gap = tl[i + 1].startMin - tl[i].endMin;
-                    if (gap > 0 && gap <= 15) {
-                        // Try extending earlier block forward
-                        if (!tl[i]._fixed && !tl[i]._gradeWide && !tl[i]._activityLocked) {
-                            const c = resolveConstraints(tl[i].layer, tl[i].type);
-                            if (tl[i].endMin - tl[i].startMin + gap <= c.dMax + 10) { tl[i].endMin = tl[i + 1].startMin; continue; }
-                        }
-                        // Try extending later block backward
-                        if (!tl[i + 1]._fixed && !tl[i + 1]._gradeWide && !tl[i + 1]._activityLocked) {
-                            const c = resolveConstraints(tl[i + 1].layer, tl[i + 1].type);
-                            if (tl[i + 1].endMin - tl[i + 1].startMin + gap <= c.dMax + 10) { tl[i + 1].startMin = tl[i].endMin; continue; }
-                        }
+                    if (gap <= 0 || gap >= seamThreshold) continue;
+                    // Try 1: extend earlier block forward (prefer non-locked)
+                    if (!tl[i]._gradeWide) {
+                        const c = resolveConstraints(tl[i].layer, tl[i].type);
+                        if (tl[i].endMin - tl[i].startMin + gap <= c.dMax + 10) { tl[i].endMin = tl[i + 1].startMin; continue; }
+                    }
+                    // Try 2: extend later block backward (prefer non-locked)
+                    if (!tl[i + 1]._gradeWide && tl[i + 1]._classification !== 'pinned') {
+                        const c = resolveConstraints(tl[i + 1].layer, tl[i + 1].type);
+                        if (tl[i + 1].endMin - tl[i + 1].startMin + gap <= c.dMax + 10) { tl[i + 1].startMin = tl[i].endMin; continue; }
                     }
                 }
             });
@@ -1753,63 +1754,116 @@
         allGrades.forEach(grade => {
             const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
             const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+            const sportLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'sport') || null;
+            const sportC = resolveConstraints(sportLayer, 'sport');
+            const minDur = sportC.dMin;
+            const maxDur = sportC.dMax;
+
             getBunksForGrade(grade, divisions).forEach(bunk => {
-                getFreeGaps(bunk, gs, ge).forEach(gap => {
-                    const dur = gap.end - gap.start;
-                    if (dur < 5) return;
-                    if (dur < GAP_MIN_DUR) {
-                        // Try absorbing into neighbor
+                // ★ Run absorption in a loop — absorbing one gap can eliminate the next
+                let passes = 0;
+                while (passes < 5) {
+                    passes++;
+                    const gaps = getFreeGaps(bunk, gs, ge);
+                    if (gaps.length === 0) break;
+
+                    let changed = false;
+                    for (const gap of gaps) {
+                        const dur = gap.end - gap.start;
+                        if (dur < 5) continue;
                         const tl = bunkTimelines[bunk];
-                        const prev = tl.find(b => b.endMin === gap.start);
-                        const next = tl.find(b => b.startMin === gap.end);
-                        if (prev && !prev._fixed && !prev._gradeWide) {
-                            const c = resolveConstraints(prev.layer, prev.type);
-                            if (prev.endMin - prev.startMin + dur <= c.dMax + 10) { prev.endMin = gap.end; return; }
-                        }
-                        if (next && !next._fixed && !next._gradeWide && next._classification !== 'pinned') {
-                            const c = resolveConstraints(next.layer, next.type);
-                            if (next.endMin - next.startMin + dur <= c.dMax + 10) { next.startMin = gap.start; return; }
-                        }
-                    }
-                    // Create filler slot
-                    const sportLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'sport') || null;
-                    const sportC = resolveConstraints(sportLayer, 'sport');
-                    const maxDur = sportC.dMax;
-                    const minDur = sportC.dMin;
-                    let cursor = gap.start;
-                    while (cursor < gap.end) {
-                        const rem = gap.end - cursor; if (rem < 5) break;
-                        // ★ If remainder is below dMin, merge into previous slot
-                        if (rem < minDur) {
-                            const tl = bunkTimelines[bunk];
-                            const prev = tl.find(b => b.endMin === cursor && !b._fixed && !b._gradeWide);
-                            if (prev && (prev.endMin - prev.startMin) + rem <= maxDur + 10) {
-                                prev.endMin = gap.end;
-                            } else {
-                                // Can't merge — create micro-gap slot
-                                tl.push({
-                                    startMin: cursor, endMin: gap.end, type: 'slot', event: 'General Activity Slot',
-                                    layer: sportLayer, _classification: 'gap', _fromGapDetection: true, _committed: true, _microGap: true
-                                });
+
+                        // ★ For ANY gap smaller than dMin — ABSORB, don't create a slot
+                        if (dur < minDur) {
+                            const prev = tl.find(b => b.endMin === gap.start);
+                            const next = tl.find(b => b.startMin === gap.end);
+
+                            // Try 1: extend prev forward (most natural)
+                            if (prev && !prev._gradeWide) {
+                                const pc = resolveConstraints(prev.layer, prev.type);
+                                if ((prev.endMin - prev.startMin) + dur <= pc.dMax + 10) {
+                                    prev.endMin = gap.end; changed = true; continue;
+                                }
                             }
-                            break;
+                            // Try 2: extend next backward
+                            if (next && !next._gradeWide && next._classification !== 'pinned') {
+                                const nc = resolveConstraints(next.layer, next.type);
+                                if ((next.endMin - next.startMin) + dur <= nc.dMax + 10) {
+                                    next.startMin = gap.start; changed = true; continue;
+                                }
+                            }
+                            // Try 3: extend prev even if _fixed (safety net last resort — 
+                            // fixed blocks can stretch slightly to prevent visible gaps)
+                            if (prev && !prev._gradeWide) {
+                                prev.endMin = gap.end; changed = true; continue;
+                            }
+                            // Try 4: extend next even if pinned
+                            if (next && !next._gradeWide) {
+                                next.startMin = gap.start; changed = true; continue;
+                            }
+                            // Absolute last resort: create micro-gap slot
+                            tl.push({
+                                startMin: gap.start, endMin: gap.end, type: 'slot',
+                                event: 'General Activity Slot', layer: sportLayer,
+                                _classification: 'gap', _fromGapDetection: true,
+                                _committed: true, _microGap: true
+                            });
+                            tl.sort((a, b) => a.startMin - b.startMin);
+                            changed = true;
+                            continue;
                         }
-                        let sd = Math.min(maxDur, rem); sd = Math.floor(sd / 5) * 5; if (sd < minDur) sd = minDur;
-                        if (sd < 5) break;
-                        // Check: would this leave an undersized remainder?
-                        const afterThis = rem - sd;
-                        if (afterThis > 0 && afterThis < minDur) {
-                            // Take the whole remaining space instead
-                            sd = rem;
+
+                        // ★ For gaps >= dMin: create properly sized filler slots
+                        let cursor = gap.start;
+                        while (cursor < gap.end) {
+                            const rem = gap.end - cursor;
+                            if (rem < 5) break;
+
+                            // If remainder would be undersized, absorb into prev/next
+                            if (rem < minDur) {
+                                const prev = tl.find(b => b.endMin === cursor && !b._gradeWide);
+                                const next = tl.find(b => b.startMin === gap.end && !b._gradeWide);
+                                if (prev) { prev.endMin = gap.end; }
+                                else if (next && next._classification !== 'pinned') { next.startMin = cursor; }
+                                else {
+                                    // Extend the slot we just created
+                                    const lastCreated = tl.find(b => b.endMin === cursor && b._fromGapDetection);
+                                    if (lastCreated) { lastCreated.endMin = gap.end; }
+                                    else {
+                                        tl.push({
+                                            startMin: cursor, endMin: gap.end, type: 'slot',
+                                            event: 'General Activity Slot', layer: sportLayer,
+                                            _classification: 'gap', _fromGapDetection: true,
+                                            _committed: true, _microGap: true
+                                        });
+                                    }
+                                }
+                                break;
+                            }
+
+                            let sd = Math.min(maxDur, rem);
+                            sd = Math.floor(sd / 5) * 5;
+                            if (sd < minDur) sd = minDur;
+
+                            // Would this leave an undersized remainder?
+                            const afterThis = rem - sd;
+                            if (afterThis > 0 && afterThis < minDur) {
+                                sd = rem; // take the whole thing
+                            }
+
+                            tl.push({
+                                startMin: cursor, endMin: cursor + sd, type: 'slot',
+                                event: 'General Activity Slot', layer: sportLayer,
+                                _classification: 'gap', _fromGapDetection: true,
+                                _committed: true, _microGap: false
+                            });
+                            cursor += sd;
                         }
-                        bunkTimelines[bunk].push({
-                            startMin: cursor, endMin: cursor + sd, type: 'slot', event: 'General Activity Slot',
-                            layer: sportLayer, _classification: 'gap', _fromGapDetection: true, _committed: true, _microGap: false
-                        });
-                        cursor += sd;
+                        tl.sort((a, b) => a.startMin - b.startMin);
+                        changed = true;
                     }
-                    bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
-                });
+                    if (!changed) break;
+                }
             });
         });
 
