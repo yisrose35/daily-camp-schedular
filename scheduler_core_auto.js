@@ -2395,8 +2395,15 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                             continue;
                         }
 
-                        // ★ Option 1: extend earlier block forward
-                        if (currDur + gap <= currMaxDur) {                            const nextWindowMin = next.layer?.startMin ?? next.layer?.windowMin ?? next.startMin;
+                        continue; // skip Options 1-4 entirely for FIXED↔FIXED pairs
+                        }
+
+                        // ★ GRADE-WIDE: league/specialty_league/swim times are shared
+                        const _currIsGradeWide = _noSlideTypes.includes(_currTypeLC);
+                        const _nextIsGradeWide = _noSlideTypes.includes(_nextTypeLC);
+
+                        // ★ FIXED↔FIXED shift/extend (skip if either is grade-wide)
+                        if (!_currIsGradeWide && !_nextIsGradeWide && currDur + gap <= currMaxDur) {                            const nextWindowMin = next.layer?.startMin ?? next.layer?.windowMin ?? next.startMin;
                             const shiftTarget = curr.endMin;
 
                             if (shiftTarget >= nextWindowMin) {
@@ -2419,12 +2426,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                             continue; // skip Options 1-4 entirely for FIXED↔FIXED pairs
                         }
 
-                        // ★ GRADE-WIDE SYNC GUARD: league/specialty_league/swim
-                        // times are shared across all bunks in a grade — seam
-                        // closing must never modify their startMin or endMin.
-                        const _currIsGradeWide = _noSlideTypes.includes(_currTypeLC);
-                        const _nextIsGradeWide = _noSlideTypes.includes(_nextTypeLC);
-                        if (_currIsGradeWide && _nextIsGradeWide) continue;
+                       if (_currIsGradeWide && _nextIsGradeWide) continue;
 
                        // ★ Option 1: extend earlier block forward
                         if (!_currIsGradeWide && currDur + gap <= currMaxDur) {                           
