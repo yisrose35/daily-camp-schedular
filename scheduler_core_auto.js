@@ -327,7 +327,7 @@
             const ratio = computeRatio(layer);
             let classification;
             if (ratio >= 1) classification = 'pinned';
-            else if (ratio >= 0.25) classification = 'windowed';
+            else if (ratio >= 0.10) classification = 'windowed';
             else classification = 'open';
             return Object.assign({}, layer, { _classification: classification, _ratio: ratio });
         });
@@ -1518,8 +1518,8 @@
                         const nextFixed = fixedBlocks.find(b => b.startMin === region.end);
 
                         let regionAbsorbed = false;
-                        // Extend prev forward (only if within dMax)
-                        if (prevFixed.length > 0 && !prevFixed[0]._gradeWide) {
+                        // Extend prev forward (only if within dMax AND not pinned)
+                        if (prevFixed.length > 0 && !prevFixed[0]._gradeWide && prevFixed[0]._classification !== 'pinned') {
                             const pf = prevFixed[0];
                             const pfC = resolveConstraints(pf.layer, pf.type);
                             const pfNewDur = (pf.endMin - pf.startMin) + regionDur;
@@ -1529,8 +1529,8 @@
                                 regionAbsorbed = true;
                             }
                         }
-                        // Extend next backward (only if within dMax)
-                        if (!regionAbsorbed && nextFixed && !nextFixed._gradeWide) {
+                        // Extend next backward (only if within dMax AND not pinned)
+                        if (!regionAbsorbed && nextFixed && !nextFixed._gradeWide && nextFixed._classification !== 'pinned') {
                             const nextInTemplate = template.find(b => b._final && b.startMin === region.end);
                             if (nextInTemplate) {
                                 const nfC = resolveConstraints(nextInTemplate.layer, nextInTemplate.type);
@@ -1586,7 +1586,39 @@
                     if (remaining > 0) {
 
                         if (remaining < slotMin) {
-                            // ★ FIX: Don't create dead space. Instead:
+                            // ★ Strategy 0: SHRINK the last draft block so remaining becomes >= slotMin
+                            // This is better than stretching anything past dMax.
+                            // Example: Region=60, Special=35(dIdeal), remaining=25.
+                            //   Shrink special to 30 → remaining=30 → proper sport slot.
+                            const lastDraft = template.length > 0 ? template[template.length - 1] : null;
+                            let wasResized = false;
+
+                            if (lastDraft && lastDraft._final && lastDraft.startMin >= region.start && lastDraft._source === 'draft') {
+                                const ldC = resolveConstraints(lastDraft.layer, lastDraft.type);
+                                const ldCurrentDur = lastDraft.endMin - lastDraft.startMin;
+                                const shrinkBy = slotMin - remaining; // how much to shrink to make remaining = slotMin
+                                const ldNewDur = ldCurrentDur - shrinkBy;
+
+                                if (ldNewDur >= ldC.dMin) {
+                                    // Shrink is valid — draft block stays within its dMin
+                                    lastDraft.endMin = lastDraft.startMin + ldNewDur;
+                                    lastDraft.duration = ldNewDur;
+                                    regionCursor = lastDraft.endMin;
+                                    // Now remaining is exactly slotMin — create a proper sport slot
+                                    const newRemaining = regionEnd - regionCursor;
+                                    template.push({
+                                        startMin: regionCursor, endMin: regionEnd,
+                                        type: 'slot', event: 'General Activity Slot',
+                                        duration: newRemaining, _source: 'filler', _final: true,
+                                        layer: shoppingList.sports.layer,
+                                        dMin: sc.dMin, dMax: sc.dMax
+                                    });
+                                    regionCursor = regionEnd;
+                                    wasResized = true;
+                                }
+                            }
+
+                            if (!wasResized) {
                             // Strategy 1: Expand the last placed block within its dMax
                             const lastBlock = template.length > 0 ? template[template.length - 1] : null;
                             let absorbed = false;
@@ -1727,41 +1759,54 @@
                                     layer: shoppingList.sports.layer
                                 });
                             }
+                            } // end if (!wasResized)
                         } else {
-                            // ★ Smart slot division: never create a slot below dMin
-                            const maxSlots = Math.floor(remaining / slotMin); // most slots that fit at dMin
-                            const minSlots = Math.max(1, Math.ceil(remaining / sc.dMax)); // fewest slots to stay under dMax
-
-                            let numSlots;
-                            if (maxSlots <= 0) {
-                                numSlots = 1; // too small to divide, one slot
-                            } else if (minSlots > maxSlots) {
-                                // Can't divide cleanly — prefer fewer LARGER slots (slightly over dMax)
-                                // over more SMALLER slots (under dMin). Over-max is cosmetic; under-min breaks things.
-                                numSlots = maxSlots;
-                            } else {
-                                numSlots = Math.max(minSlots, Math.min(maxSlots, Math.round(remaining / sc.dIdeal)));
-                            }
-
+                            // ★ Fill remaining space with properly-sized sport slots, each capped at dMax
                             let rem = remaining;
-                            const perSlot = snapTo5(Math.floor(remaining / numSlots));
+                            while (rem > 0) {
+                                if (rem < slotMin) {
+                                    // Too small for a sport slot — try merging into previous filler slot
+                                    const prevFiller = [...template].reverse().find(b =>
+                                        b._final && b._source === 'filler' && b.startMin >= region.start
+                                    );
+                                    if (prevFiller && (prevFiller.endMin - prevFiller.startMin) + rem <= sc.dMax + 5) {
+                                        prevFiller.endMin += rem;
+                                        prevFiller.duration = prevFiller.endMin - prevFiller.startMin;
+                                        regionCursor += rem; rem = 0;
+                                    } else {
+                                        // Try shrinking the FIRST filler to make room
+                                        const firstFiller = template.find(b =>
+                                            b._final && b._source === 'filler' && b.startMin >= region.start
+                                        );
+                                        if (firstFiller && (firstFiller.endMin - firstFiller.startMin) - rem >= slotMin) {
+                                            firstFiller.endMin -= rem;
+                                            firstFiller.duration = firstFiller.endMin - firstFiller.startMin;
+                                            // Shift subsequent blocks left
+                                        }
+                                        // Last resort: create micro-slot
+                                        totalDeadSpace += rem;
+                                        template.push({
+                                            startMin: regionCursor, endMin: regionCursor + rem,
+                                            type: 'slot', event: 'General Activity Slot',
+                                            duration: rem, _source: 'filler', _final: true,
+                                            _microGap: true, layer: shoppingList.sports.layer
+                                        });
+                                        regionCursor += rem; rem = 0;
+                                    }
+                                    break;
+                                }
 
-                            for (let i = 0; i < numSlots; i++) {
-                                let dur;
-                                if (i === numSlots - 1) {
-                                    dur = rem; // last slot gets remainder
-                                } else {
-                                    dur = perSlot;
+                                let dur = Math.min(sc.dMax, rem);
+                                // Check: would this leave an undersized remainder?
+                                const afterThis = rem - dur;
+                                if (afterThis > 0 && afterThis < slotMin) {
+                                    // Split evenly between this slot and the next
+                                    dur = snapTo5(Math.floor(rem / 2));
+                                    if (dur < slotMin) dur = slotMin;
+                                    if (dur > sc.dMax) dur = sc.dMax;
                                 }
-                                // ★ If this slot would be undersized, merge into previous
-                                if (dur < slotMin && template.length > 0 && i > 0) {
-                                    template[template.length - 1].endMin += dur;
-                                    template[template.length - 1].duration += dur;
-                                    regionCursor += dur;
-                                    rem -= dur;
-                                    continue;
-                                }
-                                if (dur <= 0) break;
+                                dur = Math.min(dur, rem);
+
                                 template.push({
                                     startMin: regionCursor, endMin: regionCursor + dur,
                                     type: 'slot', event: 'General Activity Slot',
@@ -1969,8 +2014,8 @@
                 const winEnd = Math.min(layer.endMin || 1440, ge);
 
                 // Only place early (as soft anchor) if the window is tight enough
-                // that it acts like an anchor — ratio >= 0.25 (windowed class)
-                // Open layers (ratio < 0.25) go through the shopping list instead
+                // that it acts like an anchor — ratio >= 0.10 (windowed class)
+                // Open layers (ratio < 0.10) go through the shopping list instead
                 if (layer._classification !== 'windowed') return;
 
                 bunks.forEach(bunk => {
@@ -2043,12 +2088,12 @@
                 for (let i = 0; i < tl.length - 1; i++) {
                     const gap = tl[i + 1].startMin - tl[i].endMin;
                     if (gap <= 0 || gap >= seamThreshold) continue;
-                    // Try 1: extend earlier block forward (prefer non-locked)
-                    if (!tl[i]._gradeWide) {
+                    // Try 1: extend earlier block forward (never pinned)
+                    if (!tl[i]._gradeWide && tl[i]._classification !== 'pinned') {
                         const c = resolveConstraints(tl[i].layer, tl[i].type);
                         if (tl[i].endMin - tl[i].startMin + gap <= c.dMax + 10) { tl[i].endMin = tl[i + 1].startMin; continue; }
                     }
-                    // Try 2: extend later block backward (prefer non-locked)
+                    // Try 2: extend later block backward (never pinned)
                     if (!tl[i + 1]._gradeWide && tl[i + 1]._classification !== 'pinned') {
                         const c = resolveConstraints(tl[i + 1].layer, tl[i + 1].type);
                         if (tl[i + 1].endMin - tl[i + 1].startMin + gap <= c.dMax + 10) { tl[i + 1].startMin = tl[i].endMin; continue; }
@@ -2099,14 +2144,19 @@
                                     next.startMin = gap.start; changed = true; continue;
                                 }
                             }
-                            // Try 3: extend prev even if _fixed (safety net last resort — 
-                            // fixed blocks can stretch slightly to prevent visible gaps)
-                            if (prev && !prev._gradeWide) {
-                                prev.endMin = gap.end; changed = true; continue;
+                            // Try 3: Try extending prev with relaxed dMax (+5 grace, but never pinned)
+                            if (prev && !prev._gradeWide && prev._classification !== 'pinned') {
+                                const pc3 = resolveConstraints(prev.layer, prev.type);
+                                if ((prev.endMin - prev.startMin) + dur <= pc3.dMax + 5) {
+                                    prev.endMin = gap.end; changed = true; continue;
+                                }
                             }
-                            // Try 4: extend next even if pinned
-                            if (next && !next._gradeWide) {
-                                next.startMin = gap.start; changed = true; continue;
+                            // Try 4: Try extending next with relaxed dMax (but NEVER pinned)
+                            if (next && !next._gradeWide && next._classification !== 'pinned') {
+                                const nc4 = resolveConstraints(next.layer, next.type);
+                                if ((next.endMin - next.startMin) + dur <= nc4.dMax + 5) {
+                                    next.startMin = gap.start; changed = true; continue;
+                                }
                             }
                             // Absolute last resort: create micro-gap slot
                             tl.push({
