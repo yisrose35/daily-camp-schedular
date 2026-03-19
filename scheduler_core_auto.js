@@ -88,6 +88,8 @@
     function clone(obj) { return JSON.parse(JSON.stringify(obj)); }
     function overlaps(aStart, aEnd, bStart, bEnd) { return aStart < bEnd && aEnd > bStart; }
     function snapTo5(val) { return Math.round(val / 5) * 5; }
+    // Grace: fixed-duration blocks (dMin===dMax) get 0 grace. Flex blocks get +5.
+    function dMaxWithGrace(constraints) { return constraints.dMax + (constraints.dMin === constraints.dMax ? 0 : 5); }
 
     // =========================================================================
     // DATA ACCESS HELPERS
@@ -849,21 +851,26 @@
             const winStart = mrc ? Math.max(mrc.start, gs) : Math.max(layer.startMin || 0, gs);
             const winEnd = mrc ? Math.min(mrc.end, ge) : Math.min(layer.endMin || 1440, ge);
 
+            // ★ Find lunch end time — prefer placing swim AFTER lunch
+            // Swim before lunch creates unusable gaps (e.g. 15min between swim-end and lunch)
+            const lunchLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'lunch');
+            const lunchEnd = lunchLayer ? (lunchLayer.endMin || 740) : 740;
+            const preferredStart = Math.max(winStart, lunchEnd);
+
             const sortedBunks = [...bunks].sort((a, b) =>
                 (parseInt(String(a).replace(/\D/g, '')) || 0) - (parseInt(String(b).replace(/\D/g, '')) || 0));
 
             let placedCount = 0;
             for (const bunk of sortedBunks) {
-                const pos = findBestGapPosition(bunk, winStart, winEnd, dMin, 'swim', null);
+                // Try post-lunch first, fall back to anywhere in window
+                let pos = findBestGapPosition(bunk, preferredStart, winEnd, dMin, 'swim', null);
+                if (!pos) pos = findBestGapPosition(bunk, winStart, winEnd, dMin, 'swim', null);
                 if (!pos) continue;
                 const bunkIdx = sortedBunks.indexOf(bunk);
                 let start = pos.start + bunkIdx * 5;
                 if (start + dMin > pos.end) start = pos.start;
                 const dur = Math.max(dMin, Math.min(dMax, pos.end - start));
 
-                // ★ Swim is a SOFT ANCHOR — DAP can shift it within the MRC window
-                // to eliminate dead space. It's placed here as a preferred position
-                // but not locked. Phase 3 (DAP) makes the final decision.
                 placeTentativeBlock(bunk, {
                     startMin: start, endMin: start + dur,
                     type: 'swim', event: layer.event || 'Swim',
@@ -1379,16 +1386,58 @@
                 const candidates = [];
                 const win = sa._softWindow;
                 const dur = sa._softDuration || (sa.endMin - sa.startMin);
-                // Include original position first
-                candidates.push({ startMin: sa.startMin, endMin: sa.startMin + dur });
-                // Generate alternatives every 5 min, limit to 10 alternatives
-                let count = 0;
-                for (let t = win.start; t + dur <= win.end && count < 10; t += 5) {
-                    if (t === sa.startMin) continue;
-                    candidates.push({ startMin: t, endMin: t + dur });
-                    count++;
+
+                // ═══════════════════════════════════════════════════════════
+                // SMART CANDIDATE GENERATION
+                // Instead of sequential positions from window start,
+                // generate positions that ALIGN with fixed block boundaries.
+                // Swim right after lunch = zero gap. Swim right before snacks = zero gap.
+                // ═══════════════════════════════════════════════════════════
+
+                // Collect all fixed block boundaries in this bunk
+                const fixedEnds = hardCommitted
+                    .filter(b => b.endMin > win.start && b.endMin + dur <= win.end)
+                    .map(b => b.endMin);  // positions right after a fixed block ends
+
+                const fixedStarts = hardCommitted
+                    .filter(b => b.startMin - dur >= win.start && b.startMin <= win.end)
+                    .map(b => b.startMin - dur);  // positions where swim ends right as a fixed block starts
+
+                // Priority 1: Positions that butt up against fixed blocks (zero gap guaranteed)
+                const boundaryPositions = [...new Set([...fixedEnds, ...fixedStarts])]
+                    .filter(t => t >= win.start && t + dur <= win.end)
+                    .sort((a, b) => a - b);
+
+                // Priority 2: Spread evenly across the window (catch positions between fixed blocks)
+                const windowSize = win.end - win.start - dur;
+                const spreadStep = Math.max(30, Math.floor(windowSize / 8));
+                const spreadPositions = [];
+                for (let t = win.start; t + dur <= win.end; t += spreadStep) {
+                    spreadPositions.push(t);
                 }
-                softAnchorCandidates.push({ base: sa, candidates });
+                // Also include window end position
+                const lastPos = win.end - dur;
+                if (lastPos >= win.start) spreadPositions.push(lastPos);
+
+                // Combine: boundary-aligned first, then spread, then original
+                const allPositions = [];
+                const seen = new Set();
+
+                // Original position (Phase 0's suggestion)
+                allPositions.push({ startMin: sa.startMin, endMin: sa.startMin + dur });
+                seen.add(sa.startMin);
+
+                // Boundary-aligned (highest priority — zero-gap by construction)
+                boundaryPositions.forEach(t => {
+                    if (!seen.has(t)) { allPositions.push({ startMin: t, endMin: t + dur }); seen.add(t); }
+                });
+
+                // Spread positions (coverage across the window)
+                spreadPositions.forEach(t => {
+                    if (!seen.has(t)) { allPositions.push({ startMin: t, endMin: t + dur }); seen.add(t); }
+                });
+
+                softAnchorCandidates.push({ base: sa, candidates: allPositions });
             });
 
             // Merge snack as another soft anchor (if present)
@@ -1485,7 +1534,7 @@
             // Limit candidates per anchor for performance
             const limitedCandidates = softAnchorCandidates.map(sac => ({
                 base: sac.base,
-                candidates: sac.candidates.slice(0, 8)
+                candidates: sac.candidates.slice(0, 15)
             }));
 
             // If no soft anchors at all, run once with just hard committed
@@ -1581,7 +1630,7 @@
                             const pf = prevFixed[0];
                             const pfC = resolveConstraints(pf.layer, pf.type);
                             const pfNewDur = (pf.endMin - pf.startMin) + regionDur;
-                            if (pfNewDur <= pfC.dMax + 5) { // +5 grace for snapping
+                            if (pfNewDur <= dMaxWithGrace(pfC)) { // +5 grace for snapping
                                 pf.endMin = region.end;
                                 pf.duration = pf.endMin - pf.startMin;
                                 regionAbsorbed = true;
@@ -1593,7 +1642,7 @@
                             if (nextInTemplate) {
                                 const nfC = resolveConstraints(nextInTemplate.layer, nextInTemplate.type);
                                 const nfNewDur = (nextInTemplate.endMin - nextInTemplate.startMin) + regionDur;
-                                if (nfNewDur <= nfC.dMax + 5) {
+                                if (nfNewDur <= dMaxWithGrace(nfC)) {
                                     nextInTemplate.startMin = region.start;
                                     nextInTemplate.duration = nextInTemplate.endMin - nextInTemplate.startMin;
                                     regionAbsorbed = true;
@@ -2031,12 +2080,12 @@
                     // Try 1: extend earlier block forward (never pinned)
                     if (!tl[i]._gradeWide && tl[i]._classification !== 'pinned') {
                         const c = resolveConstraints(tl[i].layer, tl[i].type);
-                        if (tl[i].endMin - tl[i].startMin + gap <= c.dMax + 5) { tl[i].endMin = tl[i + 1].startMin; continue; }
+                        if (tl[i].endMin - tl[i].startMin + gap <= dMaxWithGrace(c)) { tl[i].endMin = tl[i + 1].startMin; continue; }
                     }
                     // Try 2: extend later block backward (never pinned)
                     if (!tl[i + 1]._gradeWide && tl[i + 1]._classification !== 'pinned') {
                         const c = resolveConstraints(tl[i + 1].layer, tl[i + 1].type);
-                        if (tl[i + 1].endMin - tl[i + 1].startMin + gap <= c.dMax + 5) { tl[i + 1].startMin = tl[i].endMin; continue; }
+                        if (tl[i + 1].endMin - tl[i + 1].startMin + gap <= dMaxWithGrace(c)) { tl[i + 1].startMin = tl[i].endMin; continue; }
                     }
                 }
             });
@@ -2073,28 +2122,28 @@
                             // Try 1: extend prev forward (most natural)
                             if (prev && !prev._gradeWide) {
                                 const pc = resolveConstraints(prev.layer, prev.type);
-                                if ((prev.endMin - prev.startMin) + dur <= pc.dMax + 5) {
+                                if ((prev.endMin - prev.startMin) + dur <= pdMaxWithGrace(c)) {
                                     prev.endMin = gap.end; changed = true; continue;
                                 }
                             }
                             // Try 2: extend next backward
                             if (next && !next._gradeWide && next._classification !== 'pinned') {
                                 const nc = resolveConstraints(next.layer, next.type);
-                                if ((next.endMin - next.startMin) + dur <= nc.dMax + 5) {
+                                if ((next.endMin - next.startMin) + dur <= ndMaxWithGrace(c)) {
                                     next.startMin = gap.start; changed = true; continue;
                                 }
                             }
                             // Try 3: Try extending prev with relaxed dMax (+5 grace, but never pinned)
                             if (prev && !prev._gradeWide && prev._classification !== 'pinned') {
                                 const pc3 = resolveConstraints(prev.layer, prev.type);
-                                if ((prev.endMin - prev.startMin) + dur <= pc3.dMax + 5) {
+                                if ((prev.endMin - prev.startMin) + dur <= dMaxWithGrace(pc3)) {
                                     prev.endMin = gap.end; changed = true; continue;
                                 }
                             }
                             // Try 4: Try extending next with relaxed dMax (but NEVER pinned)
                             if (next && !next._gradeWide && next._classification !== 'pinned') {
                                 const nc4 = resolveConstraints(next.layer, next.type);
-                                if ((next.endMin - next.startMin) + dur <= nc4.dMax + 5) {
+                                if ((next.endMin - next.startMin) + dur <= dMaxWithGrace(nc4)) {
                                     next.startMin = gap.start; changed = true; continue;
                                 }
                             }
