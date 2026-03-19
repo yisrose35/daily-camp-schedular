@@ -731,9 +731,14 @@
             const before = blockStart - gapStart;
             const after = gapEnd - blockEnd;
             const minFill = grade ? getMinFillable(grade) : GAP_MIN_DUR;
-            // Each residual must be either 0 or large enough to hold a real block
-            if (before > 0 && before < minFill) return false;
-            if (after > 0 && after < minFill) return false;
+            // Three zones for each residual:
+            //   0          → perfect, no gap
+            //   1 to 10    → absorbable (neighbors can stretch by this much)
+            //   11 to minFill-1 → DEAD ZONE (too big to absorb, too small to fill)
+            //   >= minFill  → fillable (a real block fits)
+            const ABSORB_MAX = 10; // max minutes a neighbor can absorb
+            if (before > ABSORB_MAX && before < minFill) return false;
+            if (after > ABSORB_MAX && after < minFill) return false;
             return true;
         }
 
