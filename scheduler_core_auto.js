@@ -556,7 +556,9 @@
 
         let _iterSeed    = 0; // read by stagger offset in Step 2.3
         let bestScore    = Infinity;
-        let bestTimelines = null;
+       let bestTimelines = null;
+        let _savedNonPinnedLayers = null;
+        let _savedPlaceSpecialForBunk = null;
         let bestWarnings  = [];
         let staleCount   = 0;
        let totalIters   = 0;
@@ -589,11 +591,26 @@
                         }
                     });
                 }
-                // ── Gaps between blocks ──────────────────────────────────────
+               // ── Gaps between blocks (including day-edge gaps) ────────────
                 const sorted = [...timeline].sort((a, b) => a.startMin - b.startMin);
+                const gradeKey2 = Object.entries(divisions).find(([g, d]) =>
+                    (d.bunks || []).map(String).includes(String(bunk))
+                )?.[0];
+                const dayStart = gradeKey2 ? (parseTimeToMinutes(divisions[gradeKey2]?.startTime) || 540) : 540;
+                const dayEnd   = gradeKey2 ? (parseTimeToMinutes(divisions[gradeKey2]?.endTime)   || 960) : 960;
+
+                // Leading gap: day start → first block
+                if (sorted.length > 0 && sorted[0].startMin > dayStart) {
+                    score += (sorted[0].startMin - dayStart) * 15;
+                }
+                // Inter-block gaps
                 for (let i = 0; i < sorted.length - 1; i++) {
                     const gap = sorted[i + 1].startMin - sorted[i].endMin;
-                    if (gap > 0) score += gap * 5; // any gap is bad
+                    if (gap > 0) score += gap * 15;
+                }
+                // Trailing gap: last block → day end
+                if (sorted.length > 0 && sorted[sorted.length - 1].endMin < dayEnd) {
+                    score += (dayEnd - sorted[sorted.length - 1].endMin) * 15;
                 }
 
                 // ── Undersized gap-fill slots ────────────────────────────────
@@ -718,7 +735,7 @@
             return gaps.filter(g => g.end - g.start >= 5);
         }
 
-       function findBestGapPosition(bunk, windowStart, windowEnd, duration, blockType, specialName) {
+      function findBestGapPosition(bunk, windowStart, windowEnd, duration, blockType, specialName) {
             const gaps = getFreeGaps(bunk, windowStart, windowEnd);
             let bestPos = null;
             let bestScore = Infinity;
@@ -729,6 +746,10 @@
                 const latestStart = gap.end - duration;
                 for (let cs = gap.start; cs <= latestStart; cs += 5) {
                     const ce = cs + duration;
+
+                    // ★ Skip positions that leave unusable residual gaps
+                    if (!isResidualViable(gap.start, gap.end, cs, ce)) continue;
+
                     const score = scorePositionByContention(cs, ce, blockType, bunk, specialName);
  
                     if (score < bestScore) {
@@ -736,8 +757,23 @@
                         bestPos = { start: cs, end: ce };
                     }
                 }
+           }
+
+            // Absorb small residual gaps by expanding the block to fill them
+            if (bestPos) {
+                const bestGap = gaps.find(g => g.start <= bestPos.start && g.end >= bestPos.end);
+                if (bestGap) {
+                    const before = bestPos.start - bestGap.start;
+                    const after = bestGap.end - bestPos.end;
+                    if (before > 0 && before < GAP_MIN_DUR) {
+                        bestPos.start = bestGap.start; // expand backward
+                    }
+                    if (after > 0 && after < GAP_MIN_DUR) {
+                        bestPos.end = bestGap.end; // expand forward
+                    }
+                }
             }
- 
+
             // ★ FIX: sanity check — never return a position outside the requested window
             if (bestPos && (bestPos.start < windowStart || bestPos.end > windowEnd)) {
                 warn('[findBestGapPosition] CORRECTING out-of-window result: ' +
@@ -745,6 +781,22 @@
                 bestPos = null;
             }
             return bestPos;
+        }
+
+        // ── Residual gap viability check ─────────────────────────────────
+        function isResidualViable(gapStart, gapEnd, blockStart, blockEnd) {
+            const before = blockStart - gapStart;
+            const after  = gapEnd - blockEnd;
+            // Allow residuals that are 0, or >= GAP_MIN_DUR.
+            // Small residuals (1 to GAP_MIN_DUR-1) are only rejected if they
+            // exist on BOTH sides — a single small residual can be absorbed
+            // by expanding the block duration (handled by the caller).
+            const beforeBad = before > 0 && before < GAP_MIN_DUR;
+            const afterBad  = after > 0 && after < GAP_MIN_DUR;
+            // If only one side has a bad residual, allow it — caller can expand
+            // If both sides are bad, reject — can't absorb both
+            if (beforeBad && afterBad) return false;
+            return true;
         }
 
         function findFlexGapPosition(bunk, windowStart, windowEnd, minDuration) {
@@ -955,31 +1007,51 @@
  
         // Count bunks with field-consuming blocks in a time window.
         // Higher number = more field pressure.
-        function getFieldDemand(startMin, endMin, excludeBunk) {
+       function getFieldDemand(startMin, endMin, excludeBunk) {
             let peakDemand = 0;
- 
+
             for (let t = startMin; t < endMin; t += CONTENTION_SLICE) {
                 const sliceEnd = Math.min(t + CONTENTION_SLICE, endMin);
                 let demandThisSlice = 0;
- 
+
                 for (const grade of allGrades) {
+                    const gStart = parseTimeToMinutes(divisions[grade]?.startTime) || 660;
+                    const gEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 990;
+
+                    // Skip if this time slice is outside this grade's day
+                    if (t >= gEnd || sliceEnd <= gStart) continue;
+
                     const bunks = getBunksForGrade(grade, divisions);
                     for (const bk of bunks) {
                         if (bk === excludeBunk) continue;
                         const timeline = bunkTimelines[bk] || [];
+
+                        let hasBlock = false;
+                        let isConsumer = false;
+
                         for (const block of timeline) {
-                            if (getFieldImpact(block) !== 'consumer') continue;
                             if (block.startMin < sliceEnd && block.endMin > t) {
-                                demandThisSlice++;
-                                break; // one block per bunk per slice
+                                hasBlock = true;
+                                if (getFieldImpact(block) === 'consumer') {
+                                    isConsumer = true;
+                                }
+                                break;
                             }
                         }
+
+                        if (isConsumer) {
+                            demandThisSlice++;
+                        } else if (!hasBlock) {
+                            // Projected demand: unscheduled time assumed to need a field
+                            demandThisSlice++;
+                        }
+                        // else: has a non-consumer block (swim, special, lunch) → off the field
                     }
                 }
- 
+
                 if (demandThisSlice > peakDemand) peakDemand = demandThisSlice;
             }
- 
+
             return peakDemand;
         }
  
@@ -1202,7 +1274,10 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
  
         // ── Build flexible type layers per grade ─────────────────────────
         // Collect what each grade needs (excluding pinned)
-        const nonPinnedLayers = [...windowedLayers, ...openLayers];
+       const nonPinnedLayers = [...windowedLayers, ...openLayers];
+       _savedNonPinnedLayers = nonPinnedLayers;
+        _savedPlaceSpecialForBunk = placeSpecialForBunk;
+        window._debugNonPinnedLayers = nonPinnedLayers;
  
         const gradeFlexTypes = {}; // grade → array of distinct type strings
         allGrades.forEach(grade => {
@@ -1220,21 +1295,65 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         function generateSkeleton(grade, seed) {
             const types = [...(gradeFlexTypes[grade] || [])];
             if (types.length === 0) return [];
- 
-            // Fisher-Yates shuffle seeded by grade index + iteration seed
-            const gradeIdx = allGrades.indexOf(grade);
-            let s = ((seed + 1) * (gradeIdx + 1) * 2654435761) >>> 0; // hash
-            function rand() {
-                s ^= s << 13; s ^= s >> 17; s ^= s << 5;
-                return (s >>> 0) / 4294967296;
+
+            // ── Category rotation for cross-grade staggering ─────────
+            // Goal: different grades do different activity CATEGORIES at
+            // the same time (while 1st does sport, 2nd does special, 3rd
+            // does swim). This prevents resource depletion.
+            //
+            // How: build a canonical category order, then ROTATE it by
+            // the grade's index. The _iterSeed picks which base permutation
+            // to start from, but the offset between grades is always
+            // systematic (grade 0 = offset 0, grade 1 = offset 1, etc.)
+            //
+            // Categories: group types into swim / special / sport-like.
+            // Non-staggerable types (league, specialty_league) keep their
+            // natural priority and aren't part of the rotation.
+
+            const STAGGER_CATEGORIES = {
+                swim: 0,
+                snacks: 0,
+                special: 1,
+                sport: 2, sports: 2, slot: 2
+            };
+
+            // Split into staggerable and non-staggerable
+            const staggerable = [];
+            const fixed = []; // league, specialty_league — placed separately
+            types.forEach(t => {
+                if (STAGGER_CATEGORIES[t.toLowerCase()] !== undefined) {
+                    staggerable.push(t);
+                } else {
+                    fixed.push(t);
+                }
+            });
+
+            // Sort staggerable by category index for canonical order
+            staggerable.sort((a, b) =>
+                (STAGGER_CATEGORIES[a.toLowerCase()] ?? 99) -
+                (STAGGER_CATEGORIES[b.toLowerCase()] ?? 99)
+            );
+
+            // Use seed to pick a base permutation of the canonical order
+            // (so different iterations try different starting arrangements)
+            const numPerms = staggerable.length; // e.g. 3 for [swim, special, sport]
+            if (numPerms > 1) {
+                const baseRotation = seed % numPerms;
+                // Rotate the base by seed amount
+                for (let r = 0; r < baseRotation; r++) {
+                    staggerable.push(staggerable.shift());
+                }
+
+                // Now rotate by grade index — this is what creates the stagger
+                const gradeIdx = allGrades.indexOf(grade);
+                const gradeRotation = gradeIdx % numPerms;
+                for (let r = 0; r < gradeRotation; r++) {
+                    staggerable.push(staggerable.shift());
+                }
             }
- 
-            for (let i = types.length - 1; i > 0; i--) {
-                const j = Math.floor(rand() * (i + 1));
-                [types[i], types[j]] = [types[j], types[i]];
-            }
- 
-            return types;
+
+            // Recombine: staggerable types in rotated order, then fixed
+            return [...staggerable, ...fixed];
         }
  
         const gradeSortedForPlacement = sortGradesByConstraint(
@@ -1475,9 +1594,54 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
             }
 
             // Find best gap with contention scoring
-            const position = findBestGapPosition(bunk, windowStart, windowEnd, dMin, type, null);
+           let position = findBestGapPosition(bunk, windowStart, windowEnd, dMin, type, null);
 
-            if (!position) return null;
+            // If no free gap, split a flexible block to make room
+            if (!position) {
+                const timeline = bunkTimelines[bunk] || [];
+                const splittableTypes = ['slot', 'sport', 'sports', 'special'];
+                const splitPriority = { slot: 0, sport: 1, sports: 1, special: 2 };
+                const candidates = timeline
+                    .filter(b => {
+                        const bType = (b.type || '').toLowerCase();
+                        if (!splittableTypes.includes(bType)) return false;
+                        if (b._fixed || b._classification === 'pinned') return false;
+                        if (b._activityLocked) return false;
+                        if (bType === type.toLowerCase()) return false;
+                        const overlapStart = Math.max(b.startMin, windowStart);
+                        const overlapEnd = Math.min(b.endMin, windowEnd);
+                        if (overlapEnd - overlapStart < dMin) return false;
+                        const remainder = (b.endMin - b.startMin) - dMin;
+                        return remainder === 0 || remainder >= GAP_MIN_DUR;
+                    })
+                    .sort((a, b) => {
+                        const aPri = splitPriority[(a.type || '').toLowerCase()] ?? 99;
+                        const bPri = splitPriority[(b.type || '').toLowerCase()] ?? 99;
+                        if (aPri !== bPri) return aPri - bPri;
+                        return (b.endMin - b.startMin) - (a.endMin - a.startMin);
+                    });
+
+                for (const block of candidates) {
+                    const carveStart = Math.max(block.startMin, windowStart);
+                    const carveEnd = carveStart + dMin;
+                    if (carveEnd > block.endMin || carveEnd > windowEnd) continue;
+
+                    const remainderDur = block.endMin - carveEnd;
+                    if (remainderDur >= GAP_MIN_DUR) {
+                        block.startMin = carveEnd;
+                    } else {
+                        const idx = timeline.indexOf(block);
+                        if (idx !== -1) timeline.splice(idx, 1);
+                    }
+
+                    position = { start: carveStart, end: carveEnd };
+                    log('[STEP 2.3] Split ' + block.type + ' to place ' + type +
+                        ' at ' + carveStart + '-' + carveEnd + ' for ' + bunk);
+                    break;
+                }
+
+                if (!position) return null;
+            }
  
             // Size the block: take up to dMax or available space
             const gapEnd = (() => {
@@ -1517,7 +1681,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         for (const _g of gradeOrder) { (gradeSkeletons[_g] || []).forEach(t => _allTypes.add(t)); }
 
         // Order: relievers first (swim), then leagues, then specials, then consumers (sport)
-        const _typeOrder = ['swim', 'league', 'specialty_league', 'special', 'sport', 'sports', 'slot'];
+       const _typeOrder = ['swim', 'snacks', 'league', 'specialty_league', 'special', 'sport', 'sports', 'slot'];
         const _sortedTypes = [..._allTypes].sort((a, b) => {
             const ai = _typeOrder.indexOf(a.toLowerCase());
             const bi = _typeOrder.indexOf(b.toLowerCase());
@@ -1587,9 +1751,19 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                         if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' window=' + swimWinStart + '-' + swimWinEnd + ' dur=' + swimDur + ' → position=' + (position ? position.start + '-' + position.end : 'null'));
                         if (position) {
                             var _preCount = bunkTimelines[bunk].length;
-                           var _swimBlock = {
-                                startMin: position.start,
-                                endMin: position.end,
+                          var _swimDur = swimLayer.durationMax || swimLayer.periodMin || swimLayer.durationMin || swimLayer.duration || (position.end - position.start);
+                            // ★ Stagger: offset swim start by bunk index within grade
+                            var _bunkIdx = sortedBunks.indexOf(bunk);
+                            var _staggerOffset = _bunkIdx * 5; // 5min apart per bunk
+                            var _staggeredStart = position.start + _staggerOffset;
+                            // Ensure staggered swim still fits in the gap
+                            if (_staggeredStart + _swimDur > position.end) {
+                                _staggeredStart = position.start; // fall back to no stagger
+                            }
+                            var _swimCappedEnd = _staggeredStart + _swimDur;
+                            var _swimBlock = {
+                                startMin: _staggeredStart,
+                                endMin: _swimCappedEnd,
                                 type: 'swim',
                                 event: swimLayer.event || 'Swim',
                                 layer: swimLayer,
@@ -1740,9 +1914,14 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                             }
                         } else if (typeLC === 'swim') {
                             const position = placeSwimForBunk(bunk, need.layer);
-                            if (position) {
-                                placeTentativeBlock(bunk, {
-                                    startMin: position.start, endMin: position.end,
+                        if (position) {
+                            // ★ Cap swim duration to layer constraints (never overfill gap)
+                            const _swimDur = need.layer.periodMin || need.layer.durationMin || need.layer.duration || (position.end - position.start);
+                            const _swimMax = need.layer.durationMax || _swimDur;
+                            const _swimTarget = Math.min(_swimMax, position.end - position.start);
+                            const _swimEnd = position.start + _swimTarget;
+                            placeTentativeBlock(bunk, {
+                                startMin: position.start, endMin: _swimEnd,
                                     type: 'swim', event: need.layer.event || 'Swim',
                                     layer: need.layer, _classification: need.layer._classification,
                                     _activityLocked: true
@@ -1875,8 +2054,8 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                         });
                     }
 
-                } else {
-                    // Non-special: just flag it
+               } else {
+                    // Non-special: Step 2.4b enforcement handles recovery
                     warnings.push({
                         type: 'placement_failure',
                         bunk,
@@ -1897,6 +2076,172 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
             });
         });
 
+        // -----------------------------------------------------------------
+        // STEP 2.4b — LAYER ENFORCEMENT
+        // Guarantees every non-pinned layer's minimum quantity is met for
+        // every bunk. Runs AFTER commit, BEFORE gap-fill, so free gaps
+        // are still available. If no gap exists, splits the largest
+        // flexible block (slot > sport > special) within the layer's window.
+        // -----------------------------------------------------------------
+        log('\n[STEP 2.4b] Layer enforcement — guaranteeing all layer minimums...');
+        let enforcementCount = 0;
+
+        allGrades.forEach(grade => {
+            const bunks = getBunksForGrade(grade, divisions);
+            const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+            const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+            const gradeLayers = nonPinnedLayers.filter(l => {
+                if ((l.grade || l.division) !== grade) return false;
+                const t = (l.type || '').toLowerCase();
+                return t !== 'league' && t !== 'specialty_league';
+            });
+
+            bunks.forEach(bunk => {
+                gradeLayers.forEach(layer => {
+                    const required = layer.quantity || 1;
+                    const op = layer.operator || '=';
+                    const minRequired = (op === '<=' || op === '≤') ? 0 : required;
+                    if (minRequired <= 0) return;
+
+                    const layerType = (layer.type || '').toLowerCase();
+                    const layerEvent = layer.event || layer.name || layer.type || layerType;
+                    const layerDur = layer.periodMin || layer.durationMin || layer.duration || 10;
+                    const winStart = Math.max(layer.startMin || 0, gradeStart);
+                    const winEnd = Math.min(layer.endMin || 1440, gradeEnd);
+
+                    const timeline = bunkTimelines[bunk] || [];
+                    const alreadyByType = timeline.filter(b => (b.type || '').toLowerCase() === layerType).length;
+                    if (alreadyByType >= minRequired) return;
+
+                    let deficit = minRequired - alreadyByType;
+
+                    while (deficit > 0) {
+                        // Strategy 1: find a free gap in the layer's window
+                        const gaps = getFreeGaps(bunk, winStart, winEnd);
+                        let placed = false;
+
+                        for (const gap of gaps) {
+                            if (gap.end - gap.start >= layerDur) {
+                                if (layerType === 'special') {
+                                   const specialBlock = _savedPlaceSpecialForBunk(bunk, grade, layer, gap.start, gap.end);
+                                    if (specialBlock) {
+                                        specialBlock._committed = true;
+                                        specialBlock._fromEnforcement = true;
+                                        placeTentativeBlock(bunk, specialBlock);
+                                        enforcementCount++;
+                                        deficit--;
+                                        placed = true;
+                                        log('[STEP 2.4b] Placed special "' + specialBlock.event + '" in gap ' +
+                                            specialBlock.startMin + '-' + specialBlock.endMin + ' for ' + bunk);
+                                        break;
+                                    }
+                                    continue;
+                                }
+                                const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(layerType);
+                                placeTentativeBlock(bunk, {
+                                    startMin: gap.start,
+                                    endMin: gap.start + layerDur,
+                                    type: layerType,
+                                    event: layerEvent,
+                                    layer,
+                                    _classification: layer._classification,
+                                    _activityLocked: _isTimeLocked,
+                                    _committed: true,
+                                    _fromEnforcement: true
+                                });
+                                enforcementCount++;
+                                deficit--;
+                                placed = true;
+                                log('[STEP 2.4b] Placed ' + layerEvent + ' in gap ' +
+                                    gap.start + '-' + (gap.start + layerDur) + ' for ' + bunk);
+                                break;
+                            }
+                        }
+                        if (placed) continue;
+
+                        // Strategy 2: split a flexible block within the window
+                        const splittableTypes = ['slot', 'sport', 'sports', 'special'];
+                        const splitPriority = { slot: 0, sport: 1, sports: 1, special: 2 };
+                        const candidates = timeline
+                            .filter(b => {
+                                const bType = (b.type || '').toLowerCase();
+                                if (!splittableTypes.includes(bType)) return false;
+                                if (b._fixed || b._classification === 'pinned') return false;
+                                if (b._activityLocked) return false;
+                                if (bType === layerType) return false;
+                                const overlapStart = Math.max(b.startMin, winStart);
+                                const overlapEnd = Math.min(b.endMin, winEnd);
+                                if (overlapEnd - overlapStart < layerDur) return false;
+                                const remainder = (b.endMin - b.startMin) - layerDur;
+                                return remainder === 0 || remainder >= (GAP_MIN_DUR || 10);
+                            })
+                            .sort((a, b) => {
+                                const aPri = splitPriority[(a.type || '').toLowerCase()] ?? 99;
+                                const bPri = splitPriority[(b.type || '').toLowerCase()] ?? 99;
+                                if (aPri !== bPri) return aPri - bPri;
+                                return (b.endMin - b.startMin) - (a.endMin - a.startMin);
+                            });
+
+                        let split = false;
+                        for (const block of candidates) {
+                            const carveStart = Math.max(block.startMin, winStart);
+                            const carveEnd = carveStart + layerDur;
+                            if (carveEnd > block.endMin || carveEnd > winEnd) continue;
+
+                           if (layerType === 'special') {
+                                const specialBlock = _savedPlaceSpecialForBunk(bunk, grade, layer, carveStart, carveEnd);
+                                if (!specialBlock) continue;
+                                specialBlock._committed = true;
+                                specialBlock._fromEnforcement = true;
+                                placeTentativeBlock(bunk, specialBlock);
+                            } else {
+                                const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(layerType);
+                                placeTentativeBlock(bunk, {
+                                    startMin: carveStart,
+                                    endMin: carveEnd,
+                                    type: layerType,
+                                    event: layerEvent,
+                                    layer,
+                                    _classification: layer._classification,
+                                    _activityLocked: _isTimeLocked,
+                                    _committed: true,
+                                    _fromEnforcement: true
+                                });
+                            }
+
+                            const remainderDur = block.endMin - carveEnd;
+                            if (remainderDur >= (GAP_MIN_DUR || 10)) {
+                                block.startMin = carveEnd;
+                            } else {
+                                const idx = timeline.indexOf(block);
+                                if (idx !== -1) timeline.splice(idx, 1);
+                            }
+
+                            enforcementCount++;
+                            deficit--;
+                            split = true;
+                            log('[STEP 2.4b] Split ' + block.type + ' to place ' + layerEvent +
+                                ' at ' + carveStart + '-' + carveEnd + ' for ' + bunk);
+                            break;
+                        }
+
+                        if (!split) {
+                            warn('[STEP 2.4b] Could not enforce ' + layerEvent + ' for ' + bunk +
+                                ' — no gap or splittable block in window ' + winStart + '-' + winEnd);
+                            warnings.push({
+                                type: 'enforcement_failure',
+                                bunk, grade,
+                                layer: layerEvent,
+                                message: 'No room in window ' + winStart + '-' + winEnd
+                            });
+                            break;
+                        }
+                    }
+                });
+            });
+        });
+
+        log('[STEP 2.4b] ✅ Enforced ' + enforcementCount + ' blocks');
        // -----------------------------------------------------------------
         // STEP 2.5 — GAP FILL
         // ★ FIX: subdivide large gaps + absorb micro-gaps instead of
@@ -2065,8 +2410,12 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                             continue;
                         }
 
-                        // ★ Option 1: extend earlier block forward
-                        if (currDur + gap <= currMaxDur) {                            const nextWindowMin = next.layer?.startMin ?? next.layer?.windowMin ?? next.startMin;
+                        // ★ GRADE-WIDE: league/specialty_league/swim times are shared
+                        const _currIsGradeWide = _noSlideTypes.includes(_currTypeLC);
+                        const _nextIsGradeWide = _noSlideTypes.includes(_nextTypeLC);
+
+                        // ★ FIXED↔FIXED shift/extend (skip if either is grade-wide)
+                        if (!_currIsGradeWide && !_nextIsGradeWide && currDur + gap <= currMaxDur) {                            const nextWindowMin = next.layer?.startMin ?? next.layer?.windowMin ?? next.startMin;
                             const shiftTarget = curr.endMin;
 
                             if (shiftTarget >= nextWindowMin) {
@@ -2089,21 +2438,24 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                             continue; // skip Options 1-4 entirely for FIXED↔FIXED pairs
                         }
 
-                        // ★ Option 1: extend earlier block forward
-                        if (currDur + gap <= currMaxDur) {                            log(`[STEP 2.5b] Pass ${passCount} — extend earlier: "${curr.event}" ${curr.endMin}→${next.startMin} on ${bunk}`);
+                       if (_currIsGradeWide && _nextIsGradeWide) continue;
+
+                       // ★ Option 1: extend earlier block forward
+                        if (!_currIsGradeWide && currDur + gap <= currMaxDur) {                           
+                            log(`[STEP 2.5b] Pass ${passCount} — extend earlier: "${curr.event}" ${curr.endMin}→${next.startMin} on ${bunk}`);
                             curr.endMin = next.startMin;
                             seamsClosed++;
                             passChanged = true;
 
-                        // ★ Option 2: extend later block backward (starts earlier, runs longer)
-                        } else if (!nextIsFixed && nextDur + gap <= nextMaxDur) {
+                       // ★ Option 2: extend later block backward (starts earlier, runs longer)
+                        } else if (!nextIsFixed && !_nextIsGradeWide && nextDur + gap <= nextMaxDur) {
                             log(`[STEP 2.5b] Pass ${passCount} — extend later back: "${next.event}" ${next.startMin}→${curr.endMin} on ${bunk}`);
                             next.startMin = curr.endMin;
                             seamsClosed++;
                             passChanged = true;
 
-                        // ★ Option 3: shift later block earlier (no duration change, may cascade)
-                        } else if (!nextIsFixed) {
+                       // ★ Option 3: shift later block earlier (no duration change, may cascade)
+                        } else if (!nextIsFixed && !_nextIsGradeWide) {
                             const nextMinDur = next.layer
                                 ? (next.layer.durationMin || next.layer.periodMin || next.layer.duration || 0)
                                 : 0;
@@ -2179,7 +2531,115 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         });
 
         log('[STEP 2.5b] ✅ Closed ' + seamsClosed + ' seams across camp');
+// -----------------------------------------------------------------
+        // STEP 2.5c — EDGE GAP ABSORPTION
+        // Handles gaps that 2.5b couldn't close because adjacent blocks are
+        // fixed/swim/league. Strategy:
+        //   1. Micro gaps (<GAP_MIN_DUR): extend nearest non-fixed neighbor
+        //   2. Small gaps (GAP_MIN_DUR to GAP_MAX_DUR): create activity slot
+        //      even if below the sport layer floor
+        //   3. Leading/trailing day-edge gaps: create activity slots
+        // -----------------------------------------------------------------
+        log('\n[STEP 2.5c] Edge gap absorption...');
+        let edgeGapsFilled = 0;
 
+        allGrades.forEach(grade => {
+            const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+            const gradeEnd   = parseTimeToMinutes(divisions[grade]?.endTime)   || 960;
+            const bunks = getBunksForGrade(grade, divisions);
+
+            bunks.forEach(bunk => {
+                const timeline = bunkTimelines[bunk];
+                if (!timeline || timeline.length === 0) return;
+                timeline.sort((a, b) => a.startMin - b.startMin);
+
+                const gaps = getFreeGaps(bunk, gradeStart, gradeEnd);
+                if (gaps.length === 0) return;
+
+                gaps.forEach(gap => {
+                    const dur = gap.end - gap.start;
+                    if (dur <= 0) return;
+
+                    // ── Strategy 1: Micro gap — absorb into neighbor ─────────
+                    if (dur < GAP_MIN_DUR) {
+                        // Find adjacent blocks
+                        const before = timeline.filter(b => b.endMin === gap.start);
+                        const after  = timeline.filter(b => b.startMin === gap.end);
+                        const prev = before[0];
+                        const next = after[0];
+
+                        // Try extending a non-fixed, non-swim/league neighbor
+                        const noExtendTypes = ['swim', 'league', 'specialty_league', 'lunch', 'dismissal'];
+
+                        if (prev && !prev._fixed && !noExtendTypes.includes((prev.type || '').toLowerCase())) {
+                            const prevMaxDur = prev.layer
+                                ? (prev.layer.durationMax || prev.layer.periodMin || prev.layer.duration || Infinity)
+                                : Infinity;
+                            if ((prev.endMin - prev.startMin) + dur <= prevMaxDur) {
+                                prev.endMin = gap.end;
+                                edgeGapsFilled++;
+                                log('[STEP 2.5c] Absorbed ' + dur + 'min micro-gap into prev "' + prev.event + '" on ' + bunk);
+                                return;
+                            }
+                        }
+
+                        if (next && !next._fixed && !next._classification !== 'pinned' &&
+                            !noExtendTypes.includes((next.type || '').toLowerCase())) {
+                            const nextMaxDur = next.layer
+                                ? (next.layer.durationMax || next.layer.periodMin || next.layer.duration || Infinity)
+                                : Infinity;
+                            if ((next.endMin - next.startMin) + dur <= nextMaxDur) {
+                                next.startMin = gap.start;
+                                edgeGapsFilled++;
+                                log('[STEP 2.5c] Absorbed ' + dur + 'min micro-gap into next "' + next.event + '" on ' + bunk);
+                                return;
+                            }
+                        }
+
+                        // Last resort: create a mini slot even below GAP_MIN_DUR
+                        // (5-19 min slots are better than visible gaps)
+                        if (dur >= 5) {
+                            placeTentativeBlock(bunk, {
+                                startMin: gap.start, endMin: gap.end,
+                                type: 'slot', event: 'General Activity Slot',
+                                layer: null, _classification: 'gap',
+                                _fromGapDetection: true, _committed: true, _microGap: true
+                            });
+                            edgeGapsFilled++;
+                            log('[STEP 2.5c] Created ' + dur + 'min micro-slot on ' + bunk + ' at ' + gap.start);
+                        }
+                        return;
+                    }
+
+                    // ── Strategy 2: Fillable gap (≥GAP_MIN_DUR) ─────────────
+                    // These were missed by Step 2.5 in this iteration.
+                    // Create activity slot(s) with relaxed floor (GAP_MIN_DUR).
+                    const maxDur = getGapCapForGrade(grade, gap.start, gap.end);
+                    let cursor = gap.start;
+
+                    while (cursor < gap.end) {
+                        const remaining = gap.end - cursor;
+                        if (remaining < 5) break;
+
+                        // Use GAP_MIN_DUR as floor, but accept smaller remainders
+                        let slotDur = Math.min(maxDur, remaining);
+                        slotDur = Math.floor(slotDur / 5) * 5;
+                        if (slotDur < 5) break;
+
+                        placeTentativeBlock(bunk, {
+                            startMin: cursor, endMin: cursor + slotDur,
+                            type: 'slot', event: 'General Activity Slot',
+                            layer: null, _classification: 'gap',
+                            _fromGapDetection: true, _committed: true
+                        });
+                        edgeGapsFilled++;
+                        cursor += slotDur;
+                    }
+                });
+            });
+        });
+
+        log('[STEP 2.5c] ✅ Absorbed/filled ' + edgeGapsFilled + ' edge gaps');
         // ── Score this iteration and track best ──────────────────────────────
         const iterWarnings = [];
         const iterScore = scoreTimelines(bunkTimelines, iterWarnings);
@@ -2221,21 +2681,258 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         log('══════════════════════════════════════════════════════════');
         log('BEST SCORE: ' + bestScore + ' after ' + totalIters + ' iteration(s)');
         log('══════════════════════════════════════════════════════════');
-
-        // Debug exports — once after loop (moved from hot loop for perf)
-        window._bunkNeeds     = JSON.parse(JSON.stringify(bunkNeeds));
-        window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
-        window._autoBuildTimelines = JSON.parse(JSON.stringify(bunkTimelines));
-
-        // Restore the best iteration's timelines into live state for Steps 3–5
+// Restore the best iteration's timelines into live state for Steps 3–5
         allGrades.forEach(grade => {
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 bunkTimelines[bunk] = bestTimelines[bunk] || [];
             });
         });
-        warnings.length = 0;
-        bestWarnings.forEach(w => warnings.push(w));
+
+        // Debug exports — once after loop, AFTER restoring best timelines
         
+        warnings.length = 0;
+       bestWarnings.forEach(w => warnings.push(w));
+
+        // -----------------------------------------------------------------
+        // POST-LOOP LAYER ENFORCEMENT
+        // The best iteration's timelines may be missing layers that other
+        // iterations placed. Re-check by actual type count (not bunkNeeds,
+        // which reflects the last iteration, not the best).
+        // -----------------------------------------------------------------
+        log('\n[POST-ENFORCEMENT] Verifying all layers in best iteration...');
+        let postEnforcementCount = 0;
+
+        allGrades.forEach(grade => {
+            const bunks = getBunksForGrade(grade, divisions);
+            const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+            const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+            const gradeLayers = _savedNonPinnedLayers.filter(l => {
+                if ((l.grade || l.division) !== grade) return false;
+                const t = (l.type || '').toLowerCase();
+                return t !== 'league' && t !== 'specialty_league';
+            });
+
+            bunks.forEach(bunk => {
+                gradeLayers.forEach(layer => {
+                    const required = layer.quantity || 1;
+                    const op = layer.operator || '=';
+                    const minRequired = (op === '<=' || op === '≤') ? 0 : required;
+                    if (minRequired <= 0) return;
+
+                    const layerType = (layer.type || '').toLowerCase();
+                    const layerEvent = layer.event || layer.name || layer.type || layerType;
+                    const layerDur = layer.periodMin || layer.durationMin || layer.duration || 10;
+                    const winStart = Math.max(layer.startMin || 0, gradeStart);
+                    const winEnd = Math.min(layer.endMin || 1440, gradeEnd);
+
+                    const timeline = bunkTimelines[bunk] || [];
+                    const alreadyByType = timeline.filter(b => (b.type || '').toLowerCase() === layerType).length;
+                    if (alreadyByType >= minRequired) return;
+
+                    let deficit = minRequired - alreadyByType;
+
+                    while (deficit > 0) {
+                        const gaps = getFreeGaps(bunk, winStart, winEnd);
+                        let placed = false;
+
+                       for (const gap of gaps) {
+                            if (gap.end - gap.start >= layerDur) {
+                                if (layerType === 'special') {
+                                    const specialBlock = _savedPlaceSpecialForBunk(bunk, grade, layer, gap.start, gap.end);
+                                    if (specialBlock) {
+                                        specialBlock._committed = true;
+                                        specialBlock._fromEnforcement = true;
+                                        placeTentativeBlock(bunk, specialBlock);
+                                        enforcementCount++;
+                                        deficit--;
+                                        placed = true;
+                                        log('[STEP 2.4b] Placed special "' + specialBlock.event + '" in gap ' +
+                                            specialBlock.startMin + '-' + specialBlock.endMin + ' for ' + bunk);
+                                        break;
+                                    }
+                                    continue;
+                                }
+                                const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(layerType);
+                                placeTentativeBlock(bunk, {
+                                    startMin: gap.start,
+                                    endMin: gap.start + layerDur,
+                                    type: layerType,
+                                    event: layerEvent,
+                                    layer,
+                                    _classification: layer._classification,
+                                    _activityLocked: _isTimeLocked,
+                                    _committed: true,
+                                    _fromEnforcement: true
+                                });
+                                enforcementCount++;
+                                deficit--;
+                                placed = true;
+                                log('[STEP 2.4b] Placed ' + layerEvent + ' in gap ' +
+                                    gap.start + '-' + (gap.start + layerDur) + ' for ' + bunk);
+                                break;
+                            }
+                        }
+                        if (placed) continue;
+
+                        const splittableTypes = ['slot', 'sport', 'sports', 'special'];
+                        const splitPriority = { slot: 0, sport: 1, sports: 1, special: 2 };
+                        const candidates = timeline
+                            .filter(b => {
+                                const bType = (b.type || '').toLowerCase();
+                                if (!splittableTypes.includes(bType)) return false;
+                                if (b._fixed || b._classification === 'pinned') return false;
+                                if (b._activityLocked) return false;
+                                if (bType === layerType) return false;
+                                const overlapStart = Math.max(b.startMin, winStart);
+                                const overlapEnd = Math.min(b.endMin, winEnd);
+                                if (overlapEnd - overlapStart < layerDur) return false;
+                                const remainder = (b.endMin - b.startMin) - layerDur;
+                                return remainder === 0 || remainder >= (GAP_MIN_DUR || 10);
+                            })
+                            .sort((a, b) => {
+                                const aPri = splitPriority[(a.type || '').toLowerCase()] ?? 99;
+                                const bPri = splitPriority[(b.type || '').toLowerCase()] ?? 99;
+                                if (aPri !== bPri) return aPri - bPri;
+                                return (b.endMin - b.startMin) - (a.endMin - a.startMin);
+                            });
+
+                        let split = false;
+                        for (const block of candidates) {
+                            const carveStart = Math.max(block.startMin, winStart);
+                            const carveEnd = carveStart + layerDur;
+                            if (carveEnd > block.endMin || carveEnd > winEnd) continue;
+
+                            if (layerType === 'special') {
+                                const specialBlock = _savedPlaceSpecialForBunk(bunk, grade, layer, carveStart, carveEnd);
+                                if (!specialBlock) continue;
+                                specialBlock._committed = true;
+                                specialBlock._fromEnforcement = true;
+                                placeTentativeBlock(bunk, specialBlock);
+                            } else {
+                                const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(layerType);
+                                placeTentativeBlock(bunk, {
+                                    startMin: carveStart,
+                                    endMin: carveEnd,
+                                    type: layerType,
+                                    event: layerEvent,
+                                    layer,
+                                    _classification: layer._classification,
+                                    _activityLocked: _isTimeLocked,
+                                    _committed: true,
+                                    _fromEnforcement: true
+                                });
+                            }
+
+                            const remainderDur = block.endMin - carveEnd;
+                            if (remainderDur >= (GAP_MIN_DUR || 10)) {
+                                block.startMin = carveEnd;
+                            } else {
+                                const idx = timeline.indexOf(block);
+                                if (idx !== -1) timeline.splice(idx, 1);
+                            }
+
+                            postEnforcementCount++;
+                            deficit--;
+                            split = true;
+                            log('[POST-ENFORCEMENT] Split ' + block.type + ' to place ' + layerEvent +
+                                ' at ' + carveStart + '-' + carveEnd + ' for ' + bunk);
+                            break;
+                        }
+
+                        if (!split) {
+                            warn('[POST-ENFORCEMENT] Could not enforce ' + layerEvent + ' for ' + bunk);
+                            break;
+                        }
+                    }
+                });
+            });
+        });
+
+        log('[POST-ENFORCEMENT] ✅ Enforced ' + postEnforcementCount + ' blocks');
+
+        
+
+        // -----------------------------------------------------------------
+        // POST-LOOP GAP PATCH — run on winning timelines before formalization
+        // Catches any gaps the best iteration left behind
+        // -----------------------------------------------------------------
+        log('\n[POST-LOOP] Patching gaps in best iteration timelines...');
+        let postLoopFilled = 0;
+
+        allGrades.forEach(grade => {
+            const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+            const gradeEnd   = parseTimeToMinutes(divisions[grade]?.endTime)   || 960;
+            const bunks = getBunksForGrade(grade, divisions);
+
+            bunks.forEach(bunk => {
+                const timeline = bunkTimelines[bunk];
+                if (!timeline || timeline.length === 0) return;
+                timeline.sort((a, b) => a.startMin - b.startMin);
+
+                const gaps = getFreeGaps(bunk, gradeStart, gradeEnd);
+                gaps.forEach(gap => {
+                    const dur = gap.end - gap.start;
+                    if (dur < 5) return;
+
+                    // Try absorbing micro gaps into neighbors first
+                    if (dur < GAP_MIN_DUR) {
+                        const noExtend = ['swim', 'league', 'specialty_league', 'lunch', 'dismissal'];
+                        const prev = timeline.find(b => b.endMin === gap.start);
+                        const next = timeline.find(b => b.startMin === gap.end);
+
+                        if (prev && !prev._fixed && !noExtend.includes((prev.type || '').toLowerCase())) {
+                            const maxDur = prev.layer
+                                ? (prev.layer.durationMax || prev.layer.periodMin || prev.layer.duration || Infinity)
+                                : Infinity;
+                            if ((prev.endMin - prev.startMin) + dur <= maxDur) {
+                                prev.endMin = gap.end;
+                                postLoopFilled++;
+                                log('[POST-LOOP] Absorbed ' + dur + 'min into prev "' + prev.event + '" on ' + bunk);
+                                return;
+                            }
+                        }
+                        if (next && !next._fixed && next._classification !== 'pinned' &&
+                            !noExtend.includes((next.type || '').toLowerCase())) {
+                            const maxDur = next.layer
+                                ? (next.layer.durationMax || next.layer.periodMin || next.layer.duration || Infinity)
+                                : Infinity;
+                            if ((next.endMin - next.startMin) + dur <= maxDur) {
+                                next.startMin = gap.start;
+                                postLoopFilled++;
+                                log('[POST-LOOP] Absorbed ' + dur + 'min into next "' + next.event + '" on ' + bunk);
+                                return;
+                            }
+                        }
+                    }
+
+                    // Create slot(s) for any remaining gap ≥5min
+                    const maxDur = getGapCapForGrade(grade, gap.start, gap.end);
+                    let cursor = gap.start;
+                    while (cursor < gap.end) {
+                        const remaining = gap.end - cursor;
+                        if (remaining < 5) break;
+                        let slotDur = Math.min(maxDur, remaining);
+                        slotDur = Math.floor(slotDur / 5) * 5;
+                        if (slotDur < 5) break;
+
+                        placeTentativeBlock(bunk, {
+                            startMin: cursor, endMin: cursor + slotDur,
+                            type: 'slot', event: 'General Activity Slot',
+                            layer: null, _classification: 'gap',
+                            _fromGapDetection: true, _committed: true
+                        });
+                        postLoopFilled++;
+                        cursor += slotDur;
+                    }
+                });
+            });
+        });
+       log('[POST-LOOP] ✅ Patched ' + postLoopFilled + ' gaps in best timelines');
+
+        // Debug exports — after all post-loop fixes (enforcement + gap patch)
+        window._bunkNeeds     = JSON.parse(JSON.stringify(bunkNeeds));
+        window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
+        window._autoBuildTimelines = JSON.parse(JSON.stringify(bunkTimelines));
         // -----------------------------------------------------------------
         // STEP 2.6 — VALIDATE
         // -----------------------------------------------------------------
@@ -2367,6 +3064,16 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
             });
 
             log('[STEP 2.7] Built _perBunkSlots for all grades');
+
+            // ★ Backup _perBunkSlots to a standalone global so deserialization
+            // of divisionTimes (which strips custom array properties) can't kill it
+            window._perBunkSlots = {};
+            allGrades.forEach(grade => {
+                const divSlots = window.divisionTimes[grade];
+                if (divSlots && divSlots._perBunkSlots) {
+                    window._perBunkSlots[grade] = divSlots._perBunkSlots;
+                }
+            });
         } else {            err('[STEP 2.7] DivisionTimesSystem not available — cannot build _perBunkSlots');
             warnings.push({ type: 'critical', message: 'DivisionTimesSystem not loaded' });
         }
@@ -2374,12 +3081,13 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
         // Initialize scheduleAssignments per bunk from _perBunkSlots
         allGrades.forEach(grade => {
             const divSlots = window.divisionTimes && window.divisionTimes[grade];
-            const perBunkSlots = divSlots && divSlots._perBunkSlots;
+           const perBunkSlots = (divSlots && divSlots._perBunkSlots) || window._perBunkSlots?.[grade];
+            
             const bunks = getBunksForGrade(grade, divisions);
-
-           bunks.forEach(bunk => {
-    const bunkSlots = perBunkSlots && perBunkSlots[String(bunk)];
-    const slotCount = bunkSlots ? bunkSlots.length : (divSlots ? divSlots.length : 0);
+            bunks.forEach(bunk => {
+                const bunkSlotArr = (perBunkSlots && perBunkSlots[String(bunk)]) ||
+                    (window._perBunkSlots?.[grade]?.[String(bunk)]) || [];
+   const slotCount = bunkSlotArr ? bunkSlotArr.length : (divSlots ? divSlots.length : 0);
     window.scheduleAssignments[String(bunk)] = new Array(slotCount).fill(null);
 
    
@@ -2394,7 +3102,7 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
 
         allGrades.forEach(grade => {
             const divSlots = window.divisionTimes && window.divisionTimes[grade];
-            const perBunkSlots = divSlots && divSlots._perBunkSlots;
+            const perBunkSlots = (divSlots && divSlots._perBunkSlots) || window._perBunkSlots?.[grade];
             if (!perBunkSlots) return;
 
             const bunks = getBunksForGrade(grade, divisions);
@@ -2455,7 +3163,7 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
 
         allGrades.forEach(grade => {
             const divSlots = window.divisionTimes && window.divisionTimes[grade];
-            const perBunkSlots = divSlots && divSlots._perBunkSlots;
+           const perBunkSlots = (divSlots && divSlots._perBunkSlots) || window._perBunkSlots?.[grade];
             if (!perBunkSlots) return;
 
             const bunks = getBunksForGrade(grade, divisions);
@@ -2491,7 +3199,7 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
         const fixedTypes = ['swim', 'snacks', 'lunch', 'dismissal'];
         allGrades.forEach(grade => {
             const divSlots = window.divisionTimes && window.divisionTimes[grade];
-            const perBunkSlots = divSlots && divSlots._perBunkSlots;
+            const perBunkSlots = (divSlots && divSlots._perBunkSlots) || window._perBunkSlots?.[grade];
             if (!perBunkSlots) return;
             const bunks = getBunksForGrade(grade, divisions);
             bunks.forEach(bunk => {
@@ -2532,28 +3240,34 @@ _durationStrict: (block._activityLocked && (block._assignedSpecial || block._fix
 
         allGrades.forEach(grade => {
             const divSlots = window.divisionTimes && window.divisionTimes[grade];
-            const perBunkSlots = divSlots && divSlots._perBunkSlots;
+            const perBunkSlots = (divSlots && divSlots._perBunkSlots) || window._perBunkSlots?.[grade];
             if (!perBunkSlots) return;
 
             const bunks = getBunksForGrade(grade, divisions);
-            bunks.forEach(bunk => {
-                const bunkSlotArr = perBunkSlots[String(bunk)] || [];
-                const timeline = bunkTimelines[bunk] || [];
+           bunks.forEach(bunk => {
+                const bunkSlotArr = (perBunkSlots && perBunkSlots[String(bunk)]) ||
+                    (window._perBunkSlots?.[grade]?.[String(bunk)]) || [];
 
-               timeline
-                    .filter(b =>
-                        b._classification !== 'pinned' &&
-                        b.type !== 'special' &&
-                        !b._activityLocked
-                    )
-                    .forEach(block => {
-                        const slotIdx = bunkSlotArr.findIndex(s =>
-                            s.startMin === block.startMin && s.endMin === block.endMin
-                        );
-                        if (slotIdx === -1) return;
+              bunkSlotArr
+                    .forEach((block, originalIdx) => {
+                        // Skip pinned, special, locked entries
+                        if ((block._classification || block.type || '') === 'pinned') return;
+                        if ((block.type || '') === 'special') return;
+                        if (block._activityLocked) return;
+
+                        // Auto mode: scheduleAssignments[bunk] is indexed by per-bunk slot index
+                        // (initialized from _perBunkSlots in this same Step 2.7) — no remapping needed
+                        const slotIdx = originalIdx;
 
                         // Skip if already filled (pinned or special wrote here)
-                        if (window.scheduleAssignments[String(bunk)][slotIdx]) return;
+                        // Treat 'Free' entries as empty — they're stale fallbacks, not real assignments
+                        const _existing = window.scheduleAssignments[String(bunk)][slotIdx];
+                        if (_existing && _existing.field !== 'Free') return;
+                        // Null out stale Free so solver starts clean
+                        if (_existing && _existing.field === 'Free' && !_existing._fixed) {
+                            window.scheduleAssignments[String(bunk)][slotIdx] = null;
+                        }
+
 
                         const skipTypes = ['swim', 'snacks', 'lunch', 'dismissal', 'pinned', 'league', 'specialty_league'];
                         if (skipTypes.includes((block.type || '').toLowerCase())) return;
@@ -2933,10 +3647,20 @@ Object.entries(window.scheduleAssignments || {}).forEach(function([bunk, slots])
     );
 });
 
+// Persist _perBunkSlots so resync can re-attach them
+var _savedPerBunkSlots = {};
+var _dtRef = window.divisionTimes || {};
+Object.keys(_dtRef).forEach(function(g) {
+    if (_dtRef[g]?._perBunkSlots) {
+        _savedPerBunkSlots[g] = _dtRef[g]._perBunkSlots;
+    }
+});
+
 window.saveCurrentDailyData({
     scheduleAssignments: cleanAssignments,
                     leagueAssignments: window.leagueAssignments,
                     manualSkeleton: autoSkeleton,
+                    _perBunkSlotsData: _savedPerBunkSlots,
                     _autoGenerated: true,
                     _autoVersion: VERSION,
                     _generatedAt: new Date().toISOString(),
