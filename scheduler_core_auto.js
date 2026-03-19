@@ -376,8 +376,12 @@
 
             const rawMin = layer.durationMin || layer.periodMin || layer.duration || 0;
             const rawMax = layer.durationMax || layer.periodMin || layer.duration || 0;
-            let dMin = Math.max(typeFloor, rawMin > 0 ? rawMin : typeFloor);
-            let dMax = Math.max(dMin, rawMax > 0 ? rawMax : typeCeiling);
+            // ★ User's explicit layer value WINS over type floor.
+            // Type floor is only a fallback when the user didn't set anything.
+            // Absolute floor of 5min prevents truly insane values.
+            const ABSOLUTE_FLOOR = 5;
+            let dMin = rawMin > 0 ? Math.max(ABSOLUTE_FLOOR, rawMin) : typeFloor;
+            let dMax = Math.max(dMin, rawMax > 0 ? Math.max(ABSOLUTE_FLOOR, rawMax) : typeCeiling);
 
             // ★ Special override: if a SPECIFIC special has its own duration, use that
             // If not, the layer dMin/dMax range applies (flexible special)
@@ -1468,10 +1472,39 @@
                                 layer: shoppingList.sports.layer
                             });
                         } else {
-                            const numSlots = Math.max(1, Math.round(remaining / sc.dIdeal));
+                            // ★ Smart slot division: never create a slot below dMin
+                            const maxSlots = Math.floor(remaining / slotMin); // most slots that fit at dMin
+                            const minSlots = Math.max(1, Math.ceil(remaining / sc.dMax)); // fewest slots to stay under dMax
+
+                            let numSlots;
+                            if (maxSlots <= 0) {
+                                numSlots = 1; // too small to divide, one slot
+                            } else if (minSlots > maxSlots) {
+                                // Can't divide cleanly — prefer fewer LARGER slots (slightly over dMax)
+                                // over more SMALLER slots (under dMin). Over-max is cosmetic; under-min breaks things.
+                                numSlots = maxSlots;
+                            } else {
+                                numSlots = Math.max(minSlots, Math.min(maxSlots, Math.round(remaining / sc.dIdeal)));
+                            }
+
                             let rem = remaining;
+                            const perSlot = snapTo5(Math.floor(remaining / numSlots));
+
                             for (let i = 0; i < numSlots; i++) {
-                                const dur = (i === numSlots - 1) ? rem : snapTo5(Math.floor(remaining / numSlots));
+                                let dur;
+                                if (i === numSlots - 1) {
+                                    dur = rem; // last slot gets remainder
+                                } else {
+                                    dur = perSlot;
+                                }
+                                // ★ If this slot would be undersized, merge into previous
+                                if (dur < slotMin && template.length > 0 && i > 0) {
+                                    template[template.length - 1].endMin += dur;
+                                    template[template.length - 1].duration += dur;
+                                    regionCursor += dur;
+                                    rem -= dur;
+                                    continue;
+                                }
                                 if (dur <= 0) break;
                                 template.push({
                                     startMin: regionCursor, endMin: regionCursor + dur,
@@ -1740,14 +1773,38 @@
                     }
                     // Create filler slot
                     const sportLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'sport') || null;
-                    const maxDur = resolveConstraints(sportLayer, 'sport').dMax;
+                    const sportC = resolveConstraints(sportLayer, 'sport');
+                    const maxDur = sportC.dMax;
+                    const minDur = sportC.dMin;
                     let cursor = gap.start;
                     while (cursor < gap.end) {
                         const rem = gap.end - cursor; if (rem < 5) break;
-                        let sd = Math.min(maxDur, rem); sd = Math.floor(sd / 5) * 5; if (sd < 5) break;
+                        // ★ If remainder is below dMin, merge into previous slot
+                        if (rem < minDur) {
+                            const tl = bunkTimelines[bunk];
+                            const prev = tl.find(b => b.endMin === cursor && !b._fixed && !b._gradeWide);
+                            if (prev && (prev.endMin - prev.startMin) + rem <= maxDur + 10) {
+                                prev.endMin = gap.end;
+                            } else {
+                                // Can't merge — create micro-gap slot
+                                tl.push({
+                                    startMin: cursor, endMin: gap.end, type: 'slot', event: 'General Activity Slot',
+                                    layer: sportLayer, _classification: 'gap', _fromGapDetection: true, _committed: true, _microGap: true
+                                });
+                            }
+                            break;
+                        }
+                        let sd = Math.min(maxDur, rem); sd = Math.floor(sd / 5) * 5; if (sd < minDur) sd = minDur;
+                        if (sd < 5) break;
+                        // Check: would this leave an undersized remainder?
+                        const afterThis = rem - sd;
+                        if (afterThis > 0 && afterThis < minDur) {
+                            // Take the whole remaining space instead
+                            sd = rem;
+                        }
                         bunkTimelines[bunk].push({
                             startMin: cursor, endMin: cursor + sd, type: 'slot', event: 'General Activity Slot',
-                            layer: sportLayer, _classification: 'gap', _fromGapDetection: true, _committed: true, _microGap: rem < GAP_MIN_DUR
+                            layer: sportLayer, _classification: 'gap', _fromGapDetection: true, _committed: true, _microGap: false
                         });
                         cursor += sd;
                     }
