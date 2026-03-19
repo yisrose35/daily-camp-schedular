@@ -2104,18 +2104,16 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
 
                         for (const gap of gaps) {
                             if (gap.end - gap.start >= layerDur) {
-                                for (const gap of gaps) {
-                            if (gap.end - gap.start >= layerDur) {
                                 if (layerType === 'special') {
                                     const specialBlock = placeSpecialForBunk(bunk, grade, layer, gap.start, gap.end);
                                     if (specialBlock) {
                                         specialBlock._committed = true;
                                         specialBlock._fromEnforcement = true;
                                         placeTentativeBlock(bunk, specialBlock);
-                                        postEnforcementCount++;
+                                        enforcementCount++;
                                         deficit--;
                                         placed = true;
-                                        log('[POST-ENFORCEMENT] Placed special "' + specialBlock.event + '" in gap ' +
+                                        log('[STEP 2.4b] Placed special "' + specialBlock.event + '" in gap ' +
                                             specialBlock.startMin + '-' + specialBlock.endMin + ' for ' + bunk);
                                         break;
                                     }
@@ -2133,10 +2131,10 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                                     _committed: true,
                                     _fromEnforcement: true
                                 });
-                                postEnforcementCount++;
+                                enforcementCount++;
                                 deficit--;
                                 placed = true;
-                                log('[POST-ENFORCEMENT] Placed ' + layerEvent + ' in gap ' +
+                                log('[STEP 2.4b] Placed ' + layerEvent + ' in gap ' +
                                     gap.start + '-' + (gap.start + layerDur) + ' for ' + bunk);
                                 break;
                             }
