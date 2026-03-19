@@ -861,10 +861,17 @@
                 if (start + dMin > pos.end) start = pos.start;
                 const dur = Math.max(dMin, Math.min(dMax, pos.end - start));
 
+                // ★ Swim is a SOFT ANCHOR — DAP can shift it within the MRC window
+                // to eliminate dead space. It's placed here as a preferred position
+                // but not locked. Phase 3 (DAP) makes the final decision.
                 placeTentativeBlock(bunk, {
                     startMin: start, endMin: start + dur,
                     type: 'swim', event: layer.event || 'Swim',
-                    layer, _classification: 'pinned', _activityLocked: true, _fixed: true, _committed: true
+                    layer, _classification: 'windowed',
+                    _activityLocked: true, _fixed: false, _committed: true,
+                    _softAnchor: true,
+                    _softWindow: { start: winStart, end: winEnd },
+                    _softDuration: dur
                 });
                 placedCount++;
             }
@@ -1281,14 +1288,51 @@
             const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
 
             // ── Collect all Phase 0 committed blocks ─────────────────────
-            const committedBlocks = (bunkTimelines[bunk] || []).map(b => ({
-                startMin: b.startMin, endMin: b.endMin, type: b.type, event: b.event,
-                layer: b.layer, _fixed: true, _source: 'phase0',
-                _gradeWide: b._gradeWide, _activityLocked: b._activityLocked,
-                _noBacktrack: b._noBacktrack, _classification: b._classification,
-                _assignedSpecial: b._assignedSpecial, _specialLocation: b._specialLocation,
-                _specialDuration: b._specialDuration
-            }));
+            // Separate HARD anchors (truly fixed) from SOFT anchors (swim etc.)
+            const hardCommitted = [];
+            const softAnchors = [];
+
+            (bunkTimelines[bunk] || []).forEach(b => {
+                const block = {
+                    startMin: b.startMin, endMin: b.endMin, type: b.type, event: b.event,
+                    layer: b.layer, _fixed: true, _source: 'phase0',
+                    _gradeWide: b._gradeWide, _activityLocked: b._activityLocked,
+                    _noBacktrack: b._noBacktrack, _classification: b._classification,
+                    _assignedSpecial: b._assignedSpecial, _specialLocation: b._specialLocation,
+                    _specialDuration: b._specialDuration,
+                    _softAnchor: b._softAnchor, _softWindow: b._softWindow, _softDuration: b._softDuration
+                };
+
+                if (b._softAnchor && b._softWindow) {
+                    // Soft anchor — DAP will try multiple positions
+                    block._fixed = false;
+                    softAnchors.push(block);
+                } else {
+                    hardCommitted.push(block);
+                }
+            });
+
+            // ── Build candidate positions for each soft anchor ───────────
+            // Like snack candidates but for swim (or any soft anchor)
+            const softAnchorCandidates = [];
+            if (softAnchors.length > 0) {
+                // For each soft anchor, generate positions every 5min within its window
+                softAnchors.forEach(sa => {
+                    const candidates = [];
+                    const win = sa._softWindow;
+                    const dur = sa._softDuration || (sa.endMin - sa.startMin);
+                    // Include the original position as first candidate
+                    candidates.push({ startMin: sa.startMin, endMin: sa.startMin + dur });
+                    // Generate alternatives every 5 min within window
+                    for (let t = win.start; t + dur <= win.end; t += 5) {
+                        if (t === sa.startMin) continue; // skip duplicate of original
+                        candidates.push({ startMin: t, endMin: t + dur });
+                    }
+                    softAnchorCandidates.push({
+                        base: sa, candidates: candidates
+                    });
+                });
+            }
 
             // ── Collect draft-assigned blocks ────────────────────────────
             const draftBlocks = [];
@@ -1361,20 +1405,48 @@
 
             draftBlocks.sort((a, b) => a.approximateStart - b.approximateStart);
 
-            // ── Try each snack position, pick best ───────────────────────
+            // ── Try each combination of snack + soft anchor positions ───
             const snackCandidates = shoppingList.snack || [null];
             let bestTemplate = null, bestDeadSpace = Infinity;
 
+            // Build soft anchor position list
+            const swimPositions = softAnchorCandidates.length > 0
+                ? softAnchorCandidates[0].candidates : [null];
+            const maxSwimTries = Math.min(swimPositions.length, 12);
+
+            for (let swIdx = 0; swIdx < maxSwimTries; swIdx++) {
+                const swimPos = swimPositions[swIdx];
+
             for (const snackCandidate of snackCandidates) {
-                // Build all fixed-time blocks for this snack position
-                const fixedBlocks = [...committedBlocks];
-                if (snackCandidate) {
+                // Build fixed blocks: hard committed + soft anchors at current position + snack
+                const fixedBlocks = [...hardCommitted];
+
+                // Add soft anchors at candidate positions
+                let swimOverlap = false;
+                softAnchorCandidates.forEach((sac, sacIdx) => {
+                    const pos = sacIdx === 0 && swimPos
+                        ? swimPos : { startMin: sac.base.startMin, endMin: sac.base.endMin };
+                    if (fixedBlocks.some(fb => fb.startMin < pos.endMin && fb.endMin > pos.startMin)) {
+                        swimOverlap = true; return;
+                    }
                     fixedBlocks.push({
-                        startMin: snackCandidate.startMin, endMin: snackCandidate.endMin,
-                        type: snackCandidate.type, event: snackCandidate.event,
-                        layer: snackCandidate.layer, _fixed: true, _source: 'snack',
-                        _activityLocked: true
+                        startMin: pos.startMin, endMin: pos.endMin,
+                        type: sac.base.type, event: sac.base.event,
+                        layer: sac.base.layer, _fixed: true, _source: 'soft_anchor',
+                        _activityLocked: true, _gradeWide: sac.base._gradeWide
                     });
+                });
+                if (swimOverlap) continue; // this swim position conflicts with a fixed block
+
+                if (snackCandidate) {
+                    if (!fixedBlocks.some(fb => fb.startMin < snackCandidate.endMin && fb.endMin > snackCandidate.startMin)) {
+                        fixedBlocks.push({
+                            startMin: snackCandidate.startMin, endMin: snackCandidate.endMin,
+                            type: snackCandidate.type, event: snackCandidate.event,
+                            layer: snackCandidate.layer, _fixed: true, _source: 'snack',
+                            _activityLocked: true
+                        });
+                    }
                 }
                 fixedBlocks.sort((a, b) => a.startMin - b.startMin);
 
@@ -1420,7 +1492,37 @@
                 fixedBlocks.forEach(b => template.push({ ...b, _final: true }));
 
                 // Process each region
-                regions.forEach(region => {
+                regions.forEach((region, rIdx) => {
+                    const sc = shoppingList.sports.constraints;
+                    const slotMin = sc.dMin;
+                    const regionDur = region.end - region.start;
+
+                    // ★ Strategy 0: If region is entirely < slotMin AND has no draft blocks,
+                    // absorb it into an adjacent fixed block instead of creating a micro-slot
+                    if (regionDur > 0 && regionDur < slotMin && region.blocks.length === 0) {
+                        // Try extending the fixed block BEFORE this region
+                        const prevFixed = template.filter(b => b._final && b.endMin === region.start);
+                        const nextFixed = fixedBlocks.find(b => b.startMin === region.end);
+
+                        let regionAbsorbed = false;
+                        // Extend prev forward
+                        if (prevFixed.length > 0 && !prevFixed[0]._gradeWide) {
+                            prevFixed[0].endMin = region.end;
+                            prevFixed[0].duration = prevFixed[0].endMin - prevFixed[0].startMin;
+                            regionAbsorbed = true;
+                        }
+                        // Extend next backward
+                        else if (nextFixed && !nextFixed._gradeWide) {
+                            const nextInTemplate = template.find(b => b._final && b.startMin === region.end);
+                            if (nextInTemplate) {
+                                nextInTemplate.startMin = region.start;
+                                nextInTemplate.duration = nextInTemplate.endMin - nextInTemplate.startMin;
+                                regionAbsorbed = true;
+                            }
+                        }
+                        if (regionAbsorbed) return; // skip this region entirely
+                    }
+
                     // Sort: linked pairs stay together, specials before sports
                     region.blocks.sort((a, b) => {
                         if (a._linkedTo === b.event) return -1;
@@ -1458,19 +1560,107 @@
                     // Fill remaining space with sport/GA slots
                     const remaining = regionEnd - regionCursor;
                     if (remaining > 0) {
-                        const sc = shoppingList.sports.constraints;
-                        const slotMin = sc.dMin;
 
                         if (remaining < slotMin) {
-                            totalDeadSpace += remaining;
-                            // Still create a slot (better than a visible gap)
-                            template.push({
-                                startMin: regionCursor, endMin: regionEnd,
-                                type: 'slot', event: 'General Activity Slot',
-                                duration: remaining, _source: 'filler',
-                                _microGap: remaining < GAP_MIN_DUR, _final: true,
-                                layer: shoppingList.sports.layer
-                            });
+                            // ★ FIX: Don't create dead space. Instead:
+                            // Strategy 1: Expand the last placed block to fill the gap
+                            const lastBlock = template.length > 0 ? template[template.length - 1] : null;
+                            let absorbed = false;
+
+                            if (lastBlock && lastBlock._final && lastBlock.startMin >= region.start) {
+                                // Check if it's a flex-duration special or sport that can stretch
+                                const lbDMax = lastBlock.dMax || (lastBlock.isFlexDuration ? (shoppingList.sports.constraints.dMax || 60) : 0);
+                                const lbCurrentDur = lastBlock.endMin - lastBlock.startMin;
+
+                                if (lastBlock.isFlexDuration && lbCurrentDur + remaining <= (lbDMax || 60)) {
+                                    // Flex special — stretch it
+                                    lastBlock.endMin = regionEnd;
+                                    lastBlock.duration = lastBlock.endMin - lastBlock.startMin;
+                                    regionCursor = regionEnd;
+                                    absorbed = true;
+                                } else if (!lastBlock._activityLocked && !lastBlock._fixed && lbCurrentDur + remaining <= (lbDMax + 10 || 70)) {
+                                    // Non-locked block (sport/GA) — stretch it
+                                    lastBlock.endMin = regionEnd;
+                                    lastBlock.duration = lastBlock.endMin - lastBlock.startMin;
+                                    regionCursor = regionEnd;
+                                    absorbed = true;
+                                }
+                            }
+
+                            // Strategy 2: Shift all draft blocks to END of region,
+                            // putting the gap at the START where the previous block can absorb it
+                            if (!absorbed) {
+                                const regionDraftBlocks = template.filter(b =>
+                                    b._final && b.startMin >= region.start && b.endMin <= regionEnd && b._source === 'draft'
+                                );
+                                const regionFillerBlocks = template.filter(b =>
+                                    b._final && b.startMin >= region.start && b.endMin <= regionEnd && b._source === 'filler'
+                                );
+
+                                if (regionDraftBlocks.length > 0 && regionFillerBlocks.length === 0) {
+                                    // Shift everything right so gap is at start
+                                    let shiftCursor = regionEnd;
+                                    for (let si = regionDraftBlocks.length - 1; si >= 0; si--) {
+                                        const sb = regionDraftBlocks[si];
+                                        const sDur = sb.endMin - sb.startMin;
+                                        sb.endMin = shiftCursor;
+                                        sb.startMin = shiftCursor - sDur;
+                                        shiftCursor = sb.startMin;
+                                    }
+                                    // Now the gap is at region.start → shiftCursor
+                                    // Try extending the block BEFORE this region
+                                    const prevBlock = template.filter(b =>
+                                        b._final && b.endMin === region.start
+                                    )[0];
+                                    if (prevBlock && !prevBlock._gradeWide) {
+                                        const pbDMax = prevBlock.dMax || 60;
+                                        const pbDur = prevBlock.endMin - prevBlock.startMin;
+                                        if (pbDur + remaining <= pbDMax + 10) {
+                                            prevBlock.endMin = shiftCursor;
+                                            prevBlock.duration = prevBlock.endMin - prevBlock.startMin;
+                                            absorbed = true;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ★ Strategy 3: Universal fallback — extend a block in this region
+                            // to fill the gap. ANY extension is better than a sub-dMin dead slot.
+                            if (!absorbed) {
+                                const blocksInRegion = template.filter(b =>
+                                    b._final && b.startMin >= region.start && b.endMin <= regionEnd
+                                );
+                                if (blocksInRegion.length > 0) {
+                                    // Check if gap is at the end (last block doesn't reach regionEnd)
+                                    const lastInR = blocksInRegion[blocksInRegion.length - 1];
+                                    if (lastInR.endMin < regionEnd) {
+                                        lastInR.endMin = regionEnd;
+                                        lastInR.duration = lastInR.endMin - lastInR.startMin;
+                                        absorbed = true;
+                                    }
+                                    // Check if gap is at the start (first block doesn't start at region.start)
+                                    if (!absorbed) {
+                                        const firstInR = blocksInRegion[0];
+                                        if (firstInR.startMin > region.start) {
+                                            firstInR.startMin = region.start;
+                                            firstInR.duration = firstInR.endMin - firstInR.startMin;
+                                            absorbed = true;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Strategy 4: Absolute last resort — create micro-slot
+                            if (!absorbed) {
+                                totalDeadSpace += remaining;
+                                template.push({
+                                    startMin: regionCursor, endMin: regionEnd,
+                                    type: 'slot', event: 'General Activity Slot',
+                                    duration: remaining, _source: 'filler',
+                                    _microGap: remaining < GAP_MIN_DUR, _final: true,
+                                    layer: shoppingList.sports.layer
+                                });
+                            }
                         } else {
                             // ★ Smart slot division: never create a slot below dMin
                             const maxSlots = Math.floor(remaining / slotMin); // most slots that fit at dMin
@@ -1525,7 +1715,8 @@
                     bestDeadSpace = totalDeadSpace;
                     bestTemplate = template.sort((a, b) => a.startMin - b.startMin);
                 }
-            }
+            } // end snack loop
+            } // end swim position loop
 
             if (totalIters < 2) log('[DAP] ' + bunk + ': ' + (bestTemplate ? bestTemplate.length : 0) + ' blocks, dead=' + bestDeadSpace);
             return bestTemplate;
