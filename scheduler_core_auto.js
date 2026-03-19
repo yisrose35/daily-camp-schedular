@@ -2179,13 +2179,6 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                                 specialBlock._fromEnforcement = true;
                                 placeTentativeBlock(bunk, specialBlock);
                             } else {
-                               if (layerType === 'special') {
-                                const specialBlock = placeSpecialForBunk(bunk, grade, layer, carveStart, carveEnd);
-                                if (!specialBlock) continue;
-                                specialBlock._committed = true;
-                                specialBlock._fromEnforcement = true;
-                                placeTentativeBlock(bunk, specialBlock);
-                            } else {
                                 const _isTimeLocked = ['swim', 'snacks', 'lunch', 'dismissal'].includes(layerType);
                                 placeTentativeBlock(bunk, {
                                     startMin: carveStart,
