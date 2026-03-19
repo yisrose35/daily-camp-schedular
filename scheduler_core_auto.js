@@ -1275,8 +1275,9 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         // ── Build flexible type layers per grade ─────────────────────────
         // Collect what each grade needs (excluding pinned)
        const nonPinnedLayers = [...windowedLayers, ...openLayers];
-        _savedNonPinnedLayers = nonPinnedLayers;
+       _savedNonPinnedLayers = nonPinnedLayers;
         _savedPlaceSpecialForBunk = placeSpecialForBunk;
+        window._debugNonPinnedLayers = nonPinnedLayers;
  
         const gradeFlexTypes = {}; // grade → array of distinct type strings
         allGrades.forEach(grade => {
