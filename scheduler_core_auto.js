@@ -1887,7 +1887,7 @@
                         _specialDuration: block._specialDuration || null,
                         _specialLocation: block._specialLocation || null,
                         _assignedSport: block._assignedSport || null,
-                        _activityLocked: block._activityLocked || block._fixed || false,
+                        _activityLocked: block._activityLocked || block._fixed || block._source === 'soft_anchor' || false,
                         _fixed: block._fixed || false,
                         _gradeWide: block._gradeWide || false,
                         _noBacktrack: block._noBacktrack || false,
@@ -2394,7 +2394,28 @@
         window._divisionTimesLocked = true;
         window._autoDivisionTimesBuilt = true;
         window._preGenClearActive = false;
-        log('[2.7] ✅ ' + specialWriteCount + ' specials, ' + pinnedWriteCount + ' pinned written');
+
+        // Write activity-locked anchor blocks (swim, soft-anchored snacks, etc.)
+        // These aren't specials or pinned but have a fixed activity that the solver shouldn't change.
+        let anchorWriteCount = 0;
+        allGrades.forEach(grade => {
+            const pbs = window.divisionTimes?.[grade]?._perBunkSlots || window._perBunkSlots?.[grade]; if (!pbs) return;
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                const arr = pbs[String(bunk)] || [];
+                (bunkTimelines[bunk] || []).filter(b => b._activityLocked && b._committed && !b._assignedSpecial && !(b._fixed || b._classification === 'pinned')).forEach(block => {
+                    const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
+                    if (idx === -1 || window.scheduleAssignments[String(bunk)][idx]) return;
+                    window.scheduleAssignments[String(bunk)][idx] = {
+                        field: block.event, sport: null, _activity: block.event,
+                        _fixed: true, _bunkOverride: true, _activityLocked: true,
+                        _autoMode: true, continuation: false
+                    };
+                    anchorWriteCount++;
+                });
+            });
+        });
+
+        log('[2.7] ✅ ' + specialWriteCount + ' specials, ' + pinnedWriteCount + ' pinned, ' + anchorWriteCount + ' anchors written');
 
         // Build schedulable blocks for solver
         const schedulableSlotBlocks = [];
