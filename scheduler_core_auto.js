@@ -1904,9 +1904,14 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                             }
                         } else if (typeLC === 'swim') {
                             const position = placeSwimForBunk(bunk, need.layer);
-                            if (position) {
-                                placeTentativeBlock(bunk, {
-                                    startMin: position.start, endMin: position.end,
+                        if (position) {
+                            // ★ Cap swim duration to layer constraints (never overfill gap)
+                            const _swimDur = need.layer.periodMin || need.layer.durationMin || need.layer.duration || (position.end - position.start);
+                            const _swimMax = need.layer.durationMax || _swimDur;
+                            const _swimTarget = Math.min(_swimMax, position.end - position.start);
+                            const _swimEnd = position.start + _swimTarget;
+                            placeTentativeBlock(bunk, {
+                                startMin: position.start, endMin: _swimEnd,
                                     type: 'swim', event: need.layer.event || 'Swim',
                                     layer: need.layer, _classification: need.layer._classification,
                                     _activityLocked: true
