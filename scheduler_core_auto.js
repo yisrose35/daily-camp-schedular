@@ -1751,10 +1751,18 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                         if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' window=' + swimWinStart + '-' + swimWinEnd + ' dur=' + swimDur + ' → position=' + (position ? position.start + '-' + position.end : 'null'));
                         if (position) {
                             var _preCount = bunkTimelines[bunk].length;
-                           var _swimDur = swimLayer.durationMax || swimLayer.periodMin || swimLayer.durationMin || swimLayer.duration || (position.end - position.start);
-                            var _swimCappedEnd = Math.min(position.end, position.start + _swimDur);
+                          var _swimDur = swimLayer.durationMax || swimLayer.periodMin || swimLayer.durationMin || swimLayer.duration || (position.end - position.start);
+                            // ★ Stagger: offset swim start by bunk index within grade
+                            var _bunkIdx = sortedBunks.indexOf(bunk);
+                            var _staggerOffset = _bunkIdx * 5; // 5min apart per bunk
+                            var _staggeredStart = position.start + _staggerOffset;
+                            // Ensure staggered swim still fits in the gap
+                            if (_staggeredStart + _swimDur > position.end) {
+                                _staggeredStart = position.start; // fall back to no stagger
+                            }
+                            var _swimCappedEnd = _staggeredStart + _swimDur;
                             var _swimBlock = {
-                                startMin: position.start,
+                                startMin: _staggeredStart,
                                 endMin: _swimCappedEnd,
                                 type: 'swim',
                                 event: swimLayer.event || 'Swim',
