@@ -703,27 +703,60 @@
             return gaps.filter(g => g.end - g.start >= 5);
         }
 
-        function isResidualViable(gapStart, gapEnd, blockStart, blockEnd) {
-            const before = blockStart - gapStart, after = gapEnd - blockEnd;
-            return !(before > 0 && before < GAP_MIN_DUR && after > 0 && after < GAP_MIN_DUR);
+        // ── Can a residual gap be filled by any block? ─────────────────
+        // A residual (leftover space after placing a block) is viable ONLY if:
+        //   - It's zero (no gap), OR
+        //   - It's large enough for at least one type of block to fit
+        // This is the fundamental rule that prevents unfillable gaps.
+        const _minFillableByGrade = {};
+        function getMinFillable(grade) {
+            if (_minFillableByGrade[grade]) return _minFillableByGrade[grade];
+            const gradeLayers = layersByGrade[grade] || [];
+            let minD = Infinity;
+            // Only consider types that actually fill open regions in DAP.
+            // Swim, snacks, lunch, dismissal, league are anchors — they don't fill gaps.
+            const fillerTypes = ['sport', 'sports', 'special', 'elective', 'activity', 'slot'];
+            gradeLayers.forEach(l => {
+                const t = (l.type || '').toLowerCase();
+                if (!fillerTypes.includes(t)) return;
+                const c = resolveConstraints(l, t);
+                if (c.dMin < minD) minD = c.dMin;
+            });
+            if (minD === Infinity) minD = GAP_MIN_DUR;
+            _minFillableByGrade[grade] = minD;
+            return minD;
         }
 
-        function findBestGapPosition(bunk, windowStart, windowEnd, duration, blockType, specialName) {
+        function isResidualViable(gapStart, gapEnd, blockStart, blockEnd, grade) {
+            const before = blockStart - gapStart;
+            const after = gapEnd - blockEnd;
+            const minFill = grade ? getMinFillable(grade) : GAP_MIN_DUR;
+            // Each residual must be either 0 or large enough to hold a real block
+            if (before > 0 && before < minFill) return false;
+            if (after > 0 && after < minFill) return false;
+            return true;
+        }
+
+        function findBestGapPosition(bunk, windowStart, windowEnd, duration, blockType, specialName, grade) {
             const gaps = getFreeGaps(bunk, windowStart, windowEnd);
+            const minFill = grade ? getMinFillable(grade) : GAP_MIN_DUR;
             let bestPos = null, bestScore = Infinity;
             for (const gap of gaps) {
                 if (gap.end - gap.start < duration) continue;
                 for (let cs = gap.start; cs <= gap.end - duration; cs += 5) {
-                    if (!isResidualViable(gap.start, gap.end, cs, cs + duration)) continue;
+                    if (!isResidualViable(gap.start, gap.end, cs, cs + duration, grade)) continue;
                     const score = scorePositionByContention(cs, cs + duration, blockType, bunk, specialName);
                     if (score < bestScore) { bestScore = score; bestPos = { start: cs, end: cs + duration }; }
                 }
             }
+            // Snap to gap edges only if residual would be unfillable
             if (bestPos) {
                 const bestGap = gaps.find(g => g.start <= bestPos.start && g.end >= bestPos.end);
                 if (bestGap) {
-                    if (bestPos.start - bestGap.start > 0 && bestPos.start - bestGap.start < GAP_MIN_DUR) bestPos.start = bestGap.start;
-                    if (bestGap.end - bestPos.end > 0 && bestGap.end - bestPos.end < GAP_MIN_DUR) bestPos.end = bestGap.end;
+                    const beforeRes = bestPos.start - bestGap.start;
+                    const afterRes = bestGap.end - bestPos.end;
+                    if (beforeRes > 0 && beforeRes < minFill) bestPos.start = bestGap.start;
+                    if (afterRes > 0 && afterRes < minFill) bestPos.end = bestGap.end;
                 }
             }
             if (bestPos && (bestPos.start < windowStart || bestPos.end > windowEnd)) bestPos = null;
@@ -851,20 +884,15 @@
             const winStart = mrc ? Math.max(mrc.start, gs) : Math.max(layer.startMin || 0, gs);
             const winEnd = mrc ? Math.min(mrc.end, ge) : Math.min(layer.endMin || 1440, ge);
 
-            // ★ Find lunch end time — prefer placing swim AFTER lunch
-            // Swim before lunch creates unusable gaps (e.g. 15min between swim-end and lunch)
-            const lunchLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'lunch');
-            const lunchEnd = lunchLayer ? (lunchLayer.endMin || 740) : 740;
-            const preferredStart = Math.max(winStart, lunchEnd);
-
             const sortedBunks = [...bunks].sort((a, b) =>
                 (parseInt(String(a).replace(/\D/g, '')) || 0) - (parseInt(String(b).replace(/\D/g, '')) || 0));
 
             let placedCount = 0;
             for (const bunk of sortedBunks) {
-                // Try post-lunch first, fall back to anywhere in window
-                let pos = findBestGapPosition(bunk, preferredStart, winEnd, dMin, 'swim', null);
-                if (!pos) pos = findBestGapPosition(bunk, winStart, winEnd, dMin, 'swim', null);
+                // ★ findBestGapPosition + isResidualViable will automatically reject
+                // any gap where placing swim would leave an unfillable residual.
+                // No need to hardcode "prefer post-lunch" — the math handles it.
+                const pos = findBestGapPosition(bunk, winStart, winEnd, dMin, 'swim', null, grade);
                 if (!pos) continue;
                 const bunkIdx = sortedBunks.indexOf(bunk);
                 let start = pos.start + bunkIdx * 5;
@@ -2008,7 +2036,7 @@
                 const winEnd = Math.min(layer.endMin || 1440, ge);
 
                 bunks.forEach(bunk => {
-                    const pos = findBestGapPosition(bunk, winStart, winEnd, dMin, t, null);
+                    const pos = findBestGapPosition(bunk, winStart, winEnd, dMin, t, null, grade);
                     if (!pos) return;
                     const dur = Math.max(dMin, Math.min(dMax, pos.end - pos.start));
 
