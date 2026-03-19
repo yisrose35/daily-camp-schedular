@@ -1313,24 +1313,36 @@
             });
 
             // ── Build candidate positions for each soft anchor ───────────
-            // Like snack candidates but for swim (or any soft anchor)
+            // Every soft anchor (swim, windowed lunch, etc.) gets candidate positions.
+            // Snack candidates from the shopping list are merged in too.
             const softAnchorCandidates = [];
-            if (softAnchors.length > 0) {
-                // For each soft anchor, generate positions every 5min within its window
-                softAnchors.forEach(sa => {
-                    const candidates = [];
-                    const win = sa._softWindow;
-                    const dur = sa._softDuration || (sa.endMin - sa.startMin);
-                    // Include the original position as first candidate
-                    candidates.push({ startMin: sa.startMin, endMin: sa.startMin + dur });
-                    // Generate alternatives every 5 min within window
-                    for (let t = win.start; t + dur <= win.end; t += 5) {
-                        if (t === sa.startMin) continue; // skip duplicate of original
-                        candidates.push({ startMin: t, endMin: t + dur });
-                    }
-                    softAnchorCandidates.push({
-                        base: sa, candidates: candidates
-                    });
+
+            softAnchors.forEach(sa => {
+                const candidates = [];
+                const win = sa._softWindow;
+                const dur = sa._softDuration || (sa.endMin - sa.startMin);
+                // Include original position first
+                candidates.push({ startMin: sa.startMin, endMin: sa.startMin + dur });
+                // Generate alternatives every 5 min, limit to 10 alternatives
+                let count = 0;
+                for (let t = win.start; t + dur <= win.end && count < 10; t += 5) {
+                    if (t === sa.startMin) continue;
+                    candidates.push({ startMin: t, endMin: t + dur });
+                    count++;
+                }
+                softAnchorCandidates.push({ base: sa, candidates });
+            });
+
+            // Merge snack as another soft anchor (if present)
+            if (shoppingList.snack && shoppingList.snack.length > 0) {
+                const snackBase = shoppingList.snack[0];
+                softAnchorCandidates.push({
+                    base: {
+                        startMin: snackBase.startMin, endMin: snackBase.endMin,
+                        type: snackBase.type, event: snackBase.event,
+                        layer: snackBase.layer, _activityLocked: true
+                    },
+                    candidates: shoppingList.snack.map(s => ({ startMin: s.startMin, endMin: s.endMin }))
                 });
             }
 
@@ -1405,49 +1417,51 @@
 
             draftBlocks.sort((a, b) => a.approximateStart - b.approximateStart);
 
-            // ── Try each combination of snack + soft anchor positions ───
-            const snackCandidates = shoppingList.snack || [null];
+            // ── Try combinations of soft anchor positions ─────────────
+            // Recursive search: for each soft anchor, try its candidate positions.
+            // Limit: max 8 candidates per anchor, max 500 total evaluations.
             let bestTemplate = null, bestDeadSpace = Infinity;
+            let evalCount = 0;
+            const MAX_EVALS = 500;
 
-            // Build soft anchor position list
-            const swimPositions = softAnchorCandidates.length > 0
-                ? softAnchorCandidates[0].candidates : [null];
-            const maxSwimTries = Math.min(swimPositions.length, 12);
+            // Limit candidates per anchor for performance
+            const limitedCandidates = softAnchorCandidates.map(sac => ({
+                base: sac.base,
+                candidates: sac.candidates.slice(0, 8)
+            }));
 
-            for (let swIdx = 0; swIdx < maxSwimTries; swIdx++) {
-                const swimPos = swimPositions[swIdx];
+            // If no soft anchors at all, run once with just hard committed
+            if (limitedCandidates.length === 0) limitedCandidates.push({ base: null, candidates: [null] });
 
-            for (const snackCandidate of snackCandidates) {
-                // Build fixed blocks: hard committed + soft anchors at current position + snack
-                const fixedBlocks = [...hardCommitted];
+            function tryAnchorCombo(anchorIdx, chosenPositions) {
+                if (evalCount >= MAX_EVALS) return;
 
-                // Add soft anchors at candidate positions
-                let swimOverlap = false;
-                softAnchorCandidates.forEach((sac, sacIdx) => {
-                    const pos = sacIdx === 0 && swimPos
-                        ? swimPos : { startMin: sac.base.startMin, endMin: sac.base.endMin };
-                    if (fixedBlocks.some(fb => fb.startMin < pos.endMin && fb.endMin > pos.startMin)) {
-                        swimOverlap = true; return;
-                    }
-                    fixedBlocks.push({
-                        startMin: pos.startMin, endMin: pos.endMin,
-                        type: sac.base.type, event: sac.base.event,
-                        layer: sac.base.layer, _fixed: true, _source: 'soft_anchor',
-                        _activityLocked: true, _gradeWide: sac.base._gradeWide
-                    });
-                });
-                if (swimOverlap) continue; // this swim position conflicts with a fixed block
+                if (anchorIdx >= limitedCandidates.length) {
+                    // All anchors have positions — evaluate this combination
+                    evalCount++;
+                    const fixedBlocks = [...hardCommitted];
 
-                if (snackCandidate) {
-                    if (!fixedBlocks.some(fb => fb.startMin < snackCandidate.endMin && fb.endMin > snackCandidate.startMin)) {
+                    // Add each soft anchor at its chosen position
+                    let hasOverlap = false;
+                    for (let ci = 0; ci < chosenPositions.length; ci++) {
+                        const pos = chosenPositions[ci];
+                        if (!pos) continue;
+                        const base = limitedCandidates[ci].base;
+                        if (!base) continue;
+
+                        // Check overlap with existing fixed blocks
+                        if (fixedBlocks.some(fb => fb.startMin < pos.endMin && fb.endMin > pos.startMin)) {
+                            hasOverlap = true; break;
+                        }
                         fixedBlocks.push({
-                            startMin: snackCandidate.startMin, endMin: snackCandidate.endMin,
-                            type: snackCandidate.type, event: snackCandidate.event,
-                            layer: snackCandidate.layer, _fixed: true, _source: 'snack',
-                            _activityLocked: true
+                            startMin: pos.startMin, endMin: pos.endMin,
+                            type: base.type, event: base.event,
+                            layer: base.layer, _fixed: true, _source: 'soft_anchor',
+                            _activityLocked: base._activityLocked || true,
+                            _gradeWide: base._gradeWide
                         });
                     }
-                }
+                    if (hasOverlap) return;
                 fixedBlocks.sort((a, b) => a.startMin - b.startMin);
 
                 // Build regions between fixed blocks
@@ -1767,8 +1781,20 @@
                     bestDeadSpace = totalDeadSpace;
                     bestTemplate = template.sort((a, b) => a.startMin - b.startMin);
                 }
-            } // end snack loop
-            } // end swim position loop
+                    return; // end of evaluation
+                }
+
+                // Recurse: try each candidate for this anchor
+                const sac = limitedCandidates[anchorIdx];
+                for (let ci = 0; ci < sac.candidates.length; ci++) {
+                    if (evalCount >= MAX_EVALS) break;
+                    chosenPositions[anchorIdx] = sac.candidates[ci];
+                    tryAnchorCombo(anchorIdx + 1, chosenPositions);
+                }
+            }
+
+            // Launch the recursive search
+            tryAnchorCombo(0, new Array(limitedCandidates.length).fill(null));
 
             if (totalIters < 2) log('[DAP] ' + bunk + ': ' + (bestTemplate ? bestTemplate.length : 0) + ' blocks, dead=' + bestDeadSpace);
             return bestTemplate;
@@ -1901,29 +1927,67 @@
         // 0b. MRC for swim
         buildResourceCalendar(_iterSeed);
 
-        // 0c. Non-pinned leagues + swim + full-grade activities
+        // 0c. Non-pinned layers that need early placement
+        // ★ EVERY non-pinned, non-grade-wide layer gets placed as a SOFT ANCHOR.
+        //   DAP can shift it within its window to eliminate dead space.
+        //   Only leagues and full-grade activities are truly fixed (grade-wide).
         nonPinnedLayers.forEach(layer => {
             const grade = layer.grade || layer.division;
             if (!grade || (allowedSet && !allowedSet.has(String(grade)))) return;
             const t = (layer.type || '').toLowerCase();
+            const bunks = getBunksForGrade(grade, divisions);
+            if (!bunks.length) return;
 
-            // Leagues: always grade-wide, placed here regardless of classification
+            // Leagues: always grade-wide — truly fixed, not soft
             if (t === 'league' || t === 'specialty_league') {
                 if (layer._classification !== 'pinned') placeLeagueForGrade(grade, layer);
                 return;
             }
 
-            // Swim: placed here with MRC staggering (unless pinned — already done)
+            // Full-grade activities — truly fixed, not soft
+            const isFullGrade = activityProperties[layer.event]?.fullGrade || activityProperties[layer.name]?.fullGrade;
+            if (isFullGrade && layer._classification !== 'pinned') {
+                placeLeagueForGrade(grade, layer);
+                return;
+            }
+
+            // ★ Swim: MRC staggering gives it special placement logic
             if (t === 'swim' && layer._classification !== 'pinned') {
                 placeSwimForGrade(grade, layer);
                 return;
             }
 
-            // Full-grade activities (non-pinned, non-league, non-swim but fullGrade flag)
-            const isFullGrade = activityProperties[layer.event]?.fullGrade || activityProperties[layer.name]?.fullGrade;
-            if (isFullGrade && layer._classification !== 'pinned') {
-                // Place like a league — all bunks same time
-                placeLeagueForGrade(grade, layer);
+            // ★ ALL other windowed layers: place at preferred position as soft anchor
+            // This handles windowed lunch, windowed snacks, windowed dismissal,
+            // windowed sport, windowed special — ANYTHING the user made non-pinned.
+            // DAP will try shifting these within their window.
+            if (layer._classification === 'windowed' || layer._classification === 'open') {
+                const { dMin, dMax } = resolveConstraints(layer, t);
+                const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                const winStart = Math.max(layer.startMin || 0, gs);
+                const winEnd = Math.min(layer.endMin || 1440, ge);
+
+                // Only place early (as soft anchor) if the window is tight enough
+                // that it acts like an anchor — ratio >= 0.25 (windowed class)
+                // Open layers (ratio < 0.25) go through the shopping list instead
+                if (layer._classification !== 'windowed') return;
+
+                bunks.forEach(bunk => {
+                    const pos = findBestGapPosition(bunk, winStart, winEnd, dMin, t, null);
+                    if (!pos) return;
+                    const dur = Math.max(dMin, Math.min(dMax, pos.end - pos.start));
+
+                    placeTentativeBlock(bunk, {
+                        startMin: pos.start, endMin: pos.start + dur,
+                        type: t, event: layer.event || layer.name || t,
+                        layer, _classification: 'windowed',
+                        _activityLocked: true, _fixed: false, _committed: true,
+                        _softAnchor: true,
+                        _softWindow: { start: winStart, end: winEnd },
+                        _softDuration: dur
+                    });
+                });
             }
         });
 
