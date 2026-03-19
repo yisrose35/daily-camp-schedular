@@ -2419,21 +2419,29 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                             continue; // skip Options 1-4 entirely for FIXED↔FIXED pairs
                         }
 
-                        // ★ Option 1: extend earlier block forward
-                        if (currDur + gap <= currMaxDur) {                            log(`[STEP 2.5b] Pass ${passCount} — extend earlier: "${curr.event}" ${curr.endMin}→${next.startMin} on ${bunk}`);
+                        // ★ GRADE-WIDE SYNC GUARD: league/specialty_league/swim
+                        // times are shared across all bunks in a grade — seam
+                        // closing must never modify their startMin or endMin.
+                        const _currIsGradeWide = _noSlideTypes.includes(_currTypeLC);
+                        const _nextIsGradeWide = _noSlideTypes.includes(_nextTypeLC);
+                        if (_currIsGradeWide && _nextIsGradeWide) continue;
+
+                       // ★ Option 1: extend earlier block forward
+                        if (!_currIsGradeWide && currDur + gap <= currMaxDur) {                           
+                            log(`[STEP 2.5b] Pass ${passCount} — extend earlier: "${curr.event}" ${curr.endMin}→${next.startMin} on ${bunk}`);
                             curr.endMin = next.startMin;
                             seamsClosed++;
                             passChanged = true;
 
-                        // ★ Option 2: extend later block backward (starts earlier, runs longer)
-                        } else if (!nextIsFixed && nextDur + gap <= nextMaxDur) {
+                       // ★ Option 2: extend later block backward (starts earlier, runs longer)
+                        } else if (!nextIsFixed && !_nextIsGradeWide && nextDur + gap <= nextMaxDur) {
                             log(`[STEP 2.5b] Pass ${passCount} — extend later back: "${next.event}" ${next.startMin}→${curr.endMin} on ${bunk}`);
                             next.startMin = curr.endMin;
                             seamsClosed++;
                             passChanged = true;
 
-                        // ★ Option 3: shift later block earlier (no duration change, may cascade)
-                        } else if (!nextIsFixed) {
+                       // ★ Option 3: shift later block earlier (no duration change, may cascade)
+                        } else if (!nextIsFixed && !_nextIsGradeWide) {
                             const nextMinDur = next.layer
                                 ? (next.layer.durationMin || next.layer.periodMin || next.layer.duration || 0)
                                 : 0;
