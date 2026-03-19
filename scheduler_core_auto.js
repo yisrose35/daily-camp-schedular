@@ -2002,21 +2002,18 @@
                 return;
             }
 
-            // ★ ALL other windowed layers: place at preferred position as soft anchor
-            // This handles windowed lunch, windowed snacks, windowed dismissal,
-            // windowed sport, windowed special — ANYTHING the user made non-pinned.
-            // DAP will try shifting these within their window.
-            if (layer._classification === 'windowed' || layer._classification === 'open') {
+            // ★ Other windowed layers: only POSITIONAL types get soft-anchored.
+            // Sport, special, league, elective MUST go through the draft for field assignment.
+            // Only types that need a specific time position benefit from anchoring.
+            if (layer._classification === 'windowed') {
+                const anchorableTypes = ['snacks', 'snack', 'lunch', 'dismissal'];
+                if (!anchorableTypes.includes(t)) return; // sport/special/etc → shopping list
+
                 const { dMin, dMax } = resolveConstraints(layer, t);
                 const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
                 const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
                 const winStart = Math.max(layer.startMin || 0, gs);
                 const winEnd = Math.min(layer.endMin || 1440, ge);
-
-                // Only place early (as soft anchor) if the window is tight enough
-                // that it acts like an anchor — ratio >= 0.10 (windowed class)
-                // Open layers (ratio < 0.10) go through the shopping list instead
-                if (layer._classification !== 'windowed') return;
 
                 bunks.forEach(bunk => {
                     const pos = findBestGapPosition(bunk, winStart, winEnd, dMin, t, null);
@@ -2091,12 +2088,12 @@
                     // Try 1: extend earlier block forward (never pinned)
                     if (!tl[i]._gradeWide && tl[i]._classification !== 'pinned') {
                         const c = resolveConstraints(tl[i].layer, tl[i].type);
-                        if (tl[i].endMin - tl[i].startMin + gap <= c.dMax + 10) { tl[i].endMin = tl[i + 1].startMin; continue; }
+                        if (tl[i].endMin - tl[i].startMin + gap <= c.dMax + 5) { tl[i].endMin = tl[i + 1].startMin; continue; }
                     }
                     // Try 2: extend later block backward (never pinned)
                     if (!tl[i + 1]._gradeWide && tl[i + 1]._classification !== 'pinned') {
                         const c = resolveConstraints(tl[i + 1].layer, tl[i + 1].type);
-                        if (tl[i + 1].endMin - tl[i + 1].startMin + gap <= c.dMax + 10) { tl[i + 1].startMin = tl[i].endMin; continue; }
+                        if (tl[i + 1].endMin - tl[i + 1].startMin + gap <= c.dMax + 5) { tl[i + 1].startMin = tl[i].endMin; continue; }
                     }
                 }
             });
@@ -2133,14 +2130,14 @@
                             // Try 1: extend prev forward (most natural)
                             if (prev && !prev._gradeWide) {
                                 const pc = resolveConstraints(prev.layer, prev.type);
-                                if ((prev.endMin - prev.startMin) + dur <= pc.dMax + 10) {
+                                if ((prev.endMin - prev.startMin) + dur <= pc.dMax + 5) {
                                     prev.endMin = gap.end; changed = true; continue;
                                 }
                             }
                             // Try 2: extend next backward
                             if (next && !next._gradeWide && next._classification !== 'pinned') {
                                 const nc = resolveConstraints(next.layer, next.type);
-                                if ((next.endMin - next.startMin) + dur <= nc.dMax + 10) {
+                                if ((next.endMin - next.startMin) + dur <= nc.dMax + 5) {
                                     next.startMin = gap.start; changed = true; continue;
                                 }
                             }
