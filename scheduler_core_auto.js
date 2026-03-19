@@ -2779,10 +2779,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
 
         log('[POST-ENFORCEMENT] ✅ Enforced ' + postEnforcementCount + ' blocks');
 
-        // Update debug exports after post-enforcement
-        window._bunkNeeds     = JSON.parse(JSON.stringify(bunkNeeds));
-        window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
-        window._autoBuildTimelines = JSON.parse(JSON.stringify(bunkTimelines));
+        
 
         // -----------------------------------------------------------------
         // POST-LOOP GAP PATCH — run on winning timelines before formalization
@@ -2859,7 +2856,12 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                 });
             });
         });
-        log('[POST-LOOP] ✅ Patched ' + postLoopFilled + ' gaps in best timelines');
+       log('[POST-LOOP] ✅ Patched ' + postLoopFilled + ' gaps in best timelines');
+
+        // Debug exports — after all post-loop fixes (enforcement + gap patch)
+        window._bunkNeeds     = JSON.parse(JSON.stringify(bunkNeeds));
+        window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
+        window._autoBuildTimelines = JSON.parse(JSON.stringify(bunkTimelines));
         // -----------------------------------------------------------------
         // STEP 2.6 — VALIDATE
         // -----------------------------------------------------------------
