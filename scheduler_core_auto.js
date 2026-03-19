@@ -1751,9 +1751,11 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                         if (totalIters < 2) log('[SWIM-DBG] bunk=' + bunk + ' window=' + swimWinStart + '-' + swimWinEnd + ' dur=' + swimDur + ' → position=' + (position ? position.start + '-' + position.end : 'null'));
                         if (position) {
                             var _preCount = bunkTimelines[bunk].length;
-                           var _swimBlock = {
+                           var _swimDur = swimLayer.durationMax || swimLayer.periodMin || swimLayer.durationMin || swimLayer.duration || (position.end - position.start);
+                            var _swimCappedEnd = Math.min(position.end, position.start + _swimDur);
+                            var _swimBlock = {
                                 startMin: position.start,
-                                endMin: position.end,
+                                endMin: _swimCappedEnd,
                                 type: 'swim',
                                 event: swimLayer.event || 'Swim',
                                 layer: swimLayer,
