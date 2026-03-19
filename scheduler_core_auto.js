@@ -558,6 +558,7 @@
         let bestScore    = Infinity;
        let bestTimelines = null;
         let _savedNonPinnedLayers = null;
+        let _savedPlaceSpecialForBunk = null;
         let bestWarnings  = [];
         let staleCount   = 0;
        let totalIters   = 0;
@@ -1275,6 +1276,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
         // Collect what each grade needs (excluding pinned)
        const nonPinnedLayers = [...windowedLayers, ...openLayers];
         _savedNonPinnedLayers = nonPinnedLayers;
+        _savedPlaceSpecialForBunk = placeSpecialForBunk;
  
         const gradeFlexTypes = {}; // grade → array of distinct type strings
         allGrades.forEach(grade => {
@@ -2105,7 +2107,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                         for (const gap of gaps) {
                             if (gap.end - gap.start >= layerDur) {
                                 if (layerType === 'special') {
-                                    const specialBlock = placeSpecialForBunk(bunk, grade, layer, gap.start, gap.end);
+                                   const specialBlock = _savedPlaceSpecialForBunk(bunk, grade, layer, gap.start, gap.end);
                                     if (specialBlock) {
                                         specialBlock._committed = true;
                                         specialBlock._fromEnforcement = true;
@@ -2171,7 +2173,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                             if (carveEnd > block.endMin || carveEnd > winEnd) continue;
 
                            if (layerType === 'special') {
-                                const specialBlock = placeSpecialForBunk(bunk, grade, layer, carveStart, carveEnd);
+                                const specialBlock = _savedPlaceSpecialForBunk(bunk, grade, layer, carveStart, carveEnd);
                                 if (!specialBlock) continue;
                                 specialBlock._committed = true;
                                 specialBlock._fromEnforcement = true;
@@ -2713,7 +2715,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                        for (const gap of gaps) {
                             if (gap.end - gap.start >= layerDur) {
                                 if (layerType === 'special') {
-                                    const specialBlock = placeSpecialForBunk(bunk, grade, layer, gap.start, gap.end);
+                                    const specialBlock = _savedPlaceSpecialForBunk(bunk, grade, layer, gap.start, gap.end);
                                     if (specialBlock) {
                                         specialBlock._committed = true;
                                         specialBlock._fromEnforcement = true;
@@ -2778,7 +2780,7 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                             if (carveEnd > block.endMin || carveEnd > winEnd) continue;
 
                             if (layerType === 'special') {
-                                const specialBlock = placeSpecialForBunk(bunk, grade, layer, carveStart, carveEnd);
+                                const specialBlock = _savedPlaceSpecialForBunk(bunk, grade, layer, carveStart, carveEnd);
                                 if (!specialBlock) continue;
                                 specialBlock._committed = true;
                                 specialBlock._fromEnforcement = true;
