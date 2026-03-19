@@ -2205,7 +2205,15 @@
                             // Would this leave an undersized remainder?
                             const afterThis = rem - sd;
                             if (afterThis > 0 && afterThis < minDur) {
-                                sd = rem; // take the whole thing
+                                // Split evenly instead of taking whole thing
+                                const half = snapTo5(Math.floor(rem / 2));
+                                if (half >= minDur && half <= maxDur) {
+                                    sd = half; // two equal-ish slots
+                                } else if (rem <= maxDur + 5) {
+                                    sd = rem; // take whole thing if barely over dMax
+                                } else {
+                                    sd = maxDur; // cap at dMax, remainder becomes micro-gap
+                                }
                             }
 
                             tl.push({
