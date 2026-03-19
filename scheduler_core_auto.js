@@ -1283,6 +1283,64 @@
         // layout with zero dead space.
         // =====================================================================
 
+        // ── Perfect-fit distribution: size N blocks to sum exactly to target ──
+        // Each block has [dMin, dMax]. Returns array of durations.
+        // Algorithm: start all at dMin, distribute excess proportionally to headroom.
+        function perfectFitDistribute(blockDescs, target) {
+            const n = blockDescs.length;
+            if (n === 0) return [];
+            if (n === 1) return [Math.max(blockDescs[0].dMin, Math.min(blockDescs[0].dMax, target))];
+
+            // Start all at dMin
+            const durations = blockDescs.map(b => b.dMin);
+            let excess = target - durations.reduce((s, d) => s + d, 0);
+
+            if (excess <= 0) return durations; // already at or over target
+
+            // Calculate headroom per block
+            const headrooms = blockDescs.map((b, i) => b.dMax - durations[i]);
+            const totalHeadroom = headrooms.reduce((s, h) => s + h, 0);
+
+            if (totalHeadroom <= 0) return durations; // no room to grow
+
+            // Distribute proportionally to headroom
+            for (let pass = 0; pass < 3 && excess > 0; pass++) {
+                for (let i = 0; i < n && excess > 0; i++) {
+                    const maxGrow = blockDescs[i].dMax - durations[i];
+                    if (maxGrow <= 0) continue;
+                    // Proportional share, snapped to 5
+                    let share = totalHeadroom > 0
+                        ? Math.round((headrooms[i] / totalHeadroom) * excess)
+                        : Math.round(excess / n);
+                    share = Math.min(share, maxGrow, excess);
+                    if (share > 0) {
+                        durations[i] += share;
+                        excess -= share;
+                    }
+                }
+                // If rounding left a remainder, distribute 1 at a time
+                if (excess > 0) {
+                    for (let i = 0; i < n && excess > 0; i++) {
+                        const maxGrow = blockDescs[i].dMax - durations[i];
+                        if (maxGrow > 0) { durations[i]++; excess--; }
+                    }
+                }
+            }
+
+            // Snap to 5 while preserving total
+            let total = 0;
+            for (let i = 0; i < n - 1; i++) {
+                durations[i] = snapTo5(durations[i]);
+                durations[i] = Math.max(blockDescs[i].dMin, Math.min(blockDescs[i].dMax, durations[i]));
+                total += durations[i];
+            }
+            // Last block gets whatever's left
+            durations[n - 1] = target - total;
+            durations[n - 1] = Math.max(blockDescs[n - 1].dMin, durations[n - 1]);
+
+            return durations;
+        }
+
         function buildBunkDayTemplate(bunk, grade, draftResult, shoppingList) {
             const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
             const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
@@ -1557,266 +1615,151 @@
 
                     let regionCursor = region.start;
                     const regionEnd = region.end;
+                    const regionSize = regionEnd - regionCursor;
 
-                    // Place draft blocks sequentially within region
+                    // ═══════════════════════════════════════════════════════
+                    // PERFECT-FIT REGION SOLVER
+                    // Given a region of R minutes and N draft blocks, determine
+                    // how many filler slots are needed and size ALL blocks so
+                    // they sum to exactly R. Zero gaps by construction.
+                    // ═══════════════════════════════════════════════════════
+
+                    // Step 1: Build block descriptors with flex ranges
+                    const blockDescs = [];
                     region.blocks.forEach(block => {
-                        template.push({
-                            startMin: regionCursor, endMin: regionCursor + block.duration,
-                            type: block.type, event: block.event, duration: block.duration,
-                            field: block.field, layer: block.layer || block._layer,
-                            dMin: block.dMin, dMax: block.dMax,
-                            isFlexDuration: block.isFlexDuration,
-                            _source: block._source,
-                            _assignedSpecial: block._assignedSpecial,
-                            _assignedSport: block._assignedSport,
-                            _specialDuration: block._specialDuration,
-                            _specialLocation: block._specialLocation,
-                            _activityLocked: block._activityLocked || false,
-                            _pairedWith: block._pairedWith,
-                            _isPrepBlock: block._isPrepBlock,
-                            _isMainBlock: block._isMainBlock,
-                            _linkedTo: block._linkedTo,
-                            _final: true
+                        const bc = resolveConstraints(block.layer, block.type);
+                        blockDescs.push({
+                            block,
+                            dMin: block.dMin || bc.dMin,
+                            dMax: block.dMax || bc.dMax,
+                            dIdeal: block.duration || bc.dIdeal,
+                            isDraft: true
                         });
-                        regionCursor += block.duration;
                     });
 
-                    // Fill remaining space with sport/GA slots
-                    const remaining = regionEnd - regionCursor;
-                    if (remaining > 0) {
+                    // Step 2: Determine how many filler sport slots are needed
+                    const draftDMin = blockDescs.reduce((s, b) => s + b.dMin, 0);
+                    const draftDMax = blockDescs.reduce((s, b) => s + b.dMax, 0);
+                    let spaceForFillers = regionSize - draftDMin;
 
-                        if (remaining < slotMin) {
-                            // ★ Strategy 0: SHRINK the last draft block so remaining becomes >= slotMin
-                            // This is better than stretching anything past dMax.
-                            // Example: Region=60, Special=35(dIdeal), remaining=25.
-                            //   Shrink special to 30 → remaining=30 → proper sport slot.
-                            const lastDraft = template.length > 0 ? template[template.length - 1] : null;
-                            let wasResized = false;
-
-                            if (lastDraft && lastDraft._final && lastDraft.startMin >= region.start && lastDraft._source === 'draft') {
-                                const ldC = resolveConstraints(lastDraft.layer, lastDraft.type);
-                                const ldCurrentDur = lastDraft.endMin - lastDraft.startMin;
-                                const shrinkBy = slotMin - remaining; // how much to shrink to make remaining = slotMin
-                                const ldNewDur = ldCurrentDur - shrinkBy;
-
-                                if (ldNewDur >= ldC.dMin) {
-                                    // Shrink is valid — draft block stays within its dMin
-                                    lastDraft.endMin = lastDraft.startMin + ldNewDur;
-                                    lastDraft.duration = ldNewDur;
-                                    regionCursor = lastDraft.endMin;
-                                    // Now remaining is exactly slotMin — create a proper sport slot
-                                    const newRemaining = regionEnd - regionCursor;
-                                    template.push({
-                                        startMin: regionCursor, endMin: regionEnd,
-                                        type: 'slot', event: 'General Activity Slot',
-                                        duration: newRemaining, _source: 'filler', _final: true,
-                                        layer: shoppingList.sports.layer,
-                                        dMin: sc.dMin, dMax: sc.dMax
-                                    });
-                                    regionCursor = regionEnd;
-                                    wasResized = true;
-                                }
-                            }
-
-                            if (!wasResized) {
-                            // Strategy 1: Expand the last placed block within its dMax
-                            const lastBlock = template.length > 0 ? template[template.length - 1] : null;
-                            let absorbed = false;
-
-                            if (lastBlock && lastBlock._final && lastBlock.startMin >= region.start) {
-                                const lbC = resolveConstraints(lastBlock.layer, lastBlock.type);
-                                const lbCurrentDur = lastBlock.endMin - lastBlock.startMin;
-                                const lbNewDur = lbCurrentDur + remaining;
-
-                                if (lastBlock.isFlexDuration && lbNewDur <= lbC.dMax) {
-                                    // Flex special — stretch within its layer range
-                                    lastBlock.endMin = regionEnd;
-                                    lastBlock.duration = lastBlock.endMin - lastBlock.startMin;
-                                    regionCursor = regionEnd;
-                                    absorbed = true;
-                                } else if (!lastBlock._activityLocked && !lastBlock._fixed && lbNewDur <= lbC.dMax + 5) {
-                                    // Non-locked block (sport/GA) — stretch within dMax + small grace
-                                    lastBlock.endMin = regionEnd;
-                                    lastBlock.duration = lastBlock.endMin - lastBlock.startMin;
-                                    regionCursor = regionEnd;
-                                    absorbed = true;
-                                }
-                            }
-
-                            // Strategy 2: Shift all draft blocks to END of region,
-                            // putting the gap at the START where the previous block can absorb it
-                            if (!absorbed) {
-                                const regionDraftBlocks = template.filter(b =>
-                                    b._final && b.startMin >= region.start && b.endMin <= regionEnd && b._source === 'draft'
-                                );
-                                const regionFillerBlocks = template.filter(b =>
-                                    b._final && b.startMin >= region.start && b.endMin <= regionEnd && b._source === 'filler'
-                                );
-
-                                if (regionDraftBlocks.length > 0 && regionFillerBlocks.length === 0) {
-                                    // Save original positions in case we need to undo
-                                    const origPositions = regionDraftBlocks.map(b => ({ startMin: b.startMin, endMin: b.endMin }));
-
-                                    // Shift everything right so gap is at start
-                                    let shiftCursor = regionEnd;
-                                    for (let si = regionDraftBlocks.length - 1; si >= 0; si--) {
-                                        const sb = regionDraftBlocks[si];
-                                        const sDur = sb.endMin - sb.startMin;
-                                        sb.endMin = shiftCursor;
-                                        sb.startMin = shiftCursor - sDur;
-                                        shiftCursor = sb.startMin;
-                                    }
-                                    // Now the gap is at region.start → shiftCursor
-                                    const prevBlock = template.filter(b => b._final && b.endMin === region.start)[0];
-                                    if (prevBlock && !prevBlock._gradeWide) {
-                                        const pbC = resolveConstraints(prevBlock.layer, prevBlock.type);
-                                        const pbNewDur = (prevBlock.endMin - prevBlock.startMin) + remaining;
-                                        if (pbNewDur <= pbC.dMax + 5) {
-                                            prevBlock.endMin = shiftCursor;
-                                            prevBlock.duration = prevBlock.endMin - prevBlock.startMin;
-                                            absorbed = true;
-                                        }
-                                    }
-                                    // If absorption failed, undo the shift
-                                    if (!absorbed) {
-                                        regionDraftBlocks.forEach((b, idx) => {
-                                            b.startMin = origPositions[idx].startMin;
-                                            b.endMin = origPositions[idx].endMin;
-                                        });
-                                    }
-                                }
-                            }
-
-                            // ★ Strategy 3: Extend a block in this region within its dMax
-                            if (!absorbed) {
-                                const blocksInRegion = template.filter(b =>
-                                    b._final && b.startMin >= region.start && b.endMin <= regionEnd
-                                );
-                                if (blocksInRegion.length > 0) {
-                                    // Try end-gap: extend last block forward
-                                    const lastInR = blocksInRegion[blocksInRegion.length - 1];
-                                    if (lastInR.endMin < regionEnd) {
-                                        const lC = resolveConstraints(lastInR.layer, lastInR.type);
-                                        const lNewDur = regionEnd - lastInR.startMin;
-                                        if (lNewDur <= lC.dMax + 5) {
-                                            lastInR.endMin = regionEnd;
-                                            lastInR.duration = lNewDur;
-                                            absorbed = true;
-                                        }
-                                    }
-                                    // Try start-gap: extend first block backward
-                                    if (!absorbed) {
-                                        const firstInR = blocksInRegion[0];
-                                        if (firstInR.startMin > region.start) {
-                                            const fC = resolveConstraints(firstInR.layer, firstInR.type);
-                                            const fNewDur = firstInR.endMin - region.start;
-                                            if (fNewDur <= fC.dMax + 5) {
-                                                firstInR.startMin = region.start;
-                                                firstInR.duration = fNewDur;
-                                                absorbed = true;
-                                            }
-                                        }
-                                    }
-                                    // Try spreading across multiple blocks
-                                    if (!absorbed) {
-                                        let gapToFill = regionEnd - (blocksInRegion[blocksInRegion.length - 1].endMin);
-                                        if (gapToFill <= 0) gapToFill = blocksInRegion[0].startMin - region.start;
-                                        if (gapToFill > 0) {
-                                            // Distribute gap across all blocks that can grow
-                                            for (const blk of blocksInRegion) {
-                                                if (gapToFill <= 0) break;
-                                                const bC = resolveConstraints(blk.layer, blk.type);
-                                                const canGrow = bC.dMax - (blk.endMin - blk.startMin);
-                                                if (canGrow > 0) {
-                                                    const give = Math.min(canGrow, gapToFill);
-                                                    blk.duration = (blk.endMin - blk.startMin) + give;
-                                                    gapToFill -= give;
-                                                }
-                                            }
-                                            // Re-layout: pack sequentially from region start
-                                            if (gapToFill <= 0) {
-                                                let packCursor = region.start;
-                                                blocksInRegion.forEach(blk => {
-                                                    blk.startMin = packCursor;
-                                                    blk.endMin = packCursor + blk.duration;
-                                                    packCursor = blk.endMin;
-                                                });
-                                                absorbed = (packCursor >= regionEnd - 2); // within rounding
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Strategy 4: Absolute last resort — create micro-slot
-                            if (!absorbed) {
-                                totalDeadSpace += remaining;
-                                template.push({
-                                    startMin: regionCursor, endMin: regionEnd,
-                                    type: 'slot', event: 'General Activity Slot',
-                                    duration: remaining, _source: 'filler',
-                                    _microGap: remaining < GAP_MIN_DUR, _final: true,
-                                    layer: shoppingList.sports.layer
-                                });
-                            }
-                            } // end if (!wasResized)
-                        } else {
-                            // ★ Fill remaining space with properly-sized sport slots, each capped at dMax
-                            let rem = remaining;
-                            while (rem > 0) {
-                                if (rem < slotMin) {
-                                    // Too small for a sport slot — try merging into previous filler slot
-                                    const prevFiller = [...template].reverse().find(b =>
-                                        b._final && b._source === 'filler' && b.startMin >= region.start
-                                    );
-                                    if (prevFiller && (prevFiller.endMin - prevFiller.startMin) + rem <= sc.dMax + 5) {
-                                        prevFiller.endMin += rem;
-                                        prevFiller.duration = prevFiller.endMin - prevFiller.startMin;
-                                        regionCursor += rem; rem = 0;
-                                    } else {
-                                        // Try shrinking the FIRST filler to make room
-                                        const firstFiller = template.find(b =>
-                                            b._final && b._source === 'filler' && b.startMin >= region.start
-                                        );
-                                        if (firstFiller && (firstFiller.endMin - firstFiller.startMin) - rem >= slotMin) {
-                                            firstFiller.endMin -= rem;
-                                            firstFiller.duration = firstFiller.endMin - firstFiller.startMin;
-                                            // Shift subsequent blocks left
-                                        }
-                                        // Last resort: create micro-slot
-                                        totalDeadSpace += rem;
-                                        template.push({
-                                            startMin: regionCursor, endMin: regionCursor + rem,
-                                            type: 'slot', event: 'General Activity Slot',
-                                            duration: rem, _source: 'filler', _final: true,
-                                            _microGap: true, layer: shoppingList.sports.layer
-                                        });
-                                        regionCursor += rem; rem = 0;
-                                    }
-                                    break;
-                                }
-
-                                let dur = Math.min(sc.dMax, rem);
-                                // Check: would this leave an undersized remainder?
-                                const afterThis = rem - dur;
-                                if (afterThis > 0 && afterThis < slotMin) {
-                                    // Split evenly between this slot and the next
-                                    dur = snapTo5(Math.floor(rem / 2));
-                                    if (dur < slotMin) dur = slotMin;
-                                    if (dur > sc.dMax) dur = sc.dMax;
-                                }
-                                dur = Math.min(dur, rem);
-
-                                template.push({
-                                    startMin: regionCursor, endMin: regionCursor + dur,
-                                    type: 'slot', event: 'General Activity Slot',
-                                    duration: dur, _source: 'filler', _final: true,
-                                    layer: shoppingList.sports.layer,
-                                    dMin: sc.dMin, dMax: sc.dMax
-                                });
-                                regionCursor += dur; rem -= dur;
-                            }
+                    // Calculate filler count: fill all remaining space with sport slots
+                    let numFillers = 0;
+                    if (spaceForFillers >= slotMin) {
+                        // Start with ideal count, then verify
+                        numFillers = Math.max(1, Math.round(spaceForFillers / sc.dIdeal));
+                        // Validate: fillers at dMin must fit, fillers at dMax must not exceed
+                        while (numFillers > 0 && numFillers * slotMin > spaceForFillers) numFillers--;
+                        // Also check: with draft at dMax, is there still room for fillers?
+                        const spaceAtDraftMax = regionSize - draftDMax;
+                        if (spaceAtDraftMax < numFillers * slotMin && numFillers > 0) {
+                            numFillers = Math.max(0, Math.floor(spaceAtDraftMax / slotMin));
                         }
+                    } else if (spaceForFillers > 0 && blockDescs.length > 0) {
+                        // Not enough for a filler — draft blocks will absorb the space
+                        numFillers = 0;
+                    } else if (blockDescs.length === 0) {
+                        // Empty region — all fillers
+                        numFillers = Math.max(1, Math.round(regionSize / sc.dIdeal));
+                        while (numFillers > 0 && numFillers * slotMin > regionSize) numFillers--;
+                        if (numFillers === 0 && regionSize >= slotMin) numFillers = 1;
+                    }
+
+                    // Add filler descriptors
+                    for (let fi = 0; fi < numFillers; fi++) {
+                        blockDescs.push({
+                            block: null, // filler — no draft block
+                            dMin: sc.dMin,
+                            dMax: sc.dMax,
+                            dIdeal: sc.dIdeal,
+                            isDraft: false
+                        });
+                    }
+
+                    // Step 3: Solve — size all blocks to sum exactly to regionSize
+                    const totalDMin = blockDescs.reduce((s, b) => s + b.dMin, 0);
+                    const totalDMax = blockDescs.reduce((s, b) => s + b.dMax, 0);
+
+                    let durations;
+                    if (blockDescs.length === 0) {
+                        // Region too small for anything — dead space
+                        totalDeadSpace += regionSize;
+                        durations = [];
+                    } else if (totalDMin > regionSize) {
+                        // Can't fit all blocks even at minimum — remove fillers until it works
+                        while (blockDescs.length > region.blocks.length && blockDescs.reduce((s, b) => s + b.dMin, 0) > regionSize) {
+                            blockDescs.pop(); // remove last filler
+                        }
+                        // Re-solve with fewer blocks
+                        const adjDMin = blockDescs.reduce((s, b) => s + b.dMin, 0);
+                        if (adjDMin > regionSize) {
+                            // Even draft blocks alone are too big — shrink to fit
+                            durations = blockDescs.map(b => b.dMin);
+                            let excess = adjDMin - regionSize;
+                            for (let i = durations.length - 1; i >= 0 && excess > 0; i--) {
+                                const canShrink = durations[i] - 5; // absolute minimum
+                                if (canShrink > 0) {
+                                    const shrink = Math.min(excess, canShrink);
+                                    durations[i] -= shrink;
+                                    excess -= shrink;
+                                }
+                            }
+                        } else {
+                            durations = perfectFitDistribute(blockDescs, regionSize);
+                        }
+                    } else if (totalDMax < regionSize) {
+                        // All blocks at max still don't fill region — add more fillers
+                        let extraFillers = Math.ceil((regionSize - totalDMax) / sc.dMax);
+                        for (let fi = 0; fi < extraFillers; fi++) {
+                            blockDescs.push({ block: null, dMin: sc.dMin, dMax: sc.dMax, dIdeal: sc.dIdeal, isDraft: false });
+                        }
+                        durations = perfectFitDistribute(blockDescs, regionSize);
+                    } else {
+                        // Normal case: totalDMin ≤ regionSize ≤ totalDMax → perfect fit exists
+                        durations = perfectFitDistribute(blockDescs, regionSize);
+                    }
+
+                    // Step 4: Write blocks at computed durations
+                    for (let bi = 0; bi < blockDescs.length; bi++) {
+                        const bd = blockDescs[bi];
+                        const dur = durations[bi] || bd.dMin;
+                        if (dur <= 0) continue;
+
+                        if (bd.isDraft && bd.block) {
+                            // Draft block — preserve all metadata
+                            template.push({
+                                startMin: regionCursor, endMin: regionCursor + dur,
+                                type: bd.block.type, event: bd.block.event, duration: dur,
+                                field: bd.block.field, layer: bd.block.layer || bd.block._layer,
+                                dMin: bd.dMin, dMax: bd.dMax,
+                                isFlexDuration: bd.block.isFlexDuration,
+                                _source: bd.block._source,
+                                _assignedSpecial: bd.block._assignedSpecial,
+                                _assignedSport: bd.block._assignedSport,
+                                _specialDuration: bd.block._specialDuration,
+                                _specialLocation: bd.block._specialLocation,
+                                _activityLocked: bd.block._activityLocked || false,
+                                _pairedWith: bd.block._pairedWith,
+                                _isPrepBlock: bd.block._isPrepBlock,
+                                _isMainBlock: bd.block._isMainBlock,
+                                _linkedTo: bd.block._linkedTo,
+                                _final: true
+                            });
+                        } else {
+                            // Filler sport slot
+                            template.push({
+                                startMin: regionCursor, endMin: regionCursor + dur,
+                                type: 'slot', event: 'General Activity Slot',
+                                duration: dur, _source: 'filler', _final: true,
+                                layer: shoppingList.sports.layer,
+                                dMin: sc.dMin, dMax: sc.dMax
+                            });
+                        }
+                        regionCursor += dur;
+                    }
+
+                    // Verify: did we fill the region exactly?
+                    if (regionCursor < regionEnd) {
+                        totalDeadSpace += (regionEnd - regionCursor);
                     }
                 });
 
