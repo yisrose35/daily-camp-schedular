@@ -2395,9 +2395,6 @@ const duration = getSpecialDuration(s.name, activityProperties, globalSettings, 
                             continue;
                         }
 
-                        continue; // skip Options 1-4 entirely for FIXED↔FIXED pairs
-                        }
-
                         // ★ GRADE-WIDE: league/specialty_league/swim times are shared
                         const _currIsGradeWide = _noSlideTypes.includes(_currTypeLC);
                         const _nextIsGradeWide = _noSlideTypes.includes(_nextTypeLC);
