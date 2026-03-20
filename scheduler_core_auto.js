@@ -1671,25 +1671,34 @@
             const sportQueue = [...(draftResult.sports || [])];
 
             // ★ Extend queue with additional sports from the priority list
-            // The draft only assigns 1 sport, but the packer creates 4-5 slots.
-            // Use the rotation-scored priority list to fill the rest.
+            // ONLY use common sports (3+ fields) for extra slots.
+            // Scarce sports (Trench, Jump Rope, etc.) only come from the draft
+            // which already verified field availability via the field ledger.
             const usedSports = new Set(sportQueue.map(s => s.name));
             const priorityList = shoppingList.sports?.priorityList || [];
-            // First pass: unused sports from priority list
-            for (const sport of priorityList) {
+
+            // Determine which sports are "common" (many fields available)
+            const MIN_FIELDS_FOR_FILL = 3;
+            const commonSports = priorityList.filter(sport => {
+                const fieldCount = (sport.fields || []).length;
+                return fieldCount >= MIN_FIELDS_FOR_FILL;
+            });
+
+            // First pass: unused common sports
+            for (const sport of commonSports) {
                 if (!usedSports.has(sport.name)) {
-                    sportQueue.push({ name: sport.name, field: sport.fields?.[0] || null });
+                    sportQueue.push({ name: sport.name, field: null });
                     usedSports.add(sport.name);
                 }
             }
-            // Second pass: if still not enough, cycle through priority list again
-            // (same sport can appear twice in a day — different time slots)
+            // Second pass: cycle common sports if still not enough
             let cycleIdx = 0;
-            while (sportQueue.length < 10 && priorityList.length > 0) {
-                const sport = priorityList[cycleIdx % priorityList.length];
-                sportQueue.push({ name: sport.name, field: null }); // no specific field for repeats
+            const cycleSource = commonSports.length > 0 ? commonSports : priorityList;
+            while (sportQueue.length < 10 && cycleSource.length > 0) {
+                const sport = cycleSource[cycleIdx % cycleSource.length];
+                sportQueue.push({ name: sport.name, field: null });
                 cycleIdx++;
-                if (cycleIdx > 20) break; // safety
+                if (cycleIdx > 20) break;
             }
 
             let sportIdx = 0;
@@ -1719,6 +1728,7 @@
                         _assignedSport: sport ? sport.name : null,
                         field: sport ? sport.field : null,
                         _source: sport ? 'draft' : 'filler',
+                        _sportFallbacks: priorityList.map(s => s.name),
                         _final: true
                     });
                     cursor += sportC.dMin;
@@ -2014,7 +2024,8 @@
                         _microGap: block._microGap || false,
                         _bunkOverride: true,
                         _draftActivity: block._assignedSport || block._assignedSpecial || null,
-                        _draftField: block.field || null
+                        _draftField: block.field || null,
+                        _sportFallbacks: block._sportFallbacks || null
                     });
                 });
                 bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
@@ -2240,6 +2251,25 @@
 
         // ── Phase 4: Execute templates ───────────────────────────────
         executeTemplates(allTemplates);
+
+        // ── Propagate sport fallbacks to ALL sport/slot blocks ──────
+        // Ensures every sport slot has a fallback list for the post-solver sweep,
+        // even if created by Step 5/6 (expand/gap sweep) which may not carry them.
+        allGrades.forEach(grade => {
+            const pl = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'sport');
+            if (!pl) return;
+            const priorityList = shoppingLists[getBunksForGrade(grade, divisions)[0]]?.sports?.priorityList || [];
+            const fallbackNames = priorityList.map(s => s.name);
+            if (!fallbackNames.length) return;
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                (bunkTimelines[bunk] || []).forEach(b => {
+                    const t = (b.type || '').toLowerCase();
+                    if ((t === 'sport' || t === 'slot') && !b._sportFallbacks) {
+                        b._sportFallbacks = fallbackNames;
+                    }
+                });
+            });
+        });
 
 
         // ── (Safety nets removed — greedy packer produces zero-gap schedules) ──
@@ -2548,6 +2578,83 @@
 
                 let filled = 0; ab.forEach(b => { const s = (window.scheduleAssignments?.[b.bunk] || [])[b.slots?.[0]]; if (s && !s._league && !s._fixed) filled++; });
                 log('[4] ✅ Solver filled ~' + filled + ' slots');
+
+                // ── Post-solver fallback sweep ──────────────────────────
+                // For each Free block that has _sportFallbacks, try each
+                // sport in order until one gets an available field.
+                let fallbackFixed = 0;
+                const fbs2 = window.fieldsBySport || fbs;
+
+                // Build time-based field usage map from ALL scheduleAssignments
+                const timeFieldUsage = {}; // timeKey → Set of field names
+                Object.entries(window.scheduleAssignments).forEach(([bk, slots]) => {
+                    const g = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(bk)))?.[0];
+                    const pbsArr = g ? (window.divisionTimes?.[g]?._perBunkSlots?.[bk] || []) : [];
+                    (slots || []).forEach((s, i) => {
+                        if (!s || s.field === 'Free' || !s.field) return;
+                        const pbSlot = pbsArr[i];
+                        if (!pbSlot) return;
+                        // Mark every 5-min bucket as occupied by this field
+                        for (let t = pbSlot.startMin; t < pbSlot.endMin; t += 5) {
+                            if (!timeFieldUsage[t]) timeFieldUsage[t] = new Set();
+                            timeFieldUsage[t].add(s.field);
+                        }
+                    });
+                });
+
+                function isFieldFreeAtTime(fieldName, startMin, endMin) {
+                    for (let t = startMin; t < endMin; t += 5) {
+                        if (timeFieldUsage[t] && timeFieldUsage[t].has(fieldName)) return false;
+                    }
+                    return true;
+                }
+
+                function markFieldUsed(fieldName, startMin, endMin) {
+                    for (let t = startMin; t < endMin; t += 5) {
+                        if (!timeFieldUsage[t]) timeFieldUsage[t] = new Set();
+                        timeFieldUsage[t].add(fieldName);
+                    }
+                }
+
+                Object.keys(window.scheduleAssignments).forEach(bk => {
+                    const slots = window.scheduleAssignments[bk] || [];
+                    const g = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(bk)))?.[0];
+                    const pbsArr = g ? (window.divisionTimes?.[g]?._perBunkSlots?.[bk] || []) : [];
+
+                    slots.forEach((s, idx) => {
+                        if (!s || s.field !== 'Free') return;
+                        const pbSlot = pbsArr[idx];
+                        if (!pbSlot) return;
+
+                        const tlBlock = (bunkTimelines[bk] || []).find(b =>
+                            b.startMin === pbSlot.startMin && b.endMin === pbSlot.endMin
+                        );
+                        const fallbacks = tlBlock?._sportFallbacks;
+                        if (!fallbacks || !fallbacks.length) return;
+
+                        // Try each sport in fallback order
+                        for (const sportName of fallbacks) {
+                            const fields = fbs2[sportName] || [];
+                            for (const fieldName of fields) {
+                                if (!isFieldFreeAtTime(fieldName, pbSlot.startMin, pbSlot.endMin)) continue;
+
+                                // Field is available — assign it
+                                window.scheduleAssignments[bk][idx] = {
+                                    field: fieldName, sport: sportName,
+                                    _activity: sportName, _fixed: false,
+                                    _bunkOverride: true, _autoMode: true,
+                                    _fallbackResolved: true, continuation: false
+                                };
+                                markFieldUsed(fieldName, pbSlot.startMin, pbSlot.endMin);
+                                fallbackFixed++;
+                                break; // done with this slot — move to next sport name search
+                            }
+                            // If we assigned, break out of sport loop too
+                            if (window.scheduleAssignments[bk][idx]?._fallbackResolved) break;
+                        }
+                    });
+                });
+                if (fallbackFixed > 0) log('[4] ✅ Fallback resolved ' + fallbackFixed + ' Free blocks');
             } catch (e) { err('[4] ' + e.message); console.error(e); warnings.push({ type: 'solver_error', message: e.message }); }
         } else { warn('[4] Solver not loaded'); }
 
