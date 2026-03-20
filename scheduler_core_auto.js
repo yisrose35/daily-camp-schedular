@@ -361,9 +361,9 @@
 
         // ── Cross-grade activity tracker ─────────────────────────────
         // Tracks what each grade is doing at each time to prevent contention.
-        // Key: time bucket (5-min rounded). Value: { league: [grades], swim: [grades], special: [grades], snack: [grades] }
+        // Key: time bucket (5-min rounded). Value: { league: [grades], swim: [grades], special: [grades], snack: [grades], 'special:Name': [grades] }
         const crossGradeTracker = {};
-        function registerCrossGrade(grade, type, startMin, endMin) {
+        function registerCrossGrade(grade, type, startMin, endMin, eventName) {
             const t = (type || '').toLowerCase();
             const trackTypes = ['league', 'swim', 'special', 'snacks', 'snack'];
             if (!trackTypes.includes(t)) return;
@@ -372,10 +372,18 @@
                 if (!crossGradeTracker[m]) crossGradeTracker[m] = {};
                 if (!crossGradeTracker[m][key]) crossGradeTracker[m][key] = [];
                 if (!crossGradeTracker[m][key].includes(grade)) crossGradeTracker[m][key].push(grade);
+                // Also track by specific event name for specials
+                if (t === 'special' && eventName) {
+                    const nameKey = 'special:' + eventName.toLowerCase();
+                    if (!crossGradeTracker[m][nameKey]) crossGradeTracker[m][nameKey] = [];
+                    if (!crossGradeTracker[m][nameKey].includes(grade)) crossGradeTracker[m][nameKey].push(grade);
+                }
             }
         }
-        function getCrossGradeConflicts(type, startMin, endMin, excludeGrade) {
-            const key = (type || '').toLowerCase();
+        function getCrossGradeConflicts(type, startMin, endMin, excludeGrade, eventName) {
+            const t = (type || '').toLowerCase();
+            // For specials: check the specific name if provided
+            const key = (t === 'special' && eventName) ? 'special:' + eventName.toLowerCase() : (t === 'snack' ? 'snacks' : t);
             let conflicts = 0;
             for (let m = startMin; m < endMin; m += 5) {
                 const bucket = crossGradeTracker[m];
@@ -1593,11 +1601,13 @@
 
                     const trackableType = ['swim', 'special', 'snacks', 'snack'].includes(need.type);
                     const isExclusive = need.type === 'swim'; // pool = one grade at a time
+                    // Specials with same_division sharing are also exclusive across different divisions
+                    const isSpecialExclusive = need.type === 'special' && need._assignedSpecial;
 
-                    // ★ For exclusive types (swim): scan EVERY 5-min position
+                    // ★ For exclusive types (swim) or specials: scan EVERY 5-min position
                     // For others: sparse scan (start, end, every 15min)
                     const candidateSet = new Set();
-                    if (isExclusive) {
+                    if (isExclusive || isSpecialExclusive) {
                         for (let t = gap.start; t <= endPos; t += 5) candidateSet.add(t);
                     } else {
                         candidateSet.add(gap.start);
@@ -1611,7 +1621,7 @@
                         // Pre-compute conflict scores for all candidates
                         candidates = candidates.map(t => ({
                             pos: t,
-                            conflicts: getCrossGradeConflicts(need.type, t, t + need.dMin, grade)
+                            conflicts: getCrossGradeConflicts(need.type, t, t + need.dMin, grade, need.event)
                         }));
                         candidates.sort((a, b) => {
                             if (a.conflicts !== b.conflicts) return a.conflicts - b.conflicts;
@@ -1661,7 +1671,7 @@
                 // ★ Register in cross-grade tracker so other grades avoid this time
                 if (didPlace) {
                     const lastPlaced = placed[placed.length - 1];
-                    registerCrossGrade(grade, need.type, lastPlaced.startMin, lastPlaced.endMin);
+                    registerCrossGrade(grade, need.type, lastPlaced.startMin, lastPlaced.endMin, need.event);
                 }
             }
 
@@ -2677,6 +2687,111 @@
                     });
                 });
                 if (fallbackFixed > 0) log('[4] ✅ Fallback resolved ' + fallbackFixed + ' Free blocks');
+
+                // ── Post-solver pass 2: Fix capacity + cross-division violations ──
+                let violationsFix = 0;
+
+                // Rebuild time-field counts after fallback sweep
+                const tfCount2 = {};
+                const tfBunks = {}; // time → field → [{bunk, idx, grade}]
+                Object.entries(window.scheduleAssignments).forEach(([bk, slots]) => {
+                    const g2 = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(bk)))?.[0];
+                    const pbs2 = g2 ? (window.divisionTimes?.[g2]?._perBunkSlots?.[bk] || []) : [];
+                    (slots || []).forEach((s2, i2) => {
+                        if (!s2 || !s2.field || s2.field === 'Free') return;
+                        const pb2 = pbs2[i2];
+                        if (!pb2) return;
+                        for (let t = pb2.startMin; t < pb2.endMin; t += 5) {
+                            if (!tfCount2[t]) { tfCount2[t] = {}; tfBunks[t] = {}; }
+                            tfCount2[t][s2.field] = (tfCount2[t][s2.field] || 0) + 1;
+                            if (!tfBunks[t][s2.field]) tfBunks[t][s2.field] = [];
+                            tfBunks[t][s2.field].push({ bunk: bk, idx: i2, grade: g2 });
+                        }
+                    });
+                });
+
+                // Find violations and fix them
+                const processedViolations = new Set(); // "bunk-idx" keys already reassigned
+                Object.entries(tfCount2).forEach(([timeStr, fieldCounts]) => {
+                    Object.entries(fieldCounts).forEach(([fieldName, count]) => {
+                        const cap = fieldCapacity[fieldName] || 1;
+                        if (count <= cap) return;
+
+                        // Get bunks using this field at this time
+                        const users = tfBunks[timeStr]?.[fieldName] || [];
+                        if (users.length <= cap) return;
+
+                        // Check cross-division sharing rules
+                        const fieldProps = builtAP[fieldName] || {};
+                        const shareType = fieldProps.sharableWith?.type || 'not_sharable';
+                        const grades = [...new Set(users.map(u => u.grade))];
+
+                        let toReassign = [];
+                        if (shareType === 'same_division' && grades.length > 1) {
+                            // Cross-division violation: keep the majority grade, reassign others
+                            const gradeCounts = {};
+                            users.forEach(u => { gradeCounts[u.grade] = (gradeCounts[u.grade] || 0) + 1; });
+                            const majorityGrade = Object.entries(gradeCounts).sort((a, b) => b[1] - a[1])[0][0];
+                            toReassign = users.filter(u => u.grade !== majorityGrade);
+                        }
+
+                        if (count > cap) {
+                            // Capacity violation: keep first `cap` users, reassign the rest
+                            const excess = users.slice(cap);
+                            excess.forEach(u => {
+                                if (!toReassign.some(r => r.bunk === u.bunk && r.idx === u.idx)) {
+                                    toReassign.push(u);
+                                }
+                            });
+                        }
+
+                        // Reassign each violator using fallback list
+                        toReassign.forEach(v => {
+                            const key = v.bunk + '-' + v.idx;
+                            if (processedViolations.has(key)) return;
+                            processedViolations.add(key);
+
+                            const pbSlot2 = (window.divisionTimes?.[v.grade]?._perBunkSlots?.[v.bunk] || [])[v.idx];
+                            if (!pbSlot2) return;
+
+                            const tlBlock2 = (bunkTimelines[v.bunk] || []).find(b =>
+                                b.startMin === pbSlot2.startMin && b.endMin === pbSlot2.endMin
+                            );
+                            const fallbacks2 = tlBlock2?._sportFallbacks || [];
+
+                            // Collect what this bunk already has today
+                            const bunkUsed2 = new Set();
+                            (window.scheduleAssignments[v.bunk] || []).forEach(s3 => {
+                                if (s3 && s3.sport) bunkUsed2.add(s3.sport.toLowerCase());
+                                if (s3 && s3._activity) bunkUsed2.add(s3._activity.toLowerCase());
+                            });
+
+                            let fixed = false;
+                            for (const sportName2 of fallbacks2) {
+                                if (bunkUsed2.has(sportName2.toLowerCase())) continue;
+                                const fields2 = fbs2[sportName2] || [];
+                                for (const fn2 of fields2) {
+                                    if (fn2 === fieldName) continue; // don't assign back to same field
+                                    if (!isFieldFreeAtTime(fn2, pbSlot2.startMin, pbSlot2.endMin)) continue;
+
+                                    window.scheduleAssignments[v.bunk][v.idx] = {
+                                        field: fn2, sport: sportName2,
+                                        _activity: sportName2, _fixed: false,
+                                        _bunkOverride: true, _autoMode: true,
+                                        _violationFixed: true, continuation: false
+                                    };
+                                    markFieldUsed(fn2, pbSlot2.startMin, pbSlot2.endMin);
+                                    bunkUsed2.add(sportName2.toLowerCase());
+                                    violationsFix++;
+                                    fixed = true;
+                                    break;
+                                }
+                                if (fixed) break;
+                            }
+                        });
+                    });
+                });
+                if (violationsFix > 0) log('[4] ✅ Violation fixer resolved ' + violationsFix + ' conflicts');
             } catch (e) { err('[4] ' + e.message); console.error(e); warnings.push({ type: 'solver_error', message: e.message }); }
         } else { warn('[4] Solver not loaded'); }
 
