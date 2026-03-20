@@ -1580,13 +1580,11 @@
             for (const gap of afterGaps) {
                 if (gap.size < sportC.dMin) continue; // absorbed in expand phase
 
-                // How many sport slots at dMin fit?
-                let numSlots = Math.floor(gap.size / sportC.dMin);
-                // Would that leave a dead-zone residual?
-                const leftover = gap.size - numSlots * sportC.dMin;
-                if (leftover > ABSORB_MAX && leftover < sportC.dMin && numSlots > 1) {
-                    numSlots--; // one fewer, perfectFit will expand the rest
-                }
+                // Minimum number of blocks needed to fill this gap
+                // (each block can be up to dMax, so ceil(gap/dMax) gives the fewest blocks)
+                let numSlots = Math.ceil(gap.size / sportC.dMax);
+                // Verify all blocks can be at least dMin
+                if (numSlots * sportC.dMin > gap.size) numSlots = Math.max(1, numSlots - 1);
 
                 let cursor = gap.start;
                 for (let s = 0; s < numSlots; s++) {
@@ -1669,7 +1667,7 @@
                 if (flexBlocks.length === 0) {
                     // Empty flex region — create sport fillers
                     if (rSize >= sportC.dMin) {
-                        let numF = Math.max(1, Math.round(rSize / ((sportC.dMin + sportC.dMax) / 2)));
+                        let numF = Math.max(1, Math.ceil(rSize / sportC.dMax));
                         while (numF > 0 && numF * sportC.dMin > rSize) numF--;
                         if (numF === 0 && rSize >= sportC.dMin) numF = 1;
 
