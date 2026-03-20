@@ -394,6 +394,43 @@
         }
         function resetCrossGradeTracker() {
             Object.keys(crossGradeTracker).forEach(k => delete crossGradeTracker[k]);
+            Object.keys(specialUsageTracker).forEach(k => delete specialUsageTracker[k]);
+        }
+
+        // ── Special capacity tracker ─────────────────────────────────
+        // Tracks per-special, per-5min-bucket: { count, grades: Set }
+        // Used by greedyPackBunk to enforce capacity + cross-division rules.
+        const specialUsageTracker = {};
+        function registerSpecialUsage(specialName, grade, startMin, endMin) {
+            const key = (specialName || '').toLowerCase();
+            if (!key) return;
+            for (let m = startMin; m < endMin; m += 5) {
+                if (!specialUsageTracker[m]) specialUsageTracker[m] = {};
+                if (!specialUsageTracker[m][key]) specialUsageTracker[m][key] = { count: 0, grades: new Set() };
+                specialUsageTracker[m][key].count++;
+                specialUsageTracker[m][key].grades.add(grade);
+            }
+        }
+        function canUseSpecialAtTime(specialName, grade, startMin, endMin) {
+            const key = (specialName || '').toLowerCase();
+            if (!key) return true;
+            const props = activityProperties[specialName] || {};
+            const shareType = props.sharableWith?.type || 'not_sharable';
+            const cap = props.sharableWith?.capacity || 1;
+
+            for (let m = startMin; m < endMin; m += 5) {
+                const bucket = specialUsageTracker[m]?.[key];
+                if (!bucket) continue;
+
+                // Capacity check
+                if (bucket.count >= cap) return false;
+
+                // Cross-division check for same_division specials
+                if (shareType === 'same_division' && bucket.grades.size > 0) {
+                    if (!bucket.grades.has(grade)) return false; // different division already using it
+                }
+            }
+            return true;
         }
 
         // =====================================================================
@@ -1639,6 +1676,11 @@
                         if (beforeRes > ABSORB_MAX && beforeRes < minFill) continue;
                         if (afterRes > ABSORB_MAX && afterRes < minFill) continue;
 
+                        // ★ Special capacity + cross-division check
+                        if (need.type === 'special' && need._assignedSpecial) {
+                            if (!canUseSpecialAtTime(need._assignedSpecial, grade, pos, pos + need.dMin)) continue;
+                        }
+
                         // Future viability: can remaining needs still fit?
                         const tempBlock = {
                             startMin: pos, endMin: pos + need.dMin,
@@ -1659,19 +1701,31 @@
                 // Fallback: place at best available position even without perfect viability
                 if (!didPlace) {
                     for (const gap of validGaps) {
-                        placed.push({
-                            startMin: gap.start, endMin: gap.start + need.dMin,
-                            ...need, _final: true
-                        });
-                        didPlace = true;
-                        break;
+                        const endPos2 = gap.end - need.dMin;
+                        // For specials, still try to respect capacity even in fallback
+                        if (need.type === 'special' && need._assignedSpecial) {
+                            let foundFallback = false;
+                            for (let t = gap.start; t <= endPos2; t += 5) {
+                                if (canUseSpecialAtTime(need._assignedSpecial, grade, t, t + need.dMin)) {
+                                    placed.push({ startMin: t, endMin: t + need.dMin, ...need, _final: true });
+                                    didPlace = true; foundFallback = true; break;
+                                }
+                            }
+                            if (foundFallback) break;
+                        } else {
+                            placed.push({ startMin: gap.start, endMin: gap.start + need.dMin, ...need, _final: true });
+                            didPlace = true; break;
+                        }
                     }
                 }
 
-                // ★ Register in cross-grade tracker so other grades avoid this time
+                // ★ Register in cross-grade tracker AND special capacity tracker
                 if (didPlace) {
                     const lastPlaced = placed[placed.length - 1];
                     registerCrossGrade(grade, need.type, lastPlaced.startMin, lastPlaced.endMin, need.event);
+                    if (need.type === 'special' && need._assignedSpecial) {
+                        registerSpecialUsage(need._assignedSpecial, grade, lastPlaced.startMin, lastPlaced.endMin);
+                    }
                 }
             }
 
