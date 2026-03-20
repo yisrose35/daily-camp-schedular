@@ -1584,11 +1584,22 @@
                     }))
                     .filter(g => g.end - g.start >= need.dMin)
                     .map(g => {
-                        // Score: cross-grade conflicts at this time × 1000, minus gap size (prefer larger)
+                        // ★ Type-specific penalties:
+                        // SWIM: pool holds ONE grade at a time → any overlap = hard block
+                        // SPECIAL: locations are limited → 2+ grades = heavy penalty
+                        // SNACK: mild spread preference
                         const conflicts = trackableType
                             ? getCrossGradeConflicts(need.type, g.start, g.start + need.dMin, grade)
                             : 0;
-                        return { ...g, _conflicts: conflicts, _score: conflicts * 1000 - (g.end - g.start) };
+                        let penalty = 0;
+                        if (need.type === 'swim') {
+                            penalty = conflicts > 0 ? conflicts * 50000 : 0; // hard block
+                        } else if (need.type === 'special') {
+                            penalty = conflicts <= 1 ? conflicts * 200 : conflicts * 3000;
+                        } else {
+                            penalty = conflicts <= 1 ? conflicts * 50 : conflicts * 1000;
+                        }
+                        return { ...g, _conflicts: conflicts, _score: penalty - (g.end - g.start) };
                     })
                     .sort((a, b) => a._score - b._score); // least conflicts first, then largest
 
