@@ -1477,7 +1477,7 @@
         // After packing, expand all flex blocks to fill regions exactly.
         // =====================================================================
 
-        function greedyPackBunk(bunk, grade, draftResult, shoppingList, staggerOffset) {
+        function greedyPackBunk(bunk, grade, draftResult, shoppingList, staggerOffset, swimsToday) {
             const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
             const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
             const sportC = shoppingList.sports?.constraints || resolveConstraints(null, 'sport');
@@ -1498,9 +1498,9 @@
             // Sorted most-constrained first: fixed-dur → tight-window → flex
             const needs = [];
 
-            // Swim (fixed duration, wide window)
+            // Swim (fixed duration, wide window) — only if this bunk swims today
             const swimLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'swim');
-            if (swimLayer && !walls.some(w => (w.type || '').toLowerCase() === 'swim')) {
+            if (swimLayer && swimsToday !== false && !walls.some(w => (w.type || '').toLowerCase() === 'swim')) {
                 const c = resolveConstraints(swimLayer, 'swim');
                 needs.push({
                     type: 'swim', event: swimLayer.event || 'Swim', layer: swimLayer,
@@ -2173,6 +2173,95 @@
         });
 
         // =====================================================================
+        // SWIM ROTATION SYSTEM
+        // Not every bunk swims every day. The swim layer config has:
+        //   bunksPerDay: how many bunks swim each day (default: all)
+        //   timesPerWeek: target swims per bunk per week (default: 5)
+        // History tracks which bunks swam which days, persisted via cloud sync.
+        // =====================================================================
+
+        const swimHistory = {};
+        function loadSwimHistory() {
+            try {
+                const gs = window.loadGlobalSettings?.() || {};
+                const stored = gs.swimRotationHistory || gs.app1?.swimRotationHistory;
+                if (stored) Object.assign(swimHistory, stored);
+                // Also try localStorage
+                const ls = localStorage.getItem('campistry_swimRotationHistory');
+                if (ls && !stored) Object.assign(swimHistory, JSON.parse(ls));
+            } catch (e) { /* ignore */ }
+        }
+        function saveSwimHistory() {
+            try {
+                const gs = window.loadGlobalSettings?.() || {};
+                if (gs.app1) gs.app1.swimRotationHistory = swimHistory;
+                else if (gs) gs.swimRotationHistory = swimHistory;
+                localStorage.setItem('campistry_swimRotationHistory', JSON.stringify(swimHistory));
+                if (window.IntegrationHooks?.queueChange) {
+                    window.IntegrationHooks.queueChange('swimRotationHistory', swimHistory);
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        function getSwimmersForToday(grade, allBunks, swimLayer, seed) {
+            // Read config from: dedicated config → layer properties → defaults
+            const gs = window.loadGlobalSettings?.() || {};
+            const dedicatedConfig = gs.swimRotationConfig?.[grade] ||
+                JSON.parse(localStorage.getItem('campistry_swimRotationConfig') || '{}')?.[grade];
+            
+            const bunksPerDay = dedicatedConfig?.bunksPerDay || swimLayer.bunksPerDay || swimLayer._bunksPerDay || allBunks.length;
+            const timesPerWeek = dedicatedConfig?.timesPerWeek || swimLayer.timesPerWeek || swimLayer._timesPerWeek || 5;
+
+            // If bunksPerDay >= total bunks, everyone swims
+            if (bunksPerDay >= allBunks.length) return allBunks;
+
+            // Get this week's Monday
+            const weekStart = getMondayOfWeek(currentDate, 0);
+
+            // Count swims this week per bunk
+            const weekCounts = {};
+            allBunks.forEach(b => { weekCounts[String(b)] = 0; });
+
+            const gradeHistory = swimHistory[grade] || {};
+            Object.entries(gradeHistory).forEach(([dateStr, bunksArr]) => {
+                if (dateStr >= weekStart && dateStr < currentDate) {
+                    (bunksArr || []).forEach(b => {
+                        if (weekCounts[String(b)] !== undefined) weekCounts[String(b)]++;
+                    });
+                }
+            });
+
+            // Sort bunks: fewest swims first, break ties with seeded shuffle
+            const sorted = [...allBunks].map(b => ({
+                bunk: b,
+                count: weekCounts[String(b)] || 0,
+                rand: ((seed * 2654435761 + parseInt(String(b).replace(/\D/g, '')) * 1597) >>> 0) % 10000
+            }));
+            sorted.sort((a, b) => {
+                if (a.count !== b.count) return a.count - b.count; // fewest swims first
+                return a.rand - b.rand; // random among ties
+            });
+
+            // Pick the top N
+            const selected = sorted.slice(0, bunksPerDay).map(s => s.bunk);
+
+            // Record today's swimmers in history
+            if (!swimHistory[grade]) swimHistory[grade] = {};
+            swimHistory[grade][currentDate] = selected.map(String);
+
+            if (totalIters < 1) {
+                log('[SWIM-ROT] ' + grade + ': ' + selected.length + '/' + allBunks.length +
+                    ' bunks swim today (target: ' + timesPerWeek + 'x/week)' +
+                    ' — bunks: ' + selected.join(','));
+            }
+
+            return selected;
+        }
+
+        // Load swim history at startup
+        loadSwimHistory();
+
+        // =====================================================================
         // STAGGER PLANNER — ensures different grades do different things
         // at the same time. Prevents field/pool/location contention.
         // =====================================================================
@@ -2302,13 +2391,28 @@
         const staggeredGrades = [...allGrades].sort((a, b) =>
             ((staggerPlan[a] || {}).offset || 0) - ((staggerPlan[b] || {}).offset || 0)
         );
+
+        // ★ Compute which bunks swim today per grade (swim rotation)
+        const todaysSwimmers = {};
+        staggeredGrades.forEach(grade => {
+            const swimLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'swim');
+            if (swimLayer) {
+                const allBunks = getBunksForGrade(grade, divisions);
+                todaysSwimmers[grade] = new Set(
+                    getSwimmersForToday(grade, allBunks, swimLayer, _iterSeed).map(String)
+                );
+            }
+        });
+
         staggeredGrades.forEach(grade => {
             getBunksForGrade(grade, divisions).forEach(bunk => {
+                const swimsToday = todaysSwimmers[grade] ? todaysSwimmers[grade].has(String(bunk)) : true;
                 allTemplates[bunk] = greedyPackBunk(
                     bunk, grade,
                     draftResults[bunk] || { sports: [], specials: [], elective: [], generic: [], usedActivities: new Set() },
                     shoppingLists[bunk],
-                    (staggerPlan[grade] || { offset: 0 }).offset
+                    (staggerPlan[grade] || { offset: 0 }).offset,
+                    swimsToday
                 );
             });
         });
@@ -2852,6 +2956,7 @@
         // =====================================================================
         // STEP 5 — SAVE
         // =====================================================================
+        saveSwimHistory();
         log('\n[STEP 5] Saving...');
         if (window.saveCurrentDailyData) {
             try {
