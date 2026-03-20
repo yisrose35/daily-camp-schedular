@@ -1557,30 +1557,6 @@ function showDAWPopover(bandEl, layer, grade, opts) {
     const weekQtyVal = weekQtyRaw !== '' ? Math.max(1, Math.min(7, parseInt(weekQtyRaw) || 1)) : null;
     layer.timesPerWeek = weekQtyVal;
     layer.weeklyOp = weekQtyVal != null && activeWop ? activeWop.dataset.wop : '>=';
-```
-
-That's both patches. Summary of what changed in `master_schedule_builder.js`:
-
-**Patch 1 (popover HTML):** Removed the swim-only `if` gate. Added "Rotation" section header with "Bunks / Day" and "Times / Week" fields for ALL layer types, with help text under each field.
-
-**Patch 2 (save handler):** Removed the `if (layer.type === 'swim')` gate. Now saves `bunksPerDay`, `timesPerWeek`, and `weeklyOp` for every layer type.
-
-Apply both patches, deploy, and the popover for every layer will show:
-```
-Time Window        [11:00am] → [2:30pm]
-Activity Duration  [30] to [50] min
-Quantity           [≥] [1]
-───────────────────────────────
-ROTATION
-Leave blank for no limits
-
-Bunks / Day        [4] per grade
-  How many bunks do this activity each day...
-
-Times / Week       [≥] [2] days/wk
-  Target days per week each bunk gets this...
-
-[Save] [Delete] [Close]
 
     onSave();
     onRender();
