@@ -2585,8 +2585,18 @@
                 let fallbackFixed = 0;
                 const fbs2 = window.fieldsBySport || fbs;
 
-                // Build time-based field usage map from ALL scheduleAssignments
-                const timeFieldUsage = {}; // timeKey → Set of field names
+                // Build capacity lookup from activityProperties
+                // Fields have sharableWith.capacity (default 1 if not sharable)
+                const fieldCapacity = {};
+                Object.entries(builtAP).forEach(([name, props]) => {
+                    if (props.sharableWith && props.sharableWith.capacity) {
+                        fieldCapacity[name] = props.sharableWith.capacity;
+                    }
+                });
+
+                // Build time-based field usage COUNTS from ALL scheduleAssignments
+                // timeKey → { fieldName: count }
+                const timeFieldCount = {};
                 Object.entries(window.scheduleAssignments).forEach(([bk, slots]) => {
                     const g = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(bk)))?.[0];
                     const pbsArr = g ? (window.divisionTimes?.[g]?._perBunkSlots?.[bk] || []) : [];
@@ -2594,25 +2604,26 @@
                         if (!s || s.field === 'Free' || !s.field) return;
                         const pbSlot = pbsArr[i];
                         if (!pbSlot) return;
-                        // Mark every 5-min bucket as occupied by this field
                         for (let t = pbSlot.startMin; t < pbSlot.endMin; t += 5) {
-                            if (!timeFieldUsage[t]) timeFieldUsage[t] = new Set();
-                            timeFieldUsage[t].add(s.field);
+                            if (!timeFieldCount[t]) timeFieldCount[t] = {};
+                            timeFieldCount[t][s.field] = (timeFieldCount[t][s.field] || 0) + 1;
                         }
                     });
                 });
 
                 function isFieldFreeAtTime(fieldName, startMin, endMin) {
+                    const cap = fieldCapacity[fieldName] || 1;
                     for (let t = startMin; t < endMin; t += 5) {
-                        if (timeFieldUsage[t] && timeFieldUsage[t].has(fieldName)) return false;
+                        const count = timeFieldCount[t]?.[fieldName] || 0;
+                        if (count >= cap) return false;
                     }
                     return true;
                 }
 
                 function markFieldUsed(fieldName, startMin, endMin) {
                     for (let t = startMin; t < endMin; t += 5) {
-                        if (!timeFieldUsage[t]) timeFieldUsage[t] = new Set();
-                        timeFieldUsage[t].add(fieldName);
+                        if (!timeFieldCount[t]) timeFieldCount[t] = {};
+                        timeFieldCount[t][fieldName] = (timeFieldCount[t][fieldName] || 0) + 1;
                     }
                 }
 
