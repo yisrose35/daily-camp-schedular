@@ -1492,16 +1492,26 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       <button class="ms-daw-pop-op ${layer.op === '<=' ? 'active' : ''}" data-op="<=">≤</button>
       <input type="number" id="daw-pop-qty" value="${layer.qty}" min="1" max="10" style="width:50px;">
     </div>
-   ${layer.type === 'swim' ? `
-    <label>Max Per Bunk Per Week</label>
+  <div style="border-top:1px solid #e5e7eb;margin:10px 0 8px;"></div>
+    <label style="font-size:11px;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:0.05em;">Rotation</label>
+    <span style="font-size:9px;color:#94a3b8;display:block;margin:-2px 0 6px;">Leave blank for no limits</span>
+
+    <label>Bunks / Day</label>
+    <div class="ms-daw-pop-row">
+      <input type="number" id="daw-pop-bpd" value="${layer.bunksPerDay != null ? layer.bunksPerDay : ''}" min="1" max="99" style="width:50px;" placeholder="All">
+      <span style="font-size:10px;color:#94a3b8;">per grade</span>
+    </div>
+    <span style="font-size:9px;color:#94a3b8;display:block;margin:-4px 0 6px;">How many bunks do this activity each day. Others get it on a different day.</span>
+
+    <label>Times / Week</label>
     <div class="ms-daw-pop-row">
       <button class="ms-daw-pop-op ms-daw-wop ${(layer.weeklyOp || '>=') === '>=' ? 'active' : ''}" data-wop=">=">≥</button>
       <button class="ms-daw-pop-op ms-daw-wop ${layer.weeklyOp === '=' ? 'active' : ''}" data-wop="=">=</button>
       <button class="ms-daw-pop-op ms-daw-wop ${layer.weeklyOp === '<=' ? 'active' : ''}" data-wop="<=">≤</button>
       <input type="number" id="daw-pop-week-qty" value="${layer.timesPerWeek != null ? layer.timesPerWeek : ''}" min="1" max="7" style="width:50px;" placeholder="Any">
       <span style="font-size:10px;color:#94a3b8;">days/wk</span>
-    </div>` : ''}
-    <div class="ms-daw-pop-actions">      <button class="ms-daw-pop-btn ms-daw-pop-btn-save">Save</button>
+    </div>
+    <span style="font-size:9px;color:#94a3b8;display:block;margin:-4px 0 6px;">Target days per week each bunk gets this. System picks bunks that need it most.</span>    <div class="ms-daw-pop-actions">      <button class="ms-daw-pop-btn ms-daw-pop-btn-save">Save</button>
       <button class="ms-daw-pop-btn ms-daw-pop-btn-del">Delete</button>
       <button class="ms-daw-pop-btn ms-daw-pop-btn-cancel">Close</button>
     </div>
@@ -1538,17 +1548,39 @@ function showDAWPopover(bandEl, layer, grade, opts) {
     const activeOp = popover.querySelector('.ms-daw-pop-op[data-op].active');
     if (activeOp) layer.op = activeOp.dataset.op;
 
-    // Swim-only: Max Per Bunk Per Week
-    if (layer.type === 'swim') {
-      const activeWop = popover.querySelector('.ms-daw-wop[data-wop].active');
-      const weekQtyRaw = (popover.querySelector('#daw-pop-week-qty')?.value || '').trim();
-      const weekQtyVal = weekQtyRaw !== '' ? Math.max(1, Math.min(7, parseInt(weekQtyRaw) || 1)) : null;
-      layer.timesPerWeek = weekQtyVal;
-      layer.weeklyOp = weekQtyVal != null && activeWop ? activeWop.dataset.wop : '>=';
-    } else {
-      delete layer.timesPerWeek;
-      delete layer.weeklyOp;
-    }
+   // Rotation: Bunks Per Day + Times Per Week (all layer types)
+    const bpdRaw = (popover.querySelector('#daw-pop-bpd')?.value || '').trim();
+    layer.bunksPerDay = bpdRaw !== '' ? Math.max(1, parseInt(bpdRaw) || 1) : null;
+
+    const activeWop = popover.querySelector('.ms-daw-wop[data-wop].active');
+    const weekQtyRaw = (popover.querySelector('#daw-pop-week-qty')?.value || '').trim();
+    const weekQtyVal = weekQtyRaw !== '' ? Math.max(1, Math.min(7, parseInt(weekQtyRaw) || 1)) : null;
+    layer.timesPerWeek = weekQtyVal;
+    layer.weeklyOp = weekQtyVal != null && activeWop ? activeWop.dataset.wop : '>=';
+```
+
+That's both patches. Summary of what changed in `master_schedule_builder.js`:
+
+**Patch 1 (popover HTML):** Removed the swim-only `if` gate. Added "Rotation" section header with "Bunks / Day" and "Times / Week" fields for ALL layer types, with help text under each field.
+
+**Patch 2 (save handler):** Removed the `if (layer.type === 'swim')` gate. Now saves `bunksPerDay`, `timesPerWeek`, and `weeklyOp` for every layer type.
+
+Apply both patches, deploy, and the popover for every layer will show:
+```
+Time Window        [11:00am] → [2:30pm]
+Activity Duration  [30] to [50] min
+Quantity           [≥] [1]
+───────────────────────────────
+ROTATION
+Leave blank for no limits
+
+Bunks / Day        [4] per grade
+  How many bunks do this activity each day...
+
+Times / Week       [≥] [2] days/wk
+  Target days per week each bunk gets this...
+
+[Save] [Delete] [Close]
 
     onSave();
     onRender();
