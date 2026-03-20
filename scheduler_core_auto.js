@@ -1583,37 +1583,46 @@
                         origStart: g.start, origEnd: g.end
                     }))
                     .filter(g => g.end - g.start >= need.dMin)
-                    .map(g => {
-                        // ★ Type-specific penalties:
-                        // SWIM: pool holds ONE grade at a time → any overlap = hard block
-                        // SPECIAL: locations are limited → 2+ grades = heavy penalty
-                        // SNACK: mild spread preference
-                        const conflicts = trackableType
-                            ? getCrossGradeConflicts(need.type, g.start, g.start + need.dMin, grade)
-                            : 0;
-                        let penalty = 0;
-                        if (need.type === 'swim') {
-                            penalty = conflicts > 0 ? conflicts * 50000 : 0; // hard block
-                        } else if (need.type === 'special') {
-                            penalty = conflicts <= 1 ? conflicts * 200 : conflicts * 3000;
-                        } else {
-                            penalty = conflicts <= 1 ? conflicts * 50 : conflicts * 1000;
-                        }
-                        return { ...g, _conflicts: conflicts, _score: penalty - (g.end - g.start) };
-                    })
-                    .sort((a, b) => a._score - b._score); // least conflicts first, then largest
+                    // Sort by size only — conflict avoidance happens at position level
+                    .sort((a, b) => (b.end - b.start) - (a.end - a.start));
 
                 let didPlace = false;
                 for (const gap of validGaps) {
-                    // ★ STAGGER: alternate gap position preference
-                    const startPos = gap.start;
                     const endPos = gap.end - need.dMin;
-                    const candidates = (staggerOffset % 2 === 0)
-                        ? [startPos, endPos].filter(p => p >= gap.start)
-                        : [endPos, startPos].filter(p => p >= gap.start);
-                    const uniqueCandidates = [...new Set(candidates)];
+                    if (endPos < gap.start) continue;
 
-                    for (const pos of uniqueCandidates) {
+                    const trackableType = ['swim', 'special', 'snacks', 'snack'].includes(need.type);
+                    const isExclusive = need.type === 'swim'; // pool = one grade at a time
+
+                    // ★ For exclusive types (swim): scan EVERY 5-min position
+                    // For others: sparse scan (start, end, every 15min)
+                    const candidateSet = new Set();
+                    if (isExclusive) {
+                        for (let t = gap.start; t <= endPos; t += 5) candidateSet.add(t);
+                    } else {
+                        candidateSet.add(gap.start);
+                        if (endPos > gap.start) candidateSet.add(endPos);
+                        for (let t = gap.start; t <= endPos; t += 15) candidateSet.add(t);
+                    }
+
+                    // Sort: least cross-grade conflicts first, then stagger preference
+                    let candidates = [...candidateSet];
+                    if (trackableType) {
+                        // Pre-compute conflict scores for all candidates
+                        candidates = candidates.map(t => ({
+                            pos: t,
+                            conflicts: getCrossGradeConflicts(need.type, t, t + need.dMin, grade)
+                        }));
+                        candidates.sort((a, b) => {
+                            if (a.conflicts !== b.conflicts) return a.conflicts - b.conflicts;
+                            return (staggerOffset % 2 === 0) ? (a.pos - b.pos) : (b.pos - a.pos);
+                        });
+                        candidates = candidates.map(c => c.pos);
+                    } else {
+                        candidates.sort((a, b) => (staggerOffset % 2 === 0) ? (a - b) : (b - a));
+                    }
+
+                    for (const pos of candidates) {
                         // Residual check: before and after must be 0, absorbable, or fillable
                         const beforeRes = pos - gap.origStart;
                         const afterRes = gap.origEnd - (pos + need.dMin);
