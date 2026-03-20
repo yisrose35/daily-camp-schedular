@@ -515,6 +515,9 @@ function renderBand(layer, dayStart, stackIdx, maxStack) {
   var weeklyBadgeHtml = (layer.timesPerWeek != null)
     ? '<span class="al-band-week-badge">' + (layer.weeklyOp || '\u2265') + layer.timesPerWeek + 'x/wk</span>'
     : '';
+  var bpdBadgeHtml = (layer.bunksPerDay != null)
+    ? '<span class="al-band-week-badge" style="background:rgba(6,182,212,0.15);color:#164e63;border-color:rgba(6,182,212,0.3);">' + layer.bunksPerDay + '/day</span>'
+    : '';
 
   return '<div class="al-band' + selClass + '" data-layer-id="' + layer.id + '" style="left:' + left + 'px;width:' + width + 'px;top:' + topCss + ';height:' + heightCss + ';background:' + color.bg + ';border:2px ' + borderStyle + ' ' + color.border + ';color:' + color.text + ';">' +
     '<div class="al-band-resize al-band-resize-left"></div>' +
@@ -523,6 +526,7 @@ function renderBand(layer, dayStart, stackIdx, maxStack) {
     '<span class="al-band-dur">' + durText + '</span>' +
     '<span class="al-band-badge">' + badge + '</span>' +
     weeklyBadgeHtml +
+    bpdBadgeHtml +
     '<span class="al-band-time">' + timeText + '</span>' +
     '<div class="al-band-resize al-band-resize-right"></div>' +
     '</div>';
@@ -583,7 +587,8 @@ function setupDropZones(dayStart) {
         grade: grade,
         pinExact: tile.fixed || false,
         timesPerWeek: null,   // null = "every active day" (unconstrained)
-        weeklyOp: '\u2265'    // ≥ by default
+        weeklyOp: '\u2265',   // ≥ by default
+        bunksPerDay: null     // null = all bunks swim (no rotation limit)
       });
       hasChanges = true; selectedLayerId = layers[layers.length - 1].id;
       saveDraftLayers(); render();
@@ -770,7 +775,14 @@ function openPopover(layerId, bandEl) {
     (isPinned ? '<div style="font-size:10px;color:#92400e;background:#fffbeb;border-radius:6px;padding:6px 10px;margin:0 0 8px 78px;">\u26A0\uFE0F Must occur at exactly <b>' + fmtTime(layer.startMin) + '\u2013' + fmtTime(layer.endMin) + '</b></div>' : '') +
     (layer.type === 'swim' ?
       '<div class="al-popover-divider"></div>' +
-      '<div class="al-popover-section-title">Max Per Bunk Per Week</div>' +
+      '<div class="al-popover-section-title">Swim Rotation</div>' +
+      '<div class="al-popover-row">' +
+        '<label>Bunks/Day</label>' +
+        '<input type="number" class="al-pop-input al-pop-qty" id="al-pop-bpd"' +
+          ' value="' + (layer.bunksPerDay != null ? layer.bunksPerDay : '') + '"' +
+          ' min="1" max="99" placeholder="All">' +
+        '<span style="font-size:10px;color:#94a3b8;margin-left:4px;">per grade<br><span style="color:#64748b;">blank&nbsp;=&nbsp;all&nbsp;bunks</span></span>' +
+      '</div>' +
       '<div class="al-popover-row">' +
         '<label>Per Week</label>' +
         '<div class="al-pop-ops">' +
@@ -832,12 +844,15 @@ function openPopover(layerId, bandEl) {
     layer.quantity = qVal;
     layer.operator = opVal;
     layer.pinExact = pinned;
-   if (layer.type === 'swim') {
+  if (layer.type === 'swim') {
       layer.timesPerWeek = weekQtyVal;
       layer.weeklyOp = weekQtyVal != null ? wopVal : '\u2265';
+      var bpdRaw = popoverEl.querySelector('#al-pop-bpd') ? popoverEl.querySelector('#al-pop-bpd').value.trim() : '';
+      layer.bunksPerDay = bpdRaw !== '' ? Math.max(1, parseInt(bpdRaw) || 1) : null;
     } else {
       delete layer.timesPerWeek;
       delete layer.weeklyOp;
+      delete layer.bunksPerDay;
     }
     hasChanges = true; saveDraftLayers(); closePopover(); render();  };
 }
