@@ -601,3 +601,13 @@
     color: #6366f1;
     padding: 0 0 4px 0;
 }
+.al-popover-hint {
+    font-size: 10px;
+    color: #94a3b8;
+    line-height: 1.4;
+    margin: -4px 0 8px 78px;
+    padding: 0;
+}
+.al-popover-hint b {
+    color: #64748b;
+}
