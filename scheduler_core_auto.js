@@ -357,6 +357,7 @@
         const bunkSpecialAssigned = {};
         const specialCapacityTracker = {};
         const sharedLeagueTime = {};
+        let staggerPlan = {};
 
         // =====================================================================
         // CEL — CONSTRAINT ENFORCEMENT LAYER
@@ -857,7 +858,16 @@
             }
 
             let bestStart = null, bestScore = Infinity;
-            for (let ts = layer.startMin; ts + dur <= layer.endMin; ts += 5) {
+            // ★ STAGGER: alternate search direction so different grades
+            // find different time slots. Even offset → search early→late,
+            // odd offset → search late→early.
+            const gradeStagger = staggerPlan[grade] || { offset: 0, searchDirection: 'early' };
+            const searchReverse = gradeStagger.searchDirection === 'late';
+            const times = [];
+            for (let ts = layer.startMin; ts + dur <= layer.endMin; ts += 5) times.push(ts);
+            if (searchReverse) times.reverse();
+
+            for (const ts of times) {
                 const te = ts + dur;
                 if (!bunks.every(bk => !(bunkTimelines[bk] || []).some(b => b.startMin < te && b.endMin > ts))) continue;
                 const score = scorePositionByContention(ts, te, 'league', null, null);
@@ -1389,7 +1399,7 @@
         // After packing, expand all flex blocks to fill regions exactly.
         // =====================================================================
 
-        function greedyPackBunk(bunk, grade, draftResult, shoppingList) {
+        function greedyPackBunk(bunk, grade, draftResult, shoppingList, staggerOffset) {
             const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
             const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
             const sportC = shoppingList.sports?.constraints || resolveConstraints(null, 'sport');
@@ -1472,6 +1482,20 @@
                 return aFlex - bFlex;
             });
 
+            // ★ STAGGER: Rotate flex needs by grade offset so different grades
+            // place swim/special/snack at different positions in the day.
+            // Fixed-duration blocks stay first (they're most constrained).
+            if (staggerOffset > 0 && needs.length > 1) {
+                const fixedPart = needs.filter(n => n.dMin === n.dMax);
+                const flexPart = needs.filter(n => n.dMin !== n.dMax);
+                if (flexPart.length > 1) {
+                    const rot = staggerOffset % flexPart.length;
+                    const rotated = [...flexPart.slice(rot), ...flexPart.slice(0, rot)];
+                    needs.length = 0;
+                    needs.push(...fixedPart, ...rotated);
+                }
+            }
+
             // ── Helpers ───────────────────────────────────────────────────
             function getGaps(blockList) {
                 const sorted = [...blockList].sort((a, b) => a.startMin - b.startMin);
@@ -1528,12 +1552,18 @@
 
                 let didPlace = false;
                 for (const gap of validGaps) {
-                    // Candidates: start of gap, end of gap (butting against walls)
-                    const candidates = [gap.start];
+                    // ★ STAGGER: alternate gap position preference
+                    // Even offset → prefer start of gap (early in day)
+                    // Odd offset → prefer end of gap (later in day)
+                    const startPos = gap.start;
                     const endPos = gap.end - need.dMin;
-                    if (endPos > gap.start) candidates.push(endPos);
+                    const candidates = (staggerOffset % 2 === 0)
+                        ? [startPos, endPos].filter(p => p >= gap.start)
+                        : [endPos, startPos].filter(p => p >= gap.start);
+                    // Deduplicate
+                    const uniqueCandidates = [...new Set(candidates)];
 
-                    for (const pos of candidates) {
+                    for (const pos of uniqueCandidates) {
                         // Residual check: before and after must be 0, absorbable, or fillable
                         const beforeRes = pos - gap.origStart;
                         const afterRes = gap.origEnd - (pos + need.dMin);
@@ -1978,7 +2008,40 @@
             specialCapacityTracker[s.name] = { total: getSpecialCapacity(s.name, activityProperties, globalSettings), assignments: [] };
         });
 
+        // =====================================================================
+        // STAGGER PLANNER — ensures different grades do different things
+        // at the same time. Prevents field/pool/location contention.
+        // =====================================================================
+        function buildStaggerPlan(grades, seed) {
+            // Shuffle grades into a random order using seed
+            const shuffled = [...grades];
+            for (let i = shuffled.length - 1; i > 0; i--) {
+                const j = ((seed * 2654435761 + i * 1597) >>> 0) % (i + 1);
+                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+            }
+            // Assign each grade a stagger offset (0, 1, 2, ...)
+            const plan = {};
+            shuffled.forEach((grade, idx) => {
+                plan[grade] = {
+                    offset: idx,
+                    // Which fraction of the day this grade prefers for each type
+                    // Offset 0 → leagues early, swim mid, special late
+                    // Offset 1 → swim early, special mid, leagues late
+                    // etc. — rotated by offset
+                    searchDirection: idx % 2 === 0 ? 'early' : 'late'
+                };
+            });
+            return plan;
+        }
+
         do { // ← ITERATION LOOP
+
+        // Build stagger plan for this iteration
+        staggerPlan = buildStaggerPlan(allGrades, _iterSeed);
+        if (totalIters < 1) {
+            const order = allGrades.map(g => g.replace(' Grade', '') + '=' + (staggerPlan[g] || {}).offset).join(', ');
+            log('[STAGGER] ' + order);
+        }
 
         // ── Phase 0: Place all pinned + grade-wide + swim ────────────
         allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = []; bunkSpecialAssigned[bunk] = {}; }));
@@ -1990,21 +2053,43 @@
         buildResourceCalendar(_iterSeed);
 
         // 0c. Non-pinned layers that need early placement
-        // ★ EVERY non-pinned, non-grade-wide layer gets placed as a SOFT ANCHOR.
-        //   DAP can shift it within its window to eliminate dead space.
-        //   Only leagues and full-grade activities are truly fixed (grade-wide).
+        // ★ STAGGERED: Leagues placed in stagger order so different grades
+        //   get different time slots. Other layers go to greedy packer.
+
+        // Collect and sort league layers by stagger offset
+        const leagueLayers = [];
+        const otherNonPinned = [];
         nonPinnedLayers.forEach(layer => {
             const grade = layer.grade || layer.division;
             if (!grade || (allowedSet && !allowedSet.has(String(grade)))) return;
             const t = (layer.type || '').toLowerCase();
+            if (t === 'league' || t === 'specialty_league') {
+                if (layer._classification !== 'pinned') leagueLayers.push(layer);
+            } else {
+                otherNonPinned.push(layer);
+            }
+        });
+
+        // Sort leagues by stagger offset — different order each iteration
+        leagueLayers.sort((a, b) => {
+            const aOff = (staggerPlan[a.grade || a.division] || { offset: 0 }).offset;
+            const bOff = (staggerPlan[b.grade || b.division] || { offset: 0 }).offset;
+            return aOff - bOff;
+        });
+
+        // Place leagues in staggered order
+        leagueLayers.forEach(layer => {
+            const grade = layer.grade || layer.division;
+            placeLeagueForGrade(grade, layer);
+        });
+
+        // Process other non-pinned layers
+        otherNonPinned.forEach(layer => {
+            const grade = layer.grade || layer.division;
+            if (!grade) return;
+            const t = (layer.type || '').toLowerCase();
             const bunks = getBunksForGrade(grade, divisions);
             if (!bunks.length) return;
-
-            // Leagues: always grade-wide — truly fixed, not soft
-            if (t === 'league' || t === 'specialty_league') {
-                if (layer._classification !== 'pinned') placeLeagueForGrade(grade, layer);
-                return;
-            }
 
             // Full-grade activities — truly fixed, not soft
             const isFullGrade = activityProperties[layer.event]?.fullGrade || activityProperties[layer.name]?.fullGrade;
@@ -2053,7 +2138,8 @@
                 allTemplates[bunk] = greedyPackBunk(
                     bunk, grade,
                     draftResults[bunk] || { sports: [], specials: [], elective: [], generic: [], usedActivities: new Set() },
-                    shoppingLists[bunk]
+                    shoppingLists[bunk],
+                    (staggerPlan[grade] || { offset: 0 }).offset
                 );
             });
         });
