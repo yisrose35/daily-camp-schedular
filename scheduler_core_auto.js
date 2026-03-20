@@ -1381,494 +1381,488 @@
             return durations;
         }
 
-        function buildBunkDayTemplate(bunk, grade, draftResult, shoppingList) {
+        // =====================================================================
+        // PHASE 3: GREEDY CONSTRAINT PACKER
+        // For each bunk: list what needs placing, get the gaps between walls,
+        // pack blocks into gaps one at a time — most constrained first.
+        // Every placement checks: "can the remaining blocks still fit?"
+        // After packing, expand all flex blocks to fill regions exactly.
+        // =====================================================================
+
+        function greedyPackBunk(bunk, grade, draftResult, shoppingList) {
             const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
             const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+            const sportC = shoppingList.sports?.constraints || resolveConstraints(null, 'sport');
+            const minFill = getMinFillable(grade);
+            const ABSORB_MAX = 10;
 
-            // ── Collect all Phase 0 committed blocks ─────────────────────
-            // Separate HARD anchors (truly fixed) from SOFT anchors (swim etc.)
-            const hardCommitted = [];
-            const softAnchors = [];
-
-            (bunkTimelines[bunk] || []).forEach(b => {
-                const block = {
-                    startMin: b.startMin, endMin: b.endMin, type: b.type, event: b.event,
-                    layer: b.layer, _fixed: true, _source: 'phase0',
-                    _gradeWide: b._gradeWide, _activityLocked: b._activityLocked,
-                    _noBacktrack: b._noBacktrack, _classification: b._classification,
-                    _assignedSpecial: b._assignedSpecial, _specialLocation: b._specialLocation,
-                    _specialDuration: b._specialDuration,
-                    _softAnchor: b._softAnchor, _softWindow: b._softWindow, _softDuration: b._softDuration
-                };
-
-                if (b._softAnchor && b._softWindow) {
-                    // Soft anchor — DAP will try multiple positions
-                    block._fixed = false;
-                    softAnchors.push(block);
-                } else {
-                    hardCommitted.push(block);
-                }
-            });
-
-            // ── Build candidate positions for each soft anchor ───────────
-            // Every soft anchor (swim, windowed lunch, etc.) gets candidate positions.
-            // Snack candidates from the shopping list are merged in too.
-            const softAnchorCandidates = [];
-
-            softAnchors.forEach(sa => {
-                const candidates = [];
-                const win = sa._softWindow;
-                const dur = sa._softDuration || (sa.endMin - sa.startMin);
-
-                // ═══════════════════════════════════════════════════════════
-                // SMART CANDIDATE GENERATION
-                // Instead of sequential positions from window start,
-                // generate positions that ALIGN with fixed block boundaries.
-                // Swim right after lunch = zero gap. Swim right before snacks = zero gap.
-                // ═══════════════════════════════════════════════════════════
-
-                // Collect all fixed block boundaries in this bunk
-                const fixedEnds = hardCommitted
-                    .filter(b => b.endMin > win.start && b.endMin + dur <= win.end)
-                    .map(b => b.endMin);  // positions right after a fixed block ends
-
-                const fixedStarts = hardCommitted
-                    .filter(b => b.startMin - dur >= win.start && b.startMin <= win.end)
-                    .map(b => b.startMin - dur);  // positions where swim ends right as a fixed block starts
-
-                // Priority 1: Positions that butt up against fixed blocks (zero gap guaranteed)
-                const boundaryPositions = [...new Set([...fixedEnds, ...fixedStarts])]
-                    .filter(t => t >= win.start && t + dur <= win.end)
-                    .sort((a, b) => a - b);
-
-                // Priority 2: Spread evenly across the window (catch positions between fixed blocks)
-                const windowSize = win.end - win.start - dur;
-                const spreadStep = Math.max(30, Math.floor(windowSize / 8));
-                const spreadPositions = [];
-                for (let t = win.start; t + dur <= win.end; t += spreadStep) {
-                    spreadPositions.push(t);
-                }
-                // Also include window end position
-                const lastPos = win.end - dur;
-                if (lastPos >= win.start) spreadPositions.push(lastPos);
-
-                // Combine: boundary-aligned first, then spread, then original
-                const allPositions = [];
-                const seen = new Set();
-
-                // Original position (Phase 0's suggestion)
-                allPositions.push({ startMin: sa.startMin, endMin: sa.startMin + dur });
-                seen.add(sa.startMin);
-
-                // Boundary-aligned (highest priority — zero-gap by construction)
-                boundaryPositions.forEach(t => {
-                    if (!seen.has(t)) { allPositions.push({ startMin: t, endMin: t + dur }); seen.add(t); }
-                });
-
-                // Spread positions (coverage across the window)
-                spreadPositions.forEach(t => {
-                    if (!seen.has(t)) { allPositions.push({ startMin: t, endMin: t + dur }); seen.add(t); }
-                });
-
-                softAnchorCandidates.push({ base: sa, candidates: allPositions });
-            });
-
-            // Merge snack as another soft anchor (if present)
-            if (shoppingList.snack && shoppingList.snack.length > 0) {
-                const snackBase = shoppingList.snack[0];
-                softAnchorCandidates.push({
-                    base: {
-                        startMin: snackBase.startMin, endMin: snackBase.endMin,
-                        type: snackBase.type, event: snackBase.event,
-                        layer: snackBase.layer, _activityLocked: true
-                    },
-                    candidates: shoppingList.snack.map(s => ({ startMin: s.startMin, endMin: s.endMin }))
-                });
-            }
-
-            // ── Collect draft-assigned blocks ────────────────────────────
-            const draftBlocks = [];
-
-            (draftResult.specials || []).forEach(special => {
-                if (special._linkedPair) {
-                    // Prep block
-                    draftBlocks.push({
-                        type: 'special', event: special.name + ' (Prep)',
-                        duration: special.prepDuration, field: special.prepLocation,
-                        _source: 'draft', _assignedSpecial: special.name,
-                        _specialLocation: special.prepLocation, _activityLocked: true,
-                        _isPrepBlock: true, _linkedTo: special.name,
-                        approximateStart: special.claimedTime.startMin
-                    });
-                    // Main block
-                    draftBlocks.push({
-                        type: 'special', event: special.name,
-                        duration: special.duration || special.dIdeal, field: special.claimedField,
-                        _source: 'draft', _assignedSpecial: special.name,
-                        _specialLocation: special.location, _specialDuration: special.duration,
-                        _activityLocked: true, _isMainBlock: true, _linkedTo: special.name + ' (Prep)',
-                        approximateStart: special.claimedTime.startMin + special.prepDuration
-                    });
-                } else {
-                    draftBlocks.push({
-                        type: 'special', event: special.name,
-                        duration: special.duration || special.dIdeal,
-                        dMin: special.dMin, dMax: special.dMax,
-                        isFlexDuration: special.isFlexDuration,
-                        field: special.claimedField,
-                        _source: 'draft', _assignedSpecial: special.name,
-                        _specialLocation: special.location, _specialDuration: special.duration,
-                        _activityLocked: true,
-                        approximateStart: special.claimedTime.startMin
-                    });
-                }
-            });
-
-            (draftResult.sports || []).forEach(sport => {
-                // Don't double-add sports that were paired (partner's draft adds them too)
-                if (sport.pairedWith && String(sport.pairedWith) < String(bunk)) return; // only one bunk adds the pair
-
-                draftBlocks.push({
-                    type: 'sport', event: sport.name,
-                    duration: sport.dIdeal, dMin: sport.dMin, dMax: sport.dMax,
-                    field: sport.claimedField, _source: 'draft',
-                    _assignedSport: sport.name, _pairedWith: sport.pairedWith || null,
-                    approximateStart: sport.claimedTime.startMin
-                });
-            });
-
-            (draftResult.elective || []).forEach(elec => {
-                draftBlocks.push({
-                    type: 'elective', event: 'Elective',
-                    duration: elec.duration, _source: 'draft',
-                    approximateStart: elec.claimedTime.startMin,
-                    layer: elec.layer
-                });
-            });
-
-            (draftResult.generic || []).forEach(gen => {
-                draftBlocks.push({
-                    type: gen.type, event: gen.event,
-                    duration: gen.duration, dMin: gen.dMin, dMax: gen.dMax,
-                    _source: 'draft', layer: gen.layer,
-                    approximateStart: gen.claimedTime.startMin
-                });
-            });
-
-            draftBlocks.sort((a, b) => a.approximateStart - b.approximateStart);
-
-            // ── Try combinations of soft anchor positions ─────────────
-            // Recursive search: for each soft anchor, try its candidate positions.
-            // Limit: max 8 candidates per anchor, max 500 total evaluations.
-            let bestTemplate = null, bestDeadSpace = Infinity;
-            let evalCount = 0;
-            const MAX_EVALS = 500;
-
-            // Limit candidates per anchor for performance
-            const limitedCandidates = softAnchorCandidates.map(sac => ({
-                base: sac.base,
-                candidates: sac.candidates.slice(0, 15)
+            // ── Step 1: Walls — blocks already placed by Phase 0 ──────────
+            // These are lunch, dismissal, league — they CANNOT move.
+            const walls = (bunkTimelines[bunk] || []).map(b => ({
+                startMin: b.startMin, endMin: b.endMin, type: b.type, event: b.event,
+                layer: b.layer, _fixed: true, _source: 'phase0',
+                _gradeWide: b._gradeWide || false, _activityLocked: true,
+                _classification: b._classification || 'pinned',
+                _noBacktrack: b._noBacktrack || false
             }));
 
-            // If no soft anchors at all, run once with just hard committed
-            if (limitedCandidates.length === 0) limitedCandidates.push({ base: null, candidates: [null] });
+            // ── Step 2: Build needs list — everything else ────────────────
+            // Sorted most-constrained first: fixed-dur → tight-window → flex
+            const needs = [];
 
-            function tryAnchorCombo(anchorIdx, chosenPositions) {
-                if (evalCount >= MAX_EVALS) return;
+            // Swim (fixed duration, wide window)
+            const swimLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'swim');
+            if (swimLayer && !walls.some(w => (w.type || '').toLowerCase() === 'swim')) {
+                const c = resolveConstraints(swimLayer, 'swim');
+                needs.push({
+                    type: 'swim', event: swimLayer.event || 'Swim', layer: swimLayer,
+                    dMin: c.dMin, dMax: c.dMax,
+                    windowStart: Math.max(swimLayer.startMin || 0, gradeStart),
+                    windowEnd: Math.min(swimLayer.endMin || 1440, gradeEnd),
+                    _activityLocked: true, _source: 'layer'
+                });
+            }
 
-                if (anchorIdx >= limitedCandidates.length) {
-                    // All anchors have positions — evaluate this combination
-                    evalCount++;
-                    const fixedBlocks = [...hardCommitted];
+            // Snack (fixed duration, tight window)
+            const snackLayer = (layersByGrade[grade] || []).find(l =>
+                ['snacks', 'snack'].includes((l.type || '').toLowerCase())
+            );
+            if (snackLayer && !walls.some(w => ['snacks', 'snack'].includes((w.type || '').toLowerCase()))) {
+                const c = resolveConstraints(snackLayer, 'snacks');
+                needs.push({
+                    type: 'snacks', event: snackLayer.event || 'snacks', layer: snackLayer,
+                    dMin: c.dMin, dMax: c.dMax,
+                    windowStart: Math.max(snackLayer.startMin || 0, gradeStart),
+                    windowEnd: Math.min(snackLayer.endMin || 1440, gradeEnd),
+                    _activityLocked: true, _source: 'layer'
+                });
+            }
 
-                    // Add each soft anchor at its chosen position
-                    let hasOverlap = false;
-                    for (let ci = 0; ci < chosenPositions.length; ci++) {
-                        const pos = chosenPositions[ci];
-                        if (!pos) continue;
-                        const base = limitedCandidates[ci].base;
-                        if (!base) continue;
+            // Draft specials (flex duration, full window, assigned activity)
+            (draftResult.specials || []).forEach(special => {
+                const c = resolveConstraints(special.layer, 'special');
+                // If the special has its own duration, use it to tighten dMin/dMax
+                let sDMin = c.dMin, sDMax = c.dMax;
+                if (special.duration && special.duration > 0) {
+                    // Special has a specific duration — honor it as the ideal,
+                    // but allow flex within layer bounds
+                    sDMin = Math.max(c.dMin, special.duration);
+                    sDMax = Math.min(c.dMax, special.duration);
+                    // If special.duration is outside layer bounds, clamp
+                    if (sDMin > sDMax) { sDMin = special.duration; sDMax = special.duration; }
+                }
+                needs.push({
+                    type: 'special', event: special.name, layer: special.layer,
+                    dMin: sDMin, dMax: sDMax,
+                    windowStart: gradeStart, windowEnd: gradeEnd,
+                    _activityLocked: true, _assignedSpecial: special.name,
+                    _specialLocation: special.location, _specialDuration: special.duration,
+                    _source: 'draft'
+                });
+            });
 
-                        // Check overlap with existing fixed blocks
-                        if (fixedBlocks.some(fb => fb.startMin < pos.endMin && fb.endMin > pos.startMin)) {
-                            hasOverlap = true; break;
-                        }
-                        fixedBlocks.push({
-                            startMin: pos.startMin, endMin: pos.endMin,
-                            type: base.type, event: base.event,
-                            layer: base.layer, _fixed: true, _source: 'soft_anchor',
-                            _activityLocked: base._activityLocked || true,
-                            _gradeWide: base._gradeWide
-                        });
-                    }
-                    if (hasOverlap) return;
-                fixedBlocks.sort((a, b) => a.startMin - b.startMin);
+            // Sort: fixed-duration first, then tighter flexibility ratio
+            needs.sort((a, b) => {
+                const aFixed = a.dMin === a.dMax ? 0 : 1;
+                const bFixed = b.dMin === b.dMax ? 0 : 1;
+                if (aFixed !== bFixed) return aFixed - bFixed;
+                // Among same fixedness: tighter (less flexibility) first
+                const aFlex = (a.windowEnd - a.windowStart) / Math.max(1, a.dMin);
+                const bFlex = (b.windowEnd - b.windowStart) / Math.max(1, b.dMin);
+                return aFlex - bFlex;
+            });
 
-                // Build regions between fixed blocks
-                const regions = [];
+            // ── Helpers ───────────────────────────────────────────────────
+            function getGaps(blockList) {
+                const sorted = [...blockList].sort((a, b) => a.startMin - b.startMin);
+                const gaps = [];
                 let cursor = gradeStart;
-                fixedBlocks.forEach(block => {
-                    if (block.startMin > cursor) regions.push({ start: cursor, end: block.startMin, duration: block.startMin - cursor, blocks: [] });
-                    cursor = Math.max(cursor, block.endMin);
+                sorted.forEach(b => {
+                    if (b.startMin > cursor) gaps.push({ start: cursor, end: b.startMin, size: b.startMin - cursor });
+                    cursor = Math.max(cursor, b.endMin);
                 });
-                if (cursor < gradeEnd) regions.push({ start: cursor, end: gradeEnd, duration: gradeEnd - cursor, blocks: [] });
+                if (cursor < gradeEnd) gaps.push({ start: cursor, end: gradeEnd, size: gradeEnd - cursor });
+                return gaps;
+            }
 
-                // Assign draft blocks to regions (by approximate time)
-                const unassigned = [];
-                for (const db of draftBlocks) {
-                    let placed = false;
-                    // Try the region containing the approximate time
-                    for (const region of regions) {
-                        if (db.approximateStart >= region.start && db.approximateStart < region.end && region.duration >= db.duration) {
-                            region.blocks.push(db);
-                            region.duration -= db.duration;
-                            placed = true; break;
-                        }
-                    }
-                    // Fallback: any region with space
-                    if (!placed) {
-                        for (const region of regions) {
-                            if (region.duration >= db.duration) {
-                                region.blocks.push(db);
-                                region.duration -= db.duration;
-                                placed = true; break;
-                            }
-                        }
-                    }
-                    if (!placed) unassigned.push(db);
-                }
-
-                // Build template: fixed blocks + draft blocks + filler sport slots
-                const template = [];
-                let totalDeadSpace = 0;
-
-                // Add fixed blocks
-                fixedBlocks.forEach(b => template.push({ ...b, _final: true }));
-
-                // Process each region
-                regions.forEach((region, rIdx) => {
-                    const sc = shoppingList.sports.constraints;
-                    const slotMin = sc.dMin;
-                    const regionDur = region.end - region.start;
-
-                    // ★ Strategy 0: If region is entirely < slotMin AND has no draft blocks,
-                    // absorb it into an adjacent fixed block — BUT respect dMax
-                    if (regionDur > 0 && regionDur < slotMin && region.blocks.length === 0) {
-                        const prevFixed = template.filter(b => b._final && b.endMin === region.start);
-                        const nextFixed = fixedBlocks.find(b => b.startMin === region.end);
-
-                        let regionAbsorbed = false;
-                        // Extend prev forward (only if within dMax AND not pinned)
-                        if (prevFixed.length > 0 && !prevFixed[0]._gradeWide && prevFixed[0]._classification !== 'pinned') {
-                            const pf = prevFixed[0];
-                            const pfC = resolveConstraints(pf.layer, pf.type);
-                            const pfNewDur = (pf.endMin - pf.startMin) + regionDur;
-                            if (pfNewDur <= dMaxWithGrace(pfC)) { // +5 grace for snapping
-                                pf.endMin = region.end;
-                                pf.duration = pf.endMin - pf.startMin;
-                                regionAbsorbed = true;
-                            }
-                        }
-                        // Extend next backward (only if within dMax AND not pinned)
-                        if (!regionAbsorbed && nextFixed && !nextFixed._gradeWide && nextFixed._classification !== 'pinned') {
-                            const nextInTemplate = template.find(b => b._final && b.startMin === region.end);
-                            if (nextInTemplate) {
-                                const nfC = resolveConstraints(nextInTemplate.layer, nextInTemplate.type);
-                                const nfNewDur = (nextInTemplate.endMin - nextInTemplate.startMin) + regionDur;
-                                if (nfNewDur <= dMaxWithGrace(nfC)) {
-                                    nextInTemplate.startMin = region.start;
-                                    nextInTemplate.duration = nextInTemplate.endMin - nextInTemplate.startMin;
-                                    regionAbsorbed = true;
-                                }
-                            }
-                        }
-                        // If neither neighbor can absorb within dMax, leave as dead space
-                        // (swim soft anchor will find a better position next iteration)
-                        if (regionAbsorbed) return;
-                    }
-
-                    // Sort: linked pairs stay together, specials before sports
-                    region.blocks.sort((a, b) => {
-                        if (a._linkedTo === b.event) return -1;
-                        if (b._linkedTo === a.event) return 1;
-                        const pri = { special: 0, elective: 1, sport: 2 };
-                        return (pri[a.type] ?? 3) - (pri[b.type] ?? 3);
+            function canFitRemaining(currentPlaced, remainingNeeds) {
+                if (remainingNeeds.length === 0) return true;
+                const gaps = getGaps(currentPlaced);
+                // Each remaining need must have at least one gap in its window
+                for (const need of remainingNeeds) {
+                    const ok = gaps.some(g => {
+                        const es = Math.max(g.start, need.windowStart);
+                        const ee = Math.min(g.end, need.windowEnd);
+                        return ee - es >= need.dMin;
                     });
-
-                    let regionCursor = region.start;
-                    const regionEnd = region.end;
-                    const regionSize = regionEnd - regionCursor;
-
-                    // ═══════════════════════════════════════════════════════
-                    // PERFECT-FIT REGION SOLVER
-                    // Given a region of R minutes and N draft blocks, determine
-                    // how many filler slots are needed and size ALL blocks so
-                    // they sum to exactly R. Zero gaps by construction.
-                    // ═══════════════════════════════════════════════════════
-
-                    // Step 1: Build block descriptors with flex ranges
-                    const blockDescs = [];
-                    region.blocks.forEach(block => {
-                        const bc = resolveConstraints(block.layer, block.type);
-                        blockDescs.push({
-                            block,
-                            dMin: block.dMin || bc.dMin,
-                            dMax: block.dMax || bc.dMax,
-                            dIdeal: block.duration || bc.dIdeal,
-                            isDraft: true
-                        });
-                    });
-
-                    // Step 2: Determine how many filler sport slots are needed
-                    const draftDMin = blockDescs.reduce((s, b) => s + b.dMin, 0);
-                    const draftDMax = blockDescs.reduce((s, b) => s + b.dMax, 0);
-                    let spaceForFillers = regionSize - draftDMin;
-
-                    // Calculate filler count: fill all remaining space with sport slots
-                    let numFillers = 0;
-                    if (spaceForFillers >= slotMin) {
-                        // Start with ideal count, then verify
-                        numFillers = Math.max(1, Math.round(spaceForFillers / sc.dIdeal));
-                        // Validate: fillers at dMin must fit, fillers at dMax must not exceed
-                        while (numFillers > 0 && numFillers * slotMin > spaceForFillers) numFillers--;
-                        // Also check: with draft at dMax, is there still room for fillers?
-                        const spaceAtDraftMax = regionSize - draftDMax;
-                        if (spaceAtDraftMax < numFillers * slotMin && numFillers > 0) {
-                            numFillers = Math.max(0, Math.floor(spaceAtDraftMax / slotMin));
-                        }
-                    } else if (spaceForFillers > 0 && blockDescs.length > 0) {
-                        // Not enough for a filler — draft blocks will absorb the space
-                        numFillers = 0;
-                    } else if (blockDescs.length === 0) {
-                        // Empty region — all fillers
-                        numFillers = Math.max(1, Math.round(regionSize / sc.dIdeal));
-                        while (numFillers > 0 && numFillers * slotMin > regionSize) numFillers--;
-                        if (numFillers === 0 && regionSize >= slotMin) numFillers = 1;
-                    }
-
-                    // Add filler descriptors
-                    for (let fi = 0; fi < numFillers; fi++) {
-                        blockDescs.push({
-                            block: null, // filler — no draft block
-                            dMin: sc.dMin,
-                            dMax: sc.dMax,
-                            dIdeal: sc.dIdeal,
-                            isDraft: false
-                        });
-                    }
-
-                    // Step 3: Solve — size all blocks to sum exactly to regionSize
-                    const totalDMin = blockDescs.reduce((s, b) => s + b.dMin, 0);
-                    const totalDMax = blockDescs.reduce((s, b) => s + b.dMax, 0);
-
-                    let durations;
-                    if (blockDescs.length === 0) {
-                        // Region too small for anything — dead space
-                        totalDeadSpace += regionSize;
-                        durations = [];
-                    } else if (totalDMin > regionSize) {
-                        // Can't fit all blocks even at minimum — remove fillers until it works
-                        while (blockDescs.length > region.blocks.length && blockDescs.reduce((s, b) => s + b.dMin, 0) > regionSize) {
-                            blockDescs.pop(); // remove last filler
-                        }
-                        // Re-solve with fewer blocks
-                        const adjDMin = blockDescs.reduce((s, b) => s + b.dMin, 0);
-                        if (adjDMin > regionSize) {
-                            // Even draft blocks alone are too big — shrink to fit
-                            durations = blockDescs.map(b => b.dMin);
-                            let excess = adjDMin - regionSize;
-                            for (let i = durations.length - 1; i >= 0 && excess > 0; i--) {
-                                const canShrink = durations[i] - 5; // absolute minimum
-                                if (canShrink > 0) {
-                                    const shrink = Math.min(excess, canShrink);
-                                    durations[i] -= shrink;
-                                    excess -= shrink;
-                                }
-                            }
-                        } else {
-                            durations = perfectFitDistribute(blockDescs, regionSize);
-                        }
-                    } else if (totalDMax < regionSize) {
-                        // All blocks at max still don't fill region — add more fillers
-                        let extraFillers = Math.ceil((regionSize - totalDMax) / sc.dMax);
-                        for (let fi = 0; fi < extraFillers; fi++) {
-                            blockDescs.push({ block: null, dMin: sc.dMin, dMax: sc.dMax, dIdeal: sc.dIdeal, isDraft: false });
-                        }
-                        durations = perfectFitDistribute(blockDescs, regionSize);
-                    } else {
-                        // Normal case: totalDMin ≤ regionSize ≤ totalDMax → perfect fit exists
-                        durations = perfectFitDistribute(blockDescs, regionSize);
-                    }
-
-                    // Step 4: Write blocks at computed durations
-                    for (let bi = 0; bi < blockDescs.length; bi++) {
-                        const bd = blockDescs[bi];
-                        const dur = durations[bi] || bd.dMin;
-                        if (dur <= 0) continue;
-
-                        if (bd.isDraft && bd.block) {
-                            // Draft block — preserve all metadata
-                            template.push({
-                                startMin: regionCursor, endMin: regionCursor + dur,
-                                type: bd.block.type, event: bd.block.event, duration: dur,
-                                field: bd.block.field, layer: bd.block.layer || bd.block._layer,
-                                dMin: bd.dMin, dMax: bd.dMax,
-                                isFlexDuration: bd.block.isFlexDuration,
-                                _source: bd.block._source,
-                                _assignedSpecial: bd.block._assignedSpecial,
-                                _assignedSport: bd.block._assignedSport,
-                                _specialDuration: bd.block._specialDuration,
-                                _specialLocation: bd.block._specialLocation,
-                                _activityLocked: bd.block._activityLocked || false,
-                                _pairedWith: bd.block._pairedWith,
-                                _isPrepBlock: bd.block._isPrepBlock,
-                                _isMainBlock: bd.block._isMainBlock,
-                                _linkedTo: bd.block._linkedTo,
-                                _final: true
-                            });
-                        } else {
-                            // Filler sport slot
-                            template.push({
-                                startMin: regionCursor, endMin: regionCursor + dur,
-                                type: 'slot', event: 'General Activity Slot',
-                                duration: dur, _source: 'filler', _final: true,
-                                layer: shoppingList.sports.layer,
-                                dMin: sc.dMin, dMax: sc.dMax
-                            });
-                        }
-                        regionCursor += dur;
-                    }
-
-                    // Verify: did we fill the region exactly?
-                    if (regionCursor < regionEnd) {
-                        totalDeadSpace += (regionEnd - regionCursor);
-                    }
-                });
-
-                unassigned.forEach(u => totalDeadSpace += (u.duration || 30) * 100);
-
-                if (totalDeadSpace < bestDeadSpace) {
-                    bestDeadSpace = totalDeadSpace;
-                    bestTemplate = template.sort((a, b) => a.startMin - b.startMin);
+                    if (!ok) return false;
                 }
-                    return; // end of evaluation
+                // Total dMin must fit in total gap space
+                const totalNeed = remainingNeeds.reduce((s, n) => s + n.dMin, 0);
+                const totalGap = gaps.reduce((s, g) => s + g.size, 0);
+                if (totalNeed > totalGap) return false;
+                return true;
+            }
+
+            // ── Step 3: Pack required needs into gaps ─────────────────────
+            // For each need (most constrained first):
+            //   Try every valid gap. In each gap, try start and end positions.
+            //   Accept the first position where residuals are viable AND
+            //   all remaining needs can still fit somewhere.
+            const placed = [...walls];
+
+            for (let i = 0; i < needs.length; i++) {
+                const need = needs[i];
+                const remaining = needs.slice(i + 1);
+                const gaps = getGaps(placed);
+
+                // Gaps that overlap this need's window, largest first
+                const validGaps = gaps
+                    .map(g => ({
+                        start: Math.max(g.start, need.windowStart),
+                        end: Math.min(g.end, need.windowEnd),
+                        origStart: g.start, origEnd: g.end
+                    }))
+                    .filter(g => g.end - g.start >= need.dMin)
+                    .sort((a, b) => (b.end - b.start) - (a.end - a.start));
+
+                let didPlace = false;
+                for (const gap of validGaps) {
+                    // Candidates: start of gap, end of gap (butting against walls)
+                    const candidates = [gap.start];
+                    const endPos = gap.end - need.dMin;
+                    if (endPos > gap.start) candidates.push(endPos);
+
+                    for (const pos of candidates) {
+                        // Residual check: before and after must be 0, absorbable, or fillable
+                        const beforeRes = pos - gap.origStart;
+                        const afterRes = gap.origEnd - (pos + need.dMin);
+                        if (beforeRes > ABSORB_MAX && beforeRes < minFill) continue;
+                        if (afterRes > ABSORB_MAX && afterRes < minFill) continue;
+
+                        // Future viability: can remaining needs still fit?
+                        const tempBlock = {
+                            startMin: pos, endMin: pos + need.dMin,
+                            type: need.type, event: need.event
+                        };
+                        if (canFitRemaining([...placed, tempBlock], remaining)) {
+                            placed.push({
+                                startMin: pos, endMin: pos + need.dMin,
+                                ...need, _final: true
+                            });
+                            didPlace = true;
+                            break;
+                        }
+                    }
+                    if (didPlace) break;
                 }
 
-                // Recurse: try each candidate for this anchor
-                const sac = limitedCandidates[anchorIdx];
-                for (let ci = 0; ci < sac.candidates.length; ci++) {
-                    if (evalCount >= MAX_EVALS) break;
-                    chosenPositions[anchorIdx] = sac.candidates[ci];
-                    tryAnchorCombo(anchorIdx + 1, chosenPositions);
+                // Fallback: place at best available position even without perfect viability
+                if (!didPlace) {
+                    for (const gap of validGaps) {
+                        placed.push({
+                            startMin: gap.start, endMin: gap.start + need.dMin,
+                            ...need, _final: true
+                        });
+                        didPlace = true;
+                        break;
+                    }
                 }
             }
 
-            // Launch the recursive search
-            tryAnchorCombo(0, new Array(limitedCandidates.length).fill(null));
+            // ── Step 4: Fill remaining gaps with sport slots ──────────────
+            // Draft assigned specific sport activities. Use them in order.
+            // Any extra gaps get generic "General Activity Slot".
+            const sportQueue = [...(draftResult.sports || [])];
+            let sportIdx = 0;
 
-            if (totalIters < 2) log('[DAP] ' + bunk + ': ' + (bestTemplate ? bestTemplate.length : 0) + ' blocks, dead=' + bestDeadSpace);
-            return bestTemplate;
+            const afterGaps = getGaps(placed);
+            for (const gap of afterGaps) {
+                if (gap.size < sportC.dMin) continue; // absorbed in expand phase
+
+                // How many sport slots at dMin fit?
+                let numSlots = Math.floor(gap.size / sportC.dMin);
+                // Would that leave a dead-zone residual?
+                const leftover = gap.size - numSlots * sportC.dMin;
+                if (leftover > ABSORB_MAX && leftover < sportC.dMin && numSlots > 1) {
+                    numSlots--; // one fewer, perfectFit will expand the rest
+                }
+
+                let cursor = gap.start;
+                for (let s = 0; s < numSlots; s++) {
+                    const sport = sportQueue[sportIdx] || null;
+                    if (sport) sportIdx++;
+
+                    placed.push({
+                        startMin: cursor, endMin: cursor + sportC.dMin,
+                        type: sport ? 'sport' : 'slot',
+                        event: sport ? sport.name : 'General Activity Slot',
+                        layer: shoppingList.sports?.layer || null,
+                        dMin: sportC.dMin, dMax: sportC.dMax,
+                        _activityLocked: false,
+                        _assignedSport: sport ? sport.name : null,
+                        field: sport ? sport.field : null,
+                        _source: sport ? 'draft' : 'filler',
+                        _final: true
+                    });
+                    cursor += sportC.dMin;
+                }
+            }
+
+            // ── Step 5: Expand — size all blocks to fill regions exactly ──
+            // Regions are spans between wall boundaries.
+            // Within each region, use perfectFitDistribute to size flex blocks.
+            placed.sort((a, b) => a.startMin - b.startMin);
+
+            const template = [];
+            // Walk through the day: alternate between walls and flex regions
+            let dayCursor = gradeStart;
+
+            // Collect walls in order
+            const sortedWalls = walls.sort((a, b) => a.startMin - b.startMin);
+
+            // Build ordered list of ALL boundary points
+            const boundaryTimes = new Set([gradeStart, gradeEnd]);
+            sortedWalls.forEach(w => { boundaryTimes.add(w.startMin); boundaryTimes.add(w.endMin); });
+            // Fixed-duration placed blocks are also boundaries
+            placed.filter(b => b.dMin === b.dMax && b._source !== 'phase0').forEach(b => {
+                boundaryTimes.add(b.startMin); boundaryTimes.add(b.endMin);
+            });
+            const boundaries = [...boundaryTimes].sort((a, b) => a - b);
+
+            for (let r = 0; r < boundaries.length - 1; r++) {
+                const rStart = boundaries[r];
+                const rEnd = boundaries[r + 1];
+                const rSize = rEnd - rStart;
+                if (rSize <= 0) continue;
+
+                // Is this region a wall?
+                const wallHere = placed.find(b =>
+                    b._source === 'phase0' && b.startMin <= rStart && b.endMin >= rEnd
+                );
+                if (wallHere) {
+                    // Only add once (first time we encounter this wall)
+                    if (!template.some(t => t.startMin === wallHere.startMin && t.endMin === wallHere.endMin)) {
+                        template.push({ ...wallHere, _final: true });
+                    }
+                    continue;
+                }
+
+                // Is this a fixed-duration block (swim, snack)?
+                const fixedHere = placed.find(b =>
+                    b.dMin === b.dMax && b._source !== 'phase0' &&
+                    b.startMin <= rStart && b.endMin >= rEnd
+                );
+                if (fixedHere) {
+                    if (!template.some(t => t.startMin === fixedHere.startMin && t.endMin === fixedHere.endMin)) {
+                        template.push({ ...fixedHere, _final: true });
+                    }
+                    continue;
+                }
+
+                // Flex region: collect all flex blocks that were placed here
+                const flexBlocks = placed.filter(b =>
+                    b.startMin >= rStart && b.startMin < rEnd &&
+                    b._source !== 'phase0' && !(b.dMin === b.dMax)
+                );
+
+                if (flexBlocks.length === 0) {
+                    // Empty flex region — create sport fillers
+                    if (rSize >= sportC.dMin) {
+                        let numF = Math.max(1, Math.round(rSize / ((sportC.dMin + sportC.dMax) / 2)));
+                        while (numF > 0 && numF * sportC.dMin > rSize) numF--;
+                        if (numF === 0 && rSize >= sportC.dMin) numF = 1;
+
+                        const descs = [];
+                        for (let f = 0; f < numF; f++) descs.push({ dMin: sportC.dMin, dMax: sportC.dMax });
+                        const durs = perfectFitDistribute(descs, rSize);
+
+                        let cur = rStart;
+                        for (let f = 0; f < numF; f++) {
+                            const sp = sportQueue[sportIdx] || null;
+                            if (sp) sportIdx++;
+                            template.push({
+                                startMin: cur, endMin: cur + durs[f],
+                                type: sp ? 'sport' : 'slot',
+                                event: sp ? sp.name : 'General Activity Slot',
+                                layer: shoppingList.sports?.layer,
+                                dMin: sportC.dMin, dMax: sportC.dMax,
+                                _activityLocked: false,
+                                _assignedSport: sp ? sp.name : null,
+                                field: sp ? sp.field : null,
+                                _source: sp ? 'draft' : 'filler', _final: true
+                            });
+                            cur += durs[f];
+                        }
+                    }
+                    // else: tiny region absorbed by adjacent blocks
+                    continue;
+                }
+
+                // Have flex blocks — perfectFitDistribute to fill region exactly
+                const descs = flexBlocks.map(b => ({
+                    block: b, dMin: b.dMin, dMax: b.dMax
+                }));
+
+                // Check if we need MORE sport fillers to fill this region
+                const totalDMax = descs.reduce((s, d) => s + d.dMax, 0);
+                if (totalDMax < rSize) {
+                    const extraSpace = rSize - totalDMax;
+                    let extraCount = Math.ceil(extraSpace / sportC.dMax);
+                    for (let e = 0; e < extraCount; e++) {
+                        const sp = sportQueue[sportIdx] || null;
+                        if (sp) sportIdx++;
+                        descs.push({
+                            block: {
+                                type: sp ? 'sport' : 'slot',
+                                event: sp ? sp.name : 'General Activity Slot',
+                                layer: shoppingList.sports?.layer,
+                                _activityLocked: false,
+                                _assignedSport: sp ? sp.name : null,
+                                field: sp ? sp.field : null,
+                                _source: sp ? 'draft' : 'filler'
+                            },
+                            dMin: sportC.dMin, dMax: sportC.dMax
+                        });
+                    }
+                }
+
+                // Also check if we have TOO MANY blocks (total dMin > region)
+                while (descs.length > 1 && descs.reduce((s, d) => s + d.dMin, 0) > rSize) {
+                    descs.pop(); // remove last (least important) filler
+                }
+
+                const durs = perfectFitDistribute(
+                    descs.map(d => ({ dMin: d.dMin, dMax: d.dMax })),
+                    rSize
+                );
+
+                let cur = rStart;
+                for (let d = 0; d < descs.length; d++) {
+                    const dur = durs[d] || descs[d].dMin;
+                    if (dur <= 0) continue;
+                    const b = descs[d].block;
+                    template.push({
+                        startMin: cur, endMin: cur + dur,
+                        type: b.type, event: b.event,
+                        layer: b.layer, field: b.field,
+                        dMin: descs[d].dMin, dMax: descs[d].dMax,
+                        _source: b._source || 'draft',
+                        _activityLocked: b._activityLocked || false,
+                        _assignedSpecial: b._assignedSpecial || null,
+                        _specialLocation: b._specialLocation || null,
+                        _specialDuration: b._specialDuration || null,
+                        _assignedSport: b._assignedSport || null,
+                        _final: true
+                    });
+                    cur += dur;
+                }
+            }
+
+            // ── Step 6: Final gap sweep — absorb any tiny residuals ─────
+            // Walk through the sorted template and find gaps between blocks.
+            // Tiny gaps (≤ ABSORB_MAX) get absorbed by expanding a neighbor.
+            // Gaps ≥ minFill get a sport filler. Dead-zone gaps are logged.
+            template.sort((a, b) => a.startMin - b.startMin);
+
+            for (let pass = 0; pass < 3; pass++) {
+                let changed = false;
+                for (let i = 0; i < template.length - 1; i++) {
+                    const gap = template[i + 1].startMin - template[i].endMin;
+                    if (gap <= 0) continue;
+                    if (gap <= ABSORB_MAX) {
+                        // Absorb into whichever neighbor is flex (not fixed-duration, not a wall)
+                        const prev = template[i];
+                        const next = template[i + 1];
+                        const prevFlex = prev.dMin !== prev.dMax && prev._source !== 'phase0';
+                        const nextFlex = next.dMin !== next.dMax && next._source !== 'phase0';
+                        const prevC = prevFlex ? resolveConstraints(prev.layer, prev.type) : null;
+                        const nextC = nextFlex ? resolveConstraints(next.layer, next.type) : null;
+
+                        if (prevFlex && prevC && (prev.endMin - prev.startMin + gap) <= prevC.dMax) {
+                            prev.endMin += gap; changed = true;
+                        } else if (nextFlex && nextC && (next.endMin - next.startMin + gap) <= nextC.dMax) {
+                            next.startMin -= gap; changed = true;
+                        } else {
+                            // Neither can absorb within dMax — extend prev anyway (visual cleanliness)
+                            if (prevFlex) { prev.endMin += gap; changed = true; }
+                            else if (nextFlex) { next.startMin -= gap; changed = true; }
+                        }
+                    } else if (gap >= sportC.dMin) {
+                        // Big enough for a sport slot
+                        const sp = sportQueue[sportIdx] || null;
+                        if (sp) sportIdx++;
+                        template.push({
+                            startMin: template[i].endMin, endMin: template[i + 1].startMin,
+                            type: sp ? 'sport' : 'slot',
+                            event: sp ? sp.name : 'General Activity Slot',
+                            layer: shoppingList.sports?.layer,
+                            dMin: sportC.dMin, dMax: sportC.dMax,
+                            _activityLocked: false,
+                            _assignedSport: sp ? sp.name : null,
+                            _source: sp ? 'draft' : 'filler', _final: true
+                        });
+                        template.sort((a, b) => a.startMin - b.startMin);
+                        changed = true;
+                    }
+                    // Dead-zone gaps (ABSORB_MAX < gap < sportC.dMin) — forced absorption
+                    else {
+                        const prev = template[i];
+                        const next = template[i + 1];
+                        if (prev._source !== 'phase0') { prev.endMin += gap; changed = true; }
+                        else if (next._source !== 'phase0') { next.startMin -= gap; changed = true; }
+                    }
+                }
+                // Also check gap at start and end of day
+                if (template.length > 0) {
+                    const firstGap = template[0].startMin - gradeStart;
+                    if (firstGap > 0 && firstGap <= ABSORB_MAX && template[0]._source !== 'phase0') {
+                        template[0].startMin = gradeStart; changed = true;
+                    } else if (firstGap >= sportC.dMin) {
+                        template.unshift({
+                            startMin: gradeStart, endMin: template[0].startMin,
+                            type: 'slot', event: 'General Activity Slot',
+                            layer: shoppingList.sports?.layer,
+                            dMin: sportC.dMin, dMax: sportC.dMax,
+                            _source: 'filler', _final: true
+                        });
+                        changed = true;
+                    } else if (firstGap > 0) {
+                        template[0].startMin = gradeStart; changed = true;
+                    }
+
+                    const lastGap = gradeEnd - template[template.length - 1].endMin;
+                    if (lastGap > 0 && lastGap <= ABSORB_MAX && template[template.length - 1]._source !== 'phase0') {
+                        template[template.length - 1].endMin = gradeEnd; changed = true;
+                    } else if (lastGap >= sportC.dMin) {
+                        template.push({
+                            startMin: template[template.length - 1].endMin, endMin: gradeEnd,
+                            type: 'slot', event: 'General Activity Slot',
+                            layer: shoppingList.sports?.layer,
+                            dMin: sportC.dMin, dMax: sportC.dMax,
+                            _source: 'filler', _final: true
+                        });
+                        changed = true;
+                    } else if (lastGap > 0) {
+                        template[template.length - 1].endMin = gradeEnd; changed = true;
+                    }
+                }
+                template.sort((a, b) => a.startMin - b.startMin);
+                if (!changed) break;
+            }
+
+            if (totalIters < 2) {
+                const dead = template.reduce((s, b) => {
+                    const dur = b.endMin - b.startMin;
+                    if (dur < minFill && b._source === 'filler') return s + dur;
+                    return s;
+                }, 0);
+                log('[PACK] ' + bunk + ': ' + template.length + ' blocks, dead=' + dead);
+            }
+
+            return template.sort((a, b) => a.startMin - b.startMin);
         }
+
 
         // =====================================================================
         // PHASE 4: EXECUTE TEMPLATES → bunkTimelines
@@ -2021,41 +2015,11 @@
                 return;
             }
 
-            // ★ Swim: MRC staggering gives it special placement logic
-            if (t === 'swim' && layer._classification !== 'pinned') {
-                placeSwimForGrade(grade, layer);
-                return;
-            }
+            // ★ Swim: handled by greedy packer per-bunk (not pre-placed)
+            if (t === 'swim') return;
 
-            // ★ Other windowed layers: only POSITIONAL types get soft-anchored.
-            // Sport, special, league, elective MUST go through the draft for field assignment.
-            // Only types that need a specific time position benefit from anchoring.
-            if (layer._classification === 'windowed') {
-                const anchorableTypes = ['snacks', 'snack', 'lunch', 'dismissal'];
-                if (!anchorableTypes.includes(t)) return; // sport/special/etc → shopping list
-
-                const { dMin, dMax } = resolveConstraints(layer, t);
-                const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
-                const winStart = Math.max(layer.startMin || 0, gs);
-                const winEnd = Math.min(layer.endMin || 1440, ge);
-
-                bunks.forEach(bunk => {
-                    const pos = findBestGapPosition(bunk, winStart, winEnd, dMin, t, null, grade);
-                    if (!pos) return;
-                    const dur = Math.max(dMin, Math.min(dMax, pos.end - pos.start));
-
-                    placeTentativeBlock(bunk, {
-                        startMin: pos.start, endMin: pos.start + dur,
-                        type: t, event: layer.event || layer.name || t,
-                        layer, _classification: 'windowed',
-                        _activityLocked: true, _fixed: false, _committed: true,
-                        _softAnchor: true,
-                        _softWindow: { start: winStart, end: winEnd },
-                        _softDuration: dur
-                    });
-                });
-            }
+            // ★ All other non-pinned layers (snack, sport, special, etc.)
+            // handled by the greedy packer per-bunk — not pre-placed.
         });
 
         if (totalIters < 2) log('[P0] ' + pinnedCount + ' pinned blocks placed');
@@ -2088,7 +2052,7 @@
         const allTemplates = {};
         allGrades.forEach(grade => {
             getBunksForGrade(grade, divisions).forEach(bunk => {
-                allTemplates[bunk] = buildBunkDayTemplate(
+                allTemplates[bunk] = greedyPackBunk(
                     bunk, grade,
                     draftResults[bunk] || { sports: [], specials: [], elective: [], generic: [], usedActivities: new Set() },
                     shoppingLists[bunk]
@@ -2099,160 +2063,8 @@
         // ── Phase 4: Execute templates ───────────────────────────────
         executeTemplates(allTemplates);
 
-        // ── Safety net: seam closing ─────────────────────────────────
-        allGrades.forEach(grade => {
-            const sportLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'sport') || null;
-            const seamThreshold = sportLayer ? resolveConstraints(sportLayer, 'sport').dMin : 30;
-            getBunksForGrade(grade, divisions).forEach(bunk => {
-                const tl = bunkTimelines[bunk];
-                if (!tl || tl.length < 2) return;
-                tl.sort((a, b) => a.startMin - b.startMin);
-                for (let i = 0; i < tl.length - 1; i++) {
-                    const gap = tl[i + 1].startMin - tl[i].endMin;
-                    if (gap <= 0 || gap >= seamThreshold) continue;
-                    // Try 1: extend earlier block forward (never pinned)
-                    if (!tl[i]._gradeWide && tl[i]._classification !== 'pinned') {
-                        const c = resolveConstraints(tl[i].layer, tl[i].type);
-                        if (tl[i].endMin - tl[i].startMin + gap <= dMaxWithGrace(c)) { tl[i].endMin = tl[i + 1].startMin; continue; }
-                    }
-                    // Try 2: extend later block backward (never pinned)
-                    if (!tl[i + 1]._gradeWide && tl[i + 1]._classification !== 'pinned') {
-                        const c = resolveConstraints(tl[i + 1].layer, tl[i + 1].type);
-                        if (tl[i + 1].endMin - tl[i + 1].startMin + gap <= dMaxWithGrace(c)) { tl[i + 1].startMin = tl[i].endMin; continue; }
-                    }
-                }
-            });
-        });
 
-        // ── Safety net: edge gap fill ────────────────────────────────
-        allGrades.forEach(grade => {
-            const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-            const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
-            const sportLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'sport') || null;
-            const sportC = resolveConstraints(sportLayer, 'sport');
-            const minDur = sportC.dMin;
-            const maxDur = sportC.dMax;
-
-            getBunksForGrade(grade, divisions).forEach(bunk => {
-                // ★ Run absorption in a loop — absorbing one gap can eliminate the next
-                let passes = 0;
-                while (passes < 5) {
-                    passes++;
-                    const gaps = getFreeGaps(bunk, gs, ge);
-                    if (gaps.length === 0) break;
-
-                    let changed = false;
-                    for (const gap of gaps) {
-                        const dur = gap.end - gap.start;
-                        if (dur < 5) continue;
-                        const tl = bunkTimelines[bunk];
-
-                        // ★ For ANY gap smaller than dMin — ABSORB, don't create a slot
-                        if (dur < minDur) {
-                            const prev = tl.find(b => b.endMin === gap.start);
-                            const next = tl.find(b => b.startMin === gap.end);
-
-                            // Try 1: extend prev forward (most natural)
-                            if (prev && !prev._gradeWide) {
-                                const pc = resolveConstraints(prev.layer, prev.type);
-                                if ((prev.endMin - prev.startMin) + dur <= dMaxWithGrace(pc)) {
-                                    prev.endMin = gap.end; changed = true; continue;
-                                }
-                            }
-                            // Try 2: extend next backward
-                            if (next && !next._gradeWide && next._classification !== 'pinned') {
-                                const nc = resolveConstraints(next.layer, next.type);
-                                if ((next.endMin - next.startMin) + dur <= dMaxWithGrace(nc)) {
-                                    next.startMin = gap.start; changed = true; continue;
-                                }
-                            }
-                            // Try 3: Try extending prev with relaxed dMax (+5 grace, but never pinned)
-                            if (prev && !prev._gradeWide && prev._classification !== 'pinned') {
-                                const pc3 = resolveConstraints(prev.layer, prev.type);
-                                if ((prev.endMin - prev.startMin) + dur <= dMaxWithGrace(pc3)) {
-                                    prev.endMin = gap.end; changed = true; continue;
-                                }
-                            }
-                            // Try 4: Try extending next with relaxed dMax (but NEVER pinned)
-                            if (next && !next._gradeWide && next._classification !== 'pinned') {
-                                const nc4 = resolveConstraints(next.layer, next.type);
-                                if ((next.endMin - next.startMin) + dur <= dMaxWithGrace(nc4)) {
-                                    next.startMin = gap.start; changed = true; continue;
-                                }
-                            }
-                            // Absolute last resort: create micro-gap slot
-                            tl.push({
-                                startMin: gap.start, endMin: gap.end, type: 'slot',
-                                event: 'General Activity Slot', layer: sportLayer,
-                                _classification: 'gap', _fromGapDetection: true,
-                                _committed: true, _microGap: true
-                            });
-                            tl.sort((a, b) => a.startMin - b.startMin);
-                            changed = true;
-                            continue;
-                        }
-
-                        // ★ For gaps >= dMin: create properly sized filler slots
-                        let cursor = gap.start;
-                        while (cursor < gap.end) {
-                            const rem = gap.end - cursor;
-                            if (rem < 5) break;
-
-                            // If remainder would be undersized, absorb into prev/next
-                            if (rem < minDur) {
-                                const prev = tl.find(b => b.endMin === cursor && !b._gradeWide);
-                                const next = tl.find(b => b.startMin === gap.end && !b._gradeWide);
-                                if (prev) { prev.endMin = gap.end; }
-                                else if (next && next._classification !== 'pinned') { next.startMin = cursor; }
-                                else {
-                                    // Extend the slot we just created
-                                    const lastCreated = tl.find(b => b.endMin === cursor && b._fromGapDetection);
-                                    if (lastCreated) { lastCreated.endMin = gap.end; }
-                                    else {
-                                        tl.push({
-                                            startMin: cursor, endMin: gap.end, type: 'slot',
-                                            event: 'General Activity Slot', layer: sportLayer,
-                                            _classification: 'gap', _fromGapDetection: true,
-                                            _committed: true, _microGap: true
-                                        });
-                                    }
-                                }
-                                break;
-                            }
-
-                            let sd = Math.min(maxDur, rem);
-                            sd = Math.floor(sd / 5) * 5;
-                            if (sd < minDur) sd = minDur;
-
-                            // Would this leave an undersized remainder?
-                            const afterThis = rem - sd;
-                            if (afterThis > 0 && afterThis < minDur) {
-                                // Split evenly instead of taking whole thing
-                                const half = snapTo5(Math.floor(rem / 2));
-                                if (half >= minDur && half <= maxDur) {
-                                    sd = half; // two equal-ish slots
-                                } else if (rem <= maxDur + 5) {
-                                    sd = rem; // take whole thing if barely over dMax
-                                } else {
-                                    sd = maxDur; // cap at dMax, remainder becomes micro-gap
-                                }
-                            }
-
-                            tl.push({
-                                startMin: cursor, endMin: cursor + sd, type: 'slot',
-                                event: 'General Activity Slot', layer: sportLayer,
-                                _classification: 'gap', _fromGapDetection: true,
-                                _committed: true, _microGap: false
-                            });
-                            cursor += sd;
-                        }
-                        tl.sort((a, b) => a.startMin - b.startMin);
-                        changed = true;
-                    }
-                    if (!changed) break;
-                }
-            });
-        });
+        // ── (Safety nets removed — greedy packer produces zero-gap schedules) ──
 
         // ── Score ────────────────────────────────────────────────────
         const iterWarnings = [];
