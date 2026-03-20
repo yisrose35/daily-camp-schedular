@@ -2632,6 +2632,15 @@
                     const g = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(bk)))?.[0];
                     const pbsArr = g ? (window.divisionTimes?.[g]?._perBunkSlots?.[bk] || []) : [];
 
+                    // ★ Collect sports already assigned to this bunk today
+                    const bunkSportsUsed = new Set();
+                    slots.forEach(s => {
+                        if (s && s.field && s.field !== 'Free') {
+                            if (s.sport) bunkSportsUsed.add(s.sport.toLowerCase());
+                            if (s._activity) bunkSportsUsed.add(s._activity.toLowerCase());
+                        }
+                    });
+
                     slots.forEach((s, idx) => {
                         if (!s || s.field !== 'Free') return;
                         const pbSlot = pbsArr[idx];
@@ -2643,8 +2652,10 @@
                         const fallbacks = tlBlock?._sportFallbacks;
                         if (!fallbacks || !fallbacks.length) return;
 
-                        // Try each sport in fallback order
+                        // Try each sport in fallback order — skip if already used today
                         for (const sportName of fallbacks) {
+                            if (bunkSportsUsed.has(sportName.toLowerCase())) continue;
+
                             const fields = fbs2[sportName] || [];
                             for (const fieldName of fields) {
                                 if (!isFieldFreeAtTime(fieldName, pbSlot.startMin, pbSlot.endMin)) continue;
@@ -2657,10 +2668,10 @@
                                     _fallbackResolved: true, continuation: false
                                 };
                                 markFieldUsed(fieldName, pbSlot.startMin, pbSlot.endMin);
+                                bunkSportsUsed.add(sportName.toLowerCase());
                                 fallbackFixed++;
-                                break; // done with this slot — move to next sport name search
+                                break;
                             }
-                            // If we assigned, break out of sport loop too
                             if (window.scheduleAssignments[bk][idx]?._fallbackResolved) break;
                         }
                     });
