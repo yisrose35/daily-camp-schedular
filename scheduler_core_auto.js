@@ -1667,8 +1667,31 @@
 
             // ── Step 4: Fill remaining gaps with sport slots ──────────────
             // Draft assigned specific sport activities. Use them in order.
-            // Any extra gaps get generic "General Activity Slot".
+            // When drafted sports run out, pull from the priority list (rotation-scored).
             const sportQueue = [...(draftResult.sports || [])];
+
+            // ★ Extend queue with additional sports from the priority list
+            // The draft only assigns 1 sport, but the packer creates 4-5 slots.
+            // Use the rotation-scored priority list to fill the rest.
+            const usedSports = new Set(sportQueue.map(s => s.name));
+            const priorityList = shoppingList.sports?.priorityList || [];
+            // First pass: unused sports from priority list
+            for (const sport of priorityList) {
+                if (!usedSports.has(sport.name)) {
+                    sportQueue.push({ name: sport.name, field: sport.fields?.[0] || null });
+                    usedSports.add(sport.name);
+                }
+            }
+            // Second pass: if still not enough, cycle through priority list again
+            // (same sport can appear twice in a day — different time slots)
+            let cycleIdx = 0;
+            while (sportQueue.length < 10 && priorityList.length > 0) {
+                const sport = priorityList[cycleIdx % priorityList.length];
+                sportQueue.push({ name: sport.name, field: null }); // no specific field for repeats
+                cycleIdx++;
+                if (cycleIdx > 20) break; // safety
+            }
+
             let sportIdx = 0;
 
             const afterGaps = getGaps(placed);
