@@ -359,6 +359,35 @@
         const sharedLeagueTime = {};
         let staggerPlan = {};
 
+        // ── Cross-grade activity tracker ─────────────────────────────
+        // Tracks what each grade is doing at each time to prevent contention.
+        // Key: time bucket (5-min rounded). Value: { league: [grades], swim: [grades], special: [grades], snack: [grades] }
+        const crossGradeTracker = {};
+        function registerCrossGrade(grade, type, startMin, endMin) {
+            const t = (type || '').toLowerCase();
+            const trackTypes = ['league', 'swim', 'special', 'snacks', 'snack'];
+            if (!trackTypes.includes(t)) return;
+            const key = t === 'snack' ? 'snacks' : t;
+            for (let m = startMin; m < endMin; m += 5) {
+                if (!crossGradeTracker[m]) crossGradeTracker[m] = {};
+                if (!crossGradeTracker[m][key]) crossGradeTracker[m][key] = [];
+                if (!crossGradeTracker[m][key].includes(grade)) crossGradeTracker[m][key].push(grade);
+            }
+        }
+        function getCrossGradeConflicts(type, startMin, endMin, excludeGrade) {
+            const key = (type || '').toLowerCase();
+            let conflicts = 0;
+            for (let m = startMin; m < endMin; m += 5) {
+                const bucket = crossGradeTracker[m];
+                if (!bucket || !bucket[key]) continue;
+                conflicts += bucket[key].filter(g => g !== excludeGrade).length;
+            }
+            return conflicts;
+        }
+        function resetCrossGradeTracker() {
+            Object.keys(crossGradeTracker).forEach(k => delete crossGradeTracker[k]);
+        }
+
         // =====================================================================
         // CEL — CONSTRAINT ENFORCEMENT LAYER
         // Single source of truth for dMin/dMax/dIdeal.
@@ -870,7 +899,10 @@
             for (const ts of times) {
                 const te = ts + dur;
                 if (!bunks.every(bk => !(bunkTimelines[bk] || []).some(b => b.startMin < te && b.endMin > ts))) continue;
-                const score = scorePositionByContention(ts, te, 'league', null, null);
+                let score = scorePositionByContention(ts, te, 'league', null, null);
+                // ★ CROSS-GRADE: heavy penalty if another grade already has leagues here
+                const crossConflicts = getCrossGradeConflicts('league', ts, te, grade);
+                score += crossConflicts * 10000; // massive penalty per conflicting grade
                 if (score < bestScore) { bestScore = score; bestStart = ts; }
             }
             if (bestStart === null) { warn('[P0] No free league gap for ' + grade); return null; }
@@ -885,6 +917,7 @@
                 bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
             });
             if (leagueName) sharedLeagueTime[leagueName] = bestStart;
+            registerCrossGrade(grade, 'league', bestStart, bestStart + dur);
             log('[P0] ' + grade + ' league at ' + minutesToTimeLabel(bestStart));
             return bestStart;
         }
@@ -1540,7 +1573,9 @@
                 const remaining = needs.slice(i + 1);
                 const gaps = getGaps(placed);
 
-                // Gaps that overlap this need's window, largest first
+                // Gaps that overlap this need's window
+                // ★ CROSS-GRADE: sort by fewest conflicts, then by size
+                const trackableType = ['swim', 'special', 'snacks', 'snack'].includes(need.type);
                 const validGaps = gaps
                     .map(g => ({
                         start: Math.max(g.start, need.windowStart),
@@ -1548,19 +1583,23 @@
                         origStart: g.start, origEnd: g.end
                     }))
                     .filter(g => g.end - g.start >= need.dMin)
-                    .sort((a, b) => (b.end - b.start) - (a.end - a.start));
+                    .map(g => {
+                        // Score: cross-grade conflicts at this time × 1000, minus gap size (prefer larger)
+                        const conflicts = trackableType
+                            ? getCrossGradeConflicts(need.type, g.start, g.start + need.dMin, grade)
+                            : 0;
+                        return { ...g, _conflicts: conflicts, _score: conflicts * 1000 - (g.end - g.start) };
+                    })
+                    .sort((a, b) => a._score - b._score); // least conflicts first, then largest
 
                 let didPlace = false;
                 for (const gap of validGaps) {
                     // ★ STAGGER: alternate gap position preference
-                    // Even offset → prefer start of gap (early in day)
-                    // Odd offset → prefer end of gap (later in day)
                     const startPos = gap.start;
                     const endPos = gap.end - need.dMin;
                     const candidates = (staggerOffset % 2 === 0)
                         ? [startPos, endPos].filter(p => p >= gap.start)
                         : [endPos, startPos].filter(p => p >= gap.start);
-                    // Deduplicate
                     const uniqueCandidates = [...new Set(candidates)];
 
                     for (const pos of uniqueCandidates) {
@@ -1597,6 +1636,12 @@
                         didPlace = true;
                         break;
                     }
+                }
+
+                // ★ Register in cross-grade tracker so other grades avoid this time
+                if (didPlace) {
+                    const lastPlaced = placed[placed.length - 1];
+                    registerCrossGrade(grade, need.type, lastPlaced.startMin, lastPlaced.endMin);
                 }
             }
 
@@ -1994,6 +2039,7 @@
             Object.keys(sharedLeagueTime).forEach(k => delete sharedLeagueTime[k]);
             resourceCalendar.swim = {};
             Object.keys(fieldLedger).forEach(k => { if (fieldLedger[k]) fieldLedger[k].claims = []; });
+            resetCrossGradeTracker();
         }
 
         // =====================================================================
@@ -2131,9 +2177,14 @@
             log('[P2] Draft assigned: ' + dSports + ' sports, ' + dSpecials + ' specials');
         }
 
-        // ── Phase 3: DAP per-bunk partition ──────────────────────────
+        // ── Phase 3: Greedy pack per-bunk ──────────────────────────
+        // ★ Process grades in STAGGER ORDER so early grades' placements
+        //   influence later grades via cross-grade tracker
         const allTemplates = {};
-        allGrades.forEach(grade => {
+        const staggeredGrades = [...allGrades].sort((a, b) =>
+            ((staggerPlan[a] || {}).offset || 0) - ((staggerPlan[b] || {}).offset || 0)
+        );
+        staggeredGrades.forEach(grade => {
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 allTemplates[bunk] = greedyPackBunk(
                     bunk, grade,
