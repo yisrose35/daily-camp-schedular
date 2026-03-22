@@ -1,8 +1,7 @@
 // =========================================================================
 // schedule_calendar_views.js — Multi-View Calendar (Year / Month / Week / Day)
 // =========================================================================
-// v2.0 — Fixes: robust updateTable capture, proper orchestrator date load,
-//         division filter for all views
+// v2.1 — Smart highlights: month=compact badges, week=rich blocks w/ division tags
 // =========================================================================
 
 (function () {
@@ -156,6 +155,99 @@
             var key = ev.type + '|' + ev.activity + '|' + ev.startMin + '|' + ev.division;
             if (!seen[key]) { seen[key] = true; result.push(ev); }
         });
+        result.sort(function (a, b) { return a.startMin - b.startMin; });
+        return result;
+    }
+
+    // ── Smart Highlights (Month = compact badges, Week = rich blocks) ───
+    // Returns an array of { label, type, count, names[], icon, color, bg }
+    // Month view shows these as summary pills.
+    function getDayHighlights(dateKey) {
+        var rawEvents = getEventSummary(dateKey);
+        if (!rawEvents.length) return [];
+
+        // Bucket by type, collect unique activity names and divisions
+        var buckets = {};
+        rawEvents.forEach(function (ev) {
+            var t = ev.type;
+            // Skip noise
+            if (t === 'lunch' || t === 'snack' || t === 'dismissal' || t === 'free' || t === 'default') return;
+            if (!buckets[t]) buckets[t] = { names: {}, divs: {}, count: 0, startMins: [] };
+            buckets[t].names[ev.activity] = true;
+            if (ev.division) buckets[t].divs[ev.division] = true;
+            buckets[t].count++;
+            buckets[t].startMins.push(ev.startMin);
+        });
+
+        var highlights = [];
+
+        // Priority order: trip, swim, league, special, sport
+        var order = ['trip', 'swim', 'league', 'special', 'sport'];
+        order.forEach(function (type) {
+            var b = buckets[type];
+            if (!b) return;
+            var ec = EVENT_COLORS[type] || EVENT_COLORS.default;
+            var uniqueNames = Object.keys(b.names);
+            var uniqueDivs = Object.keys(b.divs);
+            var label = '';
+
+            if (type === 'trip') {
+                // Trips are always notable — show the name
+                label = uniqueNames.length === 1 ? 'Trip: ' + uniqueNames[0] : uniqueNames.length + ' Trips';
+            } else if (type === 'swim') {
+                label = uniqueDivs.length <= 2 ? 'Swim \u00B7 ' + uniqueDivs.join(', ') : 'Swim \u00B7 ' + uniqueDivs.length + ' grades';
+            } else if (type === 'league') {
+                label = uniqueDivs.length === 1 ? 'League \u00B7 ' + uniqueDivs[0] : uniqueDivs.length + ' Leagues';
+            } else if (type === 'special') {
+                if (uniqueNames.length <= 2) {
+                    label = uniqueNames.join(', ');
+                } else {
+                    label = uniqueNames.length + ' Specials';
+                }
+            } else if (type === 'sport') {
+                if (uniqueNames.length <= 2) {
+                    label = uniqueNames.join(', ');
+                } else {
+                    label = uniqueNames.length + ' Sports';
+                }
+            }
+
+            highlights.push({
+                type: type, label: label,
+                icon: ec.icon, color: ec.color, bg: ec.bg,
+                count: b.count, names: uniqueNames, divs: uniqueDivs,
+            });
+        });
+
+        return highlights;
+    }
+
+    // Week view: grouped events with time + division detail
+    // Returns array of { type, activity, startMin, endMin, division, divColor, bunkCount }
+    function getWeekEvents(dateKey) {
+        var rawEvents = getEventSummary(dateKey);
+        if (!rawEvents.length) return [];
+
+        // Group by type + activity + startMin + division for dedup,
+        // but count how many bunks share each event
+        var groups = {};
+        rawEvents.forEach(function (ev) {
+            var key = ev.type + '|' + ev.activity + '|' + ev.startMin + '|' + ev.division;
+            if (!groups[key]) {
+                groups[key] = {
+                    type: ev.type, activity: ev.activity,
+                    startMin: ev.startMin, endMin: ev.endMin,
+                    division: ev.division, divColor: ev.divColor,
+                    bunkCount: 0,
+                };
+            }
+            groups[key].bunkCount++;
+            // Use longest endMin
+            if (ev.endMin > groups[key].endMin) groups[key].endMin = ev.endMin;
+        });
+
+        var result = [];
+        for (var k in groups) result.push(groups[k]);
         result.sort(function (a, b) { return a.startMin - b.startMin; });
         return result;
     }
@@ -520,15 +612,26 @@
 
                 if (inMonth) {
                     var dateKey = getDateKey(_viewYear, _viewMonth, dayNum);
-                    var events = dedupeEvents(getEventSummary(dateKey));
+                    var highlights = getDayHighlights(dateKey);
                     var maxShow = 3;
-                    for (var ei = 0; ei < Math.min(events.length, maxShow); ei++) {
-                        var ev = events[ei];
-                        var ec = EVENT_COLORS[ev.type] || EVENT_COLORS.default;
-                        inner += '<div class="scv-month-event" style="background:' + ec.bg + ';color:' + ec.color + ';border-left:3px solid ' + ec.color + ';">' + ec.icon + ' ' + escapeHtml(ev.activity) + '</div>';
+                    for (var ei = 0; ei < Math.min(highlights.length, maxShow); ei++) {
+                        var hl = highlights[ei];
+                        inner += '<div class="scv-month-pill" style="background:' + hl.bg + ';color:' + hl.color + ';">' +
+                            '<span class="scv-month-pill-icon">' + hl.icon + '</span> ' +
+                            escapeHtml(hl.label) + '</div>';
                     }
-                    if (events.length > maxShow) {
-                        inner += '<div class="scv-month-more">+' + (events.length - maxShow) + ' more</div>';
+                    if (highlights.length > maxShow) {
+                        inner += '<div class="scv-month-more">+' + (highlights.length - maxShow) + ' more</div>';
+                    }
+                    // Show a subtle "no schedule" indicator for weekdays with no data
+                    if (highlights.length === 0) {
+                        var dow2 = (idx % 7);
+                        if (dow2 !== 0 && dow2 !== 6) {
+                            var hasAnyData = getScheduleDataForDate(dateKey);
+                            if (!hasAnyData) {
+                                inner += '<div class="scv-month-empty">\u2014</div>';
+                            }
+                        }
                     }
                 }
 
@@ -556,7 +659,7 @@
             weekDays.push(d);
         }
 
-        var START_HOUR = 8, END_HOUR = 17, HOUR_H = 56;
+        var START_HOUR = 8, END_HOUR = 17, HOUR_H = 72;
         var totalH = (END_HOUR - START_HOUR) * HOUR_H;
 
         var wrapper = document.createElement('div');
@@ -565,9 +668,17 @@
         var headerHtml = '<div class="scv-week-header"><div class="scv-week-gutter-hdr"></div>';
         weekDays.forEach(function (wd) {
             var today = isToday(wd.getFullYear(), wd.getMonth(), wd.getDate());
+            var dateKey = getDateKey(wd.getFullYear(), wd.getMonth(), wd.getDate());
+            var dayHL = getDayHighlights(dateKey);
+            var hlHtml = '';
+            // Show up to 3 tiny summary dots in the header
+            dayHL.slice(0, 3).forEach(function (hl) {
+                hlHtml += '<span class="scv-week-hdr-pill" style="background:' + hl.bg + ';color:' + hl.color + ';" title="' + escapeHtml(hl.label) + '">' + hl.icon + '</span>';
+            });
             headerHtml += '<div class="scv-week-day-hdr' + (today ? ' today' : '') + '" data-y="' + wd.getFullYear() + '" data-m="' + wd.getMonth() + '" data-d="' + wd.getDate() + '">' +
                 '<span class="scv-week-day-name">' + DAYS[wd.getDay()] + '</span>' +
                 '<span class="scv-week-day-num' + (today ? ' today-badge' : '') + '">' + wd.getDate() + '</span>' +
+                (hlHtml ? '<div class="scv-week-hdr-pills">' + hlHtml + '</div>' : '') +
                 '</div>';
         });
         headerHtml += '</div>';
@@ -607,21 +718,70 @@
             }
 
             var dateKey = getDateKey(wd.getFullYear(), wd.getMonth(), wd.getDate());
-            var events = dedupeEvents(getEventSummary(dateKey));
+            var events = getWeekEvents(dateKey);
 
-            events.forEach(function (ev) {
+            // Stack overlapping events into columns
+            var colAssign = {};
+            var colEnds = [];
+            events.forEach(function (ev, evi) {
+                // Skip lunch/snack/dismissal — just noise at week scale
+                if (ev.type === 'lunch' || ev.type === 'snack' || ev.type === 'dismissal') return;
+                if (ev.startMin < START_HOUR * 60 || ev.startMin >= END_HOUR * 60) return;
+
+                var placed = false;
+                for (var ci = 0; ci < colEnds.length; ci++) {
+                    if (ev.startMin >= colEnds[ci]) {
+                        colEnds[ci] = ev.endMin;
+                        colAssign[evi] = { col: ci, total: colEnds.length };
+                        placed = true; break;
+                    }
+                }
+                if (!placed) {
+                    colAssign[evi] = { col: colEnds.length, total: colEnds.length + 1 };
+                    colEnds.push(ev.endMin);
+                }
+            });
+            // Fix total counts
+            var maxCols = colEnds.length || 1;
+            for (var ck in colAssign) colAssign[ck].total = maxCols;
+
+            events.forEach(function (ev, evi) {
+                if (ev.type === 'lunch' || ev.type === 'snack' || ev.type === 'dismissal') return;
                 if (ev.startMin < START_HOUR * 60 || ev.startMin >= END_HOUR * 60) return;
                 var topPx = (ev.startMin - START_HOUR * 60) * (HOUR_H / 60);
                 var dur = Math.max(ev.endMin - ev.startMin, 15);
-                var heightPx = Math.max(dur * (HOUR_H / 60) - 2, 14);
+                var heightPx = Math.max(dur * (HOUR_H / 60) - 2, 16);
                 var ec = EVENT_COLORS[ev.type] || EVENT_COLORS.default;
+
+                var layout = colAssign[evi] || { col: 0, total: 1 };
+                var wPct = 100 / layout.total;
+                var lPct = layout.col * wPct;
 
                 var block = document.createElement('div');
                 block.className = 'scv-week-event';
-                block.style.cssText = 'top:' + topPx + 'px;height:' + heightPx + 'px;background:' + ec.bg + ';border-left:3px solid ' + ec.color + ';color:' + ec.color + ';';
+                block.style.cssText = 'top:' + topPx + 'px;height:' + heightPx + 'px;' +
+                    'left:calc(' + lPct + '% + 1px);width:calc(' + wPct + '% - 3px);' +
+                    'background:' + ec.bg + ';border-left:3px solid ' + ec.color + ';color:' + ec.color + ';';
+
                 var blockHtml = '<div class="scv-week-event-title">' + escapeHtml(ev.activity) + '</div>';
-                if (heightPx > 22) blockHtml += '<div class="scv-week-event-time">' + minutesToTime(ev.startMin) + '</div>';
-                if (heightPx > 36 && ev.division) blockHtml += '<div class="scv-week-event-div">' + escapeHtml(ev.division) + '</div>';
+
+                if (heightPx > 22) {
+                    blockHtml += '<div class="scv-week-event-time">' +
+                        minutesToTime(ev.startMin) + ' \u2013 ' + minutesToTime(ev.endMin) + '</div>';
+                }
+
+                if (heightPx > 38 && ev.division) {
+                    var divColor = ev.divColor || '#64748b';
+                    blockHtml += '<div class="scv-week-event-tag" style="background:' + divColor + ';">' +
+                        escapeHtml(ev.division) +
+                        (ev.bunkCount > 1 ? ' \u00B7 ' + ev.bunkCount + ' bunks' : '') +
+                        '</div>';
+                }
+
+                if (heightPx > 54 && ev.type === 'sport' && ev.activity) {
+                    blockHtml += '<div class="scv-week-event-field">' + escapeHtml(ev.activity) + '</div>';
+                }
+
                 block.innerHTML = blockHtml;
                 col.appendChild(block);
             });
@@ -705,8 +865,12 @@
 '.scv-month-day-num{font-size:12px;font-weight:500;color:var(--slate-700,#334155);display:inline-block;margin-bottom:4px}' +
 '.scv-month-cell.outside .scv-month-day-num{color:var(--slate-400,#94a3b8)}' +
 '.today-badge{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--camp-green,#147D91);color:#fff!important;font-weight:700;font-size:11px}' +
-'.scv-month-event{font-size:10px;line-height:16px;padding:1px 5px;border-radius:4px;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500}' +
 '.scv-month-more{font-size:10px;color:var(--slate-400,#94a3b8);padding-left:5px}' +
+
+/* Month highlight pills */
+'.scv-month-pill{font-size:10px;line-height:15px;padding:2px 6px;border-radius:10px;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;display:flex;align-items:center;gap:3px}' +
+'.scv-month-pill-icon{font-size:8px;flex-shrink:0;opacity:.7}' +
+'.scv-month-empty{font-size:10px;color:var(--slate-300,#cbd5e1);text-align:center;margin-top:8px}' +
 
 /* Week */
 '.scv-week-wrapper{border:1px solid var(--slate-200,#e2e8f0);border-radius:10px;overflow:hidden;background:#fff}' +
@@ -715,6 +879,8 @@
 '.scv-week-day-hdr{padding:8px 4px;text-align:center;background:var(--slate-50,#f8fafc);border-left:1px solid var(--slate-100,#f1f5f9);transition:background .1s}' +
 '.scv-week-day-hdr:hover{background:var(--slate-100,#f1f5f9)}' +
 '.scv-week-day-hdr.today{background:rgba(20,125,145,.06)}' +
+'.scv-week-hdr-pills{display:flex;justify-content:center;gap:3px;margin-top:3px}' +
+'.scv-week-hdr-pill{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;font-size:9px;font-weight:700}' +
 '.scv-week-day-name{display:block;font-size:11px;font-weight:600;color:var(--slate-500,#64748b)}' +
 '.scv-week-day-num{display:inline-block;font-size:16px;font-weight:500;color:var(--slate-800,#1e293b);margin-top:2px}' +
 '.scv-week-day-num.today-badge{font-size:13px}' +
@@ -728,6 +894,8 @@
 '.scv-week-event-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:14px}' +
 '.scv-week-event-time{font-size:9px;opacity:.7}' +
 '.scv-week-event-div{font-size:9px;opacity:.6;font-weight:600}' +
+'.scv-week-event-tag{display:inline-block;font-size:8px;font-weight:600;padding:1px 5px;border-radius:3px;color:#fff;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;line-height:13px}' +
+'.scv-week-event-field{font-size:8px;opacity:.55;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-style:italic}' +
 '.scv-now-line{position:absolute;left:0;right:0;z-index:5;display:flex;align-items:center}' +
 '.scv-now-dot{width:8px;height:8px;border-radius:50%;background:#ef4444;margin-left:-4px;flex-shrink:0}' +
 '.scv-now-bar{flex:1;height:2px;background:#ef4444}' +
