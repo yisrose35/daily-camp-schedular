@@ -1187,13 +1187,20 @@
     // =========================================================================
 
     window.initPostEditSystem = initPostEditSystem;
-    window.enhancedEditCell = enhancedEditCell;
-    window.checkLocationConflict = checkLocationConflict;
-    window.getAllLocations = getAllLocations;
-    window.getEditableBunks = getEditableBunks;
-    window.canEditBunk = canEditBunk;
-    window.sendSchedulerNotification = sendSchedulerNotification;
-    window.bypassSaveAllBunks = bypassSaveAllBunks;
+    // ★★★ FIX: Don't override if unified_schedule_system.js already loaded ★★★
+    // unified_schedule_system.js has the full integrated edit system with
+    // per-bunk slot support for auto mode. Only override if it's NOT loaded.
+    if (!window.UnifiedScheduleSystem) {
+        window.enhancedEditCell = enhancedEditCell;
+        window.checkLocationConflict = checkLocationConflict;
+        window.getAllLocations = getAllLocations;
+        window.getEditableBunks = getEditableBunks;
+        window.canEditBunk = canEditBunk;
+        window.sendSchedulerNotification = sendSchedulerNotification;
+        window.bypassSaveAllBunks = bypassSaveAllBunks;
+    } else {
+        console.log('[PostEdit] unified_schedule_system.js already loaded — skipping overrides');
+    }
    
     // =========================================================================
     // ★★★ CRITICAL PATCH: Make loadScheduleForDate respect _postEditInProgress ★★★
