@@ -4288,6 +4288,7 @@ function init() {
   renderTripsForm();
   renderBunkOverridesUI();
   renderResourceOverridesUI();
+  if (window.RotationEvents?.injectSubtab) window.RotationEvents.injectSubtab();
 }
     
 function cleanup() {
