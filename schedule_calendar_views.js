@@ -1,7 +1,8 @@
 // =========================================================================
 // schedule_calendar_views.js — Multi-View Calendar (Year / Month / Week / Day)
 // =========================================================================
-// v2.1 — Smart highlights: month=compact badges, week=rich blocks w/ division tags
+// v5.1 — Special events only + schedule-generated indicator
+//         (green tint/checkmark when schedule exists for a day)
 // =========================================================================
 
 (function () {
@@ -14,20 +15,6 @@
     const DAYS_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
     const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-    const EVENT_COLORS = {
-        swim:      { color: '#0284c7', bg: '#e0f2fe', icon: '~' },
-        league:    { color: '#059669', bg: '#d1fae5', icon: '\u25CF' },
-        special:   { color: '#7c3aed', bg: '#ede9fe', icon: '\u2605' },
-        sport:     { color: '#ea580c', bg: '#fff7ed', icon: '\u25B2' },
-        trip:      { color: '#db2777', bg: '#fce7f3', icon: '\u279A' },
-        lunch:     { color: '#d97706', bg: '#fffbeb', icon: '\u25C9' },
-        snack:     { color: '#d97706', bg: '#fffbeb', icon: '\u25C9' },
-        dismissal: { color: '#64748b', bg: '#f1f5f9', icon: '\u25AA' },
-        free:      { color: '#94a3b8', bg: '#f8fafc', icon: '\u25CB' },
-        pinned:    { color: '#b45309', bg: '#fef3c7', icon: '\u25C6' },
-        default:   { color: '#475569', bg: '#f1f5f9', icon: '\u2022' },
-    };
 
     // ── State ────────────────────────────────────────────────────────────
     let _currentView = 'day';
@@ -108,148 +95,224 @@
         return all[dateKey] || null;
     }
 
-    function getEventSummary(dateKey) {
+    // Check if a generated schedule exists for this date
+    // (has real bunk assignments, not just empty/skeleton data)
+    function hasSchedule(dateKey) {
         var data = getScheduleDataForDate(dateKey);
-        if (!data) return [];
-        var events = [];
-        var assignments = data.scheduleAssignments || {};
-
-        Object.keys(assignments).forEach(function (bunkName) {
-            var slots = assignments[bunkName];
-            if (!Array.isArray(slots)) return;
-            var divName = getDivisionForBunk(bunkName);
-            if (_selectedDivision !== 'all' && divName !== _selectedDivision) return;
-
-            slots.forEach(function (slot) {
-                if (!slot || !slot.activity) return;
-                var act = (slot.activity || '').toLowerCase();
-                if (act === 'free' || act === 'free play' || !act) return;
-
-                var type = 'default';
-                if (act.indexOf('swim') !== -1 || act.indexOf('pool') !== -1) type = 'swim';
-                else if (act.indexOf('league') !== -1) type = 'league';
-                else if (act.indexOf('lunch') !== -1) type = 'lunch';
-                else if (act.indexOf('snack') !== -1) type = 'snack';
-                else if (act.indexOf('dismissal') !== -1) type = 'dismissal';
-                else if (slot._isSpecial || slot._type === 'special' || slot._type === 'special_slot') type = 'special';
-                else if (slot._type === 'sport' || slot._type === 'sport_slot') type = 'sport';
-
-                events.push({
-                    type: type,
-                    activity: slot.activity,
-                    division: divName,
-                    divColor: (getDivisions()[divName] || {}).color || '#64748b',
-                    startMin: slot.startMin || 0,
-                    endMin: slot.endMin || 0,
-                    bunk: bunkName,
-                });
-            });
-        });
-        return events;
+        if (!data || !data.scheduleAssignments) return false;
+        var bunks = Object.keys(data.scheduleAssignments);
+        if (bunks.length === 0) return false;
+        // Check at least one bunk has a real slot
+        for (var i = 0; i < bunks.length; i++) {
+            var slots = data.scheduleAssignments[bunks[i]];
+            if (Array.isArray(slots) && slots.length > 0) {
+                for (var j = 0; j < slots.length; j++) {
+                    var s = slots[j];
+                    if (s && s.activity && s.activity.toLowerCase() !== 'free') return true;
+                }
+            }
+        }
+        return false;
     }
 
-    function dedupeEvents(events) {
+    // ── Special Events Only ─────────────────────────────────────────────
+    // The calendar ONLY shows truly notable/special things — NOT the
+    // regular daily schedule. Three data sources:
+    //
+    //   1. TRIPS        → campDailyTrips_<dateKey> / dailyData.dailyTrips
+    //   2. ROTATION EVT → globalSettings.rotationEvents (date-range based)
+    //   3. CUSTOM PINS  → skeleton blocks with type "pinned" that are NOT
+    //                      standard (swim/lunch/snacks/dismissal)
+    //
+    // Returns: [{ division, color, shortLabel, longLabel, startMin, endMin, category }]
+
+    var STANDARD_PINS = { 'swim': 1, 'lunch': 1, 'snacks': 1, 'snack': 1, 'dismissal': 1 };
+
+    function parseTimeStr(str) {
+        if (!str) return null;
+        str = str.toString().toLowerCase().replace(/\s/g, '');
+        var m = str.match(/^(\d{1,2}):(\d{2})(am|pm)?$/);
+        if (!m) return null;
+        var h = parseInt(m[1], 10);
+        var min = parseInt(m[2], 10);
+        if (m[3] === 'pm' && h < 12) h += 12;
+        if (m[3] === 'am' && h === 12) h = 0;
+        return h * 60 + min;
+    }
+
+    function getGradeEvents(dateKey) {
+        var divs = getDivisions();
+        var results = [];
+
+        // ─── 1. TRIPS ────────────────────────────────────────────────
+        var trips = [];
+        try {
+            var stored = localStorage.getItem('campDailyTrips_' + dateKey);
+            if (stored) trips = JSON.parse(stored);
+        } catch (e) { /* ignore */ }
+        // Fallback: dailyData
+        if (!trips.length) {
+            var dd = getScheduleDataForDate(dateKey);
+            if (dd && Array.isArray(dd.dailyTrips)) trips = dd.dailyTrips;
+        }
+
+        trips.forEach(function (trip) {
+            var divName = trip.division;
+            if (!divName) return;
+            if (_selectedDivision !== 'all' && divName !== _selectedDivision) return;
+            var color = (divs[divName] || {}).color || '#64748b';
+            var name = trip.event || 'Trip';
+            var startMin = trip.startMin != null ? trip.startMin : parseTimeStr(trip.startTime);
+            var endMin = trip.endMin != null ? trip.endMin : parseTimeStr(trip.endTime);
+
+            results.push({
+                division: divName, color: color, category: 'trip',
+                shortLabel: 'Trip',
+                longLabel: name + (startMin != null && endMin != null ? ' \u2013 ' + minutesToTime(startMin) + ' to ' + minutesToTime(endMin) : ''),
+                startMin: startMin || 0, endMin: endMin || 0,
+            });
+        });
+
+        // ─── 2. ROTATION EVENTS ──────────────────────────────────────
+        var rotEvents = [];
+        try {
+            var g = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            rotEvents = Array.isArray(g.rotationEvents) ? g.rotationEvents : [];
+        } catch (e) { /* ignore */ }
+
+        rotEvents.forEach(function (evt) {
+            if (!evt.dateRange || !evt.dateRange.start || !evt.dateRange.end) return;
+            if (dateKey < evt.dateRange.start || dateKey > evt.dateRange.end) return;
+            // Rotation events are camp-wide — show once with a neutral label,
+            // or once per grade if filtered
+            var name = evt.name || 'Event';
+            var loc = evt.location || '';
+            var startMin = evt.dailyWindow ? evt.dailyWindow.startMin : 0;
+            var endMin = evt.dailyWindow ? evt.dailyWindow.endMin : 0;
+            var longText = name;
+            if (loc) longText += ' \u2013 ' + loc;
+            if (startMin && endMin) longText += ' \u2013 ' + minutesToTime(startMin) + ' to ' + minutesToTime(endMin);
+
+            if (_selectedDivision !== 'all') {
+                // Show for the selected grade only
+                var color = (divs[_selectedDivision] || {}).color || '#64748b';
+                results.push({
+                    division: _selectedDivision, color: color, category: 'rotation',
+                    shortLabel: name,
+                    longLabel: longText,
+                    startMin: startMin || 0, endMin: endMin || 0,
+                });
+            } else {
+                // Show once with camp-wide styling (use the event's color or teal)
+                var evtColor = evt.color || '#147D91';
+                results.push({
+                    division: 'All Grades', color: evtColor, category: 'rotation',
+                    shortLabel: name,
+                    longLabel: longText,
+                    startMin: startMin || 0, endMin: endMin || 0,
+                });
+            }
+        });
+
+        // ─── 3. CUSTOM SKELETON PINS ─────────────────────────────────
+        // These are user-created pinned blocks like "Assembly", "Color War"
+        // that are NOT standard swim/lunch/snacks/dismissal
+        var skeleton = [];
+        try {
+            // Check dailyOverrideSkeleton in dailyData
+            var dd2 = getScheduleDataForDate(dateKey);
+            if (dd2 && Array.isArray(dd2.manualSkeleton)) skeleton = dd2.manualSkeleton;
+            // Also check dedicated localStorage key
+            if (!skeleton.length) {
+                var raw = localStorage.getItem('campManualSkeleton_' + dateKey);
+                if (raw) skeleton = JSON.parse(raw);
+            }
+            // Also check the global dailyData skeleton
+            if (!skeleton.length) {
+                var allDaily = getAllDailyData();
+                var dayData = allDaily[dateKey];
+                if (dayData && Array.isArray(dayData.dailyOverrideSkeleton)) skeleton = dayData.dailyOverrideSkeleton;
+            }
+        } catch (e) { /* ignore */ }
+
+        skeleton.forEach(function (block) {
+            if (!block || block.type !== 'pinned') return;
+            var evtName = (block.event || '').toLowerCase().trim();
+            if (STANDARD_PINS[evtName]) return; // skip swim, lunch, snacks, dismissal
+            if (!evtName) return;
+
+            var divName = block.division;
+            if (!divName) return;
+            if (_selectedDivision !== 'all' && divName !== _selectedDivision) return;
+            var color = (divs[divName] || {}).color || '#64748b';
+            var startMin = parseTimeStr(block.startTime);
+            var endMin = parseTimeStr(block.endTime);
+
+            var displayName = block.event || 'Event';
+            var longText = displayName;
+            if (startMin != null && endMin != null) {
+                longText += ' \u2013 ' + minutesToTime(startMin) + ' to ' + minutesToTime(endMin);
+            }
+
+            results.push({
+                division: divName, color: color, category: 'custom',
+                shortLabel: displayName,
+                longLabel: longText,
+                startMin: startMin || 0, endMin: endMin || 0,
+            });
+        });
+
+        // Sort: trips first, then rotation, then custom; within same category sort by division
+        var catOrder = { trip: 0, rotation: 1, custom: 2 };
+        results.sort(function (a, b) {
+            var ca = catOrder[a.category] !== undefined ? catOrder[a.category] : 9;
+            var cb = catOrder[b.category] !== undefined ? catOrder[b.category] : 9;
+            if (ca !== cb) return ca - cb;
+            return a.division.localeCompare(b.division);
+        });
+
+        return results;
+    }
+
+    // Which grades have any special event this day?
+    function getActiveGrades(dateKey) {
+        var events = getGradeEvents(dateKey);
         var seen = {};
         var result = [];
         events.forEach(function (ev) {
-            var key = ev.type + '|' + ev.activity + '|' + ev.startMin + '|' + ev.division;
-            if (!seen[key]) { seen[key] = true; result.push(ev); }
+            if (!seen[ev.division]) {
+                seen[ev.division] = true;
+                result.push({ division: ev.division, color: ev.color });
+            }
         });
-        result.sort(function (a, b) { return a.startMin - b.startMin; });
         return result;
     }
 
-    // ── Smart Highlights (Month = compact badges, Week = rich blocks) ───
-    // Returns an array of { label, type, count, names[], icon, color, bg }
-    // Month view shows these as summary pills.
-    function getDayHighlights(dateKey) {
-        var rawEvents = getEventSummary(dateKey);
-        if (!rawEvents.length) return [];
-
-        // Bucket by type, collect unique activity names and divisions
-        var buckets = {};
-        rawEvents.forEach(function (ev) {
-            var t = ev.type;
-            // Skip noise
-            if (t === 'lunch' || t === 'snack' || t === 'dismissal' || t === 'free' || t === 'default') return;
-            if (!buckets[t]) buckets[t] = { names: {}, divs: {}, count: 0, startMins: [] };
-            buckets[t].names[ev.activity] = true;
-            if (ev.division) buckets[t].divs[ev.division] = true;
-            buckets[t].count++;
-            buckets[t].startMins.push(ev.startMin);
-        });
-
-        var highlights = [];
-
-        // Priority order: trip, swim, league, special, sport
-        var order = ['trip', 'swim', 'league', 'special', 'sport'];
-        order.forEach(function (type) {
-            var b = buckets[type];
-            if (!b) return;
-            var ec = EVENT_COLORS[type] || EVENT_COLORS.default;
-            var uniqueNames = Object.keys(b.names);
-            var uniqueDivs = Object.keys(b.divs);
-            var label = '';
-
-            if (type === 'trip') {
-                // Trips are always notable — show the name
-                label = uniqueNames.length === 1 ? 'Trip: ' + uniqueNames[0] : uniqueNames.length + ' Trips';
-            } else if (type === 'swim') {
-                label = uniqueDivs.length <= 2 ? 'Swim \u00B7 ' + uniqueDivs.join(', ') : 'Swim \u00B7 ' + uniqueDivs.length + ' grades';
-            } else if (type === 'league') {
-                label = uniqueDivs.length === 1 ? 'League \u00B7 ' + uniqueDivs[0] : uniqueDivs.length + ' Leagues';
-            } else if (type === 'special') {
-                if (uniqueNames.length <= 2) {
-                    label = uniqueNames.join(', ');
-                } else {
-                    label = uniqueNames.length + ' Specials';
-                }
-            } else if (type === 'sport') {
-                if (uniqueNames.length <= 2) {
-                    label = uniqueNames.join(', ');
-                } else {
-                    label = uniqueNames.length + ' Sports';
-                }
-            }
-
-            highlights.push({
-                type: type, label: label,
-                icon: ec.icon, color: ec.color, bg: ec.bg,
-                count: b.count, names: uniqueNames, divs: uniqueDivs,
-            });
-        });
-
-        return highlights;
+    // Does this day have a generated schedule? (checks scheduleAssignments)
+    function hasSchedule(dateKey) {
+        var data = getScheduleDataForDate(dateKey);
+        if (!data || !data.scheduleAssignments) return false;
+        var bunks = Object.keys(data.scheduleAssignments);
+        if (bunks.length === 0) return false;
+        // Make sure at least one bunk has real slot data
+        for (var i = 0; i < bunks.length; i++) {
+            var slots = data.scheduleAssignments[bunks[i]];
+            if (Array.isArray(slots) && slots.length > 0) return true;
+        }
+        return false;
     }
 
-    // Week view: grouped events with time + division detail
-    // Returns array of { type, activity, startMin, endMin, division, divColor, bunkCount }
-    function getWeekEvents(dateKey) {
-        var rawEvents = getEventSummary(dateKey);
-        if (!rawEvents.length) return [];
-
-        // Group by type + activity + startMin + division for dedup,
-        // but count how many bunks share each event
-        var groups = {};
-        rawEvents.forEach(function (ev) {
-            var key = ev.type + '|' + ev.activity + '|' + ev.startMin + '|' + ev.division;
-            if (!groups[key]) {
-                groups[key] = {
-                    type: ev.type, activity: ev.activity,
-                    startMin: ev.startMin, endMin: ev.endMin,
-                    division: ev.division, divColor: ev.divColor,
-                    bunkCount: 0,
-                };
-            }
-            groups[key].bunkCount++;
-            // Use longest endMin
-            if (ev.endMin > groups[key].endMin) groups[key].endMin = ev.endMin;
-        });
-
-        var result = [];
-        for (var k in groups) result.push(groups[k]);
-        result.sort(function (a, b) { return a.startMin - b.startMin; });
-        return result;
+    // Lighten a hex color for backgrounds
+    function lightenColor(hex, amt) {
+        hex = hex.replace('#', '');
+        if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+        var r = parseInt(hex.substring(0, 2), 16);
+        var g = parseInt(hex.substring(2, 4), 16);
+        var b = parseInt(hex.substring(4, 6), 16);
+        r = Math.min(255, Math.round(r + (255 - r) * amt));
+        g = Math.min(255, Math.round(g + (255 - g) * amt));
+        b = Math.min(255, Math.round(b + (255 - b) * amt));
+        return '#' + r.toString(16).padStart(2,'0') + g.toString(16).padStart(2,'0') + b.toString(16).padStart(2,'0');
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -519,7 +582,6 @@
     // YEAR VIEW
     // ══════════════════════════════════════════════════════════════════════
     function renderYearView() {
-        var allData = getAllDailyData();
         var grid = document.createElement('div');
         grid.className = 'scv-year-grid';
 
@@ -527,23 +589,15 @@
             (function (monthIdx) {
                 var daysInMonth = new Date(_viewYear, monthIdx + 1, 0).getDate();
                 var firstDow = new Date(_viewYear, monthIdx, 1).getDay();
-                var daysWithData = {};
 
+                // Pre-compute which grades are active each day
+                var dayGrades = {};
+                var dayHasSchedule = {};
                 for (var d = 1; d <= daysInMonth; d++) {
                     var key = getDateKey(_viewYear, monthIdx, d);
-                    var dd = allData[key];
-                    if (dd && dd.scheduleAssignments && Object.keys(dd.scheduleAssignments).length > 0) {
-                        if (_selectedDivision === 'all') {
-                            daysWithData[d] = true;
-                        } else {
-                            var bunks = getBunksForDivision(_selectedDivision);
-                            for (var bi = 0; bi < bunks.length; bi++) {
-                                if (dd.scheduleAssignments[bunks[bi]] && dd.scheduleAssignments[bunks[bi]].length > 0) {
-                                    daysWithData[d] = true; break;
-                                }
-                            }
-                        }
-                    }
+                    var grades = getActiveGrades(key);
+                    if (grades.length > 0) dayGrades[d] = grades;
+                    dayHasSchedule[d] = hasSchedule(key);
                 }
 
                 var card = document.createElement('div');
@@ -556,10 +610,22 @@
                 for (var i = 0; i < firstDow; i++) html += '<div class="scv-year-mini-day empty"></div>';
                 for (var d = 1; d <= daysInMonth; d++) {
                     var today = isToday(_viewYear, monthIdx, d);
-                    var hasData = daysWithData[d];
+                    var grades = dayGrades[d];
+                    var scheduled = dayHasSchedule[d];
                     var cls = 'scv-year-mini-day';
                     if (today) cls += ' today';
-                    html += '<div class="' + cls + '">' + d + (hasData && !today ? '<span class="scv-dot"></span>' : '') + '</div>';
+                    else if (scheduled) cls += ' has-sched';
+                    html += '<div class="' + cls + '">' + d;
+                    if (grades && !today) {
+                        html += '<div class="scv-grade-dots">';
+                        // Show up to 6 grade dots
+                        var maxDots = Math.min(grades.length, 6);
+                        for (var gi = 0; gi < maxDots; gi++) {
+                            html += '<span class="scv-grade-dot" style="background:' + grades[gi].color + ';"></span>';
+                        }
+                        html += '</div>';
+                    }
+                    html += '</div>';
                 }
                 html += '</div>';
                 card.innerHTML = html;
@@ -612,25 +678,25 @@
 
                 if (inMonth) {
                     var dateKey = getDateKey(_viewYear, _viewMonth, dayNum);
-                    var highlights = getDayHighlights(dateKey);
+                    var events = getGradeEvents(dateKey);
+                    var scheduled = hasSchedule(dateKey);
                     var maxShow = 3;
-                    for (var ei = 0; ei < Math.min(highlights.length, maxShow); ei++) {
-                        var hl = highlights[ei];
-                        inner += '<div class="scv-month-pill" style="background:' + hl.bg + ';color:' + hl.color + ';">' +
-                            '<span class="scv-month-pill-icon">' + hl.icon + '</span> ' +
-                            escapeHtml(hl.label) + '</div>';
+                    for (var gi = 0; gi < Math.min(events.length, maxShow); gi++) {
+                        var ev = events[gi];
+                        var bgColor = lightenColor(ev.color, 0.82);
+                        inner += '<div class="scv-month-ev" style="background:' + bgColor + ';color:' + ev.color + ';border-left:3px solid ' + ev.color + ';">' +
+                            escapeHtml(ev.division) + ' ' + escapeHtml(ev.shortLabel) + '</div>';
                     }
-                    if (highlights.length > maxShow) {
-                        inner += '<div class="scv-month-more">+' + (highlights.length - maxShow) + ' more</div>';
+                    if (events.length > maxShow) {
+                        inner += '<div class="scv-month-more">+' + (events.length - maxShow) + ' more</div>';
                     }
-                    // Show a subtle "no schedule" indicator for weekdays with no data
-                    if (highlights.length === 0) {
-                        var dow2 = (idx % 7);
+                    // Schedule status indicator
+                    if (scheduled) {
+                        inner += '<div class="scv-month-sched">\u2713 Schedule</div>';
+                    } else {
+                        var dow2 = idx % 7;
                         if (dow2 !== 0 && dow2 !== 6) {
-                            var hasAnyData = getScheduleDataForDate(dateKey);
-                            if (!hasAnyData) {
-                                inner += '<div class="scv-month-empty">\u2014</div>';
-                            }
+                            inner += '<div class="scv-month-no-sched">No schedule</div>';
                         }
                     }
                 }
@@ -669,16 +735,22 @@
         weekDays.forEach(function (wd) {
             var today = isToday(wd.getFullYear(), wd.getMonth(), wd.getDate());
             var dateKey = getDateKey(wd.getFullYear(), wd.getMonth(), wd.getDate());
-            var dayHL = getDayHighlights(dateKey);
-            var hlHtml = '';
-            // Show up to 3 tiny summary dots in the header
-            dayHL.slice(0, 3).forEach(function (hl) {
-                hlHtml += '<span class="scv-week-hdr-pill" style="background:' + hl.bg + ';color:' + hl.color + ';" title="' + escapeHtml(hl.label) + '">' + hl.icon + '</span>';
+            var activeGrades = getActiveGrades(dateKey);
+            var scheduled = hasSchedule(dateKey);
+            var dotHtml = '';
+            activeGrades.slice(0, 6).forEach(function (g) {
+                dotHtml += '<span class="scv-week-hdr-dot" style="background:' + g.color + ';" title="' + escapeHtml(g.division) + '"></span>';
             });
+            var schedBadge = scheduled
+                ? '<span class="scv-week-sched-badge">\u2713</span>'
+                : '<span class="scv-week-no-sched-badge">\u2013</span>';
             headerHtml += '<div class="scv-week-day-hdr' + (today ? ' today' : '') + '" data-y="' + wd.getFullYear() + '" data-m="' + wd.getMonth() + '" data-d="' + wd.getDate() + '">' +
                 '<span class="scv-week-day-name">' + DAYS[wd.getDay()] + '</span>' +
-                '<span class="scv-week-day-num' + (today ? ' today-badge' : '') + '">' + wd.getDate() + '</span>' +
-                (hlHtml ? '<div class="scv-week-hdr-pills">' + hlHtml + '</div>' : '') +
+                '<div class="scv-week-day-num-row">' +
+                    '<span class="scv-week-day-num' + (today ? ' today-badge' : '') + '">' + wd.getDate() + '</span>' +
+                    schedBadge +
+                '</div>' +
+                (dotHtml ? '<div class="scv-week-hdr-dots">' + dotHtml + '</div>' : '') +
                 '</div>';
         });
         headerHtml += '</div>';
@@ -718,16 +790,13 @@
             }
 
             var dateKey = getDateKey(wd.getFullYear(), wd.getMonth(), wd.getDate());
-            var events = getWeekEvents(dateKey);
+            var events = getGradeEvents(dateKey);
 
             // Stack overlapping events into columns
-            var colAssign = {};
             var colEnds = [];
+            var colAssign = {};
             events.forEach(function (ev, evi) {
-                // Skip lunch/snack/dismissal — just noise at week scale
-                if (ev.type === 'lunch' || ev.type === 'snack' || ev.type === 'dismissal') return;
                 if (ev.startMin < START_HOUR * 60 || ev.startMin >= END_HOUR * 60) return;
-
                 var placed = false;
                 for (var ci = 0; ci < colEnds.length; ci++) {
                     if (ev.startMin >= colEnds[ci]) {
@@ -741,17 +810,15 @@
                     colEnds.push(ev.endMin);
                 }
             });
-            // Fix total counts
             var maxCols = colEnds.length || 1;
             for (var ck in colAssign) colAssign[ck].total = maxCols;
 
             events.forEach(function (ev, evi) {
-                if (ev.type === 'lunch' || ev.type === 'snack' || ev.type === 'dismissal') return;
                 if (ev.startMin < START_HOUR * 60 || ev.startMin >= END_HOUR * 60) return;
                 var topPx = (ev.startMin - START_HOUR * 60) * (HOUR_H / 60);
                 var dur = Math.max(ev.endMin - ev.startMin, 15);
-                var heightPx = Math.max(dur * (HOUR_H / 60) - 2, 16);
-                var ec = EVENT_COLORS[ev.type] || EVENT_COLORS.default;
+                var heightPx = Math.max(dur * (HOUR_H / 60) - 2, 24);
+                var bgColor = lightenColor(ev.color, 0.82);
 
                 var layout = colAssign[evi] || { col: 0, total: 1 };
                 var wPct = 100 / layout.total;
@@ -761,26 +828,11 @@
                 block.className = 'scv-week-event';
                 block.style.cssText = 'top:' + topPx + 'px;height:' + heightPx + 'px;' +
                     'left:calc(' + lPct + '% + 1px);width:calc(' + wPct + '% - 3px);' +
-                    'background:' + ec.bg + ';border-left:3px solid ' + ec.color + ';color:' + ec.color + ';';
+                    'background:' + bgColor + ';border-left:3px solid ' + ev.color + ';color:' + ev.color + ';';
 
-                var blockHtml = '<div class="scv-week-event-title">' + escapeHtml(ev.activity) + '</div>';
-
-                if (heightPx > 22) {
-                    blockHtml += '<div class="scv-week-event-time">' +
-                        minutesToTime(ev.startMin) + ' \u2013 ' + minutesToTime(ev.endMin) + '</div>';
-                }
-
-                if (heightPx > 38 && ev.division) {
-                    var divColor = ev.divColor || '#64748b';
-                    blockHtml += '<div class="scv-week-event-tag" style="background:' + divColor + ';">' +
-                        escapeHtml(ev.division) +
-                        (ev.bunkCount > 1 ? ' \u00B7 ' + ev.bunkCount + ' bunks' : '') +
-                        '</div>';
-                }
-
-                if (heightPx > 54 && ev.type === 'sport' && ev.activity) {
-                    blockHtml += '<div class="scv-week-event-field">' + escapeHtml(ev.activity) + '</div>';
-                }
+                // Full detail: "1st Grade Trip - Zoo - 11:00 AM to 2:00 PM"
+                var blockHtml = '<div class="scv-week-event-title">' +
+                    escapeHtml(ev.division) + ' ' + escapeHtml(ev.longLabel) + '</div>';
 
                 block.innerHTML = blockHtml;
                 col.appendChild(block);
@@ -846,17 +898,19 @@
 '.scv-year-month-name{font-size:13px;font-weight:600;color:var(--slate-800,#1e293b);margin-bottom:8px}' +
 '.scv-year-mini-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;text-align:center}' +
 '.scv-year-mini-hdr{font-size:9px;font-weight:600;color:var(--slate-400,#94a3b8);line-height:16px}' +
-'.scv-year-mini-day{font-size:10px;line-height:20px;color:var(--slate-600,#475569);border-radius:50%;position:relative}' +
+'.scv-year-mini-day{font-size:10px;line-height:20px;color:var(--slate-600,#475569);border-radius:50%;text-align:center}' +
 '.scv-year-mini-day.empty{visibility:hidden}' +
 '.scv-year-mini-day.today{background:var(--camp-green,#147D91);color:#fff;font-weight:700}' +
-'.scv-dot{position:absolute;bottom:0;left:50%;transform:translateX(-50%);width:4px;height:4px;border-radius:50%;background:var(--camp-green,#147D91)}' +
+'.scv-year-mini-day.has-sched{background:rgba(16,185,129,0.15);color:var(--slate-700,#334155);font-weight:500;border-radius:50%}' +
+'.scv-grade-dots{display:flex;justify-content:center;gap:1px;margin-top:-2px;min-height:5px}' +
+'.scv-grade-dot{width:4px;height:4px;border-radius:50%;flex-shrink:0}' +
 
 /* Month */
 '.scv-month-wrapper{border:1px solid var(--slate-200,#e2e8f0);border-radius:10px;overflow:hidden;background:#fff}' +
 '.scv-month-header-row{display:grid;grid-template-columns:repeat(7,1fr);border-bottom:1px solid var(--slate-200,#e2e8f0)}' +
 '.scv-month-hdr{padding:8px 0;text-align:center;font-size:12px;font-weight:600;color:var(--slate-500,#64748b);background:var(--slate-50,#f8fafc)}' +
 '.scv-month-grid{display:grid;grid-template-columns:repeat(7,1fr)}' +
-'.scv-month-cell{min-height:100px;padding:4px 6px;border-bottom:1px solid var(--slate-100,#f1f5f9);border-right:1px solid var(--slate-100,#f1f5f9);transition:background .1s;overflow:hidden}' +
+'.scv-month-cell{min-height:100px;padding:4px 6px;border-bottom:1px solid var(--slate-100,#f1f5f9);border-right:1px solid var(--slate-100,#f1f5f9);transition:background .1s;overflow:hidden;display:flex;flex-direction:column}' +
 '.scv-month-cell:nth-child(7n){border-right:none}' +
 '.scv-month-cell:hover{background:var(--slate-50,#f8fafc)}' +
 '.scv-month-cell.outside{opacity:.35}' +
@@ -867,10 +921,10 @@
 '.today-badge{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--camp-green,#147D91);color:#fff!important;font-weight:700;font-size:11px}' +
 '.scv-month-more{font-size:10px;color:var(--slate-400,#94a3b8);padding-left:5px}' +
 
-/* Month highlight pills */
-'.scv-month-pill{font-size:10px;line-height:15px;padding:2px 6px;border-radius:10px;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;display:flex;align-items:center;gap:3px}' +
-'.scv-month-pill-icon{font-size:8px;flex-shrink:0;opacity:.7}' +
-'.scv-month-empty{font-size:10px;color:var(--slate-300,#cbd5e1);text-align:center;margin-top:8px}' +
+/* Month event lines */
+'.scv-month-ev{font-size:10px;line-height:15px;padding:2px 6px;border-radius:4px;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}' +
+'.scv-month-sched{font-size:9px;color:#059669;font-weight:600;margin-top:auto;padding-top:4px;opacity:.7}' +
+'.scv-month-no-sched{font-size:9px;color:var(--slate-300,#cbd5e1);margin-top:auto;padding-top:4px}' +
 
 /* Week */
 '.scv-week-wrapper{border:1px solid var(--slate-200,#e2e8f0);border-radius:10px;overflow:hidden;background:#fff}' +
@@ -879,8 +933,11 @@
 '.scv-week-day-hdr{padding:8px 4px;text-align:center;background:var(--slate-50,#f8fafc);border-left:1px solid var(--slate-100,#f1f5f9);transition:background .1s}' +
 '.scv-week-day-hdr:hover{background:var(--slate-100,#f1f5f9)}' +
 '.scv-week-day-hdr.today{background:rgba(20,125,145,.06)}' +
-'.scv-week-hdr-pills{display:flex;justify-content:center;gap:3px;margin-top:3px}' +
-'.scv-week-hdr-pill{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;font-size:9px;font-weight:700}' +
+'.scv-week-day-num-row{display:flex;align-items:center;justify-content:center;gap:4px}' +
+'.scv-week-sched-badge{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:rgba(16,185,129,0.15);color:#059669;font-size:9px;font-weight:700}' +
+'.scv-week-no-sched-badge{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:var(--slate-100,#f1f5f9);color:var(--slate-300,#cbd5e1);font-size:9px;font-weight:700}' +
+'.scv-week-hdr-dots{display:flex;justify-content:center;gap:3px;margin-top:3px}' +
+'.scv-week-hdr-dot{display:inline-block;width:7px;height:7px;border-radius:50%}' +
 '.scv-week-day-name{display:block;font-size:11px;font-weight:600;color:var(--slate-500,#64748b)}' +
 '.scv-week-day-num{display:inline-block;font-size:16px;font-weight:500;color:var(--slate-800,#1e293b);margin-top:2px}' +
 '.scv-week-day-num.today-badge{font-size:13px}' +
@@ -891,11 +948,7 @@
 '.scv-week-hour-line{position:absolute;left:0;right:0;border-top:1px solid var(--slate-100,#f1f5f9)}' +
 '.scv-week-event{position:absolute;left:2px;right:2px;border-radius:4px;padding:2px 5px;font-size:10px;overflow:hidden;cursor:default;font-weight:500;transition:opacity .1s;z-index:2}' +
 '.scv-week-event:hover{opacity:.8}' +
-'.scv-week-event-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:14px}' +
-'.scv-week-event-time{font-size:9px;opacity:.7}' +
-'.scv-week-event-div{font-size:9px;opacity:.6;font-weight:600}' +
-'.scv-week-event-tag{display:inline-block;font-size:8px;font-weight:600;padding:1px 5px;border-radius:3px;color:#fff;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;line-height:13px}' +
-'.scv-week-event-field{font-size:8px;opacity:.55;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-style:italic}' +
+'.scv-week-event-title{overflow:hidden;text-overflow:ellipsis;line-height:14px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;white-space:normal;word-break:break-word}' +
 '.scv-now-line{position:absolute;left:0;right:0;z-index:5;display:flex;align-items:center}' +
 '.scv-now-dot{width:8px;height:8px;border-radius:50%;background:#ef4444;margin-left:-4px;flex-shrink:0}' +
 '.scv-now-bar{flex:1;height:2px;background:#ef4444}' +
