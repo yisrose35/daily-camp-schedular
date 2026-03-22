@@ -3057,7 +3057,45 @@ if (bypassStatus.highlight) {
                 }]
             };
         }
-let conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
+// ★★★ AUTO MODE: findAllConflictsForClaim uses slot indices which are bunk-specific.
+        // In auto mode, we need to find conflicts by TIME overlap instead. ★★★
+        const _isAutoMode = !!window.divisionTimes?.[claimingDivision]?._perBunkSlots;
+        let conflictQueue;
+        if (_isAutoMode && claimDivSlots.length > 0 && slots.length > 0) {
+            const _claimStart = claimDivSlots[slots[0]]?.startMin;
+            const _claimEnd = claimDivSlots[slots[slots.length - 1]]?.endMin;
+            conflictQueue = [];
+            if (_claimStart != null && _claimEnd != null) {
+                const assignments = window.scheduleAssignments || {};
+                const excludeSet = new Set(claimingBunks);
+                for (const [bunkName, bunkSlots] of Object.entries(assignments)) {
+                    if (excludeSet.has(bunkName)) continue;
+                    if (!bunkSlots || !Array.isArray(bunkSlots)) continue;
+                    const bunkDiv = getDivisionForBunk(bunkName);
+                    const bunkPerSlots = window.divisionTimes?.[bunkDiv]?._perBunkSlots?.[String(bunkName)] 
+                                      || window.divisionTimes?.[bunkDiv] || [];
+                    for (let idx = 0; idx < bunkPerSlots.length; idx++) {
+                        const slot = bunkPerSlots[idx];
+                        if (!slot || slot.startMin === undefined) continue;
+                        if (!(slot.endMin <= _claimStart || slot.startMin >= _claimEnd)) {
+                            const entry = bunkSlots[idx];
+                            if (!entry) continue;
+                            const entryField = fieldLabel(entry.field);
+                            if (entryField !== fieldName) continue;
+                            conflictQueue.push({
+                                bunk: bunkName, slot: idx, division: bunkDiv,
+                                currentActivity: entry._activity || entry.sport || entryField,
+                                currentField: entryField,
+                                isPinned: entry._fixed || entry._pinned || entry._bunkOverride,
+                                entry
+                            });
+                        }
+                    }
+                }
+            }
+        } else {
+            conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
+        }
         let iteration = 0;
         const MAX_ITERATIONS = 50;
 
@@ -3398,11 +3436,28 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
         const times = perBunkSlots || window.divisionTimes?.[divName] || [];
         const slotInfo = times[slotIdx] || {};        const timeLabel = slotInfo.label || `${minutesToTimeStr(slotInfo.startMin)} - ${minutesToTimeStr(slotInfo.endMin)}`;
 
-        _currentEditContext = { bunk, slotIdx, divName, bunksInDivision, existingEntry, slotInfo };
+        _currentEditContext = { 
+            bunk, slotIdx, divName, bunksInDivision, existingEntry, slotInfo,
+            // ★★★ AUTO MODE: Store canonical time range for cross-bunk resolution ★★★
+            startMin: slotInfo.startMin ?? null,
+            endMin: slotInfo.endMin ?? null,
+            isAutoMode: !!window.divisionTimes?.[divName]?._perBunkSlots
+        };
 
-        showScopeSelectionModal(bunk, slotIdx, divName, timeLabel, canEditBunk(bunk));
+        showScopeSelectionModal(bunk, slotIdx, divName, timeLabel, canEditBunk(bunk));    }
+function minutesToTimeString(mins) {
+        if (mins === null || mins === undefined) return '';
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
     }
 
+    function timeStringToMinutes(str) {
+        if (!str) return null;
+        const parts = str.split(':');
+        if (parts.length !== 2) return null;
+        return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+    }
     function showScopeSelectionModal(bunk, slotIdx, divName, timeLabel, canEdit) {
         const overlay = document.createElement('div');
         overlay.id = INTEGRATED_EDIT_OVERLAY_ID;
@@ -3473,6 +3528,25 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
             </div>
             <input type="hidden" id="edit-start-slot" value="${slotIdx}">
             <input type="hidden" id="edit-end-slot" value="${slotIdx}">
+            ${_currentEditContext.isAutoMode ? `
+            <div id="time-adjust-section" style="margin-bottom: 20px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 10px; padding: 14px;">
+                <div style="font-weight: 500; color: #0369a1; margin-bottom: 10px; font-size: 0.9rem;">⏱️ Adjust Time</div>
+                <div style="display: flex; gap: 12px; align-items: center;">
+                    <div style="flex: 1;">
+                        <label style="display: block; font-size: 0.8rem; color: #6b7280; margin-bottom: 4px;">Start</label>
+                        <input type="time" id="edit-time-start" value="${_currentEditContext.startMin != null ? minutesToTimeString(_currentEditContext.startMin) : ''}" 
+                            style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.9rem;">
+                    </div>
+                    <span style="color: #9ca3af; margin-top: 18px;">→</span>
+                    <div style="flex: 1;">
+                        <label style="display: block; font-size: 0.8rem; color: #6b7280; margin-bottom: 4px;">End</label>
+                        <input type="time" id="edit-time-end" value="${_currentEditContext.endMin != null ? minutesToTimeString(_currentEditContext.endMin) : ''}" 
+                            style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.9rem;">
+                    </div>
+                </div>
+                <div style="font-size: 0.75rem; color: #6b7280; margin-top: 6px;">Change the time window for this activity block</div>
+            </div>
+            ` : ''}
             <div style="display: flex; gap: 12px;">
                 <button onclick="closeIntegratedEditModal()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">Cancel</button>
                 <button onclick="proceedWithScope()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">Continue →</button>
@@ -3506,7 +3580,7 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
         document.querySelector('input[name="edit-scope"]:checked')?.dispatchEvent(new Event('change'));
     }
 
-    function proceedWithScope() {
+   function proceedWithScope() {
         const scope = document.querySelector('input[name="edit-scope"]:checked')?.value;
         const ctx = _currentEditContext;
         if (!ctx) {
@@ -3514,47 +3588,74 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
             closeIntegratedEditModal();
             return;
         }
+
+        // ★★★ AUTO MODE: Read adjusted time from UI ★★★
+        let editStartMin = ctx.startMin;
+        let editEndMin = ctx.endMin;
+        if (ctx.isAutoMode) {
+            const startInput = document.getElementById('edit-time-start');
+            const endInput = document.getElementById('edit-time-end');
+            if (startInput?.value) editStartMin = timeStringToMinutes(startInput.value);
+            if (endInput?.value) editEndMin = timeStringToMinutes(endInput.value);
+            if (editStartMin != null && editEndMin != null && editEndMin <= editStartMin) {
+                alert('End time must be after start time');
+                return;
+            }
+        }
         
         if (scope === 'single') {
             closeIntegratedEditModal();
             showEditModal(
                 ctx.bunk,
-                ctx.slotInfo?.startMin,
-                ctx.slotInfo?.endMin,
+                editStartMin ?? ctx.slotInfo?.startMin,
+                editEndMin ?? ctx.slotInfo?.endMin,
                 ctx.existingEntry?._activity || '',
                 (editData) => applyEdit(ctx.bunk, editData)
             );
-        } else if (scope === 'division') {
-            const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
-            const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
-            
-            if (endSlot < startSlot) { alert('End time must be after start time'); return; }
+        } else if (scope === 'division' || scope === 'select') {
+            const targetBunks = scope === 'division' 
+                ? ctx.bunksInDivision 
+                : Array.from(document.querySelectorAll('.bunk-checkbox:checked')).map(cb => cb.value);
 
-            const slots = [];
-            for (let i = startSlot; i <= endSlot; i++) slots.push(i);
+            if (scope === 'select' && targetBunks.length === 0) { 
+                alert('Please select at least one bunk'); 
+                return; 
+            }
 
-            closeIntegratedEditModal();
-            openMultiBunkEditModal(ctx.bunksInDivision, slots, ctx.divName);
-        } else if (scope === 'select') {
-            const selectedBunks = Array.from(document.querySelectorAll('.bunk-checkbox:checked')).map(cb => cb.value);
-            
-            if (selectedBunks.length === 0) { alert('Please select at least one bunk'); return; }
-
-            const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
-            const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
-            
-            if (endSlot < startSlot) { alert('End time must be after start time'); return; }
-
-            const slots = [];
-            for (let i = startSlot; i <= endSlot; i++) slots.push(i);
-
-            closeIntegratedEditModal();
-            openMultiBunkEditModal(selectedBunks, slots, ctx.divName);
+            // ★★★ AUTO MODE: Resolve per-bunk slots by TIME, not shared slot index ★★★
+            if (ctx.isAutoMode && editStartMin != null && editEndMin != null) {
+                closeIntegratedEditModal();
+                openMultiBunkEditModal(targetBunks, null, ctx.divName, editStartMin, editEndMin);
+            } else {
+                // Manual mode: use slot indices as before
+                const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
+                const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
+                if (endSlot < startSlot) { alert('End time must be after start time'); return; }
+                const slots = [];
+                for (let i = startSlot; i <= endSlot; i++) slots.push(i);
+                closeIntegratedEditModal();
+                openMultiBunkEditModal(targetBunks, slots, ctx.divName);
+            }
         }
     }
 
-    function openMultiBunkEditModal(bunks, slots, divName) {
-        _multiBunkEditContext = { bunks, slots, divName };
+   function openMultiBunkEditModal(bunks, slots, divName, timeStartMin = null, timeEndMin = null) {
+        // ★★★ AUTO MODE: Resolve per-bunk slots from time range ★★★
+        const isAutoMode = !!window.divisionTimes?.[divName]?._perBunkSlots;
+        let perBunkSlots = null;
+        
+        if (isAutoMode && timeStartMin != null && timeEndMin != null) {
+            perBunkSlots = {};
+            bunks.forEach(bunk => {
+                const bunkSlots = findSlotsForRange(timeStartMin, timeEndMin, divName, bunk);
+                if (bunkSlots.length > 0) perBunkSlots[String(bunk)] = bunkSlots;
+            });
+            // Use first bunk's slots as the "representative" for UI display
+            const firstBunkSlots = perBunkSlots[String(bunks[0])] || [];
+            if (!slots || slots.length === 0) slots = firstBunkSlots;
+        }
+
+        _multiBunkEditContext = { bunks, slots, divName, perBunkSlots, isAutoMode, timeStartMin, timeEndMin };
         _multiBunkPreviewResult = null;
 
         const overlay = document.createElement('div');
@@ -3568,11 +3669,15 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
         modal.style.cssText = `position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999; min-width: 500px; max-width: 620px; max-height: 85vh; overflow-y: auto;`;
         modal.onclick = e => e.stopPropagation();
 
-        const times = window.divisionTimes?.[divName] || [];
-        const startSlot = times[slots[0]];
-        const endSlot = times[slots[slots.length - 1]];
-        const timeRange = `${minutesToTimeStr(startSlot?.startMin)} - ${minutesToTimeStr(endSlot?.endMin)}`;
-        const allLocations = getAllLocations();
+       const times = window.divisionTimes?.[divName] || [];
+        let timeRange;
+        if (isAutoMode && timeStartMin != null && timeEndMin != null) {
+            timeRange = `${minutesToTimeStr(timeStartMin)} - ${minutesToTimeStr(timeEndMin)}`;
+        } else {
+            const startSlot = times[slots?.[0]];
+            const endSlot = times[slots?.[slots?.length - 1]];
+            timeRange = `${minutesToTimeStr(startSlot?.startMin)} - ${minutesToTimeStr(endSlot?.endMin)}`;
+        }        const allLocations = getAllLocations();
 
         modal.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
@@ -3643,7 +3748,14 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
         if (!activity) { alert('Please enter an activity name'); return; }
 
         const result = buildCascadeResolutionPlan(location, slots, divName, activity, bunks);
-        _multiBunkPreviewResult = { ...result, location, slots, divName, activity, bunks };
+        _multiBunkPreviewResult = { 
+            ...result, location, slots, divName, activity, bunks,
+            // ★★★ AUTO MODE: Carry per-bunk slots and time range through to apply ★★★
+            perBunkSlots: _multiBunkEditContext.perBunkSlots || null,
+            isAutoMode: _multiBunkEditContext.isAutoMode || false,
+            timeStartMin: _multiBunkEditContext.timeStartMin || null,
+            timeEndMin: _multiBunkEditContext.timeEndMin || null
+        };
 
         const previewArea = document.getElementById('multi-conflict-preview');
         const resolutionMode = document.getElementById('multi-resolution-mode');
@@ -3828,9 +3940,27 @@ if (globalBlocks.length > 0) {
         const divSlots = window.divisionTimes?.[divName] || [];
         
         for (const bunk of bunks) {
-            if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
-            for (let i = 0; i < slots.length; i++) {
-                window.scheduleAssignments[bunk][slots[i]] = {
+           const divSlots = window.divisionTimes?.[divName] || [];
+        const isAutoMode = !!window.divisionTimes?.[divName]?._perBunkSlots;
+        const perBunkSlotMap = result.perBunkSlots || null;
+        
+        for (const bunk of bunks) {
+            // ★★★ AUTO MODE: Each bunk gets its own slot indices resolved by time ★★★
+            let bunkSlots;
+            if (isAutoMode && perBunkSlotMap && perBunkSlotMap[String(bunk)]) {
+                bunkSlots = perBunkSlotMap[String(bunk)];
+            } else if (isAutoMode && result.timeStartMin != null && result.timeEndMin != null) {
+                bunkSlots = findSlotsForRange(result.timeStartMin, result.timeEndMin, divName, bunk);
+            } else {
+                bunkSlots = slots;
+            }
+            
+            const perBunk = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
+            const slotCount = perBunk ? perBunk.length : (divSlots.length || 50);
+            if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(slotCount);
+            
+            for (let i = 0; i < bunkSlots.length; i++) {
+                window.scheduleAssignments[bunk][bunkSlots[i]] = {
                     field: location, sport: null, _activity: activity,
                     _fixed: true, _pinned: true, _multiBunkEdit: true, continuation: i > 0
                 };
