@@ -4050,7 +4050,9 @@ function getMainHTML(useMS) {
           <div id="da-pane-resources" class="da-pane">
             <div id="da-resources-container"></div>
           </div>
-          
+          <div id="da-pane-rotation-events" class="da-pane">
+            <div id="da-rotation-events-container"></div>
+          </div>
         </div>
       </div>
     `;
@@ -4275,6 +4277,9 @@ window.isRainyDayActive = isRainyDayActive;
 window.isMidDayModeActive = isMidDayModeActive;
 window.getMidDayStartTime = getMidDayStartTime;
 window.refreshSkeletonConflicts = function() { renderGrid(); };
+window.daShowModal = daShowModal;
+window.daShowConfirm = daShowConfirm;
+window.daShowAlert = daShowAlert;
 // === ADD THIS near the end of the IIFE, before the closing })(); ===
 
 // Expose internals for mobile touch support
