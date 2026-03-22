@@ -2362,7 +2362,10 @@
         const pinnedCount = executePinnedLayers();
 
         // ★ INJECT DAILY TRIPS — block out time for entire divisions
-        const dailyTrips = window.loadCurrentDailyData?.()?.dailyTrips || [];
+       const dateKey = window.currentScheduleDate || window.currentDate || '';
+        let dailyTrips = [];
+        try { const stored = localStorage.getItem('campDailyTrips_' + dateKey); if (stored) dailyTrips = JSON.parse(stored); } catch(e) {}
+        if (!dailyTrips.length) dailyTrips = window.loadCurrentDailyData?.()?.dailyTrips || [];
         let tripBlockCount = 0;
         dailyTrips.forEach(trip => {
             const grade = trip.division;
