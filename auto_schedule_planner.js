@@ -1,39 +1,29 @@
 // =================================================================
-// auto_schedule_planner.js (v3.0 - LAYER-BASED AUTO BUILDER)
+// auto_schedule_planner.js (v4.0 - LAYER-BASED AUTO BUILDER)
 // =================================================================
-// Horizontal timeline grid where users define scheduling layers
-// per grade. Layers = time window + activity type + quantity rule.
+// v4.0 CHANGES:
+//  - bunksPerDay + timesPerWeek on ALL layer types (not just swim)
+//  - Improved popover with clear section headers and help text
+//  - "Rotation" section shows bunks/day + times/week for every layer
+//  - Better field labels: "Time Window", "Block Duration", etc.
 //
 // v3.0 CHANGES:
-//  - Wired to AutoBuildEngine (replaces AutoSkeletonBuilder)
+//  - Wired to AutoBuildEngine
 //  - Engine produces skeleton + bunk overrides + bunk timelines
-//  - Bunk overrides handle scarce activities (Bubble Lady etc.)
-//  - _durationStrict blocks ensure solver respects activity durations
-//  - _bunk blocks create per-bunk time structures
 //  - Gantt/timeline renderer for auto-generated schedules
 //
-// v2.0 CHANGES:
-//  - WHITE theme (no dark mode)
-//  - Timeline range = earliest grade start → latest grade end
-//  - Unused grade time shaded grey (diagonal hatch)
-//  - Time labels visible on band + on drag ghost
-//  - Duration indicator on every band ("40m")
-//  - PIN / EXACT button: locks layer to exact time window
-//
 // LAYER → ENGINE FIELD MAP:
-//   layer.pinExact   → pinned     (engine Phase 2 placement)
-//   layer.periodMin  → duration   (engine Phase 4 block sizing)
-//   layer.quantity   → quantity   (engine Phase 4 count)
-//   layer.operator   → quantity.op (>=, <=, =)
-//   layer.startMin   → startMin
-//   layer.endMin     → endMin
-//   layer.type       → type
-//   layer.event      → event
-//   layer.grade      → grade/division
-//
-// Integration: Lives inside Master Schedule Builder as Auto mode tab.
-//              Outputs layers that AutoBuildEngine converts into
-//              skeleton + bunk overrides for the existing pipeline.
+//   layer.pinExact    → pinned
+//   layer.periodMin   → duration
+//   layer.quantity    → quantity
+//   layer.operator    → quantity.op (>=, <=, =)
+//   layer.startMin    → startMin
+//   layer.endMin      → endMin
+//   layer.type        → type
+//   layer.event       → event
+//   layer.grade       → grade/division
+//   layer.bunksPerDay → max bunks doing this activity per day
+//   layer.timesPerWeek→ target times each bunk gets this per week
 // =================================================================
 
 (function() {
@@ -49,7 +39,7 @@ let currentTemplate = null;
 let hasChanges = false;
 
 // Grid config
-const HOUR_WIDTH = 120;     // pixels per hour
+const HOUR_WIDTH = 120;
 const MIN_WIDTH = HOUR_WIDTH / 60;
 const SNAP_MINUTES = 5;
 
@@ -57,7 +47,7 @@ const SNAP_MINUTES = 5;
 let dragState = null;
 
 // =================================================================
-// LAYER COLORS (matches master builder palette)
+// LAYER COLORS
 // =================================================================
 const LAYER_COLORS = {
   sport:            { bg: 'rgba(134,239,172,0.55)', border: '#22c55e', text: '#14532d' },
@@ -148,7 +138,6 @@ function getGradeTime(grade) {
   return { start: s != null ? s : 540, end: e != null ? e : 960 };
 }
 
-/** Global day bounds = earliest grade start to latest grade end */
 function getDayBounds() {
   const grades = getGrades();
   if (grades.length === 0) return { dayStart: 540, dayEnd: 960 };
@@ -174,14 +163,12 @@ function xToMin(x, dayStart) { return snap(x / MIN_WIDTH + dayStart); }
 // =================================================================
 // IMPORT SKELETON FROM MASTER BUILDER
 // =================================================================
-/** Convert Master Builder skeleton blocks into Auto Planner layers */
 function importSkeletonFromMasterBuilder() {
   var g = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
   var app1 = g.app1 || {};
   var assignments = app1.skeletonAssignments || {};
   var skeletons = app1.savedSkeletons || {};
-  
-  // Determine today's template
+
   var dateStr = window.currentScheduleDate || '';
   var parts = dateStr.split('-').map(Number);
   if (!parts[0]) return false;
@@ -189,93 +176,62 @@ function importSkeletonFromMasterBuilder() {
   var dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
   var tmplName = assignments[dayNames[dow]] || assignments['Default'];
   if (!tmplName || !skeletons[tmplName]) return false;
-  
+
   var skeleton = skeletons[tmplName];
   if (!skeleton || skeleton.length === 0) return false;
-  
   console.log('[AutoPlanner] Importing skeleton "' + tmplName + '" (' + skeleton.length + ' blocks)');
-  
-  // Also check daily override skeleton (if user modified today's skeleton in DA)
+
   var dailyData = window.loadCurrentDailyData ? window.loadCurrentDailyData() : {};
   var dailySkeleton = dailyData.manualSkeleton;
   if (dailySkeleton && dailySkeleton.length > 0) {
     skeleton = dailySkeleton;
     console.log('[AutoPlanner] Using daily override skeleton (' + skeleton.length + ' blocks)');
   }
-  
-  // Map skeleton block types to layer types
+
   var typeMap = {
-    'slot': 'activity',
-    'sports': 'sports', 'sport': 'sports',
-    'special': 'special',
-    'pinned': 'custom',
-    'league': 'league',
-    'specialty_league': 'specialty_league',
-    'smart': 'activity',
-    'split': 'split',
-    'elective': 'elective'
+    'slot': 'activity', 'sports': 'sports', 'sport': 'sports',
+    'special': 'special', 'pinned': 'custom', 'league': 'league',
+    'specialty_league': 'specialty_league', 'smart': 'activity',
+    'split': 'split', 'elective': 'elective'
   };
-  
-  // Map event names to types
+
   var eventTypeMap = {
-    'general activity slot': 'activity',
-    'sports slot': 'sports',
-    'special activity': 'special',
-    'league game': 'league',
-    'specialty league': 'specialty_league',
-    'swim': 'swim',
-    'lunch': 'lunch',
-    'snacks': 'snack',
-    'snack': 'snack',
-    'dismissal': 'dismissal'
+    'general activity slot': 'activity', 'sports slot': 'sports',
+    'special activity': 'special', 'league game': 'league',
+    'specialty league': 'specialty_league', 'swim': 'swim',
+    'lunch': 'lunch', 'snacks': 'snack', 'snack': 'snack', 'dismissal': 'dismissal'
   };
-  
+
   layers = [];
   skeleton.forEach(function(block) {
     if (!block || !block.startTime || !block.endTime || !block.division) return;
     var startMin = parseTime(block.startTime);
     var endMin = parseTime(block.endTime);
     if (startMin == null || endMin == null || endMin <= startMin) return;
-    
-    // Determine layer type
+
     var layerType = 'activity';
     var eventName = block.event || '';
     var blockType = block.type || '';
-    
-    // Check event name first (more specific)
     var lowerEvent = eventName.toLowerCase().trim();
-    if (eventTypeMap[lowerEvent]) {
-      layerType = eventTypeMap[lowerEvent];
-    } else if (typeMap[blockType]) {
-      layerType = typeMap[blockType];
-    }
-    
-    // Determine if pinned
+    if (eventTypeMap[lowerEvent]) layerType = eventTypeMap[lowerEvent];
+    else if (typeMap[blockType]) layerType = typeMap[blockType];
+
     var isPinned = blockType === 'pinned' || ['swim','lunch','snack','snacks','dismissal'].indexOf(layerType) >= 0;
-    
-    // Duration = full block duration
     var duration = endMin - startMin;
-    
+
     layers.push({
-      id: uid(),
-      type: layerType,
-      event: eventName || layerType,
-      startMin: startMin,
-      endMin: endMin,
-      periodMin: duration,
-      operator: isPinned ? '=' : '\u2265',
-      quantity: 1,
-      grade: block.division,
-      pinExact: isPinned,
+      id: uid(), type: layerType, event: eventName || layerType,
+      startMin: startMin, endMin: endMin, periodMin: duration,
+      operator: isPinned ? '=' : '\u2265', quantity: 1,
+      grade: block.division, pinExact: isPinned,
+      timesPerWeek: null, weeklyOp: '\u2265', bunksPerDay: null,
       _importedFrom: tmplName
     });
   });
-  
+
   if (layers.length > 0) {
     currentTemplate = tmplName + ' (imported)';
-    hasChanges = false;
-    saveDraftLayers();
-    return true;
+    hasChanges = false; saveDraftLayers(); return true;
   }
   return false;
 }
@@ -287,17 +243,12 @@ function init(containerEl) {
   layerContainer = containerEl;
   if (!layerContainer) return;
   loadDraftLayers();
-  
-  // Don't silently auto-import from manual skeleton — modes are separate.
-  // User can still explicitly click the Import button if they want to convert
-  // a manual skeleton into auto layers.
   if (layers.length === 0) {
-    console.log('[AutoPlanner] No layers loaded — add layers or use Import to convert from a manual skeleton template');
+    console.log('[AutoPlanner] No layers loaded \u2014 add layers or use Import to convert from a manual skeleton template');
   }
-  
   render();
   setupGlobalListeners();
-  console.log('[AutoPlanner] v3.0 init —', layers.length, 'layers');
+  console.log('[AutoPlanner] v4.0 init \u2014', layers.length, 'layers');
 }
 
 function destroy() {
@@ -401,14 +352,14 @@ function renderToolbar() {
     '<div class="al-toolbar-sep"></div>' +
     '<div class="al-toolbar-group"><select id="al-load-select" class="al-select"><option value="">Load Template\u2026</option>' + opts + '</select>' +
     '<button id="al-load-btn" class="al-btn al-btn-ghost al-btn-sm">Load</button></div>' +
-    '<div class="al-toolbar-group"><button id="al-save-btn" class="al-btn al-btn-primary al-btn-sm">\uD83D\uDCBE Save</button>' +
+    '<div class="al-toolbar-group"><button id="al-save-btn" class="al-btn al-btn-primary al-btn-sm">Save</button>' +
     '<button id="al-save-as-btn" class="al-btn al-btn-ghost al-btn-sm">Save As\u2026</button></div>' +
     '<div class="al-toolbar-sep"></div>' +
-    '<div class="al-toolbar-group"><button id="al-copy-grade-btn" class="al-btn al-btn-ghost al-btn-sm">\uD83D\uDCCB Copy Grade</button>' +
-    '<button id="al-import-skeleton-btn" class="al-btn al-btn-ghost al-btn-sm">\uD83D\uDD04 Reload from Template</button>' +
-    '<button id="al-clear-btn" class="al-btn al-btn-danger al-btn-sm">\uD83D\uDDD1 Clear All</button></div>' +
+    '<div class="al-toolbar-group"><button id="al-copy-grade-btn" class="al-btn al-btn-ghost al-btn-sm">Copy Grade</button>' +
+    '<button id="al-import-skeleton-btn" class="al-btn al-btn-ghost al-btn-sm">Reload from Template</button>' +
+    '<button id="al-clear-btn" class="al-btn al-btn-danger al-btn-sm">Clear All</button></div>' +
     '<div class="al-toolbar-sep"></div>' +
-    '<div class="al-toolbar-group"><button id="al-preview-btn" class="al-btn al-btn-success al-btn-sm">\uD83D\uDC41 Preview</button>' +
+    '<div class="al-toolbar-group"><button id="al-preview-btn" class="al-btn al-btn-success al-btn-sm">Preview</button>' +
     '<button id="al-generate-btn" class="al-btn al-btn-primary">\u26A1 Generate Schedule</button></div>' +
     '</div>';
 }
@@ -440,7 +391,7 @@ function renderTimeHeader(dayStart, dayEnd) {
 }
 
 // =================================================================
-// RENDER: GRADE ROW (grey unused zones)
+// RENDER: GRADE ROW
 // =================================================================
 function renderGradeRow(grade, dayStart, dayEnd, totalWidth) {
   var gradeTime = getGradeTime(grade);
@@ -452,13 +403,11 @@ function renderGradeRow(grade, dayStart, dayEnd, totalWidth) {
   html += '<div class="al-grade-label">' + grade + '</div>';
   html += '<div class="al-grade-timeline" data-grade="' + grade + '" style="width:' + totalWidth + 'px;height:' + rowHeight + 'px;">';
 
-  // Grid lines
   for (var m = dayStart; m <= dayEnd; m += 30) {
     var left = (m - dayStart) * MIN_WIDTH;
     html += '<div class="al-grid-line' + (m % 60 === 0 ? ' al-grid-line-hour' : '') + '" style="left:' + left + 'px;"></div>';
   }
 
-  // Grey unused zones
   if (gradeTime.start > dayStart) {
     html += '<div class="al-unused-zone" style="left:0;width:' + ((gradeTime.start - dayStart) * MIN_WIDTH) + 'px;"></div>';
   }
@@ -467,7 +416,6 @@ function renderGradeRow(grade, dayStart, dayEnd, totalWidth) {
     html += '<div class="al-unused-zone" style="left:' + zLeft + 'px;width:' + ((dayEnd - gradeTime.end) * MIN_WIDTH) + 'px;"></div>';
   }
 
-  // Bands
   gradeLayers.forEach(function(layer) {
     html += renderBand(layer, dayStart, stacking.map[layer.id], stacking.maxStack);
   });
@@ -510,10 +458,16 @@ function renderBand(layer, dayStart, stackIdx, maxStack) {
   var selClass = isSelected ? ' al-band-selected' : '';
   var durText = layer.periodMin ? layer.periodMin + 'm' : '';
   var timeText = fmtShort(layer.startMin) + '\u2013' + fmtShort(layer.endMin);
- var badge = (layer.operator || '\u2265') + (layer.quantity || 1);
-  var pinHtml = isPinned ? '<span class="al-band-pin">\uD83D\uDCCC</span>' : '';
+  var badge = (layer.operator || '\u2265') + (layer.quantity || 1);
+  var pinHtml = isPinned ? '<span class="al-band-pin">PIN</span>' : '';
+
+  // Weekly badge
   var weeklyBadgeHtml = (layer.timesPerWeek != null)
     ? '<span class="al-band-week-badge">' + (layer.weeklyOp || '\u2265') + layer.timesPerWeek + 'x/wk</span>'
+    : '';
+  // Bunks per day badge
+  var bpdBadgeHtml = (layer.bunksPerDay != null)
+    ? '<span class="al-band-week-badge" style="background:rgba(6,182,212,0.15);color:#164e63;border-color:rgba(6,182,212,0.3);">' + layer.bunksPerDay + '/day</span>'
     : '';
 
   return '<div class="al-band' + selClass + '" data-layer-id="' + layer.id + '" style="left:' + left + 'px;width:' + width + 'px;top:' + topCss + ';height:' + heightCss + ';background:' + color.bg + ';border:2px ' + borderStyle + ' ' + color.border + ';color:' + color.text + ';">' +
@@ -523,6 +477,7 @@ function renderBand(layer, dayStart, stackIdx, maxStack) {
     '<span class="al-band-dur">' + durText + '</span>' +
     '<span class="al-band-badge">' + badge + '</span>' +
     weeklyBadgeHtml +
+    bpdBadgeHtml +
     '<span class="al-band-time">' + timeText + '</span>' +
     '<div class="al-band-resize al-band-resize-right"></div>' +
     '</div>';
@@ -562,12 +517,10 @@ function setupDropZones(dayStart) {
 
       var startMin, endMin;
       if (tile.fixed) {
-        // Fixed types: window = exactly the duration, placed at drop point
         startMin = snap(dropMin);
         endMin = snap(startMin + (tile.defaultDuration || 30));
         if (endMin > gradeTime.end) { startMin = gradeTime.end - (tile.defaultDuration || 30); endMin = gradeTime.end; }
       } else {
-        // Flexible types: wider window around drop
         var halfSpan = Math.max((tile.defaultDuration || 40) + 30, 60) / 2;
         startMin = snap(Math.max(gradeTime.start, dropMin - halfSpan));
         endMin = snap(Math.min(gradeTime.end, dropMin + halfSpan));
@@ -582,8 +535,9 @@ function setupDropZones(dayStart) {
         quantity: tile.defaultQty || 1,
         grade: grade,
         pinExact: tile.fixed || false,
-        timesPerWeek: null,   // null = "every active day" (unconstrained)
-        weeklyOp: '\u2265'    // ≥ by default
+        timesPerWeek: null,
+        weeklyOp: '\u2265',
+        bunksPerDay: null
       });
       hasChanges = true; selectedLayerId = layers[layers.length - 1].id;
       saveDraftLayers(); render();
@@ -697,7 +651,6 @@ function setupGlobalListeners() {
       layer.startMin = ns; layer.endMin = ns + dur;
     }
 
-    // Live update band DOM
     var band = document.querySelector('.al-band[data-layer-id="' + layer.id + '"]');
     if (band) {
       band.style.left = (layer.startMin - bounds.dayStart) * MIN_WIDTH + 'px';
@@ -732,7 +685,7 @@ function deleteLayer(id) {
 }
 
 // =================================================================
-// POPOVER EDITOR
+// POPOVER EDITOR — v4.0 with improved labels and rotation section
 // =================================================================
 var popoverEl = null;
 
@@ -752,50 +705,109 @@ function openPopover(layerId, bandEl) {
   popoverEl = document.createElement('div');
   popoverEl.className = 'al-popover';
   var top = rect.bottom + 8, left = rect.left;
-  if (top + 370 > window.innerHeight) top = rect.top - 370;
-  if (left + 340 > window.innerWidth) left = window.innerWidth - 360;
+  if (top + 480 > window.innerHeight) top = rect.top - 480;
+  if (left + 380 > window.innerWidth) left = window.innerWidth - 400;
   popoverEl.style.top = Math.max(10, top) + 'px';
   popoverEl.style.left = Math.max(10, left) + 'px';
 
-  popoverEl.innerHTML =
-    '<div class="al-popover-title"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:' + color.border + ';"></span> ' + (layer.event || layer.type) + '</div>' +
-    '<div class="al-popover-row"><label>Window</label><input type="text" class="al-pop-input" id="al-pop-start" value="' + fmtTime(layer.startMin) + '" placeholder="Start"><span style="color:#94a3b8;"> \u2192 </span><input type="text" class="al-pop-input" id="al-pop-end" value="' + fmtTime(layer.endMin) + '" placeholder="End"></div>' +
-    '<div class="al-popover-row"><label>Duration</label><input type="number" class="al-pop-input al-pop-dur" id="al-pop-dur" value="' + (layer.periodMin || '') + '" min="5" step="5" placeholder="min"><span style="font-size:10px;color:#94a3b8;">minutes needed</span></div>' +
-    '<div class="al-popover-row"><label>Quantity</label><div class="al-pop-ops">' +
+  // ── Build popover HTML ──
+  var html = '';
+
+  // Title
+  html += '<div class="al-popover-title"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:' + color.border + ';"></span> ' + (layer.event || layer.type) + '</div>';
+
+  // ── Section 1: Scheduling ──
+  html += '<div class="al-popover-section-title">Scheduling</div>';
+
+  // Time Window
+  html += '<div class="al-popover-row">' +
+    '<label>Time Window</label>' +
+    '<input type="text" class="al-pop-input" id="al-pop-start" value="' + fmtTime(layer.startMin) + '" placeholder="Start">' +
+    '<span style="color:#94a3b8;margin:0 4px;"> \u2192 </span>' +
+    '<input type="text" class="al-pop-input" id="al-pop-end" value="' + fmtTime(layer.endMin) + '" placeholder="End">' +
+    '</div>';
+  html += '<div class="al-popover-hint">The earliest and latest this activity can be placed in the day</div>';
+
+  // Block Duration
+  html += '<div class="al-popover-row">' +
+    '<label>Block Duration</label>' +
+    '<input type="number" class="al-pop-input al-pop-dur" id="al-pop-dur" value="' + (layer.periodMin || '') + '" min="5" step="5" placeholder="min">' +
+    '<span style="font-size:10px;color:#94a3b8;">minutes</span>' +
+    '</div>';
+  html += '<div class="al-popover-hint">How long each block of this activity lasts</div>';
+
+  // Daily Quantity
+  html += '<div class="al-popover-row">' +
+    '<label>Blocks Per Day</label>' +
+    '<div class="al-pop-ops">' +
     '<button class="al-pop-op' + (layer.operator === '\u2265' ? ' active' : '') + '" data-op="\u2265">\u2265</button>' +
     '<button class="al-pop-op' + (layer.operator === '\u2264' ? ' active' : '') + '" data-op="\u2264">\u2264</button>' +
     '<button class="al-pop-op' + (layer.operator === '=' ? ' active' : '') + '" data-op="=">=</button>' +
-    '</div><input type="number" class="al-pop-input al-pop-qty" id="al-pop-qty" value="' + (layer.quantity || 1) + '" min="1" max="10"></div>' +
-   '<div class="al-popover-row"><label>Pin Time</label><button class="al-pin-toggle' + (isPinned ? ' active' : '') + '" id="al-pop-pin"><span class="al-pin-icon">\uD83D\uDCCC</span><span id="al-pin-label">' + (isPinned ? 'Exact Time' : 'Flexible') + '</span></button></div>' +
-    (isPinned ? '<div style="font-size:10px;color:#92400e;background:#fffbeb;border-radius:6px;padding:6px 10px;margin:0 0 8px 78px;">\u26A0\uFE0F Must occur at exactly <b>' + fmtTime(layer.startMin) + '\u2013' + fmtTime(layer.endMin) + '</b></div>' : '') +
-    (layer.type === 'swim' ?
-      '<div class="al-popover-divider"></div>' +
-      '<div class="al-popover-section-title">Max Per Bunk Per Week</div>' +
-      '<div class="al-popover-row">' +
-        '<label>Per Week</label>' +
-        '<div class="al-pop-ops">' +
-          '<button class="al-pop-op' + ((layer.weeklyOp || '\u2265') === '\u2265' ? ' active' : '') + '" data-wop="\u2265">\u2265</button>' +
-          '<button class="al-pop-op' + ((layer.weeklyOp) === '\u2264' ? ' active' : '') + '" data-wop="\u2264">\u2264</button>' +
-          '<button class="al-pop-op' + ((layer.weeklyOp) === '=' ? ' active' : '') + '" data-wop="=">=</button>' +
-        '</div>' +
-        '<input type="number" class="al-pop-input al-pop-qty" id="al-pop-week-qty"' +
-          ' value="' + (layer.timesPerWeek != null ? layer.timesPerWeek : '') + '"' +
-          ' min="1" max="7" placeholder="Any">' +
-        '<span style="font-size:10px;color:#94a3b8;margin-left:4px;">days/wk<br><span style="color:#64748b;">blank&nbsp;=&nbsp;no&nbsp;limit</span></span>' +
-      '</div>'
-    : '') +
-    '<div class="al-popover-actions"><button class="al-btn al-btn-danger al-btn-sm" id="al-pop-delete">\uD83D\uDDD1 Delete</button><button class="al-btn al-btn-primary al-btn-sm" id="al-pop-done">\u2713 Done</button></div>';
+    '</div>' +
+    '<input type="number" class="al-pop-input al-pop-qty" id="al-pop-qty" value="' + (layer.quantity || 1) + '" min="1" max="10">' +
+    '</div>';
+  html += '<div class="al-popover-hint">How many times per day each bunk gets this activity (\u2265 = at least, \u2264 = at most, = exactly)</div>';
 
+  // Pin Time
+  html += '<div class="al-popover-row">' +
+    '<label>Pin Time</label>' +
+    '<button class="al-pin-toggle' + (isPinned ? ' active' : '') + '" id="al-pop-pin">' +
+    '<span class="al-pin-icon">PIN</span>' +
+    '<span id="al-pin-label">' + (isPinned ? 'Exact Time' : 'Flexible') + '</span>' +
+    '</button>' +
+    '</div>';
+  if (isPinned) {
+    html += '<div style="font-size:10px;color:#92400e;background:#fffbeb;border-radius:6px;padding:6px 10px;margin:0 0 8px 78px;">' +
+      'Locked to exactly <b>' + fmtTime(layer.startMin) + '\u2013' + fmtTime(layer.endMin) + '</b></div>';
+  }
+
+  // ── Section 2: Rotation ──
+  html += '<div class="al-popover-divider"></div>';
+  html += '<div class="al-popover-section-title">Rotation <span style="font-weight:400;font-size:10px;color:#94a3b8;">(optional \u2014 leave blank for no limits)</span></div>';
+
+  // Bunks Per Day
+  html += '<div class="al-popover-row">' +
+    '<label>Bunks / Day</label>' +
+    '<input type="number" class="al-pop-input al-pop-qty" id="al-pop-bpd"' +
+    ' value="' + (layer.bunksPerDay != null ? layer.bunksPerDay : '') + '"' +
+    ' min="1" max="99" placeholder="All">' +
+    '</div>';
+  html += '<div class="al-popover-hint">Max bunks that do this activity each day in this grade. The system rotates who gets it so everyone is covered.<br><b>Example:</b> Set to 4 \u2192 only 4 of 8 bunks swim today, the other 4 swim tomorrow.</div>';
+
+  // Times Per Week
+  html += '<div class="al-popover-row">' +
+    '<label>Times / Week</label>' +
+    '<div class="al-pop-ops">' +
+    '<button class="al-pop-op' + ((layer.weeklyOp || '\u2265') === '\u2265' ? ' active' : '') + '" data-wop="\u2265">\u2265</button>' +
+    '<button class="al-pop-op' + ((layer.weeklyOp) === '\u2264' ? ' active' : '') + '" data-wop="\u2264">\u2264</button>' +
+    '<button class="al-pop-op' + ((layer.weeklyOp) === '=' ? ' active' : '') + '" data-wop="=">=</button>' +
+    '</div>' +
+    '<input type="number" class="al-pop-input al-pop-qty" id="al-pop-week-qty"' +
+    ' value="' + (layer.timesPerWeek != null ? layer.timesPerWeek : '') + '"' +
+    ' min="1" max="7" placeholder="Any">' +
+    '</div>';
+  html += '<div class="al-popover-hint">Target number of days per week each bunk should get this activity. The system tracks history and picks bunks that need it most.<br><b>Example:</b> Set \u2265 2 \u2192 every bunk gets this at least 2 days per week.</div>';
+
+  // ── Actions ──
+  html += '<div class="al-popover-actions">' +
+    '<button class="al-btn al-btn-danger al-btn-sm" id="al-pop-delete">Delete</button>' +
+    '<button class="al-btn al-btn-primary al-btn-sm" id="al-pop-done">\u2713 Done</button>' +
+    '</div>';
+
+  popoverEl.innerHTML = html;
   document.body.appendChild(popoverEl);
 
-  // Daily quantity operator buttons (data-op)
+  // ── Wire up buttons ──
+
+  // Daily quantity operator buttons
   popoverEl.querySelectorAll('.al-pop-op[data-op]').forEach(function(btn) {
     btn.onclick = function() {
       popoverEl.querySelectorAll('.al-pop-op[data-op]').forEach(function(b) { b.classList.remove('active'); });
       btn.classList.add('active');
     };
   });
-  // Weekly operator buttons (data-wop)
+
+  // Weekly operator buttons
   popoverEl.querySelectorAll('.al-pop-op[data-wop]').forEach(function(btn) {
     btn.onclick = function() {
       popoverEl.querySelectorAll('.al-pop-op[data-wop]').forEach(function(b) { b.classList.remove('active'); });
@@ -809,14 +821,16 @@ function openPopover(layerId, bandEl) {
     this.querySelector('#al-pin-label').textContent = this.classList.contains('active') ? 'Exact Time' : 'Flexible';
   };
 
+  // Delete
   popoverEl.querySelector('#al-pop-delete').onclick = function() { deleteLayer(layerId); };
 
+  // Done — save all values
   popoverEl.querySelector('#al-pop-done').onclick = function() {
     var sVal = parseTime(popoverEl.querySelector('#al-pop-start').value);
     var eVal = parseTime(popoverEl.querySelector('#al-pop-end').value);
     var dVal = parseInt(popoverEl.querySelector('#al-pop-dur').value) || null;
     var qVal = parseInt(popoverEl.querySelector('#al-pop-qty').value) || 1;
-   var activeOp = popoverEl.querySelector('.al-pop-op[data-op].active');
+    var activeOp = popoverEl.querySelector('.al-pop-op[data-op].active');
     var opVal = activeOp ? activeOp.dataset.op : '\u2265';
     var pinned = popoverEl.querySelector('#al-pop-pin').classList.contains('active');
 
@@ -826,20 +840,22 @@ function openPopover(layerId, bandEl) {
     var weekQtyRaw = popoverEl.querySelector('#al-pop-week-qty') ? popoverEl.querySelector('#al-pop-week-qty').value.trim() : '';
     var weekQtyVal = weekQtyRaw !== '' ? Math.max(1, Math.min(7, parseInt(weekQtyRaw) || 1)) : null;
 
+    // Bunks per day
+    var bpdRaw = popoverEl.querySelector('#al-pop-bpd') ? popoverEl.querySelector('#al-pop-bpd').value.trim() : '';
+    var bpdVal = bpdRaw !== '' ? Math.max(1, parseInt(bpdRaw) || 1) : null;
+
     if (sVal != null) layer.startMin = snap(sVal);
     if (eVal != null) layer.endMin = snap(eVal);
     if (dVal) layer.periodMin = dVal;
     layer.quantity = qVal;
     layer.operator = opVal;
     layer.pinExact = pinned;
-   if (layer.type === 'swim') {
-      layer.timesPerWeek = weekQtyVal;
-      layer.weeklyOp = weekQtyVal != null ? wopVal : '\u2265';
-    } else {
-      delete layer.timesPerWeek;
-      delete layer.weeklyOp;
-    }
-    hasChanges = true; saveDraftLayers(); closePopover(); render();  };
+    layer.timesPerWeek = weekQtyVal;
+    layer.weeklyOp = weekQtyVal != null ? wopVal : '\u2265';
+    layer.bunksPerDay = bpdVal;
+
+    hasChanges = true; saveDraftLayers(); closePopover(); render();
+  };
 }
 
 function closePopover() {
@@ -880,16 +896,10 @@ function setupToolbarEvents() {
     if (layers.length > 0 && !confirm('This will replace current layers with the Master Builder skeleton for today. Continue?')) return;
     layers = [];
     var imported = importSkeletonFromMasterBuilder();
-    if (imported) {
-      notify('Imported ' + layers.length + ' layers from template', 'success');
-      render();
-    } else {
-      notify('No template assigned for today', 'error');
-      render();
-    }
+    if (imported) { notify('Imported ' + layers.length + ' layers from template', 'success'); render(); }
+    else { notify('No template assigned for today', 'error'); render(); }
   };
 
-  // ── PREVIEW via AutoBuildEngine ──
   var previewBtn = $('al-preview-btn');
   if (previewBtn) previewBtn.onclick = function() {
     if (!window.AutoBuildEngine) { notify('AutoBuildEngine not loaded', 'error'); return; }
@@ -901,7 +911,6 @@ function setupToolbarEvents() {
     notify(msg, 'info');
   };
 
-  // ── GENERATE via AutoBuildEngine → existing pipeline ──
   var genBtn = $('al-generate-btn');
   if (genBtn) genBtn.onclick = function() {
     if (!window.AutoBuildEngine) { notify('AutoBuildEngine not loaded', 'error'); return; }
@@ -909,11 +918,9 @@ function setupToolbarEvents() {
     var result = window.AutoBuildEngine.build({ layers: layers, dateStr: dateStr });
     if (!result.skeleton || result.skeleton.length === 0) { notify('No skeleton generated \u2014 check layers', 'error'); return; }
 
-    // ★★★ Store auto-generated flags for Gantt renderer ★★★
     window._autoGeneratedSchedule = true;
     window._autoBuildTimelines = result.bunkTimelines;
 
-    // Push skeleton + bunk overrides into existing pipeline
     if (window.saveCurrentDailyData) {
       window.saveCurrentDailyData('autoSkeleton', result.skeleton);
       if (result.bunkOverrides && result.bunkOverrides.length > 0) {
@@ -922,42 +929,35 @@ function setupToolbarEvents() {
       window.saveCurrentDailyData('_autoGenerated', true);
       window.saveCurrentDailyData('_autoBuildTimelines', result.bunkTimelines);
     }
-    // ★★★ v3.2: FULL AUTO PIPELINE ★★★
-    // 1. Build divisionTimes from auto skeleton
+
     if (window.DivisionTimesSystem?.buildFromSkeleton) {
       var divisions = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
       window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(result.skeleton, divisions);
       console.log('[AutoPlanner] Built divisionTimes for', Object.keys(window.divisionTimes).length, 'divisions');
     }
 
-    // 2. Store bunk overrides for scheduler_core_main Step 2
     if (result.bunkOverrides && result.bunkOverrides.length > 0) {
       window._autoBunkOverrides = result.bunkOverrides;
       console.log('[AutoPlanner] Stored', result.bunkOverrides.length, 'bunk overrides');
     }
 
-    // 3. Store the skeleton for the render layer
     window.manualSkeleton = result.skeleton;
     window.skeleton = result.skeleton;
 
-    // 4. Run the solver with the auto skeleton
     if (typeof window.runSkeletonOptimizer === 'function') {
-     window.runSkeletonOptimizer(result.skeleton);
+      window.runSkeletonOptimizer(result.skeleton);
       notify('Schedule generated! \u26A1', 'success');
     } else if (typeof window.generateSchedule === 'function') {
       window.generateSchedule({ skeleton: result.skeleton, bunkOverrides: result.bunkOverrides });
       notify('Schedule generated! \u26A1', 'success');
     } else {
-      // No solver available — keep Gantt view showing pre-solve timelines
       notify('Skeleton built \u2014 run Generate in the scheduler to solve', 'info');
     }
 
-    // 5. Save everything
     if (window.saveCurrentDailyData) {
       window.saveCurrentDailyData('divisionTimes', window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes);
     }
 
-    // 6. Refresh display
     if (typeof window.updateTable === 'function') {
       setTimeout(function() { window.updateTable(); }, 200);
     }
@@ -1051,5 +1051,39 @@ window.AutoSchedulePlanner = {
   PALETTE_TILES: PALETTE_TILES, LAYER_COLORS: LAYER_COLORS
 };
 
-console.log('[AutoSchedulePlanner] v3.0 loaded (wired to AutoBuildEngine)');
+console.log('[AutoSchedulePlanner] v4.0 loaded \u2014 rotation on all layers');
+
+// Inject popover hint styles
+(function() {
+  if (document.getElementById('al-v4-hint-styles')) return;
+  var s = document.createElement('style');
+  s.id = 'al-v4-hint-styles';
+  s.textContent = [
+    '.al-popover-hint {',
+    '  font-size: 10px;',
+    '  color: #94a3b8;',
+    '  line-height: 1.4;',
+    '  margin: -2px 0 8px 78px;',
+    '  padding: 0;',
+    '}',
+    '.al-popover-hint b { color: #64748b; }',
+    '.al-popover-divider {',
+    '  height: 1px;',
+    '  background: #e5e7eb;',
+    '  margin: 10px 0;',
+    '}',
+    '.al-popover-section-title {',
+    '  font-size: 11px;',
+    '  font-weight: 700;',
+    '  color: #374151;',
+    '  margin: 0 0 8px 0;',
+    '  padding: 0 0 4px 0;',
+    '  border-bottom: 1px solid #f3f4f6;',
+    '  display: flex;',
+    '  align-items: center;',
+    '  gap: 6px;',
+    '}'
+  ].join('\n');
+  document.head.appendChild(s);
+})();
 })();

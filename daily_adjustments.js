@@ -1681,6 +1681,60 @@ function renderDAWTimeline(gridEl) {
       saveDAAutoLayers();
     }
   });
+
+  // ★ Overlay daily trips on the DAW grid
+  overlayTripsOnDAW(gridEl);
+}
+
+function overlayTripsOnDAW(gridEl) {
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  const trips = Array.isArray(dailyData.dailyTrips) ? dailyData.dailyTrips : [];
+  if (trips.length === 0) return;
+
+  // Find global start from ruler (same logic as DAW grid)
+  const divisions = window.divisions || {};
+  let globalStart = null;
+  Object.keys(divisions).forEach(d => {
+    if (divisions[d].isParent) return;
+    const s = parseTimeToMinutes(divisions[d]?.startTime);
+    if (s !== null && (globalStart === null || s < globalStart)) globalStart = s;
+  });
+  if (globalStart === null) globalStart = 540;
+  const PX_PER_MIN = 4; // matches DAW_PIXELS_PER_MINUTE in master_schedule_builder
+
+  trips.forEach(trip => {
+    const track = gridEl.querySelector('.ms-daw-track[data-grade="' + trip.division + '"]');
+    if (!track) return;
+    const tStart = trip.startMin ?? parseTimeToMinutes(trip.startTime);
+    const tEnd = trip.endMin ?? parseTimeToMinutes(trip.endTime);
+    if (tStart == null || tEnd == null) return;
+
+    const left = (tStart - globalStart) * PX_PER_MIN;
+    const width = (tEnd - tStart) * PX_PER_MIN;
+
+    const el = document.createElement('div');
+    el.className = 'da-trip-overlay';
+    el.style.cssText = 'position:absolute; left:' + left + 'px; width:' + width + 'px; top:0; bottom:0;' +
+      'background:repeating-linear-gradient(45deg, rgba(239,68,68,0.12), rgba(239,68,68,0.12) 4px, rgba(239,68,68,0.04) 4px, rgba(239,68,68,0.04) 8px);' +
+      'border:2px solid #ef4444; border-radius:4px; z-index:8; pointer-events:none;' +
+      'display:flex; align-items:center; justify-content:center;';
+    el.innerHTML = '<span style="background:#ef4444; color:#fff; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:700; pointer-events:none; white-space:nowrap;">' +
+      'Trip: ' + (trip.event || 'Trip') + ' (' + minutesToTime(tStart) + '–' + minutesToTime(tEnd) + ')' +
+      '</span>';
+    track.appendChild(el);
+  });
+
+  // ★ Show regen warning banner above the grid
+  if (trips.length > 0) {
+    const existing = gridEl.querySelector('.da-trip-regen-warning');
+    if (!existing) {
+      const banner = document.createElement('div');
+      banner.className = 'da-trip-regen-warning';
+      banner.style.cssText = 'padding:10px 16px; margin-bottom:8px; background:#fef3c7; border:1px solid #fcd34d; border-radius:8px; font-size:13px; color:#92400e; display:flex; align-items:center; gap:8px;';
+      banner.innerHTML = '<span style="font-size:16px;">⚠️</span> <span><strong>' + trips.length + ' trip' + (trips.length > 1 ? 's' : '') + '</strong> added today. Press <strong>▶ Generate Schedule</strong> to rebuild the day around ' + (trips.length > 1 ? 'them' : 'it') + '.</span>';
+      gridEl.insertBefore(banner, gridEl.firstChild);
+    }
+  }
 }
 function daConvertSkeletonToLayers(skeleton) {
   var layers = [];
@@ -3012,7 +3066,31 @@ if (success) {
   } else { 
       await daShowAlert("❌ Error generating schedule. Check console."); 
   }
-}// =================================================================
+}
+  // =================================================================
+// DAILY TRIPS: Persistent load/save (survives reload + cloud sync)
+// =================================================================
+function loadDailyTrips(dateKey) {
+  // Primary: dedicated localStorage key
+  try {
+    const stored = localStorage.getItem('campDailyTrips_' + dateKey);
+    if (stored) return JSON.parse(stored);
+  } catch (e) { /* ignore */ }
+  // Fallback: dailyData
+  try {
+    const dd = window.loadCurrentDailyData?.() || {};
+    if (Array.isArray(dd.dailyTrips)) return dd.dailyTrips;
+  } catch (e) { /* ignore */ }
+  return [];
+}
+
+function saveDailyTrips(dateKey, trips) {
+  // Save to dedicated localStorage key (primary — survives cloud overwrites)
+  try { localStorage.setItem('campDailyTrips_' + dateKey, JSON.stringify(trips)); } catch (e) { /* ignore */ }
+  // Also save to dailyData (for cloud sync + other modules)
+  window.saveCurrentDailyData?.('dailyTrips', trips);
+}
+  // =================================================================
 // TRIPS FORM
 // =================================================================
 function renderTripsForm() {
@@ -3021,10 +3099,28 @@ function renderTripsForm() {
   
   const divisions = window.availableDivisions || [];
   
-  container.innerHTML = `
+ // ★ Auto mode: show existing trips list
+ const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  const existingTrips = (window._daBuilderMode === 'auto') ? loadDailyTrips(dateKey) : [];
+  const tripsListHTML = existingTrips.length > 0 ? `
+    <div class="da-section" style="margin-bottom:12px;">
+      <h3 class="da-section-title">Today's Trips (${existingTrips.length})</h3>
+      ${existingTrips.map(t => `
+        <div class="da-override-item" style="margin-bottom:6px;">
+          <div>
+            <strong>${t.event || 'Trip'}</strong> — <span style="color:#3b82f6;">${t.division}</span>
+            <div style="font-size:12px;color:#64748b;">${t.startTime} – ${t.endTime}</div>
+          </div>
+          <button class="da-btn da-btn-danger da-btn-sm da-trip-remove-btn" data-trip-id="${t.id}">Remove</button>
+        </div>
+      `).join('')}
+    </div>
+  ` : '';
+
+  container.innerHTML = tripsListHTML + `
     <div class="da-section">
       <h3 class="da-section-title">Add Trip</h3>
-      <p class="da-section-desc">Add an off-campus trip. Overlapping events will be bumped.</p>
+      <p class="da-section-desc">Add an off-campus trip.${window._daBuilderMode === 'auto' ? ' All bunks in the division will be blocked for this time.' : ' Overlapping events will be bumped.'}</p>
       
       <div class="da-form-grid">
         <div class="da-form-field">
@@ -3058,26 +3154,50 @@ function renderTripsForm() {
     const startTime = document.getElementById("da-trip-start").value.trim();
     const endTime = document.getElementById("da-trip-end").value.trim();
     
-   if (!division || !tripName || !startTime || !endTime) { daShowAlert("Complete all fields."); return; }
+  if (!division || !tripName || !startTime || !endTime) { daShowAlert("Complete all fields."); return; }
     const startMin = parseTimeToMinutes(startTime);
     const endMin = parseTimeToMinutes(endTime);
     if (startMin == null || endMin == null) { daShowAlert("Invalid time format. Use format like 9:00am or 2:30pm."); return; }
     if (endMin <= startMin) { daShowAlert("End time must be after start time."); return; }
     
-    loadDailySkeleton();
-    const newEvent = { id: 'trip_' + Date.now(), type: "pinned", event: tripName, division, startTime, endTime, reservedFields: [] };
-    eraseOverlappingTiles(newEvent, division);
-    dailyOverrideSkeleton.push(newEvent);
-    saveDailySkeleton();
-    renderGrid();
-    
-    document.querySelector('.da-subtab[data-tab="skeleton"]').click();
-    daShowAlert("✅ Trip added!");
+  if (window._daBuilderMode === 'auto') {
+      // ★ Auto mode: save trips to dedicated localStorage key + dailyData
+      const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+      const trips = loadDailyTrips(dateKey);
+      trips.push({ id: 'trip_' + Date.now(), event: tripName, division, startTime, endTime, startMin, endMin });
+      saveDailyTrips(dateKey, trips);
+      renderTripsForm();
+      renderGrid(); // ★ refresh DAW grid to show trip overlay
+      daShowAlert("✅ Trip added!");
+    } else {
+      loadDailySkeleton();
+      const newEvent = { id: 'trip_' + Date.now(), type: "pinned", event: tripName, division, startTime, endTime, reservedFields: [] };
+      eraseOverlappingTiles(newEvent, division);
+      dailyOverrideSkeleton.push(newEvent);
+      saveDailySkeleton();
+      renderGrid();
+      document.querySelector('.da-subtab[data-tab="skeleton"]')?.click();
+      daShowAlert("✅ Trip added!");
+    }
     document.getElementById("da-trip-name").value = "";
     document.getElementById("da-trip-start").value = "";
-    document.getElementById("da-trip-end").value = "";
-  };
+    document.getElementById("da-trip-end").value = "";  };
+
+  // ★ Auto mode: bind remove buttons for existing trips
+  if (window._daBuilderMode === 'auto') {
+    container.querySelectorAll('.da-trip-remove-btn').forEach(btn => {
+      btn.onclick = async () => {
+        const tripId = btn.dataset.tripId;
+        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        const trips = loadDailyTrips(dateKey).filter(t => t.id !== tripId);
+        saveDailyTrips(dateKey, trips);
+        renderTripsForm();
+        renderGrid(); // ★ refresh DAW grid to remove trip overlay
+      };
+    });
+  }
 }
+
 
 // =================================================================
 // BUNK OVERRIDES UI
@@ -3993,7 +4113,7 @@ function getStyles() {
     .ms-container #da-trips-container { padding:16px; }
     .ms-container #da-bunk-overrides-container { padding:16px; }
     .ms-container #da-resources-container { padding:16px; }
-    .ms-container #da-fluid-container { padding:16px; }
+   
     #da-skeleton-grid .al-toolbar { display: none !important; }
     #da-skeleton-grid .al-palette { display: none !important; }
   </style>`;
@@ -4050,7 +4170,9 @@ function getMainHTML(useMS) {
           <div id="da-pane-resources" class="da-pane">
             <div id="da-resources-container"></div>
           </div>
-          
+          <div id="da-pane-rotation-events" class="da-pane">
+            <div id="da-rotation-events-container"></div>
+          </div>
         </div>
       </div>
     `;
@@ -4068,7 +4190,6 @@ function getMainHTML(useMS) {
           <button class="da-subtab" data-tab="trips">Trips</button>
           <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
           <button class="da-subtab" data-tab="resources">Resources</button>
-          <button class="da-subtab" data-tab="fluid">Fluid Mode</button>
         </div>
         
         <div id="da-pane-skeleton" class="da-pane active">
@@ -4088,11 +4209,8 @@ function getMainHTML(useMS) {
           <div id="da-bunk-overrides-container"></div>
         </div>
         
-        <div id="da-pane-resources" class="da-pane">
+       <div id="da-pane-resources" class="da-pane">
           <div id="da-resources-container"></div>
-        </div>
-        <div id="da-pane-fluid" class="da-pane">
-          <div id="da-fluid-container"></div>
         </div>
       </div>
     </div>
@@ -4250,6 +4368,7 @@ function init() {
   renderTripsForm();
   renderBunkOverridesUI();
   renderResourceOverridesUI();
+  if (window.RotationEvents?.injectSubtab) window.RotationEvents.injectSubtab();
 }
     
 function cleanup() {
@@ -4275,6 +4394,9 @@ window.isRainyDayActive = isRainyDayActive;
 window.isMidDayModeActive = isMidDayModeActive;
 window.getMidDayStartTime = getMidDayStartTime;
 window.refreshSkeletonConflicts = function() { renderGrid(); };
+window.daShowModal = daShowModal;
+window.daShowConfirm = daShowConfirm;
+window.daShowAlert = daShowAlert;
 // === ADD THIS near the end of the IIFE, before the closing })(); ===
 
 // Expose internals for mobile touch support

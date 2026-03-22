@@ -935,7 +935,18 @@ else penalty += 200;
                     var tcInfo = _timeConstrainedBoost.get(actNameW); var timeBoost = tcInfo ? -tcInfo.boost : 0;
                     wishes.push({ activity: actNameW, need: rotScore + debtBonus + timeBoost, actType: isSpecial ? 'special' : 'sport', needsSharing: needsSharing, bunkSize: bSize });
                 }
-                wishes.sort(function(a, b) { return a.need - b.need; }); wishLists[bunk] = wishes;
+               wishes.sort(function(a, b) { return a.need - b.need; });
+                // ★ v3 AUTO MODE: Draft hint — boost _draftActivity to #1
+                if (block._draftActivity) {
+                    for (var dhi = 0; dhi < wishes.length; dhi++) {
+                        if (wishes[dhi].activity === block._draftActivity) {
+                            wishes[dhi].need -= 50000;
+                            break;
+                        }
+                    }
+                    wishes.sort(function(a, b) { return a.need - b.need; });
+                }
+                wishLists[bunk] = wishes;
             }
             var actFieldSlots = {};
             for (var ci3 = 0; ci3 < allCandidateOptions.length; ci3++) { var c3 = allCandidateOptions[ci3]; if (!c3.activityName || c3.activityName === 'Free') continue; if (!actFieldSlots[c3.activityName]) actFieldSlots[c3.activityName] = new Set(); actFieldSlots[c3.activityName].add(c3.field); }

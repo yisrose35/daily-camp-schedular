@@ -1492,18 +1492,74 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       <button class="ms-daw-pop-op ${layer.op === '<=' ? 'active' : ''}" data-op="<=">≤</button>
       <input type="number" id="daw-pop-qty" value="${layer.qty}" min="1" max="10" style="width:50px;">
     </div>
-   ${layer.type === 'swim' ? `
-    <label>Max Per Bunk Per Week</label>
+  <div style="border-top:1px solid #e5e7eb;margin:10px 0 8px;"></div>
+    <label style="font-size:11px;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:0.05em;">Rotation</label>
+    <span style="font-size:9px;color:#94a3b8;display:block;margin:-2px 0 6px;">Leave blank for no limits</span>
+
+    <label>Bunks / Day</label>
+    <div class="ms-daw-pop-row">
+      <input type="number" id="daw-pop-bpd" value="${layer.bunksPerDay != null ? layer.bunksPerDay : ''}" min="1" max="99" style="width:50px;" placeholder="All">
+      <span style="font-size:10px;color:#94a3b8;">per grade</span>
+    </div>
+    <span style="font-size:9px;color:#94a3b8;display:block;margin:-4px 0 6px;">How many bunks do this activity each day. Others get it on a different day.</span>
+
+    <label>Times / Week</label>
     <div class="ms-daw-pop-row">
       <button class="ms-daw-pop-op ms-daw-wop ${(layer.weeklyOp || '>=') === '>=' ? 'active' : ''}" data-wop=">=">≥</button>
       <button class="ms-daw-pop-op ms-daw-wop ${layer.weeklyOp === '=' ? 'active' : ''}" data-wop="=">=</button>
       <button class="ms-daw-pop-op ms-daw-wop ${layer.weeklyOp === '<=' ? 'active' : ''}" data-wop="<=">≤</button>
       <input type="number" id="daw-pop-week-qty" value="${layer.timesPerWeek != null ? layer.timesPerWeek : ''}" min="1" max="7" style="width:50px;" placeholder="Any">
       <span style="font-size:10px;color:#94a3b8;">days/wk</span>
-    </div>` : ''}
+    </div>
+    <span style="font-size:9px;color:#94a3b8;display:block;margin:-4px 0 6px;">Target days per week each bunk gets this. System picks bunks that need it most.</span>    
+    ${layer.type === 'custom' ? `
+    <div style="border-top:1px solid #e5e7eb;margin:10px 0 8px;"></div>
+    <label style="font-size:11px;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:0.05em;">Custom Activity</label>
+    
+    <label>Activity Name</label>
+    <div class="ms-daw-pop-row">
+      <input type="text" id="daw-pop-custom-name" value="${layer.customActivity || ''}" placeholder="e.g. Home Run Derby" style="width:100%;">
+    </div>
+
+    <label>Field / Location</label>
+    <div class="ms-daw-pop-row">
+      <select id="daw-pop-custom-field" style="width:100%;">
+        <option value="">-- Select field --</option>
+        ${(() => {
+          const gs = window.loadGlobalSettings?.() || {};
+          const fields = gs.app1?.fields || gs.fields || window.fields || [];
+          const specialLocs = (gs.app1?.specialActivities || []).map(s => s.location).filter(Boolean);
+          const allLocs = [...new Set([...fields.map(f => f.name), ...specialLocs])].sort();
+          return allLocs.map(f => '<option value="' + f + '"' + (f === (layer.customField || '') ? ' selected' : '') + '>' + f + '</option>').join('');
+        })()}
+        <option value="_custom" ${layer.customField && !(() => { const gs = window.loadGlobalSettings?.() || {}; const fields = gs.app1?.fields || []; return fields.some(f => f.name === layer.customField); })() ? 'selected' : ''}>-- Custom location --</option>
+      </select>
+    </div>
+    <div id="daw-pop-custom-field-text-wrap" style="display:${layer.customField && !(() => { const gs = window.loadGlobalSettings?.() || {}; const fields = gs.app1?.fields || []; return fields.some(f => f.name === layer.customField); })() ? 'block' : 'none'};">
+      <div class="ms-daw-pop-row" style="margin-top:4px;">
+        <input type="text" id="daw-pop-custom-field-text" value="${layer.customField || ''}" placeholder="Type location name" style="width:100%;">
+      </div>
+    </div>
+
+    <label>Bunks</label>
+    <div class="ms-daw-pop-row" style="flex-wrap:wrap;gap:4px;">
+      <button id="daw-pop-bunk-all" style="font-size:10px;padding:3px 8px;border:1px solid #e2e8f0;border-radius:4px;background:#f1f5f9;cursor:pointer;font-weight:600;">All</button>
+      <button id="daw-pop-bunk-none" style="font-size:10px;padding:3px 8px;border:1px solid #e2e8f0;border-radius:4px;background:#f1f5f9;cursor:pointer;font-weight:600;">None</button>
+    </div>
+    <div id="daw-pop-bunk-grid" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">
+      ${(() => {
+        const divs = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
+        const bunks = (divs[grade]?.bunks || []).map(String);
+        const selected = layer.customBunks || bunks;
+        return bunks.map(b => '<label style="font-size:11px;display:flex;align-items:center;gap:3px;cursor:pointer;padding:2px 6px;border:1px solid #e2e8f0;border-radius:4px;background:' + (selected.includes(b) ? '#dbeafe' : '#fff') + ';"><input type="checkbox" class="daw-bunk-cb" value="' + b + '"' + (selected.includes(b) ? ' checked' : '') + ' style="width:13px;height:13px;">' + b + '</label>').join('');
+      })()}
+    </div>
+    <span style="font-size:9px;color:#94a3b8;display:block;margin-top:4px;">Select which bunks participate. Others get regular activities.</span>
+    ` : ''}
     <div class="ms-daw-pop-actions">      <button class="ms-daw-pop-btn ms-daw-pop-btn-save">Save</button>
       <button class="ms-daw-pop-btn ms-daw-pop-btn-del">Delete</button>
       <button class="ms-daw-pop-btn ms-daw-pop-btn-cancel">Close</button>
+    </div>
     </div>
   `;
   
@@ -1523,6 +1579,30 @@ function showDAWPopover(bandEl, layer, grade, opts) {
     };
   });
   
+  // Custom layer: field dropdown toggle + bunk select/deselect
+  const customFieldSelect = popover.querySelector('#daw-pop-custom-field');
+  if (customFieldSelect) {
+    customFieldSelect.onchange = function() {
+      const wrap = popover.querySelector('#daw-pop-custom-field-text-wrap');
+      if (wrap) wrap.style.display = this.value === '_custom' ? 'block' : 'none';
+    };
+  }
+  const bunkAllBtn = popover.querySelector('#daw-pop-bunk-all');
+  const bunkNoneBtn = popover.querySelector('#daw-pop-bunk-none');
+  if (bunkAllBtn) {
+    bunkAllBtn.onclick = () => {
+      popover.querySelectorAll('.daw-bunk-cb').forEach(cb => { cb.checked = true; cb.closest('label').style.background = '#dbeafe'; });
+    };
+  }
+  if (bunkNoneBtn) {
+    bunkNoneBtn.onclick = () => {
+      popover.querySelectorAll('.daw-bunk-cb').forEach(cb => { cb.checked = false; cb.closest('label').style.background = '#fff'; });
+    };
+  }
+  popover.querySelectorAll('.daw-bunk-cb').forEach(cb => {
+    cb.onchange = function() { this.closest('label').style.background = this.checked ? '#dbeafe' : '#fff'; };
+  });
+
   // Save
   popover.querySelector('.ms-daw-pop-btn-save').onclick = () => {
     const startStr = popover.querySelector('#daw-pop-start').value;
@@ -1538,18 +1618,33 @@ function showDAWPopover(bandEl, layer, grade, opts) {
     const activeOp = popover.querySelector('.ms-daw-pop-op[data-op].active');
     if (activeOp) layer.op = activeOp.dataset.op;
 
-    // Swim-only: Max Per Bunk Per Week
-    if (layer.type === 'swim') {
-      const activeWop = popover.querySelector('.ms-daw-wop[data-wop].active');
-      const weekQtyRaw = (popover.querySelector('#daw-pop-week-qty')?.value || '').trim();
-      const weekQtyVal = weekQtyRaw !== '' ? Math.max(1, Math.min(7, parseInt(weekQtyRaw) || 1)) : null;
-      layer.timesPerWeek = weekQtyVal;
-      layer.weeklyOp = weekQtyVal != null && activeWop ? activeWop.dataset.wop : '>=';
-    } else {
-      delete layer.timesPerWeek;
-      delete layer.weeklyOp;
-    }
+   // Rotation: Bunks Per Day + Times Per Week (all layer types)
+    const bpdRaw = (popover.querySelector('#daw-pop-bpd')?.value || '').trim();
+    layer.bunksPerDay = bpdRaw !== '' ? Math.max(1, parseInt(bpdRaw) || 1) : null;
 
+    const activeWop = popover.querySelector('.ms-daw-wop[data-wop].active');
+    const weekQtyRaw = (popover.querySelector('#daw-pop-week-qty')?.value || '').trim();
+    const weekQtyVal = weekQtyRaw !== '' ? Math.max(1, Math.min(7, parseInt(weekQtyRaw) || 1)) : null;
+    layer.timesPerWeek = weekQtyVal;
+    layer.weeklyOp = weekQtyVal != null && activeWop ? activeWop.dataset.wop : '>=';
+
+    // Custom layer: save activity name, field, and bunks
+    if (layer.type === 'custom') {
+      layer.customActivity = (popover.querySelector('#daw-pop-custom-name')?.value || '').trim() || null;
+      const fieldSelect = popover.querySelector('#daw-pop-custom-field');
+      const fieldText = popover.querySelector('#daw-pop-custom-field-text');
+      if (fieldSelect) {
+        if (fieldSelect.value === '_custom') {
+          layer.customField = (fieldText?.value || '').trim() || null;
+        } else {
+          layer.customField = fieldSelect.value || null;
+        }
+      }
+      const checkedBunks = Array.from(popover.querySelectorAll('.daw-bunk-cb:checked')).map(cb => cb.value);
+      const divs = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
+      const allBunks = (divs[grade]?.bunks || []).map(String);
+      layer.customBunks = checkedBunks.length === allBunks.length ? null : checkedBunks; // null = all
+    }
     onSave();
     onRender();
   };
