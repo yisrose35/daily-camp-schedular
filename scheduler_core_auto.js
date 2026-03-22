@@ -2359,7 +2359,31 @@
         allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = []; bunkSpecialAssigned[bunk] = {}; }));
 
         // 0a. Pinned (any type)
-        const pinnedCount = executePinnedLayers();
+       // ★ INJECT DAILY TRIPS — block out time for entire divisions
+        const dailyTrips = window.loadCurrentDailyData?.()?.dailyTrips || [];
+        let tripBlockCount = 0;
+        dailyTrips.forEach(trip => {
+            const grade = trip.division;
+            if (!grade || !divisions[grade]) return;
+            if (allowedSet && !allowedSet.has(String(grade))) return;
+            const tStart = trip.startMin ?? parseTimeToMinutes(trip.startTime);
+            const tEnd = trip.endMin ?? parseTimeToMinutes(trip.endTime);
+            if (tStart == null || tEnd == null) return;
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                bunkTimelines[bunk].push({
+                    startMin: tStart, endMin: tEnd,
+                    type: 'trip', event: trip.event || 'Trip',
+                    layer: null, _classification: 'pinned',
+                    _committed: true, _fixed: true, _isTrip: true,
+                    _activityLocked: true, _noBacktrack: true
+                });
+                tripBlockCount++;
+            });
+        });
+        if (tripBlockCount > 0) {
+            allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin)));
+            log('[0.1] Injected ' + tripBlockCount + ' trip blocks from daily trips');
+        }
 
         // 0b. MRC for swim
         buildResourceCalendar(_iterSeed);
