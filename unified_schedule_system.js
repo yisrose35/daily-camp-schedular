@@ -3938,9 +3938,6 @@ if (globalBlocks.length > 0) {
         await createAutoBackup(activity, divName);
 
         const divSlots = window.divisionTimes?.[divName] || [];
-        
-        for (const bunk of bunks) {
-           const divSlots = window.divisionTimes?.[divName] || [];
         const isAutoMode = !!window.divisionTimes?.[divName]?._perBunkSlots;
         const perBunkSlotMap = result.perBunkSlots || null;
         
