@@ -3021,10 +3021,28 @@ function renderTripsForm() {
   
   const divisions = window.availableDivisions || [];
   
-  container.innerHTML = `
+ // ★ Auto mode: show existing trips list
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  const existingTrips = (window._daBuilderMode === 'auto') ? (Array.isArray(dailyData.dailyTrips) ? dailyData.dailyTrips : []) : [];
+  const tripsListHTML = existingTrips.length > 0 ? `
+    <div class="da-section" style="margin-bottom:12px;">
+      <h3 class="da-section-title">Today's Trips (${existingTrips.length})</h3>
+      ${existingTrips.map(t => `
+        <div class="da-override-item" style="margin-bottom:6px;">
+          <div>
+            <strong>${t.event || 'Trip'}</strong> — <span style="color:#3b82f6;">${t.division}</span>
+            <div style="font-size:12px;color:#64748b;">${t.startTime} – ${t.endTime}</div>
+          </div>
+          <button class="da-btn da-btn-danger da-btn-sm da-trip-remove-btn" data-trip-id="${t.id}">Remove</button>
+        </div>
+      `).join('')}
+    </div>
+  ` : '';
+
+  container.innerHTML = tripsListHTML + `
     <div class="da-section">
       <h3 class="da-section-title">Add Trip</h3>
-      <p class="da-section-desc">Add an off-campus trip. Overlapping events will be bumped.</p>
+      <p class="da-section-desc">Add an off-campus trip.${window._daBuilderMode === 'auto' ? ' All bunks in the division will be blocked for this time.' : ' Overlapping events will be bumped.'}</p>
       
       <div class="da-form-grid">
         <div class="da-form-field">
@@ -3058,25 +3076,47 @@ function renderTripsForm() {
     const startTime = document.getElementById("da-trip-start").value.trim();
     const endTime = document.getElementById("da-trip-end").value.trim();
     
-   if (!division || !tripName || !startTime || !endTime) { daShowAlert("Complete all fields."); return; }
+  if (!division || !tripName || !startTime || !endTime) { daShowAlert("Complete all fields."); return; }
     const startMin = parseTimeToMinutes(startTime);
     const endMin = parseTimeToMinutes(endTime);
     if (startMin == null || endMin == null) { daShowAlert("Invalid time format. Use format like 9:00am or 2:30pm."); return; }
     if (endMin <= startMin) { daShowAlert("End time must be after start time."); return; }
     
-    loadDailySkeleton();
-    const newEvent = { id: 'trip_' + Date.now(), type: "pinned", event: tripName, division, startTime, endTime, reservedFields: [] };
-    eraseOverlappingTiles(newEvent, division);
-    dailyOverrideSkeleton.push(newEvent);
-    saveDailySkeleton();
-    renderGrid();
-    
-    document.querySelector('.da-subtab[data-tab="skeleton"]').click();
-    daShowAlert("✅ Trip added!");
+    if (window._daBuilderMode === 'auto') {
+      // ★ Auto mode: save trips to dailyData.dailyTrips (separate from manual skeleton)
+      const dailyData = window.loadCurrentDailyData?.() || {};
+      const trips = Array.isArray(dailyData.dailyTrips) ? dailyData.dailyTrips : [];
+      trips.push({ id: 'trip_' + Date.now(), event: tripName, division, startTime, endTime, startMin, endMin });
+      window.saveCurrentDailyData?.('dailyTrips', trips);
+      renderTripsForm();
+      daShowAlert("✅ Trip added!");
+    } else {
+      loadDailySkeleton();
+      const newEvent = { id: 'trip_' + Date.now(), type: "pinned", event: tripName, division, startTime, endTime, reservedFields: [] };
+      eraseOverlappingTiles(newEvent, division);
+      dailyOverrideSkeleton.push(newEvent);
+      saveDailySkeleton();
+      renderGrid();
+      document.querySelector('.da-subtab[data-tab="skeleton"]')?.click();
+      daShowAlert("✅ Trip added!");
+    }
     document.getElementById("da-trip-name").value = "";
     document.getElementById("da-trip-start").value = "";
-    document.getElementById("da-trip-end").value = "";
-  };
+    document.getElementById("da-trip-end").value = "";  };
+
+  // ★ Auto mode: bind remove buttons for existing trips
+  if (window._daBuilderMode === 'auto') {
+    container.querySelectorAll('.da-trip-remove-btn').forEach(btn => {
+      btn.onclick = async () => {
+        const tripId = btn.dataset.tripId;
+        const dd = window.loadCurrentDailyData?.() || {};
+        const trips = (Array.isArray(dd.dailyTrips) ? dd.dailyTrips : []).filter(t => t.id !== tripId);
+        window.saveCurrentDailyData?.('dailyTrips', trips);
+        renderTripsForm();
+      };
+    });
+  }
+}
 }
 
 // =================================================================
