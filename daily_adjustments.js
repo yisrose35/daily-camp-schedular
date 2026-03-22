@@ -3066,7 +3066,31 @@ if (success) {
   } else { 
       await daShowAlert("❌ Error generating schedule. Check console."); 
   }
-}// =================================================================
+}
+  // =================================================================
+// DAILY TRIPS: Persistent load/save (survives reload + cloud sync)
+// =================================================================
+function loadDailyTrips(dateKey) {
+  // Primary: dedicated localStorage key
+  try {
+    const stored = localStorage.getItem('campDailyTrips_' + dateKey);
+    if (stored) return JSON.parse(stored);
+  } catch (e) { /* ignore */ }
+  // Fallback: dailyData
+  try {
+    const dd = window.loadCurrentDailyData?.() || {};
+    if (Array.isArray(dd.dailyTrips)) return dd.dailyTrips;
+  } catch (e) { /* ignore */ }
+  return [];
+}
+
+function saveDailyTrips(dateKey, trips) {
+  // Save to dedicated localStorage key (primary — survives cloud overwrites)
+  try { localStorage.setItem('campDailyTrips_' + dateKey, JSON.stringify(trips)); } catch (e) { /* ignore */ }
+  // Also save to dailyData (for cloud sync + other modules)
+  window.saveCurrentDailyData?.('dailyTrips', trips);
+}
+  // =================================================================
 // TRIPS FORM
 // =================================================================
 function renderTripsForm() {
@@ -3076,8 +3100,8 @@ function renderTripsForm() {
   const divisions = window.availableDivisions || [];
   
  // ★ Auto mode: show existing trips list
-  const dailyData = window.loadCurrentDailyData?.() || {};
-  const existingTrips = (window._daBuilderMode === 'auto') ? (Array.isArray(dailyData.dailyTrips) ? dailyData.dailyTrips : []) : [];
+ const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  const existingTrips = (window._daBuilderMode === 'auto') ? loadDailyTrips(dateKey) : [];
   const tripsListHTML = existingTrips.length > 0 ? `
     <div class="da-section" style="margin-bottom:12px;">
       <h3 class="da-section-title">Today's Trips (${existingTrips.length})</h3>
@@ -3136,12 +3160,12 @@ function renderTripsForm() {
     if (startMin == null || endMin == null) { daShowAlert("Invalid time format. Use format like 9:00am or 2:30pm."); return; }
     if (endMin <= startMin) { daShowAlert("End time must be after start time."); return; }
     
-   if (window._daBuilderMode === 'auto') {
-      // ★ Auto mode: save trips to dailyData.dailyTrips (separate from manual skeleton)
-      const dailyData = window.loadCurrentDailyData?.() || {};
-      const trips = Array.isArray(dailyData.dailyTrips) ? dailyData.dailyTrips : [];
+  if (window._daBuilderMode === 'auto') {
+      // ★ Auto mode: save trips to dedicated localStorage key + dailyData
+      const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+      const trips = loadDailyTrips(dateKey);
       trips.push({ id: 'trip_' + Date.now(), event: tripName, division, startTime, endTime, startMin, endMin });
-      window.saveCurrentDailyData?.('dailyTrips', trips);
+      saveDailyTrips(dateKey, trips);
       renderTripsForm();
       renderGrid(); // ★ refresh DAW grid to show trip overlay
       daShowAlert("✅ Trip added!");
@@ -3164,9 +3188,9 @@ function renderTripsForm() {
     container.querySelectorAll('.da-trip-remove-btn').forEach(btn => {
       btn.onclick = async () => {
         const tripId = btn.dataset.tripId;
-        const dd = window.loadCurrentDailyData?.() || {};
-        const trips = (Array.isArray(dd.dailyTrips) ? dd.dailyTrips : []).filter(t => t.id !== tripId);
-        window.saveCurrentDailyData?.('dailyTrips', trips);
+        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        const trips = loadDailyTrips(dateKey).filter(t => t.id !== tripId);
+        saveDailyTrips(dateKey, trips);
         renderTripsForm();
         renderGrid(); // ★ refresh DAW grid to remove trip overlay
       };
