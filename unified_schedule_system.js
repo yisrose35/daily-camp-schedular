@@ -3387,12 +3387,13 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
         return newConflicts;
     }
 
-    function openIntegratedEditModal(bunk, slotIdx, existingEntry = null) {
+   function openIntegratedEditModal(bunk, slotIdx, existingEntry = null) {
         closeIntegratedEditModal();
 
         const divName = getDivisionForBunk(bunk);
         const bunksInDivision = getBunksForDivision(divName);
-        // ★★★ AUTO MODE: Per-bunk slots have different indices than division slots ★★★
+        // ★★★ AUTO MODE: Per-bunk slots have bunk-specific time indices ★★★
+        // In manual mode _perBunkSlots is undefined → perBunkSlots is undefined → uses division-level (unchanged)
         const perBunkSlots = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
         const times = perBunkSlots || window.divisionTimes?.[divName] || [];
         const slotInfo = times[slotIdx] || {};        const timeLabel = slotInfo.label || `${minutesToTimeStr(slotInfo.startMin)} - ${minutesToTimeStr(slotInfo.endMin)}`;
