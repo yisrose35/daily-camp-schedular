@@ -2359,7 +2359,9 @@
         allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = []; bunkSpecialAssigned[bunk] = {}; }));
 
         // 0a. Pinned (any type)
-       // ★ INJECT DAILY TRIPS — block out time for entire divisions
+        const pinnedCount = executePinnedLayers();
+
+        // ★ INJECT DAILY TRIPS — block out time for entire divisions
         const dailyTrips = window.loadCurrentDailyData?.()?.dailyTrips || [];
         let tripBlockCount = 0;
         dailyTrips.forEach(trip => {
