@@ -1,6 +1,3 @@
-
-
-
 // =============================================================================
 // unified_schedule_system.js v4.1.0 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
 // =============================================================================
@@ -2802,8 +2799,10 @@ if (bypassStatus.highlight) {
             return;
         }
 
-       const isClear = !activity || activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
-        const slots = findSlotsForRange(startMin, endMin, divName);
+      const isClear = !activity || activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
+        // ★★★ Pass bunk name only in auto mode (per-bunk slots) — manual mode ignores 4th arg ★★★
+        const hasPerBunk = !!window.divisionTimes?.[divName]?._perBunkSlots;
+        const slots = findSlotsForRange(startMin, endMin, divName, hasPerBunk ? bunk : null);
         if (slots.length === 0) { alert('Error: Could not find time slots.'); return; }
 
         // ★ Sequence rule warning
@@ -2865,10 +2864,11 @@ if (bypassStatus.highlight) {
         const locationSelect = document.getElementById('post-edit-location');
         const conflictArea = document.getElementById('post-edit-conflict');
         
+       const _hasPerBunk = !!window.divisionTimes?.[divName]?._perBunkSlots;
         function checkAndShowConflicts() {
             const location = locationSelect.value;
             if (!location) { conflictArea.style.display = 'none'; return null; }
-            const targetSlots = findSlotsForRange(startMin, endMin, divName);
+            const targetSlots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
             const conflictCheck = checkLocationConflict(location, targetSlots, bunk);
             if (conflictCheck.hasConflict) {
                 const editableBunks = [...new Set(conflictCheck.editableConflicts.map(c => c.bunk))];
@@ -2896,7 +2896,7 @@ if (bypassStatus.highlight) {
             const activity = document.getElementById('post-edit-activity').value.trim();
             const location = locationSelect.value;
             if (!activity) { alert('Please enter an activity name.'); return; }
-            const targetSlots = findSlotsForRange(startMin, endMin, divName);
+            const targetSlots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
             const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
             if (conflictCheck?.hasConflict) {
                 onSave({ 
@@ -3392,9 +3392,10 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
 
         const divName = getDivisionForBunk(bunk);
         const bunksInDivision = getBunksForDivision(divName);
-        const times = window.divisionTimes?.[divName] || [];
-        const slotInfo = times[slotIdx] || {};
-        const timeLabel = slotInfo.label || `${minutesToTimeStr(slotInfo.startMin)} - ${minutesToTimeStr(slotInfo.endMin)}`;
+        // ★★★ AUTO MODE: Per-bunk slots have different indices than division slots ★★★
+        const perBunkSlots = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
+        const times = perBunkSlots || window.divisionTimes?.[divName] || [];
+        const slotInfo = times[slotIdx] || {};        const timeLabel = slotInfo.label || `${minutesToTimeStr(slotInfo.startMin)} - ${minutesToTimeStr(slotInfo.endMin)}`;
 
         _currentEditContext = { bunk, slotIdx, divName, bunksInDivision, existingEntry, slotInfo };
 
