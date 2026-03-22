@@ -151,6 +151,31 @@
 
     var STANDARD_PINS = { 'swim': 1, 'lunch': 1, 'snacks': 1, 'snack': 1, 'dismissal': 1 };
 
+    // Routine/boring pinned blocks that should NOT show on the calendar.
+    // These are everyday operational blocks, not notable events.
+    var ROUTINE_WORDS = ['change', 'changing', 'free play', 'free time', 'free period',
+        'transition', 'break', 'recess', 'rest', 'cleanup', 'clean up',
+        'davening', 'tefilla', 'mincha', 'maariv', 'shacharit',
+        'lineup', 'line up', 'line-up', 'roll call', 'attendance',
+        'warm up', 'warmup', 'warm-up', 'cool down', 'cooldown',
+        'flag', 'flagpole', 'opening', 'closing', 'announcements'];
+
+    function isRoutinePin(name) {
+        if (!name) return true;
+        var lower = name.toLowerCase().trim();
+        // Exact match against standard pins
+        if (STANDARD_PINS[lower]) return true;
+        // Exact match or contains a routine word
+        for (var i = 0; i < ROUTINE_WORDS.length; i++) {
+            if (lower === ROUTINE_WORDS[i] || lower.indexOf(ROUTINE_WORDS[i]) !== -1) return true;
+        }
+        // Too short to be a real event name (like "X" or ".")
+        if (lower.length < 3) return true;
+        // Starts with "free" (catches "Free", "Free Block", "Free Choice", etc.)
+        if (lower.indexOf('free') === 0) return true;
+        return false;
+    }
+
     function parseTimeStr(str) {
         if (!str) return null;
         str = str.toString().toLowerCase().replace(/\s/g, '');
@@ -256,8 +281,8 @@
 
         skeleton.forEach(function (block) {
             if (!block || block.type !== 'pinned') return;
-            var evtName = (block.event || '').toLowerCase().trim();
-            if (STANDARD_PINS[evtName]) return; // skip swim, lunch, snacks, dismissal
+            var evtName = (block.event || '').trim();
+            if (isRoutinePin(evtName)) return;
             if (!evtName) return;
 
             var divName = block.division;
@@ -712,14 +737,9 @@
                     if (events.length > maxShow) {
                         inner += '<div class="scv-month-more">+' + (events.length - maxShow) + ' more</div>';
                     }
-                    // Schedule status indicator
+                    // Subtle schedule indicator — just a class on the cell
                     if (scheduled) {
-                        inner += '<div class="scv-month-sched">\u2713 Schedule</div>';
-                    } else {
-                        var dow2 = idx % 7;
-                        if (dow2 !== 0 && dow2 !== 6) {
-                            inner += '<div class="scv-month-no-sched">No schedule</div>';
-                        }
+                        cell.classList.add('has-sched');
                     }
                 }
 
@@ -763,15 +783,13 @@
             activeGrades.slice(0, 6).forEach(function (g) {
                 dotHtml += '<span class="scv-week-hdr-dot" style="background:' + g.color + ';" title="' + escapeHtml(g.division) + '"></span>';
             });
-            var schedBadge = scheduled
-                ? '<span class="scv-week-sched-badge">\u2713</span>'
-                : '<span class="scv-week-no-sched-badge">\u2013</span>';
-            headerHtml += '<div class="scv-week-day-hdr' + (today ? ' today' : '') + '" data-y="' + wd.getFullYear() + '" data-m="' + wd.getMonth() + '" data-d="' + wd.getDate() + '">' +
+            var schedDot = scheduled
+                ? '<span class="scv-week-sched-dot" title="Schedule generated"></span>'
+                : '';
+            headerHtml += '<div class="scv-week-day-hdr' + (today ? ' today' : '') + (scheduled ? ' has-sched' : '') + '" data-y="' + wd.getFullYear() + '" data-m="' + wd.getMonth() + '" data-d="' + wd.getDate() + '">' +
                 '<span class="scv-week-day-name">' + DAYS[wd.getDay()] + '</span>' +
-                '<div class="scv-week-day-num-row">' +
-                    '<span class="scv-week-day-num' + (today ? ' today-badge' : '') + '">' + wd.getDate() + '</span>' +
-                    schedBadge +
-                '</div>' +
+                '<span class="scv-week-day-num' + (today ? ' today-badge' : '') + '">' + wd.getDate() + '</span>' +
+                schedDot +
                 (dotHtml ? '<div class="scv-week-hdr-dots">' + dotHtml + '</div>' : '') +
                 '</div>';
         });
@@ -945,8 +963,8 @@
 
 /* Month event lines */
 '.scv-month-ev{font-size:10px;line-height:15px;padding:2px 6px;border-radius:4px;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}' +
-'.scv-month-sched{font-size:9px;color:#059669;font-weight:600;margin-top:auto;padding-top:4px;opacity:.7}' +
-'.scv-month-no-sched{font-size:9px;color:var(--slate-300,#cbd5e1);margin-top:auto;padding-top:4px}' +
+/* Month schedule indicator — thin green bottom border */
+'.scv-month-cell.has-sched{border-bottom:2px solid rgba(16,185,129,0.4)}' +
 
 /* Week */
 '.scv-week-wrapper{border:1px solid var(--slate-200,#e2e8f0);border-radius:10px;overflow:hidden;background:#fff}' +
@@ -955,9 +973,8 @@
 '.scv-week-day-hdr{padding:8px 4px;text-align:center;background:var(--slate-50,#f8fafc);border-left:1px solid var(--slate-100,#f1f5f9);transition:background .1s}' +
 '.scv-week-day-hdr:hover{background:var(--slate-100,#f1f5f9)}' +
 '.scv-week-day-hdr.today{background:rgba(20,125,145,.06)}' +
-'.scv-week-day-num-row{display:flex;align-items:center;justify-content:center;gap:4px}' +
-'.scv-week-sched-badge{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:rgba(16,185,129,0.15);color:#059669;font-size:9px;font-weight:700}' +
-'.scv-week-no-sched-badge{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:var(--slate-100,#f1f5f9);color:var(--slate-300,#cbd5e1);font-size:9px;font-weight:700}' +
+'.scv-week-sched-dot{display:block;width:6px;height:6px;border-radius:50%;background:#10b981;margin:3px auto 0}' +
+'.scv-week-day-hdr.has-sched{border-bottom:2px solid rgba(16,185,129,0.4)}' +
 '.scv-week-hdr-dots{display:flex;justify-content:center;gap:3px;margin-top:3px}' +
 '.scv-week-hdr-dot{display:inline-block;width:7px;height:7px;border-radius:50%}' +
 '.scv-week-day-name{display:block;font-size:11px;font-weight:600;color:var(--slate-500,#64748b)}' +
