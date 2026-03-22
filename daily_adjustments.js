@@ -3993,7 +3993,7 @@ function getStyles() {
     .ms-container #da-trips-container { padding:16px; }
     .ms-container #da-bunk-overrides-container { padding:16px; }
     .ms-container #da-resources-container { padding:16px; }
-    .ms-container #da-fluid-container { padding:16px; }
+   
     #da-skeleton-grid .al-toolbar { display: none !important; }
     #da-skeleton-grid .al-palette { display: none !important; }
   </style>`;
@@ -4070,7 +4070,6 @@ function getMainHTML(useMS) {
           <button class="da-subtab" data-tab="trips">Trips</button>
           <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
           <button class="da-subtab" data-tab="resources">Resources</button>
-          <button class="da-subtab" data-tab="fluid">Fluid Mode</button>
         </div>
         
         <div id="da-pane-skeleton" class="da-pane active">
@@ -4090,11 +4089,8 @@ function getMainHTML(useMS) {
           <div id="da-bunk-overrides-container"></div>
         </div>
         
-        <div id="da-pane-resources" class="da-pane">
+       <div id="da-pane-resources" class="da-pane">
           <div id="da-resources-container"></div>
-        </div>
-        <div id="da-pane-fluid" class="da-pane">
-          <div id="da-fluid-container"></div>
         </div>
       </div>
     </div>
