@@ -1213,13 +1213,19 @@
     // 
     // =========================================================================
 
+  let _patchRetryCount = 0;
     function patchLoadScheduleForDate() {
         if (window._loadScheduleForDatePatched) return;
         
         const original = window.loadScheduleForDate;
         if (!original) {
-            console.warn('[PostEdit] loadScheduleForDate not found, will retry...');
-            setTimeout(patchLoadScheduleForDate, 500);
+            _patchRetryCount++;
+            if (_patchRetryCount <= 10) {
+                console.warn('[PostEdit] loadScheduleForDate not found, will retry... (' + _patchRetryCount + '/10)');
+                setTimeout(patchLoadScheduleForDate, 500);
+            } else {
+                console.warn('[PostEdit] loadScheduleForDate not found after 10 retries — giving up. Check if unified_schedule_system.js loaded correctly.');
+            }
             return;
         }
 
