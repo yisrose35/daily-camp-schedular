@@ -62,33 +62,40 @@
     // This is needed to bridge the timeline view (time-based)
     // with the scheduleAssignments array (index-based).
     // ─────────────────────────────────────────────
-    function findSlotIndex(bunk, divName, startMin, endMin) {
+   function findSlotIndex(bunk, divName, startMin, endMin) {
         // Method 1: Per-bunk slots (auto mode canonical)
         var perBunkSlots = (window.divisionTimes || {})[divName];
         if (perBunkSlots && perBunkSlots._perBunkSlots) {
             var bunkSlots = perBunkSlots._perBunkSlots[String(bunk)];
             if (bunkSlots) {
+                // Exact match (single-slot block)
                 for (var i = 0; i < bunkSlots.length; i++) {
                     if (bunkSlots[i].startMin === startMin && bunkSlots[i].endMin === endMin) return i;
                 }
-                // Fallback: overlapping match
+                // ★★★ FIX: Match on startMin only — handles multi-slot continuation blocks
+                // where getBunkActivities merged slots 3+4 into one block with combined endMin.
+                // We need the FIRST slot (the one with the actual assignment, not continuation).
                 for (var j = 0; j < bunkSlots.length; j++) {
-                    if (bunkSlots[j].startMin <= startMin && bunkSlots[j].endMin >= endMin) return j;
+                    if (bunkSlots[j].startMin === startMin) return j;
+                }
+                // Last resort: overlapping match
+                for (var k = 0; k < bunkSlots.length; k++) {
+                    if (bunkSlots[k].startMin >= startMin && bunkSlots[k].startMin < endMin) return k;
                 }
             }
         }
 
-        // Method 2: Division-level slots (fallback)
+        // Method 2: Division-level slots (non-auto fallback)
         var divSlots = (window.divisionTimes || {})[divName];
         if (divSlots && Array.isArray(divSlots)) {
-            for (var k = 0; k < divSlots.length; k++) {
-                if (divSlots[k].startMin === startMin && divSlots[k].endMin === endMin) return k;
+            for (var m = 0; m < divSlots.length; m++) {
+                if (divSlots[m].startMin === startMin) return m;
             }
         }
 
-        // Method 3: Use SchedulerCoreUtils
+        // Method 3: Use SchedulerCoreUtils with bunk context
         if (window.SchedulerCoreUtils && window.SchedulerCoreUtils.findSlotsForRange) {
-            var slots = window.SchedulerCoreUtils.findSlotsForRange(startMin, endMin, divName);
+            var slots = window.SchedulerCoreUtils.findSlotsForRange(startMin, endMin, divName, String(bunk));
             if (slots.length > 0) return slots[0];
         }
 
