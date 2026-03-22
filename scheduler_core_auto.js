@@ -885,22 +885,40 @@
             pinnedLayers.forEach(layer => {
                 const grade = layer.grade || layer.division;
                 if (!grade || (allowedSet && !allowedSet.has(String(grade)))) return;
-                const bunks = getBunksForGrade(grade, divisions);
-                if (!bunks.length) return;
+                const allBunks = getBunksForGrade(grade, divisions);
+                if (!allBunks.length) return;
 
                 const t = (layer.type || '').toLowerCase();
                 const isGradeWide = t === 'league' || t === 'specialty_league' ||
                     (activityProperties[layer.event]?.fullGrade) || (activityProperties[layer.name]?.fullGrade);
 
-                bunks.forEach(bunk => {
+                // ★ Custom layers: only place for selected bunks
+                const isCustom = t === 'custom';
+                const targetBunks = (isCustom && layer.customBunks && layer.customBunks.length > 0)
+                    ? allBunks.filter(b => layer.customBunks.includes(String(b)))
+                    : allBunks;
+
+                const eventName = (isCustom && layer.customActivity) ? layer.customActivity : (layer.event || layer.name || layer.type || 'Pinned');
+
+                targetBunks.forEach(bunk => {
                     bunkTimelines[bunk].push({
                         startMin: layer.startMin, endMin: layer.endMin,
-                        type: layer.type || 'pinned', event: layer.event || layer.name || layer.type || 'Pinned',
+                        type: isCustom ? 'custom' : (layer.type || 'pinned'),
+                        event: eventName,
                         layer, _classification: 'pinned', _committed: true, _fixed: true,
-                        _gradeWide: isGradeWide, _activityLocked: true, _noBacktrack: isGradeWide
+                        _gradeWide: isGradeWide && !isCustom,
+                        _activityLocked: true, _noBacktrack: isGradeWide,
+                        _customActivity: isCustom ? layer.customActivity : null,
+                        _customField: isCustom ? layer.customField : null,
+                        _customBunks: isCustom ? layer.customBunks : null
                     });
                     count++;
                 });
+
+                // ★ Register custom field as occupied so solver/fallback doesn't use it
+                if (isCustom && layer.customField) {
+                    registerCrossGrade(grade, 'custom', layer.startMin, layer.endMin, layer.customActivity);
+                }
             });
             allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin)));
             return count;
@@ -1549,6 +1567,31 @@
                 });
             });
 
+            // ★ Custom layers (windowed, not pinned) — pre-assigned activity + field
+            (layersByGrade[grade] || []).filter(l =>
+                (l.type || '').toLowerCase() === 'custom' && l._classification !== 'pinned'
+            ).forEach(customLayer => {
+                // Only add for this bunk if it's in the selected bunks list
+                if (customLayer.customBunks && customLayer.customBunks.length > 0) {
+                    if (!customLayer.customBunks.includes(String(bunk))) return;
+                }
+                const dur = customLayer.durationMin || customLayer.periodMin || 30;
+                const durMax = customLayer.durationMax || dur;
+                needs.push({
+                    type: 'custom',
+                    event: customLayer.customActivity || customLayer.event || 'Custom',
+                    layer: customLayer,
+                    dMin: dur, dMax: durMax,
+                    windowStart: Math.max(customLayer.startMin || 0, gradeStart),
+                    windowEnd: Math.min(customLayer.endMin || 1440, gradeEnd),
+                    _activityLocked: true,
+                    _customActivity: customLayer.customActivity || null,
+                    _customField: customLayer.customField || null,
+                    _customBunks: customLayer.customBunks || null,
+                    _source: 'custom-layer'
+                });
+            });
+
             // Sort: fixed-duration first, then tighter flexibility ratio
             needs.sort((a, b) => {
                 const aFixed = a.dMin === a.dMax ? 0 : 1;
@@ -2087,9 +2130,12 @@
                         _fromGapDetection: block._source === 'filler',
                         _microGap: block._microGap || false,
                         _bunkOverride: true,
-                        _draftActivity: block._assignedSport || block._assignedSpecial || null,
-                        _draftField: block.field || null,
-                        _sportFallbacks: block._sportFallbacks || null
+                        _draftActivity: block._customActivity || block._assignedSport || block._assignedSpecial || null,
+                        _draftField: block._customField || block.field || null,
+                        _sportFallbacks: block._sportFallbacks || null,
+                        _customActivity: block._customActivity || null,
+                        _customField: block._customField || null,
+                        _customBunks: block._customBunks || null
                     });
                 });
                 bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
@@ -2242,8 +2288,21 @@
                 return a.rand - b.rand; // random among ties
             });
 
-            // Pick the top N
-            const selected = sorted.slice(0, bunksPerDay).map(s => s.bunk);
+            // ★ Only pick bunks that haven't hit their weekly target yet
+            const needsSwim = sorted.filter(s => s.count < timesPerWeek);
+
+            // If no one needs swim, skip entirely — everyone met target
+            if (needsSwim.length === 0) {
+                if (totalIters < 1) {
+                    log('[SWIM-ROT] ' + grade + ': all bunks met ' + timesPerWeek + 'x/week target — no swim today');
+                }
+                if (!swimHistory[grade]) swimHistory[grade] = {};
+                swimHistory[grade][currentDate] = [];
+                return [];
+            }
+
+            // Pick up to bunksPerDay from those who still need it
+            const selected = needsSwim.slice(0, bunksPerDay).map(s => s.bunk);
 
             // Record today's swimmers in history
             if (!swimHistory[grade]) swimHistory[grade] = {};
@@ -2353,6 +2412,9 @@
 
             // ★ Swim: handled by greedy packer per-bunk (not pre-placed)
             if (t === 'swim') return;
+
+            // ★ Custom: handled by greedy packer per-bunk (not pre-placed)
+            if (t === 'custom') return;
 
             // ★ All other non-pinned layers (snack, sport, special, etc.)
             // handled by the greedy packer per-bunk — not pre-placed.
@@ -2578,11 +2640,52 @@
                 (bunkTimelines[bunk] || []).filter(b => (b._fixed || b._classification === 'pinned') && b._committed).forEach(block => {
                     const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     if (idx === -1 || window.scheduleAssignments[String(bunk)][idx]) return;
-                    window.scheduleAssignments[String(bunk)][idx] = { field: block.event, sport: null, _activity: block.event, _fixed: true, _pinned: true, _bunkOverride: true, continuation: false };
+                    // ★ Custom blocks: use customField and customActivity
+                    const isCustom = (block.type || '').toLowerCase() === 'custom' && block._customField;
+                    window.scheduleAssignments[String(bunk)][idx] = {
+                        field: isCustom ? block._customField : block.event,
+                        sport: null,
+                        _activity: isCustom ? (block._customActivity || block.event) : block.event,
+                        _fixed: true, _pinned: true, _bunkOverride: true,
+                        _customActivity: block._customActivity || null,
+                        _customField: block._customField || null,
+                        continuation: false
+                    };
                     pinnedWriteCount++;
                 });
             });
         });
+
+        // ★ Write custom (non-pinned) blocks — they have pre-assigned fields
+        let customWriteCount = 0;
+        allGrades.forEach(grade => {
+            const pbs = window.divisionTimes?.[grade]?._perBunkSlots || window._perBunkSlots?.[grade]; if (!pbs) return;
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                const arr = pbs[String(bunk)] || [];
+                (bunkTimelines[bunk] || []).filter(b => (b.type || '').toLowerCase() === 'custom' && b._customField && !b._fixed).forEach(block => {
+                    const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
+                    if (idx === -1 || window.scheduleAssignments[String(bunk)][idx]) return;
+                    window.scheduleAssignments[String(bunk)][idx] = {
+                        field: block._customField,
+                        sport: null,
+                        _activity: block._customActivity || block.event || 'Custom',
+                        _fixed: true, _bunkOverride: true, _activityLocked: true,
+                        _customActivity: block._customActivity || null,
+                        _customField: block._customField || null,
+                        _autoMode: true, continuation: false
+                    };
+                    // Lock the field so solver/fallback doesn't assign it to others
+                    if (block._customField && window.GlobalFieldLocks) {
+                        window.GlobalFieldLocks.lockField(block._customField, [idx], {
+                            lockedBy: 'auto_custom', division: grade,
+                            activity: block._customActivity || 'Custom'
+                        });
+                    }
+                    customWriteCount++;
+                });
+            });
+        });
+        if (customWriteCount > 0) log('[2.7] Wrote ' + customWriteCount + ' custom activity blocks');
 
         window._divisionTimesLocked = true;
         window._autoDivisionTimesBuilt = true;
