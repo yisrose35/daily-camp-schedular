@@ -1681,6 +1681,60 @@ function renderDAWTimeline(gridEl) {
       saveDAAutoLayers();
     }
   });
+
+  // ★ Overlay daily trips on the DAW grid
+  overlayTripsOnDAW(gridEl);
+}
+
+function overlayTripsOnDAW(gridEl) {
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  const trips = Array.isArray(dailyData.dailyTrips) ? dailyData.dailyTrips : [];
+  if (trips.length === 0) return;
+
+  // Find global start from ruler (same logic as DAW grid)
+  const divisions = window.divisions || {};
+  let globalStart = null;
+  Object.keys(divisions).forEach(d => {
+    if (divisions[d].isParent) return;
+    const s = parseTimeToMinutes(divisions[d]?.startTime);
+    if (s !== null && (globalStart === null || s < globalStart)) globalStart = s;
+  });
+  if (globalStart === null) globalStart = 540;
+  const PX_PER_MIN = 4; // matches DAW_PIXELS_PER_MINUTE in master_schedule_builder
+
+  trips.forEach(trip => {
+    const track = gridEl.querySelector('.ms-daw-track[data-grade="' + trip.division + '"]');
+    if (!track) return;
+    const tStart = trip.startMin ?? parseTimeToMinutes(trip.startTime);
+    const tEnd = trip.endMin ?? parseTimeToMinutes(trip.endTime);
+    if (tStart == null || tEnd == null) return;
+
+    const left = (tStart - globalStart) * PX_PER_MIN;
+    const width = (tEnd - tStart) * PX_PER_MIN;
+
+    const el = document.createElement('div');
+    el.className = 'da-trip-overlay';
+    el.style.cssText = 'position:absolute; left:' + left + 'px; width:' + width + 'px; top:0; bottom:0;' +
+      'background:repeating-linear-gradient(45deg, rgba(239,68,68,0.12), rgba(239,68,68,0.12) 4px, rgba(239,68,68,0.04) 4px, rgba(239,68,68,0.04) 8px);' +
+      'border:2px solid #ef4444; border-radius:4px; z-index:8; pointer-events:none;' +
+      'display:flex; align-items:center; justify-content:center;';
+    el.innerHTML = '<span style="background:#ef4444; color:#fff; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:700; pointer-events:none; white-space:nowrap;">' +
+      'Trip: ' + (trip.event || 'Trip') + ' (' + minutesToTime(tStart) + '–' + minutesToTime(tEnd) + ')' +
+      '</span>';
+    track.appendChild(el);
+  });
+
+  // ★ Show regen warning banner above the grid
+  if (trips.length > 0) {
+    const existing = gridEl.querySelector('.da-trip-regen-warning');
+    if (!existing) {
+      const banner = document.createElement('div');
+      banner.className = 'da-trip-regen-warning';
+      banner.style.cssText = 'padding:10px 16px; margin-bottom:8px; background:#fef3c7; border:1px solid #fcd34d; border-radius:8px; font-size:13px; color:#92400e; display:flex; align-items:center; gap:8px;';
+      banner.innerHTML = '<span style="font-size:16px;">⚠️</span> <span><strong>' + trips.length + ' trip' + (trips.length > 1 ? 's' : '') + '</strong> added today. Press <strong>▶ Generate Schedule</strong> to rebuild the day around ' + (trips.length > 1 ? 'them' : 'it') + '.</span>';
+      gridEl.insertBefore(banner, gridEl.firstChild);
+    }
+  }
 }
 function daConvertSkeletonToLayers(skeleton) {
   var layers = [];
@@ -3082,13 +3136,14 @@ function renderTripsForm() {
     if (startMin == null || endMin == null) { daShowAlert("Invalid time format. Use format like 9:00am or 2:30pm."); return; }
     if (endMin <= startMin) { daShowAlert("End time must be after start time."); return; }
     
-    if (window._daBuilderMode === 'auto') {
+   if (window._daBuilderMode === 'auto') {
       // ★ Auto mode: save trips to dailyData.dailyTrips (separate from manual skeleton)
       const dailyData = window.loadCurrentDailyData?.() || {};
       const trips = Array.isArray(dailyData.dailyTrips) ? dailyData.dailyTrips : [];
       trips.push({ id: 'trip_' + Date.now(), event: tripName, division, startTime, endTime, startMin, endMin });
       window.saveCurrentDailyData?.('dailyTrips', trips);
       renderTripsForm();
+      renderGrid(); // ★ refresh DAW grid to show trip overlay
       daShowAlert("✅ Trip added!");
     } else {
       loadDailySkeleton();
@@ -3113,6 +3168,7 @@ function renderTripsForm() {
         const trips = (Array.isArray(dd.dailyTrips) ? dd.dailyTrips : []).filter(t => t.id !== tripId);
         window.saveCurrentDailyData?.('dailyTrips', trips);
         renderTripsForm();
+        renderGrid(); // ★ refresh DAW grid to remove trip overlay
       };
     });
   }
