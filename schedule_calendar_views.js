@@ -83,7 +83,30 @@
     }
 
     // ── Data Layer ──────────────────────────────────────────────────────
+    // Render-scoped cache: parsed ONCE per render cycle, cleared after.
+    // Without this, year view parses the (potentially huge) campDailyData_v1
+    // JSON blob 700+ times and freezes the browser.
+    var _dataCache = null;
+    var _rotCache = null;
+
+    function beginRenderCache() {
+        try {
+            var raw = localStorage.getItem('campDailyData_v1');
+            _dataCache = raw ? JSON.parse(raw) : {};
+        } catch (e) { _dataCache = {}; }
+        try {
+            var g = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            _rotCache = Array.isArray(g.rotationEvents) ? g.rotationEvents : [];
+        } catch (e) { _rotCache = []; }
+    }
+
+    function endRenderCache() {
+        _dataCache = null;
+        _rotCache = null;
+    }
+
     function getAllDailyData() {
+        if (_dataCache) return _dataCache;
         try {
             var raw = localStorage.getItem('campDailyData_v1');
             return raw ? JSON.parse(raw) : {};
@@ -95,24 +118,24 @@
         return all[dateKey] || null;
     }
 
-    // Check if a generated schedule exists for this date
-    // (has real bunk assignments, not just empty/skeleton data)
+    function getRotationEvents() {
+        if (_rotCache) return _rotCache;
+        try {
+            var g = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            return Array.isArray(g.rotationEvents) ? g.rotationEvents : [];
+        } catch (e) { return []; }
+    }
+
+    // Does this day have a generated schedule?
+    // Fast check: just confirms scheduleAssignments has bunk data.
     function hasSchedule(dateKey) {
         var data = getScheduleDataForDate(dateKey);
         if (!data || !data.scheduleAssignments) return false;
-        var bunks = Object.keys(data.scheduleAssignments);
-        if (bunks.length === 0) return false;
-        // Check at least one bunk has a real slot
-        for (var i = 0; i < bunks.length; i++) {
-            var slots = data.scheduleAssignments[bunks[i]];
-            if (Array.isArray(slots) && slots.length > 0) {
-                for (var j = 0; j < slots.length; j++) {
-                    var s = slots[j];
-                    if (s && s.activity && s.activity.toLowerCase() !== 'free') return true;
-                }
-            }
-        }
-        return false;
+        var keys = Object.keys(data.scheduleAssignments);
+        if (keys.length === 0) return false;
+        // Quick: check first bunk has an array with entries
+        var first = data.scheduleAssignments[keys[0]];
+        return Array.isArray(first) && first.length > 0;
     }
 
     // ── Special Events Only ─────────────────────────────────────────────
@@ -174,11 +197,7 @@
         });
 
         // ─── 2. ROTATION EVENTS ──────────────────────────────────────
-        var rotEvents = [];
-        try {
-            var g = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
-            rotEvents = Array.isArray(g.rotationEvents) ? g.rotationEvents : [];
-        } catch (e) { /* ignore */ }
+        var rotEvents = getRotationEvents();
 
         rotEvents.forEach(function (evt) {
             if (!evt.dateRange || !evt.dateRange.start || !evt.dateRange.end) return;
@@ -573,9 +592,12 @@
         _calendarContainer.style.display = '';
         _calendarContainer.innerHTML = '';
 
+        // Parse localStorage ONCE for the entire render
+        beginRenderCache();
         if (_currentView === 'year') renderYearView();
         else if (_currentView === 'month') renderMonthView();
         else if (_currentView === 'week') renderWeekView();
+        endRenderCache();
     }
 
     // ══════════════════════════════════════════════════════════════════════
