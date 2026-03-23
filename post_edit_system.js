@@ -649,8 +649,40 @@
             detail: { bunk, slots, activity, location, date: currentDate }
         }));
         
-        // Cloud save (fire and forget - don't await to keep UI responsive)
+       // Cloud save (fire and forget - don't await to keep UI responsive)
         window.saveSchedule?.();
+        
+        // ★★★ FIX: Rebuild historical counts + rotation timestamps after post-edit ★★★
+        const _peDate = currentDate || new Date().toISOString().split('T')[0];
+        if (window.SchedulerCoreUtils?.reIncrementHistoricalCounts) {
+            setTimeout(() => {
+                window.SchedulerCoreUtils.reIncrementHistoricalCounts(
+                    _peDate,
+                    window.scheduleAssignments || {},
+                    true
+                );
+                console.log('[PostEdit] 📊 Historical counts rebuilt after post-edit');
+            }, 300);
+        }
+        // Update rotation history timestamps for the edited bunk
+        try {
+            const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
+            _rotHist.bunks = _rotHist.bunks || {};
+            _rotHist.bunks[bunk] = _rotHist.bunks[bunk] || {};
+            const _bunkSlots = window.scheduleAssignments?.[bunk] || [];
+            const _now = Date.now();
+            _rotHist.bunks[bunk] = {};
+            _bunkSlots.forEach(entry => {
+                if (entry?._activity && !entry.continuation && !entry._isTransition) {
+                    const _aLower = entry._activity.toLowerCase();
+                    if (_aLower !== 'free' && !_aLower.includes('transition')) {
+                        _rotHist.bunks[bunk][entry._activity] = _now;
+                    }
+                }
+            });
+            window.saveRotationHistory?.(_rotHist);
+            console.log('[PostEdit] 📊 Rotation timestamps rebuilt for', bunk);
+        } catch (_re) { console.error('[PostEdit] Rotation history update failed:', _re); }
         
         // ★★★ FIX: Render immediately from current memory state ★★★
         // Don't dispatch campistry-daily-data-updated as it triggers loadScheduleForDate()
