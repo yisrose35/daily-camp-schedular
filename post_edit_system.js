@@ -1047,10 +1047,10 @@
         s.currentStartMin = newStart; s.currentEndMin = newEnd;
         s.block.style.top = ((newStart - s.dayStart) * PEI_PX_PER_MIN + 2) + 'px';
         s.block.style.height = ((newEnd - newStart) * PEI_PX_PER_MIN - 4) + 'px';
-        // Update duration label
+        // Update duration label — find by content since resize handles are appended after
         const dur = newEnd - newStart;
-        const durLabel = s.block.querySelector('.asg-block-sub:last-child');
-        if (durLabel && /\d+min/.test(durLabel.textContent)) durLabel.textContent = dur + 'min';
+        const allSubs = s.block.querySelectorAll('.asg-block-sub');
+        for (const sub of allSubs) { if (/\d+min/.test(sub.textContent)) { sub.textContent = dur + 'min'; break; } }
         // Tooltip at block edge
         const br = s.block.getBoundingClientRect();
         let tip = peiToLabel(newStart) + ' – ' + peiToLabel(newEnd) + ` <span style="opacity:0.6">(${dur}min)</span>`;
@@ -1075,13 +1075,55 @@
         s.block.dataset.peiEndMin = s.currentEndMin;
         // Ensure duration label is final
         const finalDur = s.currentEndMin - s.currentStartMin;
-        const durLabel = s.block.querySelector('.asg-block-sub:last-child');
-        if (durLabel && /\d+min/.test(durLabel.textContent)) durLabel.textContent = finalDur + 'min';
+        const allSubsEnd = s.block.querySelectorAll('.asg-block-sub');
+        for (const sub of allSubsEnd) { if (/\d+min/.test(sub.textContent)) { sub.textContent = finalDur + 'min'; break; } }
         const c = PEI_ConflictEngine.check(s.bunk, s.currentStartMin, s.currentEndMin, s.fieldName, s.slotIdx);
         peiApplyTimeChange(s.bunk, s.slotIdx, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.divName);
+        // Inject free-space block in the gap created by shortening
+        peiInjectFreeGap(s.col, s.block, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.dayStart, s.bunk, s.divName);
         if (c.fieldConflicts.length > 0) peiShowBanner('Resized — field conflict: ' + c.fieldConflicts.map(x => x.bunk).join(', '), 'warning', true);
         else peiShowBanner('Resized to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success', true);
         _peiResizing = false; _peiState = null;
+    }
+
+    /**
+     * After resize shortens a block, inject a visual free-space indicator with "+" button
+     * in the gap that was freed.
+     */
+    function peiInjectFreeGap(col, block, origStart, origEnd, newStart, newEnd, dayStart, bunk, divName) {
+        // Determine freed range
+        let gapStart, gapEnd;
+        if (newEnd < origEnd) { gapStart = newEnd; gapEnd = origEnd; }       // Shortened from bottom
+        else if (newStart > origStart) { gapStart = origStart; gapEnd = newStart; } // Shortened from top
+        else return; // No gap (block was lengthened)
+
+        const gapDur = gapEnd - gapStart;
+        if (gapDur < PEI_MIN_BLOCK_DURATION) return; // Too small
+
+        const topPx = (gapStart - dayStart) * PEI_PX_PER_MIN + 2;
+        const heightPx = gapDur * PEI_PX_PER_MIN - 4;
+
+        const freeEl = document.createElement('div');
+        freeEl.className = 'asg-free pei-injected-free';
+        freeEl.style.cssText = `position:absolute;left:3px;right:3px;top:${topPx}px;height:${heightPx}px;border-radius:5px;background:repeating-linear-gradient(45deg,#f9fafb,#f9fafb 4px,#f3f4f6 4px,#f3f4f6 8px);border:1px dashed #d1d5db;display:flex;align-items:center;justify-content:center;z-index:0;transition:border-color 0.2s;`;
+
+        // "+" button
+        if (canEditBunk(bunk)) {
+            const addBtn = document.createElement('div');
+            addBtn.className = 'pei-add-btn';
+            addBtn.innerHTML = '+';
+            addBtn.title = 'Add activity here';
+            addBtn.style.cssText = 'width:26px;height:26px;border-radius:50%;background:rgba(37,99,235,0.1);color:#2563eb;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s;z-index:4;';
+            freeEl.appendChild(addBtn);
+            freeEl.addEventListener('mouseenter', () => { addBtn.style.opacity = '1'; freeEl.style.borderColor = '#93c5fd'; });
+            freeEl.addEventListener('mouseleave', () => { addBtn.style.opacity = '0'; freeEl.style.borderColor = '#d1d5db'; });
+            addBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                peiShowAddModal(bunk, divName, gapStart, gapEnd);
+            });
+        }
+
+        col.appendChild(freeEl);
     }
 
     // ── MOVE (position-based — grab offset preserved) ──
@@ -1466,6 +1508,8 @@
     }
 
     function peiTriggerReRender() {
+        // Clean up injected free gaps (re-render creates proper ones)
+        document.querySelectorAll('.pei-injected-free').forEach(el => el.remove());
         // Clear augmented flags so observer re-augments after render
         document.querySelectorAll('.asg-wrap[data-pei-augmented]').forEach(w => delete w.dataset.peiAugmented);
         if (window.UnifiedScheduleSystem?.renderStaggeredView) window.UnifiedScheduleSystem.renderStaggeredView();
