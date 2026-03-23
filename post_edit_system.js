@@ -1,8 +1,17 @@
-
 // =============================================================================
-// POST-GENERATION EDIT SYSTEM v3.2 - CLIENT UI ONLY
+// POST-GENERATION EDIT SYSTEM v3.3 - CLIENT UI + INTERACTIVE EDITING
 // =============================================================================
 // 
+// v3.3 CHANGES:
+// - RESIZE: Drag top/bottom edge of any block to lengthen/shorten
+// - MOVE: Click-drag any block up/down to reposition in time
+// - ADD: Double-click empty space to insert new activity (manual or auto-fill)
+// - REAL-TIME CONFLICT DETECTION during all interactions
+// - Threshold-based drag (5px) so click-to-edit still works
+// - Capturing click suppressor prevents edit modal after drag/resize
+// - All block types interactive (including lunch, swim, etc.)
+// - Rotation history updated on every post-edit save
+//
 // v3.2 CHANGES:
 // - CRITICAL FIX: Owner/Admin permission check now handles uninitialized AccessControl
 // - Added fallback chain: AccessControl -> CampistryDB -> localStorage -> allow
@@ -26,7 +35,7 @@
 (function() {
     'use strict';
 
-    console.log('📝 Post-Generation Edit System v3.2 (UI Client) loading...');
+    console.log('📝 Post-Generation Edit System v3.3 (UI Client) loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -35,29 +44,27 @@
     const MODAL_ID = 'post-edit-modal';
     const OVERLAY_ID = 'post-edit-overlay';
     const DEBUG = true;
-   const TRANSITION_TYPE = window.TRANSITION_TYPE || "Transition/Buffer";
- 
+    const TRANSITION_TYPE = window.TRANSITION_TYPE || "Transition/Buffer";
+
     // REMOVED: ROTATION_CONFIG (Moved to unified_schedule_system.js)
- 
+
     // =========================================================================
     // v3.3 — POST-EDIT INTERACTIONS CONFIG
     // =========================================================================
-    const PEI_PX_PER_MIN = 2.5;       // Must match auto_schedule_grid.js
+    const PEI_PX_PER_MIN = 2.5;
     const PEI_SNAP_MINS = 5;
     const PEI_MIN_BLOCK_DURATION = 10;
     const PEI_LONG_PRESS_MS = 300;
-    const PEI_DRAG_THRESHOLD = 5;      // px before mousedown becomes drag
- 
-    // v3.3 — Interaction state
+    const PEI_DRAG_THRESHOLD = 5;
+
     let _peiResizing = false;
     let _peiMoving = false;
-    let _peiState = null;            // active drag/resize state
+    let _peiState = null;
     let _peiTooltip = null;
     let _peiConflictOverlays = [];
     let _peiPendingMove = null;
     let _peiSuppressClick = false;
     let _peiSetupDone = false;
- 
 
     // =========================================================================
     // DEBUG LOGGING
@@ -145,13 +152,9 @@
         const editableBunks = new Set();
         const divisions = window.divisions || {};
         
-        // ★★★ FIX v3.2: Check initialization state to prevent race condition ★★★
-        // If AccessControl exists but isn't initialized yet, role will be null/undefined
-        // In that case, we should ALLOW edits (default permissive) rather than block owner
         const isInitialized = window.AccessControl?.isInitialized;
         const role = window.AccessControl?.getCurrentRole?.();
         
-        // Fallback role detection (CampistryDB or localStorage)
         const fallbackRole = window.CampistryDB?.getRole?.() || 
                             localStorage.getItem('campistry_role');
         const effectiveRole = role || fallbackRole;
@@ -164,20 +167,16 @@
             effectiveRole
         });
         
-        // Allow all if: no RBAC, not initialized yet, or user is owner/admin
         if (!window.AccessControl || !isInitialized || effectiveRole === 'owner' || effectiveRole === 'admin') {
-            // Add all bunks from all divisions
             for (const divInfo of Object.values(divisions)) {
                 if (divInfo?.bunks) {
                     divInfo.bunks.forEach(b => editableBunks.add(String(b)));
                 }
             }
-            // Also add any bunks already in scheduleAssignments
             Object.keys(window.scheduleAssignments || {}).forEach(b => editableBunks.add(String(b)));
             return editableBunks;
         }
         
-        // For schedulers/viewers: use assigned divisions only
         const editableDivisions = window.AccessControl.getEditableDivisions?.() || [];
         
         for (const divName of editableDivisions) {
@@ -190,16 +189,10 @@
         return editableBunks;
     }
 
-    /**
-     * Check if user can edit a specific bunk
-     * ★★★ FIX v3.2: Handle uninitialized AccessControl race condition ★★★
-     */
     function canEditBunk(bunkName) {
-        // Check initialization state
         const isInitialized = window.AccessControl?.isInitialized;
         const role = window.AccessControl?.getCurrentRole?.();
         
-        // If AccessControl exists but isn't initialized, check fallbacks
         if (window.AccessControl && (!isInitialized || !role)) {
             const fallbackRole = window.CampistryDB?.getRole?.() || 
                                 localStorage.getItem('campistry_role');
@@ -207,17 +200,14 @@
                 debugLog(`canEditBunk(${bunkName}): Using fallback role = ${fallbackRole}, ALLOWED`);
                 return true;
             }
-            // If still no role info, default to ALLOW (don't block the owner during init)
             if (!fallbackRole) {
                 debugLog(`canEditBunk(${bunkName}): No role info during init, defaulting to ALLOW`);
                 return true;
             }
         }
         
-        // Owner/admin always can edit
         if (role === 'owner' || role === 'admin') return true;
         
-        // Check editable bunks for schedulers
         const editableBunks = getEditableBunks();
         return editableBunks.has(String(bunkName));
     }
@@ -226,7 +216,7 @@
     // CONFLICT DETECTION
     // =========================================================================
 
-   function checkLocationConflict(locationName, slots, excludeBunk) {
+    function checkLocationConflict(locationName, slots, excludeBunk) {
         if (!locationName) {
             return {
                 hasConflict: false, conflicts: [],
@@ -235,8 +225,8 @@
             };
         }
         const assignments = window.scheduleAssignments || {};
-        // UPDATED: Use SchedulerCoreUtils
-        const activityProperties = window.SchedulerCoreUtils?.getActivityProperties?.() ||                                   window.activityProperties || {};
+        const activityProperties = window.SchedulerCoreUtils?.getActivityProperties?.() ||
+                                   window.activityProperties || {};
         const locationInfo = activityProperties[locationName] || {};
         
         let maxCapacity = 1;
@@ -263,7 +253,6 @@
                 const entryActivity = entry._activity || entryField;
                 const entryLocation = entry._location || entryField;
                 
-                // Check if this entry uses the same location
                 const matchesLocation = 
                     entryField?.toLowerCase() === locationName.toLowerCase() ||
                     entryLocation?.toLowerCase() === locationName.toLowerCase() ||
@@ -280,10 +269,8 @@
             }
         }
         
-        // Check GlobalFieldLocks
         let globalLock = null;
         if (window.GlobalFieldLocks) {
-            // UPDATED: Use SchedulerCoreUtils
             const divName = window.SchedulerCoreUtils?.getDivisionForBunk?.(excludeBunk) ||
                            window.getDivisionForBunk?.(excludeBunk);
             const lockInfo = window.GlobalFieldLocks.isFieldLocked(locationName, slots, divName);
@@ -313,39 +300,23 @@
         const nonEditableConflicts = conflicts.filter(c => !c.canEdit);
         
         return {
-            hasConflict,
-            conflicts,
-            editableConflicts,
-            nonEditableConflicts,
+            hasConflict, conflicts, editableConflicts, nonEditableConflicts,
             globalLock,
             canShare: maxCapacity > 1 && currentUsage < maxCapacity,
-            currentUsage,
-            maxCapacity
+            currentUsage, maxCapacity
         };
     }
-
-    // REMOVED: Rotation Scoring Helpers (Delegated to unified_schedule_system.js)
-    // REMOVED: Build Candidate Options (Delegated to unified_schedule_system.js)
-    // REMOVED: Penalty Calculation (Delegated to unified_schedule_system.js)
-    // REMOVED: findBestActivityForBunk (Delegated to unified_schedule_system.js)
-    // REMOVED: applyPickToBunk (Delegated to unified_schedule_system.js)
-    // REMOVED: smartRegenerateConflicts (Delegated to unified_schedule_system.js)
-    // REMOVED: smartReassignBunkActivity (Delegated to unified_schedule_system.js)
-    // REMOVED: resolveConflictsAndApply (Delegated to unified_schedule_system.js)
 
     // =========================================================================
     // APPLY DIRECT EDIT
     // =========================================================================
 
     function applyDirectEdit(bunk, slots, activity, location, isClear) {
-        // ★ FIX: Use division-specific slot count ★
         const divName = window.SchedulerCoreUtils?.getDivisionForBunk?.(bunk) || 
                         window.getDivisionForBunk?.(bunk);
         const divTimes = window.divisionTimes?.[divName] || [];
         
-        if (!window.scheduleAssignments) {
-            window.scheduleAssignments = {};
-        }
+        if (!window.scheduleAssignments) window.scheduleAssignments = {};
         if (!window.scheduleAssignments[bunk]) {
             window.scheduleAssignments[bunk] = new Array(divTimes.length || 50);
         }
@@ -366,25 +337,22 @@
             debugLog(`Set bunk ${bunk} slot ${idx}:`, window.scheduleAssignments[bunk][idx]);
         });
         
-        // Register location usage
         if (location && !isClear && window.registerLocationUsage) {
-            // UPDATED: Use SchedulerCoreUtils
-            const divName = window.SchedulerCoreUtils?.getDivisionForBunk?.(bunk) ||
+            const divName2 = window.SchedulerCoreUtils?.getDivisionForBunk?.(bunk) ||
                            window.getDivisionForBunk?.(bunk);
             slots.forEach(idx => {
-                window.registerLocationUsage(idx, location, activity, divName);
+                window.registerLocationUsage(idx, location, activity, divName2);
             });
         }
     }
 
     // =========================================================================
-    // BYPASS SAVE - Save ALL modified bunks (admin-level access)
+    // BYPASS SAVE
     // =========================================================================
 
     async function bypassSaveAllBunks(modifiedBunks) {
         console.log('[PostEdit] 🔓 BYPASS SAVE for bunks:', modifiedBunks);
         
-        // ★★★ FIX: Use consistent date key with all fallbacks ★★★
         const dateKey = window.currentScheduleDate || 
                        window.currentDate || 
                        document.getElementById('datePicker')?.value ||
@@ -392,30 +360,19 @@
         
         console.log(`[PostEdit] 📅 Bypass save using date key: ${dateKey}`);
         
-        // ★★★ FIX: Save to localStorage IMMEDIATELY before cloud save ★★★
-        // This ensures the data is available when updateTable() calls loadScheduleForDate()
         try {
-            // Format 1: scheduleAssignments_${date}
             localStorage.setItem(`scheduleAssignments_${dateKey}`, JSON.stringify(window.scheduleAssignments));
-            
-            // Format 2: campDailyData_v1 (nested)
             const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
-            if (!allDailyData[dateKey]) {
-                allDailyData[dateKey] = {};
-            }
+            if (!allDailyData[dateKey]) allDailyData[dateKey] = {};
             allDailyData[dateKey].scheduleAssignments = window.scheduleAssignments;
             allDailyData[dateKey].leagueAssignments = window.leagueAssignments || {};
-            
             allDailyData[dateKey]._bypassSaveAt = Date.now();
             localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
-            
             console.log(`[PostEdit] ✅ Bypass: saved to localStorage before cloud save`);
         } catch (e) {
             console.error('[PostEdit] Bypass localStorage save error:', e);
         }
         
-        // ★★★ FIX: Use ScheduleDB.saveSchedule with skipFilter instead of raw upsert ★★★
-        // This properly handles the (camp_id, date_key, scheduler_id) constraint
         if (window.ScheduleDB?.saveSchedule) {
             try {
                 const result = await window.ScheduleDB.saveSchedule(dateKey, {
@@ -424,23 +381,16 @@
                     unifiedTimes: window.unifiedTimes,
                     _bypassSaveAt: Date.now(),
                     _modifiedBunks: modifiedBunks
-                }, { 
-                    skipFilter: true,  // ★★★ This bypasses RBAC filtering - saves ALL bunks
-                    immediate: true    // Don't debounce - save immediately
-                });
+                }, { skipFilter: true, immediate: true });
                 
-                if (result?.success) {
-                    console.log('[PostEdit] ✅ Bypass save successful via ScheduleDB');
-                } else {
-                    console.error('[PostEdit] Bypass save error:', result?.error);
-                }
+                if (result?.success) console.log('[PostEdit] ✅ Bypass save successful via ScheduleDB');
+                else console.error('[PostEdit] Bypass save error:', result?.error);
                 return result;
             } catch (e) {
                 console.error('[PostEdit] Bypass save exception:', e);
             }
         }
         
-        // Fallback: trigger standard save flow (will respect RBAC, but better than nothing)
         console.log('[PostEdit] 🔓 Fallback: triggering standard save');
         window.saveSchedule?.();
         window.updateTable?.();
@@ -451,7 +401,6 @@
     // =========================================================================
 
     async function sendSchedulerNotification(affectedBunks, location, activity, notificationType) {
-        // ★ DEMO FIX: No supabase users to notify in demo mode
         if (window.__CAMPISTRY_DEMO_MODE__) {
             console.log('[PostEdit] 🎭 Demo mode — skipping scheduler notification');
             return;
@@ -460,83 +409,48 @@
         console.log('[PostEdit] 📧 Sending ' + (notificationType || 'conflict') + ' notification for bunks:', affectedBunks);
         
         const supabase = window.CampistryDB?.getClient?.() || window.supabase;
-
-        if (!supabase) {
-            console.warn('[PostEdit] Supabase not available for notifications');
-            return;
-        }
+        if (!supabase) { console.warn('[PostEdit] Supabase not available'); return; }
         
         const campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('currentCampId');
         const userId = window.CampistryDB?.getUserId?.() || null;
         const dateKey = window.currentDate || new Date().toISOString().split('T')[0];
-        
         if (!campId) return;
         
         try {
-            // Find which schedulers own these bunks
             const affectedDivisions = new Set();
             const divisions = window.divisions || {};
-            
             for (const bunk of affectedBunks) {
                 for (const [divName, divData] of Object.entries(divisions)) {
-                    if (divData.bunks?.includes(bunk)) {
-                        affectedDivisions.add(divName);
-                    }
+                    if (divData.bunks?.includes(bunk)) affectedDivisions.add(divName);
                 }
             }
             
-            // Get schedulers for these divisions
             const { data: schedulers } = await supabase
-                .from('camp_users')
-                .select('user_id, divisions')
-                .eq('camp_id', campId)
-                .neq('user_id', userId);
-            
+                .from('camp_users').select('user_id, divisions')
+                .eq('camp_id', campId).neq('user_id', userId);
             if (!schedulers) return;
             
-            // Find schedulers whose divisions include the affected ones
             const notifyUsers = [];
             for (const scheduler of schedulers) {
                 const theirDivisions = scheduler.divisions || [];
-                if (theirDivisions.some(d => affectedDivisions.has(d))) {
-                    notifyUsers.push(scheduler.user_id);
-                }
+                if (theirDivisions.some(d => affectedDivisions.has(d))) notifyUsers.push(scheduler.user_id);
             }
-            
             if (notifyUsers.length === 0) return;
             
-            // Create notifications
             const notifications = notifyUsers.map(targetUserId => ({
-                camp_id: campId,
-                user_id: targetUserId,
+                camp_id: campId, user_id: targetUserId,
                 type: notificationType === 'bypassed' ? 'schedule_bypassed' : 'schedule_conflict',
-                title: notificationType === 'bypassed' 
-                    ? '🔓 Your schedule was modified' 
-                    : '⚠️ Schedule conflict detected',
+                title: notificationType === 'bypassed' ? '🔓 Your schedule was modified' : '⚠️ Schedule conflict detected',
                 message: notificationType === 'bypassed'
                     ? `Another scheduler reassigned bunks (${affectedBunks.join(', ')}) for ${location} - ${activity} on ${dateKey}`
                     : `Conflict at ${location} for ${activity} on ${dateKey}. Affected bunks: ${affectedBunks.join(', ')}`,
-                metadata: {
-                    dateKey,
-                    bunks: affectedBunks,
-                    location,
-                    activity,
-                    initiatedBy: userId
-                },
-                read: false,
-                created_at: new Date().toISOString()
+                metadata: { dateKey, bunks: affectedBunks, location, activity, initiatedBy: userId },
+                read: false, created_at: new Date().toISOString()
             }));
             
-            const { error } = await supabase
-                .from('notifications')
-                .insert(notifications);
-            
-            if (error) {
-                console.error('[PostEdit] Notification insert error:', error);
-            } else {
-                console.log(`[PostEdit] ✅ Sent ${notificationType} notifications to ${notifyUsers.length} user(s)`);
-            }
-            
+            const { error } = await supabase.from('notifications').insert(notifications);
+            if (error) console.error('[PostEdit] Notification insert error:', error);
+            else console.log(`[PostEdit] ✅ Sent ${notificationType} notifications to ${notifyUsers.length} user(s)`);
         } catch (e) {
             console.error('[PostEdit] Notification error:', e);
         }
@@ -550,15 +464,13 @@
         const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
         const unifiedTimes = window.unifiedTimes || [];
         
-        // ★ DEMO FIX: Guard against undefined activity
         if (window.__CAMPISTRY_DEMO_MODE__ && !activity && activity !== '') {
             console.error('[PostEdit] ❌ Demo: applyEdit called with undefined activity:', editData);
             alert('Error: No activity specified.');
             return;
         }
 
-       const isClear = !activity || activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
-        // UPDATED: Use SchedulerCoreUtils
+        const isClear = !activity || activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
         const slots = window.SchedulerCoreUtils?.findSlotsForRange?.(startMin, endMin, unifiedTimes) || [];
         
         if (slots.length === 0) {
@@ -567,150 +479,91 @@
             return;
         }
         
-        console.log(`[PostEdit] Applying edit for ${bunk}:`, { 
-            activity, location, startMin, endMin, slots, hasConflict, resolutionChoice, isClear
-        });
+        console.log(`[PostEdit] Applying edit for ${bunk}:`, { activity, location, startMin, endMin, slots, hasConflict, resolutionChoice, isClear });
         
-       if (!window.scheduleAssignments) {
-            window.scheduleAssignments = {};
-        }
-        if (!window.scheduleAssignments[bunk]) {
-            window.scheduleAssignments[bunk] = new Array(unifiedTimes.length);
-        }
+        if (!window.scheduleAssignments) window.scheduleAssignments = {};
+        if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(unifiedTimes.length);
 
-        // ★★★ CAPTURE old activities BEFORE edit overwrites them ★★★
         const _oldActivities = [];
         slots.forEach(idx => {
             const old = window.scheduleAssignments[bunk]?.[idx];
             if (old?._activity && !old.continuation && !old._isTransition) {
                 const a = old._activity.toLowerCase();
-                if (a !== 'free' && !a.includes('transition')) {
-                    _oldActivities.push(old._activity);
-                }
+                if (a !== 'free' && !a.includes('transition')) _oldActivities.push(old._activity);
             }
         });
 
-        // ★★★ FIX: Await conflict resolution to prevent race conditions ★★★
-        if (hasConflict) {            // UPDATED: Use window.resolveConflictsAndApply (Global call)
+        if (hasConflict) {
             if (typeof window.resolveConflictsAndApply === 'function') {
                 await window.resolveConflictsAndApply(bunk, slots, activity, location, editData);
             } else {
-                console.error('[PostEdit] ❌ Fatal: window.resolveConflictsAndApply is not defined! Ensure unified_schedule_system.js is loaded.');
+                console.error('[PostEdit] ❌ Fatal: window.resolveConflictsAndApply is not defined!');
                 alert('System Error: Conflict resolution module not loaded.');
             }
         } else {
             applyDirectEdit(bunk, slots, activity, location, isClear);
         }
         
-        // Debug
         console.log(`[PostEdit] ✅ After edit, bunk ${bunk} slot ${slots[0]}:`, window.scheduleAssignments[bunk][slots[0]]);
         
-        // ★★★ FIX: Use consistent date key - same as bypassSaveAllBunks and unified_schedule_system ★★★
         const currentDate = window.currentScheduleDate || 
                            window.currentDate || 
                            document.getElementById('datePicker')?.value ||
                            new Date().toISOString().split('T')[0];
         
-        console.log(`[PostEdit] 📅 Using date key: ${currentDate}`);
-        
         const storageKey = `scheduleAssignments_${currentDate}`;
         try {
             localStorage.setItem(storageKey, JSON.stringify(window.scheduleAssignments));
-            console.log(`[PostEdit] ✅ Saved to localStorage: ${storageKey}`);
-        } catch (e) {
-            console.error('[PostEdit] Failed to save to localStorage:', e);
-        }
+        } catch (e) { console.error('[PostEdit] Failed to save to localStorage:', e); }
         
-        // ★★★ FIX: Save to BOTH storage formats for compatibility ★★★
-        // Format 1: campDailyData_v1_${date} (per-date key)
         const unifiedKeyWithDate = `campDailyData_v1_${currentDate}`;
         try {
             const dailyData = JSON.parse(localStorage.getItem(unifiedKeyWithDate) || '{}');
             dailyData.scheduleAssignments = window.scheduleAssignments;
             dailyData._postEditAt = Date.now();
             localStorage.setItem(unifiedKeyWithDate, JSON.stringify(dailyData));
-            console.log(`[PostEdit] ✅ Saved to: ${unifiedKeyWithDate}`);
-        } catch (e) {
-            console.error('[PostEdit] Failed to save to unified storage (per-date):', e);
-        }
+        } catch (e) { console.error('[PostEdit] Failed to save to unified storage (per-date):', e); }
         
-        // Format 2: campDailyData_v1 with nested date keys (what loadScheduleForDate expects)
-        const unifiedKeyNested = 'campDailyData_v1';
         try {
-            const allDailyData = JSON.parse(localStorage.getItem(unifiedKeyNested) || '{}');
-            if (!allDailyData[currentDate]) {
-                allDailyData[currentDate] = {};
-            }
+            const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+            if (!allDailyData[currentDate]) allDailyData[currentDate] = {};
             allDailyData[currentDate].scheduleAssignments = window.scheduleAssignments;
             allDailyData[currentDate].leagueAssignments = window.leagueAssignments || {};
             allDailyData[currentDate].unifiedTimes = window.unifiedTimes || [];
             allDailyData[currentDate]._postEditAt = Date.now();
-            localStorage.setItem(unifiedKeyNested, JSON.stringify(allDailyData));
-            console.log(`[PostEdit] ✅ Saved to: ${unifiedKeyNested}[${currentDate}]`);
-        } catch (e) {
-            console.error('[PostEdit] Failed to save to unified storage (nested):', e);
-        }
+            localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
+        } catch (e) { console.error('[PostEdit] Failed to save to unified storage (nested):', e); }
         
-        // Protection flag - prevent cloud hydration from overwriting
-        // Note: This flag is also set earlier in resolveConflictsAndApply for bypass mode
         window._postEditInProgress = true;
         window._postEditTimestamp = Date.now();
+        setTimeout(() => { window._postEditInProgress = false; }, 8000);
         
-        // Clear the flag after a longer timeout to allow for all async operations
-        // The patchLoadScheduleForDate will skip loading while this flag is true
-        setTimeout(() => {
-            window._postEditInProgress = false;
-            console.log('[PostEdit] 🔓 Post-edit protection flag cleared');
-        }, 8000); // 8 seconds to be safe
-        
-        // ★★★ FIX: Don't dispatch campistry-daily-data-updated - it triggers a reload ★★★
-        // Our in-memory window.scheduleAssignments is already correct
-        // Just dispatch a notification event and render directly
-        console.log('[PostEdit] 🔄 Triggering UI refresh...');
-        
-        // ★★★ VERIFICATION: Check window.scheduleAssignments before render ★★★
-        console.log('[PostEdit] VERIFICATION before render:');
-        console.log(`  Total bunks in scheduleAssignments: ${Object.keys(window.scheduleAssignments || {}).length}`);
-        // Log the bunk we just edited
-        const editedEntry = window.scheduleAssignments?.[bunk]?.[slots[0]];
-        console.log(`  Edited bunk ${bunk} slot ${slots[0]}: ${editedEntry?._activity || editedEntry?.field || 'MISSING'}`);
-        
-        // Dispatch post-edit event for any listeners (informational only)
         document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
             detail: { bunk, slots, activity, location, date: currentDate }
         }));
         
-       // Cloud save (fire and forget - don't await to keep UI responsive)
         window.saveSchedule?.();
 
-        // ★★★ FIX: Targeted delta adjustment for historical counts ★★★
+        // Historical counts delta
         try {
             const _gs = window.loadGlobalSettings?.() || {};
             const _hc = _gs.historicalCounts || {};
             if (!_hc[bunk]) _hc[bunk] = {};
-           let _newAct = (!isClear && activity) ? activity : null;
+            let _newAct = (!isClear && activity) ? activity : null;
 
-            // Normalize: if new activity matches old activity ignoring case, use old casing
             if (_newAct) {
                 for (const oldAct of _oldActivities) {
-                    if (oldAct.toLowerCase() === _newAct.toLowerCase() && oldAct !== _newAct) {
-                        console.log(`[PostEdit] 📊 Case normalization: "${_newAct}" → "${oldAct}"`);
-                        _newAct = oldAct;
-                        break;
-                    }
+                    if (oldAct.toLowerCase() === _newAct.toLowerCase() && oldAct !== _newAct) { _newAct = oldAct; break; }
                 }
             }
 
-            // Decrement old activities
             const _oldUnique = {};
             _oldActivities.forEach(a => { _oldUnique[a] = (_oldUnique[a] || 0) + 1; });
             for (const [act, count] of Object.entries(_oldUnique)) {
                 const _before = _hc[bunk][act] || 0;
                 _hc[bunk][act] = Math.max(0, _before - count);
-                console.log(`[PostEdit] 📊 ${bunk} "${act}" count: ${_before} → ${_hc[bunk][act]}`);
             }
 
-            // Increment new activity (only if it's a tracked/valid activity)
             const _validActs = window.SchedulerCoreUtils?.getValidActivityNames?.() || new Set();
             if (_newAct && (_validActs.size === 0 || _validActs.has(_newAct))) {
                 let _newCount = 0;
@@ -720,19 +573,15 @@
                 });
                 const _before = _hc[bunk][_newAct] || 0;
                 _hc[bunk][_newAct] = _before + _newCount;
-                console.log(`[PostEdit] 📊 ${bunk} "${_newAct}" count: ${_before} → ${_hc[bunk][_newAct]}`);
             }
 
             if (window.saveGlobalSettings) {
                 window.saveGlobalSettings('historicalCounts', _hc);
-                if (typeof window.forceSyncToCloud === 'function') {
-                    setTimeout(() => window.forceSyncToCloud(), 100);
-                }
+                if (typeof window.forceSyncToCloud === 'function') setTimeout(() => window.forceSyncToCloud(), 100);
             }
-            console.log('[PostEdit] 📊 Historical counts delta applied for', bunk);
         } catch (_hcErr) { console.error('[PostEdit] Historical counts delta failed:', _hcErr); }
 
-        // ★★★ Update rotation history timestamps for the edited bunk ★★★
+        // Rotation history timestamps
         try {
             const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
             _rotHist.bunks = _rotHist.bunks || {};
@@ -749,24 +598,12 @@
                 }
             });
             window.saveRotationHistory?.(_rotHist);
-            console.log('[PostEdit] 📊 Rotation timestamps rebuilt for', bunk);
         } catch (_re) { console.error('[PostEdit] Rotation history update failed:', _re); }
         
-        // ★★★ FIX: Render immediately from current memory state ★★★
-        // Don't dispatch campistry-daily-data-updated as it triggers loadScheduleForDate()
-        // which would re-read from storage and might get stale data
+        // Render
         console.log('[PostEdit] 🔄 Calling updateTable() immediately');
-        if (typeof window.updateTable === 'function') {
-            window.updateTable();
-        }
-        
-        // Second render after a small delay to catch any async updates
-        setTimeout(() => {
-            console.log('[PostEdit] 🔄 Second render pass');
-            if (typeof window.updateTable === 'function') {
-                window.updateTable();
-            }
-        }, 200);
+        if (typeof window.updateTable === 'function') window.updateTable();
+        setTimeout(() => { if (typeof window.updateTable === 'function') window.updateTable(); }, 200);
     }
 
     // =========================================================================
@@ -779,44 +616,17 @@
         
         const overlay = document.createElement('div');
         overlay.id = OVERLAY_ID;
-        overlay.style.cssText = `
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0, 0, 0, 0.5);
-            z-index: 10000;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            animation: fadeIn 0.2s ease;
-        `;
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;animation:fadeIn 0.2s ease;';
         
         const modal = document.createElement('div');
         modal.id = MODAL_ID;
-        modal.style.cssText = `
-            background: white;
-            border-radius: 12px;
-            padding: 24px;
-            min-width: 400px;
-            max-width: 500px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-height: 90vh;
-            overflow-y: auto;
-        `;
+        modal.style.cssText = 'background:white;border-radius:12px;padding:24px;min-width:400px;max-width:500px;box-shadow:0 20px 60px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-height:90vh;overflow-y:auto;';
         
         overlay.appendChild(modal);
         document.body.appendChild(overlay);
         
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) closeModal();
-        });
-        
-        const escHandler = (e) => {
-            if (e.key === 'Escape') {
-                closeModal();
-                document.removeEventListener('keydown', escHandler);
-            }
-        };
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
+        const escHandler = (e) => { if (e.key === 'Escape') { closeModal(); document.removeEventListener('keydown', escHandler); } };
         document.addEventListener('keydown', escHandler);
         
         return modal;
@@ -835,7 +645,6 @@
         let currentField = '';
         let resolutionChoice = 'notify';
         
-        // UPDATED: Use SchedulerCoreUtils with fallback
         const slots = window.SchedulerCoreUtils?.findSlotsForRange?.(startMin, endMin, unifiedTimes) || [];
         if (slots.length > 0) {
             const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
@@ -845,7 +654,6 @@
             }
         }
         
-        // Helper for time label with fallback
         const minutesToTimeLabel = window.SchedulerCoreUtils?.minutesToTimeLabel || 
             function(mins) {
                 if (mins === null || mins === undefined) return '';
@@ -857,40 +665,24 @@
             };
         
         modal.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                <h2 style="margin: 0; font-size: 1.25rem; color: #1f2937;">Edit Schedule Cell</h2>
-                <button id="post-edit-close" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #9ca3af; line-height: 1;">&times;</button>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+                <h2 style="margin:0;font-size:1.25rem;color:#1f2937;">Edit Schedule Cell</h2>
+                <button id="post-edit-close" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#9ca3af;line-height:1;">&times;</button>
             </div>
-            
-            <div style="background: #f3f4f6; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px;">
-                <div style="font-weight: 600; color: #374151;">${bunk}</div>
-                <div style="font-size: 0.875rem; color: #6b7280;" id="post-edit-time-display">
-                    ${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}
-                </div>
+            <div style="background:#f3f4f6;padding:12px 16px;border-radius:8px;margin-bottom:20px;">
+                <div style="font-weight:600;color:#374151;">${bunk}</div>
+                <div style="font-size:0.875rem;color:#6b7280;" id="post-edit-time-display">${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}</div>
             </div>
-            
-            <div style="display: flex; flex-direction: column; gap: 16px;">
-                <!-- Activity Name -->
+            <div style="display:flex;flex-direction:column;gap:16px;">
                 <div>
-                    <label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px;">
-                        Activity Name
-                    </label>
-                    <input type="text" id="post-edit-activity" 
-                        value="${currentActivity}"
-                        placeholder="e.g., Impromptu Carnival, Basketball"
-                        style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box;">
-                    <div style="font-size: 0.75rem; color: #9ca3af; margin-top: 4px;">
-                        Enter CLEAR or FREE to empty this slot
-                    </div>
+                    <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Activity Name</label>
+                    <input type="text" id="post-edit-activity" value="${currentActivity}" placeholder="e.g., Basketball"
+                        style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;">
+                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:4px;">Enter CLEAR or FREE to empty this slot</div>
                 </div>
-                
-                <!-- Location/Field -->
                 <div>
-                    <label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px;">
-                        Location / Field
-                    </label>
-                    <select id="post-edit-location" 
-                        style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box; background: white;">
+                    <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Location / Field</label>
+                    <select id="post-edit-location" style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;background:white;">
                         <option value="">-- No specific location --</option>
                         <optgroup label="Fields">
                             ${locations.filter(l => l.type === 'field').map(l => 
@@ -904,86 +696,37 @@
                         </optgroup>
                     </select>
                 </div>
-                
-                <!-- Change Time Toggle -->
                 <div>
-                    <button type="button" id="post-edit-time-toggle" style="
-                        background: none;
-                        border: none;
-                        color: #2563eb;
-                        font-size: 0.875rem;
-                        cursor: pointer;
-                        padding: 0;
-                        display: flex;
-                        align-items: center;
-                        gap: 4px;
-                    ">
+                    <button type="button" id="post-edit-time-toggle" style="background:none;border:none;color:#2563eb;font-size:0.875rem;cursor:pointer;padding:0;display:flex;align-items:center;gap:4px;">
                         <span id="post-edit-time-arrow">▶</span> Change time
                     </button>
-                    
-                    <div id="post-edit-time-section" style="display: none; margin-top: 12px;">
-                        <div style="display: flex; gap: 12px;">
-                            <div style="flex: 1;">
-                                <label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px; font-size: 0.875rem;">
-                                    Start Time
-                                </label>
-                                <input type="time" id="post-edit-start" 
-                                    value="${minutesToTimeString(startMin)}"
-                                    style="width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.9rem; box-sizing: border-box;">
+                    <div id="post-edit-time-section" style="display:none;margin-top:12px;">
+                        <div style="display:flex;gap:12px;">
+                            <div style="flex:1;">
+                                <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;font-size:0.875rem;">Start Time</label>
+                                <input type="time" id="post-edit-start" value="${minutesToTimeString(startMin)}" style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:0.9rem;box-sizing:border-box;">
                             </div>
-                            <div style="flex: 1;">
-                                <label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px; font-size: 0.875rem;">
-                                    End Time
-                                </label>
-                                <input type="time" id="post-edit-end" 
-                                    value="${minutesToTimeString(endMin)}"
-                                    style="width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.9rem; box-sizing: border-box;">
+                            <div style="flex:1;">
+                                <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;font-size:0.875rem;">End Time</label>
+                                <input type="time" id="post-edit-end" value="${minutesToTimeString(endMin)}" style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:0.9rem;box-sizing:border-box;">
                             </div>
                         </div>
                     </div>
                 </div>
-                
-                <!-- Conflict Warning Area -->
-                <div id="post-edit-conflict" style="display: none;"></div>
-                
-                <!-- Buttons -->
-                <div style="display: flex; gap: 12px; margin-top: 8px;">
-                    <button id="post-edit-cancel" style="
-                        flex: 1;
-                        padding: 12px;
-                        border: 1px solid #d1d5db;
-                        border-radius: 8px;
-                        background: white;
-                        color: #374151;
-                        font-size: 1rem;
-                        cursor: pointer;
-                        font-weight: 500;
-                    ">Cancel</button>
-                    <button id="post-edit-save" style="
-                        flex: 1;
-                        padding: 12px;
-                        border: none;
-                        border-radius: 8px;
-                        background: #2563eb;
-                        color: white;
-                        font-size: 1rem;
-                        cursor: pointer;
-                        font-weight: 500;
-                    ">Save Changes</button>
+                <div id="post-edit-conflict" style="display:none;"></div>
+                <div style="display:flex;gap:12px;margin-top:8px;">
+                    <button id="post-edit-cancel" style="flex:1;padding:12px;border:1px solid #d1d5db;border-radius:8px;background:white;color:#374151;font-size:1rem;cursor:pointer;font-weight:500;">Cancel</button>
+                    <button id="post-edit-save" style="flex:1;padding:12px;border:none;border-radius:8px;background:#2563eb;color:white;font-size:1rem;cursor:pointer;font-weight:500;">Save Changes</button>
                 </div>
-            </div>
-        `;
+            </div>`;
         
-        // State
         let useOriginalTime = true;
         const originalStartMin = startMin;
         const originalEndMin = endMin;
         
-        // Event handlers
         document.getElementById('post-edit-close').onclick = closeModal;
         document.getElementById('post-edit-cancel').onclick = closeModal;
         
-        // Time toggle
         const timeToggle = document.getElementById('post-edit-time-toggle');
         const timeSection = document.getElementById('post-edit-time-section');
         const timeArrow = document.getElementById('post-edit-time-arrow');
@@ -996,16 +739,13 @@
             useOriginalTime = !isHidden;
         };
         
-        // Conflict checking
         const locationSelect = document.getElementById('post-edit-location');
         const conflictArea = document.getElementById('post-edit-conflict');
         const startInput = document.getElementById('post-edit-start');
         const endInput = document.getElementById('post-edit-end');
         
         function getEffectiveTimes() {
-            if (useOriginalTime) {
-                return { startMin: originalStartMin, endMin: originalEndMin };
-            }
+            if (useOriginalTime) return { startMin: originalStartMin, endMin: originalEndMin };
             return {
                 startMin: parseTimeToMinutes(startInput.value) || originalStartMin,
                 endMin: parseTimeToMinutes(endInput.value) || originalEndMin
@@ -1020,13 +760,8 @@
         function checkAndShowConflicts() {
             const location = locationSelect.value;
             const times = getEffectiveTimes();
+            if (!location) { conflictArea.style.display = 'none'; return null; }
             
-            if (!location) {
-                conflictArea.style.display = 'none';
-                return null;
-            }
-            
-            // UPDATED: Use SchedulerCoreUtils with fallback
             const targetSlots = window.SchedulerCoreUtils?.findSlotsForRange?.(times.startMin, times.endMin, unifiedTimes) || [];
             const conflictCheck = checkLocationConflict(location, targetSlots, bunk);
             
@@ -1035,65 +770,38 @@
                 const nonEditableBunks = [...new Set(conflictCheck.nonEditableConflicts.map(c => c.bunk))];
                 
                 conflictArea.style.display = 'block';
-                
-                let html = `<div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px;">
-                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-                        <span style="font-size: 1.25rem;">⚠️</span>
-                        <strong style="color: #92400e;">Location Conflict Detected</strong>
+                let html = `<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:12px;">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                        <span style="font-size:1.25rem;">⚠️</span>
+                        <strong style="color:#92400e;">Location Conflict Detected</strong>
                     </div>
-                    <p style="margin: 0 0 8px 0; color: #78350f; font-size: 0.875rem;">
-                        <strong>${location}</strong> is already in use:
-                    </p>`;
+                    <p style="margin:0 0 8px 0;color:#78350f;font-size:0.875rem;"><strong>${location}</strong> is already in use:</p>`;
                 
                 if (editableBunks.length > 0) {
-                    html += `<div style="margin-bottom: 8px; padding: 8px; background: #d1fae5; border-radius: 6px;">
-                        <div style="font-size: 0.8rem; color: #065f46;">
-                            <strong>✓ Can auto-reassign:</strong> ${editableBunks.join(', ')}
-                        </div>
-                    </div>`;
+                    html += `<div style="margin-bottom:8px;padding:8px;background:#d1fae5;border-radius:6px;"><div style="font-size:0.8rem;color:#065f46;"><strong>✓ Can auto-reassign:</strong> ${editableBunks.join(', ')}</div></div>`;
                 }
                 
                 if (nonEditableBunks.length > 0) {
-                    html += `<div style="margin-bottom: 8px; padding: 8px; background: #fee2e2; border-radius: 6px;">
-                        <div style="font-size: 0.8rem; color: #991b1b;">
-                            <strong>✗ Other scheduler's bunks:</strong> ${nonEditableBunks.join(', ')}
-                        </div>
-                    </div>
-                    
-                    <div style="margin-top: 12px;">
-                        <div style="font-weight: 500; color: #374151; margin-bottom: 8px; font-size: 0.875rem;">
-                            How to handle their bunks?
-                        </div>
-                        <div style="display: flex; flex-direction: column; gap: 8px;">
-                            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;">
-                                <input type="radio" name="conflict-resolution" value="notify" checked style="margin-top: 2px;">
-                                <div>
-                                    <div style="font-weight: 500; color: #374151;">📧 Notify other scheduler</div>
-                                    <div style="font-size: 0.75rem; color: #6b7280;">Create double-booking & send them a warning</div>
-                                </div>
+                    html += `<div style="margin-bottom:8px;padding:8px;background:#fee2e2;border-radius:6px;"><div style="font-size:0.8rem;color:#991b1b;"><strong>✗ Other scheduler's bunks:</strong> ${nonEditableBunks.join(', ')}</div></div>
+                    <div style="margin-top:12px;">
+                        <div style="font-weight:500;color:#374151;margin-bottom:8px;font-size:0.875rem;">How to handle their bunks?</div>
+                        <div style="display:flex;flex-direction:column;gap:8px;">
+                            <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;">
+                                <input type="radio" name="conflict-resolution" value="notify" checked style="margin-top:2px;">
+                                <div><div style="font-weight:500;color:#374151;">📧 Notify other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Create double-booking & send warning</div></div>
                             </label>
-                            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;">
-                                <input type="radio" name="conflict-resolution" value="bypass" style="margin-top: 2px;">
-                                <div>
-                                    <div style="font-weight: 500; color: #374151;">🔓 Bypass & reassign (Admin mode)</div>
-                                    <div style="font-size: 0.75rem; color: #6b7280;">Override permissions and use smart regeneration</div>
-                                </div>
+                            <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;">
+                                <input type="radio" name="conflict-resolution" value="bypass" style="margin-top:2px;">
+                                <div><div style="font-weight:500;color:#374151;">🔓 Bypass & reassign (Admin mode)</div><div style="font-size:0.75rem;color:#6b7280;">Override permissions and use smart regeneration</div></div>
                             </label>
                         </div>
                     </div>`;
                 }
-                
                 html += `</div>`;
                 conflictArea.innerHTML = html;
-                
-                // Bind radio buttons
-                const radioButtons = conflictArea.querySelectorAll('input[name="conflict-resolution"]');
-                radioButtons.forEach(radio => {
-                    radio.addEventListener('change', (e) => {
-                        resolutionChoice = e.target.value;
-                    });
+                conflictArea.querySelectorAll('input[name="conflict-resolution"]').forEach(radio => {
+                    radio.addEventListener('change', (e) => { resolutionChoice = e.target.value; });
                 });
-                
                 return conflictCheck;
             } else {
                 conflictArea.style.display = 'none';
@@ -1104,52 +812,28 @@
         locationSelect.addEventListener('change', checkAndShowConflicts);
         startInput.addEventListener('change', () => { updateTimeDisplay(); checkAndShowConflicts(); });
         endInput.addEventListener('change', () => { updateTimeDisplay(); checkAndShowConflicts(); });
-        
         checkAndShowConflicts();
         
-        // Save handler
         document.getElementById('post-edit-save').onclick = () => {
             const activity = document.getElementById('post-edit-activity').value.trim();
             const location = locationSelect.value;
             const times = getEffectiveTimes();
             
-            if (!activity) {
-                alert('Please enter an activity name.');
-                return;
-            }
+            if (!activity) { alert('Please enter an activity name.'); return; }
+            if (times.endMin <= times.startMin) { alert('End time must be after start time.'); return; }
             
-            if (times.endMin <= times.startMin) {
-                alert('End time must be after start time.');
-                return;
-            }
-            
-            // UPDATED: Use SchedulerCoreUtils with fallback
             const targetSlots = window.SchedulerCoreUtils?.findSlotsForRange?.(times.startMin, times.endMin, unifiedTimes) || [];
             const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
             
             if (conflictCheck?.hasConflict) {
-                onSave({
-                    activity,
-                    location,
-                    startMin: times.startMin,
-                    endMin: times.endMin,
-                    hasConflict: true,
-                    conflicts: conflictCheck.conflicts,
+                onSave({ activity, location, startMin: times.startMin, endMin: times.endMin,
+                    hasConflict: true, conflicts: conflictCheck.conflicts,
                     editableConflicts: conflictCheck.editableConflicts || [],
                     nonEditableConflicts: conflictCheck.nonEditableConflicts || [],
-                    resolutionChoice: resolutionChoice
-                });
+                    resolutionChoice });
             } else {
-                onSave({
-                    activity,
-                    location,
-                    startMin: times.startMin,
-                    endMin: times.endMin,
-                    hasConflict: false,
-                    conflicts: []
-                });
+                onSave({ activity, location, startMin: times.startMin, endMin: times.endMin, hasConflict: false, conflicts: [] });
             }
-            
             closeModal();
         };
         
@@ -1161,30 +845,21 @@
     // ENHANCED EDIT CELL (Main entry point)
     // =========================================================================
 
-   function enhancedEditCell(bunk, startMin, endMin, current) {
-        // ★★★ v3.3 SECURITY: Check division permission even on direct console call ★★★
+    function enhancedEditCell(bunk, startMin, endMin, current) {
         const _divNameCheck = window.AccessControl?.getDivisionForBunk?.(bunk);
         if (_divNameCheck && window.AccessControl?.canEditDivision) {
             if (!window.AccessControl.canEditDivision(_divNameCheck)) {
                 debugLog('BLOCKED: Cannot edit bunk', bunk, 'in division', _divNameCheck);
-                if (typeof window.showToast === 'function') {
-                    window.showToast('You don\'t have permission to edit ' + _divNameCheck, 'error');
-                }
+                if (typeof window.showToast === 'function') window.showToast('You don\'t have permission to edit ' + _divNameCheck, 'error');
                 return;
             }
         }
-
         debugLog('enhancedEditCell called:', bunk, startMin, endMin, current);
-        
-        // RBAC check - now with proper initialization handling
         if (!canEditBunk(bunk)) {
             alert('You do not have permission to edit this schedule.\n\n(You can only edit your assigned divisions.)');
             return;
         }
-        
-        showEditModal(bunk, startMin, endMin, current, (editData) => {
-            applyEdit(bunk, editData);
-        });
+        showEditModal(bunk, startMin, endMin, current, (editData) => { applyEdit(bunk, editData); });
     }
 
     // =========================================================================
@@ -1200,96 +875,657 @@
                 window.editCell._isEnhanced = true;
             }
         };
-        
         overrideWindowEditCell();
         setTimeout(overrideWindowEditCell, 500);
         setTimeout(overrideWindowEditCell, 1500);
         setTimeout(overrideWindowEditCell, 3000);
         
-        // Capture phase click listener
         document.addEventListener('click', (e) => {
             const td = e.target.closest('td');
             if (!td) return;
-            
             const table = td.closest('#scheduleTable, .schedule-table, [data-schedule]');
             if (!table) return;
-            
             const onclickStr = td.getAttribute('onclick') || (td.onclick ? td.onclick.toString() : '');
             const isClickable = td.style.cursor === 'pointer' || getComputedStyle(td).cursor === 'pointer';
-            
             if (!isClickable && !onclickStr.includes('editCell')) return;
             
-            let bunk, startMin, endMin, currentText;
-            
             const match = onclickStr.match(/editCell\s*\(\s*["']?([^"',]+)["']?\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*["']?([^"']*)["']?\s*\)/);
-            
             if (match) {
-                bunk = match[1];
-                startMin = parseInt(match[2], 10);
-                endMin = parseInt(match[3], 10);
-                currentText = match[4] || '';
-                
-                e.preventDefault();
-                e.stopPropagation();
-                e.stopImmediatePropagation();
-                
-                td.onclick = null;
-                td.removeAttribute('onclick');
-                
-                enhancedEditCell(bunk, startMin, endMin, currentText);
+                e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+                td.onclick = null; td.removeAttribute('onclick');
+                enhancedEditCell(match[1], parseInt(match[2], 10), parseInt(match[3], 10), match[4] || '');
             }
         }, true);
         
-        // Observer for dynamic content
-        const observer = new MutationObserver((mutations) => {
-            overrideWindowEditCell();
-        });
-        
+        const observer = new MutationObserver(() => { overrideWindowEditCell(); });
         const scheduleContainer = document.getElementById('scheduleTable') || document.getElementById('unified-schedule');
-        if (scheduleContainer) {
-            observer.observe(scheduleContainer, { childList: true, subtree: true });
-        }
-        
+        if (scheduleContainer) observer.observe(scheduleContainer, { childList: true, subtree: true });
         debugLog('Click interceptor installed');
     }
 
-     function initPostEditSystem() {
-        // Verify dependencies
+    // =========================================================================
+    // v3.3 — POST-EDIT INTERACTIONS: RESIZE / MOVE / ADD / CONFLICT ENGINE
+    // =========================================================================
+
+    function peiSnap(min) { return Math.round(min / PEI_SNAP_MINS) * PEI_SNAP_MINS; }
+
+    function peiToLabel(min) {
+        const h = Math.floor(min / 60), m = min % 60, ap = h >= 12 ? 'PM' : 'AM';
+        return (h % 12 || 12) + ':' + (m < 10 ? '0' : '') + m + ' ' + ap;
+    }
+
+    function peiGetDivConfig(divName) { return (window.divisions || {})[divName] || {}; }
+
+    function peiParseTime(v) {
+        if (typeof v === 'number') return v;
+        return window.SchedulerCoreUtils?.parseTimeToMinutes?.(v) || null;
+    }
+
+    function peiGetDivForBunk(bunk) {
+        return window.SchedulerCoreUtils?.getDivisionForBunk?.(bunk) ||
+               window.AccessControl?.getDivisionForBunk?.(bunk) || null;
+    }
+
+    function peiBunkActivities(bunk, divName) {
+        const assignments = window.scheduleAssignments?.[bunk] || [];
+        const divSlots = window.divisionTimes?.[divName] || [];
+        const acts = [];
+        for (let i = 0; i < Math.min(assignments.length, divSlots.length); i++) {
+            const entry = assignments[i];
+            if (!entry || entry.continuation) continue;
+            const slot = divSlots[i];
+            if (!slot) continue;
+            let endIdx = i;
+            for (let j = i + 1; j < assignments.length; j++) {
+                if (assignments[j] && assignments[j].continuation) endIdx = j;
+                else break;
+            }
+            acts.push({
+                entry, slotIdx: i, endSlotIdx: endIdx,
+                startMin: slot.startMin,
+                endMin: divSlots[endIdx] ? divSlots[endIdx].endMin : slot.endMin,
+                duration: (divSlots[endIdx] ? divSlots[endIdx].endMin : slot.endMin) - slot.startMin
+            });
+        }
+        return acts;
+    }
+
+    function peiMinutesToTimeString(mins) {
+        const h = Math.floor(mins / 60), m = mins % 60;
+        return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+    }
+
+    function peiTimeStringToMinutes(str) {
+        if (!str) return null;
+        const p = str.split(':');
+        return parseInt(p[0], 10) * 60 + parseInt(p[1], 10);
+    }
+
+    // ── Conflict Engine ──
+
+    const PEI_ConflictEngine = {
+        check(bunk, proposedStart, proposedEnd, fieldName, excludeSlotIdx) {
+            const result = { hasConflict: false, sameBunkOverlap: [], fieldConflicts: [], details: [] };
+            const divName = peiGetDivForBunk(bunk);
+            const acts = peiBunkActivities(bunk, divName);
+            for (const act of acts) {
+                if (act.slotIdx === excludeSlotIdx) continue;
+                if (act.startMin < proposedEnd && act.endMin > proposedStart) {
+                    result.sameBunkOverlap.push({ activity: act.entry._activity || act.entry.field || 'Unknown', startMin: act.startMin, endMin: act.endMin, slotIdx: act.slotIdx });
+                    result.hasConflict = true;
+                }
+            }
+            if (fieldName && fieldName !== 'Free' && fieldName.toLowerCase() !== 'free') {
+                let fieldOnly = fieldName;
+                if (fieldName.includes(' – ')) fieldOnly = fieldName.split(' – ')[0].trim();
+                if (window.TimeBasedFieldUsage?.checkAvailability) {
+                    const actProps = (window.activityProperties || {})[fieldOnly] || {};
+                    const capacity = actProps.sharableWith?.capacity ? parseInt(actProps.sharableWith.capacity) || 1 : (actProps.sharable ? 2 : 1);
+                    const avail = window.TimeBasedFieldUsage.checkAvailability(fieldOnly, proposedStart, proposedEnd, capacity, bunk);
+                    if (!avail.available) { result.fieldConflicts = avail.conflicts || []; result.hasConflict = true; }
+                }
+            }
+            if (divName) {
+                const dc = peiGetDivConfig(divName);
+                const dStart = peiParseTime(dc.startTime) || 540, dEnd = peiParseTime(dc.endTime) || 960;
+                if (proposedStart < dStart || proposedEnd > dEnd) { result.details.push('Exceeds division boundaries'); result.hasConflict = true; }
+            }
+            return result;
+        }
+    };
+
+    // ── UI: Tooltip ──
+    function peiShowTooltip(x, y, html) {
+        if (!_peiTooltip) {
+            _peiTooltip = document.createElement('div');
+            _peiTooltip.id = 'pei-tooltip';
+            _peiTooltip.style.cssText = 'position:fixed;z-index:100001;pointer-events:none;padding:6px 12px;background:#111827;color:#fff;border-radius:6px;font-size:12px;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,0.3);display:none;white-space:nowrap;font-family:-apple-system,BlinkMacSystemFont,sans-serif';
+            document.body.appendChild(_peiTooltip);
+        }
+        _peiTooltip.innerHTML = html;
+        _peiTooltip.style.display = 'block';
+        _peiTooltip.style.left = (x + 14) + 'px';
+        _peiTooltip.style.top = (y - 36) + 'px';
+    }
+    function peiHideTooltip() { if (_peiTooltip) _peiTooltip.style.display = 'none'; }
+
+    // ── UI: Conflict indicators ──
+    function peiShowConflictIndicator(block, cr) {
+        peiClearConflictIndicators();
+        if (!cr.hasConflict) { block.style.boxShadow = '0 0 0 2px #22c55e, 0 0 12px rgba(34,197,94,0.3)'; block._peiShadow = true; return; }
+        block.style.boxShadow = '0 0 0 2px #ef4444, 0 0 12px rgba(239,68,68,0.4)'; block._peiShadow = true;
+        cr.sameBunkOverlap.forEach(ov => {
+            const col = block.closest('[data-pei-bunk]');
+            if (!col) return;
+            col.querySelectorAll(`.asg-block[data-pei-slot-idx="${ov.slotIdx}"]`).forEach(ob => {
+                const ind = document.createElement('div');
+                ind.className = 'pei-conflict-overlay';
+                ind.style.cssText = `position:absolute;left:0;right:0;top:${ob.style.top};height:${ob.style.height};background:rgba(239,68,68,0.15);border:2px solid rgba(239,68,68,0.5);border-radius:5px;pointer-events:none;z-index:5`;
+                col.appendChild(ind);
+                _peiConflictOverlays.push(ind);
+            });
+        });
+    }
+    function peiClearConflictIndicators() {
+        _peiConflictOverlays.forEach(el => el.remove()); _peiConflictOverlays = [];
+        document.querySelectorAll('.asg-block[data-pei-bunk]').forEach(blk => { if (blk._peiShadow) { blk.style.boxShadow = ''; blk._peiShadow = false; } });
+    }
+
+    function peiShowBanner(msg, type) {
+        document.getElementById('pei-conflict-banner')?.remove();
+        const bg = type === 'error' ? '#fef2f2' : (type === 'warning' ? '#fffbeb' : '#f0fdf4');
+        const bc = type === 'error' ? '#f87171' : (type === 'warning' ? '#f59e0b' : '#4ade80');
+        const tc = type === 'error' ? '#991b1b' : (type === 'warning' ? '#92400e' : '#166534');
+        const icon = type === 'error' ? '⚠️' : (type === 'warning' ? '⚡' : '✅');
+        const b = document.createElement('div'); b.id = 'pei-conflict-banner';
+        b.style.cssText = `position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:100002;padding:12px 24px;background:${bg};border:2px solid ${bc};border-radius:12px;color:${tc};font-size:14px;font-weight:600;box-shadow:0 8px 32px rgba(0,0,0,0.15);font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;gap:8px;animation:pei-slide-up 0.3s ease-out`;
+        b.innerHTML = icon + ' ' + msg; document.body.appendChild(b);
+        setTimeout(() => b.remove(), 3500);
+    }
+
+    // ── RESIZE ──
+    function peiStartResize(block, direction, e) {
+        if (_peiMoving || _peiResizing) return;
+        const divName = block.dataset.peiDivision;
+        const dc = peiGetDivConfig(divName);
+        _peiResizing = true;
+        _peiState = {
+            type: 'resize', direction, block, bunk: block.dataset.peiBunk,
+            slotIdx: parseInt(block.dataset.peiSlotIdx, 10),
+            origStartMin: parseInt(block.dataset.peiStartMin, 10), origEndMin: parseInt(block.dataset.peiEndMin, 10),
+            currentStartMin: parseInt(block.dataset.peiStartMin, 10), currentEndMin: parseInt(block.dataset.peiEndMin, 10),
+            fieldName: block.dataset.peiField || '', divName,
+            dayStart: peiParseTime(dc.startTime) || 540, dayEnd: peiParseTime(dc.endTime) || 960,
+            startY: e.clientY, origTop: parseInt(block.style.top, 10), origHeight: block.offsetHeight
+        };
+        block.style.transition = 'none'; block.style.zIndex = '20';
+        block.style.cursor = direction === 'top' ? 'n-resize' : 's-resize';
+        document.body.style.cursor = block.style.cursor; document.body.style.userSelect = 'none';
+        document.addEventListener('mousemove', peiOnResizeMove);
+        document.addEventListener('mouseup', peiOnResizeEnd);
+    }
+
+    function peiOnResizeMove(e) {
+        if (!_peiResizing || !_peiState) return;
+        const s = _peiState;
+        const deltaMins = peiSnap((e.clientY - s.startY) / PEI_PX_PER_MIN);
+        let newStart = s.origStartMin, newEnd = s.origEndMin;
+        if (s.direction === 'top') newStart = Math.max(s.dayStart, Math.min(s.origEndMin - PEI_MIN_BLOCK_DURATION, peiSnap(s.origStartMin + deltaMins)));
+        else newEnd = Math.min(s.dayEnd, Math.max(s.origStartMin + PEI_MIN_BLOCK_DURATION, peiSnap(s.origEndMin + deltaMins)));
+        s.currentStartMin = newStart; s.currentEndMin = newEnd;
+        s.block.style.top = ((newStart - s.dayStart) * PEI_PX_PER_MIN + 2) + 'px';
+        s.block.style.height = ((newEnd - newStart) * PEI_PX_PER_MIN - 4) + 'px';
+        const dur = newEnd - newStart;
+        peiShowTooltip(e.clientX, e.clientY, peiToLabel(newStart) + ' – ' + peiToLabel(newEnd) + ` <span style="opacity:0.6">(${dur < 60 ? dur + 'm' : Math.floor(dur/60) + 'h' + (dur%60 > 0 ? dur%60 + 'm' : '')})</span>`);
+        peiShowConflictIndicator(s.block, PEI_ConflictEngine.check(s.bunk, newStart, newEnd, s.fieldName, s.slotIdx));
+    }
+
+    function peiOnResizeEnd() {
+        document.removeEventListener('mousemove', peiOnResizeMove);
+        document.removeEventListener('mouseup', peiOnResizeEnd);
+        if (!_peiResizing || !_peiState) return;
+        _peiSuppressClick = true;
+        const s = _peiState;
+        peiHideTooltip(); peiClearConflictIndicators();
+        s.block.style.transition = ''; s.block.style.zIndex = ''; s.block.style.cursor = '';
+        document.body.style.cursor = ''; document.body.style.userSelect = '';
+        if (s.currentStartMin === s.origStartMin && s.currentEndMin === s.origEndMin) { _peiResizing = false; _peiState = null; return; }
+        const conflicts = PEI_ConflictEngine.check(s.bunk, s.currentStartMin, s.currentEndMin, s.fieldName, s.slotIdx);
+        if (conflicts.sameBunkOverlap.length > 0) {
+            peiShowBanner('Cannot resize: overlaps with ' + conflicts.sameBunkOverlap[0].activity, 'error');
+            s.block.style.top = ((s.origStartMin - s.dayStart) * PEI_PX_PER_MIN + 2) + 'px';
+            s.block.style.height = ((s.origEndMin - s.origStartMin) * PEI_PX_PER_MIN - 4) + 'px';
+            _peiResizing = false; _peiState = null; return;
+        }
+        peiApplyTimeChange(s.bunk, s.slotIdx, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.divName);
+        if (conflicts.fieldConflicts.length > 0) peiShowBanner('Resized — field conflict with ' + conflicts.fieldConflicts.length + ' bunk(s)', 'warning');
+        else peiShowBanner('Resized to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success');
+        _peiResizing = false; _peiState = null;
+    }
+
+    // ── MOVE ──
+    function peiStartMove(block, e) {
+        if (_peiMoving || _peiResizing) return;
+        const startMin = parseInt(block.dataset.peiStartMin, 10), endMin = parseInt(block.dataset.peiEndMin, 10);
+        const divName = block.dataset.peiDivision;
+        const dc = peiGetDivConfig(divName);
+        _peiMoving = true;
+        _peiState = {
+            type: 'move', block, bunk: block.dataset.peiBunk,
+            slotIdx: parseInt(block.dataset.peiSlotIdx, 10),
+            origStartMin: startMin, origEndMin: endMin, currentStartMin: startMin, currentEndMin: endMin,
+            duration: endMin - startMin, fieldName: block.dataset.peiField || '',
+            divName, dayStart: peiParseTime(dc.startTime) || 540, dayEnd: peiParseTime(dc.endTime) || 960,
+            startY: e.clientY, origTop: parseInt(block.style.top, 10)
+        };
+        block.style.transition = 'none'; block.style.zIndex = '20'; block.style.opacity = '0.85'; block.style.cursor = 'grabbing';
+        document.body.style.cursor = 'grabbing'; document.body.style.userSelect = 'none';
+        document.addEventListener('mousemove', peiOnMoveMove);
+        document.addEventListener('mouseup', peiOnMoveEnd);
+    }
+
+    function peiOnMoveMove(e) {
+        if (!_peiMoving || !_peiState) return;
+        const s = _peiState;
+        let newStart = Math.max(s.dayStart, Math.min(s.dayEnd - s.duration, peiSnap(s.origStartMin + peiSnap((e.clientY - s.startY) / PEI_PX_PER_MIN))));
+        s.currentStartMin = newStart; s.currentEndMin = newStart + s.duration;
+        s.block.style.top = ((newStart - s.dayStart) * PEI_PX_PER_MIN + 2) + 'px';
+        peiShowTooltip(e.clientX, e.clientY, '↕ ' + peiToLabel(newStart) + ' – ' + peiToLabel(newStart + s.duration));
+        peiShowConflictIndicator(s.block, PEI_ConflictEngine.check(s.bunk, newStart, newStart + s.duration, s.fieldName, s.slotIdx));
+    }
+
+    function peiOnMoveEnd() {
+        document.removeEventListener('mousemove', peiOnMoveMove);
+        document.removeEventListener('mouseup', peiOnMoveEnd);
+        if (!_peiMoving || !_peiState) return;
+        _peiSuppressClick = true; _peiPendingMove = null;
+        const s = _peiState;
+        peiHideTooltip(); peiClearConflictIndicators();
+        s.block.style.transition = ''; s.block.style.zIndex = ''; s.block.style.opacity = ''; s.block.style.cursor = '';
+        document.body.style.cursor = ''; document.body.style.userSelect = '';
+        if (s.currentStartMin === s.origStartMin) { _peiMoving = false; _peiState = null; return; }
+        const conflicts = PEI_ConflictEngine.check(s.bunk, s.currentStartMin, s.currentEndMin, s.fieldName, s.slotIdx);
+        if (conflicts.sameBunkOverlap.length > 0) {
+            peiShowBanner('Cannot move: overlaps with ' + conflicts.sameBunkOverlap[0].activity, 'error');
+            s.block.style.top = ((s.origStartMin - s.dayStart) * PEI_PX_PER_MIN + 2) + 'px';
+            _peiMoving = false; _peiState = null; return;
+        }
+        peiApplyTimeChange(s.bunk, s.slotIdx, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.divName);
+        if (conflicts.fieldConflicts.length > 0) peiShowBanner('Moved — field conflict with ' + conflicts.fieldConflicts.length + ' bunk(s)', 'warning');
+        else peiShowBanner('Moved to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success');
+        _peiMoving = false; _peiState = null;
+    }
+
+    // ── Pending move: threshold ──
+    function peiOnPendingMoveCheck(e) {
+        if (!_peiPendingMove || _peiPendingMove.started) return;
+        if (Math.sqrt((e.clientX - _peiPendingMove.startX) ** 2 + (e.clientY - _peiPendingMove.startY) ** 2) >= PEI_DRAG_THRESHOLD) {
+            _peiPendingMove.started = true;
+            document.removeEventListener('mousemove', peiOnPendingMoveCheck);
+            document.removeEventListener('mouseup', peiOnPendingMoveCancel);
+            peiStartMove(_peiPendingMove.block, { clientY: _peiPendingMove.startY, preventDefault() {} });
+            peiOnMoveMove(e);
+        }
+    }
+    function peiOnPendingMoveCancel() {
+        document.removeEventListener('mousemove', peiOnPendingMoveCheck);
+        document.removeEventListener('mouseup', peiOnPendingMoveCancel);
+        _peiPendingMove = null;
+    }
+
+    // ── Click suppressor ──
+    function peiInstallClickSuppressor() {
+        document.addEventListener('click', (e) => {
+            if (_peiSuppressClick) { e.stopPropagation(); e.stopImmediatePropagation(); e.preventDefault(); _peiSuppressClick = false; return; }
+            if (_peiResizing || _peiMoving) { e.stopPropagation(); e.stopImmediatePropagation(); e.preventDefault(); }
+        }, true);
+    }
+
+    // ── DOUBLE-CLICK ADD ──
+    function peiHandleDoubleClickAdd(col, e) {
+        const bunk = col.dataset.peiBunk, divName = col.dataset.peiDivision;
+        if (!bunk || !divName || !canEditBunk(bunk)) { if (window.showToast) window.showToast('No permission to edit ' + bunk, 'error'); return; }
+        const dc = peiGetDivConfig(divName);
+        const dayStart = peiParseTime(dc.startTime) || 540;
+        const clickMin = peiSnap(dayStart + ((e.clientY - col.getBoundingClientRect().top) / PEI_PX_PER_MIN));
+        const acts = peiBunkActivities(bunk, divName);
+        for (const a of acts) { if (a.startMin <= clickMin && a.endMin > clickMin) return; }
+        let newStart = clickMin, newEnd = clickMin + 30;
+        const nextBlock = acts.find(a => a.startMin > newStart);
+        if (nextBlock && newEnd > nextBlock.startMin) newEnd = nextBlock.startMin;
+        let prevBlock = null;
+        for (let j = acts.length - 1; j >= 0; j--) { if (acts[j].endMin <= newStart) { prevBlock = acts[j]; break; } }
+        if (prevBlock && newStart < prevBlock.endMin) { newStart = prevBlock.endMin; newEnd = newStart + 30; if (nextBlock && newEnd > nextBlock.startMin) newEnd = nextBlock.startMin; }
+        if (newEnd - newStart < PEI_MIN_BLOCK_DURATION) { peiShowBanner('Not enough space here', 'error'); return; }
+        peiShowAddModal(bunk, divName, newStart, newEnd);
+    }
+
+    function peiShowAddModal(bunk, divName, startMin, endMin) {
+        document.getElementById('pei-add-overlay')?.remove();
+        const locations = getAllLocations();
+        const fieldOpts = locations.filter(l => l.type === 'field').map(l => `<option value="${l.name}">${l.name}${l.capacity > 1 ? ` (cap:${l.capacity})` : ''}</option>`).join('');
+        const specOpts = locations.filter(l => l.type === 'special').map(l => `<option value="${l.name}">${l.name}</option>`).join('');
+        const todayDone = new Set();
+        peiBunkActivities(bunk, divName).forEach(a => { const n = (a.entry._activity || '').toLowerCase(); if (n && n !== 'free') todayDone.add(n); });
+        const suggestions = [];
+        const app1 = (window.loadGlobalSettings?.() || {}).app1 || {};
+        (app1.fields || []).forEach(f => { if (!f.name || f.available === false) return; (f.activities || f.sports || []).forEach(sport => { const sn = typeof sport === 'string' ? sport : sport.name; if (sn && !todayDone.has(sn.toLowerCase())) suggestions.push({ name: sn, field: f.name }); }); });
+        (app1.specialActivities || []).forEach(s => { if (s.name && !todayDone.has(s.name.toLowerCase())) suggestions.push({ name: s.name, field: s.name }); });
+        const sugHtml = suggestions.length > 0 ? `<div><label style="display:block;font-weight:500;color:#374151;margin-bottom:8px;">Quick Pick</label><div id="pei-add-suggestions" style="display:flex;flex-wrap:wrap;gap:6px;">${suggestions.slice(0, 8).map(a => `<button class="pei-suggestion-btn" data-activity="${a.name}" data-field="${a.field || ''}" style="padding:6px 12px;border:1px solid #d1d5db;border-radius:20px;background:#fff;font-size:0.8rem;cursor:pointer;color:#374151;transition:all 0.15s;">${a.name}${a.field ? ` <span style='font-size:0.7rem;opacity:0.6'>@ ${a.field}</span>` : ''}</button>`).join('')}</div></div>` : '';
+
+        const overlay = document.createElement('div'); overlay.id = 'pei-add-overlay';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:100003;display:flex;align-items:center;justify-content:center;animation:pei-fade-in 0.2s ease-out';
+        overlay.innerHTML = `<div style="background:#fff;border-radius:16px;padding:28px;min-width:420px;max-width:520px;max-height:85vh;overflow-y:auto;box-shadow:0 24px 80px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,sans-serif;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;"><h2 style="margin:0;font-size:1.2rem;color:#1f2937;">Add New Activity</h2><button id="pei-add-close" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#9ca3af;line-height:1;">&times;</button></div>
+            <div style="background:#f3f4f6;padding:12px 16px;border-radius:8px;margin-bottom:20px;"><div style="font-weight:600;color:#374151;">${bunk}</div><div style="font-size:0.875rem;color:#6b7280;">${peiToLabel(startMin)} – ${peiToLabel(endMin)} (${endMin - startMin}min)</div></div>
+            <div style="display:flex;flex-direction:column;gap:16px;">
+                <div><label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Activity Name</label><input type="text" id="pei-add-activity" placeholder="e.g., Basketball" style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;"></div>
+                <div><label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Location / Field</label><select id="pei-add-location" style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;background:white;"><option value="">-- No location --</option>${fieldOpts ? '<optgroup label="Fields">' + fieldOpts + '</optgroup>' : ''}${specOpts ? '<optgroup label="Specials">' + specOpts + '</optgroup>' : ''}</select></div>
+                <div><div id="pei-add-time-toggle" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.875rem;color:#6b7280;"><span id="pei-add-time-arrow">▶</span> Adjust time</div><div id="pei-add-time-section" style="display:none;margin-top:10px;"><div style="display:flex;gap:12px;"><div style="flex:1;"><label style="display:block;font-size:0.8rem;color:#6b7280;margin-bottom:4px;">Start</label><input type="time" id="pei-add-start" value="${peiMinutesToTimeString(startMin)}" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:8px;font-size:0.9rem;box-sizing:border-box;"></div><div style="flex:1;"><label style="display:block;font-size:0.8rem;color:#6b7280;margin-bottom:4px;">End</label><input type="time" id="pei-add-end" value="${peiMinutesToTimeString(endMin)}" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:8px;font-size:0.9rem;box-sizing:border-box;"></div></div></div></div>
+                <div id="pei-add-conflict-status" style="display:none;"></div>
+                ${sugHtml}
+                <div style="display:flex;gap:12px;margin-top:4px;"><button id="pei-add-auto" style="flex:1;padding:12px;border:2px dashed #a5b4fc;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:0.95rem;cursor:pointer;font-weight:600;">✨ Auto-fill</button></div>
+                <div style="display:flex;gap:12px;"><button id="pei-add-cancel" style="flex:1;padding:12px;border:1px solid #d1d5db;border-radius:8px;background:white;color:#374151;font-size:1rem;cursor:pointer;font-weight:500;">Cancel</button><button id="pei-add-save" style="flex:1;padding:12px;border:none;border-radius:8px;background:#2563eb;color:white;font-size:1rem;cursor:pointer;font-weight:500;">Add Activity</button></div>
+            </div></div>`;
+        document.body.appendChild(overlay);
+
+        const closeAdd = () => overlay.remove();
+        overlay.addEventListener('click', e => { if (e.target === overlay) closeAdd(); });
+        document.getElementById('pei-add-close').onclick = closeAdd;
+        document.getElementById('pei-add-cancel').onclick = closeAdd;
+        document.getElementById('pei-add-time-toggle').onclick = () => { const sec = document.getElementById('pei-add-time-section'); const hidden = sec.style.display === 'none'; sec.style.display = hidden ? 'block' : 'none'; document.getElementById('pei-add-time-arrow').textContent = hidden ? '▼' : '▶'; };
+        document.querySelectorAll('.pei-suggestion-btn').forEach(btn => {
+            btn.onclick = () => {
+                document.getElementById('pei-add-activity').value = btn.dataset.activity;
+                const loc = document.getElementById('pei-add-location');
+                if (btn.dataset.field) { for (let i = 0; i < loc.options.length; i++) { if (loc.options[i].value === btn.dataset.field) { loc.selectedIndex = i; break; } } }
+                document.querySelectorAll('.pei-suggestion-btn').forEach(b => { b.style.background = '#fff'; b.style.borderColor = '#d1d5db'; });
+                btn.style.background = '#dbeafe'; btn.style.borderColor = '#3b82f6';
+                peiCheckAddConflict(bunk, startMin, endMin);
+            };
+        });
+        document.getElementById('pei-add-auto').onclick = () => {
+            const r = peiAutoFill(bunk, divName, startMin, endMin);
+            if (r) { document.getElementById('pei-add-activity').value = r.activity; const loc = document.getElementById('pei-add-location'); if (r.field) { for (let i = 0; i < loc.options.length; i++) { if (loc.options[i].value === r.field) { loc.selectedIndex = i; break; } } } peiCheckAddConflict(bunk, startMin, endMin); peiShowBanner('Auto-filled: ' + r.activity, 'success'); }
+            else peiShowBanner('No suitable activity found', 'warning');
+        };
+        document.getElementById('pei-add-location').onchange = () => peiCheckAddConflict(bunk, startMin, endMin);
+        document.getElementById('pei-add-activity').oninput = () => peiCheckAddConflict(bunk, startMin, endMin);
+        document.getElementById('pei-add-save').onclick = () => {
+            const activity = document.getElementById('pei-add-activity').value.trim();
+            if (!activity) { alert('Please enter an activity name.'); return; }
+            let adjStart = startMin, adjEnd = endMin;
+            if (document.getElementById('pei-add-time-section').style.display !== 'none') { adjStart = peiTimeStringToMinutes(document.getElementById('pei-add-start').value) || startMin; adjEnd = peiTimeStringToMinutes(document.getElementById('pei-add-end').value) || endMin; }
+            if (adjEnd <= adjStart) { alert('End must be after start.'); return; }
+            const location = document.getElementById('pei-add-location').value || null;
+            const conflicts = PEI_ConflictEngine.check(bunk, adjStart, adjEnd, location, -1);
+            if (conflicts.sameBunkOverlap.length > 0 && !confirm('Overlaps with ' + conflicts.sameBunkOverlap[0].activity + '. Add anyway?')) return;
+            if (conflicts.fieldConflicts.length > 0 && !confirm('Field conflict on ' + location + '. Continue?')) return;
+            peiApplyNewBlock(bunk, divName, adjStart, adjEnd, activity, location);
+            closeAdd();
+            peiShowBanner('Added: ' + activity + ' at ' + peiToLabel(adjStart) + ' – ' + peiToLabel(adjEnd), 'success');
+        };
+        document.getElementById('pei-add-activity').focus();
+        document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { closeAdd(); document.removeEventListener('keydown', esc); } });
+    }
+
+    function peiCheckAddConflict(bunk, startMin, endMin) {
+        const location = document.getElementById('pei-add-location')?.value || '';
+        const el = document.getElementById('pei-add-conflict-status');
+        if (!el || !location) { if (el) el.style.display = 'none'; return; }
+        const c = PEI_ConflictEngine.check(bunk, startMin, endMin, location, -1);
+        if (!c.hasConflict) { el.style.display = 'block'; el.style.cssText = 'padding:10px 14px;border-radius:8px;background:#f0fdf4;border:1px solid #86efac;color:#166534;font-size:0.85rem;display:block;'; el.innerHTML = '✅ ' + location + ' is available'; }
+        else if (c.fieldConflicts.length > 0) { el.style.display = 'block'; el.style.cssText = 'padding:10px 14px;border-radius:8px;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:0.85rem;display:block;'; el.innerHTML = '⚠️ ' + location + ' in use by: ' + c.fieldConflicts.map(x => x.bunk).join(', '); }
+    }
+
+    // ── Auto-fill ──
+    function peiAutoFill(bunk, divName, startMin, endMin) {
+        const todayDone = new Set();
+        peiBunkActivities(bunk, divName).forEach(a => { const n = (a.entry._activity || '').toLowerCase(); if (n && n !== 'free') todayDone.add(n); });
+        const app1 = (window.loadGlobalSettings?.() || {}).app1 || {};
+        const candidates = [];
+        (app1.fields || []).forEach(f => {
+            if (!f.name || f.available === false) return;
+            (f.activities || f.sports || []).forEach(sport => {
+                const sn = typeof sport === 'string' ? sport : sport.name;
+                if (!sn || todayDone.has(sn.toLowerCase())) return;
+                const cap = f.sharableWith?.capacity ? parseInt(f.sharableWith.capacity) || 1 : 1;
+                let avail = true;
+                if (window.TimeBasedFieldUsage?.checkAvailability) avail = window.TimeBasedFieldUsage.checkAvailability(f.name, startMin, endMin, cap, bunk).available;
+                candidates.push({ activity: sn, field: f.name, available: avail, score: avail ? (100 - (window.RotationEngine?.getActivityCount?.(bunk, sn) || 0)) : -100 });
+            });
+        });
+        (app1.specialActivities || []).forEach(s => {
+            if (!s.name || todayDone.has(s.name.toLowerCase())) return;
+            const cap = s.sharableWith?.capacity ? parseInt(s.sharableWith.capacity) || 1 : 1;
+            let avail = true;
+            if (window.TimeBasedFieldUsage?.checkAvailability) avail = window.TimeBasedFieldUsage.checkAvailability(s.name, startMin, endMin, cap, bunk).available;
+            candidates.push({ activity: s.name, field: s.name, available: avail, score: avail ? (100 - (window.RotationEngine?.getActivityCount?.(bunk, s.name) || 0)) : -100 });
+        });
+        candidates.sort((a, b) => b.score - a.score);
+        return candidates[0] || null;
+    }
+
+    // ── Apply changes ──
+    function peiApplyTimeChange(bunk, origSlotIdx, origStart, origEnd, newStart, newEnd, divName) {
+        const divSlots = window.divisionTimes?.[divName] || [];
+        const assignments = window.scheduleAssignments?.[bunk];
+        if (!assignments) return;
+        const origEntry = assignments[origSlotIdx];
+        if (!origEntry) return;
+        window._postEditInProgress = true; window._postEditTimestamp = Date.now();
+        assignments[origSlotIdx] = null;
+        for (let c = origSlotIdx + 1; c < assignments.length; c++) { if (assignments[c] && assignments[c].continuation) assignments[c] = null; else break; }
+        const newSlots = [];
+        for (let i = 0; i < divSlots.length; i++) { if (divSlots[i].startMin < newEnd && divSlots[i].endMin > newStart) newSlots.push(i); }
+        if (newSlots.length === 0) { debugLog('PEI: No slots for range', newStart, newEnd); window._postEditInProgress = false; return; }
+        newSlots.forEach((idx, i) => {
+            if (i === 0) assignments[idx] = Object.assign({}, origEntry, { continuation: false, _startMin: newStart, _endMin: newEnd, _blockStart: newStart, _postEdited: true });
+            else assignments[idx] = { field: origEntry.field, sport: origEntry.sport, _activity: origEntry._activity, continuation: true, _postEdited: true };
+        });
+        peiTriggerReRender();
+        peiSave(bunk);
+    }
+
+    function peiApplyNewBlock(bunk, divName, startMin, endMin, activity, location) {
+        const divSlots = window.divisionTimes?.[divName] || [];
+        if (!window.scheduleAssignments) window.scheduleAssignments = {};
+        if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divSlots.length);
+        const assignments = window.scheduleAssignments[bunk];
+        window._postEditInProgress = true; window._postEditTimestamp = Date.now();
+        const newSlots = [];
+        for (let i = 0; i < divSlots.length; i++) { if (divSlots[i].startMin < endMin && divSlots[i].endMin > startMin) newSlots.push(i); }
+        const fieldValue = location ? location + ' – ' + activity : activity;
+        newSlots.forEach((idx, i) => {
+            assignments[idx] = { field: fieldValue, sport: activity, _activity: activity, continuation: i > 0, _fixed: true, _postEdited: true, _pinned: true, _startMin: startMin, _endMin: endMin, _blockStart: startMin };
+        });
+        peiTriggerReRender();
+        peiSave(bunk);
+    }
+
+    function peiTriggerReRender() {
+        if (window.UnifiedScheduleSystem?.renderStaggeredView) window.UnifiedScheduleSystem.renderStaggeredView();
+        else if (window.updateTable) window.updateTable();
+        setTimeout(() => { window._postEditInProgress = false; }, 500);
+    }
+
+    function peiSave(bunk) {
+        if (typeof window.resolveAndSaveSchedule === 'function') window.resolveAndSaveSchedule(bunk);
+        else if (typeof bypassSaveAllBunks === 'function') bypassSaveAllBunks([bunk]);
+        else if (window.ScheduleDB?.saveBunkSchedule) {
+            const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+            window.ScheduleDB.saveBunkSchedule(dateKey, bunk, window.scheduleAssignments[bunk]);
+        }
+        peiUpdateRotationHistory(bunk);
+    }
+
+    function peiUpdateRotationHistory(bunk) {
+        try {
+            const history = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
+            history.bunks = history.bunks || {};
+            history.bunks[bunk] = history.bunks[bunk] || {};
+            const assignments = window.scheduleAssignments?.[bunk] || [];
+            const timestamp = Date.now();
+            const SKIP = new Set(['free', 'free play', 'free (timeout)', 'transition/buffer', 'regroup', 'lineup', 'bus', 'buffer']);
+            for (const entry of assignments) {
+                if (!entry || entry.continuation || entry._isTransition) continue;
+                const actName = entry._activity || '';
+                if (!actName || SKIP.has(actName.toLowerCase())) continue;
+                history.bunks[bunk][actName] = timestamp;
+            }
+            window.saveRotationHistory?.(history);
+            const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+            if (window.SchedulerCoreUtils?.reIncrementHistoricalCounts) {
+                setTimeout(() => window.SchedulerCoreUtils.reIncrementHistoricalCounts(dateKey, window.scheduleAssignments || {}, true), 200);
+            } else if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+                setTimeout(() => window.SchedulerCoreUtils.rebuildHistoricalCounts(true), 200);
+            }
+            debugLog('v3.3: Rotation history updated for', bunk);
+        } catch (e) { console.error('[PostEdit] Rotation history update failed:', e); }
+    }
+
+    // ── Grid augmentation ──
+    function peiAugmentGrid() {
+        const wraps = document.querySelectorAll('.asg-wrap');
+        if (wraps.length === 0) return;
+        wraps.forEach(wrap => {
+            if (wrap.dataset.peiAugmented === '1') return;
+            const header = wrap.querySelector('.asg-header-title');
+            const divName = header ? header.textContent.trim() : '';
+            if (!divName) return;
+            const divConfig = peiGetDivConfig(divName);
+            const dayStart = peiParseTime(divConfig.startTime) || 540;
+            const bunks = divConfig.bunks || [];
+            const scrollEl = wrap.querySelector('.asg-scroll');
+            if (!scrollEl) return;
+            const containerEl = scrollEl.firstElementChild;
+            if (!containerEl) return;
+            const bunkCols = Array.from(containerEl.children).slice(1);
+            if (bunkCols.length !== bunks.length) { debugLog('PEI: column mismatch', bunkCols.length, bunks.length); return; }
+
+            bunkCols.forEach((col, idx) => {
+                const bunk = bunks[idx];
+                if (!bunk) return;
+                col.dataset.peiBunk = bunk; col.dataset.peiDivision = divName;
+                col.addEventListener('dblclick', (e) => {
+                    if (e.target.closest('.asg-block')) return;
+                    if (e.target.closest('.asg-free')) { peiHandleDoubleClickAdd(col, e); return; }
+                    peiHandleDoubleClickAdd(col, e);
+                });
+                const bunkActs = peiBunkActivities(bunk, divName);
+                col.querySelectorAll('.asg-block').forEach(blk => {
+                    const blkTop = parseInt(blk.style.top, 10) || 0;
+                    const blkStartMin = peiSnap(dayStart + ((blkTop - 2) / PEI_PX_PER_MIN));
+                    const blkH = blk.offsetHeight || parseInt(blk.style.height, 10) || 0;
+                    const blkEndMin = peiSnap(blkStartMin + ((blkH + 4) / PEI_PX_PER_MIN));
+                    const matched = bunkActs.find(a => Math.abs(a.startMin - blkStartMin) <= PEI_SNAP_MINS && Math.abs(a.endMin - blkEndMin) <= PEI_SNAP_MINS);
+                    if (!matched) return;
+                    blk.dataset.peiBunk = bunk; blk.dataset.peiStartMin = matched.startMin; blk.dataset.peiEndMin = matched.endMin;
+                    blk.dataset.peiSlotIdx = matched.slotIdx; blk.dataset.peiDivision = divName;
+                    blk.dataset.peiField = matched.entry.field || ''; blk.dataset.peiActivity = matched.entry._activity || '';
+                    if (!canEditBunk(bunk)) { blk.style.cursor = 'not-allowed'; return; }
+                    blk.style.cursor = 'grab';
+                    const topH = document.createElement('div'); topH.className = 'pei-resize-handle pei-resize-top';
+                    topH.style.cssText = 'position:absolute;top:-3px;left:0;right:0;height:8px;cursor:n-resize;z-index:10;opacity:0;background:linear-gradient(to bottom,rgba(59,130,246,0.3),transparent);border-radius:5px 5px 0 0;transition:opacity 0.15s';
+                    blk.appendChild(topH);
+                    const botH = document.createElement('div'); botH.className = 'pei-resize-handle pei-resize-bottom';
+                    botH.style.cssText = 'position:absolute;bottom:-3px;left:0;right:0;height:8px;cursor:s-resize;z-index:10;opacity:0;background:linear-gradient(to top,rgba(59,130,246,0.3),transparent);border-radius:0 0 5px 5px;transition:opacity 0.15s';
+                    blk.appendChild(botH);
+                    blk.addEventListener('mouseenter', () => { if (!_peiResizing && !_peiMoving) { topH.style.opacity = '1'; botH.style.opacity = '1'; } });
+                    blk.addEventListener('mouseleave', () => { if (!_peiResizing && !_peiMoving) { topH.style.opacity = '0'; botH.style.opacity = '0'; } });
+                    topH.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); peiStartResize(blk, 'top', e); });
+                    botH.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); peiStartResize(blk, 'bottom', e); });
+                    blk.addEventListener('mousedown', e => {
+                        if (e.target.classList.contains('pei-resize-handle') || e.target.classList.contains('pei-resize-top') || e.target.classList.contains('pei-resize-bottom')) return;
+                        if (e.button !== 0) return;
+                        _peiPendingMove = { block: blk, startX: e.clientX, startY: e.clientY, started: false };
+                        document.addEventListener('mousemove', peiOnPendingMoveCheck);
+                        document.addEventListener('mouseup', peiOnPendingMoveCancel);
+                    });
+                });
+            });
+            wrap.dataset.peiAugmented = '1';
+        });
+    }
+
+    // ── Touch ──
+    function peiSetupTouch() {
+        if (window.MobileTouchDrag) return;
+        document.addEventListener('touchstart', (e) => {
+            const target = e.target;
+            if (target.classList.contains('pei-resize-handle')) { e.preventDefault(); const block = target.closest('.asg-block'); if (!block) return; peiStartResize(block, target.classList.contains('pei-resize-top') ? 'top' : 'bottom', { clientY: e.touches[0].clientY, preventDefault() {} }); return; }
+            const block = target.closest('.asg-block[data-pei-bunk]');
+            if (block) { const sy = e.touches[0].clientY; block._peiLP = setTimeout(() => { peiStartMove(block, { clientY: sy, preventDefault() {} }); if (navigator.vibrate) navigator.vibrate(30); }, PEI_LONG_PRESS_MS); block._peiTS = { x: e.touches[0].clientX, y: sy }; }
+        }, { passive: false });
+        document.addEventListener('touchmove', (e) => {
+            const t = e.touches[0];
+            document.querySelectorAll('.asg-block[data-pei-bunk]').forEach(b => { if (b._peiLP && b._peiTS && Math.sqrt((t.clientX - b._peiTS.x) ** 2 + (t.clientY - b._peiTS.y) ** 2) > 10) { clearTimeout(b._peiLP); b._peiLP = null; } });
+            if (_peiResizing) { e.preventDefault(); peiOnResizeMove({ clientX: t.clientX, clientY: t.clientY }); }
+            if (_peiMoving) { e.preventDefault(); peiOnMoveMove({ clientX: t.clientX, clientY: t.clientY }); }
+        }, { passive: false });
+        document.addEventListener('touchend', (e) => {
+            document.querySelectorAll('.asg-block[data-pei-bunk]').forEach(b => { if (b._peiLP) { clearTimeout(b._peiLP); b._peiLP = null; } });
+            if (_peiResizing) peiOnResizeEnd();
+            if (_peiMoving) peiOnMoveEnd();
+        });
+    }
+
+    // ── Observer ──
+    function peiSetupObserver() {
+        const target = document.getElementById('unified-schedule') || document.getElementById('scheduleContainer') || document.body;
+        const obs = new MutationObserver(() => { clearTimeout(obs._d); obs._d = setTimeout(() => { if (document.querySelectorAll('.asg-wrap:not([data-pei-augmented="1"])').length > 0) peiAugmentGrid(); }, 200); });
+        obs.observe(target, { childList: true, subtree: true });
+    }
+
+    // ── CSS ──
+    function peiInjectStyles() {
+        if (document.getElementById('pei-styles')) return;
+        const s = document.createElement('style'); s.id = 'pei-styles';
+        s.textContent = `.pei-resize-handle{touch-action:none}@media(pointer:coarse){.pei-resize-handle{height:16px!important;opacity:.5!important}.pei-resize-top{top:-6px!important}.pei-resize-bottom{bottom:-6px!important}}.asg-block[data-pei-bunk]{touch-action:none}.asg-block[data-pei-bunk]:active{cursor:grabbing!important}.pei-conflict-overlay{pointer-events:none;animation:pei-pulse 1s ease-in-out infinite}@keyframes pei-pulse{0%,100%{opacity:.3}50%{opacity:.6}}@keyframes pei-slide-up{from{transform:translate(-50%,20px);opacity:0}to{transform:translate(-50%,0);opacity:1}}@keyframes pei-fade-in{from{opacity:0}to{opacity:1}}.asg-free{cursor:cell}.asg-free:hover{background:repeating-linear-gradient(45deg,#ecfdf5,#ecfdf5 4px,#d1fae5 4px,#d1fae5 8px)!important;border-color:#86efac!important}[data-pei-bunk]:hover{background:rgba(59,130,246,.01)}`;
+        document.head.appendChild(s);
+    }
+
+    // ── Master init ──
+    function initPostEditInteractions() {
+        if (_peiSetupDone) return;
+        _peiSetupDone = true;
+        peiInjectStyles();
+        peiInstallClickSuppressor();
+        peiAugmentGrid();
+        peiSetupObserver();
+        peiSetupTouch();
+        debugLog('v3.3 Post-Edit Interactions initialized (resize / move / add / conflict engine)');
+    }
+
+    // =========================================================================
+    // INITIALIZATION
+    // =========================================================================
+
+    function initPostEditSystem() {
         const missing = [];
         if (typeof window.smartRegenerateConflicts !== 'function') missing.push('smartRegenerateConflicts');
         if (typeof window.resolveConflictsAndApply !== 'function') missing.push('resolveConflictsAndApply');
         if (typeof window.applyPickToBunk !== 'function') missing.push('applyPickToBunk');
+        if (missing.length > 0) console.warn('⚠️ [PostEdit] Missing dependencies (will use fallbacks):', missing.join(', '));
         
-        if (missing.length > 0) {
-            console.warn('⚠️ [PostEdit] Missing dependencies (will use fallbacks):', missing.join(', '));
-        }
-        
-        // Add styles
         if (!document.getElementById('post-edit-styles')) {
             const style = document.createElement('style');
             style.id = 'post-edit-styles';
-            style.textContent = `
-                @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-            `;
+            style.textContent = `@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }`;
             document.head.appendChild(style);
         }
         
-         // v3.3: Initialize interactive resize / move / add
         initPostEditInteractions();
- 
+
         console.log('📝 Post-Edit System v3.3 initialized');
         console.log('   ★★★ v3.3: Resize / Move / Add / Real-time conflict detection ★★★');
     }
- 
 
     // =========================================================================
     // EXPORTS
     // =========================================================================
 
     window.initPostEditSystem = initPostEditSystem;
-    // ★★★ FIX: Don't override if unified_schedule_system.js already loaded ★★★
-    // unified_schedule_system.js has the full integrated edit system with
-    // per-bunk slot support for auto mode. Only override if it's NOT loaded.
     if (!window.UnifiedScheduleSystem) {
         window.enhancedEditCell = enhancedEditCell;
         window.checkLocationConflict = checkLocationConflict;
@@ -1302,64 +1538,39 @@
         console.log('[PostEdit] unified_schedule_system.js already loaded — skipping overrides');
     }
 
-    // v3.3 — Post-Edit Interactions (always exported regardless of UnifiedScheduleSystem)
     window.PostEditInteractions = {
         augmentRenderedGrid: peiAugmentGrid,
         ConflictEngine: PEI_ConflictEngine,
         autoFillActivity: peiAutoFill,
         init: initPostEditInteractions
     };
-   
+
     // =========================================================================
-    // ★★★ CRITICAL PATCH: Make loadScheduleForDate respect _postEditInProgress ★★★
-    // =========================================================================
-    // 
-    // Problem: When we update window.scheduleAssignments in memory and call updateTable(),
-    // renderStaggeredView() calls loadScheduleForDate() which OVERWRITES our changes.
-    // 
-    // Solution: Patch loadScheduleForDate to skip loading when _postEditInProgress is true.
-    // 
+    // PATCH: loadScheduleForDate respect _postEditInProgress
     // =========================================================================
 
-  let _patchRetryCount = 0;
+    let _patchRetryCount = 0;
     function patchLoadScheduleForDate() {
         if (window._loadScheduleForDatePatched) return;
-        
         const original = window.loadScheduleForDate;
         if (!original) {
             _patchRetryCount++;
-            if (_patchRetryCount <= 10) {
-                console.warn('[PostEdit] loadScheduleForDate not found, will retry... (' + _patchRetryCount + '/10)');
-                setTimeout(patchLoadScheduleForDate, 500);
-            } else {
-                console.warn('[PostEdit] loadScheduleForDate not found after 10 retries — giving up. Check if unified_schedule_system.js loaded correctly.');
-            }
+            if (_patchRetryCount <= 10) setTimeout(patchLoadScheduleForDate, 500);
             return;
         }
-
         window.loadScheduleForDate = function(dateKey) {
-            // ★★★ Skip loading if post-edit is in progress ★★★
-            if (window._postEditInProgress) {
-                console.log('[PostEdit] 🛡️ Skipping loadScheduleForDate - post-edit in progress');
-                console.log('[PostEdit]   Current scheduleAssignments bunks:', Object.keys(window.scheduleAssignments || {}).length);
-                return; // Don't overwrite our in-memory changes
-            }
-            
-            // Call original
+            if (window._postEditInProgress) { console.log('[PostEdit] 🛡️ Skipping loadScheduleForDate - post-edit in progress'); return; }
             return original.call(this, dateKey);
         };
-
         window._loadScheduleForDatePatched = true;
-        console.log('[PostEdit] ✅ Patched loadScheduleForDate to respect _postEditInProgress flag');
+        console.log('[PostEdit] ✅ Patched loadScheduleForDate');
     }
 
-    // Patch immediately and also after delays (in case unified_schedule_system loads later)
     patchLoadScheduleForDate();
     setTimeout(patchLoadScheduleForDate, 100);
     setTimeout(patchLoadScheduleForDate, 500);
     setTimeout(patchLoadScheduleForDate, 1500);
 
-    // Auto-initialize
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initPostEditSystem);
     } else {
