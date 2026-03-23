@@ -965,20 +965,11 @@
         return parseInt(p[0], 10) * 60 + parseInt(p[1], 10);
     }
 
-    // ── Conflict Engine ──
+    // ── Conflict Engine (field/capacity only — overlaps are user's intent) ──
 
     const PEI_ConflictEngine = {
         check(bunk, proposedStart, proposedEnd, fieldName, excludeSlotIdx) {
-            const result = { hasConflict: false, sameBunkOverlap: [], fieldConflicts: [], details: [] };
-            const divName = peiGetDivForBunk(bunk);
-            const acts = peiBunkActivities(bunk, divName);
-            for (const act of acts) {
-                if (act.slotIdx === excludeSlotIdx) continue;
-                if (act.startMin < proposedEnd && act.endMin > proposedStart) {
-                    result.sameBunkOverlap.push({ activity: act.entry._activity || act.entry.field || 'Unknown', startMin: act.startMin, endMin: act.endMin, slotIdx: act.slotIdx });
-                    result.hasConflict = true;
-                }
-            }
+            const result = { hasConflict: false, fieldConflicts: [], details: [] };
             if (fieldName && fieldName !== 'Free' && fieldName.toLowerCase() !== 'free') {
                 let fieldOnly = fieldName;
                 if (fieldName.includes(' – ')) fieldOnly = fieldName.split(' – ')[0].trim();
@@ -989,11 +980,6 @@
                     if (!avail.available) { result.fieldConflicts = avail.conflicts || []; result.hasConflict = true; }
                 }
             }
-            if (divName) {
-                const dc = peiGetDivConfig(divName);
-                const dStart = peiParseTime(dc.startTime) || 540, dEnd = peiParseTime(dc.endTime) || 960;
-                if (proposedStart < dStart || proposedEnd > dEnd) { result.details.push('Exceeds division boundaries'); result.hasConflict = true; }
-            }
             return result;
         }
     };
@@ -1003,40 +989,27 @@
         if (!_peiTooltip) {
             _peiTooltip = document.createElement('div');
             _peiTooltip.id = 'pei-tooltip';
-            _peiTooltip.style.cssText = 'position:fixed;z-index:100001;pointer-events:none;padding:8px 14px;background:#111827;color:#fff;border-radius:8px;font-size:12px;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.4);display:none;white-space:nowrap;font-family:-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.5;max-width:260px;';
+            _peiTooltip.style.cssText = 'position:fixed;z-index:100001;pointer-events:none;padding:8px 14px;background:#111827;color:#fff;border-radius:8px;font-size:12px;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.4);display:none;font-family:-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.5;max-width:280px;white-space:nowrap;';
             document.body.appendChild(_peiTooltip);
         }
         _peiTooltip.innerHTML = html;
         _peiTooltip.style.display = 'block';
-        // Clamp to viewport
         const vw = window.innerWidth, vh = window.innerHeight;
-        let left = x, top = y - 10;
-        _peiTooltip.style.left = '0'; _peiTooltip.style.top = '0'; // reset to measure
+        _peiTooltip.style.left = '0'; _peiTooltip.style.top = '0';
         const tw = _peiTooltip.offsetWidth, th = _peiTooltip.offsetHeight;
-        if (left + tw > vw - 12) left = x - tw - 16; // flip to left of block
+        let left = x, top = y - 10;
+        if (left + tw > vw - 12) left = x - tw - 16;
         if (top + th > vh - 12) top = vh - th - 12;
         if (top < 8) top = 8;
-        _peiTooltip.style.left = left + 'px';
-        _peiTooltip.style.top = top + 'px';
+        _peiTooltip.style.left = left + 'px'; _peiTooltip.style.top = top + 'px';
     }
     function peiHideTooltip() { if (_peiTooltip) _peiTooltip.style.display = 'none'; }
 
     // ── UI: Conflict indicators ──
     function peiShowConflictIndicator(block, cr) {
         peiClearConflictIndicators();
-        if (!cr.hasConflict) { block.style.boxShadow = '0 0 0 2px #22c55e, 0 0 12px rgba(34,197,94,0.3)'; block._peiShadow = true; return; }
-        block.style.boxShadow = '0 0 0 2px #ef4444, 0 0 12px rgba(239,68,68,0.4)'; block._peiShadow = true;
-        cr.sameBunkOverlap.forEach(ov => {
-            const col = block.closest('[data-pei-bunk]');
-            if (!col) return;
-            col.querySelectorAll(`.asg-block[data-pei-slot-idx="${ov.slotIdx}"]`).forEach(ob => {
-                const ind = document.createElement('div');
-                ind.className = 'pei-conflict-overlay';
-                ind.style.cssText = `position:absolute;left:0;right:0;top:${ob.style.top};height:${ob.style.height};background:rgba(239,68,68,0.15);border:2px solid rgba(239,68,68,0.5);border-radius:5px;pointer-events:none;z-index:5`;
-                col.appendChild(ind);
-                _peiConflictOverlays.push(ind);
-            });
-        });
+        if (!cr.hasConflict) { block.style.boxShadow = '0 0 0 2px #22c55e, 0 0 12px rgba(34,197,94,0.25)'; block._peiShadow = true; return; }
+        block.style.boxShadow = '0 0 0 2px #f59e0b, 0 0 12px rgba(245,158,11,0.35)'; block._peiShadow = true;
     }
     function peiClearConflictIndicators() {
         _peiConflictOverlays.forEach(el => el.remove()); _peiConflictOverlays = [];
@@ -1060,24 +1033,34 @@
         setTimeout(() => b.remove(), showUndoHint ? 5000 : 3500);
     }
 
-    // ── RESIZE ──
+    // ── Helper: mouse Y → time (position-based, not delta) ──
+    function peiMouseYToTime(mouseY, col, dayStart) {
+        const colRect = col.getBoundingClientRect();
+        return peiSnap(dayStart + ((mouseY - colRect.top) / PEI_PX_PER_MIN));
+    }
+
+    // ── RESIZE (position-based — smooth, no jump) ──
     function peiStartResize(block, direction, e) {
         if (_peiMoving || _peiResizing) return;
         const divName = block.dataset.peiDivision;
         const dc = peiGetDivConfig(divName);
+        const col = block.parentElement;
         _peiResizing = true;
         _peiState = {
-            type: 'resize', direction, block, bunk: block.dataset.peiBunk,
+            type: 'resize', direction, block, col,
+            bunk: block.dataset.peiBunk,
             slotIdx: parseInt(block.dataset.peiSlotIdx, 10),
-            origStartMin: parseInt(block.dataset.peiStartMin, 10), origEndMin: parseInt(block.dataset.peiEndMin, 10),
-            currentStartMin: parseInt(block.dataset.peiStartMin, 10), currentEndMin: parseInt(block.dataset.peiEndMin, 10),
+            origStartMin: parseInt(block.dataset.peiStartMin, 10),
+            origEndMin: parseInt(block.dataset.peiEndMin, 10),
+            currentStartMin: parseInt(block.dataset.peiStartMin, 10),
+            currentEndMin: parseInt(block.dataset.peiEndMin, 10),
             fieldName: block.dataset.peiField || '', divName,
-            dayStart: peiParseTime(dc.startTime) || 540, dayEnd: peiParseTime(dc.endTime) || 960,
-            startY: e.clientY, origTop: parseInt(block.style.top, 10), origHeight: block.offsetHeight
+            dayStart: peiParseTime(dc.startTime) || 540,
+            dayEnd: peiParseTime(dc.endTime) || 960
         };
         block.style.transition = 'none'; block.style.zIndex = '20';
-        block.style.cursor = direction === 'top' ? 'n-resize' : 's-resize';
-        document.body.style.cursor = block.style.cursor; document.body.style.userSelect = 'none';
+        document.body.style.cursor = direction === 'top' ? 'n-resize' : 's-resize';
+        document.body.style.userSelect = 'none';
         document.addEventListener('mousemove', peiOnResizeMove);
         document.addEventListener('mouseup', peiOnResizeEnd);
     }
@@ -1085,26 +1068,24 @@
     function peiOnResizeMove(e) {
         if (!_peiResizing || !_peiState) return;
         const s = _peiState;
-        const deltaMins = peiSnap((e.clientY - s.startY) / PEI_PX_PER_MIN);
+        const mouseTime = peiMouseYToTime(e.clientY, s.col, s.dayStart);
         let newStart = s.origStartMin, newEnd = s.origEndMin;
-        if (s.direction === 'top') newStart = Math.max(s.dayStart, Math.min(s.origEndMin - PEI_MIN_BLOCK_DURATION, peiSnap(s.origStartMin + deltaMins)));
-        else newEnd = Math.min(s.dayEnd, Math.max(s.origStartMin + PEI_MIN_BLOCK_DURATION, peiSnap(s.origEndMin + deltaMins)));
+        if (s.direction === 'top') newStart = Math.max(s.dayStart, Math.min(s.origEndMin - PEI_MIN_BLOCK_DURATION, mouseTime));
+        else newEnd = Math.min(s.dayEnd, Math.max(s.origStartMin + PEI_MIN_BLOCK_DURATION, mouseTime));
         s.currentStartMin = newStart; s.currentEndMin = newEnd;
-        const newTopPx = (newStart - s.dayStart) * PEI_PX_PER_MIN + 2;
-        const newHeightPx = (newEnd - newStart) * PEI_PX_PER_MIN - 4;
-        s.block.style.top = newTopPx + 'px';
-        s.block.style.height = newHeightPx + 'px';
+        s.block.style.top = ((newStart - s.dayStart) * PEI_PX_PER_MIN + 2) + 'px';
+        s.block.style.height = ((newEnd - newStart) * PEI_PX_PER_MIN - 4) + 'px';
+        // Update duration label
         const dur = newEnd - newStart;
-        let tooltipHtml = peiToLabel(newStart) + ' – ' + peiToLabel(newEnd) + ` <span style="opacity:0.6">(${dur < 60 ? dur + 'm' : Math.floor(dur/60) + 'h' + (dur%60 > 0 ? dur%60 + 'm' : '')})</span>`;
-        const liveConflicts = PEI_ConflictEngine.check(s.bunk, newStart, newEnd, s.fieldName, s.slotIdx);
-        if (liveConflicts.sameBunkOverlap.length > 0) tooltipHtml += `<br><span style="color:#fca5a5;">⚠ Overlaps: ${liveConflicts.sameBunkOverlap.map(o => o.activity).join(', ')}</span>`;
-        if (liveConflicts.fieldConflicts.length > 0) tooltipHtml += `<br><span style="color:#fcd34d;">⚡ Field: ${liveConflicts.fieldConflicts.map(c => c.bunk).join(', ')}</span>`;
-        // Position tooltip at block EDGE, not mouse cursor
-        const blockRect = s.block.getBoundingClientRect();
-        const tipX = blockRect.right + 8;
-        const tipY = s.direction === 'bottom' ? blockRect.bottom : blockRect.top;
-        peiShowTooltip(tipX, tipY, tooltipHtml);
-        peiShowConflictIndicator(s.block, liveConflicts);
+        const durLabel = s.block.querySelector('.asg-block-sub:last-child');
+        if (durLabel && /\d+min/.test(durLabel.textContent)) durLabel.textContent = dur + 'min';
+        // Tooltip at block edge
+        const br = s.block.getBoundingClientRect();
+        let tip = peiToLabel(newStart) + ' – ' + peiToLabel(newEnd) + ` <span style="opacity:0.6">(${dur}min)</span>`;
+        const c = PEI_ConflictEngine.check(s.bunk, newStart, newEnd, s.fieldName, s.slotIdx);
+        if (c.fieldConflicts.length > 0) tip += `<br><span style="color:#fcd34d;">⚡ Field: ${c.fieldConflicts.map(x => x.bunk).join(', ')}</span>`;
+        peiShowTooltip(br.right + 8, s.direction === 'bottom' ? br.bottom : br.top, tip);
+        peiShowConflictIndicator(s.block, c);
     }
 
     function peiOnResizeEnd() {
@@ -1114,39 +1095,35 @@
         _peiSuppressClick = true;
         const s = _peiState;
         peiHideTooltip(); peiClearConflictIndicators();
-        s.block.style.transition = ''; s.block.style.zIndex = ''; s.block.style.cursor = '';
+        s.block.style.transition = ''; s.block.style.zIndex = '';
         document.body.style.cursor = ''; document.body.style.userSelect = '';
         if (s.currentStartMin === s.origStartMin && s.currentEndMin === s.origEndMin) { _peiResizing = false; _peiState = null; return; }
-        const conflicts = PEI_ConflictEngine.check(s.bunk, s.currentStartMin, s.currentEndMin, s.fieldName, s.slotIdx);
-        // Apply to data WITHOUT re-rendering (keeps visual in place)
+        const c = PEI_ConflictEngine.check(s.bunk, s.currentStartMin, s.currentEndMin, s.fieldName, s.slotIdx);
         peiApplyTimeChange(s.bunk, s.slotIdx, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.divName);
-        // Update block's data attributes to match new position
-        s.block.dataset.peiStartMin = s.currentStartMin;
-        s.block.dataset.peiEndMin = s.currentEndMin;
-        if (conflicts.sameBunkOverlap.length > 0) {
-            peiShowBanner('⚠️ Resized — overlaps with: ' + conflicts.sameBunkOverlap.map(o => o.activity).join(', '), 'warning', true);
-        } else if (conflicts.fieldConflicts.length > 0) {
-            peiShowBanner('Resized — field conflict with ' + conflicts.fieldConflicts.length + ' bunk(s)', 'warning', true);
-        } else {
-            peiShowBanner('Resized to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success', true);
-        }
+        if (c.fieldConflicts.length > 0) peiShowBanner('Resized — field conflict: ' + c.fieldConflicts.map(x => x.bunk).join(', '), 'warning', true);
+        else peiShowBanner('Resized to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success', true);
         _peiResizing = false; _peiState = null;
     }
 
-    // ── MOVE ──
+    // ── MOVE (position-based — grab offset preserved) ──
     function peiStartMove(block, e) {
         if (_peiMoving || _peiResizing) return;
         const startMin = parseInt(block.dataset.peiStartMin, 10), endMin = parseInt(block.dataset.peiEndMin, 10);
         const divName = block.dataset.peiDivision;
         const dc = peiGetDivConfig(divName);
+        const col = block.parentElement;
+        const grabOffsetPx = e.clientY - block.getBoundingClientRect().top;
         _peiMoving = true;
         _peiState = {
-            type: 'move', block, bunk: block.dataset.peiBunk,
+            type: 'move', block, col,
+            bunk: block.dataset.peiBunk,
             slotIdx: parseInt(block.dataset.peiSlotIdx, 10),
-            origStartMin: startMin, origEndMin: endMin, currentStartMin: startMin, currentEndMin: endMin,
-            duration: endMin - startMin, fieldName: block.dataset.peiField || '',
+            origStartMin: startMin, origEndMin: endMin,
+            currentStartMin: startMin, currentEndMin: endMin,
+            duration: endMin - startMin,
+            fieldName: block.dataset.peiField || '',
             divName, dayStart: peiParseTime(dc.startTime) || 540, dayEnd: peiParseTime(dc.endTime) || 960,
-            startY: e.clientY, origTop: parseInt(block.style.top, 10)
+            grabOffsetPx
         };
         block.style.transition = 'none'; block.style.zIndex = '20'; block.style.opacity = '0.85'; block.style.cursor = 'grabbing';
         document.body.style.cursor = 'grabbing'; document.body.style.userSelect = 'none';
@@ -1157,17 +1134,16 @@
     function peiOnMoveMove(e) {
         if (!_peiMoving || !_peiState) return;
         const s = _peiState;
-        let newStart = Math.max(s.dayStart, Math.min(s.dayEnd - s.duration, peiSnap(s.origStartMin + peiSnap((e.clientY - s.startY) / PEI_PX_PER_MIN))));
+        const topTime = peiMouseYToTime(e.clientY - s.grabOffsetPx, s.col, s.dayStart);
+        let newStart = Math.max(s.dayStart, Math.min(s.dayEnd - s.duration, topTime));
         s.currentStartMin = newStart; s.currentEndMin = newStart + s.duration;
         s.block.style.top = ((newStart - s.dayStart) * PEI_PX_PER_MIN + 2) + 'px';
-        let moveTooltip = '↕ ' + peiToLabel(newStart) + ' – ' + peiToLabel(newStart + s.duration);
-        const mc = PEI_ConflictEngine.check(s.bunk, newStart, newStart + s.duration, s.fieldName, s.slotIdx);
-        if (mc.sameBunkOverlap.length > 0) moveTooltip += `<br><span style="color:#fca5a5;">⚠ Overlaps: ${mc.sameBunkOverlap.map(o => o.activity).join(', ')}</span>`;
-        if (mc.fieldConflicts.length > 0) moveTooltip += `<br><span style="color:#fcd34d;">⚡ Field: ${mc.fieldConflicts.map(c => c.bunk).join(', ')}</span>`;
-        // Tooltip at block top edge
-        const blockRect = s.block.getBoundingClientRect();
-        peiShowTooltip(blockRect.right + 8, blockRect.top, moveTooltip);
-        peiShowConflictIndicator(s.block, mc);
+        const br = s.block.getBoundingClientRect();
+        let tip = '↕ ' + peiToLabel(newStart) + ' – ' + peiToLabel(newStart + s.duration);
+        const c = PEI_ConflictEngine.check(s.bunk, newStart, newStart + s.duration, s.fieldName, s.slotIdx);
+        if (c.fieldConflicts.length > 0) tip += `<br><span style="color:#fcd34d;">⚡ Field: ${c.fieldConflicts.map(x => x.bunk).join(', ')}</span>`;
+        peiShowTooltip(br.right + 8, br.top, tip);
+        peiShowConflictIndicator(s.block, c);
     }
 
     function peiOnMoveEnd() {
@@ -1180,46 +1156,26 @@
         s.block.style.transition = ''; s.block.style.zIndex = ''; s.block.style.opacity = ''; s.block.style.cursor = '';
         document.body.style.cursor = ''; document.body.style.userSelect = '';
         if (s.currentStartMin === s.origStartMin) { _peiMoving = false; _peiState = null; return; }
-        const conflicts = PEI_ConflictEngine.check(s.bunk, s.currentStartMin, s.currentEndMin, s.fieldName, s.slotIdx);
-        // Apply to data WITHOUT re-rendering
+        const c = PEI_ConflictEngine.check(s.bunk, s.currentStartMin, s.currentEndMin, s.fieldName, s.slotIdx);
         peiApplyTimeChange(s.bunk, s.slotIdx, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.divName);
-        // Update block's data attributes
-        s.block.dataset.peiStartMin = s.currentStartMin;
-        s.block.dataset.peiEndMin = s.currentEndMin;
-        if (conflicts.sameBunkOverlap.length > 0) {
-            peiShowBanner('⚠️ Moved — overlaps with: ' + conflicts.sameBunkOverlap.map(o => o.activity).join(', '), 'warning', true);
-        } else if (conflicts.fieldConflicts.length > 0) {
-            peiShowBanner('Moved — field conflict with ' + conflicts.fieldConflicts.length + ' bunk(s)', 'warning', true);
-        } else {
-            peiShowBanner('Moved to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success', true);
-        }
+        if (c.fieldConflicts.length > 0) peiShowBanner('Moved — field conflict: ' + c.fieldConflicts.map(x => x.bunk).join(', '), 'warning', true);
+        else peiShowBanner('Moved to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success', true);
         _peiMoving = false; _peiState = null;
     }
 
-    // ── Pending move: threshold ──
-    function peiOnPendingMoveCheck(e) {
-        if (!_peiPendingMove || _peiPendingMove.started) return;
-        if (Math.sqrt((e.clientX - _peiPendingMove.startX) ** 2 + (e.clientY - _peiPendingMove.startY) ** 2) >= PEI_DRAG_THRESHOLD) {
-            _peiPendingMove.started = true;
-            document.removeEventListener('mousemove', peiOnPendingMoveCheck);
-            document.removeEventListener('mouseup', peiOnPendingMoveCancel);
-            peiStartMove(_peiPendingMove.block, { clientY: _peiPendingMove.startY, preventDefault() {} });
-            peiOnMoveMove(e);
-        }
-    }
-    function peiOnPendingMoveCancel() {
-        document.removeEventListener('mousemove', peiOnPendingMoveCheck);
-        document.removeEventListener('mouseup', peiOnPendingMoveCancel);
-        _peiPendingMove = null;
+    // ── DELETE ──
+    function peiDeleteBlock(bunk, slotIdx, divName, activityName) {
+        const assignments = window.scheduleAssignments?.[bunk];
+        if (!assignments) return;
+        peiSnapshotBunk(bunk, `Delete ${activityName}`);
+        const slots = peiFindEntrySlots(assignments, slotIdx);
+        slots.forEach(idx => { assignments[idx] = null; });
+        peiTriggerReRender();
+        peiSave(bunk);
+        peiShowBanner('Deleted: ' + activityName, 'success', true);
     }
 
-    // ── Click suppressor ──
-    function peiInstallClickSuppressor() {
-        document.addEventListener('click', (e) => {
-            if (_peiSuppressClick) { e.stopPropagation(); e.stopImmediatePropagation(); e.preventDefault(); _peiSuppressClick = false; return; }
-            if (_peiResizing || _peiMoving) { e.stopPropagation(); e.stopImmediatePropagation(); e.preventDefault(); }
-        }, true);
-    }
+    // ── Pending move: threshold ──
 
     // ── DOUBLE-CLICK ADD ──
     function peiHandleDoubleClickAdd(col, e) {
@@ -1299,7 +1255,6 @@
             if (adjEnd <= adjStart) { alert('End must be after start.'); return; }
             const location = document.getElementById('pei-add-location').value || null;
             const conflicts = PEI_ConflictEngine.check(bunk, adjStart, adjEnd, location, -1);
-            if (conflicts.sameBunkOverlap.length > 0 && !confirm('Overlaps with ' + conflicts.sameBunkOverlap[0].activity + '. Add anyway?')) return;
             if (conflicts.fieldConflicts.length > 0 && !confirm('Field conflict on ' + location + '. Continue?')) return;
             peiApplyNewBlock(bunk, divName, adjStart, adjEnd, activity, location);
             closeAdd();
@@ -1471,7 +1426,8 @@
             });
         }
 
-        // Do NOT re-render — caller updates the visual block position directly
+        // Re-render to show freed space and update visuals
+        peiTriggerReRender();
         peiSave(bunk);
     }
 
@@ -1612,6 +1568,24 @@
                     blk.dataset.peiField = matched.entry.field || ''; blk.dataset.peiActivity = matched.entry._activity || '';
                     if (!canEditBunk(bunk)) { blk.style.cursor = 'not-allowed'; return; }
                     blk.style.cursor = 'grab';
+
+                    // Delete button (appears on hover)
+                    const delBtn = document.createElement('div');
+                    delBtn.className = 'pei-delete-btn';
+                    delBtn.innerHTML = '×';
+                    delBtn.title = 'Delete this activity';
+                    delBtn.style.cssText = 'position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;background:rgba(239,68,68,0.15);color:#ef4444;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s;z-index:10;line-height:1;';
+                    blk.appendChild(delBtn);
+                    blk.addEventListener('mouseenter', () => { delBtn.style.opacity = '1'; });
+                    blk.addEventListener('mouseleave', () => { delBtn.style.opacity = '0'; });
+                    delBtn.addEventListener('mouseenter', () => { delBtn.style.background = 'rgba(239,68,68,0.3)'; });
+                    delBtn.addEventListener('mouseleave', () => { delBtn.style.background = 'rgba(239,68,68,0.15)'; });
+                    delBtn.addEventListener('click', (ev) => {
+                        ev.stopPropagation(); ev.preventDefault();
+                        if (confirm('Delete ' + (matched.entry._activity || 'this activity') + '?')) {
+                            peiDeleteBlock(bunk, matched.slotIdx, divName, matched.entry._activity || 'activity');
+                        }
+                    });
                     const topH = document.createElement('div'); topH.className = 'pei-resize-handle pei-resize-top';
                     topH.style.cssText = 'position:absolute;top:-3px;left:0;right:0;height:8px;cursor:n-resize;z-index:10;opacity:0;background:linear-gradient(to bottom,rgba(59,130,246,0.3),transparent);border-radius:5px 5px 0 0;transition:opacity 0.15s';
                     blk.appendChild(topH);
@@ -1668,7 +1642,7 @@
     function peiInjectStyles() {
         if (document.getElementById('pei-styles')) return;
         const s = document.createElement('style'); s.id = 'pei-styles';
-        s.textContent = `.pei-resize-handle{touch-action:none}@media(pointer:coarse){.pei-resize-handle{height:16px!important;opacity:.5!important}.pei-resize-top{top:-6px!important}.pei-resize-bottom{bottom:-6px!important}}.asg-block[data-pei-bunk]{touch-action:none;transition:box-shadow 0.2s}.asg-block[data-pei-bunk]:active{cursor:grabbing!important}.pei-conflict-overlay{pointer-events:none;animation:pei-pulse 1s ease-in-out infinite}@keyframes pei-pulse{0%,100%{opacity:.3}50%{opacity:.6}}@keyframes pei-slide-up{from{transform:translate(-50%,20px);opacity:0}to{transform:translate(-50%,0);opacity:1}}@keyframes pei-fade-in{from{opacity:0}to{opacity:1}}.asg-free{cursor:default;position:relative;transition:border-color 0.2s}.asg-free:hover{border-color:#93c5fd!important;background:repeating-linear-gradient(45deg,#eff6ff,#eff6ff 4px,#dbeafe 4px,#dbeafe 8px)!important}.pei-add-btn{font-family:-apple-system,BlinkMacSystemFont,sans-serif;user-select:none;line-height:1;}.pei-add-btn:hover{transform:translate(-50%,-50%) scale(1.15)!important;box-shadow:0 2px 8px rgba(37,99,235,0.3);}[data-pei-bunk]:hover{background:rgba(59,130,246,.01)}`;
+        s.textContent = `.pei-resize-handle{touch-action:none}@media(pointer:coarse){.pei-resize-handle{height:16px!important;opacity:.5!important}.pei-resize-top{top:-6px!important}.pei-resize-bottom{bottom:-6px!important}}.asg-block[data-pei-bunk]{touch-action:none;transition:box-shadow 0.2s}.asg-block[data-pei-bunk]:active{cursor:grabbing!important}.pei-conflict-overlay{pointer-events:none;animation:pei-pulse 1s ease-in-out infinite}@keyframes pei-pulse{0%,100%{opacity:.3}50%{opacity:.6}}@keyframes pei-slide-up{from{transform:translate(-50%,20px);opacity:0}to{transform:translate(-50%,0);opacity:1}}@keyframes pei-fade-in{from{opacity:0}to{opacity:1}}.asg-free{cursor:default;position:relative;transition:border-color 0.2s}.asg-free:hover{border-color:#93c5fd!important;background:repeating-linear-gradient(45deg,#eff6ff,#eff6ff 4px,#dbeafe 4px,#dbeafe 8px)!important}.pei-add-btn{font-family:-apple-system,BlinkMacSystemFont,sans-serif;user-select:none;line-height:1;}.pei-add-btn:hover{transform:translate(-50%,-50%) scale(1.15)!important;box-shadow:0 2px 8px rgba(37,99,235,0.3);}[data-pei-bunk]:hover{background:rgba(59,130,246,.01)}.pei-delete-btn{font-family:-apple-system,BlinkMacSystemFont,sans-serif;user-select:none;}.pei-delete-btn:hover{transform:scale(1.2)!important;}`;
         document.head.appendChild(s);
     }
 
@@ -1744,6 +1718,7 @@
         autoFillActivity: peiAutoFill,
         init: initPostEditInteractions,
         undo: peiUndo,
+        deleteBlock: peiDeleteBlock,
         undoStack: _peiUndoStack
     };
 
