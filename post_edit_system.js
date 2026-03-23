@@ -700,66 +700,43 @@
                         </optgroup>
                     </select>
                 </div>
-                <div>
-                    <button type="button" id="post-edit-time-toggle" style="background:none;border:none;color:#2563eb;font-size:0.875rem;cursor:pointer;padding:0;display:flex;align-items:center;gap:4px;">
-                        <span id="post-edit-time-arrow">▶</span> Change time
-                    </button>
-                    <div id="post-edit-time-section" style="display:none;margin-top:12px;">
-                        <div style="display:flex;gap:12px;">
-                            <div style="flex:1;">
-                                <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;font-size:0.875rem;">Start Time</label>
-                                <input type="time" id="post-edit-start" value="${minutesToTimeString(startMin)}" style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:0.9rem;box-sizing:border-box;">
-                            </div>
-                            <div style="flex:1;">
-                                <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;font-size:0.875rem;">End Time</label>
-                                <input type="time" id="post-edit-end" value="${minutesToTimeString(endMin)}" style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:0.9rem;box-sizing:border-box;">
-                            </div>
-                        </div>
-                    </div>
-                </div>
                 <div id="post-edit-conflict" style="display:none;"></div>
-                <div style="display:flex;gap:12px;margin-top:8px;">
+                <div style="display:flex;gap:10px;margin-top:8px;">
                     <button id="post-edit-cancel" style="flex:1;padding:12px;border:1px solid #d1d5db;border-radius:8px;background:white;color:#374151;font-size:1rem;cursor:pointer;font-weight:500;">Cancel</button>
+                    <button id="post-edit-delete" style="padding:12px 16px;border:none;border-radius:8px;background:#fef2f2;color:#dc2626;font-size:1rem;cursor:pointer;font-weight:600;border:1px solid #fca5a5;">Delete</button>
                     <button id="post-edit-save" style="flex:1;padding:12px;border:none;border-radius:8px;background:#2563eb;color:white;font-size:1rem;cursor:pointer;font-weight:500;">Save Changes</button>
                 </div>
             </div>`;
         
-        let useOriginalTime = true;
-        const originalStartMin = startMin;
-        const originalEndMin = endMin;
-        
         document.getElementById('post-edit-close').onclick = closeModal;
         document.getElementById('post-edit-cancel').onclick = closeModal;
         
-        const timeToggle = document.getElementById('post-edit-time-toggle');
-        const timeSection = document.getElementById('post-edit-time-section');
-        const timeArrow = document.getElementById('post-edit-time-arrow');
-        const timeDisplay = document.getElementById('post-edit-time-display');
-        
-        timeToggle.onclick = () => {
-            const isHidden = timeSection.style.display === 'none';
-            timeSection.style.display = isHidden ? 'block' : 'none';
-            timeArrow.textContent = isHidden ? '▼' : '▶';
-            useOriginalTime = !isHidden;
+        // Delete button
+        document.getElementById('post-edit-delete').onclick = () => {
+            const divName = peiGetDivForBunk(bunk);
+            const divSlots = window.divisionTimes?.[divName] || [];
+            // Find slot index for this time
+            let slotIdx = -1;
+            for (let i = 0; i < divSlots.length; i++) {
+                if (divSlots[i].startMin <= startMin && divSlots[i].endMin > startMin) { slotIdx = i; break; }
+            }
+            if (slotIdx >= 0) {
+                closeModal();
+                peiDeleteBlock(bunk, slotIdx, divName, currentActivity || 'activity');
+            } else {
+                alert('Could not find this block to delete.');
+            }
         };
         
         const locationSelect = document.getElementById('post-edit-location');
         const conflictArea = document.getElementById('post-edit-conflict');
-        const startInput = document.getElementById('post-edit-start');
-        const endInput = document.getElementById('post-edit-end');
         
         function getEffectiveTimes() {
-            if (useOriginalTime) return { startMin: originalStartMin, endMin: originalEndMin };
-            return {
-                startMin: parseTimeToMinutes(startInput.value) || originalStartMin,
-                endMin: parseTimeToMinutes(endInput.value) || originalEndMin
-            };
+            return { startMin, endMin };
         }
         
-        function updateTimeDisplay() {
-            const times = getEffectiveTimes();
-            timeDisplay.textContent = `${minutesToTimeLabel(times.startMin)} - ${minutesToTimeLabel(times.endMin)}`;
-        }
+        locationSelect.addEventListener('change', checkAndShowConflicts);
+        checkAndShowConflicts();
         
         function checkAndShowConflicts() {
             const location = locationSelect.value;
@@ -812,11 +789,6 @@
                 return null;
             }
         }
-        
-        locationSelect.addEventListener('change', checkAndShowConflicts);
-        startInput.addEventListener('change', () => { updateTimeDisplay(); checkAndShowConflicts(); });
-        endInput.addEventListener('change', () => { updateTimeDisplay(); checkAndShowConflicts(); });
-        checkAndShowConflicts();
         
         document.getElementById('post-edit-save').onclick = () => {
             const activity = document.getElementById('post-edit-activity').value.trim();
@@ -1591,29 +1563,14 @@
                     blk.dataset.peiField = matched.entry.field || ''; blk.dataset.peiActivity = matched.entry._activity || '';
                     if (!canEditBunk(bunk)) { blk.style.cursor = 'not-allowed'; return; }
                     blk.style.cursor = 'grab';
+                    blk.style.overflow = 'visible'; // Override grid CSS overflow:hidden
 
-                    // Delete button (appears on hover)
-                    const delBtn = document.createElement('div');
-                    delBtn.className = 'pei-delete-btn';
-                    delBtn.innerHTML = '×';
-                    delBtn.title = 'Delete this activity';
-                    delBtn.style.cssText = 'position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;background:rgba(239,68,68,0.15);color:#ef4444;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s;z-index:10;line-height:1;';
-                    blk.appendChild(delBtn);
-                    blk.addEventListener('mouseenter', () => { delBtn.style.opacity = '1'; });
-                    blk.addEventListener('mouseleave', () => { delBtn.style.opacity = '0'; });
-                    delBtn.addEventListener('mouseenter', () => { delBtn.style.background = 'rgba(239,68,68,0.3)'; });
-                    delBtn.addEventListener('mouseleave', () => { delBtn.style.background = 'rgba(239,68,68,0.15)'; });
-                    delBtn.addEventListener('click', (ev) => {
-                        ev.stopPropagation(); ev.preventDefault();
-                        if (confirm('Delete ' + (matched.entry._activity || 'this activity') + '?')) {
-                            peiDeleteBlock(bunk, matched.slotIdx, divName, matched.entry._activity || 'activity');
-                        }
-                    });
+                    // Resize handles — INSIDE block bounds so overflow:hidden can't clip
                     const topH = document.createElement('div'); topH.className = 'pei-resize-handle pei-resize-top';
-                    topH.style.cssText = 'position:absolute;top:-3px;left:0;right:0;height:8px;cursor:n-resize;z-index:10;opacity:0;background:linear-gradient(to bottom,rgba(59,130,246,0.3),transparent);border-radius:5px 5px 0 0;transition:opacity 0.15s';
+                    topH.style.cssText = 'position:absolute;top:0;left:0;right:0;height:6px;cursor:n-resize;z-index:10;opacity:0;transition:opacity 0.15s;border-radius:5px 5px 0 0;';
                     blk.appendChild(topH);
                     const botH = document.createElement('div'); botH.className = 'pei-resize-handle pei-resize-bottom';
-                    botH.style.cssText = 'position:absolute;bottom:-3px;left:0;right:0;height:8px;cursor:s-resize;z-index:10;opacity:0;background:linear-gradient(to top,rgba(59,130,246,0.3),transparent);border-radius:0 0 5px 5px;transition:opacity 0.15s';
+                    botH.style.cssText = 'position:absolute;bottom:0;left:0;right:0;height:6px;cursor:s-resize;z-index:10;opacity:0;transition:opacity 0.15s;border-radius:0 0 5px 5px;';
                     blk.appendChild(botH);
                     blk.addEventListener('mouseenter', () => { if (!_peiResizing && !_peiMoving) { topH.style.opacity = '1'; botH.style.opacity = '1'; } });
                     blk.addEventListener('mouseleave', () => { if (!_peiResizing && !_peiMoving) { topH.style.opacity = '0'; botH.style.opacity = '0'; } });
@@ -1665,7 +1622,7 @@
     function peiInjectStyles() {
         if (document.getElementById('pei-styles')) return;
         const s = document.createElement('style'); s.id = 'pei-styles';
-        s.textContent = `.pei-resize-handle{touch-action:none}@media(pointer:coarse){.pei-resize-handle{height:16px!important;opacity:.5!important}.pei-resize-top{top:-6px!important}.pei-resize-bottom{bottom:-6px!important}}.asg-block[data-pei-bunk]{touch-action:none;transition:box-shadow 0.2s}.asg-block[data-pei-bunk]:active{cursor:grabbing!important}.pei-conflict-overlay{pointer-events:none;animation:pei-pulse 1s ease-in-out infinite}@keyframes pei-pulse{0%,100%{opacity:.3}50%{opacity:.6}}@keyframes pei-slide-up{from{transform:translate(-50%,20px);opacity:0}to{transform:translate(-50%,0);opacity:1}}@keyframes pei-fade-in{from{opacity:0}to{opacity:1}}.asg-free{cursor:default;position:relative;transition:border-color 0.2s}.asg-free:hover{border-color:#93c5fd!important;background:repeating-linear-gradient(45deg,#eff6ff,#eff6ff 4px,#dbeafe 4px,#dbeafe 8px)!important}.pei-add-btn{font-family:-apple-system,BlinkMacSystemFont,sans-serif;user-select:none;line-height:1;}.pei-add-btn:hover{transform:translate(-50%,-50%) scale(1.15)!important;box-shadow:0 2px 8px rgba(37,99,235,0.3);}[data-pei-bunk]:hover{background:rgba(59,130,246,.01)}.pei-delete-btn{font-family:-apple-system,BlinkMacSystemFont,sans-serif;user-select:none;}.pei-delete-btn:hover{transform:scale(1.2)!important;}`;
+        s.textContent = `.pei-resize-handle{touch-action:none;background:transparent;}.pei-resize-handle:hover{background:rgba(59,130,246,0.4)!important;}@media(pointer:coarse){.pei-resize-handle{height:12px!important;opacity:.5!important}}.asg-block[data-pei-bunk]{touch-action:none;overflow:visible!important;transition:box-shadow 0.2s}.asg-block[data-pei-bunk]:active{cursor:grabbing!important}.pei-conflict-overlay{pointer-events:none;animation:pei-pulse 1s ease-in-out infinite}@keyframes pei-pulse{0%,100%{opacity:.3}50%{opacity:.6}}@keyframes pei-slide-up{from{transform:translate(-50%,20px);opacity:0}to{transform:translate(-50%,0);opacity:1}}@keyframes pei-fade-in{from{opacity:0}to{opacity:1}}.asg-free{cursor:default;position:relative;transition:border-color 0.2s}.asg-free:hover{border-color:#93c5fd!important;background:repeating-linear-gradient(45deg,#eff6ff,#eff6ff 4px,#dbeafe 4px,#dbeafe 8px)!important}.pei-add-btn{font-family:-apple-system,BlinkMacSystemFont,sans-serif;user-select:none;line-height:1;}.pei-add-btn:hover{transform:translate(-50%,-50%) scale(1.15)!important;box-shadow:0 2px 8px rgba(37,99,235,0.3);}[data-pei-bunk]:hover{background:rgba(59,130,246,.01)}`;
         document.head.appendChild(s);
     }
 
