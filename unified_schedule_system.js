@@ -2922,8 +2922,9 @@ if (bypassStatus.highlight) {
                 console.log(`[PostEdit] 📊 ${bunk} "${act}" count: ${_before} → ${_hc[bunk][act]}`);
             }
 
-            // Increment new activity (count non-continuation slots only)
-            if (_newAct) {
+            // Increment new activity (only if it's a tracked/valid activity)
+            const _validActs = window.SchedulerCoreUtils?.getValidActivityNames?.() || new Set();
+            if (_newAct && (_validActs.size === 0 || _validActs.has(_newAct))) {
                 let _newCount = 0;
                 slots.forEach(idx => {
                     const entry = window.scheduleAssignments[bunk]?.[idx];
