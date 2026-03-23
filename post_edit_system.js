@@ -551,16 +551,27 @@
             activity, location, startMin, endMin, slots, hasConflict, resolutionChoice, isClear
         });
         
-        if (!window.scheduleAssignments) {
+       if (!window.scheduleAssignments) {
             window.scheduleAssignments = {};
         }
         if (!window.scheduleAssignments[bunk]) {
             window.scheduleAssignments[bunk] = new Array(unifiedTimes.length);
         }
-        
+
+        // ★★★ CAPTURE old activities BEFORE edit overwrites them ★★★
+        const _oldActivities = [];
+        slots.forEach(idx => {
+            const old = window.scheduleAssignments[bunk]?.[idx];
+            if (old?._activity && !old.continuation && !old._isTransition) {
+                const a = old._activity.toLowerCase();
+                if (a !== 'free' && !a.includes('transition')) {
+                    _oldActivities.push(old._activity);
+                }
+            }
+        });
+
         // ★★★ FIX: Await conflict resolution to prevent race conditions ★★★
-        if (hasConflict) {
-            // UPDATED: Use window.resolveConflictsAndApply (Global call)
+        if (hasConflict) {            // UPDATED: Use window.resolveConflictsAndApply (Global call)
             if (typeof window.resolveConflictsAndApply === 'function') {
                 await window.resolveConflictsAndApply(bunk, slots, activity, location, editData);
             } else {
@@ -651,20 +662,45 @@
         
        // Cloud save (fire and forget - don't await to keep UI responsive)
         window.saveSchedule?.();
-        
-        // ★★★ FIX: Rebuild historical counts + rotation timestamps after post-edit ★★★
-        const _peDate = currentDate || new Date().toISOString().split('T')[0];
-        if (window.SchedulerCoreUtils?.reIncrementHistoricalCounts) {
-            setTimeout(() => {
-                window.SchedulerCoreUtils.reIncrementHistoricalCounts(
-                    _peDate,
-                    window.scheduleAssignments || {},
-                    true
-                );
-                console.log('[PostEdit] 📊 Historical counts rebuilt after post-edit');
-            }, 300);
-        }
-        // Update rotation history timestamps for the edited bunk
+
+        // ★★★ FIX: Targeted delta adjustment for historical counts ★★★
+        try {
+            const _gs = window.loadGlobalSettings?.() || {};
+            const _hc = _gs.historicalCounts || {};
+            if (!_hc[bunk]) _hc[bunk] = {};
+            const _newAct = (!isClear && activity) ? activity : null;
+
+            // Decrement old activities
+            const _oldUnique = {};
+            _oldActivities.forEach(a => { _oldUnique[a] = (_oldUnique[a] || 0) + 1; });
+            for (const [act, count] of Object.entries(_oldUnique)) {
+                const _before = _hc[bunk][act] || 0;
+                _hc[bunk][act] = Math.max(0, _before - count);
+                console.log(`[PostEdit] 📊 ${bunk} "${act}" count: ${_before} → ${_hc[bunk][act]}`);
+            }
+
+            // Increment new activity (count non-continuation slots only)
+            if (_newAct) {
+                let _newCount = 0;
+                slots.forEach(idx => {
+                    const entry = window.scheduleAssignments[bunk]?.[idx];
+                    if (entry && !entry.continuation) _newCount++;
+                });
+                const _before = _hc[bunk][_newAct] || 0;
+                _hc[bunk][_newAct] = _before + _newCount;
+                console.log(`[PostEdit] 📊 ${bunk} "${_newAct}" count: ${_before} → ${_hc[bunk][_newAct]}`);
+            }
+
+            if (window.saveGlobalSettings) {
+                window.saveGlobalSettings('historicalCounts', _hc);
+                if (typeof window.forceSyncToCloud === 'function') {
+                    setTimeout(() => window.forceSyncToCloud(), 100);
+                }
+            }
+            console.log('[PostEdit] 📊 Historical counts delta applied for', bunk);
+        } catch (_hcErr) { console.error('[PostEdit] Historical counts delta failed:', _hcErr); }
+
+        // ★★★ Update rotation history timestamps for the edited bunk ★★★
         try {
             const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
             _rotHist.bunks = _rotHist.bunks || {};
