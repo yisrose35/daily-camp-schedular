@@ -66,6 +66,10 @@
     let _peiSuppressClick = false;
     let _peiSetupDone = false;
 
+    // Undo stack: array of { bunk, snapshot (deep copy of assignments[bunk]), description }
+    const _peiUndoStack = [];
+    const PEI_MAX_UNDO = 30;
+
     // =========================================================================
     // DEBUG LOGGING
     // =========================================================================
@@ -1031,7 +1035,7 @@
         document.querySelectorAll('.asg-block[data-pei-bunk]').forEach(blk => { if (blk._peiShadow) { blk.style.boxShadow = ''; blk._peiShadow = false; } });
     }
 
-    function peiShowBanner(msg, type) {
+    function peiShowBanner(msg, type, showUndoHint) {
         document.getElementById('pei-conflict-banner')?.remove();
         const bg = type === 'error' ? '#fef2f2' : (type === 'warning' ? '#fffbeb' : '#f0fdf4');
         const bc = type === 'error' ? '#f87171' : (type === 'warning' ? '#f59e0b' : '#4ade80');
@@ -1039,8 +1043,13 @@
         const icon = type === 'error' ? '⚠️' : (type === 'warning' ? '⚡' : '✅');
         const b = document.createElement('div'); b.id = 'pei-conflict-banner';
         b.style.cssText = `position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:100002;padding:12px 24px;background:${bg};border:2px solid ${bc};border-radius:12px;color:${tc};font-size:14px;font-weight:600;box-shadow:0 8px 32px rgba(0,0,0,0.15);font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;gap:8px;animation:pei-slide-up 0.3s ease-out`;
-        b.innerHTML = icon + ' ' + msg; document.body.appendChild(b);
-        setTimeout(() => b.remove(), 3500);
+        let html = icon + ' ' + msg;
+        if (showUndoHint && _peiUndoStack.length > 0) {
+            html += `<button onclick="window.PostEditInteractions.undo()" style="margin-left:12px;padding:4px 10px;border:1px solid ${bc};border-radius:6px;background:rgba(255,255,255,0.7);color:${tc};font-size:12px;cursor:pointer;font-weight:600;">↩ Undo</button>`;
+            html += `<span style="font-size:11px;opacity:0.6;margin-left:4px;">(Ctrl+Z)</span>`;
+        }
+        b.innerHTML = html; document.body.appendChild(b);
+        setTimeout(() => b.remove(), showUndoHint ? 5000 : 3500);
     }
 
     // ── RESIZE ──
@@ -1099,11 +1108,11 @@
         peiApplyTimeChange(s.bunk, s.slotIdx, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.divName);
         if (conflicts.sameBunkOverlap.length > 0) {
             const overlapNames = conflicts.sameBunkOverlap.map(o => o.activity).join(', ');
-            peiShowBanner('⚠️ Resized — overlaps with: ' + overlapNames, 'warning');
+            peiShowBanner('⚠️ Resized — overlaps with: ' + overlapNames, 'warning', true);
         } else if (conflicts.fieldConflicts.length > 0) {
-            peiShowBanner('Resized — field conflict with ' + conflicts.fieldConflicts.length + ' bunk(s)', 'warning');
+            peiShowBanner('Resized — field conflict with ' + conflicts.fieldConflicts.length + ' bunk(s)', 'warning', true);
         } else {
-            peiShowBanner('Resized to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success');
+            peiShowBanner('Resized to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success', true);
         }
         _peiResizing = false; _peiState = null;
     }
@@ -1158,11 +1167,11 @@
         peiApplyTimeChange(s.bunk, s.slotIdx, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.divName);
         if (conflicts.sameBunkOverlap.length > 0) {
             const overlapNames = conflicts.sameBunkOverlap.map(o => o.activity).join(', ');
-            peiShowBanner('⚠️ Moved — overlaps with: ' + overlapNames, 'warning');
+            peiShowBanner('⚠️ Moved — overlaps with: ' + overlapNames, 'warning', true);
         } else if (conflicts.fieldConflicts.length > 0) {
-            peiShowBanner('Moved — field conflict with ' + conflicts.fieldConflicts.length + ' bunk(s)', 'warning');
+            peiShowBanner('Moved — field conflict with ' + conflicts.fieldConflicts.length + ' bunk(s)', 'warning', true);
         } else {
-            peiShowBanner('Moved to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success');
+            peiShowBanner('Moved to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success', true);
         }
         _peiMoving = false; _peiState = null;
     }
@@ -1274,7 +1283,7 @@
             if (conflicts.fieldConflicts.length > 0 && !confirm('Field conflict on ' + location + '. Continue?')) return;
             peiApplyNewBlock(bunk, divName, adjStart, adjEnd, activity, location);
             closeAdd();
-            peiShowBanner('Added: ' + activity + ' at ' + peiToLabel(adjStart) + ' – ' + peiToLabel(adjEnd), 'success');
+            peiShowBanner('Added: ' + activity + ' at ' + peiToLabel(adjStart) + ' – ' + peiToLabel(adjEnd), 'success', true);
         };
         document.getElementById('pei-add-activity').focus();
         document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { closeAdd(); document.removeEventListener('keydown', esc); } });
@@ -1317,23 +1326,131 @@
         return candidates[0] || null;
     }
 
-    // ── Apply changes ──
+    // ── Undo system ──
+
+    function peiSnapshotBunk(bunk, description) {
+        const assignments = window.scheduleAssignments?.[bunk];
+        if (!assignments) return;
+        // Deep copy via JSON (safe for our data)
+        const snapshot = JSON.parse(JSON.stringify(assignments));
+        _peiUndoStack.push({ bunk, snapshot, description, timestamp: Date.now() });
+        if (_peiUndoStack.length > PEI_MAX_UNDO) _peiUndoStack.shift();
+        debugLog('Undo snapshot saved:', description, '(stack size:', _peiUndoStack.length + ')');
+    }
+
+    function peiUndo() {
+        if (_peiUndoStack.length === 0) {
+            peiShowBanner('Nothing to undo', 'warning');
+            return;
+        }
+        const last = _peiUndoStack.pop();
+        window.scheduleAssignments[last.bunk] = last.snapshot;
+        debugLog('Undo:', last.description, 'for', last.bunk);
+        peiTriggerReRender();
+        peiSave(last.bunk);
+        peiShowBanner('↩ Undid: ' + last.description, 'success');
+    }
+
+    // ── Apply changes (safe slot management) ──
+
+    /**
+     * Find ALL slot indices that a given entry occupies (primary + continuations).
+     * Walks forward from slotIdx while continuations exist.
+     */
+    function peiFindEntrySlots(assignments, slotIdx) {
+        const slots = [slotIdx];
+        for (let c = slotIdx + 1; c < assignments.length; c++) {
+            if (assignments[c] && assignments[c].continuation) slots.push(c);
+            else break;
+        }
+        return slots;
+    }
+
     function peiApplyTimeChange(bunk, origSlotIdx, origStart, origEnd, newStart, newEnd, divName) {
         const divSlots = window.divisionTimes?.[divName] || [];
         const assignments = window.scheduleAssignments?.[bunk];
         if (!assignments) return;
         const origEntry = assignments[origSlotIdx];
         if (!origEntry) return;
-        window._postEditInProgress = true; window._postEditTimestamp = Date.now();
-        assignments[origSlotIdx] = null;
-        for (let c = origSlotIdx + 1; c < assignments.length; c++) { if (assignments[c] && assignments[c].continuation) assignments[c] = null; else break; }
-        const newSlots = [];
-        for (let i = 0; i < divSlots.length; i++) { if (divSlots[i].startMin < newEnd && divSlots[i].endMin > newStart) newSlots.push(i); }
-        if (newSlots.length === 0) { debugLog('PEI: No slots for range', newStart, newEnd); window._postEditInProgress = false; return; }
-        newSlots.forEach((idx, i) => {
-            if (i === 0) assignments[idx] = Object.assign({}, origEntry, { continuation: false, _startMin: newStart, _endMin: newEnd, _blockStart: newStart, _postEdited: true });
-            else assignments[idx] = { field: origEntry.field, sport: origEntry.sport, _activity: origEntry._activity, continuation: true, _postEdited: true };
+
+        // Snapshot for undo BEFORE any changes
+        const actName = origEntry._activity || origEntry.field || 'block';
+        if (newStart !== origStart || newEnd !== origEnd) {
+            peiSnapshotBunk(bunk, (newEnd - newStart) !== (origEnd - origStart)
+                ? `Resize ${actName} (${origEnd - origStart}m → ${newEnd - newStart}m)`
+                : `Move ${actName} to ${peiToLabel(newStart)}`);
+        }
+
+        window._postEditInProgress = true;
+        window._postEditTimestamp = Date.now();
+
+        // 1) Find ALL slots the original entry occupies
+        const oldSlots = peiFindEntrySlots(assignments, origSlotIdx);
+
+        // 2) Save a clean copy of the entry (without continuation flag)
+        const cleanEntry = Object.assign({}, origEntry, { continuation: false });
+
+        // 3) Clear ONLY the slots this entry occupied
+        oldSlots.forEach(idx => { assignments[idx] = null; });
+
+        // 4) Find new target slots by time overlap
+        const newSlotIndices = [];
+        for (let i = 0; i < divSlots.length; i++) {
+            if (divSlots[i].startMin < newEnd && divSlots[i].endMin > newStart) {
+                newSlotIndices.push(i);
+            }
+        }
+
+        if (newSlotIndices.length === 0) {
+            debugLog('PEI: No slots found for', newStart, '-', newEnd, '— reverting');
+            // Restore original
+            oldSlots.forEach((idx, i) => {
+                if (i === 0) assignments[idx] = cleanEntry;
+                else assignments[idx] = { field: cleanEntry.field, sport: cleanEntry.sport, _activity: cleanEntry._activity, continuation: true };
+            });
+            window._postEditInProgress = false;
+            _peiUndoStack.pop(); // Remove the snapshot we just pushed
+            return;
+        }
+
+        // 5) Write to new slots — only overwrite null/Free entries, skip occupied entries
+        newSlotIndices.forEach((idx, i) => {
+            const existing = assignments[idx];
+            const isOccupied = existing && !existing.continuation &&
+                existing._activity && existing._activity.toLowerCase() !== 'free';
+            if (isOccupied && !oldSlots.includes(idx)) {
+                // Don't overwrite another activity — skip this slot
+                debugLog('PEI: Skipping occupied slot', idx, '(has', existing._activity + ')');
+                return;
+            }
+            if (i === 0 || !assignments[newSlotIndices[0]]) {
+                // Primary entry at first available slot
+                if (!assignments[newSlotIndices[0]]) {
+                    assignments[idx] = Object.assign({}, cleanEntry, {
+                        _startMin: newStart, _endMin: newEnd, _blockStart: newStart, _postEdited: true
+                    });
+                } else if (i > 0) {
+                    assignments[idx] = {
+                        field: cleanEntry.field, sport: cleanEntry.sport,
+                        _activity: cleanEntry._activity, continuation: true, _postEdited: true
+                    };
+                }
+            } else {
+                assignments[idx] = {
+                    field: cleanEntry.field, sport: cleanEntry.sport,
+                    _activity: cleanEntry._activity, continuation: true, _postEdited: true
+                };
+            }
         });
+
+        // Make sure first written slot is the primary (non-continuation)
+        const firstWritten = newSlotIndices.find(idx => assignments[idx] && assignments[idx]._postEdited);
+        if (firstWritten !== undefined && assignments[firstWritten]) {
+            assignments[firstWritten] = Object.assign({}, cleanEntry, {
+                continuation: false, _startMin: newStart, _endMin: newEnd, _blockStart: newStart, _postEdited: true
+            });
+        }
+
         peiTriggerReRender();
         peiSave(bunk);
     }
@@ -1343,12 +1460,24 @@
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divSlots.length);
         const assignments = window.scheduleAssignments[bunk];
-        window._postEditInProgress = true; window._postEditTimestamp = Date.now();
+
+        // Snapshot for undo
+        peiSnapshotBunk(bunk, `Add ${activity} at ${peiToLabel(startMin)}`);
+
+        window._postEditInProgress = true;
+        window._postEditTimestamp = Date.now();
+
         const newSlots = [];
-        for (let i = 0; i < divSlots.length; i++) { if (divSlots[i].startMin < endMin && divSlots[i].endMin > startMin) newSlots.push(i); }
+        for (let i = 0; i < divSlots.length; i++) {
+            if (divSlots[i].startMin < endMin && divSlots[i].endMin > startMin) newSlots.push(i);
+        }
         const fieldValue = location ? location + ' – ' + activity : activity;
         newSlots.forEach((idx, i) => {
-            assignments[idx] = { field: fieldValue, sport: activity, _activity: activity, continuation: i > 0, _fixed: true, _postEdited: true, _pinned: true, _startMin: startMin, _endMin: endMin, _blockStart: startMin };
+            assignments[idx] = {
+                field: fieldValue, sport: activity, _activity: activity,
+                continuation: i > 0, _fixed: true, _postEdited: true, _pinned: true,
+                _startMin: startMin, _endMin: endMin, _blockStart: startMin
+            };
         });
         peiTriggerReRender();
         peiSave(bunk);
@@ -1512,7 +1641,20 @@
         peiAugmentGrid();
         peiSetupObserver();
         peiSetupTouch();
-        debugLog('v3.3 Post-Edit Interactions initialized (resize / move / add / conflict engine)');
+
+        // Ctrl+Z / Cmd+Z undo handler
+        document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+                // Only handle if no modal/input is focused
+                const active = document.activeElement;
+                if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) return;
+                if (document.getElementById('pei-add-overlay') || document.getElementById(OVERLAY_ID)) return;
+                e.preventDefault();
+                peiUndo();
+            }
+        });
+
+        debugLog('v3.3 Post-Edit Interactions initialized (resize / move / add / undo / conflict engine)');
     }
 
     // =========================================================================
@@ -1560,7 +1702,9 @@
         augmentRenderedGrid: peiAugmentGrid,
         ConflictEngine: PEI_ConflictEngine,
         autoFillActivity: peiAutoFill,
-        init: initPostEditInteractions
+        init: initPostEditInteractions,
+        undo: peiUndo,
+        undoStack: _peiUndoStack
     };
 
     // =========================================================================
