@@ -1003,13 +1003,21 @@
         if (!_peiTooltip) {
             _peiTooltip = document.createElement('div');
             _peiTooltip.id = 'pei-tooltip';
-            _peiTooltip.style.cssText = 'position:fixed;z-index:100001;pointer-events:none;padding:6px 12px;background:#111827;color:#fff;border-radius:6px;font-size:12px;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,0.3);display:none;white-space:nowrap;font-family:-apple-system,BlinkMacSystemFont,sans-serif';
+            _peiTooltip.style.cssText = 'position:fixed;z-index:100001;pointer-events:none;padding:8px 14px;background:#111827;color:#fff;border-radius:8px;font-size:12px;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.4);display:none;white-space:nowrap;font-family:-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.5;max-width:260px;';
             document.body.appendChild(_peiTooltip);
         }
         _peiTooltip.innerHTML = html;
         _peiTooltip.style.display = 'block';
-        _peiTooltip.style.left = (x + 14) + 'px';
-        _peiTooltip.style.top = (y - 36) + 'px';
+        // Clamp to viewport
+        const vw = window.innerWidth, vh = window.innerHeight;
+        let left = x, top = y - 10;
+        _peiTooltip.style.left = '0'; _peiTooltip.style.top = '0'; // reset to measure
+        const tw = _peiTooltip.offsetWidth, th = _peiTooltip.offsetHeight;
+        if (left + tw > vw - 12) left = x - tw - 16; // flip to left of block
+        if (top + th > vh - 12) top = vh - th - 12;
+        if (top < 8) top = 8;
+        _peiTooltip.style.left = left + 'px';
+        _peiTooltip.style.top = top + 'px';
     }
     function peiHideTooltip() { if (_peiTooltip) _peiTooltip.style.display = 'none'; }
 
@@ -1082,14 +1090,20 @@
         if (s.direction === 'top') newStart = Math.max(s.dayStart, Math.min(s.origEndMin - PEI_MIN_BLOCK_DURATION, peiSnap(s.origStartMin + deltaMins)));
         else newEnd = Math.min(s.dayEnd, Math.max(s.origStartMin + PEI_MIN_BLOCK_DURATION, peiSnap(s.origEndMin + deltaMins)));
         s.currentStartMin = newStart; s.currentEndMin = newEnd;
-        s.block.style.top = ((newStart - s.dayStart) * PEI_PX_PER_MIN + 2) + 'px';
-        s.block.style.height = ((newEnd - newStart) * PEI_PX_PER_MIN - 4) + 'px';
+        const newTopPx = (newStart - s.dayStart) * PEI_PX_PER_MIN + 2;
+        const newHeightPx = (newEnd - newStart) * PEI_PX_PER_MIN - 4;
+        s.block.style.top = newTopPx + 'px';
+        s.block.style.height = newHeightPx + 'px';
         const dur = newEnd - newStart;
         let tooltipHtml = peiToLabel(newStart) + ' – ' + peiToLabel(newEnd) + ` <span style="opacity:0.6">(${dur < 60 ? dur + 'm' : Math.floor(dur/60) + 'h' + (dur%60 > 0 ? dur%60 + 'm' : '')})</span>`;
         const liveConflicts = PEI_ConflictEngine.check(s.bunk, newStart, newEnd, s.fieldName, s.slotIdx);
         if (liveConflicts.sameBunkOverlap.length > 0) tooltipHtml += `<br><span style="color:#fca5a5;">⚠ Overlaps: ${liveConflicts.sameBunkOverlap.map(o => o.activity).join(', ')}</span>`;
-        if (liveConflicts.fieldConflicts.length > 0) tooltipHtml += `<br><span style="color:#fcd34d;">⚡ Field used by: ${liveConflicts.fieldConflicts.map(c => c.bunk).join(', ')}</span>`;
-        peiShowTooltip(e.clientX, e.clientY, tooltipHtml);
+        if (liveConflicts.fieldConflicts.length > 0) tooltipHtml += `<br><span style="color:#fcd34d;">⚡ Field: ${liveConflicts.fieldConflicts.map(c => c.bunk).join(', ')}</span>`;
+        // Position tooltip at block EDGE, not mouse cursor
+        const blockRect = s.block.getBoundingClientRect();
+        const tipX = blockRect.right + 8;
+        const tipY = s.direction === 'bottom' ? blockRect.bottom : blockRect.top;
+        peiShowTooltip(tipX, tipY, tooltipHtml);
         peiShowConflictIndicator(s.block, liveConflicts);
     }
 
@@ -1104,11 +1118,13 @@
         document.body.style.cursor = ''; document.body.style.userSelect = '';
         if (s.currentStartMin === s.origStartMin && s.currentEndMin === s.origEndMin) { _peiResizing = false; _peiState = null; return; }
         const conflicts = PEI_ConflictEngine.check(s.bunk, s.currentStartMin, s.currentEndMin, s.fieldName, s.slotIdx);
-        // Always apply — conflicts are warnings, not blockers
+        // Apply to data WITHOUT re-rendering (keeps visual in place)
         peiApplyTimeChange(s.bunk, s.slotIdx, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.divName);
+        // Update block's data attributes to match new position
+        s.block.dataset.peiStartMin = s.currentStartMin;
+        s.block.dataset.peiEndMin = s.currentEndMin;
         if (conflicts.sameBunkOverlap.length > 0) {
-            const overlapNames = conflicts.sameBunkOverlap.map(o => o.activity).join(', ');
-            peiShowBanner('⚠️ Resized — overlaps with: ' + overlapNames, 'warning', true);
+            peiShowBanner('⚠️ Resized — overlaps with: ' + conflicts.sameBunkOverlap.map(o => o.activity).join(', '), 'warning', true);
         } else if (conflicts.fieldConflicts.length > 0) {
             peiShowBanner('Resized — field conflict with ' + conflicts.fieldConflicts.length + ' bunk(s)', 'warning', true);
         } else {
@@ -1145,11 +1161,13 @@
         s.currentStartMin = newStart; s.currentEndMin = newStart + s.duration;
         s.block.style.top = ((newStart - s.dayStart) * PEI_PX_PER_MIN + 2) + 'px';
         let moveTooltip = '↕ ' + peiToLabel(newStart) + ' – ' + peiToLabel(newStart + s.duration);
-        const moveLiveConflicts = PEI_ConflictEngine.check(s.bunk, newStart, newStart + s.duration, s.fieldName, s.slotIdx);
-        if (moveLiveConflicts.sameBunkOverlap.length > 0) moveTooltip += `<br><span style="color:#fca5a5;">⚠ Overlaps: ${moveLiveConflicts.sameBunkOverlap.map(o => o.activity).join(', ')}</span>`;
-        if (moveLiveConflicts.fieldConflicts.length > 0) moveTooltip += `<br><span style="color:#fcd34d;">⚡ Field used by: ${moveLiveConflicts.fieldConflicts.map(c => c.bunk).join(', ')}</span>`;
-        peiShowTooltip(e.clientX, e.clientY, moveTooltip);
-        peiShowConflictIndicator(s.block, moveLiveConflicts);
+        const mc = PEI_ConflictEngine.check(s.bunk, newStart, newStart + s.duration, s.fieldName, s.slotIdx);
+        if (mc.sameBunkOverlap.length > 0) moveTooltip += `<br><span style="color:#fca5a5;">⚠ Overlaps: ${mc.sameBunkOverlap.map(o => o.activity).join(', ')}</span>`;
+        if (mc.fieldConflicts.length > 0) moveTooltip += `<br><span style="color:#fcd34d;">⚡ Field: ${mc.fieldConflicts.map(c => c.bunk).join(', ')}</span>`;
+        // Tooltip at block top edge
+        const blockRect = s.block.getBoundingClientRect();
+        peiShowTooltip(blockRect.right + 8, blockRect.top, moveTooltip);
+        peiShowConflictIndicator(s.block, mc);
     }
 
     function peiOnMoveEnd() {
@@ -1163,11 +1181,13 @@
         document.body.style.cursor = ''; document.body.style.userSelect = '';
         if (s.currentStartMin === s.origStartMin) { _peiMoving = false; _peiState = null; return; }
         const conflicts = PEI_ConflictEngine.check(s.bunk, s.currentStartMin, s.currentEndMin, s.fieldName, s.slotIdx);
-        // Always apply — conflicts are warnings, not blockers
+        // Apply to data WITHOUT re-rendering
         peiApplyTimeChange(s.bunk, s.slotIdx, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.divName);
+        // Update block's data attributes
+        s.block.dataset.peiStartMin = s.currentStartMin;
+        s.block.dataset.peiEndMin = s.currentEndMin;
         if (conflicts.sameBunkOverlap.length > 0) {
-            const overlapNames = conflicts.sameBunkOverlap.map(o => o.activity).join(', ');
-            peiShowBanner('⚠️ Moved — overlaps with: ' + overlapNames, 'warning', true);
+            peiShowBanner('⚠️ Moved — overlaps with: ' + conflicts.sameBunkOverlap.map(o => o.activity).join(', '), 'warning', true);
         } else if (conflicts.fieldConflicts.length > 0) {
             peiShowBanner('Moved — field conflict with ' + conflicts.fieldConflicts.length + ' bunk(s)', 'warning', true);
         } else {
@@ -1451,7 +1471,7 @@
             });
         }
 
-        peiTriggerReRender();
+        // Do NOT re-render — caller updates the visual block position directly
         peiSave(bunk);
     }
 
@@ -1496,6 +1516,8 @@
     }
 
     function peiSave(bunk) {
+        // Ensure flag is set
+        window._postEditInProgress = true;
         if (typeof window.resolveAndSaveSchedule === 'function') window.resolveAndSaveSchedule(bunk);
         else if (typeof bypassSaveAllBunks === 'function') bypassSaveAllBunks([bunk]);
         else if (window.ScheduleDB?.saveBunkSchedule) {
@@ -1503,6 +1525,8 @@
             window.ScheduleDB.saveBunkSchedule(dateKey, bunk, window.scheduleAssignments[bunk]);
         }
         peiUpdateRotationHistory(bunk);
+        // Release flag after save settles
+        setTimeout(() => { window._postEditInProgress = false; }, 500);
     }
 
     function peiUpdateRotationHistory(bunk) {
@@ -1556,11 +1580,27 @@
                 const bunk = bunks[idx];
                 if (!bunk) return;
                 col.dataset.peiBunk = bunk; col.dataset.peiDivision = divName;
-                col.addEventListener('dblclick', (e) => {
-                    if (e.target.closest('.asg-block')) return;
-                    if (e.target.closest('.asg-free')) { peiHandleDoubleClickAdd(col, e); return; }
-                    peiHandleDoubleClickAdd(col, e);
-                });
+
+                // Fix 3: Add "+" buttons to free blocks (no dblclick needed)
+                if (canEditBunk(bunk)) {
+                    col.querySelectorAll('.asg-free').forEach(freeEl => {
+                        const addBtn = document.createElement('div');
+                        addBtn.className = 'pei-add-btn';
+                        addBtn.innerHTML = '+';
+                        addBtn.title = 'Add activity here';
+                        addBtn.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:26px;height:26px;border-radius:50%;background:rgba(37,99,235,0.1);color:#2563eb;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s;z-index:4;pointer-events:auto;';
+                        freeEl.style.position = 'absolute'; // ensure positioning context
+                        freeEl.appendChild(addBtn);
+                        freeEl.addEventListener('mouseenter', () => { addBtn.style.opacity = '1'; });
+                        freeEl.addEventListener('mouseleave', () => { addBtn.style.opacity = '0'; });
+                        addBtn.addEventListener('mouseenter', () => { addBtn.style.background = 'rgba(37,99,235,0.2)'; });
+                        addBtn.addEventListener('mouseleave', () => { addBtn.style.background = 'rgba(37,99,235,0.1)'; });
+                        addBtn.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            peiHandleDoubleClickAdd(col, e);
+                        });
+                    });
+                }
                 const bunkActs = peiBunkActivities(bunk, divName);
                 const blocks = col.querySelectorAll('.asg-block');
                 // Blocks render in same order as peiBunkActivities — match by index
@@ -1628,7 +1668,7 @@
     function peiInjectStyles() {
         if (document.getElementById('pei-styles')) return;
         const s = document.createElement('style'); s.id = 'pei-styles';
-        s.textContent = `.pei-resize-handle{touch-action:none}@media(pointer:coarse){.pei-resize-handle{height:16px!important;opacity:.5!important}.pei-resize-top{top:-6px!important}.pei-resize-bottom{bottom:-6px!important}}.asg-block[data-pei-bunk]{touch-action:none}.asg-block[data-pei-bunk]:active{cursor:grabbing!important}.pei-conflict-overlay{pointer-events:none;animation:pei-pulse 1s ease-in-out infinite}@keyframes pei-pulse{0%,100%{opacity:.3}50%{opacity:.6}}@keyframes pei-slide-up{from{transform:translate(-50%,20px);opacity:0}to{transform:translate(-50%,0);opacity:1}}@keyframes pei-fade-in{from{opacity:0}to{opacity:1}}.asg-free{cursor:cell}.asg-free:hover{background:repeating-linear-gradient(45deg,#ecfdf5,#ecfdf5 4px,#d1fae5 4px,#d1fae5 8px)!important;border-color:#86efac!important}[data-pei-bunk]:hover{background:rgba(59,130,246,.01)}`;
+        s.textContent = `.pei-resize-handle{touch-action:none}@media(pointer:coarse){.pei-resize-handle{height:16px!important;opacity:.5!important}.pei-resize-top{top:-6px!important}.pei-resize-bottom{bottom:-6px!important}}.asg-block[data-pei-bunk]{touch-action:none;transition:box-shadow 0.2s}.asg-block[data-pei-bunk]:active{cursor:grabbing!important}.pei-conflict-overlay{pointer-events:none;animation:pei-pulse 1s ease-in-out infinite}@keyframes pei-pulse{0%,100%{opacity:.3}50%{opacity:.6}}@keyframes pei-slide-up{from{transform:translate(-50%,20px);opacity:0}to{transform:translate(-50%,0);opacity:1}}@keyframes pei-fade-in{from{opacity:0}to{opacity:1}}.asg-free{cursor:default;position:relative;transition:border-color 0.2s}.asg-free:hover{border-color:#93c5fd!important;background:repeating-linear-gradient(45deg,#eff6ff,#eff6ff 4px,#dbeafe 4px,#dbeafe 8px)!important}.pei-add-btn{font-family:-apple-system,BlinkMacSystemFont,sans-serif;user-select:none;line-height:1;}.pei-add-btn:hover{transform:translate(-50%,-50%) scale(1.15)!important;box-shadow:0 2px 8px rgba(37,99,235,0.3);}[data-pei-bunk]:hover{background:rgba(59,130,246,.01)}`;
         document.head.appendChild(s);
     }
 
