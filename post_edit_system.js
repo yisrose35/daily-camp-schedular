@@ -1176,8 +1176,31 @@
     }
 
     // ── Pending move: threshold ──
+    function peiOnPendingMoveCheck(e) {
+        if (!_peiPendingMove || _peiPendingMove.started) return;
+        if (Math.sqrt((e.clientX - _peiPendingMove.startX) ** 2 + (e.clientY - _peiPendingMove.startY) ** 2) >= PEI_DRAG_THRESHOLD) {
+            _peiPendingMove.started = true;
+            document.removeEventListener('mousemove', peiOnPendingMoveCheck);
+            document.removeEventListener('mouseup', peiOnPendingMoveCancel);
+            peiStartMove(_peiPendingMove.block, { clientY: _peiPendingMove.startY, preventDefault() {} });
+            peiOnMoveMove(e);
+        }
+    }
+    function peiOnPendingMoveCancel() {
+        document.removeEventListener('mousemove', peiOnPendingMoveCheck);
+        document.removeEventListener('mouseup', peiOnPendingMoveCancel);
+        _peiPendingMove = null;
+    }
 
-    // ── DOUBLE-CLICK ADD ──
+    // ── Click suppressor (capturing phase) ──
+    function peiInstallClickSuppressor() {
+        document.addEventListener('click', (e) => {
+            if (_peiSuppressClick) { e.stopPropagation(); e.stopImmediatePropagation(); e.preventDefault(); _peiSuppressClick = false; return; }
+            if (_peiResizing || _peiMoving) { e.stopPropagation(); e.stopImmediatePropagation(); e.preventDefault(); }
+        }, true);
+    }
+
+
     function peiHandleDoubleClickAdd(col, e) {
         const bunk = col.dataset.peiBunk, divName = col.dataset.peiDivision;
         if (!bunk || !divName || !canEditBunk(bunk)) { if (window.showToast) window.showToast('No permission to edit ' + bunk, 'error'); return; }
