@@ -1070,6 +1070,13 @@
         s.block.style.transition = ''; s.block.style.zIndex = '';
         document.body.style.cursor = ''; document.body.style.userSelect = '';
         if (s.currentStartMin === s.origStartMin && s.currentEndMin === s.origEndMin) { _peiResizing = false; _peiState = null; return; }
+        // Update block data attributes to new position
+        s.block.dataset.peiStartMin = s.currentStartMin;
+        s.block.dataset.peiEndMin = s.currentEndMin;
+        // Ensure duration label is final
+        const finalDur = s.currentEndMin - s.currentStartMin;
+        const durLabel = s.block.querySelector('.asg-block-sub:last-child');
+        if (durLabel && /\d+min/.test(durLabel.textContent)) durLabel.textContent = finalDur + 'min';
         const c = PEI_ConflictEngine.check(s.bunk, s.currentStartMin, s.currentEndMin, s.fieldName, s.slotIdx);
         peiApplyTimeChange(s.bunk, s.slotIdx, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.divName);
         if (c.fieldConflicts.length > 0) peiShowBanner('Resized — field conflict: ' + c.fieldConflicts.map(x => x.bunk).join(', '), 'warning', true);
@@ -1128,6 +1135,9 @@
         s.block.style.transition = ''; s.block.style.zIndex = ''; s.block.style.opacity = ''; s.block.style.cursor = '';
         document.body.style.cursor = ''; document.body.style.userSelect = '';
         if (s.currentStartMin === s.origStartMin) { _peiMoving = false; _peiState = null; return; }
+        // Update block data attributes to new position
+        s.block.dataset.peiStartMin = s.currentStartMin;
+        s.block.dataset.peiEndMin = s.currentEndMin;
         const c = PEI_ConflictEngine.check(s.bunk, s.currentStartMin, s.currentEndMin, s.fieldName, s.slotIdx);
         peiApplyTimeChange(s.bunk, s.slotIdx, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.divName);
         if (c.fieldConflicts.length > 0) peiShowBanner('Moved — field conflict: ' + c.fieldConflicts.map(x => x.bunk).join(', '), 'warning', true);
@@ -1421,8 +1431,9 @@
             });
         }
 
-        // Re-render to show freed space and update visuals
-        peiTriggerReRender();
+        // Do NOT re-render — the drag already positioned the block correctly.
+        // Re-rendering would snap it back to slot boundaries.
+        // Only save the data. Delete/Add/Undo handle their own re-renders.
         peiSave(bunk);
     }
 
