@@ -1076,8 +1076,12 @@
         s.block.style.top = ((newStart - s.dayStart) * PEI_PX_PER_MIN + 2) + 'px';
         s.block.style.height = ((newEnd - newStart) * PEI_PX_PER_MIN - 4) + 'px';
         const dur = newEnd - newStart;
-        peiShowTooltip(e.clientX, e.clientY, peiToLabel(newStart) + ' – ' + peiToLabel(newEnd) + ` <span style="opacity:0.6">(${dur < 60 ? dur + 'm' : Math.floor(dur/60) + 'h' + (dur%60 > 0 ? dur%60 + 'm' : '')})</span>`);
-        peiShowConflictIndicator(s.block, PEI_ConflictEngine.check(s.bunk, newStart, newEnd, s.fieldName, s.slotIdx));
+        let tooltipHtml = peiToLabel(newStart) + ' – ' + peiToLabel(newEnd) + ` <span style="opacity:0.6">(${dur < 60 ? dur + 'm' : Math.floor(dur/60) + 'h' + (dur%60 > 0 ? dur%60 + 'm' : '')})</span>`;
+        const liveConflicts = PEI_ConflictEngine.check(s.bunk, newStart, newEnd, s.fieldName, s.slotIdx);
+        if (liveConflicts.sameBunkOverlap.length > 0) tooltipHtml += `<br><span style="color:#fca5a5;">⚠ Overlaps: ${liveConflicts.sameBunkOverlap.map(o => o.activity).join(', ')}</span>`;
+        if (liveConflicts.fieldConflicts.length > 0) tooltipHtml += `<br><span style="color:#fcd34d;">⚡ Field used by: ${liveConflicts.fieldConflicts.map(c => c.bunk).join(', ')}</span>`;
+        peiShowTooltip(e.clientX, e.clientY, tooltipHtml);
+        peiShowConflictIndicator(s.block, liveConflicts);
     }
 
     function peiOnResizeEnd() {
@@ -1091,15 +1095,16 @@
         document.body.style.cursor = ''; document.body.style.userSelect = '';
         if (s.currentStartMin === s.origStartMin && s.currentEndMin === s.origEndMin) { _peiResizing = false; _peiState = null; return; }
         const conflicts = PEI_ConflictEngine.check(s.bunk, s.currentStartMin, s.currentEndMin, s.fieldName, s.slotIdx);
-        if (conflicts.sameBunkOverlap.length > 0) {
-            peiShowBanner('Cannot resize: overlaps with ' + conflicts.sameBunkOverlap[0].activity, 'error');
-            s.block.style.top = ((s.origStartMin - s.dayStart) * PEI_PX_PER_MIN + 2) + 'px';
-            s.block.style.height = ((s.origEndMin - s.origStartMin) * PEI_PX_PER_MIN - 4) + 'px';
-            _peiResizing = false; _peiState = null; return;
-        }
+        // Always apply — conflicts are warnings, not blockers
         peiApplyTimeChange(s.bunk, s.slotIdx, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.divName);
-        if (conflicts.fieldConflicts.length > 0) peiShowBanner('Resized — field conflict with ' + conflicts.fieldConflicts.length + ' bunk(s)', 'warning');
-        else peiShowBanner('Resized to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success');
+        if (conflicts.sameBunkOverlap.length > 0) {
+            const overlapNames = conflicts.sameBunkOverlap.map(o => o.activity).join(', ');
+            peiShowBanner('⚠️ Resized — overlaps with: ' + overlapNames, 'warning');
+        } else if (conflicts.fieldConflicts.length > 0) {
+            peiShowBanner('Resized — field conflict with ' + conflicts.fieldConflicts.length + ' bunk(s)', 'warning');
+        } else {
+            peiShowBanner('Resized to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success');
+        }
         _peiResizing = false; _peiState = null;
     }
 
@@ -1130,8 +1135,12 @@
         let newStart = Math.max(s.dayStart, Math.min(s.dayEnd - s.duration, peiSnap(s.origStartMin + peiSnap((e.clientY - s.startY) / PEI_PX_PER_MIN))));
         s.currentStartMin = newStart; s.currentEndMin = newStart + s.duration;
         s.block.style.top = ((newStart - s.dayStart) * PEI_PX_PER_MIN + 2) + 'px';
-        peiShowTooltip(e.clientX, e.clientY, '↕ ' + peiToLabel(newStart) + ' – ' + peiToLabel(newStart + s.duration));
-        peiShowConflictIndicator(s.block, PEI_ConflictEngine.check(s.bunk, newStart, newStart + s.duration, s.fieldName, s.slotIdx));
+        let moveTooltip = '↕ ' + peiToLabel(newStart) + ' – ' + peiToLabel(newStart + s.duration);
+        const moveLiveConflicts = PEI_ConflictEngine.check(s.bunk, newStart, newStart + s.duration, s.fieldName, s.slotIdx);
+        if (moveLiveConflicts.sameBunkOverlap.length > 0) moveTooltip += `<br><span style="color:#fca5a5;">⚠ Overlaps: ${moveLiveConflicts.sameBunkOverlap.map(o => o.activity).join(', ')}</span>`;
+        if (moveLiveConflicts.fieldConflicts.length > 0) moveTooltip += `<br><span style="color:#fcd34d;">⚡ Field used by: ${moveLiveConflicts.fieldConflicts.map(c => c.bunk).join(', ')}</span>`;
+        peiShowTooltip(e.clientX, e.clientY, moveTooltip);
+        peiShowConflictIndicator(s.block, moveLiveConflicts);
     }
 
     function peiOnMoveEnd() {
@@ -1145,14 +1154,16 @@
         document.body.style.cursor = ''; document.body.style.userSelect = '';
         if (s.currentStartMin === s.origStartMin) { _peiMoving = false; _peiState = null; return; }
         const conflicts = PEI_ConflictEngine.check(s.bunk, s.currentStartMin, s.currentEndMin, s.fieldName, s.slotIdx);
-        if (conflicts.sameBunkOverlap.length > 0) {
-            peiShowBanner('Cannot move: overlaps with ' + conflicts.sameBunkOverlap[0].activity, 'error');
-            s.block.style.top = ((s.origStartMin - s.dayStart) * PEI_PX_PER_MIN + 2) + 'px';
-            _peiMoving = false; _peiState = null; return;
-        }
+        // Always apply — conflicts are warnings, not blockers
         peiApplyTimeChange(s.bunk, s.slotIdx, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.divName);
-        if (conflicts.fieldConflicts.length > 0) peiShowBanner('Moved — field conflict with ' + conflicts.fieldConflicts.length + ' bunk(s)', 'warning');
-        else peiShowBanner('Moved to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success');
+        if (conflicts.sameBunkOverlap.length > 0) {
+            const overlapNames = conflicts.sameBunkOverlap.map(o => o.activity).join(', ');
+            peiShowBanner('⚠️ Moved — overlaps with: ' + overlapNames, 'warning');
+        } else if (conflicts.fieldConflicts.length > 0) {
+            peiShowBanner('Moved — field conflict with ' + conflicts.fieldConflicts.length + ' bunk(s)', 'warning');
+        } else {
+            peiShowBanner('Moved to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success');
+        }
         _peiMoving = false; _peiState = null;
     }
 
@@ -1344,9 +1355,15 @@
     }
 
     function peiTriggerReRender() {
+        // Clear augmented flags so observer re-augments after render
+        document.querySelectorAll('.asg-wrap[data-pei-augmented]').forEach(w => delete w.dataset.peiAugmented);
         if (window.UnifiedScheduleSystem?.renderStaggeredView) window.UnifiedScheduleSystem.renderStaggeredView();
         else if (window.updateTable) window.updateTable();
-        setTimeout(() => { window._postEditInProgress = false; }, 500);
+        // Re-augment after render completes
+        setTimeout(() => {
+            peiAugmentGrid();
+            window._postEditInProgress = false;
+        }, 300);
     }
 
     function peiSave(bunk) {
@@ -1416,12 +1433,10 @@
                     peiHandleDoubleClickAdd(col, e);
                 });
                 const bunkActs = peiBunkActivities(bunk, divName);
-                col.querySelectorAll('.asg-block').forEach(blk => {
-                    const blkTop = parseInt(blk.style.top, 10) || 0;
-                    const blkStartMin = peiSnap(dayStart + ((blkTop - 2) / PEI_PX_PER_MIN));
-                    const blkH = blk.offsetHeight || parseInt(blk.style.height, 10) || 0;
-                    const blkEndMin = peiSnap(blkStartMin + ((blkH + 4) / PEI_PX_PER_MIN));
-                    const matched = bunkActs.find(a => Math.abs(a.startMin - blkStartMin) <= PEI_SNAP_MINS && Math.abs(a.endMin - blkEndMin) <= PEI_SNAP_MINS);
+                const blocks = col.querySelectorAll('.asg-block');
+                // Blocks render in same order as peiBunkActivities — match by index
+                blocks.forEach((blk, bi) => {
+                    const matched = bunkActs[bi];
                     if (!matched) return;
                     blk.dataset.peiBunk = bunk; blk.dataset.peiStartMin = matched.startMin; blk.dataset.peiEndMin = matched.endMin;
                     blk.dataset.peiSlotIdx = matched.slotIdx; blk.dataset.peiDivision = divName;
