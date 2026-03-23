@@ -668,7 +668,18 @@
             const _gs = window.loadGlobalSettings?.() || {};
             const _hc = _gs.historicalCounts || {};
             if (!_hc[bunk]) _hc[bunk] = {};
-            const _newAct = (!isClear && activity) ? activity : null;
+           let _newAct = (!isClear && activity) ? activity : null;
+
+            // Normalize: if new activity matches old activity ignoring case, use old casing
+            if (_newAct) {
+                for (const oldAct of _oldActivities) {
+                    if (oldAct.toLowerCase() === _newAct.toLowerCase() && oldAct !== _newAct) {
+                        console.log(`[PostEdit] 📊 Case normalization: "${_newAct}" → "${oldAct}"`);
+                        _newAct = oldAct;
+                        break;
+                    }
+                }
+            }
 
             // Decrement old activities
             const _oldUnique = {};
