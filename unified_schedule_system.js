@@ -2376,13 +2376,37 @@ if (bypassStatus.highlight) {
     // APPLY DIRECT EDIT
     // =========================================================================
 
-    function applyDirectEdit(bunk, slots, activity, location, isClear, shouldPin = true) {
+   function applyDirectEdit(bunk, slots, activity, location, isClear, shouldPin = true) {
         const divName = getDivisionForBunk(bunk);
         const divSlots = window.divisionTimes?.[divName] || [];
         
+        // ★★★ AUTO MODE: Reshape per-bunk slots if edit time doesn't match slot boundaries ★★★
+        const _isAutoMode = !!window.divisionTimes?.[divName]?._perBunkSlots;
+        if (_isAutoMode && !isClear && slots.length > 0) {
+            const perBunk = window.divisionTimes[divName]._perBunkSlots[String(bunk)];
+            if (perBunk && perBunk[slots[0]]) {
+                const firstSlot = perBunk[slots[0]];
+                const lastSlot = perBunk[slots[slots.length - 1]];
+                // Get the time range from _currentEditContext if available
+                const editCtx = _currentEditContext || {};
+                if (editCtx.isAutoMode && editCtx.startMin != null && editCtx.endMin != null) {
+                    // Check if slot boundaries match the requested time range
+                    if (firstSlot.startMin !== editCtx.startMin || lastSlot.endMin !== editCtx.endMin) {
+                        console.log('[applyDirectEdit] Auto mode: reshaping slots for ' + bunk + ' to [' + editCtx.startMin + '-' + editCtx.endMin + ']');
+                        const reshaped = ensurePerBunkSlotForRange(bunk, divName, editCtx.startMin, editCtx.endMin);
+                        if (reshaped.length > 0) {
+                            slots = reshaped;
+                        }
+                    }
+                }
+            }
+        }
+        
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
         if (!window.scheduleAssignments[bunk]) {
-            window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
+            const perBunk = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
+            const slotCount = perBunk ? perBunk.length : (divSlots.length || 50);
+            window.scheduleAssignments[bunk] = new Array(slotCount);
         }
         
         const fieldValue = location ? `${location} – ${activity}` : activity;
@@ -2819,8 +2843,21 @@ if (bypassStatus.highlight) {
         const divSlots = window.divisionTimes?.[divName] || [];
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
-        if (hasConflict) await resolveConflictsAndApply(bunk, slots, activity, location, editData);
-        else applyDirectEdit(bunk, slots, activity, location, isClear, true);
+       if (hasConflict) await resolveConflictsAndApply(bunk, slots, activity, location, editData);
+        else {
+            // ★★★ AUTO MODE: If time was adjusted, reshape before applying ★★★
+            const _autoMode = !!window.divisionTimes?.[divName]?._perBunkSlots;
+            if (_autoMode && !isClear && startMin != null && endMin != null) {
+                const reshaped = ensurePerBunkSlotForRange(bunk, divName, startMin, endMin);
+                if (reshaped.length > 0) {
+                    applyDirectEdit(bunk, reshaped, activity, location, isClear, true);
+                } else {
+                    applyDirectEdit(bunk, slots, activity, location, isClear, true);
+                }
+            } else {
+                applyDirectEdit(bunk, slots, activity, location, isClear, true);
+            }
+        }
         const currentDate = window.currentScheduleDate || window.currentDate || document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
         try {
             localStorage.setItem(`scheduleAssignments_${currentDate}`, JSON.stringify(window.scheduleAssignments));
@@ -3932,24 +3969,140 @@ if (globalBlocks.length > 0) {
     // APPLY MULTI-BUNK EDIT
     // =========================================================================
 
+    /**
+     * ★★★ AUTO MODE: Reshape a bunk's per-bunk slots to guarantee an exact time window ★★★
+     * Splits overlapping slots so the target range has its own dedicated slot(s).
+     * Returns the slot indices that now exactly cover [targetStart, targetEnd].
+     */
+    function ensurePerBunkSlotForRange(bunkName, divName, targetStart, targetEnd) {
+        const perBunkSlots = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunkName)];
+        if (!perBunkSlots) return [];
+
+        const newSlots = [];
+        const resultIndices = [];
+
+        for (let i = 0; i < perBunkSlots.length; i++) {
+            const slot = { ...perBunkSlots[i] };
+            const overlapStart = Math.max(slot.startMin, targetStart);
+            const overlapEnd = Math.min(slot.endMin, targetEnd);
+            const hasOverlap = overlapStart < overlapEnd;
+
+            if (!hasOverlap) {
+                newSlots.push(slot);
+                continue;
+            }
+
+            // Part BEFORE target range
+            if (slot.startMin < targetStart) {
+                newSlots.push({
+                    ...slot,
+                    endMin: targetStart,
+                    label: minutesToTimeLabel(slot.startMin) + ' - ' + minutesToTimeLabel(targetStart),
+                    _splitFrom: i
+                });
+            }
+
+            // The overlapping part (target slot)
+            const targetSlot = {
+                ...slot,
+                startMin: overlapStart,
+                endMin: overlapEnd,
+                label: minutesToTimeLabel(overlapStart) + ' - ' + minutesToTimeLabel(overlapEnd),
+                _reshapedForEdit: true
+            };
+            resultIndices.push(newSlots.length);
+            newSlots.push(targetSlot);
+
+            // Part AFTER target range
+            if (slot.endMin > targetEnd) {
+                newSlots.push({
+                    ...slot,
+                    startMin: targetEnd,
+                    endMin: slot.endMin,
+                    label: minutesToTimeLabel(targetEnd) + ' - ' + minutesToTimeLabel(slot.endMin),
+                    _splitFrom: i
+                });
+            }
+        }
+
+        // If the target range extends beyond all existing slots, add a new slot
+        if (resultIndices.length === 0) {
+            resultIndices.push(newSlots.length);
+            newSlots.push({
+                startMin: targetStart,
+                endMin: targetEnd,
+                event: 'GA',
+                type: 'slot',
+                label: minutesToTimeLabel(targetStart) + ' - ' + minutesToTimeLabel(targetEnd),
+                _reshapedForEdit: true,
+                _injected: true
+            });
+            newSlots.sort(function(a, b) { return a.startMin - b.startMin; });
+            resultIndices[0] = newSlots.findIndex(function(s) { return s._reshapedForEdit && s.startMin === targetStart; });
+        }
+
+        // Rebuild slotIndex
+        newSlots.forEach(function(s, idx) { s.slotIndex = idx; });
+
+        // ★★★ CRITICAL: Remap existing scheduleAssignments to new slot layout ★★★
+        var oldAssignments = window.scheduleAssignments?.[bunkName] || [];
+        var newAssignments = new Array(newSlots.length);
+
+        // Map old entries by startMin
+        var oldSlotEntries = {};
+        for (var oi = 0; oi < perBunkSlots.length; oi++) {
+            if (oldAssignments[oi]) {
+                oldSlotEntries[perBunkSlots[oi].startMin] = oldAssignments[oi];
+            }
+        }
+
+        for (var ni = 0; ni < newSlots.length; ni++) {
+            if (resultIndices.includes(ni)) continue; // Will be overwritten by edit
+            var entry = oldSlotEntries[newSlots[ni].startMin];
+            if (entry) {
+                newAssignments[ni] = entry;
+            } else if (newSlots[ni]._splitFrom !== undefined) {
+                var origEntry = oldAssignments[newSlots[ni]._splitFrom];
+                if (origEntry) {
+                    newAssignments[ni] = { ...origEntry, _splitRemainder: true };
+                }
+            }
+        }
+
+        // Apply
+        window.divisionTimes[divName]._perBunkSlots[String(bunkName)] = newSlots;
+        if (!window.scheduleAssignments) window.scheduleAssignments = {};
+        window.scheduleAssignments[bunkName] = newAssignments;
+
+        console.log('[ReshapeSlot] ' + bunkName + ': ' + perBunkSlots.length + ' slots -> ' + newSlots.length + ' slots. Target [' + targetStart + '-' + targetEnd + '] at indices [' + resultIndices.join(',') + ']');
+
+        return resultIndices;
+    }
+
     async function applyMultiBunkEdit(result, notifyAfter = false) {
         const { location, slots, divName, activity, bunks, plan } = result;
 
         await createAutoBackup(activity, divName);
 
-        const divSlots = window.divisionTimes?.[divName] || [];
+       const divSlots = window.divisionTimes?.[divName] || [];
         const isAutoMode = !!window.divisionTimes?.[divName]?._perBunkSlots;
         const perBunkSlotMap = result.perBunkSlots || null;
         
         for (const bunk of bunks) {
-            // ★★★ AUTO MODE: Each bunk gets its own slot indices resolved by time ★★★
             let bunkSlots;
-            if (isAutoMode && perBunkSlotMap && perBunkSlotMap[String(bunk)]) {
+            
+            if (isAutoMode && result.timeStartMin != null && result.timeEndMin != null) {
+                // ★★★ AUTO MODE: Reshape per-bunk slots to guarantee exact time window ★★★
+                bunkSlots = ensurePerBunkSlotForRange(bunk, divName, result.timeStartMin, result.timeEndMin);
+            } else if (isAutoMode && perBunkSlotMap && perBunkSlotMap[String(bunk)]) {
                 bunkSlots = perBunkSlotMap[String(bunk)];
-            } else if (isAutoMode && result.timeStartMin != null && result.timeEndMin != null) {
-                bunkSlots = findSlotsForRange(result.timeStartMin, result.timeEndMin, divName, bunk);
             } else {
                 bunkSlots = slots;
+            }
+            
+            if (!bunkSlots || bunkSlots.length === 0) {
+                console.warn('[applyMultiBunkEdit] No slots resolved for ' + bunk + ', skipping');
+                continue;
             }
             
             const perBunk = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
@@ -3959,11 +4112,13 @@ if (globalBlocks.length > 0) {
             for (let i = 0; i < bunkSlots.length; i++) {
                 window.scheduleAssignments[bunk][bunkSlots[i]] = {
                     field: location, sport: null, _activity: activity,
-                    _fixed: true, _pinned: true, _multiBunkEdit: true, continuation: i > 0
+                    _fixed: true, _pinned: true, _multiBunkEdit: true, 
+                    continuation: i > 0,
+                    _startMin: result.timeStartMin,
+                    _endMin: result.timeEndMin
                 };
             }
         }
-
         const modifiedBunks = new Set(bunks);
         for (const move of plan) {
             modifiedBunks.add(move.bunk);
