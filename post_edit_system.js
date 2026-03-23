@@ -1398,9 +1398,12 @@
             const bunks = divConfig.bunks || [];
             const scrollEl = wrap.querySelector('.asg-scroll');
             if (!scrollEl) return;
-            const containerEl = scrollEl.firstElementChild;
-            if (!containerEl) return;
-            const bunkCols = Array.from(containerEl.children).slice(1);
+            // Navigate from any block to find bodyRow (blocks are direct children of bunk columns)
+            const firstBlock = scrollEl.querySelector('.asg-block') || scrollEl.querySelector('.asg-free');
+            if (!firstBlock) { debugLog('PEI: No blocks found in', divName); return; }
+            const bodyRow = firstBlock.parentElement.parentElement;
+            // Bunk columns are always the first N children; league overlays are appended after
+            const bunkCols = Array.from(bodyRow.children).slice(0, bunks.length);
             if (bunkCols.length !== bunks.length) { debugLog('PEI: column mismatch', bunkCols.length, bunks.length); return; }
 
             bunkCols.forEach((col, idx) => {
