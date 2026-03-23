@@ -868,9 +868,11 @@ function checkLocationConflict(locationName, slots, excludeBunk) {
 const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(editBunksResult || []);
     const conflicts = [], usageBySlot = {};
     
-    // ★★★ FIX: Get the ACTUAL time range from the editing bunk's division ★★★
+    // ★★★ FIX: Get the ACTUAL time range from the editing bunk's slots ★★★
     const excludeBunkDiv = getDivisionForBunk(excludeBunk);
-    const excludeBunkSlots = window.divisionTimes?.[excludeBunkDiv] || [];
+    // ★★★ AUTO MODE: Use per-bunk slots when available (indices are bunk-specific) ★★★
+    const _perBunkData = window.divisionTimes?.[excludeBunkDiv]?._perBunkSlots?.[String(excludeBunk)];
+    const excludeBunkSlots = _perBunkData || window.divisionTimes?.[excludeBunkDiv] || [];
     
     // Build time ranges for the slots being claimed
     const claimedTimeRanges = [];
@@ -964,10 +966,15 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
     }
     
     // Check GlobalFieldLocks
+    // ★★★ Only league games should truly BLOCK an edit ★★★
     let globalLock = null;
     if (window.GlobalFieldLocks) {
         const lockInfo = window.GlobalFieldLocks.isFieldLocked(locationName, slots, excludeBunkDiv);
-        if (lockInfo) globalLock = lockInfo;
+        // Only treat as a hard block if it's a league game lock
+        if (lockInfo && (lockInfo.lockedBy === 'league_game' || lockInfo.leagueName || lockInfo.type === 'league')) {
+            globalLock = lockInfo;
+        }
+        // Other locks (pinned, smart_regen, etc.) are soft — post-edit can resolve them
     }
     
     // Determine conflicts based on capacity
@@ -983,6 +990,13 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
                 }
             });
         }
+    }
+    
+    // ★★★ AUTO MODE: All non-league conflicts are resolvable via post-edit ★★★
+    // Mark conflicts as auto-resolvable so UI can show them differently
+    const _isAutoEditMode = !!window.divisionTimes?.[excludeBunkDiv]?._perBunkSlots;
+    if (_isAutoEditMode && !globalLock) {
+        conflicts.forEach(c => { c._autoResolvable = true; });
     }
     
     if (conflicts.length > 0) {
@@ -2904,12 +2918,18 @@ if (bypassStatus.highlight) {
             if (!location) { conflictArea.style.display = 'none'; return null; }
             const targetSlots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
             const conflictCheck = checkLocationConflict(location, targetSlots, bunk);
-            if (conflictCheck.hasConflict) {
+           if (conflictCheck.hasConflict) {
+                // ★★★ AUTO MODE: If all conflicts are auto-resolvable, show as info not warning ★★★
+                const allAutoResolvable = conflictCheck.conflicts.every(c => c._autoResolvable);
                 const editableBunks = [...new Set(conflictCheck.editableConflicts.map(c => c.bunk))];
                 const nonEditableBunks = [...new Set(conflictCheck.nonEditableConflicts.map(c => c.bunk))];
                 conflictArea.style.display = 'block';
-                let html = `<div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px;"><div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;"><span style="font-size: 1.25rem;">⚠️</span><strong style="color: #92400e;">Location Conflict Detected</strong></div><p style="margin: 0 0 8px 0; color: #78350f; font-size: 0.875rem;"><strong>${escapeHtml(location)}</strong> is already in use:</p>`;
-                if (editableBunks.length > 0) html += `<div style="margin-bottom: 8px; padding: 8px; background: #d1fae5; border-radius: 6px;"><div style="font-size: 0.8rem; color: #065f46;"><strong>✓ Can auto-reassign:</strong> ${editableBunks.join(', ')}</div></div>`;
+                let html;
+                if (allAutoResolvable && !conflictCheck.globalLock) {
+                    html = `<div style="background: #dbeafe; border: 1px solid #3b82f6; border-radius: 8px; padding: 12px;"><div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;"><span style="font-size: 1.25rem;">🔄</span><strong style="color: #1e40af;">Will Auto-Reassign</strong></div><p style="margin: 0 0 8px 0; color: #1e3a5f; font-size: 0.875rem;"><strong>${escapeHtml(location)}</strong> is in use — affected bunks will be automatically reassigned:</p>`;
+                } else {
+                    html = `<div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px;"><div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;"><span style="font-size: 1.25rem;">⚠️</span><strong style="color: #92400e;">Location Conflict Detected</strong></div><p style="margin: 0 0 8px 0; color: #78350f; font-size: 0.875rem;"><strong>${escapeHtml(location)}</strong> is already in use:</p>`;
+                }                if (editableBunks.length > 0) html += `<div style="margin-bottom: 8px; padding: 8px; background: #d1fae5; border-radius: 6px;"><div style="font-size: 0.8rem; color: #065f46;"><strong>✓ Can auto-reassign:</strong> ${editableBunks.join(', ')}</div></div>`;
                 if (nonEditableBunks.length > 0) html += `<div style="margin-bottom: 8px; padding: 8px; background: #fee2e2; border-radius: 6px;"><div style="font-size: 0.8rem; color: #991b1b;"><strong>✗ Other scheduler's bunks:</strong> ${nonEditableBunks.join(', ')}</div></div><div style="margin-top: 12px;"><div style="font-weight: 500; color: #374151; margin-bottom: 8px; font-size: 0.875rem;">How to handle their bunks?</div><div style="display: flex; flex-direction: column; gap: 8px;"><label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="notify" checked style="margin-top: 2px;"><div><div style="font-weight: 500; color: #374151;">📧 Notify other scheduler</div><div style="font-size: 0.75rem; color: #6b7280;">Create double-booking & send them a warning</div></div></label><label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="bypass" style="margin-top: 2px;"><div><div style="font-weight: 500; color: #374151;">🔓 Bypass & reassign (Admin mode)</div><div style="font-size: 0.75rem; color: #6b7280;">Override permissions and use smart regeneration</div></div></label></div></div>`;
                 html += `</div>`; 
                 conflictArea.innerHTML = html;
@@ -3034,12 +3054,17 @@ if (bypassStatus.highlight) {
             };
         }
 
-        // ★ Check for league games using this field (scans leagueAssignments directly — works post-generation)
+       // ★ Check for league games using this field (scans leagueAssignments directly — works post-generation)
         const claimDivSlots = window.divisionTimes?.[claimingDivision] || [];
+        // ★★★ AUTO MODE: Get time range from per-bunk slots or use first claiming bunk ★★★
+        const _claimPerBunk = claimingBunks.length > 0 
+            ? window.divisionTimes?.[claimingDivision]?._perBunkSlots?.[String(claimingBunks[0])]
+            : null;
+        const _claimSlotSource = _claimPerBunk || claimDivSlots;
         let leagueConflictDesc = null;
-        if (claimDivSlots.length > 0 && slots.length > 0) {
-            const claimStartMin = claimDivSlots[slots[0]]?.startMin;
-            const claimEndMin = claimDivSlots[slots[slots.length - 1]]?.endMin;
+        if (_claimSlotSource.length > 0 && slots.length > 0) {
+            const claimStartMin = _claimSlotSource[slots[0]]?.startMin;
+            const claimEndMin = _claimSlotSource[slots[slots.length - 1]]?.endMin;
             if (claimStartMin != null && claimEndMin != null) {
                 const leagueAssignments = window.leagueAssignments || {};
                 const fieldLower = fieldName.toLowerCase();
@@ -3794,17 +3819,25 @@ function minutesToTimeString(mins) {
         const previewArea = document.getElementById('multi-conflict-preview');
         const resolutionMode = document.getElementById('multi-resolution-mode');
         const submitBtn = document.getElementById('multi-edit-submit');
-// Check for global lock blocks (league games etc)
-const globalBlocks = result.blocked.filter(b => b.globalLock);
-if (globalBlocks.length > 0) {
+// Check for LEAGUE GAME blocks only — other locks are resolvable
+const leagueBlocks = result.blocked.filter(b => b.globalLock && 
+    (b.lockInfo?.lockedBy === 'league_game' || b.lockInfo?.leagueName));
+if (leagueBlocks.length > 0) {
     previewArea.style.display = 'block';
     previewArea.style.cssText = 'background: #fef2f2; border: 1px solid #ef4444; border-radius: 8px; padding: 12px;';
     previewArea.innerHTML = `<div style="color: #991b1b; font-weight: 500;">
         🚫 Cannot use this field
-        <div style="font-weight: 400; margin-top: 6px; font-size: 0.9rem;">${globalBlocks[0].reason}</div>
+        <div style="font-weight: 400; margin-top: 6px; font-size: 0.9rem;">${leagueBlocks[0].reason}</div>
     </div>`;
     submitBtn.disabled = true;
     return;
+}
+// Non-league global locks — treat as resolvable
+const softBlocks = result.blocked.filter(b => b.globalLock && !leagueBlocks.includes(b));
+if (softBlocks.length > 0) {
+    console.log('[PreviewMultiBunk] ' + softBlocks.length + ' soft global locks (non-league) — treating as resolvable');
+    // Remove soft blocks from blocked, treat as if they need reassignment
+    result.blocked = result.blocked.filter(b => !softBlocks.includes(b));
 }
         if (result.plan.length === 0 && result.blocked.length === 0) {
             previewArea.style.display = 'block';
