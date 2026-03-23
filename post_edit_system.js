@@ -35,9 +35,29 @@
     const MODAL_ID = 'post-edit-modal';
     const OVERLAY_ID = 'post-edit-overlay';
     const DEBUG = true;
-    const TRANSITION_TYPE = window.TRANSITION_TYPE || "Transition/Buffer";
-
+   const TRANSITION_TYPE = window.TRANSITION_TYPE || "Transition/Buffer";
+ 
     // REMOVED: ROTATION_CONFIG (Moved to unified_schedule_system.js)
+ 
+    // =========================================================================
+    // v3.3 — POST-EDIT INTERACTIONS CONFIG
+    // =========================================================================
+    const PEI_PX_PER_MIN = 2.5;       // Must match auto_schedule_grid.js
+    const PEI_SNAP_MINS = 5;
+    const PEI_MIN_BLOCK_DURATION = 10;
+    const PEI_LONG_PRESS_MS = 300;
+    const PEI_DRAG_THRESHOLD = 5;      // px before mousedown becomes drag
+ 
+    // v3.3 — Interaction state
+    let _peiResizing = false;
+    let _peiMoving = false;
+    let _peiState = null;            // active drag/resize state
+    let _peiTooltip = null;
+    let _peiConflictOverlays = [];
+    let _peiPendingMove = null;
+    let _peiSuppressClick = false;
+    let _peiSetupDone = false;
+ 
 
     // =========================================================================
     // DEBUG LOGGING
@@ -1233,11 +1253,7 @@
         debugLog('Click interceptor installed');
     }
 
-    // =========================================================================
-    // INITIALIZATION
-    // =========================================================================
-
-    function initPostEditSystem() {
+     function initPostEditSystem() {
         // Verify dependencies
         const missing = [];
         if (typeof window.smartRegenerateConflicts !== 'function') missing.push('smartRegenerateConflicts');
@@ -1258,9 +1274,13 @@
             document.head.appendChild(style);
         }
         
-        console.log('📝 Post-Edit System v3.2 initialized');
-        console.log('   ★★★ FIX: Owner permission check handles uninitialized AccessControl ★★★');
+         // v3.3: Initialize interactive resize / move / add
+        initPostEditInteractions();
+ 
+        console.log('📝 Post-Edit System v3.3 initialized');
+        console.log('   ★★★ v3.3: Resize / Move / Add / Real-time conflict detection ★★★');
     }
+ 
 
     // =========================================================================
     // EXPORTS
@@ -1281,6 +1301,14 @@
     } else {
         console.log('[PostEdit] unified_schedule_system.js already loaded — skipping overrides');
     }
+
+    // v3.3 — Post-Edit Interactions (always exported regardless of UnifiedScheduleSystem)
+    window.PostEditInteractions = {
+        augmentRenderedGrid: peiAugmentGrid,
+        ConflictEngine: PEI_ConflictEngine,
+        autoFillActivity: peiAutoFill,
+        init: initPostEditInteractions
+    };
    
     // =========================================================================
     // ★★★ CRITICAL PATCH: Make loadScheduleForDate respect _postEditInProgress ★★★
