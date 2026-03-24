@@ -562,7 +562,7 @@
                     for (let i = 0; i < sorted.length - 1; i++) { const gap = sorted[i + 1].startMin - sorted[i].endMin; if (gap > 0) gradeScore += gap * 15; }
                     tl.forEach(block => {
                         if (!block.layer) return;
-                        const { dMin } = resolveConstraints(block.layer, block.type);
+                        const { dMin } = resolveConstraints(block.layer, block.type, block);
                         if (block.endMin - block.startMin < dMin) gradeScore += (dMin - (block.endMin - block.startMin)) * 200;
                         const t = (block.type || 'slot').toLowerCase();
                         if (!typeTimings[t]) typeTimings[t] = [];
@@ -1547,7 +1547,7 @@
 
             // Draft specials (flex duration, full window, assigned activity)
             (draftResult.specials || []).forEach(special => {
-                const c = resolveConstraints(special.layer, 'special');
+                const c = resolveConstraints(special.layer, 'special', special);
                 // If the special has its own duration, use it to tighten dMin/dMax
                 let sDMin = c.dMin, sDMax = c.dMax;
                 if (special.duration && special.duration > 0) {
@@ -2010,8 +2010,8 @@
                         const next = template[i + 1];
                         const prevFlex = prev.dMin !== prev.dMax && prev._source !== 'phase0';
                         const nextFlex = next.dMin !== next.dMax && next._source !== 'phase0';
-                        const prevC = prevFlex ? resolveConstraints(prev.layer, prev.type) : null;
-                        const nextC = nextFlex ? resolveConstraints(next.layer, next.type) : null;
+                        const prevC = prevFlex ? resolveConstraints(prev.layer, prev.type, prev) : null;
+                const nextC = nextFlex ? resolveConstraints(next.layer, next.type, next) : null;
 
                         if (prevFlex && prevC && (prev.endMin - prev.startMin + gap) <= prevC.dMax) {
                             prev.endMin += gap; changed = true;
@@ -2160,7 +2160,7 @@
                 // CEL duration violations
                 timeline.forEach(block => {
                     if (block._microGap || (block._fromGapDetection && !block.layer)) return;
-                    const { dMin } = resolveConstraints(block.layer, (block.type || 'slot').toLowerCase());
+                    const { dMin } = resolveConstraints(block.layer, (block.type || 'slot').toLowerCase(), block);
                     const dur = block.endMin - block.startMin;
                     if (dur < dMin) score += (dMin - dur) * 200;
                 });
