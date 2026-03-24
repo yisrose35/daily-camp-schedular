@@ -445,7 +445,7 @@
         const TYPE_FLOORS = { swim: 30, league: 30, specialty_league: 30, special: 20, sport: 25, sports: 25, lunch: 20, snack: 15, snacks: 15, dismissal: 10, slot: GAP_MIN_DUR, activity: GAP_MIN_DUR, elective: 20 };
         const TYPE_CEILINGS = { swim: 60, league: 60, specialty_league: 60, special: 60, sport: GAP_MAX_DUR, sports: GAP_MAX_DUR, lunch: 45, snack: 30, snacks: 30, dismissal: 30, slot: GAP_MAX_DUR, activity: GAP_MAX_DUR, elective: 60 };
 
-        function resolveConstraints(layer, type) {
+        function resolveConstraints(layer, type, block) {
             const t = (type || layer?.type || 'slot').toLowerCase();
             const typeFloor = TYPE_FLOORS[t] || GAP_MIN_DUR;
             const typeCeiling = TYPE_CEILINGS[t] || GAP_MAX_DUR;
@@ -460,18 +460,19 @@
             let dMin = rawMin > 0 ? Math.max(ABSOLUTE_FLOOR, rawMin) : typeFloor;
             let dMax = Math.max(dMin, rawMax > 0 ? Math.max(ABSOLUTE_FLOOR, rawMax) : typeCeiling);
 
-            // ★ Special override: if a SPECIFIC special has its own duration, use that
+           // ★ Special override: if a SPECIFIC special has its own duration, use that
             // If not, the layer dMin/dMax range applies (flexible special)
-            if (t === 'special' && layer) {
-                const specName = layer._assignedSpecial || layer._resolvedSpecial || layer.event || layer.name;
-                if (specName) {
-                    const specDur = getSpecialDuration(specName, activityProperties, globalSettings, null);
-                    // Only override if the special HAS a configured duration
-                    // If getSpecialDuration returns null → use layer range (flexible)
-                    if (specDur && specDur > 0) {
-                        dMin = specDur;
-                        dMax = specDur;
-                    }
+            if (t === 'special') {
+                let specDur = null;
+                if (layer) {
+                    const specName = layer._assignedSpecial || layer._resolvedSpecial || layer.event || layer.name;
+                    if (specName) specDur = getSpecialDuration(specName, activityProperties, globalSettings, null);
+                }
+                // Fallback: block-level _specialDuration (covers layer-null blocks from draft/fallback)
+                if (!specDur && block && block._specialDuration) specDur = block._specialDuration;
+                if (specDur && specDur > 0) {
+                    dMin = specDur;
+                    dMax = specDur;
                 }
             }
 
@@ -484,7 +485,7 @@
             timeline.forEach((block, i) => {
                 if (block._fromGapDetection && !block.layer) return;
                 if (block._microGap) return;
-                const { dMin } = resolveConstraints(block.layer, (block.type || 'slot').toLowerCase());
+                const { dMin } = resolveConstraints(block.layer, (block.type || 'slot').toLowerCase(), block);
                 const dur = block.endMin - block.startMin;
                 if (dur < dMin) violations.push({ block, bunk, type: 'undersized', actual: dur, required: dMin, msg: (block.event || block.type) + ' at ' + block.startMin + ': ' + dur + 'min < min=' + dMin });
                 if (i < timeline.length - 1 && block.endMin > timeline[i + 1].startMin) violations.push({ block, bunk, type: 'overlap', msg: block.event + ' overlaps ' + timeline[i + 1].event });
