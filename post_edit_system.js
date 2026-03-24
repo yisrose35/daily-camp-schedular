@@ -1582,7 +1582,8 @@
         // Do NOT re-render — the drag already positioned the block correctly.
         // Re-rendering would snap it back to slot boundaries.
         // Only save the data. Delete/Add/Undo handle their own re-renders.
-        peiSave(bunk);
+        // Save data without triggering re-render (DOM is already correct)
+        peiSaveQuiet(bunk);
     }
 
     function peiApplyNewBlock(bunk, divName, startMin, endMin, activity, location) {
@@ -1646,7 +1647,7 @@
             }
         }
 
-        peiSave(bunk);
+        peiSaveQuiet(bunk);
         window._postEditInProgress = false;
     }
 
@@ -1811,7 +1812,7 @@
     }
 
     function peiSave(bunk) {
-        // Ensure flag is set
+        // Full save — may trigger re-render. Use for delete/undo/add.
         window._postEditInProgress = true;
         if (typeof window.resolveAndSaveSchedule === 'function') window.resolveAndSaveSchedule(bunk);
         else if (typeof bypassSaveAllBunks === 'function') bypassSaveAllBunks([bunk]);
@@ -1820,7 +1821,33 @@
             window.ScheduleDB.saveBunkSchedule(dateKey, bunk, window.scheduleAssignments[bunk]);
         }
         peiUpdateRotationHistory(bunk);
-        // Release flag after save settles
+        setTimeout(() => { window._postEditInProgress = false; }, 500);
+    }
+
+    /**
+     * Save data to localStorage + cloud WITHOUT triggering re-render.
+     * Used for resize/move where the DOM is already visually correct.
+     */
+    function peiSaveQuiet(bunk) {
+        window._postEditInProgress = true;
+        const dateKey = window.currentScheduleDate || window.currentDate ||
+            document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
+        // Save to localStorage
+        try {
+            localStorage.setItem(`scheduleAssignments_${dateKey}`, JSON.stringify(window.scheduleAssignments));
+            const allDaily = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+            if (!allDaily[dateKey]) allDaily[dateKey] = {};
+            allDaily[dateKey].scheduleAssignments = window.scheduleAssignments;
+            allDaily[dateKey]._postEditAt = Date.now();
+            localStorage.setItem('campDailyData_v1', JSON.stringify(allDaily));
+        } catch (e) { debugLog('peiSaveQuiet localStorage error:', e); }
+        // Cloud save (fire and forget — no re-render)
+        if (window.ScheduleDB?.saveBunkSchedule) {
+            window.ScheduleDB.saveBunkSchedule(dateKey, bunk, window.scheduleAssignments[bunk]);
+        } else {
+            window.saveSchedule?.();
+        }
+        peiUpdateRotationHistory(bunk);
         setTimeout(() => { window._postEditInProgress = false; }, 500);
     }
 
