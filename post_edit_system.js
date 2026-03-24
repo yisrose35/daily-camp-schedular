@@ -1533,10 +1533,25 @@
         window._postEditInProgress = true;
         window._postEditTimestamp = Date.now();
 
+        // Only write to slots that are null/Free — never overwrite existing activities
         const newSlots = [];
         for (let i = 0; i < divSlots.length; i++) {
-            if (divSlots[i].startMin < endMin && divSlots[i].endMin > startMin) newSlots.push(i);
+            if (divSlots[i].startMin < endMin && divSlots[i].endMin > startMin) {
+                const existing = assignments[i];
+                const isOccupied = existing && existing._activity &&
+                    existing._activity.toLowerCase() !== 'free' && !existing.continuation;
+                if (!isOccupied) newSlots.push(i);
+            }
         }
+
+        if (newSlots.length === 0) {
+            debugLog('PEI: No free slots for new block', startMin, '-', endMin);
+            _peiUndoStack.pop(); // Remove the snapshot
+            window._postEditInProgress = false;
+            peiShowBanner('No free slots available in that time range', 'error');
+            return;
+        }
+
         const fieldValue = location ? location + ' – ' + activity : activity;
         newSlots.forEach((idx, i) => {
             assignments[idx] = {
@@ -1556,11 +1571,87 @@
         document.querySelectorAll('.asg-wrap[data-pei-augmented]').forEach(w => delete w.dataset.peiAugmented);
         if (window.UnifiedScheduleSystem?.renderStaggeredView) window.UnifiedScheduleSystem.renderStaggeredView();
         else if (window.updateTable) window.updateTable();
-        // Re-augment after render completes
+        // Re-augment + fix custom positions after render completes
         setTimeout(() => {
             peiAugmentGrid();
+            peiReapplyCustomPositions();
             window._postEditInProgress = false;
         }, 300);
+    }
+
+    /**
+     * After a full re-render, the grid renderer positions blocks at slot boundaries.
+     * This fixup pass finds any entries with _postEdited + custom _startMin/_endMin
+     * and repositions their DOM blocks to match the user's custom sizing.
+     * Also injects free-gap "+" buttons for any freed space.
+     */
+    function peiReapplyCustomPositions() {
+        const wraps = document.querySelectorAll('.asg-wrap[data-pei-augmented="1"]');
+        wraps.forEach(wrap => {
+            const header = wrap.querySelector('.asg-header-title');
+            const divName = header ? header.textContent.trim() : '';
+            if (!divName) return;
+            const divConfig = peiGetDivConfig(divName);
+            const dayStart = peiParseTime(divConfig.startTime) || 540;
+            const bunks = divConfig.bunks || [];
+            const divSlots = window.divisionTimes?.[divName] || [];
+
+            const scrollEl = wrap.querySelector('.asg-scroll');
+            if (!scrollEl) return;
+            const firstBlock = scrollEl.querySelector('.asg-block') || scrollEl.querySelector('.asg-free');
+            if (!firstBlock) return;
+            const bodyRow = firstBlock.parentElement.parentElement;
+            const bunkCols = Array.from(bodyRow.children).slice(0, bunks.length);
+
+            bunkCols.forEach((col, idx) => {
+                const bunk = bunks[idx];
+                if (!bunk) return;
+                const assignments = window.scheduleAssignments?.[bunk] || [];
+                const bunkActs = peiBunkActivities(bunk, divName);
+                const blocks = col.querySelectorAll('.asg-block');
+
+                blocks.forEach((blk, bi) => {
+                    const matched = bunkActs[bi];
+                    if (!matched) return;
+                    const entry = matched.entry;
+                    if (!entry._postEdited || entry._startMin === undefined || entry._endMin === undefined) return;
+
+                    // This entry has custom times — find the slot it's in
+                    const slotStart = matched.startMin;  // slot boundary
+                    const slotEnd = matched.endMin;       // slot boundary
+                    const customStart = entry._startMin;
+                    const customEnd = entry._endMin;
+
+                    // If custom times differ from slot boundaries, reposition
+                    if (customStart !== slotStart || customEnd !== slotEnd) {
+                        const newTopPx = (customStart - dayStart) * PEI_PX_PER_MIN + 2;
+                        const newHeightPx = (customEnd - customStart) * PEI_PX_PER_MIN - 4;
+                        blk.style.top = newTopPx + 'px';
+                        blk.style.height = newHeightPx + 'px';
+
+                        // Update data attributes
+                        blk.dataset.peiStartMin = customStart;
+                        blk.dataset.peiEndMin = customEnd;
+
+                        // Update duration label
+                        const dur = customEnd - customStart;
+                        const allSubs = blk.querySelectorAll('.asg-block-sub');
+                        for (const sub of allSubs) {
+                            if (/\d+min/.test(sub.textContent)) { sub.textContent = dur + 'min'; break; }
+                        }
+
+                        // Inject free gap if block was shortened
+                        if (customEnd < slotEnd && (slotEnd - customEnd) >= PEI_MIN_BLOCK_DURATION) {
+                            peiInjectFreeGap(col, blk, slotStart, slotEnd, customStart, customEnd, dayStart, bunk, divName);
+                        }
+                        if (customStart > slotStart && (customStart - slotStart) >= PEI_MIN_BLOCK_DURATION) {
+                            peiInjectFreeGap(col, blk, slotStart, slotEnd, customStart, customEnd, dayStart, bunk, divName);
+                        }
+                    }
+                });
+            });
+        });
+        debugLog('Custom positions re-applied after re-render');
     }
 
     function peiSave(bunk) {
@@ -1791,6 +1882,7 @@
 
     window.PostEditInteractions = {
         augmentRenderedGrid: peiAugmentGrid,
+        reapplyCustomPositions: peiReapplyCustomPositions,
         ConflictEngine: PEI_ConflictEngine,
         autoFillActivity: peiAutoFill,
         init: initPostEditInteractions,
