@@ -2099,8 +2099,20 @@
                 log('[PACK] ' + bunk + ': ' + template.length + ' blocks, dead=' + dead);
             }
 
-            return template.sort((a, b) => a.startMin - b.startMin);
-        }
+            // ── Post-pack enforcement: clamp configured specials to exact duration ──
+            for (let i = 0; i < template.length; i++) {
+                const blk = template[i];
+                if ((blk.type || '').toLowerCase() !== 'special') continue;
+                const eName = blk.event || blk._assignedSpecial || blk._draftActivity || blk.name;
+                if (!eName) continue;
+                const cfgDur = getSpecialDuration(eName, activityProperties, globalSettings, null);
+                if (!cfgDur || cfgDur <= 0) continue;
+                const actualDur = blk.endMin - blk.startMin;
+                if (actualDur === cfgDur) continue;
+                blk.endMin = blk.startMin + cfgDur;
+            }
+
+            return template.sort((a, b) => a.startMin - b.startMin);        }
 
 
         // =====================================================================
