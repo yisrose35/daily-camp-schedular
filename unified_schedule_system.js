@@ -398,13 +398,41 @@ function shouldHighlightBunk(bunkName) {
         if (cloudLoaded && window.divisionTimes && Object.keys(window.divisionTimes).length > 0) {
             // Keep cloud data
             debugLog('Using divisionTimes from cloud');
+            // ★★★ AUTO MODE: Reattach _perBunkSlots if lost during serialization ★★★
+            if (dateData._perBunkSlotsData && window.divisionTimes) {
+                Object.keys(dateData._perBunkSlotsData).forEach(grade => {
+                    if (window.divisionTimes[grade] && !window.divisionTimes[grade]._perBunkSlots) {
+                        window.divisionTimes[grade]._isPerBunk = true;
+                        window.divisionTimes[grade]._perBunkSlots = dateData._perBunkSlotsData[grade];
+                    }
+                });
+            }
         } else if (window.divisionTimes && Object.keys(window.divisionTimes).length > 0) {
             // Keep existing
             debugLog('Using existing divisionTimes');
+            // ★★★ AUTO MODE: Reattach _perBunkSlots if lost during serialization ★★★
+            if (dateData._perBunkSlotsData && window.divisionTimes) {
+                Object.keys(dateData._perBunkSlotsData).forEach(grade => {
+                    if (window.divisionTimes[grade] && !window.divisionTimes[grade]._perBunkSlots) {
+                        window.divisionTimes[grade]._isPerBunk = true;
+                        window.divisionTimes[grade]._perBunkSlots = dateData._perBunkSlotsData[grade];
+                    }
+                });
+            }
         } else if (dateData.divisionTimes && Object.keys(dateData.divisionTimes).length > 0) {
             // Deserialize from storage
-            window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(dateData.divisionTimes) || dateData.divisionTimes;
+           window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(dateData.divisionTimes) || dateData.divisionTimes;
             debugLog('Loaded divisionTimes from storage');
+            // ★★★ AUTO MODE: Reattach _perBunkSlots from saved data ★★★
+            if (dateData._perBunkSlotsData) {
+                Object.keys(dateData._perBunkSlotsData).forEach(grade => {
+                    if (window.divisionTimes[grade]) {
+                        window.divisionTimes[grade]._isPerBunk = true;
+                        window.divisionTimes[grade]._perBunkSlots = dateData._perBunkSlotsData[grade];
+                    }
+                });
+                debugLog('Reattached _perBunkSlots for', Object.keys(dateData._perBunkSlotsData).length, 'grades');
+            }
         } else {
             // Build from skeleton
             const skeleton = getSkeleton(dateKey);
