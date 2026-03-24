@@ -53,7 +53,7 @@
     // =========================================================================
     const PEI_PX_PER_MIN = 2.5;
     const PEI_SNAP_MINS = 5;
-    const PEI_MIN_BLOCK_DURATION = 10;
+    const PEI_MIN_BLOCK_DURATION = 5;
     const PEI_LONG_PRESS_MS = 300;
     const PEI_DRAG_THRESHOLD = 5;
 
@@ -1527,46 +1527,151 @@
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divSlots.length);
         const assignments = window.scheduleAssignments[bunk];
 
-        // Snapshot for undo
         peiSnapshotBunk(bunk, `Add ${activity} at ${peiToLabel(startMin)}`);
-
         window._postEditInProgress = true;
         window._postEditTimestamp = Date.now();
 
-        // Only write to slots that are null/Free — never overwrite existing activities
-        const newSlots = [];
+        const fieldValue = location ? location + ' – ' + activity : activity;
+        let written = false;
+
+        // Try 1: Write to null/Free slots
+        const freeSlots = [];
         for (let i = 0; i < divSlots.length; i++) {
             if (divSlots[i].startMin < endMin && divSlots[i].endMin > startMin) {
                 const existing = assignments[i];
                 const isOccupied = existing && existing._activity &&
                     existing._activity.toLowerCase() !== 'free' && !existing.continuation;
-                if (!isOccupied) newSlots.push(i);
+                if (!isOccupied) freeSlots.push(i);
             }
         }
 
-        if (newSlots.length === 0) {
-            debugLog('PEI: No free slots for new block', startMin, '-', endMin);
-            _peiUndoStack.pop(); // Remove the snapshot
+        if (freeSlots.length > 0) {
+            freeSlots.forEach((idx, i) => {
+                assignments[idx] = {
+                    field: fieldValue, sport: activity, _activity: activity,
+                    continuation: i > 0, _fixed: true, _postEdited: true, _pinned: true,
+                    _startMin: startMin, _endMin: endMin, _blockStart: startMin
+                };
+            });
+            written = true;
+        }
+
+        // Try 2: Slot is occupied by a shortened block — attach as _subEntry
+        if (!written) {
+            for (let i = 0; i < divSlots.length; i++) {
+                if (divSlots[i].startMin < endMin && divSlots[i].endMin > startMin) {
+                    const existing = assignments[i];
+                    if (existing && existing._postEdited && existing._endMin !== undefined) {
+                        // This slot has a shortened entry — attach sub-entry
+                        if (!existing._subEntries) existing._subEntries = [];
+                        existing._subEntries.push({
+                            field: fieldValue, sport: activity, _activity: activity,
+                            _startMin: startMin, _endMin: endMin, _postEdited: true, _pinned: true
+                        });
+                        written = true;
+                        debugLog('PEI: Added as _subEntry on slot', i);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!written) {
+            debugLog('PEI: No slots available for new block', startMin, '-', endMin);
+            _peiUndoStack.pop();
             window._postEditInProgress = false;
-            peiShowBanner('No free slots available in that time range', 'error');
+            peiShowBanner('No space available in that time range', 'error');
             return;
         }
 
-        const fieldValue = location ? location + ' – ' + activity : activity;
-        newSlots.forEach((idx, i) => {
-            assignments[idx] = {
-                field: fieldValue, sport: activity, _activity: activity,
-                continuation: i > 0, _fixed: true, _postEdited: true, _pinned: true,
-                _startMin: startMin, _endMin: endMin, _blockStart: startMin
-            };
+        // Inject visual block directly (don't rely on re-render which doesn't know custom times)
+        peiInjectActivityBlock(bunk, divName, startMin, endMin, activity, location);
+        // Remove the free gap that was there
+        document.querySelectorAll('.pei-injected-free').forEach(el => {
+            // Check if this free gap overlaps the new block's time
+            const freeTop = parseFloat(el.style.top);
+            const freeHeight = parseFloat(el.style.height);
+            const blkTop = (startMin - (peiParseTime(peiGetDivConfig(divName).startTime) || 540)) * PEI_PX_PER_MIN + 2;
+            if (Math.abs(freeTop - blkTop) < 5) el.remove();
         });
-        peiTriggerReRender();
+
         peiSave(bunk);
+        window._postEditInProgress = false;
+    }
+
+    /**
+     * Inject a visual activity block into the DOM at a specific time position.
+     * Used when adding activities into gaps created by resizing.
+     */
+    function peiInjectActivityBlock(bunk, divName, startMin, endMin, activity, location) {
+        const divConfig = peiGetDivConfig(divName);
+        const dayStart = peiParseTime(divConfig.startTime) || 540;
+        const bunks = divConfig.bunks || [];
+        const bunkIdx = bunks.indexOf(bunk);
+        if (bunkIdx < 0) return;
+
+        // Find the bunk column
+        const wrap = Array.from(document.querySelectorAll('.asg-wrap')).find(w => {
+            const h = w.querySelector('.asg-header-title');
+            return h && h.textContent.trim() === divName;
+        });
+        if (!wrap) return;
+        const scrollEl = wrap.querySelector('.asg-scroll');
+        if (!scrollEl) return;
+        const firstBlock = scrollEl.querySelector('.asg-block') || scrollEl.querySelector('.asg-free');
+        if (!firstBlock) return;
+        const bodyRow = firstBlock.parentElement.parentElement;
+        const col = bodyRow.children[bunkIdx];
+        if (!col) return;
+
+        const topPx = (startMin - dayStart) * PEI_PX_PER_MIN + 2;
+        const heightPx = (endMin - startMin) * PEI_PX_PER_MIN - 4;
+        const dur = endMin - startMin;
+
+        const blk = document.createElement('div');
+        blk.className = 'asg-block pei-injected-block';
+        blk.style.cssText = `position:absolute;top:${topPx}px;left:3px;right:3px;height:${heightPx}px;background:#d1fae5;border:1px solid #6ee7b7;color:#065f46;border-radius:5px;overflow:visible;display:flex;flex-direction:column;justify-content:center;padding:3px 6px;box-sizing:border-box;cursor:grab;z-index:1;`;
+        blk.dataset.peiBunk = bunk;
+        blk.dataset.peiStartMin = startMin;
+        blk.dataset.peiEndMin = endMin;
+        blk.dataset.peiDivision = divName;
+        blk.dataset.peiField = location || '';
+        blk.dataset.peiActivity = activity;
+        blk.dataset.peiSlotIdx = '-1'; // sub-entry, no direct slot
+
+        // Content
+        if (heightPx >= 35) {
+            const nameEl = document.createElement('div');
+            nameEl.className = 'asg-block-name';
+            nameEl.style.cssText = 'font-size:0.68rem;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+            nameEl.textContent = activity;
+            blk.appendChild(nameEl);
+            if (location && location !== activity) {
+                const subEl = document.createElement('div');
+                subEl.className = 'asg-block-sub';
+                subEl.style.cssText = 'font-size:0.58rem;opacity:0.72;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+                subEl.textContent = location;
+                blk.appendChild(subEl);
+            }
+            const durEl = document.createElement('div');
+            durEl.className = 'asg-block-sub';
+            durEl.style.cssText = 'font-size:0.58rem;opacity:0.72;';
+            durEl.textContent = dur + 'min';
+            blk.appendChild(durEl);
+        } else {
+            blk.textContent = activity;
+            blk.style.fontSize = '0.63rem';
+            blk.style.fontWeight = '700';
+        }
+        blk.title = activity + '\n' + peiToLabel(startMin) + ' – ' + peiToLabel(endMin) + ' (' + dur + 'min)';
+
+        col.appendChild(blk);
+        debugLog('PEI: Injected activity block', activity, 'at', peiToLabel(startMin), '-', peiToLabel(endMin));
     }
 
     function peiTriggerReRender() {
-        // Clean up injected free gaps (re-render creates proper ones)
-        document.querySelectorAll('.pei-injected-free').forEach(el => el.remove());
+        // Clean up injected elements (re-render creates proper ones)
+        document.querySelectorAll('.pei-injected-free, .pei-injected-block').forEach(el => el.remove());
         // Clear augmented flags so observer re-augments after render
         document.querySelectorAll('.asg-wrap[data-pei-augmented]').forEach(w => delete w.dataset.peiAugmented);
         if (window.UnifiedScheduleSystem?.renderStaggeredView) window.UnifiedScheduleSystem.renderStaggeredView();
@@ -1640,13 +1745,25 @@
                             if (/\d+min/.test(sub.textContent)) { sub.textContent = dur + 'min'; break; }
                         }
 
-                        // Inject free gap if block was shortened
-                        if (customEnd < slotEnd && (slotEnd - customEnd) >= PEI_MIN_BLOCK_DURATION) {
-                            peiInjectFreeGap(col, blk, slotStart, slotEnd, customStart, customEnd, dayStart, bunk, divName);
+                        // Inject free gap if block was shortened (and no sub-entry fills it)
+                        const hasSubFilling = entry._subEntries && entry._subEntries.length > 0;
+                        if (!hasSubFilling) {
+                            if (customEnd < slotEnd && (slotEnd - customEnd) >= PEI_MIN_BLOCK_DURATION) {
+                                peiInjectFreeGap(col, blk, slotStart, slotEnd, customStart, customEnd, dayStart, bunk, divName);
+                            }
+                            if (customStart > slotStart && (customStart - slotStart) >= PEI_MIN_BLOCK_DURATION) {
+                                peiInjectFreeGap(col, blk, slotStart, slotEnd, customStart, customEnd, dayStart, bunk, divName);
+                            }
                         }
-                        if (customStart > slotStart && (customStart - slotStart) >= PEI_MIN_BLOCK_DURATION) {
-                            peiInjectFreeGap(col, blk, slotStart, slotEnd, customStart, customEnd, dayStart, bunk, divName);
-                        }
+                    }
+
+                    // Recreate _subEntry blocks (activities added into freed gaps)
+                    if (entry._subEntries && entry._subEntries.length > 0) {
+                        entry._subEntries.forEach(sub => {
+                            if (!sub._startMin || !sub._endMin || !sub._activity) return;
+                            const fieldName = sub.field ? sub.field.split(' – ')[0] : null;
+                            peiInjectActivityBlock(bunk, divName, sub._startMin, sub._endMin, sub._activity, fieldName);
+                        });
                     }
                 });
             });
