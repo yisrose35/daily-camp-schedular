@@ -1113,7 +1113,7 @@
             addBtn.className = 'pei-add-btn';
             addBtn.innerHTML = '+';
             addBtn.title = 'Add activity here';
-            addBtn.style.cssText = 'width:26px;height:26px;border-radius:50%;background:rgba(37,99,235,0.1);color:#2563eb;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s;z-index:4;';
+            addBtn.style.cssText = 'width:26px;height:26px;border-radius:50%;background:rgba(37,99,235,0.1);color:#2563eb;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s,transform 0.15s;z-index:4;';
             freeEl.appendChild(addBtn);
             freeEl.addEventListener('mouseenter', () => { addBtn.style.opacity = '1'; freeEl.style.borderColor = '#93c5fd'; });
             freeEl.addEventListener('mouseleave', () => { addBtn.style.opacity = '0'; freeEl.style.borderColor = '#d1d5db'; });
@@ -1248,13 +1248,10 @@
         const locations = getAllLocations();
         const fieldOpts = locations.filter(l => l.type === 'field').map(l => `<option value="${l.name}">${l.name}${l.capacity > 1 ? ` (cap:${l.capacity})` : ''}</option>`).join('');
         const specOpts = locations.filter(l => l.type === 'special').map(l => `<option value="${l.name}">${l.name}</option>`).join('');
-        const todayDone = new Set();
-        peiBunkActivities(bunk, divName).forEach(a => { const n = (a.entry._activity || '').toLowerCase(); if (n && n !== 'free') todayDone.add(n); });
-        const suggestions = [];
-        const app1 = (window.loadGlobalSettings?.() || {}).app1 || {};
-        (app1.fields || []).forEach(f => { if (!f.name || f.available === false) return; (f.activities || f.sports || []).forEach(sport => { const sn = typeof sport === 'string' ? sport : sport.name; if (sn && !todayDone.has(sn.toLowerCase())) suggestions.push({ name: sn, field: f.name }); }); });
-        (app1.specialActivities || []).forEach(s => { if (s.name && !todayDone.has(s.name.toLowerCase())) suggestions.push({ name: s.name, field: s.name }); });
-        const sugHtml = suggestions.length > 0 ? `<div><label style="display:block;font-weight:500;color:#374151;margin-bottom:8px;">Quick Pick</label><div id="pei-add-suggestions" style="display:flex;flex-wrap:wrap;gap:6px;">${suggestions.slice(0, 8).map(a => `<button class="pei-suggestion-btn" data-activity="${a.name}" data-field="${a.field || ''}" style="padding:6px 12px;border:1px solid #d1d5db;border-radius:20px;background:#fff;font-size:0.8rem;cursor:pointer;color:#374151;transition:all 0.15s;">${a.name}${a.field ? ` <span style='font-size:0.7rem;opacity:0.6'>@ ${a.field}</span>` : ''}</button>`).join('')}</div></div>` : '';
+        // Build constraint-aware suggestions by generating many candidates and taking top 8
+        const allCandidates = peiAutoFillCandidates(bunk, divName, startMin, endMin);
+        const suggestions = allCandidates.slice(0, 8);
+        const sugHtml = suggestions.length > 0 ? `<div><label style="display:block;font-weight:500;color:#374151;margin-bottom:8px;">Quick Pick</label><div id="pei-add-suggestions" style="display:flex;flex-wrap:wrap;gap:6px;">${suggestions.map(a => `<button class="pei-suggestion-btn" data-activity="${a.activity}" data-field="${a.field || ''}" style="padding:6px 12px;border:1px solid #d1d5db;border-radius:20px;background:#fff;font-size:0.8rem;cursor:pointer;color:#374151;transition:all 0.15s;">${a.activity}${a.field && a.field !== a.activity ? ` <span style='font-size:0.7rem;opacity:0.6'>@ ${a.field}</span>` : ''}</button>`).join('')}</div></div>` : '';
 
         const overlay = document.createElement('div'); overlay.id = 'pei-add-overlay';
         overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:100003;display:flex;align-items:center;justify-content:center;animation:pei-fade-in 0.2s ease-out';
@@ -1320,31 +1317,76 @@
         else if (c.fieldConflicts.length > 0) { el.style.display = 'block'; el.style.cssText = 'padding:10px 14px;border-radius:8px;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:0.85rem;display:block;'; el.innerHTML = '⚠️ ' + location + ' in use by: ' + c.fieldConflicts.map(x => x.bunk).join(', '); }
     }
 
-    // ── Auto-fill ──
-    function peiAutoFill(bunk, divName, startMin, endMin) {
-        const todayDone = new Set();
-        peiBunkActivities(bunk, divName).forEach(a => { const n = (a.entry._activity || '').toLowerCase(); if (n && n !== 'free') todayDone.add(n); });
-        const app1 = (window.loadGlobalSettings?.() || {}).app1 || {};
+    // ── Auto-fill (constraint-aware) ──
+    function peiAutoFillCandidates(bunk, divName, startMin, endMin) {
+        // 1) What has this bunk already done today (activities AND fields)?
+        const todayActivities = new Set();
+        const todayFields = new Set();
+        peiBunkActivities(bunk, divName).forEach(a => {
+            const actName = (a.entry._activity || '').toLowerCase();
+            const fieldName = (typeof a.entry.field === 'string' ? a.entry.field : '').toLowerCase();
+            if (actName && actName !== 'free') todayActivities.add(actName);
+            if (fieldName && fieldName !== 'free' && !fieldName.includes('–')) todayFields.add(fieldName);
+            if (fieldName.includes('–')) { const f = fieldName.split('–')[0].trim().toLowerCase(); if (f) todayFields.add(f); }
+        });
+
+        // 2) Check rainy day status
+        const settings = window.loadGlobalSettings?.() || {};
+        const app1 = settings.app1 || {};
+        const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        const isRainyDay = settings.rainyDays?.[currentDate] ||
+                           window.SkeletonSandbox?.isRainyDay?.(currentDate) || false;
+
+        // 3) Build candidates
         const candidates = [];
+
         (app1.fields || []).forEach(f => {
             if (!f.name || f.available === false) return;
+            if (todayFields.has(f.name.toLowerCase())) return;
+            if (f.rainyDayOnly && !isRainyDay) return;
+            if (f.outdoors && isRainyDay && !f.rainyDayOnly) return;
+
             (f.activities || f.sports || []).forEach(sport => {
                 const sn = typeof sport === 'string' ? sport : sport.name;
-                if (!sn || todayDone.has(sn.toLowerCase())) return;
+                if (!sn || todayActivities.has(sn.toLowerCase())) return;
                 const cap = f.sharableWith?.capacity ? parseInt(f.sharableWith.capacity) || 1 : 1;
-                let avail = true;
-                if (window.TimeBasedFieldUsage?.checkAvailability) avail = window.TimeBasedFieldUsage.checkAvailability(f.name, startMin, endMin, cap, bunk).available;
-                candidates.push({ activity: sn, field: f.name, available: avail, score: avail ? (100 - (window.RotationEngine?.getActivityCount?.(bunk, sn) || 0)) : -100 });
+                if (window.TimeBasedFieldUsage?.checkAvailability) {
+                    if (!window.TimeBasedFieldUsage.checkAvailability(f.name, startMin, endMin, cap, bunk).available) return;
+                }
+                const usageCount = window.RotationEngine?.getActivityCount?.(bunk, sn) || 0;
+                const daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, sn, 0);
+                let score = 100 - usageCount;
+                if (daysSince === null) score += 20;
+                else if (daysSince >= 7) score += 10;
+                else if (daysSince >= 3) score += 5;
+                candidates.push({ activity: sn, field: f.name, score });
             });
         });
+
         (app1.specialActivities || []).forEach(s => {
-            if (!s.name || todayDone.has(s.name.toLowerCase())) return;
+            if (!s.name || todayActivities.has(s.name.toLowerCase())) return;
+            if (s.rainyDayOnly && !isRainyDay) return;
+            if (s.outdoors && isRainyDay && !s.rainyDayOnly) return;
             const cap = s.sharableWith?.capacity ? parseInt(s.sharableWith.capacity) || 1 : 1;
-            let avail = true;
-            if (window.TimeBasedFieldUsage?.checkAvailability) avail = window.TimeBasedFieldUsage.checkAvailability(s.name, startMin, endMin, cap, bunk).available;
-            candidates.push({ activity: s.name, field: s.name, available: avail, score: avail ? (100 - (window.RotationEngine?.getActivityCount?.(bunk, s.name) || 0)) : -100 });
+            if (window.TimeBasedFieldUsage?.checkAvailability) {
+                if (!window.TimeBasedFieldUsage.checkAvailability(s.name, startMin, endMin, cap, bunk).available) return;
+            }
+            const usageCount = window.RotationEngine?.getActivityCount?.(bunk, s.name) || 0;
+            const daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, s.name, 0);
+            let score = 100 - usageCount;
+            if (daysSince === null) score += 20;
+            else if (daysSince >= 7) score += 10;
+            else if (daysSince >= 3) score += 5;
+            candidates.push({ activity: s.name, field: s.name, score });
         });
+
         candidates.sort((a, b) => b.score - a.score);
+        return candidates;
+    }
+
+    function peiAutoFill(bunk, divName, startMin, endMin) {
+        const candidates = peiAutoFillCandidates(bunk, divName, startMin, endMin);
+        debugLog('Auto-fill candidates for', bunk, ':', candidates.length, 'options. Top 3:', candidates.slice(0, 3));
         return candidates[0] || null;
     }
 
@@ -1594,8 +1636,8 @@
                         addBtn.className = 'pei-add-btn';
                         addBtn.innerHTML = '+';
                         addBtn.title = 'Add activity here';
-                        addBtn.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:26px;height:26px;border-radius:50%;background:rgba(37,99,235,0.1);color:#2563eb;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s;z-index:4;pointer-events:auto;';
-                        freeEl.style.position = 'absolute'; // ensure positioning context
+                        addBtn.style.cssText = 'width:26px;height:26px;border-radius:50%;background:rgba(37,99,235,0.1);color:#2563eb;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s,transform 0.15s;z-index:4;pointer-events:auto;';
+                        // Parent asg-free already uses flex centering
                         freeEl.appendChild(addBtn);
                         freeEl.addEventListener('mouseenter', () => { addBtn.style.opacity = '1'; });
                         freeEl.addEventListener('mouseleave', () => { addBtn.style.opacity = '0'; });
@@ -1677,7 +1719,7 @@
     function peiInjectStyles() {
         if (document.getElementById('pei-styles')) return;
         const s = document.createElement('style'); s.id = 'pei-styles';
-        s.textContent = `.pei-resize-handle{touch-action:none;background:transparent;}.pei-resize-handle:hover{background:rgba(59,130,246,0.4)!important;}@media(pointer:coarse){.pei-resize-handle{height:12px!important;opacity:.5!important}}.asg-block[data-pei-bunk]{touch-action:none;overflow:visible!important;transition:box-shadow 0.2s}.asg-block[data-pei-bunk]:active{cursor:grabbing!important}.pei-conflict-overlay{pointer-events:none;animation:pei-pulse 1s ease-in-out infinite}@keyframes pei-pulse{0%,100%{opacity:.3}50%{opacity:.6}}@keyframes pei-slide-up{from{transform:translate(-50%,20px);opacity:0}to{transform:translate(-50%,0);opacity:1}}@keyframes pei-fade-in{from{opacity:0}to{opacity:1}}.asg-free{cursor:default;position:relative;transition:border-color 0.2s}.asg-free:hover{border-color:#93c5fd!important;background:repeating-linear-gradient(45deg,#eff6ff,#eff6ff 4px,#dbeafe 4px,#dbeafe 8px)!important}.pei-add-btn{font-family:-apple-system,BlinkMacSystemFont,sans-serif;user-select:none;line-height:1;}.pei-add-btn:hover{transform:translate(-50%,-50%) scale(1.15)!important;box-shadow:0 2px 8px rgba(37,99,235,0.3);}[data-pei-bunk]:hover{background:rgba(59,130,246,.01)}`;
+        s.textContent = `.pei-resize-handle{touch-action:none;background:transparent;}.pei-resize-handle:hover{background:rgba(59,130,246,0.4)!important;}@media(pointer:coarse){.pei-resize-handle{height:12px!important;opacity:.5!important}}.asg-block[data-pei-bunk]{touch-action:none;overflow:visible!important;transition:box-shadow 0.2s}.asg-block[data-pei-bunk]:active{cursor:grabbing!important}.pei-conflict-overlay{pointer-events:none;animation:pei-pulse 1s ease-in-out infinite}@keyframes pei-pulse{0%,100%{opacity:.3}50%{opacity:.6}}@keyframes pei-slide-up{from{transform:translate(-50%,20px);opacity:0}to{transform:translate(-50%,0);opacity:1}}@keyframes pei-fade-in{from{opacity:0}to{opacity:1}}.asg-free{cursor:default;position:relative;transition:border-color 0.2s}.asg-free:hover{border-color:#93c5fd!important;background:repeating-linear-gradient(45deg,#eff6ff,#eff6ff 4px,#dbeafe 4px,#dbeafe 8px)!important}.pei-add-btn{font-family:-apple-system,BlinkMacSystemFont,sans-serif;user-select:none;line-height:1;transition:transform 0.15s,opacity 0.2s,background 0.2s;}.pei-add-btn:hover{transform:scale(1.15)!important;box-shadow:0 2px 8px rgba(37,99,235,0.3);}[data-pei-bunk]:hover{background:rgba(59,130,246,.01)}`;
         document.head.appendChild(s);
     }
 
