@@ -1079,8 +1079,28 @@
         for (const sub of allSubsEnd) { if (/\d+min/.test(sub.textContent)) { sub.textContent = finalDur + 'min'; break; } }
         const c = PEI_ConflictEngine.check(s.bunk, s.currentStartMin, s.currentEndMin, s.fieldName, s.slotIdx);
         peiApplyTimeChange(s.bunk, s.slotIdx, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.divName);
-        // Scan column for ALL free gaps and inject combined "+" blocks
-        peiScanAndInjectGaps(s.col, s.bunk, s.divName, s.dayStart, s.dayEnd);
+        // Directly inject free gap from what we know
+        const _col = s.col, _bunk = s.bunk, _divName = s.divName, _dayStart = s.dayStart;
+        let gapStart = -1, gapEnd = -1;
+        if (s.currentEndMin < s.origEndMin) { gapStart = s.currentEndMin; gapEnd = s.origEndMin; }     // shortened bottom
+        else if (s.currentStartMin > s.origStartMin) { gapStart = s.origStartMin; gapEnd = s.currentStartMin; } // shortened top
+        if (gapStart >= 0 && (gapEnd - gapStart) >= PEI_MIN_BLOCK_DURATION) {
+            // Remove any existing injected free in this column that overlaps
+            _col.querySelectorAll('.pei-injected-free').forEach(el => {
+                const elTop = parseFloat(el.style.top);
+                const newTop = (gapStart - _dayStart) * PEI_PX_PER_MIN + 2;
+                // If existing gap is adjacent/overlapping, merge by removing old
+                const existingGapStart = _dayStart + ((elTop - 2) / PEI_PX_PER_MIN);
+                const existingGapEnd = existingGapStart + ((parseFloat(el.style.height) + 4) / PEI_PX_PER_MIN);
+                // Merge: if gaps touch or overlap, expand our gap range and remove old
+                if (existingGapStart <= gapEnd + PEI_SNAP_MINS && existingGapEnd >= gapStart - PEI_SNAP_MINS) {
+                    gapStart = Math.min(gapStart, existingGapStart);
+                    gapEnd = Math.max(gapEnd, existingGapEnd);
+                    el.remove();
+                }
+            });
+            peiInjectFreeGapDirect(_col, gapStart, gapEnd, _dayStart, _bunk, _divName);
+        }
         if (c.fieldConflicts.length > 0) peiShowBanner('Resized — field conflict: ' + c.fieldConflicts.map(x => x.bunk).join(', '), 'warning', true);
         else peiShowBanner('Resized to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success', true);
         _peiResizing = false; _peiState = null;
@@ -1621,7 +1641,7 @@
                 if (fb) {
                     const br = fb.parentElement.parentElement;
                     const col = br.children[bunkIdx];
-                    if (col) peiScanAndInjectGaps(col, bunk, divName, dayStart, dayEnd);
+                    if (col) setTimeout(() => peiScanAndInjectGaps(col, bunk, divName, dayStart, dayEnd), 600);
                 }
             }
         }
@@ -1776,13 +1796,15 @@
                             if (/\d+min/.test(sub.textContent)) { sub.textContent = dur + 'min'; break; }
                         }
 
+                        // Inject free gap for freed space
+                        if (customEnd < slotEnd && (slotEnd - customEnd) >= PEI_MIN_BLOCK_DURATION) {
+                            peiInjectFreeGapDirect(col, customEnd, slotEnd, dayStart, bunk, divName);
+                        }
+                        if (customStart > slotStart && (customStart - slotStart) >= PEI_MIN_BLOCK_DURATION) {
+                            peiInjectFreeGapDirect(col, slotStart, customStart, dayStart, bunk, divName);
+                        }
                     }
                 });
-
-                // After repositioning all blocks in this column, scan for gaps
-                const dc = peiGetDivConfig(divName);
-                const dayEnd = peiParseTime(dc.endTime) || 960;
-                peiScanAndInjectGaps(col, bunk, divName, dayStart, dayEnd);
             });
         });
         debugLog('Custom positions re-applied after re-render');
