@@ -469,8 +469,8 @@
                     // Only override if the special HAS a configured duration
                     // If getSpecialDuration returns null → use layer range (flexible)
                     if (specDur && specDur > 0) {
-                        dMin = Math.max(dMin, specDur);
-                        dMax = Math.max(dMin, dMax);
+                        dMin = specDur;
+                        dMax = specDur;
                     }
                 }
             }
