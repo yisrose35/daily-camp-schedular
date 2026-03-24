@@ -1079,26 +1079,68 @@
         for (const sub of allSubsEnd) { if (/\d+min/.test(sub.textContent)) { sub.textContent = finalDur + 'min'; break; } }
         const c = PEI_ConflictEngine.check(s.bunk, s.currentStartMin, s.currentEndMin, s.fieldName, s.slotIdx);
         peiApplyTimeChange(s.bunk, s.slotIdx, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.divName);
-        // Inject free-space block in the gap created by shortening
-        peiInjectFreeGap(s.col, s.block, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.dayStart, s.bunk, s.divName);
+        // Scan column for ALL free gaps and inject combined "+" blocks
+        peiScanAndInjectGaps(s.col, s.bunk, s.divName, s.dayStart, s.dayEnd);
         if (c.fieldConflicts.length > 0) peiShowBanner('Resized — field conflict: ' + c.fieldConflicts.map(x => x.bunk).join(', '), 'warning', true);
         else peiShowBanner('Resized to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success', true);
         _peiResizing = false; _peiState = null;
     }
 
     /**
-     * After resize shortens a block, inject a visual free-space indicator with "+" button
-     * in the gap that was freed.
+     * Scan a bunk column for all free time gaps and inject combined "+" blocks.
+     * Replaces per-resize gap injection — naturally combines multiple resizes.
      */
-    function peiInjectFreeGap(col, block, origStart, origEnd, newStart, newEnd, dayStart, bunk, divName) {
-        // Determine freed range
-        let gapStart, gapEnd;
-        if (newEnd < origEnd) { gapStart = newEnd; gapEnd = origEnd; }       // Shortened from bottom
-        else if (newStart > origStart) { gapStart = origStart; gapEnd = newStart; } // Shortened from top
-        else return; // No gap (block was lengthened)
+    function peiScanAndInjectGaps(col, bunk, divName, dayStart, dayEnd) {
+        // Remove existing injected free/blocks in this column
+        col.querySelectorAll('.pei-injected-free').forEach(el => el.remove());
 
+        // Build a list of occupied time ranges from assignments
+        const assignments = window.scheduleAssignments?.[bunk] || [];
+        const divSlots = window.divisionTimes?.[divName] || [];
+        const occupied = []; // [{startMin, endMin}]
+
+        for (let i = 0; i < Math.min(assignments.length, divSlots.length); i++) {
+            const entry = assignments[i];
+            if (!entry || entry.continuation) continue;
+            // Use custom times if available, otherwise slot boundaries
+            const start = entry._startMin !== undefined ? entry._startMin : divSlots[i].startMin;
+            const end = entry._endMin !== undefined ? entry._endMin : divSlots[i].endMin;
+            // Walk continuations to find true end
+            let trueEnd = end;
+            if (!entry._postEdited) {
+                for (let j = i + 1; j < assignments.length; j++) {
+                    if (assignments[j] && assignments[j].continuation && divSlots[j]) {
+                        trueEnd = divSlots[j].endMin;
+                    } else break;
+                }
+            }
+            occupied.push({ startMin: start, endMin: Math.max(end, trueEnd) });
+        }
+
+        // Sort by start time
+        occupied.sort((a, b) => a.startMin - b.startMin);
+
+        // Find gaps between occupied ranges
+        let cursor = dayStart;
+        for (const occ of occupied) {
+            if (occ.startMin > cursor + PEI_MIN_BLOCK_DURATION) {
+                // Gap from cursor to occ.startMin
+                peiInjectFreeGapDirect(col, cursor, occ.startMin, dayStart, bunk, divName);
+            }
+            cursor = Math.max(cursor, occ.endMin);
+        }
+        // Gap at the end
+        if (dayEnd > cursor + PEI_MIN_BLOCK_DURATION) {
+            peiInjectFreeGapDirect(col, cursor, dayEnd, dayStart, bunk, divName);
+        }
+    }
+
+    /**
+     * Inject a single free-space block at an absolute time range.
+     */
+    function peiInjectFreeGapDirect(col, gapStart, gapEnd, dayStart, bunk, divName) {
         const gapDur = gapEnd - gapStart;
-        if (gapDur < PEI_MIN_BLOCK_DURATION) return; // Too small
+        if (gapDur < PEI_MIN_BLOCK_DURATION) return;
 
         const topPx = (gapStart - dayStart) * PEI_PX_PER_MIN + 2;
         const heightPx = gapDur * PEI_PX_PER_MIN - 4;
@@ -1107,12 +1149,11 @@
         freeEl.className = 'asg-free pei-injected-free';
         freeEl.style.cssText = `position:absolute;left:3px;right:3px;top:${topPx}px;height:${heightPx}px;border-radius:5px;background:repeating-linear-gradient(45deg,#f9fafb,#f9fafb 4px,#f3f4f6 4px,#f3f4f6 8px);border:1px dashed #d1d5db;display:flex;align-items:center;justify-content:center;z-index:0;transition:border-color 0.2s;`;
 
-        // "+" button
         if (canEditBunk(bunk)) {
             const addBtn = document.createElement('div');
             addBtn.className = 'pei-add-btn';
             addBtn.innerHTML = '+';
-            addBtn.title = 'Add activity here';
+            addBtn.title = `Add activity (${gapDur}min)`;
             addBtn.style.cssText = 'width:26px;height:26px;border-radius:50%;background:rgba(37,99,235,0.1);color:#2563eb;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s,transform 0.15s;z-index:4;';
             freeEl.appendChild(addBtn);
             freeEl.addEventListener('mouseenter', () => { addBtn.style.opacity = '1'; freeEl.style.borderColor = '#93c5fd'; });
@@ -1457,10 +1498,13 @@
         // 3) Clear ONLY the slots this entry occupied
         oldSlots.forEach(idx => { assignments[idx] = null; });
 
-        // 4) Find new target slots by time overlap
+        // 4) Find new target slots — only claim if block covers meaningful portion
         const newSlotIndices = [];
         for (let i = 0; i < divSlots.length; i++) {
-            if (divSlots[i].startMin < newEnd && divSlots[i].endMin > newStart) {
+            const overlapStart = Math.max(newStart, divSlots[i].startMin);
+            const overlapEnd = Math.min(newEnd, divSlots[i].endMin);
+            const overlap = overlapEnd - overlapStart;
+            if (overlap > PEI_SNAP_MINS) {
                 newSlotIndices.push(i);
             }
         }
@@ -1531,69 +1575,56 @@
         window._postEditInProgress = true;
         window._postEditTimestamp = Date.now();
 
-        const fieldValue = location ? location + ' – ' + activity : activity;
-        let written = false;
-
-        // Try 1: Write to null/Free slots
-        const freeSlots = [];
+        // Find slots that overlap with new block's time and are free
+        const targetSlots = [];
         for (let i = 0; i < divSlots.length; i++) {
-            if (divSlots[i].startMin < endMin && divSlots[i].endMin > startMin) {
-                const existing = assignments[i];
-                const isOccupied = existing && existing._activity &&
-                    existing._activity.toLowerCase() !== 'free' && !existing.continuation;
-                if (!isOccupied) freeSlots.push(i);
-            }
+            const overlapStart = Math.max(startMin, divSlots[i].startMin);
+            const overlapEnd = Math.min(endMin, divSlots[i].endMin);
+            if (overlapEnd <= overlapStart) continue; // no overlap
+            const existing = assignments[i];
+            const isOccupied = existing && existing._activity &&
+                existing._activity.toLowerCase() !== 'free' && !existing.continuation;
+            if (!isOccupied) targetSlots.push(i);
         }
 
-        if (freeSlots.length > 0) {
-            freeSlots.forEach((idx, i) => {
-                assignments[idx] = {
-                    field: fieldValue, sport: activity, _activity: activity,
-                    continuation: i > 0, _fixed: true, _postEdited: true, _pinned: true,
-                    _startMin: startMin, _endMin: endMin, _blockStart: startMin
-                };
-            });
-            written = true;
-        }
-
-        // Try 2: Slot is occupied by a shortened block — attach as _subEntry
-        if (!written) {
-            for (let i = 0; i < divSlots.length; i++) {
-                if (divSlots[i].startMin < endMin && divSlots[i].endMin > startMin) {
-                    const existing = assignments[i];
-                    if (existing && existing._postEdited && existing._endMin !== undefined) {
-                        // This slot has a shortened entry — attach sub-entry
-                        if (!existing._subEntries) existing._subEntries = [];
-                        existing._subEntries.push({
-                            field: fieldValue, sport: activity, _activity: activity,
-                            _startMin: startMin, _endMin: endMin, _postEdited: true, _pinned: true
-                        });
-                        written = true;
-                        debugLog('PEI: Added as _subEntry on slot', i);
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (!written) {
-            debugLog('PEI: No slots available for new block', startMin, '-', endMin);
+        if (targetSlots.length === 0) {
+            debugLog('PEI: No free slots for', startMin, '-', endMin);
             _peiUndoStack.pop();
             window._postEditInProgress = false;
             peiShowBanner('No space available in that time range', 'error');
             return;
         }
 
-        // Inject visual block directly (don't rely on re-render which doesn't know custom times)
-        peiInjectActivityBlock(bunk, divName, startMin, endMin, activity, location);
-        // Remove the free gap that was there
-        document.querySelectorAll('.pei-injected-free').forEach(el => {
-            // Check if this free gap overlaps the new block's time
-            const freeTop = parseFloat(el.style.top);
-            const freeHeight = parseFloat(el.style.height);
-            const blkTop = (startMin - (peiParseTime(peiGetDivConfig(divName).startTime) || 540)) * PEI_PX_PER_MIN + 2;
-            if (Math.abs(freeTop - blkTop) < 5) el.remove();
+        const fieldValue = location ? location + ' – ' + activity : activity;
+        targetSlots.forEach((idx, i) => {
+            assignments[idx] = {
+                field: fieldValue, sport: activity, _activity: activity,
+                continuation: i > 0, _fixed: true, _postEdited: true, _pinned: true,
+                _startMin: startMin, _endMin: endMin, _blockStart: startMin
+            };
         });
+
+        // Inject visual block directly + remove the free gap
+        peiInjectActivityBlock(bunk, divName, startMin, endMin, activity, location);
+        // Re-scan gaps in this column (the added block fills a gap)
+        const dc = peiGetDivConfig(divName);
+        const dayStart = peiParseTime(dc.startTime) || 540;
+        const dayEnd = peiParseTime(dc.endTime) || 960;
+        const bunkIdx = (dc.bunks || []).indexOf(bunk);
+        if (bunkIdx >= 0) {
+            const wrap = Array.from(document.querySelectorAll('.asg-wrap')).find(w => {
+                const h = w.querySelector('.asg-header-title');
+                return h && h.textContent.trim() === divName;
+            });
+            if (wrap) {
+                const fb = wrap.querySelector('.asg-block');
+                if (fb) {
+                    const br = fb.parentElement.parentElement;
+                    const col = br.children[bunkIdx];
+                    if (col) peiScanAndInjectGaps(col, bunk, divName, dayStart, dayEnd);
+                }
+            }
+        }
 
         peiSave(bunk);
         window._postEditInProgress = false;
@@ -1745,27 +1776,13 @@
                             if (/\d+min/.test(sub.textContent)) { sub.textContent = dur + 'min'; break; }
                         }
 
-                        // Inject free gap if block was shortened (and no sub-entry fills it)
-                        const hasSubFilling = entry._subEntries && entry._subEntries.length > 0;
-                        if (!hasSubFilling) {
-                            if (customEnd < slotEnd && (slotEnd - customEnd) >= PEI_MIN_BLOCK_DURATION) {
-                                peiInjectFreeGap(col, blk, slotStart, slotEnd, customStart, customEnd, dayStart, bunk, divName);
-                            }
-                            if (customStart > slotStart && (customStart - slotStart) >= PEI_MIN_BLOCK_DURATION) {
-                                peiInjectFreeGap(col, blk, slotStart, slotEnd, customStart, customEnd, dayStart, bunk, divName);
-                            }
-                        }
-                    }
-
-                    // Recreate _subEntry blocks (activities added into freed gaps)
-                    if (entry._subEntries && entry._subEntries.length > 0) {
-                        entry._subEntries.forEach(sub => {
-                            if (!sub._startMin || !sub._endMin || !sub._activity) return;
-                            const fieldName = sub.field ? sub.field.split(' – ')[0] : null;
-                            peiInjectActivityBlock(bunk, divName, sub._startMin, sub._endMin, sub._activity, fieldName);
-                        });
                     }
                 });
+
+                // After repositioning all blocks in this column, scan for gaps
+                const dc = peiGetDivConfig(divName);
+                const dayEnd = peiParseTime(dc.endTime) || 960;
+                peiScanAndInjectGaps(col, bunk, divName, dayStart, dayEnd);
             });
         });
         debugLog('Custom positions re-applied after re-render');
