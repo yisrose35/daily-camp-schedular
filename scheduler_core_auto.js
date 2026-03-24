@@ -468,8 +468,13 @@
                     const specName = layer._assignedSpecial || layer._resolvedSpecial || layer.event || layer.name;
                     if (specName) specDur = getSpecialDuration(specName, activityProperties, globalSettings, null);
                 }
-                // Fallback: block-level _specialDuration (covers layer-null blocks from draft/fallback)
+               // Fallback: block-level _specialDuration (covers layer-null blocks from draft/fallback)
                 if (!specDur && block && block._specialDuration) specDur = block._specialDuration;
+                // Final fallback: look up by event name directly (covers needs/draft objects)
+                if (!specDur && block) {
+                    const eName = block.event || block._assignedSpecial || block._draftActivity || block.name;
+                    if (eName) specDur = getSpecialDuration(eName, activityProperties, globalSettings, null);
+                }
                 if (specDur && specDur > 0) {
                     dMin = specDur;
                     dMax = specDur;
