@@ -1553,20 +1553,14 @@
             // Draft specials (flex duration, full window, assigned activity)
             (draftResult.specials || []).forEach(special => {
                 const c = resolveConstraints(special.layer, 'special', special);
-                // If the special has its own duration, use it to tighten dMin/dMax
-                let sDMin = c.dMin, sDMax = c.dMax;
-                if (special.duration && special.duration > 0) {
-                    // Special has a specific duration — honor it as the ideal,
-                    // but allow flex within layer bounds
-                    sDMin = Math.max(c.dMin, special.duration);
-                    sDMax = Math.min(c.dMax, special.duration);
-                    // If special.duration is outside layer bounds, clamp
-                    if (sDMin > sDMax) { sDMin = special.duration; sDMax = special.duration; }
-                }
+                // If the special has a configured duration, it's FIXED — no flex.
+                // If no duration, use layer dMin/dMax range (flexible).
+                const hasFixedDur = special.duration && special.duration > 0;
+                const sDMin = hasFixedDur ? special.duration : c.dMin;
+                const sDMax = hasFixedDur ? special.duration : c.dMax;
                 needs.push({
                     type: 'special', event: special.name, layer: special.layer,
-                    dMin: sDMin, dMax: sDMax,
-                    windowStart: gradeStart, windowEnd: gradeEnd,
+                    dMin: sDMin, dMax: sDMax,                    windowStart: gradeStart, windowEnd: gradeEnd,
                     _activityLocked: true, _assignedSpecial: special.name,
                     _specialLocation: special.location, _specialDuration: special.duration,
                     _source: 'draft'
