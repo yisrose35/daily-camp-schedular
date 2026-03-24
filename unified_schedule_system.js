@@ -1998,8 +1998,16 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
         
         container.innerHTML = '';
         if (!skeleton || skeleton.length === 0) {
-            container.innerHTML = `<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No daily schedule structure found for this date.</p><p style="font-size: 0.9rem;">Use <strong>"Build Day"</strong> in the Master Schedule Builder to create a schedule structure.</p></div>`;
-            return;
+            // ★★★ AUTO MODE FALLBACK: If divisionTimes + scheduleAssignments exist, proceed without skeleton ★★★
+            const currentBuilderMode = window.getCampBuilderMode?.() || window._daBuilderMode || 'manual';
+            const hasDivTimes = window.divisionTimes && Object.keys(window.divisionTimes).length > 0;
+            const hasAssignments = window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0;
+            if (currentBuilderMode === 'auto' && hasDivTimes && hasAssignments) {
+                console.log('[UnifiedSchedule] Auto mode: no skeleton but divisionTimes+assignments exist — proceeding with auto renderer');
+            } else {
+                container.innerHTML = `<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No daily schedule structure found for this date.</p><p style="font-size: 0.9rem;">Use <strong>"Build Day"</strong> in the Master Schedule Builder to create a schedule structure.</p></div>`;
+                return;
+            }
         }
         
         let divisionsToShow = Object.keys(divisions);
