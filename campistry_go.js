@@ -355,10 +355,22 @@
         if (!D.setup.orsApiKey) { toast('Set ORS key in Setup', 'error'); return; }
         const todo = Object.keys(D.addresses).filter(n => D.addresses[n]?.street && !D.addresses[n].geocoded);
         if (!todo.length) { toast('All geocoded!'); return; }
-        toast('Geocoding ' + todo.length + '...');
-        let ok = 0;
-        for (let i = 0; i < todo.length; i++) { if (await geocodeOne(todo[i])) ok++; if (i < todo.length - 1) await new Promise(r => setTimeout(r, 1600)); if ((i + 1) % 10 === 0) { renderAddresses(); updateStats(); } }
-        save(); renderAddresses(); updateStats(); toast(ok + ' geocoded');
+        toast('Geocoding ' + todo.length + ' addresses...');
+        let ok = 0, fail = 0;
+        const BATCH = 5; // 5 parallel requests per batch
+        const DELAY = 2000; // 2 sec between batches (~150/min, well within limits)
+        for (let i = 0; i < todo.length; i += BATCH) {
+            const batch = todo.slice(i, i + BATCH);
+            const results = await Promise.all(batch.map(n => geocodeOne(n)));
+            results.forEach(r => { if (r) ok++; else fail++; });
+            // Update UI every batch
+            renderAddresses(); updateStats();
+            toast('Geocoded ' + (i + batch.length) + ' of ' + todo.length + '...');
+            // Pause between batches (not after last one)
+            if (i + BATCH < todo.length) await new Promise(r => setTimeout(r, DELAY));
+        }
+        save(); renderAddresses(); updateStats();
+        toast(ok + ' geocoded' + (fail ? ', ' + fail + ' failed' : '') + ' — done!');
     }
     function downloadAddressTemplate() {
         const roster = getRoster(); const names = Object.keys(roster).sort();
