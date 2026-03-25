@@ -1,6 +1,3 @@
-
-
-
 // =============================================================================
 // unified_schedule_system.js v4.1.0 — CAMPISTRY UNIFIED SCHEDULE SYSTEM
 // =============================================================================
@@ -401,13 +398,41 @@ function shouldHighlightBunk(bunkName) {
         if (cloudLoaded && window.divisionTimes && Object.keys(window.divisionTimes).length > 0) {
             // Keep cloud data
             debugLog('Using divisionTimes from cloud');
+            // ★★★ AUTO MODE: Reattach _perBunkSlots if lost during serialization ★★★
+            if (dateData._perBunkSlotsData && window.divisionTimes) {
+                Object.keys(dateData._perBunkSlotsData).forEach(grade => {
+                    if (window.divisionTimes[grade] && !window.divisionTimes[grade]._perBunkSlots) {
+                        window.divisionTimes[grade]._isPerBunk = true;
+                        window.divisionTimes[grade]._perBunkSlots = dateData._perBunkSlotsData[grade];
+                    }
+                });
+            }
         } else if (window.divisionTimes && Object.keys(window.divisionTimes).length > 0) {
             // Keep existing
             debugLog('Using existing divisionTimes');
+            // ★★★ AUTO MODE: Reattach _perBunkSlots if lost during serialization ★★★
+            if (dateData._perBunkSlotsData && window.divisionTimes) {
+                Object.keys(dateData._perBunkSlotsData).forEach(grade => {
+                    if (window.divisionTimes[grade] && !window.divisionTimes[grade]._perBunkSlots) {
+                        window.divisionTimes[grade]._isPerBunk = true;
+                        window.divisionTimes[grade]._perBunkSlots = dateData._perBunkSlotsData[grade];
+                    }
+                });
+            }
         } else if (dateData.divisionTimes && Object.keys(dateData.divisionTimes).length > 0) {
             // Deserialize from storage
-            window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(dateData.divisionTimes) || dateData.divisionTimes;
+           window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(dateData.divisionTimes) || dateData.divisionTimes;
             debugLog('Loaded divisionTimes from storage');
+            // ★★★ AUTO MODE: Reattach _perBunkSlots from saved data ★★★
+            if (dateData._perBunkSlotsData) {
+                Object.keys(dateData._perBunkSlotsData).forEach(grade => {
+                    if (window.divisionTimes[grade]) {
+                        window.divisionTimes[grade]._isPerBunk = true;
+                        window.divisionTimes[grade]._perBunkSlots = dateData._perBunkSlotsData[grade];
+                    }
+                });
+                debugLog('Reattached _perBunkSlots for', Object.keys(dateData._perBunkSlotsData).length, 'grades');
+            }
         } else {
             // Build from skeleton
             const skeleton = getSkeleton(dateKey);
@@ -871,9 +896,11 @@ function checkLocationConflict(locationName, slots, excludeBunk) {
 const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(editBunksResult || []);
     const conflicts = [], usageBySlot = {};
     
-    // ★★★ FIX: Get the ACTUAL time range from the editing bunk's division ★★★
+    // ★★★ FIX: Get the ACTUAL time range from the editing bunk's slots ★★★
     const excludeBunkDiv = getDivisionForBunk(excludeBunk);
-    const excludeBunkSlots = window.divisionTimes?.[excludeBunkDiv] || [];
+    // ★★★ AUTO MODE: Use per-bunk slots when available (indices are bunk-specific) ★★★
+    const _perBunkData = window.divisionTimes?.[excludeBunkDiv]?._perBunkSlots?.[String(excludeBunk)];
+    const excludeBunkSlots = _perBunkData || window.divisionTimes?.[excludeBunkDiv] || [];
     
     // Build time ranges for the slots being claimed
     const claimedTimeRanges = [];
@@ -967,10 +994,15 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
     }
     
     // Check GlobalFieldLocks
+    // ★★★ Only league games should truly BLOCK an edit ★★★
     let globalLock = null;
     if (window.GlobalFieldLocks) {
         const lockInfo = window.GlobalFieldLocks.isFieldLocked(locationName, slots, excludeBunkDiv);
-        if (lockInfo) globalLock = lockInfo;
+        // Only treat as a hard block if it's a league game lock
+        if (lockInfo && (lockInfo.lockedBy === 'league_game' || lockInfo.leagueName || lockInfo.type === 'league')) {
+            globalLock = lockInfo;
+        }
+        // Other locks (pinned, smart_regen, etc.) are soft — post-edit can resolve them
     }
     
     // Determine conflicts based on capacity
@@ -986,6 +1018,13 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
                 }
             });
         }
+    }
+    
+    // ★★★ AUTO MODE: All non-league conflicts are resolvable via post-edit ★★★
+    // Mark conflicts as auto-resolvable so UI can show them differently
+    const _isAutoEditMode = !!window.divisionTimes?.[excludeBunkDiv]?._perBunkSlots;
+    if (_isAutoEditMode && !globalLock) {
+        conflicts.forEach(c => { c._autoResolvable = true; });
     }
     
     if (conflicts.length > 0) {
@@ -1987,8 +2026,16 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
         
         container.innerHTML = '';
         if (!skeleton || skeleton.length === 0) {
-            container.innerHTML = `<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No daily schedule structure found for this date.</p><p style="font-size: 0.9rem;">Use <strong>"Build Day"</strong> in the Master Schedule Builder to create a schedule structure.</p></div>`;
-            return;
+            // ★★★ AUTO MODE FALLBACK: If divisionTimes + scheduleAssignments exist, proceed without skeleton ★★★
+            const currentBuilderMode = window.getCampBuilderMode?.() || window._daBuilderMode || 'manual';
+            const hasDivTimes = window.divisionTimes && Object.keys(window.divisionTimes).length > 0;
+            const hasAssignments = window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0;
+            if (currentBuilderMode === 'auto' && hasDivTimes && hasAssignments) {
+                console.log('[UnifiedSchedule] Auto mode: no skeleton but divisionTimes+assignments exist — proceeding with auto renderer');
+            } else {
+                container.innerHTML = `<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No daily schedule structure found for this date.</p><p style="font-size: 0.9rem;">Use <strong>"Build Day"</strong> in the Master Schedule Builder to create a schedule structure.</p></div>`;
+                return;
+            }
         }
         
         let divisionsToShow = Object.keys(divisions);
@@ -2379,13 +2426,35 @@ if (bypassStatus.highlight) {
     // APPLY DIRECT EDIT
     // =========================================================================
 
-    function applyDirectEdit(bunk, slots, activity, location, isClear, shouldPin = true) {
+   function applyDirectEdit(bunk, slots, activity, location, isClear, shouldPin = true) {
         const divName = getDivisionForBunk(bunk);
         const divSlots = window.divisionTimes?.[divName] || [];
         
+        // ★★★ AUTO MODE: Reshape per-bunk slots if edit time doesn't match slot boundaries ★★★
+        const _isAutoMode = !!window.divisionTimes?.[divName]?._perBunkSlots;
+        if (_isAutoMode && !isClear && slots.length > 0) {
+            const perBunk = window.divisionTimes[divName]._perBunkSlots[String(bunk)];
+            if (perBunk && perBunk[slots[0]]) {
+                const firstSlot = perBunk[slots[0]];
+                const lastSlot = perBunk[slots[slots.length - 1]];
+                const editCtx = _currentEditContext || {};
+                if (editCtx.isAutoMode && editCtx.startMin != null && editCtx.endMin != null) {
+                    if (firstSlot.startMin !== editCtx.startMin || lastSlot.endMin !== editCtx.endMin) {
+                        console.log('[applyDirectEdit] Auto mode: reshaping slots for ' + bunk + ' to [' + editCtx.startMin + '-' + editCtx.endMin + ']');
+                        const reshaped = ensurePerBunkSlotForRange(bunk, divName, editCtx.startMin, editCtx.endMin);
+                        if (reshaped.length > 0) {
+                            slots = reshaped;
+                        }
+                    }
+                }
+            }
+        }
+        
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
         if (!window.scheduleAssignments[bunk]) {
-            window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
+            const perBunk = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
+            const slotCount = perBunk ? perBunk.length : (divSlots.length || 50);
+            window.scheduleAssignments[bunk] = new Array(slotCount);
         }
         
         const fieldValue = location ? `${location} – ${activity}` : activity;
@@ -2407,7 +2476,6 @@ if (bypassStatus.highlight) {
             slots.forEach(idx => window.registerLocationUsage(idx, location, activity, divName));
         }
     }
-
     // =========================================================================
     // SAVE & UPDATE
     // =========================================================================
@@ -2791,37 +2859,63 @@ if (bypassStatus.highlight) {
     // APPLY EDIT
     // =========================================================================
 
-  async function applyEdit(bunk, editData) {
+    async function applyEdit(bunk, editData) {
         const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
         const divName = getDivisionForBunk(bunk);
 
-        // ★ DEMO FIX: Guard against undefined activity
         if (window.__CAMPISTRY_DEMO_MODE__ && !activity && activity !== '') {
             console.error('[UnifiedSchedule] ❌ Demo: applyEdit called with undefined activity:', editData);
             alert('Error: No activity specified.');
             return;
         }
 
-       const isClear = !activity || activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
-        const slots = findSlotsForRange(startMin, endMin, divName);
+        const isClear = !activity || activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
+        const hasPerBunk = !!window.divisionTimes?.[divName]?._perBunkSlots;
+        const slots = findSlotsForRange(startMin, endMin, divName, hasPerBunk ? bunk : null);
         if (slots.length === 0) { alert('Error: Could not find time slots.'); return; }
 
-        // ★ Sequence rule warning
         if (!isClear && window.checkSequenceViolation && slots.length > 0) {
             const _seqCheck = window.checkSequenceViolation(bunk, activity, slots[0], divName);
             if (_seqCheck?.violated) { if (!confirm('⚠️ Sequence Warning:\n\n' + _seqCheck.reason + '\n\nPlace anyway?')) return; }
         }
-        // ★ Location cooldown warning
         if (!isClear && window.isLocationInCooldown && location && slots.length > 0) {
             const _coolCheck = window.isLocationInCooldown(location, slots[0], bunk, divName);
             if (_coolCheck?.blocked) { if (!confirm('⚠️ Location Cooldown:\n\n' + _coolCheck.reason + '\n\nPlace anyway?')) return; }
-        }        window._postEditInProgress = true; 
+        }
+
+        window._postEditInProgress = true; 
         window._postEditTimestamp = Date.now();
         const divSlots = window.divisionTimes?.[divName] || [];
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
-        if (hasConflict) await resolveConflictsAndApply(bunk, slots, activity, location, editData);
-        else applyDirectEdit(bunk, slots, activity, location, isClear, true);
+
+        // ★★★ CAPTURE old activities BEFORE edit overwrites them ★★★
+        const _oldActivities = [];
+        slots.forEach(idx => {
+            const old = window.scheduleAssignments[bunk]?.[idx];
+            if (old?._activity && !old.continuation && !old._isTransition) {
+                const a = old._activity.toLowerCase();
+                if (a !== 'free' && !a.includes('transition')) {
+                    _oldActivities.push(old._activity);
+                }
+            }
+        });
+
+        if (hasConflict) {
+            await resolveConflictsAndApply(bunk, slots, activity, location, editData);
+        } else {
+            if (hasPerBunk && !isClear && startMin != null && endMin != null) {
+                const reshaped = ensurePerBunkSlotForRange(bunk, divName, startMin, endMin);
+                if (reshaped.length > 0) {
+                    applyDirectEdit(bunk, reshaped, activity, location, isClear, true);
+                } else {
+                    applyDirectEdit(bunk, slots, activity, location, isClear, true);
+                }
+            } else {
+                applyDirectEdit(bunk, slots, activity, location, isClear, true);
+            }
+        }
+
         const currentDate = window.currentScheduleDate || window.currentDate || document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
         try {
             localStorage.setItem(`scheduleAssignments_${currentDate}`, JSON.stringify(window.scheduleAssignments));
@@ -2836,8 +2930,78 @@ if (bypassStatus.highlight) {
         setTimeout(() => { window._postEditInProgress = false; }, 8000);
         document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', { detail: { bunk, slots, activity, location, date: currentDate } }));
         saveSchedule(); 
+
+        // ★★★ FIX: Targeted delta adjustment for historical counts ★★★
+        try {
+            const _gs = window.loadGlobalSettings?.() || {};
+            const _hc = _gs.historicalCounts || {};
+            if (!_hc[bunk]) _hc[bunk] = {};
+            let _newAct = (!isClear && activity) ? activity : null;
+
+            // Normalize: if new activity matches old activity ignoring case, use old casing
+            if (_newAct) {
+                for (const oldAct of _oldActivities) {
+                    if (oldAct.toLowerCase() === _newAct.toLowerCase() && oldAct !== _newAct) {
+                        console.log(`[PostEdit] 📊 Case normalization: "${_newAct}" → "${oldAct}"`);
+                        _newAct = oldAct;
+                        break;
+                    }
+                }
+            }
+
+            // Decrement old activities
+            const _oldUnique = {};
+            _oldActivities.forEach(a => { _oldUnique[a] = (_oldUnique[a] || 0) + 1; });
+            for (const [act, count] of Object.entries(_oldUnique)) {
+                const _before = _hc[bunk][act] || 0;
+                _hc[bunk][act] = Math.max(0, _before - count);
+                console.log(`[PostEdit] 📊 ${bunk} "${act}" count: ${_before} → ${_hc[bunk][act]}`);
+            }
+
+            // Increment new activity (only if it's a tracked/valid activity)
+            const _validActs = window.SchedulerCoreUtils?.getValidActivityNames?.() || new Set();
+            if (_newAct && (_validActs.size === 0 || _validActs.has(_newAct))) {
+                let _newCount = 0;
+                slots.forEach(idx => {
+                    const entry = window.scheduleAssignments[bunk]?.[idx];
+                    if (entry && !entry.continuation) _newCount++;
+                });
+                const _before = _hc[bunk][_newAct] || 0;
+                _hc[bunk][_newAct] = _before + _newCount;
+                console.log(`[PostEdit] 📊 ${bunk} "${_newAct}" count: ${_before} → ${_hc[bunk][_newAct]}`);
+            }
+
+            if (window.saveGlobalSettings) {
+                window.saveGlobalSettings('historicalCounts', _hc);
+                if (typeof window.forceSyncToCloud === 'function') {
+                    setTimeout(() => window.forceSyncToCloud(), 100);
+                }
+            }
+            console.log('[PostEdit] 📊 Historical counts delta applied for', bunk);
+        } catch (_hcErr) { console.error('[PostEdit] Historical counts delta failed:', _hcErr); }
+
+        // ★★★ Update rotation history timestamps for the edited bunk ★★★
+        try {
+            const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
+            _rotHist.bunks = _rotHist.bunks || {};
+            _rotHist.bunks[bunk] = _rotHist.bunks[bunk] || {};
+            const _bunkSlots = window.scheduleAssignments?.[bunk] || [];
+            const _now = Date.now();
+            _rotHist.bunks[bunk] = {};
+            _bunkSlots.forEach(entry => {
+                if (entry?._activity && !entry.continuation && !entry._isTransition) {
+                    const _aLower = entry._activity.toLowerCase();
+                    if (_aLower !== 'free' && !_aLower.includes('transition')) {
+                        _rotHist.bunks[bunk][entry._activity] = _now;
+                    }
+                }
+            });
+            window.saveRotationHistory?.(_rotHist);
+            console.log('[PostEdit] 📊 Rotation timestamps rebuilt for', bunk);
+        } catch (_re) { console.error('[PostEdit] Rotation history update failed:', _re); }
+
         updateTable();
-        setTimeout(() => updateTable(), 300);
+        setTimeout(() => updateTable(), 500);
     }
 
     // =========================================================================
@@ -2865,17 +3029,24 @@ if (bypassStatus.highlight) {
         const locationSelect = document.getElementById('post-edit-location');
         const conflictArea = document.getElementById('post-edit-conflict');
         
+       const _hasPerBunk = !!window.divisionTimes?.[divName]?._perBunkSlots;
         function checkAndShowConflicts() {
             const location = locationSelect.value;
             if (!location) { conflictArea.style.display = 'none'; return null; }
-            const targetSlots = findSlotsForRange(startMin, endMin, divName);
+            const targetSlots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
             const conflictCheck = checkLocationConflict(location, targetSlots, bunk);
-            if (conflictCheck.hasConflict) {
+           if (conflictCheck.hasConflict) {
+                // ★★★ AUTO MODE: If all conflicts are auto-resolvable, show as info not warning ★★★
+                const allAutoResolvable = conflictCheck.conflicts.every(c => c._autoResolvable);
                 const editableBunks = [...new Set(conflictCheck.editableConflicts.map(c => c.bunk))];
                 const nonEditableBunks = [...new Set(conflictCheck.nonEditableConflicts.map(c => c.bunk))];
                 conflictArea.style.display = 'block';
-                let html = `<div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px;"><div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;"><span style="font-size: 1.25rem;">⚠️</span><strong style="color: #92400e;">Location Conflict Detected</strong></div><p style="margin: 0 0 8px 0; color: #78350f; font-size: 0.875rem;"><strong>${escapeHtml(location)}</strong> is already in use:</p>`;
-                if (editableBunks.length > 0) html += `<div style="margin-bottom: 8px; padding: 8px; background: #d1fae5; border-radius: 6px;"><div style="font-size: 0.8rem; color: #065f46;"><strong>✓ Can auto-reassign:</strong> ${editableBunks.join(', ')}</div></div>`;
+                let html;
+                if (allAutoResolvable && !conflictCheck.globalLock) {
+                    html = `<div style="background: #dbeafe; border: 1px solid #3b82f6; border-radius: 8px; padding: 12px;"><div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;"><span style="font-size: 1.25rem;">🔄</span><strong style="color: #1e40af;">Will Auto-Reassign</strong></div><p style="margin: 0 0 8px 0; color: #1e3a5f; font-size: 0.875rem;"><strong>${escapeHtml(location)}</strong> is in use — affected bunks will be automatically reassigned:</p>`;
+                } else {
+                    html = `<div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px;"><div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;"><span style="font-size: 1.25rem;">⚠️</span><strong style="color: #92400e;">Location Conflict Detected</strong></div><p style="margin: 0 0 8px 0; color: #78350f; font-size: 0.875rem;"><strong>${escapeHtml(location)}</strong> is already in use:</p>`;
+                }                if (editableBunks.length > 0) html += `<div style="margin-bottom: 8px; padding: 8px; background: #d1fae5; border-radius: 6px;"><div style="font-size: 0.8rem; color: #065f46;"><strong>✓ Can auto-reassign:</strong> ${editableBunks.join(', ')}</div></div>`;
                 if (nonEditableBunks.length > 0) html += `<div style="margin-bottom: 8px; padding: 8px; background: #fee2e2; border-radius: 6px;"><div style="font-size: 0.8rem; color: #991b1b;"><strong>✗ Other scheduler's bunks:</strong> ${nonEditableBunks.join(', ')}</div></div><div style="margin-top: 12px;"><div style="font-weight: 500; color: #374151; margin-bottom: 8px; font-size: 0.875rem;">How to handle their bunks?</div><div style="display: flex; flex-direction: column; gap: 8px;"><label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="notify" checked style="margin-top: 2px;"><div><div style="font-weight: 500; color: #374151;">📧 Notify other scheduler</div><div style="font-size: 0.75rem; color: #6b7280;">Create double-booking & send them a warning</div></div></label><label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="bypass" style="margin-top: 2px;"><div><div style="font-weight: 500; color: #374151;">🔓 Bypass & reassign (Admin mode)</div><div style="font-size: 0.75rem; color: #6b7280;">Override permissions and use smart regeneration</div></div></label></div></div>`;
                 html += `</div>`; 
                 conflictArea.innerHTML = html;
@@ -2896,7 +3067,7 @@ if (bypassStatus.highlight) {
             const activity = document.getElementById('post-edit-activity').value.trim();
             const location = locationSelect.value;
             if (!activity) { alert('Please enter an activity name.'); return; }
-            const targetSlots = findSlotsForRange(startMin, endMin, divName);
+            const targetSlots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
             const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
             if (conflictCheck?.hasConflict) {
                 onSave({ 
@@ -3000,12 +3171,17 @@ if (bypassStatus.highlight) {
             };
         }
 
-        // ★ Check for league games using this field (scans leagueAssignments directly — works post-generation)
+       // ★ Check for league games using this field (scans leagueAssignments directly — works post-generation)
         const claimDivSlots = window.divisionTimes?.[claimingDivision] || [];
+        // ★★★ AUTO MODE: Get time range from per-bunk slots or use first claiming bunk ★★★
+        const _claimPerBunk = claimingBunks.length > 0 
+            ? window.divisionTimes?.[claimingDivision]?._perBunkSlots?.[String(claimingBunks[0])]
+            : null;
+        const _claimSlotSource = _claimPerBunk || claimDivSlots;
         let leagueConflictDesc = null;
-        if (claimDivSlots.length > 0 && slots.length > 0) {
-            const claimStartMin = claimDivSlots[slots[0]]?.startMin;
-            const claimEndMin = claimDivSlots[slots[slots.length - 1]]?.endMin;
+        if (_claimSlotSource.length > 0 && slots.length > 0) {
+            const claimStartMin = _claimSlotSource[slots[0]]?.startMin;
+            const claimEndMin = _claimSlotSource[slots[slots.length - 1]]?.endMin;
             if (claimStartMin != null && claimEndMin != null) {
                 const leagueAssignments = window.leagueAssignments || {};
                 const fieldLower = fieldName.toLowerCase();
@@ -3057,7 +3233,45 @@ if (bypassStatus.highlight) {
                 }]
             };
         }
-let conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
+// ★★★ AUTO MODE: findAllConflictsForClaim uses slot indices which are bunk-specific.
+        // In auto mode, we need to find conflicts by TIME overlap instead. ★★★
+        const _isAutoMode = !!window.divisionTimes?.[claimingDivision]?._perBunkSlots;
+        let conflictQueue;
+        if (_isAutoMode && claimDivSlots.length > 0 && slots.length > 0) {
+            const _claimStart = claimDivSlots[slots[0]]?.startMin;
+            const _claimEnd = claimDivSlots[slots[slots.length - 1]]?.endMin;
+            conflictQueue = [];
+            if (_claimStart != null && _claimEnd != null) {
+                const assignments = window.scheduleAssignments || {};
+                const excludeSet = new Set(claimingBunks);
+                for (const [bunkName, bunkSlots] of Object.entries(assignments)) {
+                    if (excludeSet.has(bunkName)) continue;
+                    if (!bunkSlots || !Array.isArray(bunkSlots)) continue;
+                    const bunkDiv = getDivisionForBunk(bunkName);
+                    const bunkPerSlots = window.divisionTimes?.[bunkDiv]?._perBunkSlots?.[String(bunkName)] 
+                                      || window.divisionTimes?.[bunkDiv] || [];
+                    for (let idx = 0; idx < bunkPerSlots.length; idx++) {
+                        const slot = bunkPerSlots[idx];
+                        if (!slot || slot.startMin === undefined) continue;
+                        if (!(slot.endMin <= _claimStart || slot.startMin >= _claimEnd)) {
+                            const entry = bunkSlots[idx];
+                            if (!entry) continue;
+                            const entryField = fieldLabel(entry.field);
+                            if (entryField !== fieldName) continue;
+                            conflictQueue.push({
+                                bunk: bunkName, slot: idx, division: bunkDiv,
+                                currentActivity: entry._activity || entry.sport || entryField,
+                                currentField: entryField,
+                                isPinned: entry._fixed || entry._pinned || entry._bunkOverride,
+                                entry
+                            });
+                        }
+                    }
+                }
+            }
+        } else {
+            conflictQueue = findAllConflictsForClaim(fieldName, slots, claimingBunks);
+        }
         let iteration = 0;
         const MAX_ITERATIONS = 50;
 
@@ -3387,20 +3601,39 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
         return newConflicts;
     }
 
-    function openIntegratedEditModal(bunk, slotIdx, existingEntry = null) {
+   function openIntegratedEditModal(bunk, slotIdx, existingEntry = null) {
         closeIntegratedEditModal();
 
         const divName = getDivisionForBunk(bunk);
         const bunksInDivision = getBunksForDivision(divName);
-        const times = window.divisionTimes?.[divName] || [];
-        const slotInfo = times[slotIdx] || {};
-        const timeLabel = slotInfo.label || `${minutesToTimeStr(slotInfo.startMin)} - ${minutesToTimeStr(slotInfo.endMin)}`;
+        // ★★★ AUTO MODE: Per-bunk slots have bunk-specific time indices ★★★
+        // In manual mode _perBunkSlots is undefined → perBunkSlots is undefined → uses division-level (unchanged)
+        const perBunkSlots = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
+        const times = perBunkSlots || window.divisionTimes?.[divName] || [];
+        const slotInfo = times[slotIdx] || {};        const timeLabel = slotInfo.label || `${minutesToTimeStr(slotInfo.startMin)} - ${minutesToTimeStr(slotInfo.endMin)}`;
 
-        _currentEditContext = { bunk, slotIdx, divName, bunksInDivision, existingEntry, slotInfo };
+        _currentEditContext = { 
+            bunk, slotIdx, divName, bunksInDivision, existingEntry, slotInfo,
+            // ★★★ AUTO MODE: Store canonical time range for cross-bunk resolution ★★★
+            startMin: slotInfo.startMin ?? null,
+            endMin: slotInfo.endMin ?? null,
+            isAutoMode: !!window.divisionTimes?.[divName]?._perBunkSlots
+        };
 
-        showScopeSelectionModal(bunk, slotIdx, divName, timeLabel, canEditBunk(bunk));
+        showScopeSelectionModal(bunk, slotIdx, divName, timeLabel, canEditBunk(bunk));    }
+function minutesToTimeString(mins) {
+        if (mins === null || mins === undefined) return '';
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
     }
 
+    function timeStringToMinutes(str) {
+        if (!str) return null;
+        const parts = str.split(':');
+        if (parts.length !== 2) return null;
+        return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+    }
     function showScopeSelectionModal(bunk, slotIdx, divName, timeLabel, canEdit) {
         const overlay = document.createElement('div');
         overlay.id = INTEGRATED_EDIT_OVERLAY_ID;
@@ -3471,6 +3704,25 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
             </div>
             <input type="hidden" id="edit-start-slot" value="${slotIdx}">
             <input type="hidden" id="edit-end-slot" value="${slotIdx}">
+            ${_currentEditContext.isAutoMode ? `
+            <div id="time-adjust-section" style="margin-bottom: 20px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 10px; padding: 14px;">
+                <div style="font-weight: 500; color: #0369a1; margin-bottom: 10px; font-size: 0.9rem;">⏱️ Adjust Time</div>
+                <div style="display: flex; gap: 12px; align-items: center;">
+                    <div style="flex: 1;">
+                        <label style="display: block; font-size: 0.8rem; color: #6b7280; margin-bottom: 4px;">Start</label>
+                        <input type="time" id="edit-time-start" value="${_currentEditContext.startMin != null ? minutesToTimeString(_currentEditContext.startMin) : ''}" 
+                            style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.9rem;">
+                    </div>
+                    <span style="color: #9ca3af; margin-top: 18px;">→</span>
+                    <div style="flex: 1;">
+                        <label style="display: block; font-size: 0.8rem; color: #6b7280; margin-bottom: 4px;">End</label>
+                        <input type="time" id="edit-time-end" value="${_currentEditContext.endMin != null ? minutesToTimeString(_currentEditContext.endMin) : ''}" 
+                            style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.9rem;">
+                    </div>
+                </div>
+                <div style="font-size: 0.75rem; color: #6b7280; margin-top: 6px;">Change the time window for this activity block</div>
+            </div>
+            ` : ''}
             <div style="display: flex; gap: 12px;">
                 <button onclick="closeIntegratedEditModal()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">Cancel</button>
                 <button onclick="proceedWithScope()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">Continue →</button>
@@ -3504,7 +3756,7 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
         document.querySelector('input[name="edit-scope"]:checked')?.dispatchEvent(new Event('change'));
     }
 
-    function proceedWithScope() {
+   function proceedWithScope() {
         const scope = document.querySelector('input[name="edit-scope"]:checked')?.value;
         const ctx = _currentEditContext;
         if (!ctx) {
@@ -3512,47 +3764,74 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
             closeIntegratedEditModal();
             return;
         }
+
+        // ★★★ AUTO MODE: Read adjusted time from UI ★★★
+        let editStartMin = ctx.startMin;
+        let editEndMin = ctx.endMin;
+        if (ctx.isAutoMode) {
+            const startInput = document.getElementById('edit-time-start');
+            const endInput = document.getElementById('edit-time-end');
+            if (startInput?.value) editStartMin = timeStringToMinutes(startInput.value);
+            if (endInput?.value) editEndMin = timeStringToMinutes(endInput.value);
+            if (editStartMin != null && editEndMin != null && editEndMin <= editStartMin) {
+                alert('End time must be after start time');
+                return;
+            }
+        }
         
         if (scope === 'single') {
             closeIntegratedEditModal();
             showEditModal(
                 ctx.bunk,
-                ctx.slotInfo?.startMin,
-                ctx.slotInfo?.endMin,
+                editStartMin ?? ctx.slotInfo?.startMin,
+                editEndMin ?? ctx.slotInfo?.endMin,
                 ctx.existingEntry?._activity || '',
                 (editData) => applyEdit(ctx.bunk, editData)
             );
-        } else if (scope === 'division') {
-            const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
-            const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
-            
-            if (endSlot < startSlot) { alert('End time must be after start time'); return; }
+        } else if (scope === 'division' || scope === 'select') {
+            const targetBunks = scope === 'division' 
+                ? ctx.bunksInDivision 
+                : Array.from(document.querySelectorAll('.bunk-checkbox:checked')).map(cb => cb.value);
 
-            const slots = [];
-            for (let i = startSlot; i <= endSlot; i++) slots.push(i);
+            if (scope === 'select' && targetBunks.length === 0) { 
+                alert('Please select at least one bunk'); 
+                return; 
+            }
 
-            closeIntegratedEditModal();
-            openMultiBunkEditModal(ctx.bunksInDivision, slots, ctx.divName);
-        } else if (scope === 'select') {
-            const selectedBunks = Array.from(document.querySelectorAll('.bunk-checkbox:checked')).map(cb => cb.value);
-            
-            if (selectedBunks.length === 0) { alert('Please select at least one bunk'); return; }
-
-            const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
-            const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
-            
-            if (endSlot < startSlot) { alert('End time must be after start time'); return; }
-
-            const slots = [];
-            for (let i = startSlot; i <= endSlot; i++) slots.push(i);
-
-            closeIntegratedEditModal();
-            openMultiBunkEditModal(selectedBunks, slots, ctx.divName);
+            // ★★★ AUTO MODE: Resolve per-bunk slots by TIME, not shared slot index ★★★
+            if (ctx.isAutoMode && editStartMin != null && editEndMin != null) {
+                closeIntegratedEditModal();
+                openMultiBunkEditModal(targetBunks, null, ctx.divName, editStartMin, editEndMin);
+            } else {
+                // Manual mode: use slot indices as before
+                const startSlot = parseInt(document.getElementById('edit-start-slot')?.value);
+                const endSlot = parseInt(document.getElementById('edit-end-slot')?.value);
+                if (endSlot < startSlot) { alert('End time must be after start time'); return; }
+                const slots = [];
+                for (let i = startSlot; i <= endSlot; i++) slots.push(i);
+                closeIntegratedEditModal();
+                openMultiBunkEditModal(targetBunks, slots, ctx.divName);
+            }
         }
     }
 
-    function openMultiBunkEditModal(bunks, slots, divName) {
-        _multiBunkEditContext = { bunks, slots, divName };
+   function openMultiBunkEditModal(bunks, slots, divName, timeStartMin = null, timeEndMin = null) {
+        // ★★★ AUTO MODE: Resolve per-bunk slots from time range ★★★
+        const isAutoMode = !!window.divisionTimes?.[divName]?._perBunkSlots;
+        let perBunkSlots = null;
+        
+        if (isAutoMode && timeStartMin != null && timeEndMin != null) {
+            perBunkSlots = {};
+            bunks.forEach(bunk => {
+                const bunkSlots = findSlotsForRange(timeStartMin, timeEndMin, divName, bunk);
+                if (bunkSlots.length > 0) perBunkSlots[String(bunk)] = bunkSlots;
+            });
+            // Use first bunk's slots as the "representative" for UI display
+            const firstBunkSlots = perBunkSlots[String(bunks[0])] || [];
+            if (!slots || slots.length === 0) slots = firstBunkSlots;
+        }
+
+        _multiBunkEditContext = { bunks, slots, divName, perBunkSlots, isAutoMode, timeStartMin, timeEndMin };
         _multiBunkPreviewResult = null;
 
         const overlay = document.createElement('div');
@@ -3566,11 +3845,15 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
         modal.style.cssText = `position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); z-index: 9999; min-width: 500px; max-width: 620px; max-height: 85vh; overflow-y: auto;`;
         modal.onclick = e => e.stopPropagation();
 
-        const times = window.divisionTimes?.[divName] || [];
-        const startSlot = times[slots[0]];
-        const endSlot = times[slots[slots.length - 1]];
-        const timeRange = `${minutesToTimeStr(startSlot?.startMin)} - ${minutesToTimeStr(endSlot?.endMin)}`;
-        const allLocations = getAllLocations();
+       const times = window.divisionTimes?.[divName] || [];
+        let timeRange;
+        if (isAutoMode && timeStartMin != null && timeEndMin != null) {
+            timeRange = `${minutesToTimeStr(timeStartMin)} - ${minutesToTimeStr(timeEndMin)}`;
+        } else {
+            const startSlot = times[slots?.[0]];
+            const endSlot = times[slots?.[slots?.length - 1]];
+            timeRange = `${minutesToTimeStr(startSlot?.startMin)} - ${minutesToTimeStr(endSlot?.endMin)}`;
+        }        const allLocations = getAllLocations();
 
         modal.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
@@ -3641,22 +3924,37 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
         if (!activity) { alert('Please enter an activity name'); return; }
 
         const result = buildCascadeResolutionPlan(location, slots, divName, activity, bunks);
-        _multiBunkPreviewResult = { ...result, location, slots, divName, activity, bunks };
+        _multiBunkPreviewResult = { 
+            ...result, location, slots, divName, activity, bunks,
+            // ★★★ AUTO MODE: Carry per-bunk slots and time range through to apply ★★★
+            perBunkSlots: _multiBunkEditContext.perBunkSlots || null,
+            isAutoMode: _multiBunkEditContext.isAutoMode || false,
+            timeStartMin: _multiBunkEditContext.timeStartMin || null,
+            timeEndMin: _multiBunkEditContext.timeEndMin || null
+        };
 
         const previewArea = document.getElementById('multi-conflict-preview');
         const resolutionMode = document.getElementById('multi-resolution-mode');
         const submitBtn = document.getElementById('multi-edit-submit');
-// Check for global lock blocks (league games etc)
-const globalBlocks = result.blocked.filter(b => b.globalLock);
-if (globalBlocks.length > 0) {
+// Check for LEAGUE GAME blocks only — other locks are resolvable
+const leagueBlocks = result.blocked.filter(b => b.globalLock && 
+    (b.lockInfo?.lockedBy === 'league_game' || b.lockInfo?.leagueName));
+if (leagueBlocks.length > 0) {
     previewArea.style.display = 'block';
     previewArea.style.cssText = 'background: #fef2f2; border: 1px solid #ef4444; border-radius: 8px; padding: 12px;';
     previewArea.innerHTML = `<div style="color: #991b1b; font-weight: 500;">
         🚫 Cannot use this field
-        <div style="font-weight: 400; margin-top: 6px; font-size: 0.9rem;">${globalBlocks[0].reason}</div>
+        <div style="font-weight: 400; margin-top: 6px; font-size: 0.9rem;">${leagueBlocks[0].reason}</div>
     </div>`;
     submitBtn.disabled = true;
     return;
+}
+// Non-league global locks — treat as resolvable
+const softBlocks = result.blocked.filter(b => b.globalLock && !leagueBlocks.includes(b));
+if (softBlocks.length > 0) {
+    console.log('[PreviewMultiBunk] ' + softBlocks.length + ' soft global locks (non-league) — treating as resolvable');
+    // Remove soft blocks from blocked, treat as if they need reassignment
+    result.blocked = result.blocked.filter(b => !softBlocks.includes(b));
 }
         if (result.plan.length === 0 && result.blocked.length === 0) {
             previewArea.style.display = 'block';
@@ -3818,23 +4116,157 @@ if (globalBlocks.length > 0) {
     // APPLY MULTI-BUNK EDIT
     // =========================================================================
 
+    /**
+     * ★★★ AUTO MODE: Reshape a bunk's per-bunk slots to guarantee an exact time window ★★★
+     * Splits overlapping slots so the target range has its own dedicated slot(s).
+     * Returns the slot indices that now exactly cover [targetStart, targetEnd].
+     */
+    function ensurePerBunkSlotForRange(bunkName, divName, targetStart, targetEnd) {
+        const perBunkSlots = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunkName)];
+        if (!perBunkSlots) return [];
+
+        const newSlots = [];
+        const resultIndices = [];
+
+        for (let i = 0; i < perBunkSlots.length; i++) {
+            const slot = { ...perBunkSlots[i] };
+            const overlapStart = Math.max(slot.startMin, targetStart);
+            const overlapEnd = Math.min(slot.endMin, targetEnd);
+            const hasOverlap = overlapStart < overlapEnd;
+
+            if (!hasOverlap) {
+                newSlots.push(slot);
+                continue;
+            }
+
+            // Part BEFORE target range
+            if (slot.startMin < targetStart) {
+                newSlots.push({
+                    ...slot,
+                    endMin: targetStart,
+                    label: minutesToTimeLabel(slot.startMin) + ' - ' + minutesToTimeLabel(targetStart),
+                    _splitFrom: i
+                });
+            }
+
+            // The overlapping part (target slot)
+            const targetSlot = {
+                ...slot,
+                startMin: overlapStart,
+                endMin: overlapEnd,
+                label: minutesToTimeLabel(overlapStart) + ' - ' + minutesToTimeLabel(overlapEnd),
+                _reshapedForEdit: true
+            };
+            resultIndices.push(newSlots.length);
+            newSlots.push(targetSlot);
+
+            // Part AFTER target range
+            if (slot.endMin > targetEnd) {
+                newSlots.push({
+                    ...slot,
+                    startMin: targetEnd,
+                    endMin: slot.endMin,
+                    label: minutesToTimeLabel(targetEnd) + ' - ' + minutesToTimeLabel(slot.endMin),
+                    _splitFrom: i
+                });
+            }
+        }
+
+        // If the target range extends beyond all existing slots, add a new slot
+        if (resultIndices.length === 0) {
+            resultIndices.push(newSlots.length);
+            newSlots.push({
+                startMin: targetStart,
+                endMin: targetEnd,
+                event: 'GA',
+                type: 'slot',
+                label: minutesToTimeLabel(targetStart) + ' - ' + minutesToTimeLabel(targetEnd),
+                _reshapedForEdit: true,
+                _injected: true
+            });
+            newSlots.sort(function(a, b) { return a.startMin - b.startMin; });
+            resultIndices[0] = newSlots.findIndex(function(s) { return s._reshapedForEdit && s.startMin === targetStart; });
+        }
+
+        // Rebuild slotIndex
+        newSlots.forEach(function(s, idx) { s.slotIndex = idx; });
+
+        // ★★★ CRITICAL: Remap existing scheduleAssignments to new slot layout ★★★
+        var oldAssignments = window.scheduleAssignments?.[bunkName] || [];
+        var newAssignments = new Array(newSlots.length);
+
+        // Map old entries by startMin
+        var oldSlotEntries = {};
+        for (var oi = 0; oi < perBunkSlots.length; oi++) {
+            if (oldAssignments[oi]) {
+                oldSlotEntries[perBunkSlots[oi].startMin] = oldAssignments[oi];
+            }
+        }
+
+        for (var ni = 0; ni < newSlots.length; ni++) {
+            if (resultIndices.includes(ni)) continue; // Will be overwritten by edit
+            var entry = oldSlotEntries[newSlots[ni].startMin];
+            if (entry) {
+                newAssignments[ni] = entry;
+            } else if (newSlots[ni]._splitFrom !== undefined) {
+                var origEntry = oldAssignments[newSlots[ni]._splitFrom];
+                if (origEntry) {
+                    newAssignments[ni] = { ...origEntry, _splitRemainder: true };
+                }
+            }
+        }
+
+        // Apply
+        window.divisionTimes[divName]._perBunkSlots[String(bunkName)] = newSlots;
+        if (!window.scheduleAssignments) window.scheduleAssignments = {};
+        window.scheduleAssignments[bunkName] = newAssignments;
+
+        console.log('[ReshapeSlot] ' + bunkName + ': ' + perBunkSlots.length + ' slots -> ' + newSlots.length + ' slots. Target [' + targetStart + '-' + targetEnd + '] at indices [' + resultIndices.join(',') + ']');
+
+        return resultIndices;
+    }
+
     async function applyMultiBunkEdit(result, notifyAfter = false) {
         const { location, slots, divName, activity, bunks, plan } = result;
 
         await createAutoBackup(activity, divName);
 
-        const divSlots = window.divisionTimes?.[divName] || [];
+       const divSlots = window.divisionTimes?.[divName] || [];
+        const isAutoMode = !!window.divisionTimes?.[divName]?._perBunkSlots;
+        const perBunkSlotMap = result.perBunkSlots || null;
         
         for (const bunk of bunks) {
-            if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
-            for (let i = 0; i < slots.length; i++) {
-                window.scheduleAssignments[bunk][slots[i]] = {
+            let bunkSlots;
+            
+           console.log('[applyMultiBunkEdit] ' + bunk + ': isAutoMode=' + isAutoMode + ' timeStartMin=' + result.timeStartMin + ' timeEndMin=' + result.timeEndMin);
+            if (isAutoMode && result.timeStartMin != null && result.timeEndMin != null) {
+                // ★★★ AUTO MODE: Reshape per-bunk slots to guarantee exact time window ★★★
+                bunkSlots = ensurePerBunkSlotForRange(bunk, divName, result.timeStartMin, result.timeEndMin);
+            } else if (isAutoMode && perBunkSlotMap && perBunkSlotMap[String(bunk)]) {
+                bunkSlots = perBunkSlotMap[String(bunk)];
+            } else {
+                bunkSlots = slots;
+            }
+            
+            if (!bunkSlots || bunkSlots.length === 0) {
+                console.warn('[applyMultiBunkEdit] No slots resolved for ' + bunk + ', skipping');
+                continue;
+            }
+            
+            const perBunk = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
+            const slotCount = perBunk ? perBunk.length : (divSlots.length || 50);
+            if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(slotCount);
+            
+            for (let i = 0; i < bunkSlots.length; i++) {
+                window.scheduleAssignments[bunk][bunkSlots[i]] = {
                     field: location, sport: null, _activity: activity,
-                    _fixed: true, _pinned: true, _multiBunkEdit: true, continuation: i > 0
+                    _fixed: true, _pinned: true, _multiBunkEdit: true, 
+                    continuation: i > 0,
+                    _startMin: result.timeStartMin,
+                    _endMin: result.timeEndMin
                 };
             }
         }
-
         const modifiedBunks = new Set(bunks);
         for (const move of plan) {
             modifiedBunks.add(move.bunk);

@@ -445,7 +445,7 @@
         const TYPE_FLOORS = { swim: 30, league: 30, specialty_league: 30, special: 20, sport: 25, sports: 25, lunch: 20, snack: 15, snacks: 15, dismissal: 10, slot: GAP_MIN_DUR, activity: GAP_MIN_DUR, elective: 20 };
         const TYPE_CEILINGS = { swim: 60, league: 60, specialty_league: 60, special: 60, sport: GAP_MAX_DUR, sports: GAP_MAX_DUR, lunch: 45, snack: 30, snacks: 30, dismissal: 30, slot: GAP_MAX_DUR, activity: GAP_MAX_DUR, elective: 60 };
 
-        function resolveConstraints(layer, type) {
+        function resolveConstraints(layer, type, block) {
             const t = (type || layer?.type || 'slot').toLowerCase();
             const typeFloor = TYPE_FLOORS[t] || GAP_MIN_DUR;
             const typeCeiling = TYPE_CEILINGS[t] || GAP_MAX_DUR;
@@ -460,18 +460,24 @@
             let dMin = rawMin > 0 ? Math.max(ABSOLUTE_FLOOR, rawMin) : typeFloor;
             let dMax = Math.max(dMin, rawMax > 0 ? Math.max(ABSOLUTE_FLOOR, rawMax) : typeCeiling);
 
-            // ★ Special override: if a SPECIFIC special has its own duration, use that
+           // ★ Special override: if a SPECIFIC special has its own duration, use that
             // If not, the layer dMin/dMax range applies (flexible special)
-            if (t === 'special' && layer) {
-                const specName = layer._assignedSpecial || layer._resolvedSpecial || layer.event || layer.name;
-                if (specName) {
-                    const specDur = getSpecialDuration(specName, activityProperties, globalSettings, null);
-                    // Only override if the special HAS a configured duration
-                    // If getSpecialDuration returns null → use layer range (flexible)
-                    if (specDur && specDur > 0) {
-                        dMin = Math.max(dMin, specDur);
-                        dMax = Math.max(dMin, dMax);
-                    }
+            if (t === 'special') {
+                let specDur = null;
+                if (layer) {
+                    const specName = layer._assignedSpecial || layer._resolvedSpecial || layer.event || layer.name;
+                    if (specName) specDur = getSpecialDuration(specName, activityProperties, globalSettings, null);
+                }
+               // Fallback: block-level _specialDuration (covers layer-null blocks from draft/fallback)
+                if (!specDur && block && block._specialDuration) specDur = block._specialDuration;
+                // Final fallback: look up by event name directly (covers needs/draft objects)
+                if (!specDur && block) {
+                    const eName = block.event || block._assignedSpecial || block._draftActivity || block.name;
+                    if (eName) specDur = getSpecialDuration(eName, activityProperties, globalSettings, null);
+                }
+                if (specDur && specDur > 0) {
+                    dMin = specDur;
+                    dMax = specDur;
                 }
             }
 
@@ -484,7 +490,7 @@
             timeline.forEach((block, i) => {
                 if (block._fromGapDetection && !block.layer) return;
                 if (block._microGap) return;
-                const { dMin } = resolveConstraints(block.layer, (block.type || 'slot').toLowerCase());
+                const { dMin } = resolveConstraints(block.layer, (block.type || 'slot').toLowerCase(), block);
                 const dur = block.endMin - block.startMin;
                 if (dur < dMin) violations.push({ block, bunk, type: 'undersized', actual: dur, required: dMin, msg: (block.event || block.type) + ' at ' + block.startMin + ': ' + dur + 'min < min=' + dMin });
                 if (i < timeline.length - 1 && block.endMin > timeline[i + 1].startMin) violations.push({ block, bunk, type: 'overlap', msg: block.event + ' overlaps ' + timeline[i + 1].event });
@@ -561,7 +567,7 @@
                     for (let i = 0; i < sorted.length - 1; i++) { const gap = sorted[i + 1].startMin - sorted[i].endMin; if (gap > 0) gradeScore += gap * 15; }
                     tl.forEach(block => {
                         if (!block.layer) return;
-                        const { dMin } = resolveConstraints(block.layer, block.type);
+                        const { dMin } = resolveConstraints(block.layer, block.type, block);
                         if (block.endMin - block.startMin < dMin) gradeScore += (dMin - (block.endMin - block.startMin)) * 200;
                         const t = (block.type || 'slot').toLowerCase();
                         if (!typeTimings[t]) typeTimings[t] = [];
@@ -927,19 +933,35 @@
         // ── League placement (for non-pinned leagues — they're always grade-wide) ──
         function placeLeagueForGrade(grade, layer) {
             const bunks = getBunksForGrade(grade, divisions);
-            const { dMin } = resolveConstraints(layer, 'league');
-            const dur = dMin;
+            const { dMin, dMax } = resolveConstraints(layer, 'league');
+            let dur = dMin; // start at minimum, expanded below if gap allows
             const leagueName = (() => {
                 const league = (Array.isArray(window.masterLeagues) ? window.masterLeagues : Object.values(window.masterLeagues || {}))
                     .find(l => (l.divisions || []).includes(grade));
                 return league ? league.name : null;
             })();
 
+           // ★ Helper: expand league duration to fill gap up to dMax
+            function expandLeagueDur(start, bunkList) {
+                let nextWall = start + dMax;
+                bunkList.forEach(bk => {
+                    (bunkTimelines[bk] || []).forEach(b => {
+                        if (b.startMin > start && b.startMin < nextWall) nextWall = b.startMin;
+                    });
+                });
+                const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                if (ge < nextWall) nextWall = ge;
+                let d = Math.max(dMin, Math.min(dMax, nextWall - start));
+                d = snapTo5(d);
+                return d < dMin ? dMin : d;
+            }
+
             if (leagueName && sharedLeagueTime[leagueName] != null) {
                 const ss = sharedLeagueTime[leagueName];
+                const expandedDur = expandLeagueDur(ss, bunks);
                 bunks.forEach(bunk => {
                     bunkTimelines[bunk].push({
-                        startMin: ss, endMin: ss + dur,
+                        startMin: ss, endMin: ss + expandedDur,
                         type: layer.type || 'league', event: layer.event || 'League Game',
                         layer, _classification: 'windowed', _committed: true,
                         _gradeWide: true, _activityLocked: true, _noBacktrack: true
@@ -950,9 +972,6 @@
             }
 
             let bestStart = null, bestScore = Infinity;
-            // ★ STAGGER: alternate search direction so different grades
-            // find different time slots. Even offset → search early→late,
-            // odd offset → search late→early.
             const gradeStagger = staggerPlan[grade] || { offset: 0, searchDirection: 'early' };
             const searchReverse = gradeStagger.searchDirection === 'late';
             const times = [];
@@ -963,16 +982,16 @@
                 const te = ts + dur;
                 if (!bunks.every(bk => !(bunkTimelines[bk] || []).some(b => b.startMin < te && b.endMin > ts))) continue;
                 let score = scorePositionByContention(ts, te, 'league', null, null);
-                // ★ CROSS-GRADE: heavy penalty if another grade already has leagues here
                 const crossConflicts = getCrossGradeConflicts('league', ts, te, grade);
-                score += crossConflicts * 10000; // massive penalty per conflicting grade
+                score += crossConflicts * 10000;
                 if (score < bestScore) { bestScore = score; bestStart = ts; }
             }
             if (bestStart === null) { warn('[P0] No free league gap for ' + grade); return null; }
 
+            const expandedDur = expandLeagueDur(bestStart, bunks);
             bunks.forEach(bunk => {
                 bunkTimelines[bunk].push({
-                    startMin: bestStart, endMin: bestStart + dur,
+                    startMin: bestStart, endMin: bestStart + expandedDur,
                     type: layer.type || 'league', event: layer.event || 'League Game',
                     layer, _classification: 'windowed', _committed: true,
                     _gradeWide: true, _activityLocked: true, _noBacktrack: true
@@ -980,8 +999,8 @@
                 bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
             });
             if (leagueName) sharedLeagueTime[leagueName] = bestStart;
-            registerCrossGrade(grade, 'league', bestStart, bestStart + dur);
-            log('[P0] ' + grade + ' league at ' + minutesToTimeLabel(bestStart));
+            registerCrossGrade(grade, 'league', bestStart, bestStart + expandedDur);
+            log('[P0] ' + grade + ' league at ' + minutesToTimeLabel(bestStart) + ' (' + expandedDur + 'min)');
             return bestStart;
         }
 
@@ -1443,36 +1462,23 @@
 
             if (excess <= 0) return durations; // already at or over target
 
-            // Calculate headroom per block
-            const headrooms = blockDescs.map((b, i) => b.dMax - durations[i]);
-            const totalHeadroom = headrooms.reduce((s, h) => s + h, 0);
-
-            if (totalHeadroom <= 0) return durations; // no room to grow
-
-            // Distribute proportionally to headroom
-            for (let pass = 0; pass < 3 && excess > 0; pass++) {
-                for (let i = 0; i < n && excess > 0; i++) {
-                    const maxGrow = blockDescs[i].dMax - durations[i];
-                    if (maxGrow <= 0) continue;
-                    // Proportional share, snapped to 5
-                    let share = totalHeadroom > 0
-                        ? Math.round((headrooms[i] / totalHeadroom) * excess)
-                        : Math.round(excess / n);
-                    share = Math.min(share, maxGrow, excess);
-                    if (share > 0) {
-                        durations[i] += share;
-                        excess -= share;
-                    }
-                }
-                // If rounding left a remainder, distribute 1 at a time
-                if (excess > 0) {
-                    for (let i = 0; i < n && excess > 0; i++) {
-                        const maxGrow = blockDescs[i].dMax - durations[i];
-                        if (maxGrow > 0) { durations[i]++; excess--; }
-                    }
-                }
+            // ★ MAXIMIZE: fill each block to dMax before moving to the next.
+            // Produces fewer, longer activities instead of many short ones.
+            for (let i = 0; i < n && excess > 0; i++) {
+                const maxGrow = blockDescs[i].dMax - durations[i];
+                if (maxGrow <= 0) continue;
+                const give = Math.min(maxGrow, excess);
+                durations[i] += give;
+                excess -= give;
             }
 
+            // If still excess after all blocks maxed, spread remainder
+            if (excess > 0) {
+                for (let i = 0; i < n && excess > 0; i++) {
+                    durations[i]++;
+                    excess--;
+                }
+            }
             // Snap to 5 while preserving total
             let total = 0;
             for (let i = 0; i < n - 1; i++) {
@@ -1504,13 +1510,21 @@
 
             // ── Step 1: Walls — blocks already placed by Phase 0 ──────────
             // These are lunch, dismissal, league — they CANNOT move.
-            const walls = (bunkTimelines[bunk] || []).map(b => ({
-                startMin: b.startMin, endMin: b.endMin, type: b.type, event: b.event,
-                layer: b.layer, _fixed: true, _source: 'phase0',
-                _gradeWide: b._gradeWide || false, _activityLocked: true,
-                _classification: b._classification || 'pinned',
-                _noBacktrack: b._noBacktrack || false
-            }));
+            const walls = (bunkTimelines[bunk] || []).map(b => {
+                const t = (b.type || '').toLowerCase();
+                const isLeague = t === 'league' || t === 'specialty_league';
+                const c = (isLeague && b.layer) ? resolveConstraints(b.layer, t) : null;
+                return {
+                    startMin: b.startMin, endMin: b.endMin, type: b.type, event: b.event,
+                    layer: b.layer, _fixed: true, _source: 'phase0',
+                    // Leagues can flex — carry their real constraints
+                    dMin: c ? c.dMin : (b.endMin - b.startMin),
+                    dMax: c ? c.dMax : (b.endMin - b.startMin),
+                    _gradeWide: b._gradeWide || false, _activityLocked: true,
+                    _classification: b._classification || 'pinned',
+                    _noBacktrack: b._noBacktrack || false
+                };
+            });
 
             // ── Step 2: Build needs list — everything else ────────────────
             // Sorted most-constrained first: fixed-dur → tight-window → flex
@@ -1546,21 +1560,15 @@
 
             // Draft specials (flex duration, full window, assigned activity)
             (draftResult.specials || []).forEach(special => {
-                const c = resolveConstraints(special.layer, 'special');
-                // If the special has its own duration, use it to tighten dMin/dMax
-                let sDMin = c.dMin, sDMax = c.dMax;
-                if (special.duration && special.duration > 0) {
-                    // Special has a specific duration — honor it as the ideal,
-                    // but allow flex within layer bounds
-                    sDMin = Math.max(c.dMin, special.duration);
-                    sDMax = Math.min(c.dMax, special.duration);
-                    // If special.duration is outside layer bounds, clamp
-                    if (sDMin > sDMax) { sDMin = special.duration; sDMax = special.duration; }
-                }
+                const c = resolveConstraints(special.layer, 'special', special);
+                // If the special has a configured duration, it's FIXED — no flex.
+                // If no duration, use layer dMin/dMax range (flexible).
+                const hasFixedDur = special.duration && special.duration > 0;
+                const sDMin = hasFixedDur ? special.duration : c.dMin;
+                const sDMax = hasFixedDur ? special.duration : c.dMax;
                 needs.push({
                     type: 'special', event: special.name, layer: special.layer,
-                    dMin: sDMin, dMax: sDMax,
-                    windowStart: gradeStart, windowEnd: gradeEnd,
+                    dMin: sDMin, dMax: sDMax,                    windowStart: gradeStart, windowEnd: gradeEnd,
                     _activityLocked: true, _assignedSpecial: special.name,
                     _specialLocation: special.location, _specialDuration: special.duration,
                     _source: 'draft'
@@ -1713,11 +1721,17 @@
                     }
 
                     for (const pos of candidates) {
-                        // Residual check: before and after must be 0, absorbable, or fillable
+                       // Residual check: before and after must be viable
                         const beforeRes = pos - gap.origStart;
                         const afterRes = gap.origEnd - (pos + need.dMin);
-                        if (beforeRes > ABSORB_MAX && beforeRes < minFill) continue;
-                        if (afterRes > ABSORB_MAX && afterRes < minFill) continue;
+                        if (need.dMin === need.dMax) {
+                            // Fixed-duration: residuals must be 0 or fillable (no absorption — it would stretch a fixed block)
+                            if (beforeRes > 0 && beforeRes < minFill) continue;
+                            if (afterRes > 0 && afterRes < minFill) continue;
+                        } else {
+                            if (beforeRes > ABSORB_MAX && beforeRes < minFill) continue;
+                            if (afterRes > ABSORB_MAX && afterRes < minFill) continue;
+                        }
 
                         // ★ Special capacity + cross-division check
                         if (need.type === 'special' && need._assignedSpecial) {
@@ -1749,10 +1763,16 @@
                         if (need.type === 'special' && need._assignedSpecial) {
                             let foundFallback = false;
                             for (let t = gap.start; t <= endPos2; t += 5) {
-                                if (canUseSpecialAtTime(need._assignedSpecial, grade, t, t + need.dMin)) {
-                                    placed.push({ startMin: t, endMin: t + need.dMin, ...need, _final: true });
-                                    didPlace = true; foundFallback = true; break;
+                                // ★ Fixed-duration specials: reject positions that create dead-zone residuals
+                                if (need.dMin === need.dMax) {
+                                    const beforeRes = t - gap.origStart;
+                                    const afterRes = gap.origEnd - (t + need.dMin);
+                                    if (beforeRes > 0 && beforeRes < minFill) continue;
+                                    if (afterRes > 0 && afterRes < minFill) continue;
                                 }
+                                if (!canUseSpecialAtTime(need._assignedSpecial, grade, t, t + need.dMin)) continue;
+                                placed.push({ startMin: t, endMin: t + need.dMin, ...need, _final: true });
+                                didPlace = true; foundFallback = true; break;
                             }
                             if (foundFallback) break;
                         } else {
@@ -2009,8 +2029,8 @@
                         const next = template[i + 1];
                         const prevFlex = prev.dMin !== prev.dMax && prev._source !== 'phase0';
                         const nextFlex = next.dMin !== next.dMax && next._source !== 'phase0';
-                        const prevC = prevFlex ? resolveConstraints(prev.layer, prev.type) : null;
-                        const nextC = nextFlex ? resolveConstraints(next.layer, next.type) : null;
+                        const prevC = prevFlex ? resolveConstraints(prev.layer, prev.type, prev) : null;
+                const nextC = nextFlex ? resolveConstraints(next.layer, next.type, next) : null;
 
                         if (prevFlex && prevC && (prev.endMin - prev.startMin + gap) <= prevC.dMax) {
                             prev.endMin += gap; changed = true;
@@ -2093,8 +2113,20 @@
                 log('[PACK] ' + bunk + ': ' + template.length + ' blocks, dead=' + dead);
             }
 
-            return template.sort((a, b) => a.startMin - b.startMin);
-        }
+            // ── Post-pack enforcement: clamp configured specials to exact duration ──
+            for (let i = 0; i < template.length; i++) {
+                const blk = template[i];
+                if ((blk.type || '').toLowerCase() !== 'special') continue;
+                const eName = blk.event || blk._assignedSpecial || blk._draftActivity || blk.name;
+                if (!eName) continue;
+                const cfgDur = getSpecialDuration(eName, activityProperties, globalSettings, null);
+                if (!cfgDur || cfgDur <= 0) continue;
+                const actualDur = blk.endMin - blk.startMin;
+                if (actualDur === cfgDur) continue;
+                blk.endMin = blk.startMin + cfgDur;
+            }
+
+            return template.sort((a, b) => a.startMin - b.startMin);        }
 
 
         // =====================================================================
@@ -2159,7 +2191,7 @@
                 // CEL duration violations
                 timeline.forEach(block => {
                     if (block._microGap || (block._fromGapDetection && !block.layer)) return;
-                    const { dMin } = resolveConstraints(block.layer, (block.type || 'slot').toLowerCase());
+                    const { dMin } = resolveConstraints(block.layer, (block.type || 'slot').toLowerCase(), block);
                     const dur = block.endMin - block.startMin;
                     if (dur < dMin) score += (dMin - dur) * 200;
                 });
@@ -3094,8 +3126,27 @@
             try {
                 const clean = {}; Object.entries(window.scheduleAssignments || {}).forEach(([b, s]) => { clean[b] = (s || []).map(x => (x && x.field === 'Free' && !x._fixed) ? null : x); });
                 const spbs = {}; Object.keys(window.divisionTimes || {}).forEach(g => { if (window.divisionTimes[g]?._perBunkSlots) spbs[g] = window.divisionTimes[g]._perBunkSlots; });
-                window.saveCurrentDailyData({ scheduleAssignments: clean, leagueAssignments: window.leagueAssignments, manualSkeleton: autoSkeleton, _perBunkSlotsData: spbs, _autoGenerated: true, _autoVersion: VERSION, _generatedAt: new Date().toISOString(), _warnings: warnings });
-                log('[5] Saved');
+              // ★★★ SINGLE WRITE: Avoid 8x localStorage churn that causes quota eviction ★★★
+                const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                const DAILY_KEY = 'campDailyData_v1';
+                const allDaily = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                if (!allDaily[dateKey]) allDaily[dateKey] = {};
+                Object.assign(allDaily[dateKey], {
+                    scheduleAssignments: clean,
+                    leagueAssignments: window.leagueAssignments || {},
+                    manualSkeleton: autoSkeleton,
+                    _perBunkSlotsData: spbs,
+                    _autoGenerated: true,
+                    _autoVersion: VERSION,
+                    _generatedAt: new Date().toISOString(),
+                    _warnings: warnings,
+                    divisionTimes: window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes || {}
+                });
+                localStorage.setItem(DAILY_KEY, JSON.stringify(allDaily));
+                // Also trigger cloud save via the bridge
+                if (typeof window.saveGlobalSettings === 'function') {
+                    window.saveGlobalSettings('daily_schedules', allDaily);
+                }               log('[5] Saved');
             } catch (e) { warn('[5] Save error: ' + e.message); }
         }
         if (window.SupabaseSyncEngine?.pushSchedule) { try { await window.SupabaseSyncEngine.pushSchedule(window.scheduleAssignments, window.currentScheduleDate || window.currentDate); log('[5] Synced'); } catch (e) { warn('[5] Sync: ' + e.message); } }

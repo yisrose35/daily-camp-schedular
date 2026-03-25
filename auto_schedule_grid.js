@@ -1,6 +1,14 @@
 // =================================================================
-// auto_schedule_grid.js — Auto Mode Schedule Grid Renderer v2.0
+// auto_schedule_grid.js — Auto Mode Schedule Grid Renderer v2.1
 // =================================================================
+// v2.1 CHANGES:
+// ★★★ POST-EDIT INTEGRATION ★★★
+//   - Activity blocks are clickable when isEditable=true
+//   - Clicking opens the integrated edit modal (same as manual mode)
+//   - Free/empty gaps are clickable to add new activities
+//   - Full conflict detection, rotation tracking, and smart reassignment
+//   - Bypass save for cross-division edits
+//
 // Architecture: CSS Grid with time-rows × bunk-columns.
 // League slots interrupt the column layout as TRUE full-width rows
 // using grid-column: span N — not overlays, not patches.
@@ -46,6 +54,101 @@
 
     function snapToIncrement(min, inc) {
         return Math.round(min / inc) * inc;
+    }
+
+    // ─────────────────────────────────────────────
+    // ★★★ v2.1: SLOT INDEX LOOKUP FOR POST-EDIT ★★★
+    // Finds the per-bunk slot index matching a time range.
+    // This is needed to bridge the timeline view (time-based)
+    // with the scheduleAssignments array (index-based).
+    // ─────────────────────────────────────────────
+   function findSlotIndex(bunk, divName, startMin, endMin) {
+        // Method 1: Per-bunk slots (auto mode canonical)
+        var perBunkSlots = (window.divisionTimes || {})[divName];
+        if (perBunkSlots && perBunkSlots._perBunkSlots) {
+            var bunkSlots = perBunkSlots._perBunkSlots[String(bunk)];
+            if (bunkSlots) {
+                // Exact match (single-slot block)
+                for (var i = 0; i < bunkSlots.length; i++) {
+                    if (bunkSlots[i].startMin === startMin && bunkSlots[i].endMin === endMin) return i;
+                }
+                // ★★★ FIX: Match on startMin only — handles multi-slot continuation blocks
+                // where getBunkActivities merged slots 3+4 into one block with combined endMin.
+                // We need the FIRST slot (the one with the actual assignment, not continuation).
+                for (var j = 0; j < bunkSlots.length; j++) {
+                    if (bunkSlots[j].startMin === startMin) return j;
+                }
+                // Last resort: overlapping match
+                for (var k = 0; k < bunkSlots.length; k++) {
+                    if (bunkSlots[k].startMin >= startMin && bunkSlots[k].startMin < endMin) return k;
+                }
+            }
+        }
+
+        // Method 2: Division-level slots (non-auto fallback)
+        var divSlots = (window.divisionTimes || {})[divName];
+        if (divSlots && Array.isArray(divSlots)) {
+            for (var m = 0; m < divSlots.length; m++) {
+                if (divSlots[m].startMin === startMin) return m;
+            }
+        }
+
+        // Method 3: Use SchedulerCoreUtils with bunk context
+        if (window.SchedulerCoreUtils && window.SchedulerCoreUtils.findSlotsForRange) {
+            var slots = window.SchedulerCoreUtils.findSlotsForRange(startMin, endMin, divName, String(bunk));
+            if (slots.length > 0) return slots[0];
+        }
+
+        return -1;
+    }
+
+    // ─────────────────────────────────────────────
+    // ★★★ v2.1: OPEN EDIT FOR BLOCK ★★★
+    // Entry point when user clicks an activity block.
+    // Delegates to the integrated edit modal (same as manual mode).
+    // ─────────────────────────────────────────────
+    function openEditForBlock(bunk, divName, startMin, endMin, entry) {
+        var slotIdx = findSlotIndex(bunk, divName, startMin, endMin);
+
+        if (slotIdx === -1) {
+            console.warn('[AutoGrid] Could not find slot index for', bunk, startMin, '-', endMin);
+            // Fallback: use enhancedEditCell with time range
+            if (typeof window.enhancedEditCell === 'function') {
+                var currentText = entry ? (entry._activity || entry.field || '') : '';
+                window.enhancedEditCell(bunk, startMin, endMin, currentText);
+            }
+            return;
+        }
+
+        var existingEntry = (window.scheduleAssignments || {})[bunk];
+        existingEntry = existingEntry ? existingEntry[slotIdx] : null;
+
+        // Prefer the integrated edit modal (scope selection + multi-bunk)
+        if (typeof window.openIntegratedEditModal === 'function') {
+            window.openIntegratedEditModal(bunk, slotIdx, existingEntry);
+        }
+        // Fallback: legacy edit modal
+        else if (typeof window.enhancedEditCell === 'function') {
+            var text = existingEntry ? (existingEntry._activity || existingEntry.field || '') : '';
+            window.enhancedEditCell(bunk, startMin, endMin, text);
+        }
+        else {
+            console.error('[AutoGrid] No edit modal available');
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // ★★★ v2.1: OPEN EDIT FOR FREE GAP ★★★
+    // When clicking an empty area, open edit to add a new activity.
+    // ─────────────────────────────────────────────
+    function openEditForGap(bunk, divName, startMin, endMin) {
+        var slotIdx = findSlotIndex(bunk, divName, startMin, endMin);
+
+        if (slotIdx !== -1 && typeof window.openIntegratedEditModal === 'function') {
+            window.openIntegratedEditModal(bunk, slotIdx, null);
+        } else if (typeof window.enhancedEditCell === 'function') {
+            window.enhancedEditCell(bunk, startMin, endMin, '');
+        }
     }
 
     // ─────────────────────────────────────────────
@@ -102,6 +205,7 @@
                 endMin:   divSlots[end].endMin,
                 duration: divSlots[end].endMin - divSlots[i].startMin,
                 entry:    entry,
+                slotIdx:  i,  // ★★★ v2.1: Track slot index for edit
                 isLeague: !!(entry._league || entry._h2h)
             });
             i = end + 1;
@@ -172,6 +276,33 @@
     }
 
     // ─────────────────────────────────────────────
+    // ★★★ v2.1: COMPUTE FREE GAPS FOR A BUNK ★★★
+    // Returns array of { startMin, endMin } for unoccupied time.
+    // Used to render clickable free-gap indicators.
+    // ─────────────────────────────────────────────
+    function computeFreeGaps(bunk, divName, dayStart, dayEnd) {
+        var activities = getBunkActivities(bunk, divName);
+        var gaps = [];
+        var cursor = dayStart;
+
+        // Sort by startMin
+        activities.sort(function (a, b) { return a.startMin - b.startMin; });
+
+        for (var i = 0; i < activities.length; i++) {
+            if (activities[i].startMin > cursor) {
+                gaps.push({ startMin: cursor, endMin: activities[i].startMin });
+            }
+            cursor = Math.max(cursor, activities[i].endMin);
+        }
+        if (cursor < dayEnd) {
+            gaps.push({ startMin: cursor, endMin: dayEnd });
+        }
+
+        // Only return gaps large enough to be meaningful (≥10 min)
+        return gaps.filter(function (g) { return g.endMin - g.startMin >= 10; });
+    }
+
+    // ─────────────────────────────────────────────
     // INJECT STYLES (once)
     // ─────────────────────────────────────────────
     function injectStyles() {
@@ -179,7 +310,7 @@
         var s = document.createElement('style');
         s.id = 'asg-v2-styles';
         s.textContent = `
-/* ── Auto Schedule Grid v2 ── */
+/* ── Auto Schedule Grid v2.1 ── */
 .asg-wrap {
     border-radius: 10px;
     overflow: hidden;
@@ -220,7 +351,6 @@
 /* THE GRID */
 .asg-grid {
     display: grid;
-    /* columns set inline: 64px (ruler) + N bunk cols */
     position: relative;
     background: #fff;
     min-width: max-content;
@@ -298,6 +428,19 @@
     transform: scaleY(1.01);
     z-index: 3;
 }
+/* ★★★ v2.1: Editable block styling ★★★ */
+.asg-block.asg-editable {
+    cursor: pointer;
+}
+.asg-block.asg-editable:hover {
+    filter: brightness(0.92);
+    transform: scaleY(1.02);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    z-index: 4;
+}
+.asg-block.asg-editable:active {
+    transform: scaleY(0.99);
+}
 .asg-block-name {
     font-size: 0.68rem; font-weight: 700;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -319,8 +462,38 @@
     );
     border: 1px dashed #d1d5db;
     display: flex; align-items: center; justify-content: center;
+    cursor: default;
+}
+/* ★★★ v2.1: Editable free gap styling ★★★ */
+.asg-free.asg-editable {
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+.asg-free.asg-editable:hover {
+    background: repeating-linear-gradient(
+        45deg,
+        #eff6ff, #eff6ff 4px,
+        #dbeafe 4px, #dbeafe 8px
+    );
+    border-color: #93c5fd;
+    box-shadow: 0 1px 4px rgba(59,130,246,0.15);
 }
 .asg-free span { font-size: 0.58rem; color: #9ca3af; font-weight: 500; }
+.asg-free.asg-editable span { color: #6b7280; }
+.asg-free.asg-editable:hover span { color: #2563eb; }
+
+/* ★★★ v2.1: Edit indicator on blocks ★★★ */
+.asg-edit-icon {
+    position: absolute;
+    top: 2px; right: 4px;
+    font-size: 0.55rem;
+    opacity: 0;
+    transition: opacity 0.15s;
+    pointer-events: none;
+}
+.asg-block.asg-editable:hover .asg-edit-icon {
+    opacity: 0.6;
+}
 
 /* ════════════════════════════════════════
    LEAGUE ROW — the whole point of this rewrite
@@ -385,7 +558,6 @@
     gap: 5px;
     align-content: start;
 }
-/* Custom scrollbar */
 .asg-league-matchups::-webkit-scrollbar { width: 4px; }
 .asg-league-matchups::-webkit-scrollbar-track { background: transparent; }
 .asg-league-matchups::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
@@ -407,11 +579,6 @@
     font-size: 0.6rem; font-weight: 700;
     color: #1e293b;
     text-transform: uppercase; letter-spacing: 0.06em;
-    white-space: nowrap;
-    flex-shrink: 0;
-}
-    text-transform: uppercase; letter-spacing: 0.06em;
-    writing-mode: horizontal-tb;
     white-space: nowrap;
     flex-shrink: 0;
 }
@@ -437,7 +604,6 @@
     padding: 10px 14px;
 }
 
-/* Ruler cell beside league row */
 .asg-league-time-ruler {
     grid-column: 1;
     background: #1e3a8a;
@@ -509,14 +675,11 @@
 
         // ── SCROLL WRAPPER ───────────────────────
         var scroll = document.createElement('div');
-       scroll.className = 'asg-scroll';
+        scroll.className = 'asg-scroll';
         scroll.style.width = '100%';
         scroll.style.boxSizing = 'border-box';
 
         // ── OUTER CONTAINER ──────────────────────
-        // Uses flexbox: ruler column (fixed) + bunk columns (flex)
-       var bunkColW = 0; // will use flex:1 — calculated after render if needed
-
         var container = document.createElement('div');
         container.style.cssText = [
             'display:flex',
@@ -537,7 +700,6 @@
             'z-index:2'
         ].join(';');
 
-        // Ruler header
         var rulerHead = document.createElement('div');
         rulerHead.style.cssText = [
             'height:36px',
@@ -556,7 +718,6 @@
         rulerHead.textContent = 'Time';
         ruler.appendChild(rulerHead);
 
-        // Ruler body — absolutely positioned tick marks
         var rulerBody = document.createElement('div');
         rulerBody.style.cssText = [
             'position:relative',
@@ -574,7 +735,6 @@
             var isMajor = tm % 60 === 0;
             var showLabel = isMajor || increment <= 30;
 
-            // Check if inside league
             var inLeague = false;
             for (var ls2 in leagueByStart) {
                 var lsData = leagueByStart[parseInt(ls2)];
@@ -613,7 +773,6 @@
         container.appendChild(ruler);
 
         // ── BUNK COLUMNS AREA ────────────────────
-        // One row of headers + one shared body with absolutely-positioned bunk columns
         var columnsWrap = document.createElement('div');
         columnsWrap.style.cssText = [
             'display:flex',
@@ -623,7 +782,6 @@
             'overflow:hidden'
         ].join(';');
 
-        // Bunk header row
         var headerRow = document.createElement('div');
         headerRow.style.cssText = [
             'display:flex',
@@ -657,7 +815,7 @@
         });
         columnsWrap.appendChild(headerRow);
 
-        // Body row — contains all bunk columns + league overlays
+        // Body row
         var bodyRow = document.createElement('div');
         bodyRow.style.cssText = [
             'display:flex',
@@ -681,7 +839,7 @@
                 'height:' + totalH + 'px'
             ].join(';');
 
-            // Background tick lines (visual grid)
+            // Background tick lines
             for (var tm2 = dayStart; tm2 <= dayEnd; tm2 += increment) {
                 var lineTop = (tm2 - dayStart) * PX_PER_MIN;
                 var line = document.createElement('div');
@@ -697,22 +855,22 @@
                 col.appendChild(line);
             }
 
-            // Activity blocks — absolutely positioned by startMin
+            // Activity blocks
             var acts = bunkActivities[bunk];
             acts.forEach(function (act) {
-                if (act.isLeague) return; // league handled by overlay
+                if (act.isLeague) return;
 
                 var blockTop = (act.startMin - dayStart) * PX_PER_MIN;
                 var blockH   = act.duration * PX_PER_MIN;
                 if (blockH < 2) return;
 
-               var style = blockStyle(act.entry);
+                var style = blockStyle(act.entry);
                 var name  = act.entry?._activity || act.entry?.field || '';
                 var fieldName = act.entry?.field || '';
                 var sub   = (fieldName && fieldName !== name && fieldName !== 'Free') ? fieldName : '';
 
                 var blk = document.createElement('div');
-                blk.className = 'asg-block';
+                blk.className = 'asg-block' + (isEditable ? ' asg-editable' : '');
                 blk.style.cssText = [
                     'position:absolute',
                     'top:' + (blockTop + 2) + 'px',
@@ -729,7 +887,6 @@
                     'justify-content:center',
                     'padding:3px 6px',
                     'box-sizing:border-box',
-                    'cursor:default',
                     'z-index:1'
                 ].join(';');
 
@@ -765,21 +922,73 @@
                 }
 
                 blk.title = name + '\n' + toLabel(act.startMin) + ' – ' + toLabel(act.endMin) + ' (' + act.duration + 'min)';
+
+                // ★★★ v2.1: EDIT INDICATOR ★★★
+                if (isEditable) {
+                    var editIcon = document.createElement('span');
+                    editIcon.className = 'asg-edit-icon';
+                    editIcon.textContent = '✏️';
+                    blk.appendChild(editIcon);
+                }
+
+                // ★★★ v2.1: CLICK HANDLER FOR POST-EDIT ★★★
+                if (isEditable) {
+                    (function (bunkName, dName, sMin, eMin, entryRef) {
+                        blk.addEventListener('click', function (e) {
+                            e.stopPropagation();
+                            openEditForBlock(bunkName, dName, sMin, eMin, entryRef);
+                        });
+                    })(bunk, divName, act.startMin, act.endMin, act.entry);
+                }
+
                 col.appendChild(blk);
             });
+
+            // ★★★ v2.1: FREE GAP INDICATORS (clickable) ★★★
+            if (isEditable) {
+                var gaps = computeFreeGaps(bunk, divName, dayStart, dayEnd);
+                gaps.forEach(function (gap) {
+                    var gapTop = (gap.startMin - dayStart) * PX_PER_MIN;
+                    var gapH = (gap.endMin - gap.startMin) * PX_PER_MIN;
+                    if (gapH < 15) return; // too small to click
+
+                    var gapEl = document.createElement('div');
+                    gapEl.className = 'asg-free asg-editable';
+                    gapEl.style.cssText = [
+                        'top:' + (gapTop + 2) + 'px',
+                        'height:' + (gapH - 4) + 'px'
+                    ].join(';');
+
+                    if (gapH >= 30) {
+                        var gapLabel = document.createElement('span');
+                        gapLabel.textContent = '+ Add';
+                        gapEl.appendChild(gapLabel);
+                    }
+
+                    gapEl.title = 'Add activity\n' + toLabel(gap.startMin) + ' – ' + toLabel(gap.endMin);
+
+                    (function (bunkName, dName, sMin, eMin) {
+                        gapEl.addEventListener('click', function (e) {
+                            e.stopPropagation();
+                            openEditForGap(bunkName, dName, sMin, eMin);
+                        });
+                    })(bunk, divName, gap.startMin, gap.endMin);
+
+                    col.appendChild(gapEl);
+                });
+            }
 
             bodyRow.appendChild(col);
         });
 
         // ── LEAGUE OVERLAYS ───────────────────────
-        // Rendered as absolutely-positioned full-width bars over all bunk columns
         leagueSlots.forEach(function (ls) {
             var leagueTop = (ls.startMin - dayStart) * PX_PER_MIN;
             var leagueH   = (ls.endMin - ls.startMin) * PX_PER_MIN;
 
             var overlay = document.createElement('div');
             overlay.className = 'asg-league-row';
-           overlay.style.cssText = [
+            overlay.style.cssText = [
                 'position:absolute',
                 'top:' + leagueTop + 'px',
                 'left:0',
@@ -789,7 +998,6 @@
                 'border-radius:0'
             ].join(';');
 
-            // Header bar
             var lHdr = document.createElement('div');
             lHdr.className = 'asg-league-header';
 
@@ -819,7 +1027,6 @@
 
             overlay.appendChild(lHdr);
 
-            // Matchups
             var muGrid = document.createElement('div');
             muGrid.className = 'asg-league-matchups';
 
@@ -887,9 +1094,9 @@
         getIncrement:    getIncrement,
         setIncrement:    setIncrement,
         PIXELS_PER_MINUTE: PX_PER_MIN,
-        VERSION:         '2.0.0'
+        VERSION:         '2.1.0'
     };
 
-    console.log('[AutoScheduleGrid] v2.0.0 loaded — CSS Grid architecture');
+    console.log('[AutoScheduleGrid] v2.1.0 loaded — CSS Grid + Post-Edit Integration');
 
 })();
