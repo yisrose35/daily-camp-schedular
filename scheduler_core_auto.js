@@ -933,19 +933,35 @@
         // ── League placement (for non-pinned leagues — they're always grade-wide) ──
         function placeLeagueForGrade(grade, layer) {
             const bunks = getBunksForGrade(grade, divisions);
-            const { dMin } = resolveConstraints(layer, 'league');
-            const dur = dMin;
+            const { dMin, dMax } = resolveConstraints(layer, 'league');
+            let dur = dMin; // start at minimum, expanded below if gap allows
             const leagueName = (() => {
                 const league = (Array.isArray(window.masterLeagues) ? window.masterLeagues : Object.values(window.masterLeagues || {}))
                     .find(l => (l.divisions || []).includes(grade));
                 return league ? league.name : null;
             })();
 
+           // ★ Helper: expand league duration to fill gap up to dMax
+            function expandLeagueDur(start, bunkList) {
+                let nextWall = start + dMax;
+                bunkList.forEach(bk => {
+                    (bunkTimelines[bk] || []).forEach(b => {
+                        if (b.startMin > start && b.startMin < nextWall) nextWall = b.startMin;
+                    });
+                });
+                const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                if (ge < nextWall) nextWall = ge;
+                let d = Math.max(dMin, Math.min(dMax, nextWall - start));
+                d = snapTo5(d);
+                return d < dMin ? dMin : d;
+            }
+
             if (leagueName && sharedLeagueTime[leagueName] != null) {
                 const ss = sharedLeagueTime[leagueName];
+                const expandedDur = expandLeagueDur(ss, bunks);
                 bunks.forEach(bunk => {
                     bunkTimelines[bunk].push({
-                        startMin: ss, endMin: ss + dur,
+                        startMin: ss, endMin: ss + expandedDur,
                         type: layer.type || 'league', event: layer.event || 'League Game',
                         layer, _classification: 'windowed', _committed: true,
                         _gradeWide: true, _activityLocked: true, _noBacktrack: true
@@ -956,9 +972,6 @@
             }
 
             let bestStart = null, bestScore = Infinity;
-            // ★ STAGGER: alternate search direction so different grades
-            // find different time slots. Even offset → search early→late,
-            // odd offset → search late→early.
             const gradeStagger = staggerPlan[grade] || { offset: 0, searchDirection: 'early' };
             const searchReverse = gradeStagger.searchDirection === 'late';
             const times = [];
@@ -969,16 +982,16 @@
                 const te = ts + dur;
                 if (!bunks.every(bk => !(bunkTimelines[bk] || []).some(b => b.startMin < te && b.endMin > ts))) continue;
                 let score = scorePositionByContention(ts, te, 'league', null, null);
-                // ★ CROSS-GRADE: heavy penalty if another grade already has leagues here
                 const crossConflicts = getCrossGradeConflicts('league', ts, te, grade);
-                score += crossConflicts * 10000; // massive penalty per conflicting grade
+                score += crossConflicts * 10000;
                 if (score < bestScore) { bestScore = score; bestStart = ts; }
             }
             if (bestStart === null) { warn('[P0] No free league gap for ' + grade); return null; }
 
+            const expandedDur = expandLeagueDur(bestStart, bunks);
             bunks.forEach(bunk => {
                 bunkTimelines[bunk].push({
-                    startMin: bestStart, endMin: bestStart + dur,
+                    startMin: bestStart, endMin: bestStart + expandedDur,
                     type: layer.type || 'league', event: layer.event || 'League Game',
                     layer, _classification: 'windowed', _committed: true,
                     _gradeWide: true, _activityLocked: true, _noBacktrack: true
@@ -986,8 +999,8 @@
                 bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
             });
             if (leagueName) sharedLeagueTime[leagueName] = bestStart;
-            registerCrossGrade(grade, 'league', bestStart, bestStart + dur);
-            log('[P0] ' + grade + ' league at ' + minutesToTimeLabel(bestStart));
+            registerCrossGrade(grade, 'league', bestStart, bestStart + expandedDur);
+            log('[P0] ' + grade + ' league at ' + minutesToTimeLabel(bestStart) + ' (' + expandedDur + 'min)');
             return bestStart;
         }
 
@@ -1449,36 +1462,23 @@
 
             if (excess <= 0) return durations; // already at or over target
 
-            // Calculate headroom per block
-            const headrooms = blockDescs.map((b, i) => b.dMax - durations[i]);
-            const totalHeadroom = headrooms.reduce((s, h) => s + h, 0);
-
-            if (totalHeadroom <= 0) return durations; // no room to grow
-
-            // Distribute proportionally to headroom
-            for (let pass = 0; pass < 3 && excess > 0; pass++) {
-                for (let i = 0; i < n && excess > 0; i++) {
-                    const maxGrow = blockDescs[i].dMax - durations[i];
-                    if (maxGrow <= 0) continue;
-                    // Proportional share, snapped to 5
-                    let share = totalHeadroom > 0
-                        ? Math.round((headrooms[i] / totalHeadroom) * excess)
-                        : Math.round(excess / n);
-                    share = Math.min(share, maxGrow, excess);
-                    if (share > 0) {
-                        durations[i] += share;
-                        excess -= share;
-                    }
-                }
-                // If rounding left a remainder, distribute 1 at a time
-                if (excess > 0) {
-                    for (let i = 0; i < n && excess > 0; i++) {
-                        const maxGrow = blockDescs[i].dMax - durations[i];
-                        if (maxGrow > 0) { durations[i]++; excess--; }
-                    }
-                }
+            // ★ MAXIMIZE: fill each block to dMax before moving to the next.
+            // Produces fewer, longer activities instead of many short ones.
+            for (let i = 0; i < n && excess > 0; i++) {
+                const maxGrow = blockDescs[i].dMax - durations[i];
+                if (maxGrow <= 0) continue;
+                const give = Math.min(maxGrow, excess);
+                durations[i] += give;
+                excess -= give;
             }
 
+            // If still excess after all blocks maxed, spread remainder
+            if (excess > 0) {
+                for (let i = 0; i < n && excess > 0; i++) {
+                    durations[i]++;
+                    excess--;
+                }
+            }
             // Snap to 5 while preserving total
             let total = 0;
             for (let i = 0; i < n - 1; i++) {
