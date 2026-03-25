@@ -17,7 +17,7 @@
     /* ── Border ── */
     --border: rgba(0,0,0,0.06);
     --border-strong: rgba(0,0,0,0.1);
-    --border-focus: #147D91;
+    --border-focus: #D97706;
 
     /* ── Text ── */
     --text-1: #1A1A1A;
@@ -27,13 +27,16 @@
     --text-inverse: #FFFFFF;
 
     /* ── Brand ── */
-    --accent: #147D91;
-    --accent-hover: #0F6A7A;
-    --accent-subtle: rgba(20,125,145,0.08);
-    --accent-border: rgba(20,125,145,0.2);
-    --amber: #C2890A;
-    --amber-subtle: rgba(194,137,10,0.08);
-    --amber-border: rgba(194,137,10,0.18);
+    --accent: #D97706;
+    --accent-hover: #B45309;
+    --accent-subtle: rgba(217,119,6,0.07);
+    --accent-border: rgba(217,119,6,0.18);
+    --amber: #D97706;
+    --amber-subtle: rgba(217,119,6,0.07);
+    --amber-border: rgba(217,119,6,0.18);
+    --teal: #147D91;
+    --teal-subtle: rgba(20,125,145,0.08);
+    --teal-border: rgba(20,125,145,0.2);
 
     /* ── Semantic ── */
     --success: #1A8754;
@@ -290,22 +293,7 @@ body {
 }
 .search-input::placeholder { color: var(--text-4); }
 
-/* ============================================================
-   CARDS
-   ============================================================ */
-.card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
-}
-.card-header {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 14px 20px;
-    border-bottom: 1px solid var(--border);
-}
-.card-header h2 { font-size: 13px; font-weight: 600; color: var(--text-1); letter-spacing: -0.1px; }
-.card-count { font-size: 12px; color: var(--text-3); font-weight: 500; }
+/* Card styles defined in TABLE section below */
 
 /* ============================================================
    HIERARCHY (Structure)
@@ -410,51 +398,119 @@ body {
 .add-grade-inline .quick-add input { width: 160px; }
 
 /* ============================================================
-   TABLE
+   TABLE — Premium Roster
    ============================================================ */
 .table-wrapper { overflow-x: auto; }
-.data-table { width: 100%; border-collapse: collapse; }
+.data-table { width: 100%; border-collapse: separate; border-spacing: 0; }
 .data-table th {
-    text-align: left; padding: 10px 16px;
-    font-weight: 600; font-size: 11px;
-    text-transform: uppercase; letter-spacing: 0.6px;
-    color: var(--text-3); background: var(--bg-app);
-    border-bottom: 1px solid var(--border);
+    text-align: left; padding: 0;
+    position: sticky; top: 0; z-index: 2;
 }
-.data-table th[data-sort] { cursor: pointer; user-select: none; }
-.data-table th[data-sort]:hover { color: var(--text-2); }
-.data-table th.sorted-asc::after { content: ' ↑'; }
-.data-table th.sorted-desc::after { content: ' ↓'; }
+.data-table th > span,
+.data-table th {
+    font-weight: 600; font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.8px;
+    color: var(--text-3);
+    padding: 12px 20px;
+    background: var(--bg-surface);
+    border-bottom: 2px solid var(--border-strong);
+}
+.data-table th[data-sort] { cursor: pointer; user-select: none; transition: color var(--duration); }
+.data-table th[data-sort]:hover { color: var(--text-1); }
+.data-table th.sorted-asc::after { content: ' ↑'; color: var(--accent); }
+.data-table th.sorted-desc::after { content: ' ↓'; color: var(--accent); }
 .data-table td {
-    padding: 10px 16px;
+    padding: 14px 20px;
     border-bottom: 1px solid var(--border);
     color: var(--text-2); font-size: 13px;
+    transition: background var(--duration);
+    vertical-align: middle;
 }
-.data-table tbody tr { transition: background var(--duration); }
-.data-table tbody tr:hover { background: var(--bg-hover); }
+.data-table tbody tr {
+    cursor: pointer;
+    transition: all var(--duration);
+}
+.data-table tbody tr:hover {
+    background: var(--accent-subtle);
+}
+.data-table tbody tr:hover td {
+    color: var(--text-1);
+}
+.data-table tbody tr:active {
+    background: var(--bg-active);
+}
 .data-table tbody tr:last-child td { border-bottom: none; }
 .data-table .clickable {
-    color: var(--text-1); font-weight: 500;
+    color: var(--text-1); font-weight: 600;
     cursor: pointer; transition: color var(--duration);
+    letter-spacing: -0.1px;
 }
 .data-table .clickable:hover { color: var(--accent); }
+
+/* ── Add row (the quick-add form at the top of the table) ── */
 .add-row td {
-    padding: 10px 16px !important;
-    background: var(--accent-subtle) !important;
-    border-bottom: 1px solid var(--accent-border) !important;
+    padding: 12px 20px !important;
+    background: var(--bg-surface) !important;
+    border-bottom: 2px solid var(--accent-border) !important;
+    position: relative;
+}
+.add-row td::before {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; top: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--accent), transparent);
+    opacity: 0.15;
 }
 .add-row input, .add-row select {
-    width: 100%; padding: 6px 10px;
+    width: 100%; padding: 8px 12px;
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-sm);
-    font-family: inherit; font-size: 12px;
-    background: var(--bg-surface); transition: all var(--duration);
+    font-family: inherit; font-size: 13px;
+    background: var(--bg-surface); color: var(--text-1);
+    transition: all var(--duration);
 }
 .add-row input:focus, .add-row select:focus {
-    outline: none; border-color: var(--border-focus);
+    outline: none; border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-subtle);
+    background: #fff;
 }
 .add-row input::placeholder { color: var(--text-4); }
+
+/* ── Delete button in row ── */
+.data-table .icon-btn.danger {
+    opacity: 0;
+    transition: all var(--duration);
+}
+.data-table tbody tr:hover .icon-btn.danger {
+    opacity: 1;
+}
+
+/* ── Card wrapper tighter around table ── */
+.card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+    transition: box-shadow var(--duration);
+}
+.card:hover { box-shadow: var(--shadow-md); }
+.card-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+}
+.card-header h2 {
+    font-size: 14px; font-weight: 600; color: var(--text-1);
+    letter-spacing: -0.2px;
+}
+.card-count {
+    font-size: 12px; color: var(--text-3); font-weight: 500;
+    background: var(--bg-sunken);
+    padding: 2px 10px;
+    border-radius: var(--radius-full);
+}
 
 /* ── Medical flags ── */
 .me-flag {
@@ -464,8 +520,8 @@ body {
     white-space: nowrap; max-width: 130px;
     overflow: hidden; text-overflow: ellipsis;
 }
-.me-flag-allergy { background: var(--warning-subtle); color: var(--amber); border: 1px solid var(--amber-border); }
-.me-flag-med { background: var(--accent-subtle); color: var(--accent); border: 1px solid var(--accent-border); }
+.me-flag-allergy { background: var(--amber-subtle); color: var(--amber); border: 1px solid var(--amber-border); }
+.me-flag-med { background: var(--teal-subtle); color: var(--teal); border: 1px solid var(--teal-border); }
 .me-flag-diet { background: var(--success-subtle); color: var(--success); border: 1px solid rgba(26,135,84,0.15); }
 
 .me-row-photo { width: 28px; height: 28px; border-radius: var(--radius-sm); object-fit: cover; }
@@ -647,7 +703,7 @@ body {
     margin-bottom: -1px; transition: all var(--duration);
 }
 .me-panel-tab:hover { color: var(--text-2); }
-.me-panel-tab.active { color: var(--accent); font-weight: 600; border-bottom-color: var(--accent); }
+.me-panel-tab.active { color: var(--teal); font-weight: 600; border-bottom-color: var(--teal); }
 .me-panel-body { flex: 1; overflow: auto; padding: 16px 24px 24px; }
 .me-panel-footer {
     border-top: 1px solid var(--border);
@@ -696,21 +752,21 @@ body {
 .me-balance-card { margin-top: 14px; padding: 16px; border-radius: var(--radius-md); }
 .me-balance-card.paid { background: var(--success-subtle); border: 1px solid rgba(26,135,84,0.12); }
 .me-balance-card.owed { background: var(--warning-subtle); border: 1px solid var(--amber-border); }
-.me-balance-card.owed-staff { background: var(--accent-subtle); border: 1px solid var(--accent-border); }
+.me-balance-card.owed-staff { background: var(--teal-subtle); border: 1px solid var(--teal-border); }
 .me-balance-label { font-size: 12px; font-weight: 600; }
 .me-balance-card.paid .me-balance-label { color: var(--success); }
 .me-balance-card.owed .me-balance-label { color: var(--amber); }
-.me-balance-card.owed-staff .me-balance-label { color: var(--accent); }
+.me-balance-card.owed-staff .me-balance-label { color: var(--teal); }
 .me-balance-amount { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; margin-top: 2px; }
 .me-balance-card.paid .me-balance-amount { color: var(--success); }
 .me-balance-card.owed .me-balance-amount { color: var(--amber); }
-.me-balance-card.owed-staff .me-balance-amount { color: var(--accent); }
+.me-balance-card.owed-staff .me-balance-amount { color: var(--teal); }
 
 .me-action-link {
     display: inline-flex; padding: 4px 12px;
     border-radius: var(--radius-full);
-    font-size: 11px; font-weight: 600; color: var(--accent);
-    background: var(--accent-subtle); border: 1px solid var(--accent-border);
+    font-size: 11px; font-weight: 600; color: var(--teal);
+    background: var(--teal-subtle); border: 1px solid var(--teal-border);
     text-decoration: none; cursor: pointer; transition: all var(--duration);
 }
 .me-action-link:hover { background: rgba(20,125,145,0.14); }
@@ -744,7 +800,7 @@ body {
 .me-pill-sm { padding: 5px 12px; font-size: 12px; }
 .me-pill-xs { padding: 2px 8px; font-size: 10px; font-weight: 600; border-radius: var(--radius-full); cursor: pointer; font-family: inherit; }
 .me-pill-danger { background: var(--danger-subtle); color: var(--danger); border: 1px solid var(--danger-border); }
-.me-pill-ghost { background: none; border: none; color: var(--accent); font-weight: 600; }
+.me-pill-ghost { background: none; border: none; color: var(--teal); font-weight: 600; }
 
 /* ============================================================
    TOAST
