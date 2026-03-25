@@ -1491,4 +1491,16 @@
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
     else setTimeout(init, 100);
+    // =========================================================================
+    // ★ v8 BRIDGE — Expose internals for campistry_me_v8.js enhancement module
+    // Add these lines at the BOTTOM of campistry_me.js, INSIDE the IIFE,
+    // right before the closing })();
+    // =========================================================================
+    window.CampistryMe._getStructure = function() { return structure; };
+    window.CampistryMe._getCamperRoster = function() { return camperRoster; };
+    window.CampistryMe._scheduleCloudSave = scheduleCloudSave;
+    window.CampistryMe.saveData = saveData;
+    window.CampistryMe.renderAll = renderAll;
+    window.CampistryMe.renderCamperTable = renderCamperTable;
+    window.CampistryMe.toast = toast;
 })();
