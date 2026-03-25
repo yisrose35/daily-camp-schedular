@@ -909,166 +909,177 @@
     // =========================================================================
     // CLIENT-SIDE CLUSTERING (within a region)
     // =========================================================================
+    /**
+     * ROUTING ENGINE v4 — K-Means Geographic Clustering
+     * 
+     * Think like a human route planner:
+     * 1. Kids at same address = one stop (no size limits)
+     * 2. K-Means clusters stops into natural neighborhoods
+     * 3. Each neighborhood → one bus
+     * 4. Within each bus: nearest-neighbor ordering from camp outward
+     * 5. Duration rebalancing between buses
+     */
     function clientSideCluster(campers, vehicles, campLat, campLng, mode) {
-        const MAX_PER_STOP = 8; // Max campers at any single stop
-        let jobs = campers;
-
+        // ── STEP 1: Create stops ──
+        let stops;
         if (mode === 'optimized-stops') {
             const maxWalkMi = (D.setup.maxWalkDistance || 500) * 0.000189394;
-            const clusters = []; const used = new Set();
+            const used = new Set(); stops = [];
             const sorted = [...campers].sort((a, b) => a.lat - b.lat);
-            sorted.forEach(c => { if (used.has(c.name)) return; const cl = [c]; used.add(c.name); sorted.forEach(o => { if (used.has(o.name)) return; if (haversineMi(c.lat, c.lng, o.lat, o.lng) <= maxWalkMi) { cl.push(o); used.add(o.name); } }); const cLat = cl.reduce((s, x) => s + x.lat, 0) / cl.length, cLng = cl.reduce((s, x) => s + x.lng, 0) / cl.length;
+            sorted.forEach(c => {
+                if (used.has(c.name)) return;
+                const cl = [c]; used.add(c.name);
+                sorted.forEach(o => { if (!used.has(o.name) && haversineMi(c.lat, c.lng, o.lat, o.lng) <= maxWalkMi) { cl.push(o); used.add(o.name); } });
+                const cLat = cl.reduce((s, x) => s + x.lat, 0) / cl.length;
+                const cLng = cl.reduce((s, x) => s + x.lng, 0) / cl.length;
                 let nearestAddr = cl[0].address, nearestDist = Infinity;
                 cl.forEach(x => { const d = haversineMi(cLat, cLng, x.lat, x.lng); if (d < nearestDist) { nearestDist = d; nearestAddr = x.address; } });
-                clusters.push({ lat: cLat, lng: cLng, address: nearestAddr, campers: cl.map(x => ({ name: x.name, division: x.division, bunk: x.bunk })), _count: cl.length }); });
-            jobs = clusters;
+                stops.push({ lat: cLat, lng: cLng, address: nearestAddr, campers: cl.map(x => ({ name: x.name, division: x.division, bunk: x.bunk })) });
+            });
         } else {
-            // Door-to-door: only merge TRUE same-address (siblings at identical location)
-            // Use tight grid: ~100ft cells (0.0003° lat ≈ 100ft)
-            const addrGroups = {};
+            // Door-to-door: only merge truly same address (~100ft)
+            const groups = {};
             campers.forEach(c => {
                 const key = Math.round(c.lat * 3000) + ',' + Math.round(c.lng * 3000);
-                if (!addrGroups[key]) addrGroups[key] = [];
-                addrGroups[key].push(c);
+                if (!groups[key]) groups[key] = [];
+                groups[key].push(c);
             });
-            jobs = Object.values(addrGroups).map(group => ({
-                lat: group[0].lat, lng: group[0].lng,
-                address: group[0].address,
-                campers: group.map(c => ({ name: c.name, division: c.division, bunk: c.bunk })),
-                _count: group.length
+            stops = Object.values(groups).map(g => ({
+                lat: g[0].lat, lng: g[0].lng, address: g[0].address,
+                campers: g.map(c => ({ name: c.name, division: c.division, bunk: c.bunk }))
             }));
         }
 
-        // Split oversized stops into multiple stops at same location
-        const splitJobs = [];
-        jobs.forEach(job => {
-            if (job._count <= MAX_PER_STOP) { splitJobs.push(job); return; }
-            // Split into chunks of MAX_PER_STOP
-            for (let i = 0; i < job.campers.length; i += MAX_PER_STOP) {
-                const chunk = job.campers.slice(i, i + MAX_PER_STOP);
-                splitJobs.push({ lat: job.lat, lng: job.lng, address: job.address, campers: chunk, _count: chunk.length });
-            }
-        });
-        jobs = splitJobs;
+        const numBuses = vehicles.length;
+        if (!numBuses || !stops.length) return [];
 
-        // Sort by angle from camp (geographic sweep)
-        const withAngle = jobs.map(j => ({ ...j, _angle: angleTo(campLat, campLng, j.lat, j.lng), _dist: haversineMi(campLat, campLng, j.lat, j.lng) }));
-        withAngle.sort((a, b) => a._angle - b._angle);
+        // ── STEP 2: K-Means geographic clustering ──
+        const clusters = kMeansGeo(stops, numBuses);
 
-        const routes = vehicles.map(v => ({ busId: v.busId, busName: v.name, busColor: v.color, monitor: v.monitor, counselors: v.counselors || [], stops: [], camperCount: 0, _cap: v.capacity, totalDuration: 0, _maxDist: 0 }));
-        if (!routes.length) return routes;
+        // ── STEP 3: Assign clusters to buses (largest → largest capacity) ──
+        clusters.sort((a, b) => b.camperCount - a.camperCount);
+        const sortedVehicles = [...vehicles].sort((a, b) => b.capacity - a.capacity);
 
-        // Phase 1: Distribute stops to buses using angular sectors
-        // Divide the angle space evenly among buses, then assign each stop to its sector's bus
-        const numBuses = routes.length;
-        const angles = withAngle.map(j => j._angle);
-        const minAngle = Math.min(...angles);
-        const maxAngle = Math.max(...angles);
-        const angleRange = maxAngle - minAngle || (2 * Math.PI);
-        const sectorSize = angleRange / numBuses;
-
-        withAngle.forEach(job => {
-            // Which sector does this job fall in?
-            let sectorIdx = Math.floor((job._angle - minAngle) / sectorSize);
-            sectorIdx = Math.min(sectorIdx, numBuses - 1);
-
-            // Try assigned sector first, then find nearest bus with capacity
-            let assigned = false;
-            for (let attempt = 0; attempt < numBuses; attempt++) {
-                const rIdx = (sectorIdx + attempt) % numBuses;
-                const r = routes[rIdx];
-                if (r.camperCount + job._count <= r._cap) {
-                    r.stops.push({ stopNum: 0, campers: job.campers, address: job.address, lat: job.lat, lng: job.lng });
-                    r.camperCount += job._count;
-                    assigned = true;
-                    break;
-                }
-            }
-            if (!assigned) {
-                // Overflow: put on bus with most remaining capacity
-                const best = routes.reduce((a, b) => (a._cap - a.camperCount) > (b._cap - b.camperCount) ? a : b);
-                best.stops.push({ stopNum: 0, campers: job.campers, address: job.address, lat: job.lat, lng: job.lng });
-                best.camperCount += job._count;
-            }
+        const routes = clusters.map((cluster, i) => {
+            const v = sortedVehicles[i % sortedVehicles.length];
+            return {
+                busId: v.busId, busName: v.name, busColor: v.color,
+                monitor: v.monitor, counselors: v.counselors || [],
+                stops: cluster.stops, camperCount: cluster.camperCount,
+                _cap: v.capacity, totalDuration: 0
+            };
         });
 
-        // Phase 2: Nearest-neighbor reorder within each bus (starting from camp)
+        // ── STEP 4: Handle overcapacity ──
         routes.forEach(r => {
-            if (r.stops.length < 2) { r.stops.forEach((s, i) => { s.stopNum = i + 1; }); return; }
-            const ordered = []; const rem = [...r.stops]; let cLat = campLat, cLng = campLng;
-            while (rem.length) {
-                let ni = 0, nd = Infinity;
-                rem.forEach((s, i) => { const d = haversineMi(cLat, cLng, s.lat, s.lng); if (d < nd) { nd = d; ni = i; } });
-                const nx = rem.splice(ni, 1)[0]; nx.stopNum = ordered.length + 1; ordered.push(nx); cLat = nx.lat; cLng = nx.lng;
+            while (r.camperCount > r._cap) {
+                const cLat = r.stops.reduce((s, st) => s + st.lat, 0) / r.stops.length;
+                const cLng = r.stops.reduce((s, st) => s + st.lng, 0) / r.stops.length;
+                let fIdx = -1, fDist = 0;
+                r.stops.forEach((st, i) => { const d = haversineMi(cLat, cLng, st.lat, st.lng); if (d > fDist) { fDist = d; fIdx = i; } });
+                if (fIdx < 0) break;
+                const overflow = r.stops.splice(fIdx, 1)[0];
+                r.camperCount -= overflow.campers.length;
+                let bestBus = null, bestDist = Infinity;
+                routes.forEach(other => {
+                    if (other === r || other.camperCount + overflow.campers.length > other._cap) return;
+                    const oCenter = other.stops.length ? { lat: other.stops[0].lat, lng: other.stops[0].lng } : { lat: campLat, lng: campLng };
+                    const d = haversineMi(overflow.lat, overflow.lng, oCenter.lat, oCenter.lng);
+                    if (d < bestDist) { bestDist = d; bestBus = other; }
+                });
+                if (bestBus) { bestBus.stops.push(overflow); bestBus.camperCount += overflow.campers.length; }
+                else { r.stops.push(overflow); r.camperCount += overflow.campers.length; break; }
             }
-            r.stops = ordered;
         });
 
-        // Phase 3: Estimate durations and rebalance
-        // Calculate estimated route duration for each bus
+        // ── STEP 5: Nearest-neighbor stop ordering from camp ──
         const avgSpeed = D.setup.avgSpeed || 25;
         const stopTime = D.setup.avgStopTime || 2;
-        function estDuration(r) {
-            let dur = 0, pLat = campLat, pLng = campLng;
-            r.stops.forEach(s => {
-                dur += (haversineMi(pLat, pLng, s.lat, s.lng) / avgSpeed) * 60 + stopTime;
-                pLat = s.lat; pLng = s.lng;
-            });
-            // Return to camp
-            if (r.stops.length) dur += (haversineMi(pLat, pLng, campLat, campLng) / avgSpeed) * 60;
-            return Math.round(dur);
-        }
-        routes.forEach(r => { r.totalDuration = estDuration(r); });
 
-        // Try to rebalance: move last stop from longest route to shortest if it reduces the gap
-        for (let pass = 0; pass < 5; pass++) {
+        function orderAndCalcDuration(r) {
+            if (r.stops.length < 2) { r.stops.forEach((s, i) => s.stopNum = i + 1); }
+            else {
+                const ordered = []; const rem = [...r.stops];
+                let pLat = campLat, pLng = campLng;
+                while (rem.length) {
+                    let ni = 0, nd = Infinity;
+                    rem.forEach((s, i) => { const d = haversineMi(pLat, pLng, s.lat, s.lng); if (d < nd) { nd = d; ni = i; } });
+                    const nx = rem.splice(ni, 1)[0]; nx.stopNum = ordered.length + 1; ordered.push(nx); pLat = nx.lat; pLng = nx.lng;
+                }
+                r.stops = ordered;
+            }
+            let dur = 0, pLat = campLat, pLng = campLng;
+            r.stops.forEach(s => { dur += (haversineMi(pLat, pLng, s.lat, s.lng) / avgSpeed) * 60 + stopTime; pLat = s.lat; pLng = s.lng; });
+            if (r.stops.length) dur += (haversineMi(pLat, pLng, campLat, campLng) / avgSpeed) * 60;
+            r.totalDuration = Math.round(dur);
+        }
+        routes.forEach(orderAndCalcDuration);
+
+        // ── STEP 6: Duration rebalancing ──
+        for (let pass = 0; pass < 8; pass++) {
             const longest = routes.reduce((a, b) => a.totalDuration > b.totalDuration ? a : b);
             const shortest = routes.reduce((a, b) => a.totalDuration < b.totalDuration ? a : b);
-            if (longest === shortest) break;
-            const gap = longest.totalDuration - shortest.totalDuration;
-            if (gap < 8) break; // close enough (within 8 min)
-
-            // Try moving the last stop of the longest route to the shortest
-            if (longest.stops.length <= 1) break;
+            if (longest === shortest || longest.totalDuration - shortest.totalDuration < 6) break;
+            if (longest.stops.length <= 2) break;
             const candidate = longest.stops[longest.stops.length - 1];
             if (shortest.camperCount + candidate.campers.length > shortest._cap) break;
 
-            // Simulate the move
-            longest.stops.pop();
-            longest.camperCount -= candidate.campers.length;
-            shortest.stops.push(candidate);
-            shortest.camperCount += candidate.campers.length;
+            const oldGap = longest.totalDuration - shortest.totalDuration;
+            longest.stops.pop(); longest.camperCount -= candidate.campers.length;
+            shortest.stops.push(candidate); shortest.camperCount += candidate.campers.length;
+            orderAndCalcDuration(longest); orderAndCalcDuration(shortest);
 
-            // Re-sort shortest route stops
-            const rem2 = [...shortest.stops]; shortest.stops = [];
-            let cLat2 = campLat, cLng2 = campLng;
-            while (rem2.length) {
-                let ni2 = 0, nd2 = Infinity;
-                rem2.forEach((s, i) => { const d = haversineMi(cLat2, cLng2, s.lat, s.lng); if (d < nd2) { nd2 = d; ni2 = i; } });
-                const nx2 = rem2.splice(ni2, 1)[0]; nx2.stopNum = shortest.stops.length + 1; shortest.stops.push(nx2); cLat2 = nx2.lat; cLng2 = nx2.lng;
-            }
-
-            // Recalc
-            longest.stops.forEach((s, i) => { s.stopNum = i + 1; });
-            longest.totalDuration = estDuration(longest);
-            shortest.totalDuration = estDuration(shortest);
-
-            const newGap = Math.abs(longest.totalDuration - shortest.totalDuration);
-            if (newGap >= gap) {
-                // Revert — made it worse
-                shortest.stops.pop();
-                shortest.camperCount -= candidate.campers.length;
-                longest.stops.push(candidate);
-                longest.camperCount += candidate.campers.length;
-                longest.stops.forEach((s, i) => { s.stopNum = i + 1; });
-                shortest.stops.forEach((s, i) => { s.stopNum = i + 1; });
-                longest.totalDuration = estDuration(longest);
-                shortest.totalDuration = estDuration(shortest);
+            if (Math.abs(longest.totalDuration - shortest.totalDuration) >= oldGap) {
+                shortest.stops.pop(); shortest.camperCount -= candidate.campers.length;
+                longest.stops.push(candidate); longest.camperCount += candidate.campers.length;
+                orderAndCalcDuration(longest); orderAndCalcDuration(shortest);
                 break;
             }
         }
 
         return routes;
+    }
+
+    /** K-Means++ geographic clustering */
+    function kMeansGeo(stops, K) {
+        if (stops.length <= K) {
+            return stops.map(s => ({ stops: [s], camperCount: s.campers.length, centLat: s.lat, centLng: s.lng }));
+        }
+
+        // K-Means++ initialization: spread centroids far apart
+        const centroids = [{ lat: stops[0].lat, lng: stops[0].lng }];
+        for (let c = 1; c < K; c++) {
+            let bestDist = 0, bestStop = stops[0];
+            stops.forEach(s => {
+                const minD = Math.min(...centroids.map(ct => haversineMi(s.lat, s.lng, ct.lat, ct.lng)));
+                if (minD > bestDist) { bestDist = minD; bestStop = s; }
+            });
+            centroids.push({ lat: bestStop.lat, lng: bestStop.lng });
+        }
+
+        // Iterate (max 30)
+        let assignments = new Array(stops.length).fill(0);
+        for (let iter = 0; iter < 30; iter++) {
+            let changed = false;
+            stops.forEach((s, i) => {
+                let best = 0, bestD = Infinity;
+                centroids.forEach((ct, ci) => { const d = haversineMi(s.lat, s.lng, ct.lat, ct.lng); if (d < bestD) { bestD = d; best = ci; } });
+                if (assignments[i] !== best) { assignments[i] = best; changed = true; }
+            });
+            if (!changed) break;
+            centroids.forEach((ct, ci) => {
+                const members = stops.filter((_, i) => assignments[i] === ci);
+                if (members.length) {
+                    ct.lat = members.reduce((s, m) => s + m.lat, 0) / members.length;
+                    ct.lng = members.reduce((s, m) => s + m.lng, 0) / members.length;
+                }
+            });
+        }
+
+        return centroids.map((ct, ci) => {
+            const ms = stops.filter((_, i) => assignments[i] === ci);
+            return { stops: ms, camperCount: ms.reduce((s, st) => s + st.campers.length, 0), centLat: ct.lat, centLng: ct.lng };
+        }).filter(c => c.stops.length > 0);
     }
 
     async function geocodeSingle(addr) {
