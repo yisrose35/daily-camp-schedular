@@ -72,6 +72,7 @@
             <button class="tab-btn" data-tab="shifts">Shifts</button>
             <button class="tab-btn" data-tab="staff">Staff</button>
             <button class="tab-btn" data-tab="addresses">Addresses</button>
+            <button class="tab-btn" data-tab="preflight">Preflight</button>
             <button class="tab-btn" data-tab="routes" style="font-weight:700;color:#2563eb;">Routes & Map</button>
         </div>
 
@@ -212,6 +213,18 @@
             </div>
         </div>
 
+        <!-- PREFLIGHT -->
+        <div id="tab-preflight" class="tab-content">
+            <div class="card" style="margin-bottom:1.5rem">
+                <div class="card-header"><h2>Pre-Flight Checklist</h2><span class="badge badge-neutral" id="preflightStatus">—</span></div>
+                <div class="card-body" id="preflightBody"></div>
+            </div>
+            <div class="card">
+                <div class="card-header"><h2>Detected Regions</h2><button class="btn btn-secondary btn-sm" onclick="CampistryGo.detectRegions()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg> Detect Regions</button></div>
+                <div class="card-body" id="regionPreviewBody"><div style="text-align:center;padding:1rem;color:var(--text-muted);font-size:.875rem;">Click "Detect Regions" to analyze camper addresses</div></div>
+            </div>
+        </div>
+
         <!-- ROUTES & MAP -->
         <div id="tab-routes" class="tab-content">
             <!-- Action bar -->
@@ -258,7 +271,8 @@
                 </div>
 
                 <!-- Route Map -->
-                <div class="card" style="margin-bottom:1.5rem">
+                <div class="card" style="margin-bottom:1.5rem" id="routeMapCard">
+                    <div style="display:flex;align-items:center;justify-content:flex-end;padding:.375rem .75rem;border-bottom:1px solid var(--border-light);"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.toggleMapFullscreen()" title="Toggle fullscreen"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg> Fullscreen</button></div>
                     <div id="mapShiftSelect" style="display:flex;gap:0;border-bottom:1px solid var(--border-light);overflow-x:auto;padding:0 .75rem;background:var(--bg-secondary);"></div>
                     <div id="mapBusTabs" style="display:flex;gap:0;border-bottom:1px solid var(--border-light);overflow-x:auto;padding:0 .75rem;background:var(--bg-tertiary);"></div>
                     <div id="routeMap" style="height:500px;width:100%;background:var(--bg-tertiary);"></div>
@@ -277,20 +291,11 @@
                 <!-- Master List (collapsible) -->
                 <details class="collapsible-card">
                     <summary class="collapsible-header">
-                        <span>Master Drop-off List</span>
+                        <span id="masterListLabel">Master Drop-off List</span>
                         <span class="card-count" id="masterListCount">0</span>
                     </summary>
                     <div class="collapsible-body" style="padding:0;">
                         <div class="table-wrapper"><table class="data-table"><thead><tr><th>First Name</th><th>Last Name</th><th>Shift</th><th>Bus</th><th>Stop #</th><th>Address</th><th>Est. Time</th></tr></thead><tbody id="masterListBody"></tbody></table></div>
-                    </div>
-                </details>
-
-                <!-- Preflight / Regions (collapsible) -->
-                <details class="collapsible-card">
-                    <summary class="collapsible-header"><span>Preflight & Regions</span><span class="badge badge-neutral" id="preflightStatus">—</span></summary>
-                    <div class="collapsible-body">
-                        <div id="preflightBody" style="margin-bottom:1rem;"></div>
-                        <div id="regionPreviewBody"></div>
                     </div>
                 </details>
             </div>
@@ -310,6 +315,8 @@
 <div class="modal-overlay" id="addressModal"><div class="modal"><div class="modal-header"><h3>Edit Address</h3><button class="modal-close" onclick="CampistryGo.closeModal('addressModal')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div style="margin-bottom:1rem"><span style="font-weight:600;font-size:1rem" id="addressCamperName"></span><span style="color:var(--text-muted);font-size:.8125rem;margin-left:.5rem" id="addressCamperBunk"></span></div><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Street</label><input type="text" class="form-input" id="addrStreet" placeholder="123 Main St"></div><div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:.75rem"><div class="form-group"><label class="form-label">City</label><input type="text" class="form-input" id="addrCity"></div><div class="form-group"><label class="form-label">State</label><input type="text" class="form-input" id="addrState" value="NY" maxlength="2" style="text-transform:uppercase"></div><div class="form-group"><label class="form-label">ZIP</label><input type="text" class="form-input" id="addrZip" maxlength="10"></div></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryGo.closeModal('addressModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryGo.saveAddress()">Save</button></div></div></div>
 
 <div class="modal-overlay" id="overrideModal"><div class="modal"><div class="modal-header"><h3>Add Daily Override</h3><button class="modal-close" onclick="CampistryGo.closeModal('overrideModal')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Search Camper</label><input type="text" class="form-input" id="overrideSearch" placeholder="Type name to search..." oninput="CampistryGo.filterOverrideSelect('overrideSearch','overrideCamper')"></div><div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="overrideCamper"><option value="">— Select —</option></select></div><div class="form-group"><label class="form-label">What's happening today?</label><select class="form-select" id="overrideType" onchange="CampistryGo.onOverrideTypeChange()"><option value="not-riding">Not going home by bus today</option><option value="ride-with">Going home with another camper</option><option value="add-rider">Carpool kid riding bus today</option></select></div><div class="form-group" id="overrideRideWithGroup" style="display:none"><label class="form-label">Search who they're riding with</label><input type="text" class="form-input" id="overrideTargetSearch" placeholder="Type name..." oninput="CampistryGo.filterOverrideSelect('overrideTargetSearch','overrideTarget')"><select class="form-select" id="overrideTarget" style="margin-top:.375rem"><option value="">— Select —</option></select><span class="form-hint">This camper will join that camper's bus &amp; stop</span></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryGo.closeModal('overrideModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryGo.saveOverride()">Save Override</button></div></div></div>
+
+<div class="modal-overlay" id="moveModal"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>Move Camper</h3><button class="modal-close" onclick="CampistryGo.closeModal('moveModal')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><p style="font-size:.875rem;margin-bottom:1rem;">Move <strong id="moveCamperName"></strong> to a different bus:</p><div class="form-group"><label class="form-label">Move to</label><select class="form-select" id="moveToBus"></select></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryGo.closeModal('moveModal')">Cancel</button><button class="btn btn-primary" id="moveConfirmBtn">Move</button></div></div></div>
 
 <input type="file" id="csvFileInput" accept=".csv,.tsv,.txt" style="display:none">
 <div class="toast" id="toastEl"></div>
