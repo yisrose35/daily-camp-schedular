@@ -1510,13 +1510,21 @@
 
             // ── Step 1: Walls — blocks already placed by Phase 0 ──────────
             // These are lunch, dismissal, league — they CANNOT move.
-            const walls = (bunkTimelines[bunk] || []).map(b => ({
-                startMin: b.startMin, endMin: b.endMin, type: b.type, event: b.event,
-                layer: b.layer, _fixed: true, _source: 'phase0',
-                _gradeWide: b._gradeWide || false, _activityLocked: true,
-                _classification: b._classification || 'pinned',
-                _noBacktrack: b._noBacktrack || false
-            }));
+            const walls = (bunkTimelines[bunk] || []).map(b => {
+                const t = (b.type || '').toLowerCase();
+                const isLeague = t === 'league' || t === 'specialty_league';
+                const c = (isLeague && b.layer) ? resolveConstraints(b.layer, t) : null;
+                return {
+                    startMin: b.startMin, endMin: b.endMin, type: b.type, event: b.event,
+                    layer: b.layer, _fixed: true, _source: 'phase0',
+                    // Leagues can flex — carry their real constraints
+                    dMin: c ? c.dMin : (b.endMin - b.startMin),
+                    dMax: c ? c.dMax : (b.endMin - b.startMin),
+                    _gradeWide: b._gradeWide || false, _activityLocked: true,
+                    _classification: b._classification || 'pinned',
+                    _noBacktrack: b._noBacktrack || false
+                };
+            });
 
             // ── Step 2: Build needs list — everything else ────────────────
             // Sorted most-constrained first: fixed-dur → tight-window → flex
