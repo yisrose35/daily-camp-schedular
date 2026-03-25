@@ -1184,10 +1184,12 @@
 
             if (roadCoords) {
                 const polyline = L.polyline(roadCoords, { color: route.busColor, weight: lineWeight, opacity: lineOpacity, dashArray: dashPattern }).addTo(_map);
+                polyline._goRouteKey = cacheKey;
                 _mapLayers.push(polyline);
             } else {
                 // Draw straight lines first (faded), fetch road geometry in background
                 const tempLine = L.polyline(straightCoords, { color: route.busColor, weight: lineWeight, opacity: lineOpacity * 0.4, dashArray: dashPattern }).addTo(_map);
+                tempLine._goRouteKey = cacheKey;
                 _mapLayers.push(tempLine);
 
                 if (getApiKey() && straightCoords.length >= 2) {
@@ -1246,6 +1248,7 @@
                                 const idx = _mapLayers.indexOf(temp);
                                 if (idx >= 0) _mapLayers.splice(idx, 1);
                                 const road = L.polyline(pts, { color: color, weight: w, opacity: o, dashArray: dash }).addTo(_map);
+                                road._goRouteKey = ck;
                                 _mapLayers.push(road);
                             }
                         } catch (e) { console.warn('[Go] Directions failed:', e.message); }
@@ -1267,51 +1270,105 @@
                 marker.bindPopup(popup);
                 _mapLayers.push(marker);
 
-                // On drag end: update stop coords, reverse geocode, redraw route
+                // On drag end: update stop in place without resetting map
                 if (!isSpecial) {
-                    marker.on('dragend', function() {
+                    const _busId = route.busId;
+                    const _shiftIdx = route.shiftIdx;
+                    const _stopNum = stop.stopNum;
+                    const _busColor = route.busColor;
+
+                    marker.on('dragend', async function() {
                         const pos = marker.getLatLng();
-                        // Update in saved routes
-                        if (D.savedRoutes) {
-                            const sr = D.savedRoutes[route.shiftIdx];
-                            if (sr) {
-                                const rt = sr.routes.find(r => r.busId === route.busId);
-                                if (rt) {
-                                    const st = rt.stops.find(s => s.stopNum === stop.stopNum);
-                                    if (st) {
-                                        st.lat = pos.lat;
-                                        st.lng = pos.lng;
-                                        // Reverse geocode for address
-                                        if (getApiKey()) {
-                                            fetch('https://api.openrouteservice.org/geocode/reverse?point.lat=' + pos.lat + '&point.lon=' + pos.lng + '&size=1', {
-                                                headers: { 'Authorization': getApiKey() }
-                                            }).then(r => r.json()).then(data => {
-                                                if (data.features?.[0]?.properties?.label) {
-                                                    st.address = data.features[0].properties.label;
-                                                }
-                                                // Clear cached route geometry and re-render
-                                                delete _routeGeomCache[route.busId + '_' + route.shiftIdx];
-                                                _generatedRoutes = D.savedRoutes;
-                                                save();
-                                                renderMap();
-                                                renderRouteResults(applyOverrides(D.savedRoutes));
-                                                toast('Stop ' + stop.stopNum + ' moved');
-                                            }).catch(() => {
-                                                delete _routeGeomCache[route.busId + '_' + route.shiftIdx];
-                                                _generatedRoutes = D.savedRoutes;
-                                                save();
-                                                renderMap();
-                                            });
-                                        } else {
-                                            delete _routeGeomCache[route.busId + '_' + route.shiftIdx];
-                                            _generatedRoutes = D.savedRoutes;
-                                            save();
-                                            renderMap();
-                                        }
+                        if (!D.savedRoutes) return;
+                        const sr = D.savedRoutes[_shiftIdx];
+                        if (!sr) return;
+                        const rt = sr.routes.find(r => r.busId === _busId);
+                        if (!rt) return;
+                        const st = rt.stops.find(s => s.stopNum === _stopNum);
+                        if (!st) return;
+
+                        st.lat = pos.lat;
+                        st.lng = pos.lng;
+
+                        // Reverse geocode in background
+                        if (getApiKey()) {
+                            try {
+                                const r = await fetch('https://api.openrouteservice.org/geocode/reverse?point.lat=' + pos.lat + '&point.lon=' + pos.lng + '&size=1', {
+                                    headers: { 'Authorization': getApiKey() }
+                                });
+                                const data = await r.json();
+                                if (data.features?.[0]?.properties?.label) {
+                                    st.address = data.features[0].properties.label;
+                                    marker.setPopupContent('<div style="font-family:DM Sans,sans-serif;min-width:160px;"><div style="font-weight:700;font-size:13px;margin-bottom:4px;color:' + _busColor + '">Stop ' + _stopNum + '</div><div style="font-size:11px;color:#888;">' + esc(st.address) + '</div><div style="font-size:10px;color:var(--text-muted);margin-top:4px;">Drag to move stop</div></div>');
+                                }
+                            } catch (e) { /* keep old address */ }
+                        }
+
+                        // Clear cached route for this bus and fetch new road geometry
+                        const ck = _busId + '_' + _shiftIdx;
+                        delete _routeGeomCache[ck];
+
+                        // Remove only this bus's polyline from the map
+                        const oldLines = _mapLayers.filter(l => l._goRouteKey === ck);
+                        oldLines.forEach(l => { _map.removeLayer(l); const idx = _mapLayers.indexOf(l); if (idx >= 0) _mapLayers.splice(idx, 1); });
+
+                        // Draw updated straight line immediately
+                        const stopsWithCoords = rt.stops.filter(s => s.lat && s.lng);
+                        const straightCoords = [];
+                        if (_campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
+                        stopsWithCoords.forEach(s => straightCoords.push([s.lat, s.lng]));
+                        if (_campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
+
+                        const shiftIndices = [..._activeShifts].sort();
+                        const multiShift = shiftIndices.length > 1;
+                        const totalShifts = _generatedRoutes.length;
+                        function getDash(si) { if (totalShifts <= 1 || !multiShift) return null; if (si === 0) return null; if (si === 1) return '18, 12'; return '6, 10'; }
+                        const dp = getDash(_shiftIdx);
+                        const w = _activeMapBus === 'all' ? 3 : 5;
+                        const o = _activeMapBus === 'all' ? 0.7 : 0.9;
+
+                        const tempLine = L.polyline(straightCoords, { color: _busColor, weight: w, opacity: o * 0.4, dashArray: dp }).addTo(_map);
+                        tempLine._goRouteKey = ck;
+                        _mapLayers.push(tempLine);
+
+                        // Fetch real road geometry in background
+                        if (getApiKey() && straightCoords.length >= 2) {
+                            try {
+                                const wp = [];
+                                if (_campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
+                                stopsWithCoords.forEach(s => wp.push([s.lng, s.lat]));
+                                if (_campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
+
+                                const resp = await fetch('https://api.openrouteservice.org/v2/directions/driving-car', {
+                                    method: 'POST',
+                                    headers: { 'Authorization': getApiKey(), 'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json, application/geo+json' },
+                                    body: JSON.stringify({ coordinates: wp, radiuses: wp.map(() => 1000) })
+                                });
+                                if (resp.ok) {
+                                    const data = await resp.json();
+                                    let seg = null;
+                                    if (data.features?.[0]?.geometry?.coordinates) {
+                                        seg = data.features[0].geometry.coordinates.map(c => [c[1], c[0]]);
+                                    } else if (data.routes?.[0]?.geometry) {
+                                        const geom = data.routes[0].geometry;
+                                        seg = typeof geom === 'string' ? decodePolyline(geom) : geom.coordinates?.map(c => [c[1], c[0]]);
+                                    }
+                                    if (seg && seg.length > 0 && _map) {
+                                        _routeGeomCache[ck] = seg;
+                                        _map.removeLayer(tempLine);
+                                        const ti = _mapLayers.indexOf(tempLine);
+                                        if (ti >= 0) _mapLayers.splice(ti, 1);
+                                        const roadLine = L.polyline(seg, { color: _busColor, weight: w, opacity: o, dashArray: dp }).addTo(_map);
+                                        roadLine._goRouteKey = ck;
+                                        _mapLayers.push(roadLine);
                                     }
                                 }
-                            }
+                            } catch (e) { /* keep straight line */ }
                         }
+
+                        _generatedRoutes = D.savedRoutes;
+                        save();
+                        toast('Stop ' + _stopNum + ' moved');
                     });
                 }
             });
