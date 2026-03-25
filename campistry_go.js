@@ -489,34 +489,37 @@
     }
     async function geocodeAll(force) {
         if (!getApiKey()) { toast('Set ORS key in Setup', 'error'); return; }
-        // Make sure camp coords are cached first (for focus point bias)
+        // Cache camp coords first
         if (!_campCoordsCache && D.setup.campAddress) {
+            toast('Geocoding camp address first...');
             const cc = await geocodeSingle(D.setup.campAddress);
-            if (cc) { _campCoordsCache = cc; D.setup.campLat = cc.lat; D.setup.campLng = cc.lng; }
+            if (cc) { _campCoordsCache = cc; D.setup.campLat = cc.lat; D.setup.campLng = cc.lng; save(); }
         }
         const todo = Object.keys(D.addresses).filter(n => {
             const a = D.addresses[n];
             if (!a?.street) return false;
-            if (force) { a.geocoded = false; a.lat = null; a.lng = null; return true; }
+            if (force) { a.geocoded = false; a.lat = null; a.lng = null; a._zipMismatch = false; return true; }
             return !a.geocoded;
         });
-        if (!todo.length) { toast('All geocoded!'); return; }
+        if (!todo.length) { toast('All addresses already geocoded!'); return; }
         toast((force ? 'Re-geocoding ' : 'Geocoding ') + todo.length + ' addresses...');
         let ok = 0, fail = 0;
-        const BATCH = 5; // 5 parallel requests per batch
-        const DELAY = 2000; // 2 sec between batches (~150/min, well within limits)
+        const BATCH = 3; // 3 at a time (conservative to avoid rate limits)
+        const DELAY = 2500; // 2.5 sec between batches
         for (let i = 0; i < todo.length; i += BATCH) {
             const batch = todo.slice(i, i + BATCH);
             const results = await Promise.all(batch.map(n => geocodeOne(n)));
             results.forEach(r => { if (r) ok++; else fail++; });
-            // Update UI every batch
             renderAddresses(); updateStats();
-            toast('Geocoded ' + (i + batch.length) + ' of ' + todo.length + '...');
-            // Pause between batches (not after last one)
+            toast(ok + ' ✓  ' + fail + ' ✗  (' + (i + batch.length) + ' of ' + todo.length + ')');
             if (i + BATCH < todo.length) await new Promise(r => setTimeout(r, DELAY));
         }
         save(); renderAddresses(); updateStats();
-        toast(ok + ' geocoded' + (fail ? ', ' + fail + ' failed' : '') + ' — done!');
+        if (fail > 0) {
+            toast(ok + ' geocoded, ' + fail + ' failed — check console for details', 'error');
+        } else {
+            toast(ok + ' geocoded — done!');
+        }
     }
     function downloadAddressTemplate() {
         const roster = getRoster(); const names = Object.keys(roster).sort();
