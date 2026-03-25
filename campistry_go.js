@@ -19,7 +19,9 @@
         shifts: [],      // { id, label, divisions:[], departureTime:'16:00' }
         monitors: [],    // { id, name, address, phone, assignedBus }
         counselors: [],  // { id, name, address, bunk, needsStop, assignedBus }
-        addresses: {}    // { camperName: { street, city, state, zip, lat, lng, geocoded } }
+        addresses: {},   // { camperName: { street, city, state, zip, lat, lng, geocoded } }
+        savedRoutes: null, // last generated routes (persisted across reloads)
+        dailyOverrides: {} // { 'YYYY-MM-DD': { camperName: { type, ... } } }
     };
     let _editBusId = null, _editMonitorId = null, _editCounselorId = null, _editCamper = null;
     let _generatedRoutes = null;
@@ -88,8 +90,8 @@
     }
 
     function merge(d) {
-        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:500,orsApiKey:'' }, buses:[], shifts:[], monitors:[], counselors:[], addresses:{} };
-        return { setup: { ...def.setup, ...(d.setup || {}) }, buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {} };
+        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:500,orsApiKey:'' }, buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dailyOverrides:{} };
+        return { setup: { ...def.setup, ...(d.setup || {}) }, buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dailyOverrides: d.dailyOverrides || {} };
     }
 
     function save() {
@@ -807,8 +809,10 @@
         }
 
         _generatedRoutes = allShiftResults;
+        D.savedRoutes = allShiftResults;
+        save(); // persist routes across reloads
         showProgress('Done!', 100);
-        setTimeout(() => { hideProgress(); renderRouteResults(allShiftResults); }, 400);
+        setTimeout(() => { hideProgress(); renderRouteResults(applyOverrides(allShiftResults)); }, 400);
     }
 
     // =========================================================================
@@ -1032,6 +1036,231 @@
     }
 
     // =========================================================================
+    // DAILY OVERRIDES
+    // =========================================================================
+    function getTodayKey() {
+        const d = new Date(); d.setHours(12, 0, 0, 0);
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
+    function getOverrides() {
+        const key = getTodayKey();
+        if (!D.dailyOverrides[key]) D.dailyOverrides[key] = {};
+        return D.dailyOverrides[key];
+    }
+
+    function addOverride(camperName, type, details) {
+        // type: 'not-riding' | 'ride-with' | 'add-rider'
+        const ov = getOverrides();
+        ov[camperName] = { type, ...details, timestamp: Date.now() };
+        save();
+        if (_generatedRoutes) renderRouteResults(applyOverrides(_generatedRoutes));
+        renderDailyOverrides();
+        toast('Override added for ' + camperName);
+    }
+
+    function removeOverride(camperName) {
+        const ov = getOverrides();
+        delete ov[camperName];
+        save();
+        if (_generatedRoutes) renderRouteResults(applyOverrides(_generatedRoutes));
+        renderDailyOverrides();
+        toast('Override removed');
+    }
+
+    /**
+     * Deep-clone routes and apply today's overrides:
+     * - not-riding: remove camper from all routes
+     * - ride-with: move camper to target camper's bus/stop
+     * - add-rider: inject camper into the best bus for their address
+     */
+    function applyOverrides(routes) {
+        if (!routes) return routes;
+        const ov = getOverrides();
+        if (!Object.keys(ov).length) return routes;
+
+        // Deep clone
+        const clone = JSON.parse(JSON.stringify(routes));
+
+        Object.entries(ov).forEach(([camperName, override]) => {
+            if (override.type === 'not-riding') {
+                // Remove camper from all stops across all shifts
+                clone.forEach(sr => {
+                    sr.routes.forEach(r => {
+                        r.stops.forEach(st => {
+                            st.campers = st.campers.filter(c => c.name !== camperName);
+                        });
+                        // Remove empty stops (unless monitor/counselor)
+                        r.stops = r.stops.filter(st => st.campers.length > 0 || st.isMonitor || st.isCounselor);
+                        // Renumber
+                        r.stops.forEach((st, i) => { st.stopNum = i + 1; });
+                        r.camperCount = r.stops.reduce((s, st) => s + st.campers.length, 0);
+                    });
+                });
+            }
+
+            if (override.type === 'ride-with') {
+                const targetName = override.targetCamper;
+                // Find which bus/stop the target is on
+                let targetBusId = null, targetShiftIdx = null, targetStopIdx = null;
+                clone.forEach((sr, si) => {
+                    sr.routes.forEach(r => {
+                        r.stops.forEach((st, sti) => {
+                            if (st.campers.some(c => c.name === targetName)) {
+                                targetBusId = r.busId;
+                                targetShiftIdx = si;
+                                targetStopIdx = sti;
+                            }
+                        });
+                    });
+                });
+
+                if (targetBusId !== null) {
+                    // Remove camper from current location
+                    clone.forEach(sr => {
+                        sr.routes.forEach(r => {
+                            r.stops.forEach(st => {
+                                st.campers = st.campers.filter(c => c.name !== camperName);
+                            });
+                            r.stops = r.stops.filter(st => st.campers.length > 0 || st.isMonitor || st.isCounselor);
+                        });
+                    });
+
+                    // Add to target's stop
+                    const targetRoute = clone[targetShiftIdx]?.routes.find(r => r.busId === targetBusId);
+                    if (targetRoute) {
+                        const targetStop = targetRoute.stops[targetStopIdx];
+                        if (targetStop) {
+                            const roster = getRoster();
+                            const camper = roster[camperName] || {};
+                            targetStop.campers.push({ name: camperName, division: camper.division || '', bunk: camper.bunk || '' });
+                        }
+                    }
+
+                    // Recalculate counts
+                    clone.forEach(sr => {
+                        sr.routes.forEach(r => {
+                            r.stops.forEach((st, i) => { st.stopNum = i + 1; });
+                            r.camperCount = r.stops.reduce((s, st) => s + st.campers.length, 0);
+                        });
+                    });
+                }
+            }
+
+            if (override.type === 'add-rider') {
+                // Add a carpool kid to the best bus based on their address
+                const addr = D.addresses[camperName];
+                if (!addr?.geocoded) return;
+
+                const roster = getRoster();
+                const camper = roster[camperName] || {};
+
+                // Find the shift that matches this camper's division
+                clone.forEach(sr => {
+                    const divSet = new Set(sr.shift.divisions || []);
+                    if (!divSet.has(camper.division)) return;
+
+                    // Find nearest stop across all routes in this shift
+                    let bestRoute = null, bestStopIdx = -1, bestDist = Infinity;
+                    sr.routes.forEach(r => {
+                        r.stops.forEach((st, sti) => {
+                            if (!st.lat || !st.lng) return;
+                            const d = haversineMi(addr.lat, addr.lng, st.lat, st.lng);
+                            if (d < bestDist) { bestDist = d; bestRoute = r; bestStopIdx = sti; }
+                        });
+                    });
+
+                    if (bestRoute && bestStopIdx >= 0) {
+                        // Add to nearest existing stop if within 0.3 mi, otherwise create new stop
+                        if (bestDist <= 0.3) {
+                            bestRoute.stops[bestStopIdx].campers.push({ name: camperName, division: camper.division || '', bunk: camper.bunk || '' });
+                        } else {
+                            bestRoute.stops.push({
+                                stopNum: bestRoute.stops.length + 1,
+                                campers: [{ name: camperName, division: camper.division || '', bunk: camper.bunk || '' }],
+                                address: [addr.street, addr.city, addr.state, addr.zip].filter(Boolean).join(', '),
+                                lat: addr.lat, lng: addr.lng,
+                                estimatedTime: bestRoute.stops[bestStopIdx]?.estimatedTime || '—'
+                            });
+                        }
+                        bestRoute.camperCount = bestRoute.stops.reduce((s, st) => s + st.campers.length, 0);
+                    }
+                });
+            }
+        });
+
+        return clone;
+    }
+
+    function renderDailyOverrides() {
+        const container = document.getElementById('dailyOverridesBody');
+        if (!container) return;
+
+        const ov = getOverrides();
+        const entries = Object.entries(ov);
+        const dateLabel = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+
+        if (!entries.length) {
+            container.innerHTML = '<div style="text-align:center;padding:1rem;color:var(--text-muted);font-size:.875rem;">No overrides for today. All campers riding their regular routes.</div>';
+            return;
+        }
+
+        container.innerHTML = '<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:.5rem;">' + dateLabel + ' — ' + entries.length + ' override' + (entries.length !== 1 ? 's' : '') + '</div>' +
+            entries.map(([name, ov]) => {
+                let desc = '', badgeCls = 'badge-neutral';
+                if (ov.type === 'not-riding') { desc = 'Not riding bus today'; badgeCls = 'badge-danger'; }
+                else if (ov.type === 'ride-with') { desc = 'Riding with ' + esc(ov.targetCamper); badgeCls = 'badge-warning'; }
+                else if (ov.type === 'add-rider') { desc = 'Added to bus (usually carpool)'; badgeCls = 'badge-success'; }
+                return '<div style="display:flex;align-items:center;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid var(--border-light);font-size:.8125rem;">' +
+                    '<div><strong>' + esc(name) + '</strong> — <span class="badge ' + badgeCls + '">' + desc + '</span></div>' +
+                    '<button class="btn btn-ghost btn-sm" style="color:var(--red-500)" onclick="CampistryGo.removeOverride(\'' + esc(name.replace(/'/g, "\\'")) + '\')">Remove</button></div>';
+            }).join('');
+    }
+
+    // Override modal helpers
+    function openOverrideModal() {
+        const roster = getRoster();
+        const names = Object.keys(roster).sort();
+        const sel = document.getElementById('overrideCamper');
+        sel.innerHTML = '<option value="">— Select camper —</option>' + names.map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('');
+        document.getElementById('overrideType').value = 'not-riding';
+        document.getElementById('overrideRideWithGroup').style.display = 'none';
+        openModal('overrideModal');
+    }
+
+    function onOverrideTypeChange() {
+        const type = document.getElementById('overrideType')?.value;
+        document.getElementById('overrideRideWithGroup').style.display = type === 'ride-with' ? '' : 'none';
+        if (type === 'ride-with') {
+            const roster = getRoster();
+            const names = Object.keys(roster).sort();
+            const sel = document.getElementById('overrideTarget');
+            sel.innerHTML = '<option value="">— Select camper —</option>' + names.map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('');
+        }
+    }
+
+    function saveOverride() {
+        const camper = document.getElementById('overrideCamper')?.value;
+        const type = document.getElementById('overrideType')?.value;
+        if (!camper) { toast('Select a camper', 'error'); return; }
+
+        if (type === 'ride-with') {
+            const target = document.getElementById('overrideTarget')?.value;
+            if (!target) { toast('Select who they\'re riding with', 'error'); return; }
+            if (target === camper) { toast('Can\'t ride with themselves', 'error'); return; }
+            addOverride(camper, 'ride-with', { targetCamper: target });
+        } else if (type === 'add-rider') {
+            // Check they have an address
+            if (!D.addresses[camper]?.geocoded) { toast(camper + ' needs a geocoded address first', 'error'); return; }
+            addOverride(camper, 'add-rider', {});
+        } else {
+            addOverride(camper, 'not-riding', {});
+        }
+
+        closeModal('overrideModal');
+    }
+
+    // =========================================================================
     // EXPORT / PRINT
     // =========================================================================
     function exportRoutesCsv() {
@@ -1075,7 +1304,7 @@
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             btn.classList.add('active');
             const t = btn.dataset.tab; document.getElementById('tab-' + t)?.classList.add('active');
-            if (t === 'fleet') renderFleet(); else if (t === 'shifts') renderShifts(); else if (t === 'staff') renderStaff(); else if (t === 'addresses') renderAddresses(); else if (t === 'routes') runPreflight();
+            if (t === 'fleet') renderFleet(); else if (t === 'shifts') renderShifts(); else if (t === 'staff') renderStaff(); else if (t === 'addresses') renderAddresses(); else if (t === 'routes') { runPreflight(); renderDailyOverrides(); }
         }));
         document.getElementById('addressSearch')?.addEventListener('input', () => { clearTimeout(_addrSearchTimer); _addrSearchTimer = setTimeout(renderAddresses, 200); });
     }
@@ -1084,6 +1313,17 @@
     function init() {
         console.log('[Go] Initializing...');
         load(); initTabs(); populateSetup(); renderFleet(); renderShifts(); renderStaff(); renderAddresses(); updateStats(); updateBusSelects();
+
+        // Restore saved routes if they exist
+        if (D.savedRoutes && D.savedRoutes.length) {
+            _generatedRoutes = D.savedRoutes;
+            console.log('[Go] Restoring saved routes (' + D.savedRoutes.length + ' shifts)');
+            // Defer rendering until DOM is ready
+            setTimeout(() => {
+                renderRouteResults(applyOverrides(D.savedRoutes));
+                toast('Saved routes loaded');
+            }, 200);
+        }
 
         // Close modals on overlay click + ESC
         document.querySelectorAll('.modal-overlay').forEach(o => o.addEventListener('click', e => { if (e.target === o) o.classList.remove('open'); }));
@@ -1113,6 +1353,7 @@
         editAddress, saveAddress, geocodeAll, downloadAddressTemplate, importAddressCsv,
         generateRoutes, exportRoutesCsv, printRoutes, detectRegions,
         renderMap, selectMapBus,
+        openOverrideModal, onOverrideTypeChange, saveOverride, removeOverride,
         closeModal, openModal
     };
 
