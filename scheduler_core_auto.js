@@ -2914,67 +2914,109 @@
                 let filled = 0; ab.forEach(b => { const s = (window.scheduleAssignments?.[b.bunk] || [])[b.slots?.[0]]; if (s && !s._league && !s._fixed) filled++; });
                 log('[4] ✅ Solver filled ~' + filled + ' slots');
 
-                // ── Post-solver fallback sweep ──────────────────────────
-                // For each Free block that has _sportFallbacks, try each
-                // sport in order until one gets an available field.
-                let fallbackFixed = 0;
+        // ══════════════════════════════════════════════════════════
+                // ★★★ POST-SOLVER: UNIFIED FIELD ENFORCEMENT ENGINE ★★★
+                // Handles fallback resolution + cross-div + capacity in one pass
+                // ══════════════════════════════════════════════════════════
+                let fallbackFixed = 0, violationsFix = 0;
                 const fbs2 = window.fieldsBySport || fbs;
 
-                // Build capacity lookup from activityProperties
-                // Fields have sharableWith.capacity (default 1 if not sharable)
-                const fieldCapacity = {};
+                // ── Build field rules from builtAP + masterFields ──────
+                const fieldRules = {}; // fieldName → { cap, shareType }
+                masterFields.forEach(f => {
+                    if (!f.name) return;
+                    const sw = f.sharableWith || {};
+                    fieldRules[f.name] = {
+                        cap: sw.type === 'not_sharable' ? 1 : (parseInt(sw.capacity) || 2),
+                        shareType: sw.type || 'same_division'
+                    };
+                });
+                // Also pull from builtAP (covers specials used as fields)
                 Object.entries(builtAP).forEach(([name, props]) => {
-                    if (props.sharableWith && props.sharableWith.capacity) {
-                        fieldCapacity[name] = props.sharableWith.capacity;
+                    if (fieldRules[name]) return; // masterFields takes priority
+                    if (props.sharableWith) {
+                        const sw = props.sharableWith;
+                        fieldRules[name] = {
+                            cap: sw.type === 'not_sharable' ? 1 : (parseInt(sw.capacity) || 2),
+                            shareType: sw.type || 'same_division'
+                        };
                     }
                 });
 
-                // Build time-based field usage COUNTS from ALL scheduleAssignments
-                // timeKey → { fieldName: count }
-                const timeFieldCount = {};
-                Object.entries(window.scheduleAssignments).forEach(([bk, slots]) => {
-                    const g = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(bk)))?.[0];
-                    const pbsArr = g ? (window.divisionTimes?.[g]?._perBunkSlots?.[bk] || []) : [];
-                    (slots || []).forEach((s, i) => {
-                        if (!s || s.field === 'Free' || !s.field) return;
-                        const pbSlot = pbsArr[i];
-                        if (!pbSlot) return;
-                        for (let t = pbSlot.startMin; t < pbSlot.endMin; t += 5) {
-                            if (!timeFieldCount[t]) timeFieldCount[t] = {};
-                            timeFieldCount[t][s.field] = (timeFieldCount[t][s.field] || 0) + 1;
-                        }
-                    });
+                // ── Helper: Get bunk→grade lookup ──────────────────────
+                const bunkGradeMap = {};
+                Object.entries(divisions).forEach(([g, d]) => {
+                    (d.bunks || []).forEach(b => { bunkGradeMap[String(b)] = g; });
                 });
 
-               function isFieldFreeAtTime(fieldName, startMin, endMin, forGrade) {
-                    const fp = builtAP[fieldName] || {};
-                    const cap = fp.sharableWith?.capacity || fieldCapacity[fieldName] || 1;
-                    const shareType = fp.sharableWith?.type || 'not_sharable';
+                // ── Build time→field→[{bunk,idx,grade}] from ALL assignments ──
+                const tfIndex = {}; // time → field → [{bunk, idx, grade}]
+                function rebuildTfIndex() {
+                    Object.keys(tfIndex).forEach(k => delete tfIndex[k]);
+                    Object.entries(window.scheduleAssignments).forEach(([bk, slots]) => {
+                        const g = bunkGradeMap[bk];
+                        if (!g) return;
+                        const pbsArr = window.divisionTimes?.[g]?._perBunkSlots?.[bk] || [];
+                        (slots || []).forEach((s, i) => {
+                            if (!s || !s.field || s.field === 'Free') return;
+                            const pb = pbsArr[i];
+                            if (!pb) return;
+                            for (let t = pb.startMin; t < pb.endMin; t += 5) {
+                                if (!tfIndex[t]) tfIndex[t] = {};
+                                if (!tfIndex[t][s.field]) tfIndex[t][s.field] = [];
+                                tfIndex[t][s.field].push({ bunk: bk, idx: i, grade: g });
+                            }
+                        });
+                    });
+                }
+                rebuildTfIndex();
+
+                // ── Core check: can this field be used at this time by this grade? ──
+                function checkFieldAvail(fieldName, startMin, endMin, forGrade) {
+                    const rules = fieldRules[fieldName] || { cap: 1, shareType: 'same_division' };
                     for (let t = startMin; t < endMin; t += 5) {
-                        const count = timeFieldCount[t]?.[fieldName] || 0;
-                        if (count >= cap) return false;
-                        // Cross-division check: if same_division or custom, ensure no other grade is using it
-                        if (forGrade && (shareType === 'same_division' || shareType === 'custom' || shareType === 'not_sharable') && tfBunks[t]?.[fieldName]) {
-                            const otherGrades = tfBunks[t][fieldName].filter(u => u.grade !== forGrade);
-                            if (otherGrades.length > 0) return false;
+                        const users = tfIndex[t]?.[fieldName];
+                        if (!users || users.length === 0) continue;
+
+                        // Cross-division check
+                        if (forGrade && rules.shareType !== 'all') {
+                            const otherDiv = users.some(u => u.grade !== forGrade);
+                            if (otherDiv) return false;
                         }
+
+                        // Capacity check (same-div users count toward cap)
+                        const sameDivCount = forGrade
+                            ? users.filter(u => u.grade === forGrade).length
+                            : users.length;
+                        if (sameDivCount >= rules.cap) return false;
                     }
                     return true;
                 }
 
-                function markFieldUsed(fieldName, startMin, endMin) {
+                // ── Register a new assignment in the index ──
+                function registerInTfIndex(fieldName, startMin, endMin, bunk, idx, grade) {
                     for (let t = startMin; t < endMin; t += 5) {
-                        if (!timeFieldCount[t]) timeFieldCount[t] = {};
-                        timeFieldCount[t][fieldName] = (timeFieldCount[t][fieldName] || 0) + 1;
+                        if (!tfIndex[t]) tfIndex[t] = {};
+                        if (!tfIndex[t][fieldName]) tfIndex[t][fieldName] = [];
+                        tfIndex[t][fieldName].push({ bunk, idx, grade });
                     }
                 }
 
+                // ── Remove an assignment from the index ──
+                function removeFromTfIndex(fieldName, startMin, endMin, bunk) {
+                    for (let t = startMin; t < endMin; t += 5) {
+                        if (!tfIndex[t]?.[fieldName]) continue;
+                        tfIndex[t][fieldName] = tfIndex[t][fieldName].filter(u => u.bunk !== bunk);
+                    }
+                }
+
+                // ── PASS 1: Fallback sweep — resolve Free blocks ──────
                 Object.keys(window.scheduleAssignments).forEach(bk => {
                     const slots = window.scheduleAssignments[bk] || [];
-                    const g = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(bk)))?.[0];
-                    const pbsArr = g ? (window.divisionTimes?.[g]?._perBunkSlots?.[bk] || []) : [];
+                    const g = bunkGradeMap[bk];
+                    if (!g) return;
+                    const pbsArr = window.divisionTimes?.[g]?._perBunkSlots?.[bk] || [];
 
-                    // ★ Collect sports already assigned to this bunk today
                     const bunkSportsUsed = new Set();
                     slots.forEach(s => {
                         if (s && s.field && s.field !== 'Free') {
@@ -2994,22 +3036,18 @@
                         const fallbacks = tlBlock?._sportFallbacks;
                         if (!fallbacks || !fallbacks.length) return;
 
-                        // Try each sport in fallback order — skip if already used today
                         for (const sportName of fallbacks) {
                             if (bunkSportsUsed.has(sportName.toLowerCase())) continue;
-
                             const fields = fbs2[sportName] || [];
                             for (const fieldName of fields) {
-                               if (!isFieldFreeAtTime(fieldName, pbSlot.startMin, pbSlot.endMin, g)) continue;
-
-                                // Field is available — assign it
+                                if (!checkFieldAvail(fieldName, pbSlot.startMin, pbSlot.endMin, g)) continue;
                                 window.scheduleAssignments[bk][idx] = {
                                     field: fieldName, sport: sportName,
                                     _activity: sportName, _fixed: false,
                                     _bunkOverride: true, _autoMode: true,
                                     _fallbackResolved: true, continuation: false
                                 };
-                                markFieldUsed(fieldName, pbSlot.startMin, pbSlot.endMin);
+                                registerInTfIndex(fieldName, pbSlot.startMin, pbSlot.endMin, bk, idx, g);
                                 bunkSportsUsed.add(sportName.toLowerCase());
                                 fallbackFixed++;
                                 break;
@@ -3020,100 +3058,89 @@
                 });
                 if (fallbackFixed > 0) log('[4] ✅ Fallback resolved ' + fallbackFixed + ' Free blocks');
 
-                // ── Post-solver pass 2: Fix capacity + cross-division violations ──
-                let violationsFix = 0;
+                // ── PASS 2: Fix ALL cross-div + capacity violations ───
+                // Scan every time bucket. For each field, detect:
+                //   (a) Cross-div usage where shareType forbids it
+                //   (b) Same-div usage exceeding capacity
+                // Then reassign the violating bunks.
+                const violatingSlots = new Set(); // "bunk-idx" keys
+                const allTimeBuckets = Object.keys(tfIndex).map(Number).sort((a, b) => a - b);
 
-                // Rebuild time-field counts after fallback sweep
-                const tfCount2 = {};
-                const tfBunks = {}; // time → field → [{bunk, idx, grade}]
-                Object.entries(window.scheduleAssignments).forEach(([bk, slots]) => {
-                    const g2 = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(bk)))?.[0];
-                    const pbs2 = g2 ? (window.divisionTimes?.[g2]?._perBunkSlots?.[bk] || []) : [];
-                    (slots || []).forEach((s2, i2) => {
-                        if (!s2 || !s2.field || s2.field === 'Free') return;
-                        const pb2 = pbs2[i2];
-                        if (!pb2) return;
-                        for (let t = pb2.startMin; t < pb2.endMin; t += 5) {
-                            if (!tfCount2[t]) { tfCount2[t] = {}; tfBunks[t] = {}; }
-                            tfCount2[t][s2.field] = (tfCount2[t][s2.field] || 0) + 1;
-                            if (!tfBunks[t][s2.field]) tfBunks[t][s2.field] = [];
-                            tfBunks[t][s2.field].push({ bunk: bk, idx: i2, grade: g2 });
-                        }
-                    });
-                });
-
-                // Find violations and fix them
-                const processedViolations = new Set(); // "bunk-idx" keys already reassigned
-                Object.entries(tfCount2).forEach(([timeStr, fieldCounts]) => {
-                    Object.entries(fieldCounts).forEach(([fieldName, count]) => {
-                        const cap = fieldCapacity[fieldName] || 1;
-                        if (count <= cap) return;
-
-                        // Get bunks using this field at this time
-                        const users = tfBunks[timeStr]?.[fieldName] || [];
-                        if (users.length <= cap) return;
-
-                        // Check cross-division sharing rules
-                        const fieldProps = builtAP[fieldName] || {};
-                        const shareType = fieldProps.sharableWith?.type || 'not_sharable';
+                for (const t of allTimeBuckets) {
+                    const fieldMap = tfIndex[t];
+                    if (!fieldMap) continue;
+                    for (const [fieldName, users] of Object.entries(fieldMap)) {
+                        if (users.length < 2) continue;
+                        const rules = fieldRules[fieldName] || { cap: 1, shareType: 'same_division' };
                         const grades = [...new Set(users.map(u => u.grade))];
 
-                        let toReassign = [];
-                        if (shareType === 'same_division' && grades.length > 1) {
-                            // Cross-division violation: keep the majority grade, reassign others
+                        let toFix = [];
+
+                        // (a) Cross-division violation
+                        if (grades.length > 1 && rules.shareType !== 'all') {
+                            // Keep the grade with most users, reassign others
                             const gradeCounts = {};
                             users.forEach(u => { gradeCounts[u.grade] = (gradeCounts[u.grade] || 0) + 1; });
                             const majorityGrade = Object.entries(gradeCounts).sort((a, b) => b[1] - a[1])[0][0];
-                            toReassign = users.filter(u => u.grade !== majorityGrade);
+                            toFix = users.filter(u => u.grade !== majorityGrade);
                         }
 
-                        if (count > cap) {
-                            // Capacity violation: keep first `cap` users, reassign the rest
-                            const excess = users.slice(cap);
-                            excess.forEach(u => {
-                                if (!toReassign.some(r => r.bunk === u.bunk && r.idx === u.idx)) {
-                                    toReassign.push(u);
-                                }
-                            });
+                        // (b) Capacity violation (within same division)
+                        for (const grade of grades) {
+                            const gradeUsers = users.filter(u => u.grade === grade);
+                            if (gradeUsers.length > rules.cap) {
+                                const excess = gradeUsers.slice(rules.cap);
+                                excess.forEach(u => {
+                                    if (!toFix.some(f => f.bunk === u.bunk && f.idx === u.idx)) {
+                                        toFix.push(u);
+                                    }
+                                });
+                            }
                         }
 
-                        // Reassign each violator using fallback list
-                        toReassign.forEach(v => {
+                        toFix.forEach(v => {
                             const key = v.bunk + '-' + v.idx;
-                            if (processedViolations.has(key)) return;
-                            processedViolations.add(key);
+                            if (violatingSlots.has(key)) return;
+                            violatingSlots.add(key);
 
-                            const pbSlot2 = (window.divisionTimes?.[v.grade]?._perBunkSlots?.[v.bunk] || [])[v.idx];
-                            if (!pbSlot2) return;
+                            const pbSlot = (window.divisionTimes?.[v.grade]?._perBunkSlots?.[v.bunk] || [])[v.idx];
+                            if (!pbSlot) return;
 
-                            const tlBlock2 = (bunkTimelines[v.bunk] || []).find(b =>
-                                b.startMin === pbSlot2.startMin && b.endMin === pbSlot2.endMin
+                            const currentAssign = window.scheduleAssignments[v.bunk]?.[v.idx];
+                            if (!currentAssign || currentAssign._fixed || currentAssign._league || currentAssign._autoSpecial) return;
+
+                            const oldField = currentAssign.field;
+                            const tlBlock = (bunkTimelines[v.bunk] || []).find(b =>
+                                b.startMin === pbSlot.startMin && b.endMin === pbSlot.endMin
                             );
-                            const fallbacks2 = tlBlock2?._sportFallbacks || [];
+                            const fallbacks = tlBlock?._sportFallbacks || [];
 
-                            // Collect what this bunk already has today
-                            const bunkUsed2 = new Set();
-                            (window.scheduleAssignments[v.bunk] || []).forEach(s3 => {
-                                if (s3 && s3.sport) bunkUsed2.add(s3.sport.toLowerCase());
-                                if (s3 && s3._activity) bunkUsed2.add(s3._activity.toLowerCase());
+                            const bunkUsed = new Set();
+                            (window.scheduleAssignments[v.bunk] || []).forEach((s3, i3) => {
+                                if (i3 === v.idx) return;
+                                if (s3 && s3.sport) bunkUsed.add(s3.sport.toLowerCase());
+                                if (s3 && s3._activity) bunkUsed.add(s3._activity.toLowerCase());
                             });
 
                             let fixed = false;
-                            for (const sportName2 of fallbacks2) {
-                                if (bunkUsed2.has(sportName2.toLowerCase())) continue;
-                                const fields2 = fbs2[sportName2] || [];
-                                for (const fn2 of fields2) {
-                                    if (fn2 === fieldName) continue; // don't assign back to same field
-                                    if (!isFieldFreeAtTime(fn2, pbSlot2.startMin, pbSlot2.endMin, v.grade)) continue;
+                            for (const sportName of fallbacks) {
+                                if (bunkUsed.has(sportName.toLowerCase())) continue;
+                                const fields = fbs2[sportName] || [];
+                                for (const fn of fields) {
+                                    if (fn === oldField) continue;
+                                    if (!checkFieldAvail(fn, pbSlot.startMin, pbSlot.endMin, v.grade)) continue;
 
+                                    // Remove old assignment from index
+                                    removeFromTfIndex(oldField, pbSlot.startMin, pbSlot.endMin, v.bunk);
+                                    // Write new assignment
                                     window.scheduleAssignments[v.bunk][v.idx] = {
-                                        field: fn2, sport: sportName2,
-                                        _activity: sportName2, _fixed: false,
+                                        field: fn, sport: sportName,
+                                        _activity: sportName, _fixed: false,
                                         _bunkOverride: true, _autoMode: true,
                                         _violationFixed: true, continuation: false
                                     };
-                                    markFieldUsed(fn2, pbSlot2.startMin, pbSlot2.endMin);
-                                    bunkUsed2.add(sportName2.toLowerCase());
+                                    registerInTfIndex(fn, pbSlot.startMin, pbSlot.endMin, v.bunk, v.idx, v.grade);
+                                    bunkUsed.add(sportName.toLowerCase());
                                     violationsFix++;
                                     fixed = true;
                                     break;
@@ -3121,8 +3148,8 @@
                                 if (fixed) break;
                             }
                         });
-                    });
-                });
+                    }
+                }
                 if (violationsFix > 0) log('[4] ✅ Violation fixer resolved ' + violationsFix + ' conflicts');
             } catch (e) { err('[4] ' + e.message); console.error(e); warnings.push({ type: 'solver_error', message: e.message }); }
         } else { warn('[4] Solver not loaded'); }
