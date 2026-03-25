@@ -899,7 +899,11 @@
             const maxWalkMi = (D.setup.maxWalkDistance || 500) * 0.000189394;
             const clusters = []; const used = new Set();
             const sorted = [...campers].sort((a, b) => a.lat - b.lat);
-            sorted.forEach(c => { if (used.has(c.name)) return; const cl = [c]; used.add(c.name); sorted.forEach(o => { if (used.has(o.name)) return; if (haversineMi(c.lat, c.lng, o.lat, o.lng) <= maxWalkMi) { cl.push(o); used.add(o.name); } }); const cLat = cl.reduce((s, x) => s + x.lat, 0) / cl.length, cLng = cl.reduce((s, x) => s + x.lng, 0) / cl.length; clusters.push({ lat: cLat, lng: cLng, address: cl[0].address, campers: cl.map(x => ({ name: x.name, division: x.division, bunk: x.bunk })), _count: cl.length }); });
+            sorted.forEach(c => { if (used.has(c.name)) return; const cl = [c]; used.add(c.name); sorted.forEach(o => { if (used.has(o.name)) return; if (haversineMi(c.lat, c.lng, o.lat, o.lng) <= maxWalkMi) { cl.push(o); used.add(o.name); } }); const cLat = cl.reduce((s, x) => s + x.lat, 0) / cl.length, cLng = cl.reduce((s, x) => s + x.lng, 0) / cl.length;
+                // Find the camper whose house is closest to the centroid
+                let nearestAddr = cl[0].address, nearestDist = Infinity;
+                cl.forEach(x => { const d = haversineMi(cLat, cLng, x.lat, x.lng); if (d < nearestDist) { nearestDist = d; nearestAddr = x.address; } });
+                clusters.push({ lat: cLat, lng: cLng, address: nearestAddr, campers: cl.map(x => ({ name: x.name, division: x.division, bunk: x.bunk })), _count: cl.length }); });
             jobs = clusters;
         } else {
             // Door-to-door: merge campers at same address (siblings, neighbors)
@@ -1063,17 +1067,25 @@
     let _routeGeomCache = {}; // cache road geometry to avoid re-fetching
 
     function initMap(allShifts) {
-        // Default: all shifts selected
         _activeShifts = new Set(allShifts.map((_, i) => i));
         _activeMapBus = 'all';
 
         const container = document.getElementById('routeMap');
         if (_map) { _map.remove(); _map = null; }
         _map = L.map(container, { scrollWheelZoom: true, zoomControl: true });
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+
+        // Map layers: Street + Satellite
+        const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
             maxZoom: 19
-        }).addTo(_map);
+        });
+        const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: '&copy; Esri',
+            maxZoom: 19
+        });
+        streetLayer.addTo(_map);
+        L.control.layers({ 'Street': streetLayer, 'Satellite': satelliteLayer }, null, { position: 'topright', collapsed: true }).addTo(_map);
+
         renderMap();
     }
 
@@ -1175,10 +1187,14 @@
                             for (let i = 0; i < waypoints.length - 1; i += MAX_WP - 1) {
                                 const chunk = waypoints.slice(i, i + MAX_WP);
                                 if (chunk.length < 2) break;
-                                const resp = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
+                                const resp = await fetch('https://api.openrouteservice.org/v2/directions/driving-car', {
                                     method: 'POST',
-                                    headers: { 'Authorization': getApiKey(), 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ coordinates: chunk })
+                                    headers: {
+                                        'Authorization': getApiKey(),
+                                        'Content-Type': 'application/json; charset=utf-8',
+                                        'Accept': 'application/geo+json'
+                                    },
+                                    body: JSON.stringify({ coordinates: chunk, radiuses: chunk.map(() => 1000) })
                                 });
                                 if (resp.ok) {
                                     const data = await resp.json();
@@ -1205,7 +1221,7 @@
                 }
             }
 
-            // Stop markers
+            // Stop markers (draggable)
             stopsWithCoords.forEach(stop => {
                 const isSpecial = stop.isMonitor || stop.isCounselor;
                 const size = isSpecial ? 20 : 26;
@@ -1214,10 +1230,58 @@
                     className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2]
                 });
                 const names = stop.isMonitor ? '🛡️ ' + (stop.monitorName || 'Monitor') : stop.isCounselor ? '👤 ' + (stop.counselorName || 'Counselor') : stop.campers.map(c => c.name).join('<br>');
-                const popup = '<div style="font-family:DM Sans,sans-serif;min-width:160px;"><div style="font-weight:700;font-size:13px;margin-bottom:4px;color:' + route.busColor + '">' + esc(route.busName) + ' — ' + esc(route.shiftLabel) + '</div><div style="font-weight:600;margin-bottom:2px;">Stop ' + stop.stopNum + '</div><div style="font-size:12px;margin-bottom:4px;">' + names + '</div><div style="font-size:11px;color:#888;">' + esc(stop.address) + '</div>' + (stop.estimatedTime ? '<div style="font-size:12px;font-weight:600;margin-top:4px;">Est: ' + stop.estimatedTime + '</div>' : '') + '</div>';
-                const marker = L.marker([stop.lat, stop.lng], { icon }).addTo(_map);
+                const popup = '<div style="font-family:DM Sans,sans-serif;min-width:160px;"><div style="font-weight:700;font-size:13px;margin-bottom:4px;color:' + route.busColor + '">' + esc(route.busName) + ' — ' + esc(route.shiftLabel) + '</div><div style="font-weight:600;margin-bottom:2px;">Stop ' + stop.stopNum + '</div><div style="font-size:12px;margin-bottom:4px;">' + names + '</div><div style="font-size:11px;color:#888;">' + esc(stop.address) + '</div>' + (stop.estimatedTime ? '<div style="font-size:12px;font-weight:600;margin-top:4px;">Est: ' + stop.estimatedTime + '</div>' : '') + '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;">Drag to move stop</div></div>';
+                const marker = L.marker([stop.lat, stop.lng], { icon, draggable: !isSpecial }).addTo(_map);
                 marker.bindPopup(popup);
                 _mapLayers.push(marker);
+
+                // On drag end: update stop coords, reverse geocode, redraw route
+                if (!isSpecial) {
+                    marker.on('dragend', function() {
+                        const pos = marker.getLatLng();
+                        // Update in saved routes
+                        if (D.savedRoutes) {
+                            const sr = D.savedRoutes[route.shiftIdx];
+                            if (sr) {
+                                const rt = sr.routes.find(r => r.busId === route.busId);
+                                if (rt) {
+                                    const st = rt.stops.find(s => s.stopNum === stop.stopNum);
+                                    if (st) {
+                                        st.lat = pos.lat;
+                                        st.lng = pos.lng;
+                                        // Reverse geocode for address
+                                        if (getApiKey()) {
+                                            fetch('https://api.openrouteservice.org/geocode/reverse?point.lat=' + pos.lat + '&point.lon=' + pos.lng + '&size=1', {
+                                                headers: { 'Authorization': getApiKey() }
+                                            }).then(r => r.json()).then(data => {
+                                                if (data.features?.[0]?.properties?.label) {
+                                                    st.address = data.features[0].properties.label;
+                                                }
+                                                // Clear cached route geometry and re-render
+                                                delete _routeGeomCache[route.busId + '_' + route.shiftIdx];
+                                                _generatedRoutes = D.savedRoutes;
+                                                save();
+                                                renderMap();
+                                                renderRouteResults(applyOverrides(D.savedRoutes));
+                                                toast('Stop ' + stop.stopNum + ' moved');
+                                            }).catch(() => {
+                                                delete _routeGeomCache[route.busId + '_' + route.shiftIdx];
+                                                _generatedRoutes = D.savedRoutes;
+                                                save();
+                                                renderMap();
+                                            });
+                                        } else {
+                                            delete _routeGeomCache[route.busId + '_' + route.shiftIdx];
+                                            _generatedRoutes = D.savedRoutes;
+                                            save();
+                                            renderMap();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
             });
         }
 
@@ -1685,6 +1749,7 @@
             btn.classList.add('active');
             const t = btn.dataset.tab; document.getElementById('tab-' + t)?.classList.add('active');
             if (t === 'fleet') renderFleet(); else if (t === 'shifts') renderShifts(); else if (t === 'staff') renderStaff(); else if (t === 'addresses') renderAddresses(); else if (t === 'preflight') runPreflight(); else if (t === 'routes') {
+                runPreflight(); // enables generate button
                 renderDailyOverrides();
                 if (_pendingMapInit) { setTimeout(function() { initMap(_pendingMapInit); _pendingMapInit = null; }, 150); }
                 else { setTimeout(function() { if (_map) _map.invalidateSize(); }, 150); }
@@ -1706,9 +1771,29 @@
 
         // Restore saved routes if they exist
         if (D.savedRoutes && D.savedRoutes.length) {
+            // Migrate: fix "Shared stop" addresses with nearest house address
+            let needsSave = false;
+            D.savedRoutes.forEach(sr => {
+                sr.routes.forEach(r => {
+                    r.stops.forEach(st => {
+                        if (st.address && st.address.startsWith('Shared stop')) {
+                            // Find which camper's house is closest to the stop's lat/lng
+                            let bestAddr = null, bestDist = Infinity;
+                            (st.campers || []).forEach(c => {
+                                const a = D.addresses[c.name];
+                                if (a?.geocoded && a.lat && a.lng && st.lat && st.lng) {
+                                    const d = haversineMi(st.lat, st.lng, a.lat, a.lng);
+                                    if (d < bestDist) { bestDist = d; bestAddr = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', '); }
+                                }
+                            });
+                            if (bestAddr) { st.address = bestAddr; needsSave = true; }
+                        }
+                    });
+                });
+            });
+            if (needsSave) save(); // persist the fix
             _generatedRoutes = D.savedRoutes;
             console.log('[Go] Restoring saved routes (' + D.savedRoutes.length + ' shifts)');
-            // Defer rendering until DOM is ready
             setTimeout(() => {
                 renderRouteResults(applyOverrides(D.savedRoutes));
                 toast('Saved routes loaded');
