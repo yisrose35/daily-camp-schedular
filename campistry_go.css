@@ -224,6 +224,15 @@ body {
 .toast.show { transform: translateX(-50%) translateY(0); }
 .toast.error { background: var(--red-600); }
 
+/* ==================== COLLAPSIBLE SECTIONS ==================== */
+.collapsible-card { background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: var(--radius-lg); margin-bottom: 1rem; overflow: hidden; }
+.collapsible-header { display: flex; align-items: center; justify-content: space-between; padding: .875rem 1.25rem; cursor: pointer; font-size: .875rem; font-weight: 600; color: var(--text-primary); list-style: none; user-select: none; transition: background .15s; }
+.collapsible-header:hover { background: var(--bg-tertiary); }
+.collapsible-header::-webkit-details-marker { display: none; }
+.collapsible-header::before { content: '▸'; margin-right: .5rem; transition: transform .2s; font-size: .75rem; color: var(--text-muted); }
+details[open] > .collapsible-header::before { transform: rotate(90deg); }
+.collapsible-body { padding: 1rem 1.25rem; border-top: 1px solid var(--border-light); }
+
 /* ==================== RESPONSIVE ==================== */
 @media (max-width: 768px) {
     .main { padding: 14px 10px !important; }
