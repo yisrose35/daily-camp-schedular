@@ -47,11 +47,27 @@
 
     // Distance (miles) between two lat/lng
     function haversineMi(lat1, lng1, lat2, lng2) {
-        const R = 3958.8; // earth radius in miles
+        const R = 3958.8;
         const toRad = d => d * Math.PI / 180;
         const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
         const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
         return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    /** Decode Google-style encoded polyline to [[lat,lng], ...] */
+    function decodePolyline(encoded) {
+        const points = [];
+        let i = 0, lat = 0, lng = 0;
+        while (i < encoded.length) {
+            let b, shift = 0, result = 0;
+            do { b = encoded.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+            lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+            shift = 0; result = 0;
+            do { b = encoded.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+            lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+            points.push([lat / 1e5, lng / 1e5]);
+        }
+        return points;
     }
     function angleTo(cLat, cLng, lat, lng) { return Math.atan2(lng - cLng, lat - cLat); }
     function formatTime(totalMin) {
@@ -1192,23 +1208,39 @@
                                     headers: {
                                         'Authorization': getApiKey(),
                                         'Content-Type': 'application/json; charset=utf-8',
-                                        'Accept': 'application/geo+json'
+                                        'Accept': 'application/json, application/geo+json'
                                     },
                                     body: JSON.stringify({ coordinates: chunk, radiuses: chunk.map(() => 1000) })
                                 });
                                 if (resp.ok) {
                                     const data = await resp.json();
+                                    let seg = null;
+                                    // GeoJSON format (features array)
                                     if (data.features?.[0]?.geometry?.coordinates) {
-                                        const seg = data.features[0].geometry.coordinates.map(c => [c[1], c[0]]);
+                                        seg = data.features[0].geometry.coordinates.map(c => [c[1], c[0]]);
+                                    }
+                                    // Standard format (encoded polyline)
+                                    else if (data.routes?.[0]?.geometry) {
+                                        const geom = data.routes[0].geometry;
+                                        if (typeof geom === 'string') {
+                                            seg = decodePolyline(geom);
+                                        } else if (geom.coordinates) {
+                                            seg = geom.coordinates.map(c => [c[1], c[0]]);
+                                        }
+                                    }
+                                    if (seg && seg.length > 0) {
                                         pts.push(...(pts.length ? seg.slice(1) : seg));
+                                    } else {
+                                        console.warn('[Go] No geometry in response:', Object.keys(data));
                                     }
                                 } else {
-                                    console.warn('[Go] Directions API:', resp.status);
+                                    console.warn('[Go] Directions API:', resp.status, await resp.text().catch(() => ''));
                                     return;
                                 }
                                 if (i + MAX_WP - 1 < waypoints.length - 1) await new Promise(r => setTimeout(r, 250));
                             }
                             if (pts.length > 0 && _map) {
+                                console.log('[Go] Road geometry for', ck, ':', pts.length, 'points');
                                 _routeGeomCache[ck] = pts;
                                 _map.removeLayer(temp);
                                 const idx = _mapLayers.indexOf(temp);
