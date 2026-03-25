@@ -224,48 +224,112 @@
         empty.style.display = 'none';
         const divNames = getDivisionNames();
         const struct = getStructure();
-        // Track which divisions are already assigned
-        const assignedDivs = new Set();
-        D.shifts.forEach(sh => (sh.divisions || []).forEach(d => assignedDivs.add(d)));
 
         container.innerHTML = D.shifts.map((sh, idx) => {
-            const chipsHtml = divNames.map(dName => {
+            if (!sh.grades) sh.grades = {}; // { divName: 'all' | [grade1, grade2, ...] }
+
+            // Division chips + grade sub-chips for active divisions
+            const divChips = divNames.map(dName => {
                 const isActive = (sh.divisions || []).includes(dName);
                 const color = struct[dName]?.color || '#888';
-                return '<span class="division-chip' + (isActive ? ' active' : '') + '" onclick="CampistryGo.toggleShiftDiv(\'' + sh.id + '\',\'' + esc(dName.replace(/'/g, "\\'")) + '\')"><span class="chip-dot" style="background:' + esc(color) + '"></span>' + esc(dName) + '</span>';
-            }).join(' ');
+                const gradeNames = Object.keys(struct[dName]?.grades || {}).sort();
+                const gradeMode = sh.grades[dName]; // 'all', [array], or undefined
 
-            const camperCount = countCampersForDivisions(sh.divisions || []);
+                let gradeHtml = '';
+                if (isActive && gradeNames.length > 1) {
+                    const allGrades = !gradeMode || gradeMode === 'all';
+                    gradeHtml = '<div style="display:flex;flex-wrap:wrap;gap:.25rem;margin-top:.375rem;margin-left:1.5rem;">' +
+                        '<span class="division-chip' + (allGrades ? ' active' : '') + '" style="font-size:.65rem;padding:.15rem .5rem;" onclick="CampistryGo.setShiftGradeMode(\'' + sh.id + '\',\'' + esc(dName.replace(/'/g, "\\'")) + '\',\'all\')">All Grades</span>' +
+                        gradeNames.map(g => {
+                            const gActive = allGrades || (Array.isArray(gradeMode) && gradeMode.includes(g));
+                            return '<span class="division-chip' + (gActive ? ' active' : '') + '" style="font-size:.65rem;padding:.15rem .5rem;" onclick="CampistryGo.toggleShiftGrade(\'' + sh.id + '\',\'' + esc(dName.replace(/'/g, "\\'")) + '\',\'' + esc(g.replace(/'/g, "\\'")) + '\')">' + esc(g) + '</span>';
+                        }).join('') +
+                        '</div>';
+                }
 
-            return '<div class="shift-card"><div class="shift-card-header"><div class="shift-card-title"><span class="shift-num">' + (idx + 1) + '</span>' + esc(sh.label || 'Shift ' + (idx + 1)) + '<span style="font-size:.75rem;font-weight:400;color:var(--text-muted);margin-left:.5rem;">' + camperCount + ' campers</span></div><div style="display:flex;align-items:center;gap:.5rem;"><label style="font-size:.75rem;font-weight:600;color:var(--text-secondary)">Depart:</label><input type="time" class="form-input" value="' + esc(sh.departureTime || '16:00') + '" style="width:110px;padding:.35rem .5rem;font-size:.8125rem;" onchange="CampistryGo.updateShiftTime(\'' + sh.id + '\',this.value)"><button class="btn btn-ghost btn-sm" style="color:var(--red-500);" onclick="CampistryGo.deleteShift(\'' + sh.id + '\')">Remove</button></div></div><div style="display:flex;flex-wrap:wrap;gap:.5rem;">' + (divNames.length ? chipsHtml : '<span style="font-size:.8125rem;color:var(--text-muted)">No divisions in Campistry Me yet</span>') + '</div><div style="margin-top:.75rem;"><input type="text" class="form-input" value="' + esc(sh.label || '') + '" placeholder="Shift name (e.g. Freshies)" style="max-width:300px;font-size:.8125rem;" onchange="CampistryGo.renameShift(\'' + sh.id + '\',this.value)"></div></div>';
+                return '<div><span class="division-chip' + (isActive ? ' active' : '') + '" onclick="CampistryGo.toggleShiftDiv(\'' + sh.id + '\',\'' + esc(dName.replace(/'/g, "\\'")) + '\')"><span class="chip-dot" style="background:' + esc(color) + '"></span>' + esc(dName) + '</span>' + gradeHtml + '</div>';
+            }).join('');
+
+            const camperCount = countCampersForShift(sh);
+
+            return '<div class="shift-card"><div class="shift-card-header"><div class="shift-card-title"><span class="shift-num">' + (idx + 1) + '</span><input type="text" class="form-input" value="' + esc(sh.label || '') + '" placeholder="Shift name" style="max-width:200px;font-size:.875rem;font-weight:700;padding:.25rem .5rem;border:1px solid transparent;" onfocus="this.style.borderColor=\'var(--border-medium)\'" onblur="this.style.borderColor=\'transparent\';CampistryGo.renameShift(\'' + sh.id + '\',this.value)"><span style="font-size:.75rem;font-weight:400;color:var(--text-muted);">' + camperCount + ' campers</span></div><div style="display:flex;align-items:center;gap:.5rem;"><label style="font-size:.75rem;font-weight:600;color:var(--text-secondary)">Depart:</label><input type="time" class="form-input" value="' + esc(sh.departureTime || '16:00') + '" style="width:110px;padding:.35rem .5rem;font-size:.8125rem;" onchange="CampistryGo.updateShiftTime(\'' + sh.id + '\',this.value)"><button class="btn btn-ghost btn-sm" style="color:var(--red-500);" onclick="CampistryGo.deleteShift(\'' + sh.id + '\')">Remove</button></div></div><div style="display:flex;flex-direction:column;gap:.375rem;">' + (divNames.length ? divChips : '<span style="font-size:.8125rem;color:var(--text-muted)">No divisions in Campistry Me</span>') + '</div></div>';
         }).join('');
     }
-    function countCampersForDivisions(divs) {
-        if (!divs.length) return 0;
+
+    /** Count campers matching a shift's division + grade filters */
+    function countCampersForShift(sh) {
         const roster = getRoster();
-        const divSet = new Set(divs);
-        return Object.values(roster).filter(c => divSet.has(c.division)).length;
+        const struct = getStructure();
+        const divs = sh.divisions || [];
+        if (!divs.length) return 0;
+        return Object.values(roster).filter(c => {
+            if (!divs.includes(c.division)) return false;
+            const gradeMode = sh.grades?.[c.division];
+            if (!gradeMode || gradeMode === 'all') return true;
+            if (Array.isArray(gradeMode)) return gradeMode.includes(c.grade);
+            return true;
+        }).length;
     }
+
+    /** Check if a camper matches a shift's division + grade filters */
+    function camperMatchesShift(camper, shift) {
+        if (!(shift.divisions || []).includes(camper.division)) return false;
+        const gradeMode = shift.grades?.[camper.division];
+        if (!gradeMode || gradeMode === 'all') return true;
+        if (Array.isArray(gradeMode)) return gradeMode.includes(camper.grade);
+        return true;
+    }
+
     function addShift() {
         const idx = D.shifts.length + 1;
         const prevTime = D.shifts.length ? D.shifts[D.shifts.length - 1].departureTime : '16:00';
-        // Auto-increment by 45 min
         const prevMin = parseTime(prevTime);
         const newMin = prevMin + 45;
         const h = Math.floor(newMin / 60), m = newMin % 60;
         const newTime = String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
-        D.shifts.push({ id: uid(), label: 'Shift ' + idx, divisions: [], departureTime: newTime });
+        D.shifts.push({ id: uid(), label: 'Shift ' + idx, divisions: [], grades: {}, departureTime: newTime });
         save(); renderShifts(); updateStats(); toast('Shift added');
     }
     function deleteShift(id) { D.shifts = D.shifts.filter(s => s.id !== id); save(); renderShifts(); updateStats(); toast('Shift removed'); }
     function toggleShiftDiv(shiftId, divName) {
         const sh = D.shifts.find(s => s.id === shiftId); if (!sh) return;
         if (!sh.divisions) sh.divisions = [];
+        if (!sh.grades) sh.grades = {};
         // Remove from any other shift first
-        D.shifts.forEach(s => { if (s.id !== shiftId) s.divisions = (s.divisions || []).filter(d => d !== divName); });
-        // Toggle in this shift
+        D.shifts.forEach(s => {
+            if (s.id !== shiftId) {
+                s.divisions = (s.divisions || []).filter(d => d !== divName);
+                if (s.grades) delete s.grades[divName];
+            }
+        });
         const idx = sh.divisions.indexOf(divName);
-        if (idx >= 0) sh.divisions.splice(idx, 1); else sh.divisions.push(divName);
+        if (idx >= 0) { sh.divisions.splice(idx, 1); delete sh.grades[divName]; }
+        else { sh.divisions.push(divName); sh.grades[divName] = 'all'; }
+        save(); renderShifts();
+    }
+    function toggleShiftGrade(shiftId, divName, gradeName) {
+        const sh = D.shifts.find(s => s.id === shiftId); if (!sh) return;
+        if (!sh.grades) sh.grades = {};
+        const struct = getStructure();
+        const allGrades = Object.keys(struct[divName]?.grades || {});
+
+        // If currently 'all', switch to all-minus-this
+        if (!sh.grades[divName] || sh.grades[divName] === 'all') {
+            sh.grades[divName] = allGrades.filter(g => g !== gradeName);
+        } else {
+            const arr = sh.grades[divName];
+            const gi = arr.indexOf(gradeName);
+            if (gi >= 0) { arr.splice(gi, 1); if (!arr.length) arr.push(allGrades[0] || gradeName); } // keep at least one
+            else arr.push(gradeName);
+            // If all grades selected, set back to 'all'
+            if (arr.length >= allGrades.length) sh.grades[divName] = 'all';
+        }
+        save(); renderShifts();
+    }
+    function setShiftGradeMode(shiftId, divName, mode) {
+        const sh = D.shifts.find(s => s.id === shiftId); if (!sh) return;
+        if (!sh.grades) sh.grades = {};
+        sh.grades[divName] = mode;
         save(); renderShifts();
     }
     function updateShiftTime(id, val) { const sh = D.shifts.find(s => s.id === id); if (sh) { sh.departureTime = val; save(); } }
@@ -424,15 +488,16 @@
         let geocoded = 0; Object.keys(roster).forEach(n => { if (D.addresses[n]?.geocoded) geocoded++; });
         const rs = parseInt(document.getElementById('routeReserveSeats')?.value) || D.setup.reserveSeats || 0;
         let totalSeats = 0; D.buses.forEach(b => { const m = D.monitors.find(x => x.assignedBus === b.id); const co = D.counselors.filter(x => x.assignedBus === b.id); totalSeats += Math.max(0, (b.capacity || 0) - 1 - (m ? 1 : 0) - co.length - rs); });
-        // Count campers in shifts
-        let inShifts = 0; const shiftDivs = new Set(); D.shifts.forEach(s => (s.divisions || []).forEach(d => shiftDivs.add(d)));
-        Object.values(roster).forEach(c => { if (shiftDivs.has(c.division)) inShifts++; });
+        // Count campers in shifts (grade-aware)
+        let inShifts = 0;
+        Object.entries(roster).forEach(([n, c]) => { if (D.shifts.some(sh => camperMatchesShift(c, sh))) inShifts++; });
+        const largestShift = D.shifts.length ? Math.max(...D.shifts.map(s => countCampersForShift(s))) : 0;
         const checks = [
             { label: D.buses.length + ' bus(es)', status: D.buses.length > 0 ? 'ok' : 'fail', detail: D.buses.length === 0 ? 'Add buses in Fleet tab' : '' },
             { label: D.shifts.length + ' shift(s) configured', status: D.shifts.length > 0 ? 'ok' : 'fail', detail: D.shifts.length === 0 ? 'Add shifts in Shifts tab' : '' },
-            { label: inShifts + ' of ' + camperCount + ' campers assigned to shifts', status: inShifts === camperCount && camperCount > 0 ? 'ok' : inShifts > 0 ? 'warn' : 'fail', detail: inShifts < camperCount ? (camperCount - inShifts) + ' campers have no shift (their division is unassigned)' : '' },
+            { label: inShifts + ' of ' + camperCount + ' campers assigned to shifts', status: inShifts === camperCount && camperCount > 0 ? 'ok' : inShifts > 0 ? 'warn' : 'fail', detail: inShifts < camperCount ? (camperCount - inShifts) + ' campers have no shift' : '' },
             { label: geocoded + ' of ' + camperCount + ' geocoded', status: geocoded === camperCount && camperCount > 0 ? 'ok' : geocoded > 0 ? 'warn' : 'fail', detail: geocoded < camperCount ? (camperCount - geocoded) + ' missing — will be skipped' : '' },
-            { label: totalSeats + ' seats/shift for up to ' + Math.max(...D.shifts.map(s => countCampersForDivisions(s.divisions || [])), 0) + ' in largest shift', status: 'ok', detail: '' },
+            { label: totalSeats + ' seats/shift for up to ' + largestShift + ' in largest shift', status: 'ok', detail: '' },
             { label: D.setup.campAddress ? 'Camp address set' : 'No camp address', status: D.setup.campAddress ? 'ok' : 'warn', detail: '' },
             { label: getApiKey() ? 'ORS key set' : 'No ORS key (will use estimates)', status: getApiKey() ? 'ok' : 'warn', detail: '' }
         ];
@@ -598,9 +663,8 @@
             // Count per-shift
             const shiftCounts = {};
             D.shifts.forEach(sh => {
-                const divSet = new Set(sh.divisions || []);
                 let count = 0;
-                reg.camperNames.forEach(n => { const c = roster[n]; if (c && divSet.has(c.division)) count++; });
+                reg.camperNames.forEach(n => { const c = roster[n]; if (c && camperMatchesShift(c, sh)) count++; });
                 shiftCounts[sh.id] = count;
             });
 
@@ -631,11 +695,10 @@
         // Build demand matrix: for each shift, how many buses does each region need?
         const demand = {}; // { shiftId: { regionId: busesNeeded } }
         shifts.forEach(sh => {
-            const divSet = new Set(sh.divisions || []);
             demand[sh.id] = {};
             regions.forEach(reg => {
                 let count = 0;
-                reg.camperNames.forEach(n => { const c = roster[n]; if (c && divSet.has(c.division)) count++; });
+                reg.camperNames.forEach(n => { const c = roster[n]; if (c && camperMatchesShift(c, sh)) count++; });
                 demand[sh.id][reg.id] = Math.ceil(count / Math.max(1, perBusCap));
             });
         });
@@ -776,11 +839,10 @@
                 const busIds = assignments[shift.id]?.[reg.id] || [];
                 if (!busIds.length) return;
 
-                // Get campers in this region for this shift
                 const campers = [];
                 reg.camperNames.forEach(name => {
                     const c = roster[name]; const a = D.addresses[name];
-                    if (c && divSet.has(c.division) && a?.geocoded && a.lat && a.lng) {
+                    if (c && camperMatchesShift(c, shift) && a?.geocoded && a.lat && a.lng) {
                         campers.push({ name, division: c.division, bunk: c.bunk || '', lat: a.lat, lng: a.lng, address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ') });
                     }
                 });
@@ -892,30 +954,37 @@
     // =========================================================================
     function renderRouteResults(allShifts) {
         document.getElementById('routeResults').style.display = '';
-        const container = document.getElementById('shiftResultsContainer');
-        let html = '';
 
-        // Show bus assignment summary
-        if (_busAssignments && _detectedRegions) {
-            html += '<div class="card" style="margin-bottom:1.5rem"><div class="card-header"><h2>Bus Region Assignments</h2></div><div class="card-body"><div style="font-size:.8125rem;color:var(--text-muted);margin-bottom:.75rem">Buses stay in the same region across shifts when possible. Changes are highlighted.</div>';
-            html += '<div class="table-wrapper"><table class="data-table"><thead><tr><th>Bus</th>';
-            D.shifts.forEach(sh => { html += '<th>' + esc(sh.label || 'Shift') + '</th>'; });
-            html += '</tr></thead><tbody>';
+        // Update generate button to show "Regenerate"
+        const btnLabel = document.getElementById('generateBtnLabel');
+        if (btnLabel) btnLabel.textContent = 'Regenerate Routes';
 
+        // Bus assignment table (in dedicated container)
+        const assignEl = document.getElementById('busAssignmentTable');
+        if (assignEl && _busAssignments && _detectedRegions) {
+            let ah = '<div style="font-size:.8125rem;color:var(--text-muted);margin-bottom:.5rem">Buses stay in the same region across shifts. Changes highlighted with ⚡</div>';
+            ah += '<div class="table-wrapper"><table class="data-table"><thead><tr><th>Bus</th>';
+            D.shifts.forEach(sh => { ah += '<th>' + esc(sh.label || 'Shift') + '</th>'; });
+            ah += '</tr></thead><tbody>';
             D.buses.forEach(b => {
-                html += '<tr><td style="font-weight:600"><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(b.color) + ';display:inline-block"></span>' + esc(b.name) + '</span></td>';
+                ah += '<tr><td style="font-weight:600"><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(b.color) + ';display:inline-block"></span>' + esc(b.name) + '</span></td>';
                 let prevRegion = null;
                 D.shifts.forEach(sh => {
                     const regionId = Object.keys(_busAssignments[sh.id] || {}).find(rid => (_busAssignments[sh.id][rid] || []).includes(b.id));
                     const reg = _detectedRegions.find(r => r.id === regionId);
                     const changed = prevRegion && regionId !== prevRegion;
-                    html += '<td style="' + (changed ? 'background:var(--amber-50);font-weight:700;color:var(--amber-700)' : '') + '">' + (reg ? '<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:50%;background:' + esc(reg.color) + ';display:inline-block"></span>' + esc(reg.name) + '</span>' : '—') + (changed ? ' ⚡' : '') + '</td>';
+                    ah += '<td style="' + (changed ? 'background:var(--amber-50);font-weight:700;color:var(--amber-700)' : '') + '">' + (reg ? '<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:50%;background:' + esc(reg.color) + ';display:inline-block"></span>' + esc(reg.name) + '</span>' : '—') + (changed ? ' ⚡' : '') + '</td>';
                     prevRegion = regionId;
                 });
-                html += '</tr>';
+                ah += '</tr>';
             });
-            html += '</tbody></table></div></div></div>';
+            ah += '</tbody></table></div>';
+            assignEl.innerHTML = ah;
         }
+
+        // Shift route cards (each shift is a collapsible section)
+        const container = document.getElementById('shiftResultsContainer');
+        let html = '';
 
         allShifts.forEach((sr, si) => {
             const { shift, routes } = sr;
@@ -923,23 +992,22 @@
             const totalStops = routes.reduce((s, r) => s + r.stops.filter(st => !st.isMonitor && !st.isCounselor).length, 0);
             const longest = routes.length ? Math.max(...routes.map(r => r.totalDuration), 0) : 0;
 
-            html += '<div style="margin-bottom:2.5rem;"><h2 style="font-size:1.25rem;font-weight:700;margin-bottom:.5rem;display:flex;align-items:center;gap:.5rem;"><span class="shift-num">' + (si + 1) + '</span>' + esc(shift.label || 'Shift ' + (si + 1)) + ' <span style="font-size:.875rem;font-weight:400;color:var(--text-muted)">— Departs ' + esc(shift.departureTime || '?') + ' · ' + totalCampers + ' campers · ' + totalStops + ' stops · longest ' + longest + ' min</span></h2>';
-            html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:1.5rem;">';
+            html += '<details class="collapsible-card" open><summary class="collapsible-header"><span style="display:flex;align-items:center;gap:.5rem;"><span class="shift-num">' + (si + 1) + '</span>' + esc(shift.label || 'Shift ' + (si + 1)) + '</span><span style="font-size:.75rem;font-weight:400;color:var(--text-muted);">' + totalCampers + ' campers · ' + totalStops + ' stops · ' + longest + ' min</span></summary>';
+            html += '<div class="collapsible-body" style="padding:.75rem;"><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:1rem;">';
             routes.filter(r => r.stops.length > 0).forEach(r => {
-                html += '<div class="route-card"><div class="route-card-header" style="background:' + esc(r.busColor) + '"><div><h3>' + esc(r.busName) + '</h3><div class="route-meta">' + r.camperCount + ' campers · ' + r.stops.length + ' stops</div></div><div style="text-align:right"><div style="font-size:1.25rem;font-weight:700">' + r.totalDuration + ' min</div><div class="route-meta">est. duration</div></div></div><ul class="route-stop-list">';
+                html += '<div class="route-card"><div class="route-card-header" style="background:' + esc(r.busColor) + '"><div><h3>' + esc(r.busName) + '</h3><div class="route-meta">' + r.camperCount + ' campers · ' + r.stops.length + ' stops</div></div><div style="text-align:right"><div style="font-size:1.25rem;font-weight:700">' + r.totalDuration + ' min</div></div></div><ul class="route-stop-list">';
                 r.stops.forEach(st => {
                     const names = st.isMonitor ? '🛡️ ' + esc(st.monitorName) + ' (Monitor)' : st.isCounselor ? '👤 ' + esc(st.counselorName) + ' (Counselor)' : st.campers.map(c => esc(c.name)).join(', ');
                     const cls = st.isMonitor ? ' monitor-stop' : st.isCounselor ? ' counselor-stop' : '';
                     html += '<li class="route-stop' + cls + '"><div class="route-stop-num" style="background:' + esc(r.busColor) + '">' + st.stopNum + '</div><div class="route-stop-info"><div class="route-stop-names">' + names + '</div><div class="route-stop-addr">' + esc(st.address) + '</div></div><div class="route-stop-time">' + (st.estimatedTime || '—') + '</div></li>';
                 });
-                html += '</ul><div class="route-card-footer"><span>' + (r.monitor ? '🛡️ ' + esc(r.monitor.name) : 'No monitor') + '</span><span>' + (r.counselors.length ? r.counselors.length + ' counselor(s)' : '') + '</span></div></div>';
+                html += '</ul><div class="route-card-footer"><span>' + (r.monitor ? '🛡️ ' + esc(r.monitor.name) : '') + '</span><span>' + (r.counselors.length ? r.counselors.length + ' counselor(s)' : '') + '</span></div></div>';
             });
-            html += '</div></div>';
+            html += '</div></div></details>';
         });
 
         container.innerHTML = html;
         renderMasterList(allShifts);
-        // Init map after DOM is painted
         setTimeout(() => initMap(allShifts), 100);
     }
 
@@ -947,6 +1015,8 @@
         const rows = [];
         allShifts.forEach(sr => { sr.routes.forEach(r => { r.stops.forEach(st => { if (st.isMonitor || st.isCounselor) return; st.campers.forEach(c => { const p = c.name.split(/\s+/); rows.push({ firstName: p[0] || '', lastName: p.slice(1).join(' ') || '', shift: sr.shift.label || '', busName: r.busName, busColor: r.busColor, stopNum: st.stopNum, address: st.address, time: st.estimatedTime || '—' }); }); }); }); });
         rows.sort((a, b) => a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName));
+        const countEl = document.getElementById('masterListCount');
+        if (countEl) countEl.textContent = rows.length;
         document.getElementById('masterListBody').innerHTML = rows.map(r => '<tr><td style="font-weight:600">' + esc(r.firstName) + '</td><td style="font-weight:600">' + esc(r.lastName) + '</td><td>' + esc(r.shift) + '</td><td><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(r.busColor) + ';display:inline-block"></span>' + esc(r.busName) + '</span></td><td style="font-weight:700;text-align:center">' + r.stopNum + '</td><td>' + esc(r.address) + '</td><td style="font-weight:600">' + r.time + '</td></tr>').join('');
     }
 
@@ -954,15 +1024,13 @@
     // ROUTE MAP (Leaflet)
     // =========================================================================
     let _map = null;
-    let _mapLayers = []; // all current layers (polylines, markers)
-    let _activeMapShift = 0;
-    let _activeMapBus = 'all'; // 'all' or busId
+    let _mapLayers = [];
+    let _activeShifts = new Set(); // set of shift indices to show
+    let _activeMapBus = 'all';
 
     function initMap(allShifts) {
-        const shiftSel = document.getElementById('mapShiftSelect');
-        shiftSel.innerHTML = '<option value="all">All Shifts (full route)</option>' +
-            allShifts.map((sr, i) => '<option value="' + i + '">' + esc(sr.shift.label || 'Shift ' + (i + 1)) + '</option>').join('');
-        _activeMapShift = 'all';
+        // Default: all shifts selected
+        _activeShifts = new Set(allShifts.map((_, i) => i));
         _activeMapBus = 'all';
 
         const container = document.getElementById('routeMap');
@@ -975,17 +1043,32 @@
         renderMap();
     }
 
+    function toggleMapShift(idx) {
+        if (_activeShifts.has(idx)) {
+            if (_activeShifts.size > 1) _activeShifts.delete(idx); // keep at least one
+        } else {
+            _activeShifts.add(idx);
+        }
+        renderMap();
+    }
+
+    function setMapShiftsAll() {
+        _activeShifts = new Set(_generatedRoutes.map((_, i) => i));
+        renderMap();
+    }
+
     function renderMap() {
         if (!_map || !_generatedRoutes) return;
-        const shiftVal = document.getElementById('mapShiftSelect')?.value || 'all';
-        _activeMapShift = shiftVal;
 
-        // Determine which shifts to show
-        let shiftIndices;
-        if (shiftVal === 'all') {
-            shiftIndices = _generatedRoutes.map((_, i) => i);
-        } else {
-            shiftIndices = [parseInt(shiftVal)];
+        const shiftIndices = [..._activeShifts].sort();
+        const multiShift = shiftIndices.length > 1;
+
+        // Render shift toggle buttons
+        const shiftBar = document.getElementById('mapShiftSelect');
+        if (shiftBar) {
+            const allActive = shiftIndices.length === _generatedRoutes.length;
+            shiftBar.innerHTML = '<button class="bus-tab all-tab' + (allActive ? ' active' : '') + '" onclick="CampistryGo.setMapShiftsAll()">All Shifts</button>' +
+                _generatedRoutes.map((sr, i) => '<button class="bus-tab' + (_activeShifts.has(i) ? ' active' : '') + '" style="' + (_activeShifts.has(i) ? 'border-bottom-color:var(--blue-600);color:var(--text-primary);' : '') + '" onclick="CampistryGo.toggleMapShift(' + i + ')"><span class="shift-num" style="width:20px;height:20px;font-size:.65rem;">' + (i + 1) + '</span>' + esc(sr.shift.label || 'Shift ' + (i + 1)) + '</button>').join('');
         }
 
         // Collect all routes across selected shifts
@@ -1034,16 +1117,17 @@
             const routePoints = [];
             if (_campCoordsCache) routePoints.push([_campCoordsCache.lat, _campCoordsCache.lng]);
             stopsWithCoords.forEach(s => routePoints.push([s.lat, s.lng]));
-            if (_campCoordsCache && shiftVal === 'all') routePoints.push([_campCoordsCache.lat, _campCoordsCache.lng]); // return to camp
+            if (_campCoordsCache && multiShift) routePoints.push([_campCoordsCache.lat, _campCoordsCache.lng]); // return to camp
 
             allLatLngs.push(...routePoints);
 
-            // Draw route line
+            // Draw route line — shift 1: solid, shift 2: long dash, shift 3+: short dash
+            const shiftDash = [null, '16, 10', '6, 8'][route.shiftIdx] || '4, 6';
             const polyline = L.polyline(routePoints, {
                 color: route.busColor,
                 weight: _activeMapBus === 'all' ? 3 : 5,
-                opacity: _activeMapBus === 'all' ? 0.6 : 0.9,
-                dashArray: null
+                opacity: _activeMapBus === 'all' ? 0.7 : 0.9,
+                dashArray: multiShift ? shiftDash : null
             }).addTo(_map);
             _mapLayers.push(polyline);
 
@@ -1074,6 +1158,24 @@
 
         if (allLatLngs.length > 0) {
             _map.fitBounds(L.latLngBounds(allLatLngs), { padding: [50, 50], maxZoom: 14 });
+        }
+
+        // Shift legend (only when viewing all shifts)
+        const legendEl = document.getElementById('mapLegend');
+        if (legendEl) {
+            if (multiShift && _generatedRoutes.length > 1) {
+                const labels = _generatedRoutes.map((sr, i) => {
+                    const style = ['solid', 'dashed (long)', 'dashed (short)'][i] || 'dotted';
+                    const svgLine = i === 0 ? '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3"/>'
+                        : i === 1 ? '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3" stroke-dasharray="8,5"/>'
+                        : '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3" stroke-dasharray="3,4"/>';
+                    return '<span style="display:inline-flex;align-items:center;gap:.375rem;font-size:.75rem;font-weight:500;color:var(--text-secondary);"><svg width="40" height="12">' + svgLine + '</svg>' + esc(sr.shift.label || 'Shift ' + (i + 1)) + '</span>';
+                });
+                legendEl.innerHTML = labels.join('<span style="margin:0 .5rem;color:var(--border-medium);">|</span>');
+                legendEl.style.display = '';
+            } else {
+                legendEl.style.display = 'none';
+            }
         }
     }
 
@@ -1365,13 +1467,11 @@
 
     function zoomToStop(lat, lng, busId, shiftIdx) {
         if (!_map || !lat || !lng) return;
-        // Switch map to show this bus on this shift
-        const shiftSel = document.getElementById('mapShiftSelect');
-        if (shiftSel) shiftSel.value = shiftIdx;
+        // Show just this shift and this bus
+        _activeShifts = new Set([shiftIdx]);
         _activeMapBus = busId;
         renderMap();
         _map.setView([lat, lng], 16);
-        // Clear search results
         const sr = document.getElementById('camperSearchResults');
         if (sr) sr.style.display = 'none';
     }
@@ -1464,11 +1564,12 @@
         saveSetup, testApiKey,
         openBusModal, saveBus, editBus, deleteBus, _pickColor,
         addShift, deleteShift, toggleShiftDiv, updateShiftTime, renameShift,
+        toggleShiftGrade, setShiftGradeMode,
         openMonitorModal, saveMonitor, editMonitor, deleteMonitor,
         openCounselorModal, saveCounselor, editCounselor, deleteCounselor,
         editAddress, saveAddress, geocodeAll, downloadAddressTemplate, importAddressCsv,
         generateRoutes, exportRoutesCsv, printRoutes, detectRegions,
-        renderMap, selectMapBus,
+        renderMap, selectMapBus, toggleMapShift, setMapShiftsAll,
         openOverrideModal, onOverrideTypeChange, saveOverride, removeOverride,
         filterOverrideSelect,
         searchCamperInRoutes, zoomToStop,
