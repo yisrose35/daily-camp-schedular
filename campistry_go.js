@@ -268,16 +268,18 @@
     function renderStaff() { renderMonitors(); renderCounselors(); document.getElementById('staffCount').textContent = (D.monitors.length + D.counselors.length) + ' staff'; }
     function renderMonitors() {
         const tbody = document.getElementById('monitorTableBody'), empty = document.getElementById('monitorEmptyState');
+        const tw = tbody?.closest('.table-wrapper');
         document.getElementById('monitorCount').textContent = D.monitors.length;
-        if (!D.monitors.length) { tbody.parentElement.parentElement.querySelector('.table-wrapper').style.display = 'none'; empty.style.display = ''; return; }
-        tbody.parentElement.parentElement.querySelector('.table-wrapper').style.display = ''; empty.style.display = 'none';
+        if (!D.monitors.length) { if (tw) tw.style.display = 'none'; if (empty) empty.style.display = ''; return; }
+        if (tw) tw.style.display = ''; if (empty) empty.style.display = 'none';
         tbody.innerHTML = D.monitors.map(m => { const bus = D.buses.find(b => b.id === m.assignedBus); return '<tr><td style="font-weight:600">' + esc(m.name) + '</td><td>' + (esc(m.address) || '—') + '</td><td>' + (esc(m.phone) || '—') + '</td><td>' + (bus ? '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(bus.color) + ';display:inline-block"></span>' + esc(bus.name) + '</span>' : '<span style="color:var(--text-muted)">—</span>') + '</td><td><div style="display:flex;gap:4px"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editMonitor(\'' + m.id + '\')">Edit</button><button class="btn btn-ghost btn-sm" style="color:var(--red-500)" onclick="CampistryGo.deleteMonitor(\'' + m.id + '\')">×</button></div></td></tr>'; }).join('');
     }
     function renderCounselors() {
         const tbody = document.getElementById('counselorTableBody'), empty = document.getElementById('counselorEmptyState');
+        const tw = tbody?.closest('.table-wrapper');
         document.getElementById('counselorCount').textContent = D.counselors.length;
-        if (!D.counselors.length) { tbody.parentElement.parentElement.querySelector('.table-wrapper').style.display = 'none'; empty.style.display = ''; return; }
-        tbody.parentElement.parentElement.querySelector('.table-wrapper').style.display = ''; empty.style.display = 'none';
+        if (!D.counselors.length) { if (tw) tw.style.display = 'none'; if (empty) empty.style.display = ''; return; }
+        if (tw) tw.style.display = ''; if (empty) empty.style.display = 'none';
         tbody.innerHTML = D.counselors.map(c => { const bus = D.buses.find(b => b.id === c.assignedBus); return '<tr><td style="font-weight:600">' + esc(c.name) + '</td><td>' + (esc(c.address) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (c.needsStop === 'yes' ? '<span class="badge badge-warning">Yes</span>' : '<span class="badge badge-neutral">No</span>') + '</td><td>' + (bus ? '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(bus.color) + ';display:inline-block"></span>' + esc(bus.name) + '</span>' : '—') + '</td><td><div style="display:flex;gap:4px"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editCounselor(\'' + c.id + '\')">Edit</button><button class="btn btn-ghost btn-sm" style="color:var(--red-500)" onclick="CampistryGo.deleteCounselor(\'' + c.id + '\')">×</button></div></td></tr>'; }).join('');
     }
     // Monitor CRUD
@@ -301,9 +303,10 @@
         let filtered = names;
         if (filter) filtered = names.filter(n => { const c = roster[n]; const a = D.addresses[n]; return n.toLowerCase().includes(filter) || (c.division || '').toLowerCase().includes(filter) || (a?.street || '').toLowerCase().includes(filter) || (a?.city || '').toLowerCase().includes(filter); });
         const tbody = document.getElementById('addressTableBody'), empty = document.getElementById('addressEmptyState');
+        const tw = tbody?.closest('.table-wrapper');
         document.getElementById('addressCount').textContent = filter ? filtered.length + ' of ' + names.length : names.length;
-        if (!names.length) { tbody.parentElement.parentElement.querySelector('.table-wrapper').style.display = 'none'; empty.style.display = ''; updateAddrProgress(0, 0); return; }
-        tbody.parentElement.parentElement.querySelector('.table-wrapper').style.display = ''; empty.style.display = 'none';
+        if (!names.length) { if (tw) tw.style.display = 'none'; if (empty) empty.style.display = ''; updateAddrProgress(0, 0); return; }
+        if (tw) tw.style.display = ''; if (empty) empty.style.display = 'none';
         let withAddr = 0;
         names.forEach(n => { if (D.addresses[n]?.street) withAddr++; });
         updateAddrProgress(withAddr, names.length);
