@@ -38,6 +38,13 @@
     function openModal(id) { document.getElementById(id)?.classList.add('open'); }
     function closeModal(id) { document.getElementById(id)?.classList.remove('open'); }
 
+    /** Get ORS API key — checks config.js first (platform key), then user-entered key */
+    function getApiKey() {
+        return window.__CAMPISTRY_ORS_KEY__ || D.setup.orsApiKey || '';
+    }
+
+    let _campCoordsCache = null; // { lat, lng } — cached camp geocode
+
     // Distance (miles) between two lat/lng
     function haversineMi(lat1, lng1, lat2, lng2) {
         const R = 3958.8; // earth radius in miles
@@ -343,7 +350,7 @@
     // Geocoding
     async function geocodeOne(name) {
         const a = D.addresses[name]; if (!a?.street) return false;
-        const key = D.setup.orsApiKey; if (!key) return false;
+        const key = getApiKey(); if (!key) return false;
         const q = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ');
         try {
             const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams({ text: q, size: '1', 'boundary.country': 'US' }), { headers: { 'Authorization': key, 'Accept': 'application/json' } });
@@ -354,7 +361,7 @@
         return false;
     }
     async function geocodeAll() {
-        if (!D.setup.orsApiKey) { toast('Set ORS key in Setup', 'error'); return; }
+        if (!getApiKey()) { toast('Set ORS key in Setup', 'error'); return; }
         const todo = Object.keys(D.addresses).filter(n => D.addresses[n]?.street && !D.addresses[n].geocoded);
         if (!todo.length) { toast('All geocoded!'); return; }
         toast('Geocoding ' + todo.length + ' addresses...');
@@ -427,7 +434,7 @@
             { label: geocoded + ' of ' + camperCount + ' geocoded', status: geocoded === camperCount && camperCount > 0 ? 'ok' : geocoded > 0 ? 'warn' : 'fail', detail: geocoded < camperCount ? (camperCount - geocoded) + ' missing — will be skipped' : '' },
             { label: totalSeats + ' seats/shift for up to ' + Math.max(...D.shifts.map(s => countCampersForDivisions(s.divisions || [])), 0) + ' in largest shift', status: 'ok', detail: '' },
             { label: D.setup.campAddress ? 'Camp address set' : 'No camp address', status: D.setup.campAddress ? 'ok' : 'warn', detail: '' },
-            { label: D.setup.orsApiKey ? 'ORS key set' : 'No ORS key (will use estimates)', status: D.setup.orsApiKey ? 'ok' : 'warn', detail: '' }
+            { label: getApiKey() ? 'ORS key set' : 'No ORS key (will use estimates)', status: getApiKey() ? 'ok' : 'warn', detail: '' }
         ];
         const anyFail = checks.some(c => c.status === 'fail');
         const canGen = D.buses.length > 0 && D.shifts.length > 0 && geocoded > 0;
@@ -742,9 +749,10 @@
 
         // Geocode camp
         let campCoords = null;
-        if (D.setup.orsApiKey && D.setup.campAddress) {
+        if (getApiKey() && D.setup.campAddress) {
             showProgress('Geocoding camp...', 5);
             campCoords = await geocodeSingle(D.setup.campAddress);
+            if (campCoords) _campCoordsCache = campCoords;
         }
         const campLat = campCoords?.lat || _detectedRegions[0].centroidLat;
         const campLng = campCoords?.lng || _detectedRegions[0].centroidLng;
@@ -827,7 +835,20 @@
             sorted.forEach(c => { if (used.has(c.name)) return; const cl = [c]; used.add(c.name); sorted.forEach(o => { if (used.has(o.name)) return; if (haversineMi(c.lat, c.lng, o.lat, o.lng) <= maxWalkMi) { cl.push(o); used.add(o.name); } }); const cLat = cl.reduce((s, x) => s + x.lat, 0) / cl.length, cLng = cl.reduce((s, x) => s + x.lng, 0) / cl.length; clusters.push({ lat: cLat, lng: cLng, address: cl.length === 1 ? cl[0].address : 'Shared stop (' + cl.length + ')', campers: cl.map(x => ({ name: x.name, division: x.division, bunk: x.bunk })), _count: cl.length }); });
             jobs = clusters;
         } else {
-            jobs = campers.map(c => ({ ...c, campers: [{ name: c.name, division: c.division, bunk: c.bunk }], _count: 1 }));
+            // Door-to-door: merge campers at same address (siblings, neighbors)
+            // Two campers within 0.02 mi (~100ft) share a stop
+            const addrGroups = {};
+            campers.forEach(c => {
+                const key = Math.round(c.lat * 1000) + ',' + Math.round(c.lng * 1000); // ~300ft grid
+                if (!addrGroups[key]) addrGroups[key] = [];
+                addrGroups[key].push(c);
+            });
+            jobs = Object.values(addrGroups).map(group => ({
+                lat: group[0].lat, lng: group[0].lng,
+                address: group[0].address,
+                campers: group.map(c => ({ name: c.name, division: c.division, bunk: c.bunk })),
+                _count: group.length
+            }));
         }
 
         const withAngle = jobs.map(j => ({ ...j, _angle: angleTo(campLat, campLng, j.lat, j.lng) }));
@@ -859,7 +880,7 @@
     }
 
     async function geocodeSingle(addr) {
-        const key = D.setup.orsApiKey; if (!key) return null;
+        const key = getApiKey(); if (!key) return null;
         try { const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams({ text: addr, size: '1', 'boundary.country': 'US' }), { headers: { 'Authorization': key, 'Accept': 'application/json' } }); if (!r.ok) return null; const d = await r.json(); if (d.features?.length) { const co = d.features[0].geometry.coordinates; return { lat: co[1], lng: co[0] }; } } catch (_) {} return null;
     }
 
@@ -938,95 +959,121 @@
     let _activeMapBus = 'all'; // 'all' or busId
 
     function initMap(allShifts) {
-        // Populate shift selector
         const shiftSel = document.getElementById('mapShiftSelect');
-        shiftSel.innerHTML = allShifts.map((sr, i) => '<option value="' + i + '">' + esc(sr.shift.label || 'Shift ' + (i + 1)) + '</option>').join('');
-        _activeMapShift = 0;
+        shiftSel.innerHTML = '<option value="all">All Shifts (full route)</option>' +
+            allShifts.map((sr, i) => '<option value="' + i + '">' + esc(sr.shift.label || 'Shift ' + (i + 1)) + '</option>').join('');
+        _activeMapShift = 'all';
         _activeMapBus = 'all';
 
-        // Initialize map if needed
         const container = document.getElementById('routeMap');
         if (_map) { _map.remove(); _map = null; }
-
         _map = L.map(container, { scrollWheelZoom: true, zoomControl: true });
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
             maxZoom: 19
         }).addTo(_map);
-
         renderMap();
     }
 
     function renderMap() {
         if (!_map || !_generatedRoutes) return;
+        const shiftVal = document.getElementById('mapShiftSelect')?.value || 'all';
+        _activeMapShift = shiftVal;
 
-        const shiftIdx = parseInt(document.getElementById('mapShiftSelect')?.value) || 0;
-        _activeMapShift = shiftIdx;
-        const sr = _generatedRoutes[shiftIdx];
-        if (!sr) return;
+        // Determine which shifts to show
+        let shiftIndices;
+        if (shiftVal === 'all') {
+            shiftIndices = _generatedRoutes.map((_, i) => i);
+        } else {
+            shiftIndices = [parseInt(shiftVal)];
+        }
+
+        // Collect all routes across selected shifts
+        const allRoutes = [];
+        shiftIndices.forEach(si => {
+            const sr = _generatedRoutes[si];
+            if (!sr) return;
+            sr.routes.filter(r => r.stops.length > 0).forEach(r => {
+                allRoutes.push({ ...r, shiftIdx: si, shiftLabel: sr.shift.label || 'Shift ' + (si + 1) });
+            });
+        });
 
         // Build bus tabs
         const tabsEl = document.getElementById('mapBusTabs');
-        const routes = sr.routes.filter(r => r.stops.length > 0);
-        tabsEl.innerHTML = '<button class="bus-tab all-tab' + (_activeMapBus === 'all' ? ' active' : '') + '" onclick="CampistryGo.selectMapBus(\'all\')">All Buses</button>' +
-            routes.map(r => '<button class="bus-tab' + (_activeMapBus === r.busId ? ' active' : '') + '" onclick="CampistryGo.selectMapBus(\'' + r.busId + '\')"><span class="bus-tab-dot" style="background:' + esc(r.busColor) + '"></span>' + esc(r.busName) + ' <span style="font-weight:400;color:var(--text-muted)">(' + r.camperCount + ')</span></button>').join('');
+        const uniqueBuses = [];
+        const seen = new Set();
+        allRoutes.forEach(r => { if (!seen.has(r.busId)) { seen.add(r.busId); uniqueBuses.push({ busId: r.busId, busName: r.busName, busColor: r.busColor }); } });
 
-        // Clear existing layers
+        tabsEl.innerHTML = '<button class="bus-tab all-tab' + (_activeMapBus === 'all' ? ' active' : '') + '" onclick="CampistryGo.selectMapBus(\'all\')">All Buses</button>' +
+            uniqueBuses.map(b => '<button class="bus-tab' + (_activeMapBus === b.busId ? ' active' : '') + '" onclick="CampistryGo.selectMapBus(\'' + b.busId + '\')"><span class="bus-tab-dot" style="background:' + esc(b.busColor) + '"></span>' + esc(b.busName) + '</button>').join('');
+
+        // Clear layers
         _mapLayers.forEach(l => _map.removeLayer(l));
         _mapLayers = [];
-
         const allLatLngs = [];
-        const visibleRoutes = _activeMapBus === 'all' ? routes : routes.filter(r => r.busId === _activeMapBus);
+
+        // Camp origin marker
+        if (_campCoordsCache) {
+            const campIcon = L.divIcon({
+                html: '<div style="width:32px;height:32px;background:#1e293b;border:3px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.4);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>',
+                className: '', iconSize: [32, 32], iconAnchor: [16, 16]
+            });
+            const campMarker = L.marker([_campCoordsCache.lat, _campCoordsCache.lng], { icon: campIcon, zIndexOffset: 1000 }).addTo(_map);
+            campMarker.bindPopup('<div style="font-family:DM Sans,sans-serif;"><strong>' + esc(D.setup.campName || 'Camp') + '</strong><br><span style="font-size:11px;color:#888;">' + esc(D.setup.campAddress) + '</span><br><span style="font-size:11px;font-weight:600;">Starting Point</span></div>');
+            _mapLayers.push(campMarker);
+            allLatLngs.push([_campCoordsCache.lat, _campCoordsCache.lng]);
+        }
+
+        const visibleRoutes = _activeMapBus === 'all' ? allRoutes : allRoutes.filter(r => r.busId === _activeMapBus);
 
         visibleRoutes.forEach(route => {
             const stopsWithCoords = route.stops.filter(s => s.lat && s.lng);
             if (!stopsWithCoords.length) return;
 
-            // Draw polyline between stops
-            const latlngs = stopsWithCoords.map(s => [s.lat, s.lng]);
-            allLatLngs.push(...latlngs);
+            // Build full route: camp → stops → (camp return if multi-shift view)
+            const routePoints = [];
+            if (_campCoordsCache) routePoints.push([_campCoordsCache.lat, _campCoordsCache.lng]);
+            stopsWithCoords.forEach(s => routePoints.push([s.lat, s.lng]));
+            if (_campCoordsCache && shiftVal === 'all') routePoints.push([_campCoordsCache.lat, _campCoordsCache.lng]); // return to camp
 
-            const polyline = L.polyline(latlngs, {
+            allLatLngs.push(...routePoints);
+
+            // Draw route line
+            const polyline = L.polyline(routePoints, {
                 color: route.busColor,
-                weight: 4,
-                opacity: _activeMapBus === 'all' ? 0.7 : 0.9,
+                weight: _activeMapBus === 'all' ? 3 : 5,
+                opacity: _activeMapBus === 'all' ? 0.6 : 0.9,
                 dashArray: null
             }).addTo(_map);
             _mapLayers.push(polyline);
 
-            // Add stop markers
+            // Dashed line from camp to first stop (departure)
+            if (_campCoordsCache && stopsWithCoords.length) {
+                const dashLine = L.polyline(
+                    [[_campCoordsCache.lat, _campCoordsCache.lng], [stopsWithCoords[0].lat, stopsWithCoords[0].lng]],
+                    { color: route.busColor, weight: 2, opacity: 0.4, dashArray: '8, 8' }
+                ).addTo(_map);
+                _mapLayers.push(dashLine);
+            }
+
+            // Stop markers
             stopsWithCoords.forEach(stop => {
                 const isSpecial = stop.isMonitor || stop.isCounselor;
                 const size = isSpecial ? 20 : 26;
-
                 const icon = L.divIcon({
                     html: '<div class="stop-marker-icon" style="width:' + size + 'px;height:' + size + 'px;background:' + esc(route.busColor) + ';' + (isSpecial ? 'font-size:10px;' : '') + '">' + (isSpecial ? (stop.isMonitor ? 'M' : 'C') : stop.stopNum) + '</div>',
-                    className: '',
-                    iconSize: [size, size],
-                    iconAnchor: [size / 2, size / 2]
+                    className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2]
                 });
-
-                const names = stop.isMonitor ? '🛡️ ' + (stop.monitorName || 'Monitor')
-                    : stop.isCounselor ? '👤 ' + (stop.counselorName || 'Counselor')
-                    : stop.campers.map(c => c.name).join('<br>');
-
-                const popupContent = '<div style="font-family:DM Sans,sans-serif;min-width:140px;">'
-                    + '<div style="font-weight:700;font-size:13px;margin-bottom:4px;color:' + route.busColor + '">' + esc(route.busName) + ' — Stop ' + stop.stopNum + '</div>'
-                    + '<div style="font-size:12px;margin-bottom:4px;">' + names + '</div>'
-                    + '<div style="font-size:11px;color:#888;">' + esc(stop.address) + '</div>'
-                    + (stop.estimatedTime ? '<div style="font-size:12px;font-weight:600;margin-top:4px;">Est: ' + stop.estimatedTime + '</div>' : '')
-                    + '</div>';
-
+                const names = stop.isMonitor ? '🛡️ ' + (stop.monitorName || 'Monitor') : stop.isCounselor ? '👤 ' + (stop.counselorName || 'Counselor') : stop.campers.map(c => c.name).join('<br>');
+                const popup = '<div style="font-family:DM Sans,sans-serif;min-width:160px;"><div style="font-weight:700;font-size:13px;margin-bottom:4px;color:' + route.busColor + '">' + esc(route.busName) + ' — ' + esc(route.shiftLabel) + '</div><div style="font-weight:600;margin-bottom:2px;">Stop ' + stop.stopNum + '</div><div style="font-size:12px;margin-bottom:4px;">' + names + '</div><div style="font-size:11px;color:#888;">' + esc(stop.address) + '</div>' + (stop.estimatedTime ? '<div style="font-size:12px;font-weight:600;margin-top:4px;">Est: ' + stop.estimatedTime + '</div>' : '') + '</div>';
                 const marker = L.marker([stop.lat, stop.lng], { icon }).addTo(_map);
-                marker.bindPopup(popupContent);
+                marker.bindPopup(popup);
                 _mapLayers.push(marker);
             });
         });
 
-        // Fit map to bounds
         if (allLatLngs.length > 0) {
-            const bounds = L.latLngBounds(allLatLngs);
-            _map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+            _map.fitBounds(L.latLngBounds(allLatLngs), { padding: [50, 50], maxZoom: 14 });
         }
     }
 
@@ -1223,19 +1270,29 @@
         const names = Object.keys(roster).sort();
         const sel = document.getElementById('overrideCamper');
         sel.innerHTML = '<option value="">— Select camper —</option>' + names.map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('');
+        document.getElementById('overrideSearch').value = '';
         document.getElementById('overrideType').value = 'not-riding';
         document.getElementById('overrideRideWithGroup').style.display = 'none';
         openModal('overrideModal');
+        document.getElementById('overrideSearch').focus();
+    }
+
+    function filterOverrideSelect(inputId, selectId) {
+        const q = (document.getElementById(inputId)?.value || '').toLowerCase().trim();
+        const sel = document.getElementById(selectId);
+        const roster = getRoster();
+        const names = Object.keys(roster).sort();
+        const filtered = q ? names.filter(n => n.toLowerCase().includes(q)) : names;
+        sel.innerHTML = '<option value="">— Select camper —</option>' + filtered.map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('');
+        if (filtered.length === 1) sel.value = filtered[0]; // auto-select if one match
     }
 
     function onOverrideTypeChange() {
         const type = document.getElementById('overrideType')?.value;
         document.getElementById('overrideRideWithGroup').style.display = type === 'ride-with' ? '' : 'none';
         if (type === 'ride-with') {
-            const roster = getRoster();
-            const names = Object.keys(roster).sort();
-            const sel = document.getElementById('overrideTarget');
-            sel.innerHTML = '<option value="">— Select camper —</option>' + names.map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('');
+            document.getElementById('overrideTargetSearch').value = '';
+            filterOverrideSelect('overrideTargetSearch', 'overrideTarget');
         }
     }
 
@@ -1250,14 +1307,73 @@
             if (target === camper) { toast('Can\'t ride with themselves', 'error'); return; }
             addOverride(camper, 'ride-with', { targetCamper: target });
         } else if (type === 'add-rider') {
-            // Check they have an address
             if (!D.addresses[camper]?.geocoded) { toast(camper + ' needs a geocoded address first', 'error'); return; }
             addOverride(camper, 'add-rider', {});
         } else {
             addOverride(camper, 'not-riding', {});
         }
-
         closeModal('overrideModal');
+    }
+
+    // =========================================================================
+    // CAMPER SEARCH (find any camper across all routes)
+    // =========================================================================
+    function searchCamperInRoutes(query) {
+        if (!_generatedRoutes || !query) return;
+        const q = query.toLowerCase().trim();
+        if (!q) { if (_generatedRoutes) renderRouteResults(applyOverrides(_generatedRoutes)); return; }
+
+        const results = [];
+        const applied = applyOverrides(_generatedRoutes);
+        applied.forEach(sr => {
+            sr.routes.forEach(r => {
+                r.stops.forEach(st => {
+                    st.campers.forEach(c => {
+                        if (c.name.toLowerCase().includes(q)) {
+                            results.push({
+                                name: c.name, shift: sr.shift.label || '',
+                                busName: r.busName, busColor: r.busColor, busId: r.busId,
+                                stopNum: st.stopNum, address: st.address,
+                                time: st.estimatedTime || '—', lat: st.lat, lng: st.lng,
+                                shiftIdx: _generatedRoutes.indexOf(sr)
+                            });
+                        }
+                    });
+                });
+            });
+        });
+
+        const container = document.getElementById('camperSearchResults');
+        if (!container) return;
+
+        if (!results.length) {
+            container.innerHTML = '<div style="padding:.75rem;color:var(--text-muted);font-size:.875rem;">No camper found matching "' + esc(query) + '"</div>';
+            container.style.display = '';
+            return;
+        }
+
+        container.innerHTML = results.map(r => 
+            '<div style="display:flex;align-items:center;gap:.75rem;padding:.625rem .75rem;border-bottom:1px solid var(--border-light);font-size:.8125rem;cursor:pointer;" onclick="CampistryGo.zoomToStop(' + (r.lat||0) + ',' + (r.lng||0) + ',\'' + esc(r.busId) + '\',' + r.shiftIdx + ')">' +
+            '<span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(r.busColor) + ';display:inline-block;"></span></span>' +
+            '<strong>' + esc(r.name) + '</strong>' +
+            '<span style="color:var(--text-muted)">' + esc(r.shift) + ' · ' + esc(r.busName) + ' · Stop ' + r.stopNum + '</span>' +
+            '<span style="margin-left:auto;font-weight:600;">' + r.time + '</span>' +
+            '</div>'
+        ).join('');
+        container.style.display = '';
+    }
+
+    function zoomToStop(lat, lng, busId, shiftIdx) {
+        if (!_map || !lat || !lng) return;
+        // Switch map to show this bus on this shift
+        const shiftSel = document.getElementById('mapShiftSelect');
+        if (shiftSel) shiftSel.value = shiftIdx;
+        _activeMapBus = busId;
+        renderMap();
+        _map.setView([lat, lng], 16);
+        // Clear search results
+        const sr = document.getElementById('camperSearchResults');
+        if (sr) sr.style.display = 'none';
     }
 
     // =========================================================================
@@ -1354,6 +1470,8 @@
         generateRoutes, exportRoutesCsv, printRoutes, detectRegions,
         renderMap, selectMapBus,
         openOverrideModal, onOverrideTypeChange, saveOverride, removeOverride,
+        filterOverrideSelect,
+        searchCamperInRoutes, zoomToStop,
         closeModal, openModal
     };
 
