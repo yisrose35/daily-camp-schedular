@@ -1713,11 +1713,17 @@
                     }
 
                     for (const pos of candidates) {
-                        // Residual check: before and after must be 0, absorbable, or fillable
+                       // Residual check: before and after must be viable
                         const beforeRes = pos - gap.origStart;
                         const afterRes = gap.origEnd - (pos + need.dMin);
-                        if (beforeRes > ABSORB_MAX && beforeRes < minFill) continue;
-                        if (afterRes > ABSORB_MAX && afterRes < minFill) continue;
+                        if (need.dMin === need.dMax) {
+                            // Fixed-duration: residuals must be 0 or fillable (no absorption — it would stretch a fixed block)
+                            if (beforeRes > 0 && beforeRes < minFill) continue;
+                            if (afterRes > 0 && afterRes < minFill) continue;
+                        } else {
+                            if (beforeRes > ABSORB_MAX && beforeRes < minFill) continue;
+                            if (afterRes > ABSORB_MAX && afterRes < minFill) continue;
+                        }
 
                         // ★ Special capacity + cross-division check
                         if (need.type === 'special' && need._assignedSpecial) {
@@ -1753,8 +1759,8 @@
                                 if (need.dMin === need.dMax) {
                                     const beforeRes = t - gap.origStart;
                                     const afterRes = gap.origEnd - (t + need.dMin);
-                                    if (beforeRes > ABSORB_MAX && beforeRes < minFill) continue;
-                                    if (afterRes > ABSORB_MAX && afterRes < minFill) continue;
+                                    if (beforeRes > 0 && beforeRes < minFill) continue;
+                                    if (afterRes > 0 && afterRes < minFill) continue;
                                 }
                                 if (!canUseSpecialAtTime(need._assignedSpecial, grade, t, t + need.dMin)) continue;
                                 placed.push({ startMin: t, endMin: t + need.dMin, ...need, _final: true });
