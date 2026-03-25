@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -8,860 +7,8 @@
     <link rel="icon" type="image/png" href="Campistry_logo.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    
-    <style>
-        :root {
-            --bg-primary: #fafafa;
-            --bg-secondary: #ffffff;
-            --bg-tertiary: #f4f4f5;
-            --border-light: #e4e4e7;
-            --border-medium: #d4d4d8;
-            --text-primary: #18181b;
-            --text-secondary: #52525b;
-            --text-muted: #a1a1aa;
-            --amber-50: #fffbeb;
-            --amber-100: #fef3c7;
-            --amber-200: #fde68a;
-            --amber-500: #f59e0b;
-            --amber-600: #d97706;
-            --amber-700: #b45309;
-            --green-500: #22c55e;
-            --green-600: #16a34a;
-            --red-500: #ef4444;
-            --red-600: #dc2626;
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
-            --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -1px rgba(0,0,0,0.04);
-            --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.08), 0 4px 6px -2px rgba(0,0,0,0.04);
-            --radius-sm: 6px;
-            --radius-md: 10px;
-            --radius-lg: 14px;
-        }
-
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        
-        body {
-            font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: var(--bg-primary);
-            color: var(--text-primary);
-            line-height: 1.6;
-            min-height: 100vh;
-            -webkit-font-smoothing: antialiased;
-        }
-
-        /* ==================== NAVIGATION ==================== */
-        .nav {
-            background: var(--bg-secondary);
-            border-bottom: 1px solid var(--border-light);
-            padding: 0.5rem 0;
-            height: auto;
-            min-height: 48px;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            backdrop-filter: blur(8px);
-            background: rgba(255,255,255,0.95);
-        }
-        .nav-inner {
-            max-width: 1280px;
-            margin: 0 auto;
-            padding: 0 2rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .nav-left { display: flex; align-items: center; gap: 2rem; }
-       .nav-back {
-            display: flex; align-items: center; gap: 0.25rem;
-            color: var(--text-secondary);
-            text-decoration: none;
-            font-weight: 500;
-            font-size: 0.8rem;
-            transition: color 0.15s;
-            flex-shrink: 0;
-        }
-        .nav-back:hover { color: var(--amber-600); }
-        .nav-back svg { transition: transform 0.15s; }
-        .nav-back:hover svg { transform: translateX(-2px); }
-        
-        .nav-brand {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-        }
-        .nav-icon {
-            width: 38px; height: 38px;
-            background: linear-gradient(135deg, var(--amber-500), var(--amber-600));
-            border-radius: var(--radius-md);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
-        }
-        .nav-title {
-            font-weight: 700;
-            font-size: 1.125rem;
-            color: var(--text-primary);
-        }
-        .nav-title span { color: var(--amber-600); }
-
-        /* Logo images in nav */
-        .nav-logo-main {
-            display: block;
-            flex-shrink: 0;
-            object-fit: contain;
-            vertical-align: middle;
-        }
-       .nav-logo-me {
-    height: 43px;
-    max-height: 45px;
-    width: auto;
-    position: relative;
-    top: 2px;
-}
-.nav-logo-flow {
-    height: 45px;
-    max-height: 60px;
-    width: auto;
-    position: relative;
-    top: -1px;
-}
-        .nav-app-switch {
-    display: flex;
-    align-items: center;
-    margin-left: 16px;            
-            text-decoration: none;
-            cursor: pointer;
-            transition: opacity 0.2s ease;
-        }
-        .nav-app-switch:hover {
-            opacity: 0.75;
-        }
-        
-       .sync-badge {
-            display: flex;
-            align-items: center;
-            gap: 0.375rem;
-            padding: 0.25rem 0.6rem;
-            background: var(--bg-tertiary);
-            border-radius: 100px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            color: var(--text-secondary);
-            white-space: nowrap;
-            flex-shrink: 0;
-            overflow: hidden;
-        }
-        .sync-dot {
-            width: 8px; height: 8px;
-            border-radius: 50%;
-            background: var(--green-500);
-            transition: all 0.2s;
-        }
-        .sync-dot.syncing {
-            background: var(--amber-500);
-            animation: pulse 1s ease-in-out infinite;
-        }
-        .sync-dot.error { background: var(--red-500); }
-        @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.6; transform: scale(0.95); } }
-
-        /* ==================== MAIN LAYOUT ==================== */
-        .main {
-            max-width: 1280px;
-            margin: 0 auto;
-            padding: 2rem 2rem 4rem;
-        }
-        
-        .page-header {
-            margin-bottom: 2rem;
-        }
-        .page-title {
-            font-size: 1.75rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            margin-bottom: 0.25rem;
-            letter-spacing: -0.025em;
-        }
-        .page-subtitle {
-            color: var(--text-muted);
-            font-size: 0.9375rem;
-        }
-
-        /* ==================== STATS ==================== */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 1rem;
-            margin-bottom: 2rem;
-        }
-        .stat-card {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-light);
-            border-radius: var(--radius-lg);
-            padding: 1.25rem;
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            transition: all 0.2s;
-        }
-        .stat-card:hover {
-            border-color: var(--border-medium);
-            box-shadow: var(--shadow-md);
-        }
-        .stat-icon {
-            width: 44px; height: 44px;
-            background: var(--amber-50);
-            border: 1px solid var(--amber-100);
-            border-radius: var(--radius-md);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--amber-600);
-            flex-shrink: 0;
-        }
-        .stat-value {
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            line-height: 1.2;
-            letter-spacing: -0.02em;
-        }
-        .stat-label {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            font-weight: 500;
-        }
-
-        /* ==================== TABS ==================== */
-        .tabs {
-            display: flex;
-            gap: 0.5rem;
-            margin-bottom: 1.5rem;
-            border-bottom: 1px solid var(--border-light);
-            padding-bottom: 0;
-        }
-        .tab-btn {
-            padding: 0.875rem 1.25rem;
-            background: none;
-            border: none;
-            font-family: inherit;
-            font-size: 0.875rem;
-            font-weight: 500;
-            color: var(--text-muted);
-            cursor: pointer;
-            position: relative;
-            transition: color 0.15s;
-        }
-        .tab-btn:hover { color: var(--text-secondary); }
-        .tab-btn.active { color: var(--amber-600); }
-        .tab-btn::after {
-            content: '';
-            position: absolute;
-            bottom: -1px;
-            left: 0;
-            right: 0;
-            height: 2px;
-            background: var(--amber-500);
-            border-radius: 2px 2px 0 0;
-            transform: scaleX(0);
-            transition: transform 0.2s;
-        }
-        .tab-btn.active::after { transform: scaleX(1); }
-        
-        .tab-content { display: none; }
-        .tab-content.active { display: block; animation: fadeIn 0.2s ease; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-
-        /* ==================== BUTTONS ==================== */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 0.5rem;
-            padding: 0.625rem 1rem;
-            border-radius: var(--radius-sm);
-            border: none;
-            font-family: inherit;
-            font-size: 0.8125rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.15s;
-            white-space: nowrap;
-        }
-        .btn svg { width: 16px; height: 16px; }
-        .btn-primary {
-            background: var(--amber-500);
-            color: white;
-            box-shadow: 0 2px 4px rgba(245, 158, 11, 0.25);
-        }
-        .btn-primary:hover {
-            background: var(--amber-600);
-            box-shadow: 0 4px 8px rgba(245, 158, 11, 0.3);
-        }
-        .btn-secondary {
-            background: var(--bg-secondary);
-            color: var(--text-secondary);
-            border: 1px solid var(--border-medium);
-        }
-        .btn-secondary:hover {
-            background: var(--bg-tertiary);
-            border-color: var(--border-medium);
-        }
-        .btn-ghost {
-            background: transparent;
-            color: var(--text-secondary);
-        }
-        .btn-ghost:hover { background: var(--bg-tertiary); }
-        .btn-danger {
-            background: #fef2f2;
-            color: var(--red-600);
-            border: 1px solid #fecaca;
-        }
-        .btn-danger:hover { background: #fee2e2; }
-        .btn-sm { padding: 0.375rem 0.75rem; font-size: 0.75rem; }
-        .btn-icon {
-            width: 32px; height: 32px;
-            padding: 0;
-            border-radius: var(--radius-sm);
-        }
-
-        .action-bar {
-            display: flex;
-            gap: 0.75rem;
-            margin-bottom: 1.5rem;
-            flex-wrap: wrap;
-            align-items: center;
-        }
-        .action-spacer { flex: 1; }
-        
-        .search-input {
-            flex: 1;
-            min-width: 200px;
-            max-width: 300px;
-            padding: 0.625rem 1rem;
-            padding-left: 2.5rem;
-            border: 1px solid var(--border-light);
-            border-radius: var(--radius-md);
-            font-family: inherit;
-            font-size: 0.875rem;
-            background: var(--bg-secondary) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.35-4.35'/%3E%3C/svg%3E") no-repeat 0.875rem center;
-            transition: all 0.15s;
-        }
-        .search-input:focus {
-            outline: none;
-            border-color: var(--amber-500);
-            box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.1);
-        }
-
-        /* ==================== CARDS ==================== */
-        .card {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-light);
-            border-radius: var(--radius-lg);
-            overflow: hidden;
-            box-shadow: var(--shadow-sm);
-        }
-        .card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 1rem 1.5rem;
-            border-bottom: 1px solid var(--border-light);
-            background: var(--bg-tertiary);
-        }
-        .card-header h2 {
-            font-size: 0.875rem;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-        .card-count {
-            font-size: 0.8125rem;
-            color: var(--text-muted);
-            font-weight: 500;
-        }
-
-        /* ==================== HIERARCHY (Structure) ==================== */
-        .hierarchy-container { display: flex; flex-direction: column; gap: 1rem; }
-        
-        .division-block {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-light);
-            border-radius: var(--radius-lg);
-            overflow: hidden;
-            transition: all 0.2s;
-        }
-        .division-block:hover { box-shadow: var(--shadow-md); }
-        
-        .division-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 1rem 1.25rem;
-            cursor: pointer;
-            background: var(--bg-secondary);
-            transition: background 0.15s;
-        }
-        .division-header:hover { background: var(--bg-tertiary); }
-        .division-header.collapsed { border-radius: var(--radius-lg); }
-        
-        .division-left { display: flex; align-items: center; gap: 0.875rem; }
-        .division-color {
-            width: 14px; height: 14px;
-            border-radius: 4px;
-            cursor: pointer;
-            transition: transform 0.15s;
-            box-shadow: inset 0 0 0 1px rgba(0,0,0,0.1);
-        }
-        .division-color:hover { transform: scale(1.15); }
-        .division-info h3 {
-            font-size: 0.9375rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: 0.125rem;
-        }
-        .division-meta {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-        }
-        
-        .division-actions { display: flex; align-items: center; gap: 0.25rem; }
-        .icon-btn {
-            width: 28px; height: 28px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: transparent;
-            border: none;
-            border-radius: var(--radius-sm);
-            color: var(--text-muted);
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-        .icon-btn:hover { background: var(--bg-tertiary); color: var(--text-secondary); }
-        .icon-btn.danger:hover { background: #fef2f2; color: var(--red-500); }
-        
-        .expand-icon { transition: transform 0.2s; color: var(--text-muted); }
-        .expand-icon.collapsed { transform: rotate(-90deg); }
-        
-        .division-body {
-            padding: 0 1.25rem 1.25rem;
-            border-top: 1px solid var(--border-light);
-            background: var(--bg-tertiary);
-        }
-        .division-body.collapsed { display: none; }
-        
-        .grades-list { padding-top: 1rem; display: flex; flex-direction: column; gap: 0.625rem; }
-        
-        .grade-block {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-light);
-            border-radius: var(--radius-md);
-            overflow: hidden;
-        }
-        .grade-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0.625rem 0.875rem;
-            cursor: pointer;
-            transition: background 0.15s;
-        }
-        .grade-header:hover { background: var(--bg-tertiary); }
-        .grade-left { display: flex; align-items: center; gap: 0.5rem; }
-        .grade-info { font-weight: 500; color: var(--text-primary); font-size: 0.8125rem; }
-        .grade-count { font-size: 0.6875rem; color: var(--text-muted); background: var(--bg-tertiary); padding: 0.125rem 0.5rem; border-radius: 100px; }
-        .grade-actions { display: flex; align-items: center; }
-        
-        .grade-body {
-            padding: 0.75rem 0.875rem;
-            border-top: 1px solid var(--border-light);
-            background: var(--bg-tertiary);
-        }
-        .grade-body.collapsed { display: none; }
-        
-        .bunks-list { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-        .bunk-chip {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.375rem;
-            padding: 0.375rem 0.5rem 0.375rem 0.75rem;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-light);
-            border-radius: 100px;
-            font-size: 0.75rem;
-            font-weight: 500;
-            color: var(--text-secondary);
-            transition: all 0.15s;
-        }
-        .bunk-chip:hover { border-color: var(--border-medium); }
-        .bunk-chip-count {
-            font-size: 0.6875rem;
-            color: var(--text-muted);
-            font-weight: 400;
-        }
-        .bunk-chip .icon-btn { width: 18px; height: 18px; margin: -0.25rem -0.25rem -0.25rem 0; }
-        
-        /* Quick-add inputs for grades/bunks */
-        .quick-add {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-        }
-        .quick-add input {
-            padding: 0.5rem 0.75rem;
-            border: 1px solid var(--border-light);
-            border-radius: var(--radius-sm);
-            font-family: inherit;
-            font-size: 0.8125rem;
-            background: var(--bg-secondary);
-            color: var(--text-primary);
-            transition: all 0.15s;
-            width: 120px;
-        }
-        .quick-add input:focus {
-            outline: none;
-            border-color: var(--amber-500);
-            box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.1);
-        }
-        .quick-add input::placeholder { color: var(--text-muted); }
-        .quick-add-btn {
-            width: 32px; height: 32px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: var(--amber-500);
-            border: none;
-            border-radius: var(--radius-sm);
-            color: white;
-            cursor: pointer;
-            transition: all 0.15s;
-            flex-shrink: 0;
-        }
-        .quick-add-btn:hover {
-            background: var(--amber-600);
-        }
-        
-        .add-grade-inline {
-            margin-top: 0.875rem;
-            padding-top: 0.875rem;
-            border-top: 1px dashed var(--border-light);
-        }
-        .add-grade-inline .quick-add input { width: 160px; }
-
-        /* ==================== TABLE ==================== */
-        .table-wrapper { overflow-x: auto; }
-        .data-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.8125rem;
-        }
-        .data-table th {
-            text-align: left;
-            padding: 0.75rem 1rem;
-            font-weight: 600;
-            font-size: 0.6875rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--text-muted);
-            background: var(--bg-tertiary);
-            border-bottom: 1px solid var(--border-light);
-        }
-        .data-table th[data-sort] { cursor: pointer; user-select: none; }
-        .data-table th[data-sort]:hover { color: var(--text-secondary); }
-        .data-table th.sorted-asc::after { content: ' ↑'; }
-        .data-table th.sorted-desc::after { content: ' ↓'; }
-        
-        .data-table td {
-            padding: 0.75rem 1rem;
-            border-bottom: 1px solid var(--border-light);
-            color: var(--text-secondary);
-        }
-        .data-table tbody tr:hover { background: var(--bg-tertiary); }
-        .data-table tbody tr:last-child td { border-bottom: none; }
-        
-        .data-table .clickable {
-            color: var(--text-primary);
-            font-weight: 500;
-            cursor: pointer;
-            transition: color 0.15s;
-        }
-        .data-table .clickable:hover { color: var(--amber-600); }
-        
-        /* Quick add row in table */
-        .add-row td {
-            padding: 0.75rem 1rem !important;
-            background: linear-gradient(to bottom, var(--amber-50), var(--bg-secondary)) !important;
-            border-bottom: 2px solid var(--amber-200) !important;
-        }
-        .add-row input, .add-row select {
-            width: 100%;
-            padding: 0.5rem 0.75rem;
-            border: 1px solid var(--border-light);
-            border-radius: var(--radius-sm);
-            font-family: inherit;
-            font-size: 0.8125rem;
-            background: var(--bg-secondary);
-            transition: all 0.15s;
-        }
-        .add-row input:focus, .add-row select:focus {
-            outline: none;
-            border-color: var(--amber-500);
-            box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.1);
-        }
-        .add-row input::placeholder { color: var(--text-muted); }
-
-        /* ==================== EMPTY STATE ==================== */
-        .empty-state {
-            text-align: center;
-            padding: 4rem 2rem;
-            color: var(--text-muted);
-        }
-        .empty-state-icon {
-            width: 64px; height: 64px;
-            margin: 0 auto 1rem;
-            background: var(--bg-tertiary);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-muted);
-        }
-        .empty-state h3 {
-            font-size: 1rem;
-            font-weight: 600;
-            color: var(--text-secondary);
-            margin-bottom: 0.25rem;
-        }
-        .empty-state p { font-size: 0.875rem; }
-
-        /* ==================== MODALS ==================== */
-        .modal-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.5);
-            backdrop-filter: blur(4px);
-            display: none;
-            align-items: center;
-            justify-content: center;
-            z-index: 1000;
-            padding: 1rem;
-        }
-        .modal-overlay.active { display: flex; animation: fadeIn 0.15s ease; }
-        
-        .modal {
-            background: var(--bg-secondary);
-            border-radius: var(--radius-lg);
-            width: 100%;
-            max-width: 420px;
-            box-shadow: var(--shadow-lg);
-            animation: slideUp 0.2s ease;
-            position: relative;
-            z-index: 1;
-        }
-        @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } }
-        
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 1.25rem 1.5rem;
-            border-bottom: 1px solid var(--border-light);
-        }
-        .modal-header h3 { font-size: 1rem; font-weight: 600; }
-        .modal-close {
-            background: none;
-            border: none;
-            color: var(--text-muted);
-            cursor: pointer;
-            padding: 0.25rem;
-            border-radius: var(--radius-sm);
-            display: flex;
-            transition: all 0.15s;
-        }
-        .modal-close:hover { background: var(--bg-tertiary); color: var(--text-secondary); }
-        
-        .modal-body { padding: 1.5rem; }
-        .modal-footer {
-            display: flex;
-            justify-content: flex-end;
-            gap: 0.75rem;
-            padding: 1rem 1.5rem;
-            border-top: 1px solid var(--border-light);
-            background: var(--bg-tertiary);
-            border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-        }
-
-        .form-group { margin-bottom: 1.25rem; }
-        .form-group:last-child { margin-bottom: 0; }
-        .form-group label {
-            display: block;
-            font-size: 0.8125rem;
-            font-weight: 600;
-            color: var(--text-secondary);
-            margin-bottom: 0.5rem;
-        }
-        .form-group input, .form-group select {
-            width: 100%;
-            padding: 0.75rem 1rem;
-            border: 1px solid var(--border-light);
-            border-radius: var(--radius-md);
-            font-family: inherit;
-            font-size: 0.9375rem;
-            background: var(--bg-secondary);
-            color: var(--text-primary);
-            transition: all 0.15s;
-        }
-        .form-group input:focus, .form-group select:focus {
-            outline: none;
-            border-color: var(--amber-500);
-            box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.12);
-        }
-        .form-group input::placeholder { color: var(--text-muted); }
-        .form-group input:disabled {
-            background: var(--bg-tertiary);
-            color: var(--text-muted);
-            cursor: not-allowed;
-        }
-        .form-group select {
-            cursor: pointer;
-            appearance: none;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%2371717a' stroke-width='2' viewBox='0 0 24 24'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
-            background-repeat: no-repeat;
-            background-position: right 0.75rem center;
-            padding-right: 2.5rem;
-        }
-
-        .color-picker-row { display: flex; align-items: center; gap: 1rem; }
-        .color-picker-row input[type="color"] {
-            width: 50px; height: 44px;
-            padding: 4px;
-            border: 2px solid var(--border-light);
-            border-radius: var(--radius-md);
-            cursor: pointer;
-            background: var(--bg-secondary);
-            transition: all 0.15s;
-        }
-        .color-picker-row input[type="color"]:hover {
-            border-color: var(--border-medium);
-        }
-        .color-presets { 
-            display: flex; 
-            gap: 10px; 
-            flex-wrap: wrap; 
-            padding: 4px 0;
-        }
-        .color-preset {
-            width: 36px; 
-            height: 36px;
-            border-radius: var(--radius-sm);
-            border: 2px solid transparent;
-            cursor: pointer;
-            transition: all 0.15s;
-            box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
-            flex-shrink: 0;
-        }
-        .color-preset:hover { transform: scale(1.12); }
-        .color-preset:active { transform: scale(0.95); }
-        .color-preset.selected { 
-            border-color: var(--text-primary); 
-            box-shadow: 0 0 0 2px var(--bg-secondary), 0 0 0 4px var(--border-medium);
-        }
-
-        /* ==================== CSV ==================== */
-        .csv-dropzone {
-            border: 2px dashed var(--border-medium);
-            border-radius: var(--radius-md);
-            padding: 2.5rem 1.5rem;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .csv-dropzone:hover, .csv-dropzone.dragover {
-            border-color: var(--amber-500);
-            background: var(--amber-50);
-        }
-        .csv-dropzone-icon { margin-bottom: 0.75rem; color: var(--text-muted); }
-        .csv-dropzone p { color: var(--text-secondary); margin-bottom: 0.25rem; font-weight: 500; }
-        .csv-dropzone small { color: var(--text-muted); font-size: 0.75rem; }
-        #csvFileInput { display: none; }
-        
-        .csv-preview { margin-top: 1.25rem; border: 1px solid var(--border-light); border-radius: var(--radius-md); overflow: hidden; }
-        .csv-preview-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0.75rem 1rem;
-            background: var(--bg-tertiary);
-            border-bottom: 1px solid var(--border-light);
-        }
-        .csv-preview-header h4 { font-size: 0.8125rem; font-weight: 600; }
-        .csv-preview-table { max-height: 180px; overflow-y: auto; }
-
-        /* ==================== TOAST ==================== */
-        .toast {
-            position: fixed;
-            bottom: 1.5rem;
-            right: 1.5rem;
-            background: var(--text-primary);
-            color: white;
-            padding: 0.875rem 1.25rem;
-            border-radius: var(--radius-md);
-            display: flex;
-            align-items: center;
-            gap: 0.625rem;
-            box-shadow: var(--shadow-lg);
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.3s ease;
-            z-index: 2000;
-            font-size: 0.875rem;
-            font-weight: 500;
-        }
-        .toast.show { transform: translateY(0); opacity: 1; }
-        .toast.success { background: var(--green-600); }
-        .toast.error { background: var(--red-600); }
-
-        /* ==================== LOADING ==================== */
-        #auth-loading-screen {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            background: var(--bg-primary);
-        }
-        .loading-spinner {
-            width: 40px; height: 40px;
-            border: 3px solid var(--border-light);
-            border-top-color: var(--amber-500);
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .loading-text { margin-top: 1rem; color: var(--text-muted); font-size: 0.875rem; }
-        #main-content { display: none; }
-
-       /* ==================== RESPONSIVE ==================== */
-        @media (max-width: 768px) {
-            .nav-inner, .main { padding-left: 0.75rem; padding-right: 0.75rem; }
-            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
-            .action-bar { flex-direction: column; align-items: stretch; gap: 8px; }
-            .search-input { max-width: none; width: 100%; }
-            .action-spacer { display: none; }
-            .section-title { font-size: 1.25rem; }
-            .table-wrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-            .camper-detail-grid { grid-template-columns: 1fr !important; }
-            .action-bar button { min-height: 44px; }
-        }
-        @media (max-width: 480px) {
-            .stats-grid { grid-template-columns: 1fr; }
-            .stat-card { padding: 0.875rem; }
-            .nav-back span { display: none; }
-        }
-    </style>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=Fraunces:wght@600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="campistry_me.css">
     <link rel="stylesheet" href="mobile-responsive.css">
 </head>
 <body>
@@ -896,7 +43,7 @@
     <main class="main">
         <header class="page-header">
             <h1 class="page-title">Camper Management</h1>
-            <p class="page-subtitle">Organize your camp structure and roster</p>
+            <p class="page-subtitle">Structure, roster, profiles, medical records, staff &amp; finances</p>
         </header>
 
         <div class="stats-grid">
@@ -918,9 +65,13 @@
             </div>
         </div>
 
+        <!-- v8 Financial/Medical Stats Bar -->
+        <div class="me-stats-bar" id="v8StatsBar"></div>
+
         <div class="tabs" role="tablist">
             <button class="tab-btn active" data-tab="structure" role="tab" aria-selected="true" aria-controls="tab-structure">Camp Structure</button>
             <button class="tab-btn" data-tab="campers" role="tab" aria-selected="false" aria-controls="tab-campers">Campers</button>
+            <button class="tab-btn" data-tab="staff" role="tab" aria-selected="false" aria-controls="tab-staff">Staff</button>
         </div>
 
         <!-- ===================== STRUCTURE TAB ===================== -->
@@ -949,7 +100,7 @@
             <div class="action-bar">
                 <button class="btn btn-secondary" id="downloadTemplateBtn">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg>
-                    Template
+                    CSV Template
                 </button>
                 <button class="btn btn-secondary" id="importCsvBtn">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -974,7 +125,8 @@
                                 <th data-sort="division">Division</th>
                                 <th data-sort="grade">Grade</th>
                                 <th data-sort="bunk">Bunk</th>
-                                <th data-sort="team">Team</th>
+                                <th>Medical</th>
+                                <th>Tuition</th>
                                 <th style="width:50px;"></th>
                             </tr>
                         </thead>
@@ -988,7 +140,52 @@
                 </div>
             </div>
         </div>
+
+        <!-- ===================== STAFF TAB ===================== -->
+        <div id="tab-staff" class="tab-content" role="tabpanel">
+            <div class="action-bar">
+                <button class="btn btn-primary" id="addStaffBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    Add Staff
+                </button>
+                <button class="btn btn-secondary" id="downloadStaffTemplateBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg>
+                    Staff CSV Template
+                </button>
+                <button class="btn btn-secondary" id="importStaffCsvBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Import Staff CSV
+                </button>
+                <input type="text" class="search-input" id="staffSearchInput" placeholder="Search staff..." aria-label="Search staff">
+                <div class="action-spacer"></div>
+                <span class="card-count" id="staffCount">0 staff</span>
+            </div>
+
+            <div class="card">
+                <div class="card-header"><h2>Staff Roster</h2></div>
+                <div class="table-wrapper">
+                    <table class="data-table" id="staffTable">
+                        <thead>
+                            <tr>
+                                <th style="width:22%">Name</th>
+                                <th style="width:16%">Role</th>
+                                <th style="width:13%">Division</th>
+                                <th style="width:14%">Phone</th>
+                                <th style="width:20%">Salary</th>
+                                <th style="width:15%"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="staffTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
     </main>
+</div>
+
+<!-- ===================== PROFILE SIDE PANEL ===================== -->
+<div class="me-panel-overlay" id="mePanelOverlay">
+    <div class="me-panel" id="mePanel"></div>
 </div>
 
 <!-- ===================== MODALS ===================== -->
@@ -1067,7 +264,7 @@
             <div class="csv-dropzone" id="csvDropzone" tabindex="0" role="button" aria-label="Drop CSV file here or click to browse">
                 <div class="csv-dropzone-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></div>
                 <p>Drop CSV here or click to browse</p>
-                <small>Format: Name, Division, Grade, Bunk, Team</small>
+                <small>Columns: First Name, Middle Name, Last Name, Division, Grade, Bunk, Team, Birthday, Address, City, State, Zip, and more</small>
             </div>
             <input type="file" id="csvFileInput" accept=".csv,.txt">
             <div id="csvPreview" class="csv-preview" style="display:none;">
