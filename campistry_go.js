@@ -807,7 +807,7 @@
         const vehicles = D.buses.map(b => {
             const mon = D.monitors.find(m => m.assignedBus === b.id);
             const couns = D.counselors.filter(c => c.assignedBus === b.id);
-            return { busId: b.id, name: b.name, color: b.color || '#3b82f6', capacity: Math.max(0, (b.capacity || 0) - 1 - (mon ? 1 : 0) - couns.length - reserveSeats), monitor: mon, counselors: couns };
+            return { busId: b.id, name: b.name, color: b.color || '#10b981', capacity: Math.max(0, (b.capacity || 0) - 1 - (mon ? 1 : 0) - couns.length - reserveSeats), monitor: mon, counselors: couns };
         });
 
         // Geocode camp
