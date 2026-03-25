@@ -521,6 +521,88 @@
             toast(ok + ' geocoded — done!');
         }
     }
+
+    /** Test geocode on ONE address — logs everything to console */
+    async function testGeocode() {
+        const key = getApiKey();
+        if (!key) { console.error('[Go] TEST: No API key'); toast('No API key', 'error'); return; }
+
+        // Pick first address that has a street
+        const names = Object.keys(D.addresses);
+        const testName = names.find(n => D.addresses[n]?.street);
+        if (!testName) { console.error('[Go] TEST: No addresses to test'); toast('No addresses', 'error'); return; }
+
+        const a = D.addresses[testName];
+        const q = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ');
+        console.log('========== GEOCODE TEST ==========');
+        console.log('[Go] TEST: Camper:', testName);
+        console.log('[Go] TEST: Query:', q);
+        console.log('[Go] TEST: ZIP expected:', a.zip || '(none)');
+        console.log('[Go] TEST: Camp coords cache:', _campCoordsCache);
+        console.log('[Go] TEST: API key starts with:', key.substring(0, 10) + '...');
+
+        const params = { text: q, size: '5', 'boundary.country': 'US' };
+        if (_campCoordsCache) {
+            params['focus.point.lat'] = _campCoordsCache.lat;
+            params['focus.point.lng'] = _campCoordsCache.lng;
+        } else if (D.setup.campLat && D.setup.campLng) {
+            params['focus.point.lat'] = D.setup.campLat;
+            params['focus.point.lng'] = D.setup.campLng;
+        }
+        const url = 'https://api.openrouteservice.org/geocode/search?' + new URLSearchParams(params);
+        console.log('[Go] TEST: URL:', url);
+
+        try {
+            const r = await fetch(url, { headers: { 'Authorization': key, 'Accept': 'application/json' } });
+            console.log('[Go] TEST: HTTP status:', r.status);
+
+            if (!r.ok) {
+                const body = await r.text();
+                console.error('[Go] TEST: Error body:', body);
+                toast('HTTP ' + r.status + ' — see console', 'error');
+                return;
+            }
+
+            const d = await r.json();
+            console.log('[Go] TEST: Response has', d.features?.length || 0, 'results');
+
+            if (d.features?.length) {
+                d.features.forEach((f, i) => {
+                    const co = f.geometry.coordinates;
+                    const props = f.properties || {};
+                    console.log('[Go] TEST: Result #' + (i + 1) + ':', {
+                        label: props.label,
+                        postalcode: props.postalcode,
+                        lat: co[1],
+                        lng: co[0],
+                        confidence: props.confidence,
+                        zipMatch: a.zip ? (props.postalcode === a.zip ? '✅ MATCH' : '❌ MISMATCH') : 'n/a'
+                    });
+                });
+
+                // Show which one would be picked
+                let best = null;
+                if (a.zip) {
+                    best = d.features.find(f => (f.properties?.postalcode || '') === a.zip);
+                    if (best) console.log('[Go] TEST: ✅ Would pick ZIP-matched result:', best.properties.label);
+                }
+                if (!best) {
+                    best = d.features[0];
+                    console.log('[Go] TEST: ⚠️ No ZIP match — would pick first result:', best.properties?.label);
+                }
+
+                toast('Test OK — ' + d.features.length + ' results, see console');
+            } else {
+                console.error('[Go] TEST: No features in response:', d);
+                toast('No results — see console', 'error');
+            }
+        } catch (e) {
+            console.error('[Go] TEST: Fetch error:', e);
+            toast('Fetch error — see console', 'error');
+        }
+        console.log('========== END TEST ==========');
+    }
+
     function downloadAddressTemplate() {
         const roster = getRoster(); const names = Object.keys(roster).sort();
         let csv = '\uFEFFName,Division,Bunk,Street Address,City,State,ZIP\n';
@@ -2093,6 +2175,7 @@
         openCounselorModal, saveCounselor, editCounselor, deleteCounselor,
         editAddress, saveAddress, geocodeAll, downloadAddressTemplate, importAddressCsv,
         regeocodeAll: function() { geocodeAll(true); },
+        testGeocode,
         generateRoutes, exportRoutesCsv, printRoutes, detectRegions,
         renderMap, selectMapBus, toggleMapShift, setMapShiftsAll, toggleMapFullscreen,
         openOverrideModal, onOverrideTypeChange, saveOverride, removeOverride,
