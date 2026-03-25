@@ -439,10 +439,10 @@
         // Camp focus point (dynamic — every camp gets their own)
         if (_campCoordsCache) {
             params['focus.point.lat'] = _campCoordsCache.lat;
-            params['focus.point.lng'] = _campCoordsCache.lng;
+            params['focus.point.lon'] = _campCoordsCache.lng;
         } else if (D.setup.campLat && D.setup.campLng) {
             params['focus.point.lat'] = D.setup.campLat;
-            params['focus.point.lng'] = D.setup.campLng;
+            params['focus.point.lon'] = D.setup.campLng;
         }
 
         try {
@@ -544,10 +544,10 @@
         const params = { text: q, size: '5', 'boundary.country': 'US' };
         if (_campCoordsCache) {
             params['focus.point.lat'] = _campCoordsCache.lat;
-            params['focus.point.lng'] = _campCoordsCache.lng;
+            params['focus.point.lon'] = _campCoordsCache.lng;
         } else if (D.setup.campLat && D.setup.campLng) {
             params['focus.point.lat'] = D.setup.campLat;
-            params['focus.point.lng'] = D.setup.campLng;
+            params['focus.point.lon'] = D.setup.campLng;
         }
         const url = 'https://api.openrouteservice.org/geocode/search?' + new URLSearchParams(params);
         console.log('[Go] TEST: URL:', url);
