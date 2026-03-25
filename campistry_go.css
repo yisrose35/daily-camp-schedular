@@ -32,9 +32,8 @@ body {
 .nav-left { display: flex; align-items: center; gap: 1rem; }
 .nav-back { color: var(--text-secondary); text-decoration: none; font-weight: 500; font-size: .8rem; transition: color .15s; }
 .nav-back:hover { color: var(--amber-600); }
-.nav-go-logo { display: flex; align-items: center; gap: .5rem; font-weight: 700; font-size: 1.2rem; color: var(--text-primary); }
-.nav-go-logo .go-icon { width: 36px; height: 36px; background: linear-gradient(135deg, #3b82f6, #2563eb); border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; color: #fff; box-shadow: 0 2px 8px rgba(59,130,246,.3); }
-.nav-go-logo span { color: #2563eb; }
+.nav-go-logo { display: flex; align-items: center; }
+.nav-go-logo img { height: 43px; width: auto; object-fit: contain; }
 .nav-app-switch { display: flex; align-items: center; margin-left: 12px; text-decoration: none; transition: opacity .2s; }
 .nav-app-switch:hover { opacity: .75; }
 .nav-app-switch img { height: 38px; width: auto; object-fit: contain; }
