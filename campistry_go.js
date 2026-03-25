@@ -97,7 +97,7 @@
     }
 
     function merge(d) {
-        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:500,orsApiKey:'' }, buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dailyOverrides:{} };
+        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:500,orsApiKey:'',campLat:null,campLng:null }, buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dailyOverrides:{} };
         return { setup: { ...def.setup, ...(d.setup || {}) }, buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dailyOverrides: d.dailyOverrides || {} };
     }
 
@@ -815,7 +815,11 @@
         if (getApiKey() && D.setup.campAddress) {
             showProgress('Geocoding camp...', 5);
             campCoords = await geocodeSingle(D.setup.campAddress);
-            if (campCoords) _campCoordsCache = campCoords;
+            if (campCoords) {
+                _campCoordsCache = campCoords;
+                D.setup.campLat = campCoords.lat;
+                D.setup.campLng = campCoords.lng;
+            }
         }
         const campLat = campCoords?.lat || _detectedRegions[0].centroidLat;
         const campLng = campCoords?.lng || _detectedRegions[0].centroidLng;
@@ -879,6 +883,7 @@
         }
 
         _generatedRoutes = allShiftResults;
+        _routeGeomCache = {}; // clear road geometry cache for fresh routes
         D.savedRoutes = allShiftResults;
         save(); // persist routes across reloads
         showProgress('Done!', 100);
@@ -1009,7 +1014,13 @@
 
         container.innerHTML = html;
         renderMasterList(allShifts);
-        setTimeout(() => initMap(allShifts), 100);
+        // Only init map if routes tab is visible; otherwise defer to tab switch
+        const routesTab = document.getElementById('tab-routes');
+        if (routesTab && routesTab.classList.contains('active')) {
+            setTimeout(() => initMap(allShifts), 100);
+        } else {
+            _pendingMapInit = allShifts;
+        }
     }
 
     function renderMasterList(allShifts) {
@@ -1048,6 +1059,8 @@
     let _mapLayers = [];
     let _activeShifts = new Set(); // set of shift indices to show
     let _activeMapBus = 'all';
+    let _pendingMapInit = null;
+    let _routeGeomCache = {}; // cache road geometry to avoid re-fetching
 
     function initMap(allShifts) {
         // Default: all shifts selected
@@ -1064,16 +1077,17 @@
         renderMap();
     }
 
-    function renderMap() {
+    async function renderMap() {
         if (!_map || !_generatedRoutes) return;
 
         const shiftIndices = [..._activeShifts].sort();
         const multiShift = shiftIndices.length > 1;
+        const totalShifts = _generatedRoutes.length;
 
         // Render shift toggle buttons
         const shiftBar = document.getElementById('mapShiftSelect');
         if (shiftBar) {
-            const allActive = shiftIndices.length === _generatedRoutes.length;
+            const allActive = shiftIndices.length === totalShifts;
             shiftBar.innerHTML = '<button class="bus-tab all-tab' + (allActive ? ' active' : '') + '" onclick="CampistryGo.setMapShiftsAll()">All Shifts</button>' +
                 _generatedRoutes.map((sr, i) => '<button class="bus-tab' + (_activeShifts.has(i) ? ' active' : '') + '" style="' + (_activeShifts.has(i) ? 'border-bottom-color:var(--blue-600);color:var(--text-primary);' : '') + '" onclick="CampistryGo.toggleMapShift(' + i + ')"><span class="shift-num" style="width:20px;height:20px;font-size:.65rem;">' + (i + 1) + '</span>' + esc(sr.shift.label || 'Shift ' + (i + 1)) + '</button>').join('');
         }
@@ -1093,7 +1107,6 @@
         const uniqueBuses = [];
         const seen = new Set();
         allRoutes.forEach(r => { if (!seen.has(r.busId)) { seen.add(r.busId); uniqueBuses.push({ busId: r.busId, busName: r.busName, busColor: r.busColor }); } });
-
         tabsEl.innerHTML = '<button class="bus-tab all-tab' + (_activeMapBus === 'all' ? ' active' : '') + '" onclick="CampistryGo.selectMapBus(\'all\')">All Buses</button>' +
             uniqueBuses.map(b => '<button class="bus-tab' + (_activeMapBus === b.busId ? ' active' : '') + '" onclick="CampistryGo.selectMapBus(\'' + b.busId + '\')"><span class="bus-tab-dot" style="background:' + esc(b.busColor) + '"></span>' + esc(b.busName) + '</button>').join('');
 
@@ -1102,7 +1115,7 @@
         _mapLayers = [];
         const allLatLngs = [];
 
-        // Camp origin marker
+        // Camp origin marker (always visible)
         if (_campCoordsCache) {
             const campIcon = L.divIcon({
                 html: '<div style="width:32px;height:32px;background:#1e293b;border:3px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.4);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>',
@@ -1116,40 +1129,80 @@
 
         const visibleRoutes = _activeMapBus === 'all' ? allRoutes : allRoutes.filter(r => r.busId === _activeMapBus);
 
-        // Build a map of shiftIdx → visible position for dash styles
-        const shiftPositionMap = {};
-        shiftIndices.forEach((si, pos) => { shiftPositionMap[si] = pos; });
+        // Dash rules: 1 shift=solid. 2 shifts: 1=solid, 2=long dash. 3+: 1=solid, 2=long, 3+=short
+        function getDash(shiftIdx) {
+            if (totalShifts <= 1 || !multiShift) return null;
+            if (shiftIdx === 0) return null;
+            if (shiftIdx === 1) return '18, 12';
+            return '6, 10';
+        }
 
-        visibleRoutes.forEach(route => {
+        for (const route of visibleRoutes) {
             const stopsWithCoords = route.stops.filter(s => s.lat && s.lng);
-            if (!stopsWithCoords.length) return;
+            if (!stopsWithCoords.length) continue;
 
-            // Build full route: camp → stops → (camp return if multi-shift view)
-            const routePoints = [];
-            if (_campCoordsCache) routePoints.push([_campCoordsCache.lat, _campCoordsCache.lng]);
-            stopsWithCoords.forEach(s => routePoints.push([s.lat, s.lng]));
-            if (_campCoordsCache && multiShift) routePoints.push([_campCoordsCache.lat, _campCoordsCache.lng]); // return to camp
+            // Full route: camp → stops → camp
+            const straightCoords = [];
+            if (_campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
+            stopsWithCoords.forEach(s => straightCoords.push([s.lat, s.lng]));
+            if (_campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
+            allLatLngs.push(...straightCoords);
 
-            allLatLngs.push(...routePoints);
+            const dashPattern = getDash(route.shiftIdx);
+            const lineWeight = _activeMapBus === 'all' ? 3 : 5;
+            const lineOpacity = _activeMapBus === 'all' ? 0.7 : 0.9;
+            const cacheKey = route.busId + '_' + route.shiftIdx;
+            let roadCoords = _routeGeomCache[cacheKey];
 
-            // Draw route line — visible position: 0=solid, 1=long dash, 2+=short dash
-            const visPos = shiftPositionMap[route.shiftIdx] || 0;
-            const shiftDash = [null, '16, 10', '6, 8'][visPos] || '4, 6';
-            const polyline = L.polyline(routePoints, {
-                color: route.busColor,
-                weight: _activeMapBus === 'all' ? 3 : 5,
-                opacity: _activeMapBus === 'all' ? 0.7 : 0.9,
-                dashArray: multiShift ? shiftDash : null
-            }).addTo(_map);
-            _mapLayers.push(polyline);
+            if (roadCoords) {
+                const polyline = L.polyline(roadCoords, { color: route.busColor, weight: lineWeight, opacity: lineOpacity, dashArray: dashPattern }).addTo(_map);
+                _mapLayers.push(polyline);
+            } else {
+                // Draw straight lines first (faded), fetch road geometry in background
+                const tempLine = L.polyline(straightCoords, { color: route.busColor, weight: lineWeight, opacity: lineOpacity * 0.4, dashArray: dashPattern }).addTo(_map);
+                _mapLayers.push(tempLine);
 
-            // Subtle thin line from camp to first stop (not a dashed route line)
-            if (_campCoordsCache && stopsWithCoords.length) {
-                const dashLine = L.polyline(
-                    [[_campCoordsCache.lat, _campCoordsCache.lng], [stopsWithCoords[0].lat, stopsWithCoords[0].lng]],
-                    { color: route.busColor, weight: 1.5, opacity: 0.25, dashArray: '4, 6' }
-                ).addTo(_map);
-                _mapLayers.push(dashLine);
+                if (getApiKey() && straightCoords.length >= 2) {
+                    const wp = [];
+                    if (_campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
+                    stopsWithCoords.forEach(s => wp.push([s.lng, s.lat]));
+                    if (_campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
+
+                    (async function(waypoints, color, ck, temp, dash, w, o) {
+                        try {
+                            const MAX_WP = 50;
+                            let pts = [];
+                            for (let i = 0; i < waypoints.length - 1; i += MAX_WP - 1) {
+                                const chunk = waypoints.slice(i, i + MAX_WP);
+                                if (chunk.length < 2) break;
+                                const resp = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
+                                    method: 'POST',
+                                    headers: { 'Authorization': getApiKey(), 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ coordinates: chunk })
+                                });
+                                if (resp.ok) {
+                                    const data = await resp.json();
+                                    if (data.features?.[0]?.geometry?.coordinates) {
+                                        const seg = data.features[0].geometry.coordinates.map(c => [c[1], c[0]]);
+                                        pts.push(...(pts.length ? seg.slice(1) : seg));
+                                    }
+                                } else {
+                                    console.warn('[Go] Directions API:', resp.status);
+                                    return;
+                                }
+                                if (i + MAX_WP - 1 < waypoints.length - 1) await new Promise(r => setTimeout(r, 250));
+                            }
+                            if (pts.length > 0 && _map) {
+                                _routeGeomCache[ck] = pts;
+                                _map.removeLayer(temp);
+                                const idx = _mapLayers.indexOf(temp);
+                                if (idx >= 0) _mapLayers.splice(idx, 1);
+                                const road = L.polyline(pts, { color: color, weight: w, opacity: o, dashArray: dash }).addTo(_map);
+                                _mapLayers.push(road);
+                            }
+                        } catch (e) { console.warn('[Go] Directions failed:', e.message); }
+                    })(wp, route.busColor, cacheKey, tempLine, dashPattern, lineWeight, lineOpacity);
+                }
             }
 
             // Stop markers
@@ -1166,21 +1219,22 @@
                 marker.bindPopup(popup);
                 _mapLayers.push(marker);
             });
-        });
+        }
 
         if (allLatLngs.length > 0) {
             _map.fitBounds(L.latLngBounds(allLatLngs), { padding: [50, 50], maxZoom: 14 });
         }
 
-        // Shift legend (only when viewing all shifts)
+        // Legend
         const legendEl = document.getElementById('mapLegend');
         if (legendEl) {
             if (multiShift) {
-                const labels = shiftIndices.map((si, pos) => {
+                const labels = shiftIndices.map(si => {
                     const sr = _generatedRoutes[si];
-                    const svgLine = pos === 0 ? '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3"/>'
-                        : pos === 1 ? '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3" stroke-dasharray="8,5"/>'
-                        : '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3" stroke-dasharray="3,4"/>';
+                    const d = getDash(si);
+                    const svgLine = !d ? '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3"/>'
+                        : d.startsWith('18') ? '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3" stroke-dasharray="9,6"/>'
+                        : '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3" stroke-dasharray="3,5"/>';
                     return '<span style="display:inline-flex;align-items:center;gap:.375rem;font-size:.75rem;font-weight:500;color:var(--text-secondary);"><svg width="40" height="12">' + svgLine + '</svg>' + esc(sr.shift.label || 'Shift ' + (si + 1)) + '</span>';
                 });
                 legendEl.innerHTML = labels.join('<span style="margin:0 .5rem;color:var(--border-medium);">|</span>');
@@ -1630,7 +1684,11 @@
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             btn.classList.add('active');
             const t = btn.dataset.tab; document.getElementById('tab-' + t)?.classList.add('active');
-            if (t === 'fleet') renderFleet(); else if (t === 'shifts') renderShifts(); else if (t === 'staff') renderStaff(); else if (t === 'addresses') renderAddresses(); else if (t === 'preflight') runPreflight(); else if (t === 'routes') { renderDailyOverrides(); }
+            if (t === 'fleet') renderFleet(); else if (t === 'shifts') renderShifts(); else if (t === 'staff') renderStaff(); else if (t === 'addresses') renderAddresses(); else if (t === 'preflight') runPreflight(); else if (t === 'routes') {
+                renderDailyOverrides();
+                if (_pendingMapInit) { setTimeout(function() { initMap(_pendingMapInit); _pendingMapInit = null; }, 150); }
+                else { setTimeout(function() { if (_map) _map.invalidateSize(); }, 150); }
+            }
         }));
         document.getElementById('addressSearch')?.addEventListener('input', () => { clearTimeout(_addrSearchTimer); _addrSearchTimer = setTimeout(renderAddresses, 200); });
     }
@@ -1639,6 +1697,12 @@
     function init() {
         console.log('[Go] Initializing...');
         load(); initTabs(); populateSetup(); renderFleet(); renderShifts(); renderStaff(); renderAddresses(); updateStats(); updateBusSelects();
+
+        // Restore camp coordinates from saved data
+        if (D.setup.campLat && D.setup.campLng) {
+            _campCoordsCache = { lat: D.setup.campLat, lng: D.setup.campLng };
+            console.log('[Go] Restored camp coords:', _campCoordsCache.lat, _campCoordsCache.lng);
+        }
 
         // Restore saved routes if they exist
         if (D.savedRoutes && D.savedRoutes.length) {
