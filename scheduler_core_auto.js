@@ -1749,10 +1749,16 @@
                         if (need.type === 'special' && need._assignedSpecial) {
                             let foundFallback = false;
                             for (let t = gap.start; t <= endPos2; t += 5) {
-                                if (canUseSpecialAtTime(need._assignedSpecial, grade, t, t + need.dMin)) {
-                                    placed.push({ startMin: t, endMin: t + need.dMin, ...need, _final: true });
-                                    didPlace = true; foundFallback = true; break;
+                                // ★ Fixed-duration specials: reject positions that create dead-zone residuals
+                                if (need.dMin === need.dMax) {
+                                    const beforeRes = t - gap.origStart;
+                                    const afterRes = gap.origEnd - (t + need.dMin);
+                                    if (beforeRes > ABSORB_MAX && beforeRes < minFill) continue;
+                                    if (afterRes > ABSORB_MAX && afterRes < minFill) continue;
                                 }
+                                if (!canUseSpecialAtTime(need._assignedSpecial, grade, t, t + need.dMin)) continue;
+                                placed.push({ startMin: t, endMin: t + need.dMin, ...need, _final: true });
+                                didPlace = true; foundFallback = true; break;
                             }
                             if (foundFallback) break;
                         } else {
