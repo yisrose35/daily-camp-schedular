@@ -5,9 +5,6 @@
     <title>Campistry Me | Camper Management</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="Campistry_logo.png">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=Fraunces:wght@600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="campistry_me.css">
     <link rel="stylesheet" href="mobile-responsive.css">
 </head>
@@ -22,14 +19,14 @@
     <nav class="nav">
         <div class="nav-inner">
             <div class="nav-left">
-                <a href="dashboard.html" class="nav-back" style="color:#d97706; text-decoration:none; font-weight:500; margin-right:16px; font-size:0.875rem;">&larr; Dashboard</a>
+                <a href="dashboard.html" class="nav-back" style="color:var(--text-3);text-decoration:none;">&larr; Dashboard</a>
                 <div class="nav-brand">
                     <img src="Me_clean.png" alt="Campistry Me" class="nav-logo-main nav-logo-me">
                 </div>
-                <a href="flow.html" class="nav-app-switch" title="Open Campistry Flow — Scheduling">
+                <a href="flow.html" class="nav-app-switch" title="Open Campistry Flow">
                     <img src="Flow_clean.png" alt="Campistry Flow" class="nav-logo-main nav-logo-flow">
                 </a>
-                <a href="campistry_go.html" class="nav-app-switch" title="Open Campistry Go — Bus Routing">
+                <a href="campistry_go.html" class="nav-app-switch" title="Open Campistry Go">
                     <img src="Go_clean.png" alt="Campistry Go" class="nav-logo-main" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;">
                 </a>
             </div>
@@ -48,28 +45,27 @@
 
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div>
+                <div class="stat-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div>
                 <div><div class="stat-value" id="statDivisions">0</div><div class="stat-label">Divisions</div></div>
             </div>
             <div class="stat-card">
-                <div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg></div>
+                <div class="stat-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg></div>
                 <div><div class="stat-value" id="statGrades">0</div><div class="stat-label">Grades</div></div>
             </div>
             <div class="stat-card">
-                <div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></div>
+                <div class="stat-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></div>
                 <div><div class="stat-value" id="statBunks">0</div><div class="stat-label">Bunks</div></div>
             </div>
             <div class="stat-card">
-                <div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+                <div class="stat-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
                 <div><div class="stat-value" id="statCampers">0</div><div class="stat-label">Campers</div></div>
             </div>
         </div>
 
-        <!-- v8 Financial/Medical Stats Bar -->
         <div class="me-stats-bar" id="v8StatsBar"></div>
 
         <div class="tabs" role="tablist">
-            <button class="tab-btn active" data-tab="structure" role="tab" aria-selected="true" aria-controls="tab-structure">Camp Structure</button>
+            <button class="tab-btn active" data-tab="structure" role="tab" aria-selected="true" aria-controls="tab-structure">Structure</button>
             <button class="tab-btn" data-tab="campers" role="tab" aria-selected="false" aria-controls="tab-campers">Campers</button>
             <button class="tab-btn" data-tab="staff" role="tab" aria-selected="false" aria-controls="tab-staff">Staff</button>
         </div>
@@ -78,18 +74,16 @@
         <div id="tab-structure" class="tab-content active" role="tabpanel">
             <div class="action-bar">
                 <button class="btn btn-primary" id="addDivisionBtn">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                     Add Division
                 </button>
                 <div class="action-spacer"></div>
                 <button class="btn btn-ghost btn-sm" id="expandAllBtn">Expand All</button>
                 <button class="btn btn-ghost btn-sm" id="collapseAllBtn">Collapse All</button>
             </div>
-
             <div class="hierarchy-container" id="hierarchyContainer"></div>
-
             <div class="empty-state" id="structureEmptyState" style="display:none;">
-                <div class="empty-state-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div>
+                <div class="empty-state-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div>
                 <h3>No divisions yet</h3>
                 <p>Create divisions to organize grades and bunks</p>
             </div>
@@ -98,23 +92,13 @@
         <!-- ===================== CAMPERS TAB ===================== -->
         <div id="tab-campers" class="tab-content" role="tabpanel">
             <div class="action-bar">
-                <button class="btn btn-secondary" id="downloadTemplateBtn">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg>
-                    CSV Template
-                </button>
-                <button class="btn btn-secondary" id="importCsvBtn">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                    Import CSV
-                </button>
-                <button class="btn btn-secondary" id="exportCsvBtn">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                    Export CSV
-                </button>
+                <button class="btn btn-secondary" id="downloadTemplateBtn">CSV Template</button>
+                <button class="btn btn-secondary" id="importCsvBtn">Import CSV</button>
+                <button class="btn btn-secondary" id="exportCsvBtn">Export CSV</button>
                 <input type="text" class="search-input" id="searchInput" placeholder="Search campers..." aria-label="Search campers">
                 <div class="action-spacer"></div>
                 <button class="btn btn-danger btn-sm" id="clearAllBtn">Clear All</button>
             </div>
-
             <div class="card">
                 <div class="card-header"><h2>Camper Roster</h2><span class="card-count" id="camperCount"></span></div>
                 <div class="table-wrapper">
@@ -134,7 +118,7 @@
                     </table>
                 </div>
                 <div class="empty-state" id="campersEmptyState" style="display:none;">
-                    <div class="empty-state-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div>
+                    <div class="empty-state-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div>
                     <h3>No campers yet</h3>
                     <p>Add campers using the row above or import from CSV</p>
                 </div>
@@ -145,22 +129,15 @@
         <div id="tab-staff" class="tab-content" role="tabpanel">
             <div class="action-bar">
                 <button class="btn btn-primary" id="addStaffBtn">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                     Add Staff
                 </button>
-                <button class="btn btn-secondary" id="downloadStaffTemplateBtn">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg>
-                    Staff CSV Template
-                </button>
-                <button class="btn btn-secondary" id="importStaffCsvBtn">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                    Import Staff CSV
-                </button>
+                <button class="btn btn-secondary" id="downloadStaffTemplateBtn">Staff CSV Template</button>
+                <button class="btn btn-secondary" id="importStaffCsvBtn">Import Staff CSV</button>
                 <input type="text" class="search-input" id="staffSearchInput" placeholder="Search staff..." aria-label="Search staff">
                 <div class="action-spacer"></div>
                 <span class="card-count" id="staffCount">0 staff</span>
             </div>
-
             <div class="card">
                 <div class="card-header"><h2>Staff Roster</h2></div>
                 <div class="table-wrapper">
@@ -195,7 +172,7 @@
     <div class="modal">
         <div class="modal-header">
             <h3 id="divisionModalTitle">Add Division</h3>
-            <button class="modal-close" onclick="CampistryMe.closeModal('divisionModal')" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            <button class="modal-close" onclick="CampistryMe.closeModal('divisionModal')" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div class="modal-body">
             <div class="form-group">
@@ -222,7 +199,7 @@
     <div class="modal">
         <div class="modal-header">
             <h3 id="camperModalTitle">Edit Camper</h3>
-            <button class="modal-close" onclick="CampistryMe.closeModal('camperModal')" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            <button class="modal-close" onclick="CampistryMe.closeModal('camperModal')" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div class="modal-body">
             <div class="form-group">
@@ -255,14 +232,14 @@
 
 <!-- CSV Modal -->
 <div class="modal-overlay" id="csvModal" role="dialog" aria-modal="true">
-    <div class="modal" style="max-width: 520px;">
+    <div class="modal" style="max-width: 480px;">
         <div class="modal-header">
             <h3>Import from CSV</h3>
-            <button class="modal-close" onclick="CampistryMe.closeModal('csvModal')" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            <button class="modal-close" onclick="CampistryMe.closeModal('csvModal')" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div class="modal-body">
             <div class="csv-dropzone" id="csvDropzone" tabindex="0" role="button" aria-label="Drop CSV file here or click to browse">
-                <div class="csv-dropzone-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></div>
+                <div class="csv-dropzone-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></div>
                 <p>Drop CSV here or click to browse</p>
                 <small>Columns: First Name, Middle Name, Last Name, Division, Grade, Bunk, Team, Birthday, Address, City, State, Zip, and more</small>
             </div>
@@ -279,11 +256,12 @@
     </div>
 </div>
 
-<div class="toast" id="toast" role="status" aria-live="polite"><svg id="toastIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg><span id="toastMessage">Success!</span></div>
+<div class="toast" id="toast" role="status" aria-live="polite"><svg id="toastIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg><span id="toastMessage">Success!</span></div>
+
 <!-- Script load order: Supabase → client → security → demo → Me -->
 <script src="offline_data.js" onerror=""></script>
 <script src="demo_mode.js"></script>
-    <script>
+<script>
 if (window.location.protocol === 'file:') {
     document.write('<script src="supabase-js-local.js"><\/script>');
 } else {
@@ -293,8 +271,8 @@ if (window.location.protocol === 'file:') {
 <script src="supabase_client.js"></script>
 <script src="campistry_security.js"></script>
 <script src="campistry_me.js"></script>
-    <script src="trial_guard.js"></script>
-    <script>
+<script src="trial_guard.js"></script>
+<script>
   window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
 </script>
 <script defer src="/_vercel/insights/script.js"></script>
