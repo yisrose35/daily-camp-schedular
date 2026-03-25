@@ -894,7 +894,7 @@
             const maxWalkMi = (D.setup.maxWalkDistance || 500) * 0.000189394;
             const clusters = []; const used = new Set();
             const sorted = [...campers].sort((a, b) => a.lat - b.lat);
-            sorted.forEach(c => { if (used.has(c.name)) return; const cl = [c]; used.add(c.name); sorted.forEach(o => { if (used.has(o.name)) return; if (haversineMi(c.lat, c.lng, o.lat, o.lng) <= maxWalkMi) { cl.push(o); used.add(o.name); } }); const cLat = cl.reduce((s, x) => s + x.lat, 0) / cl.length, cLng = cl.reduce((s, x) => s + x.lng, 0) / cl.length; clusters.push({ lat: cLat, lng: cLng, address: cl.length === 1 ? cl[0].address : 'Shared stop (' + cl.length + ')', campers: cl.map(x => ({ name: x.name, division: x.division, bunk: x.bunk })), _count: cl.length }); });
+            sorted.forEach(c => { if (used.has(c.name)) return; const cl = [c]; used.add(c.name); sorted.forEach(o => { if (used.has(o.name)) return; if (haversineMi(c.lat, c.lng, o.lat, o.lng) <= maxWalkMi) { cl.push(o); used.add(o.name); } }); const cLat = cl.reduce((s, x) => s + x.lat, 0) / cl.length, cLng = cl.reduce((s, x) => s + x.lng, 0) / cl.length; clusters.push({ lat: cLat, lng: cLng, address: cl[0].address, campers: cl.map(x => ({ name: x.name, division: x.division, bunk: x.bunk })), _count: cl.length }); });
             jobs = clusters;
         } else {
             // Door-to-door: merge campers at same address (siblings, neighbors)
@@ -997,7 +997,8 @@
             routes.filter(r => r.stops.length > 0).forEach(r => {
                 html += '<div class="route-card"><div class="route-card-header" style="background:' + esc(r.busColor) + '"><div><h3>' + esc(r.busName) + '</h3><div class="route-meta">' + r.camperCount + ' campers · ' + r.stops.length + ' stops</div></div><div style="text-align:right"><div style="font-size:1.25rem;font-weight:700">' + r.totalDuration + ' min</div></div></div><ul class="route-stop-list">';
                 r.stops.forEach(st => {
-                    const names = st.isMonitor ? '🛡️ ' + esc(st.monitorName) + ' (Monitor)' : st.isCounselor ? '👤 ' + esc(st.counselorName) + ' (Counselor)' : st.campers.map(c => esc(c.name)).join(', ');
+                    const isCamperStop = !st.isMonitor && !st.isCounselor;
+                    const names = st.isMonitor ? '🛡️ ' + esc(st.monitorName) + ' (Monitor)' : st.isCounselor ? '👤 ' + esc(st.counselorName) + ' (Counselor)' : st.campers.map(c => '<span style="display:inline-flex;align-items:center;gap:2px;">' + esc(c.name) + ' <button onclick="CampistryGo.openMoveModal(\'' + esc(c.name.replace(/'/g, "\\'")) + '\',\'' + r.busId + '\',' + si + ')" style="background:none;border:none;cursor:pointer;padding:0 2px;color:var(--text-muted);font-size:10px;" title="Move to another bus">↔</button></span>').join(', ');
                     const cls = st.isMonitor ? ' monitor-stop' : st.isCounselor ? ' counselor-stop' : '';
                     html += '<li class="route-stop' + cls + '"><div class="route-stop-num" style="background:' + esc(r.busColor) + '">' + st.stopNum + '</div><div class="route-stop-info"><div class="route-stop-names">' + names + '</div><div class="route-stop-addr">' + esc(st.address) + '</div></div><div class="route-stop-time">' + (st.estimatedTime || '—') + '</div></li>';
                 });
@@ -1012,11 +1013,31 @@
     }
 
     function renderMasterList(allShifts) {
-        const rows = [];
-        allShifts.forEach(sr => { sr.routes.forEach(r => { r.stops.forEach(st => { if (st.isMonitor || st.isCounselor) return; st.campers.forEach(c => { const p = c.name.split(/\s+/); rows.push({ firstName: p[0] || '', lastName: p.slice(1).join(' ') || '', shift: sr.shift.label || '', busName: r.busName, busColor: r.busColor, stopNum: st.stopNum, address: st.address, time: st.estimatedTime || '—' }); }); }); }); });
-        rows.sort((a, b) => a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName));
+        _allMasterRows = [];
+        allShifts.forEach((sr, si) => { sr.routes.forEach(r => { r.stops.forEach(st => { if (st.isMonitor || st.isCounselor) return; st.campers.forEach(c => { const p = c.name.split(/\s+/); _allMasterRows.push({ firstName: p[0] || '', lastName: p.slice(1).join(' ') || '', shift: sr.shift.label || '', shiftIdx: si, busName: r.busName, busId: r.busId, busColor: r.busColor, stopNum: st.stopNum, address: st.address, time: st.estimatedTime || '—' }); }); }); }); });
+        _allMasterRows.sort((a, b) => a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName));
+        renderFilteredMasterList();
+    }
+
+    let _allMasterRows = [];
+
+    function renderFilteredMasterList() {
+        let rows = _allMasterRows;
+        // Filter by active shifts
+        if (_activeShifts && _activeShifts.size < (_generatedRoutes?.length || 0)) {
+            rows = rows.filter(r => _activeShifts.has(r.shiftIdx));
+        }
+        // Filter by active bus
+        if (_activeMapBus && _activeMapBus !== 'all') {
+            rows = rows.filter(r => r.busId === _activeMapBus);
+        }
         const countEl = document.getElementById('masterListCount');
-        if (countEl) countEl.textContent = rows.length;
+        const label = document.getElementById('masterListLabel');
+        if (countEl) countEl.textContent = rows.length + (rows.length < _allMasterRows.length ? ' of ' + _allMasterRows.length : '');
+        if (label) {
+            if (rows.length < _allMasterRows.length) label.textContent = 'Master Drop-off List (filtered)';
+            else label.textContent = 'Master Drop-off List';
+        }
         document.getElementById('masterListBody').innerHTML = rows.map(r => '<tr><td style="font-weight:600">' + esc(r.firstName) + '</td><td style="font-weight:600">' + esc(r.lastName) + '</td><td>' + esc(r.shift) + '</td><td><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(r.busColor) + ';display:inline-block"></span>' + esc(r.busName) + '</span></td><td style="font-weight:700;text-align:center">' + r.stopNum + '</td><td>' + esc(r.address) + '</td><td style="font-weight:600">' + r.time + '</td></tr>').join('');
     }
 
@@ -1040,20 +1061,6 @@
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
             maxZoom: 19
         }).addTo(_map);
-        renderMap();
-    }
-
-    function toggleMapShift(idx) {
-        if (_activeShifts.has(idx)) {
-            if (_activeShifts.size > 1) _activeShifts.delete(idx); // keep at least one
-        } else {
-            _activeShifts.add(idx);
-        }
-        renderMap();
-    }
-
-    function setMapShiftsAll() {
-        _activeShifts = new Set(_generatedRoutes.map((_, i) => i));
         renderMap();
     }
 
@@ -1109,6 +1116,10 @@
 
         const visibleRoutes = _activeMapBus === 'all' ? allRoutes : allRoutes.filter(r => r.busId === _activeMapBus);
 
+        // Build a map of shiftIdx → visible position for dash styles
+        const shiftPositionMap = {};
+        shiftIndices.forEach((si, pos) => { shiftPositionMap[si] = pos; });
+
         visibleRoutes.forEach(route => {
             const stopsWithCoords = route.stops.filter(s => s.lat && s.lng);
             if (!stopsWithCoords.length) return;
@@ -1121,8 +1132,9 @@
 
             allLatLngs.push(...routePoints);
 
-            // Draw route line — shift 1: solid, shift 2: long dash, shift 3+: short dash
-            const shiftDash = [null, '16, 10', '6, 8'][route.shiftIdx] || '4, 6';
+            // Draw route line — visible position: 0=solid, 1=long dash, 2+=short dash
+            const visPos = shiftPositionMap[route.shiftIdx] || 0;
+            const shiftDash = [null, '16, 10', '6, 8'][visPos] || '4, 6';
             const polyline = L.polyline(routePoints, {
                 color: route.busColor,
                 weight: _activeMapBus === 'all' ? 3 : 5,
@@ -1131,11 +1143,11 @@
             }).addTo(_map);
             _mapLayers.push(polyline);
 
-            // Dashed line from camp to first stop (departure)
+            // Subtle thin line from camp to first stop (not a dashed route line)
             if (_campCoordsCache && stopsWithCoords.length) {
                 const dashLine = L.polyline(
                     [[_campCoordsCache.lat, _campCoordsCache.lng], [stopsWithCoords[0].lat, stopsWithCoords[0].lng]],
-                    { color: route.busColor, weight: 2, opacity: 0.4, dashArray: '8, 8' }
+                    { color: route.busColor, weight: 1.5, opacity: 0.25, dashArray: '4, 6' }
                 ).addTo(_map);
                 _mapLayers.push(dashLine);
             }
@@ -1163,13 +1175,13 @@
         // Shift legend (only when viewing all shifts)
         const legendEl = document.getElementById('mapLegend');
         if (legendEl) {
-            if (multiShift && _generatedRoutes.length > 1) {
-                const labels = _generatedRoutes.map((sr, i) => {
-                    const style = ['solid', 'dashed (long)', 'dashed (short)'][i] || 'dotted';
-                    const svgLine = i === 0 ? '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3"/>'
-                        : i === 1 ? '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3" stroke-dasharray="8,5"/>'
+            if (multiShift) {
+                const labels = shiftIndices.map((si, pos) => {
+                    const sr = _generatedRoutes[si];
+                    const svgLine = pos === 0 ? '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3"/>'
+                        : pos === 1 ? '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3" stroke-dasharray="8,5"/>'
                         : '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3" stroke-dasharray="3,4"/>';
-                    return '<span style="display:inline-flex;align-items:center;gap:.375rem;font-size:.75rem;font-weight:500;color:var(--text-secondary);"><svg width="40" height="12">' + svgLine + '</svg>' + esc(sr.shift.label || 'Shift ' + (i + 1)) + '</span>';
+                    return '<span style="display:inline-flex;align-items:center;gap:.375rem;font-size:.75rem;font-weight:500;color:var(--text-secondary);"><svg width="40" height="12">' + svgLine + '</svg>' + esc(sr.shift.label || 'Shift ' + (si + 1)) + '</span>';
                 });
                 legendEl.innerHTML = labels.join('<span style="margin:0 .5rem;color:var(--border-medium);">|</span>');
                 legendEl.style.display = '';
@@ -1182,6 +1194,30 @@
     function selectMapBus(busId) {
         _activeMapBus = busId;
         renderMap();
+        renderFilteredMasterList();
+    }
+
+    function toggleMapShift(idx) {
+        if (_activeShifts.has(idx)) {
+            if (_activeShifts.size > 1) _activeShifts.delete(idx);
+        } else {
+            _activeShifts.add(idx);
+        }
+        renderMap();
+        renderFilteredMasterList();
+    }
+
+    function setMapShiftsAll() {
+        _activeShifts = new Set(_generatedRoutes.map((_, i) => i));
+        renderMap();
+        renderFilteredMasterList();
+    }
+
+    function toggleMapFullscreen() {
+        const card = document.getElementById('routeMapCard');
+        if (!card) return;
+        card.classList.toggle('map-fullscreen');
+        setTimeout(() => { if (_map) _map.invalidateSize(); }, 100);
     }
 
     // =========================================================================
@@ -1477,6 +1513,80 @@
     }
 
     // =========================================================================
+    // ROUTE EDITING (move campers between buses without regenerating)
+    // =========================================================================
+    function moveCamperToBus(camperName, fromBusId, toBusId, shiftIdx) {
+        if (!_generatedRoutes || !D.savedRoutes) return;
+        const sr = D.savedRoutes[shiftIdx];
+        if (!sr) return;
+
+        // Find and remove camper from source bus
+        let camperData = null, camperStop = null;
+        const fromRoute = sr.routes.find(r => r.busId === fromBusId);
+        if (fromRoute) {
+            for (const st of fromRoute.stops) {
+                const ci = st.campers.findIndex(c => c.name === camperName);
+                if (ci >= 0) {
+                    camperData = st.campers.splice(ci, 1)[0];
+                    camperStop = st;
+                    break;
+                }
+            }
+            // Remove empty stops
+            fromRoute.stops = fromRoute.stops.filter(st => st.campers.length > 0 || st.isMonitor || st.isCounselor);
+            fromRoute.stops.forEach((st, i) => { st.stopNum = i + 1; });
+            fromRoute.camperCount = fromRoute.stops.reduce((s, st) => s + st.campers.length, 0);
+        }
+
+        if (!camperData || !camperStop) { toast('Camper not found', 'error'); return; }
+
+        // Add to target bus — find nearest existing stop or create new one
+        const toRoute = sr.routes.find(r => r.busId === toBusId);
+        if (!toRoute) { toast('Target bus not found', 'error'); return; }
+
+        let added = false;
+        if (camperStop.lat && camperStop.lng) {
+            for (const st of toRoute.stops) {
+                if (st.lat && st.lng && haversineMi(camperStop.lat, camperStop.lng, st.lat, st.lng) < 0.3) {
+                    st.campers.push(camperData);
+                    added = true;
+                    break;
+                }
+            }
+        }
+        if (!added) {
+            toRoute.stops.push({
+                stopNum: toRoute.stops.length + 1,
+                campers: [camperData],
+                address: camperStop.address,
+                lat: camperStop.lat, lng: camperStop.lng,
+                estimatedTime: camperStop.estimatedTime
+            });
+        }
+        toRoute.stops.forEach((st, i) => { st.stopNum = i + 1; });
+        toRoute.camperCount = toRoute.stops.reduce((s, st) => s + st.campers.length, 0);
+
+        _generatedRoutes = D.savedRoutes;
+        save();
+        renderRouteResults(applyOverrides(D.savedRoutes));
+        toast(camperName + ' moved to ' + toRoute.busName);
+    }
+
+    function openMoveModal(camperName, fromBusId, shiftIdx) {
+        const sr = _generatedRoutes?.[shiftIdx];
+        if (!sr) return;
+        const otherBuses = sr.routes.filter(r => r.busId !== fromBusId && r.stops.length > 0);
+        document.getElementById('moveCamperName').textContent = camperName;
+        const sel = document.getElementById('moveToBus');
+        sel.innerHTML = otherBuses.map(r => '<option value="' + r.busId + '">' + esc(r.busName) + ' (' + r.camperCount + ' campers)</option>').join('');
+        document.getElementById('moveConfirmBtn').onclick = function() {
+            moveCamperToBus(camperName, fromBusId, sel.value, shiftIdx);
+            closeModal('moveModal');
+        };
+        openModal('moveModal');
+    }
+
+    // =========================================================================
     // EXPORT / PRINT
     // =========================================================================
     function exportRoutesCsv() {
@@ -1520,7 +1630,7 @@
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             btn.classList.add('active');
             const t = btn.dataset.tab; document.getElementById('tab-' + t)?.classList.add('active');
-            if (t === 'fleet') renderFleet(); else if (t === 'shifts') renderShifts(); else if (t === 'staff') renderStaff(); else if (t === 'addresses') renderAddresses(); else if (t === 'routes') { runPreflight(); renderDailyOverrides(); }
+            if (t === 'fleet') renderFleet(); else if (t === 'shifts') renderShifts(); else if (t === 'staff') renderStaff(); else if (t === 'addresses') renderAddresses(); else if (t === 'preflight') runPreflight(); else if (t === 'routes') { renderDailyOverrides(); }
         }));
         document.getElementById('addressSearch')?.addEventListener('input', () => { clearTimeout(_addrSearchTimer); _addrSearchTimer = setTimeout(renderAddresses, 200); });
     }
@@ -1569,10 +1679,11 @@
         openCounselorModal, saveCounselor, editCounselor, deleteCounselor,
         editAddress, saveAddress, geocodeAll, downloadAddressTemplate, importAddressCsv,
         generateRoutes, exportRoutesCsv, printRoutes, detectRegions,
-        renderMap, selectMapBus, toggleMapShift, setMapShiftsAll,
+        renderMap, selectMapBus, toggleMapShift, setMapShiftsAll, toggleMapFullscreen,
         openOverrideModal, onOverrideTypeChange, saveOverride, removeOverride,
         filterOverrideSelect,
         searchCamperInRoutes, zoomToStop,
+        openMoveModal, renderFilteredMasterList,
         closeModal, openModal
     };
 
