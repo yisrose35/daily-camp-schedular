@@ -1782,12 +1782,16 @@
                     }
                 }
 
-                // ★ Register in cross-grade tracker AND special capacity tracker
+               // ★ Register in cross-grade tracker AND special capacity tracker
                 if (didPlace) {
                     const lastPlaced = placed[placed.length - 1];
                     registerCrossGrade(grade, need.type, lastPlaced.startMin, lastPlaced.endMin, need.event);
                     if (need.type === 'special' && need._assignedSpecial) {
-                        registerSpecialUsage(need._assignedSpecial, grade, lastPlaced.startMin, lastPlaced.endMin);
+                        // ★ Register with dMax as worst-case end — the expand phase may
+                        // stretch this block up to dMax, so reserve the full range now
+                        // to prevent other grades from placing overlapping specials.
+                        const worstCaseEnd = lastPlaced.startMin + (need.dMax || need.dMin || (lastPlaced.endMin - lastPlaced.startMin));
+                        registerSpecialUsage(need._assignedSpecial, grade, lastPlaced.startMin, worstCaseEnd);
                     }
                 }
             }
