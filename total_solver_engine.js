@@ -1165,7 +1165,7 @@ else penalty += 200;
             if (!blockDiv && bunk) { blockDiv = getBunkDivision(bunk) || ''; if (blockDiv) block.divName = blockDiv; }
             var slots = block.slots || [], startMin = block.startTime, endMin = block.endTime;
             if (startMin === undefined || endMin === undefined) {
-                var ds = window.divisionTimes?.[blockDiv] || [];
+                var ds = (block.bunk && window.divisionTimes?.[blockDiv]?._perBunkSlots?.[block.bunk]) || window.divisionTimes?.[blockDiv] || [];
                 if (slots.length > 0 && ds[slots[0]]) { startMin = ds[slots[0]].startMin; var ls = ds[slots[slots.length-1]]; endMin = ls ? ls.endMin : (startMin+40); block.startTime = startMin; block.endTime = endMin; }
             }
             var hasTime = startMin !== undefined && endMin !== undefined;
