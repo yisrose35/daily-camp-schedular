@@ -403,7 +403,7 @@
             const c = roster[n], a = D.addresses[n];
             const hasA = a?.street;
             const full = hasA ? [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ') : '';
-            const badge = hasA ? (a.geocoded ? '<span class="badge badge-success">Geocoded</span>' : '<span class="badge badge-warning">Not geocoded</span>') : '<span class="badge badge-danger">Missing</span>';
+            const badge = hasA ? (a.geocoded ? (a._zipMismatch ? '<span class="badge badge-warning" title="ZIP code mismatch — location may be wrong">⚠ Check</span>' : '<span class="badge badge-success">Geocoded</span>') : '<span class="badge badge-warning">Not geocoded</span>') : '<span class="badge badge-danger">Missing</span>';
             return '<tr><td style="font-weight:600">' + esc(n) + '</td><td>' + (esc(c.division) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (full ? esc(full) : '<span style="color:var(--text-muted)">No address</span>') + '</td><td>' + badge + '</td><td><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editAddress(\'' + esc(n.replace(/'/g, "\\'")) + '\')">' + (hasA ? 'Edit' : 'Add') + '</button></td></tr>';
         }).join('');
     }
@@ -431,20 +431,109 @@
     async function geocodeOne(name) {
         const a = D.addresses[name]; if (!a?.street) return false;
         const key = getApiKey(); if (!key) return false;
-        const q = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ');
+
+        // Strategy 1: Structured search with all components
+        // ORS Pelias supports structured parameters that disambiguate correctly
+        const params = {
+            'address': a.street,
+            'locality': a.city || '',
+            'region': a.state || '',
+            'postalcode': a.zip || '',
+            'country': 'US',
+            'size': '5'
+        };
+        // Use camp as focus (dynamic per-camp, not hardcoded)
+        if (_campCoordsCache) {
+            params['focus.point.lat'] = _campCoordsCache.lat;
+            params['focus.point.lng'] = _campCoordsCache.lng;
+        } else if (D.setup.campLat && D.setup.campLng) {
+            params['focus.point.lat'] = D.setup.campLat;
+            params['focus.point.lng'] = D.setup.campLng;
+        }
+
         try {
-            const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams({ text: q, size: '1', 'boundary.country': 'US' }), { headers: { 'Authorization': key, 'Accept': 'application/json' } });
-            if (!r.ok) return false;
-            const d = await r.json();
-            if (d.features?.length) { const co = d.features[0].geometry.coordinates; a.lng = co[0]; a.lat = co[1]; a.geocoded = true; return true; }
-        } catch (_) {}
+            // Try structured search first
+            let r = await fetch('https://api.openrouteservice.org/geocode/structured?' + new URLSearchParams(params), {
+                headers: { 'Authorization': key, 'Accept': 'application/json' }
+            });
+
+            let d = null;
+            if (r.ok) d = await r.json();
+
+            // Fallback to text search if structured returned nothing
+            if (!d?.features?.length) {
+                const q = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ');
+                const textParams = { text: q, size: '5', 'boundary.country': 'US' };
+                if (params['focus.point.lat']) {
+                    textParams['focus.point.lat'] = params['focus.point.lat'];
+                    textParams['focus.point.lng'] = params['focus.point.lng'];
+                }
+                r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams(textParams), {
+                    headers: { 'Authorization': key, 'Accept': 'application/json' }
+                });
+                if (r.ok) d = await r.json();
+            }
+
+            if (!d?.features?.length) return false;
+
+            // Pick best result: prioritize ZIP match, then closest to camp
+            let best = null;
+
+            if (a.zip) {
+                // Strong preference: result whose postal code matches
+                best = d.features.find(f => {
+                    const pc = f.properties?.postalcode || '';
+                    return pc === a.zip || pc.startsWith(a.zip);
+                });
+            }
+
+            if (!best && _campCoordsCache) {
+                // No ZIP match — pick the result closest to camp
+                let bestDist = Infinity;
+                d.features.forEach(f => {
+                    const co = f.geometry?.coordinates;
+                    if (!co) return;
+                    const dist = haversineMi(_campCoordsCache.lat, _campCoordsCache.lng, co[1], co[0]);
+                    if (dist < bestDist) { bestDist = dist; best = f; }
+                });
+            }
+
+            if (!best) best = d.features[0];
+
+            const co = best.geometry.coordinates;
+            a.lng = co[0]; a.lat = co[1]; a.geocoded = true;
+
+            // Validation: warn if result ZIP doesn't match input ZIP
+            const resultZip = best.properties?.postalcode || '';
+            if (a.zip && resultZip && !resultZip.startsWith(a.zip)) {
+                console.warn('[Go] ZIP mismatch for', name, '— expected', a.zip, 'got', resultZip,
+                    '(' + (best.properties?.label || '') + ')');
+                a._zipMismatch = true;
+            } else {
+                a._zipMismatch = false;
+            }
+
+            return true;
+        } catch (e) {
+            console.warn('[Go] Geocode error for', name, e.message);
+        }
         return false;
     }
-    async function geocodeAll() {
+    async function geocodeAll(force) {
         if (!getApiKey()) { toast('Set ORS key in Setup', 'error'); return; }
-        const todo = Object.keys(D.addresses).filter(n => D.addresses[n]?.street && !D.addresses[n].geocoded);
+        // Make sure camp coords are cached first (for focus point bias)
+        if (!_campCoordsCache && D.setup.campAddress) {
+            const cc = await geocodeSingle(D.setup.campAddress);
+            if (cc) { _campCoordsCache = cc; D.setup.campLat = cc.lat; D.setup.campLng = cc.lng; }
+        }
+        const todo = Object.keys(D.addresses).filter(n => {
+            const a = D.addresses[n];
+            if (!a?.street) return false;
+            if (force) { a.geocoded = false; a.lat = null; a.lng = null; return true; }
+            return !a.geocoded;
+        });
         if (!todo.length) { toast('All geocoded!'); return; }
-        toast('Geocoding ' + todo.length + ' addresses...');
+        toast((force ? 'Re-geocoding ' : 'Geocoding ') + todo.length + ' addresses...');
         let ok = 0, fail = 0;
         const BATCH = 5; // 5 parallel requests per batch
         const DELAY = 2000; // 2 sec between batches (~150/min, well within limits)
@@ -2032,6 +2121,7 @@
         openMonitorModal, saveMonitor, editMonitor, deleteMonitor,
         openCounselorModal, saveCounselor, editCounselor, deleteCounselor,
         editAddress, saveAddress, geocodeAll, downloadAddressTemplate, importAddressCsv,
+        regeocodeAll: function() { geocodeAll(true); },
         generateRoutes, exportRoutesCsv, printRoutes, detectRegions,
         renderMap, selectMapBus, toggleMapShift, setMapShiftsAll, toggleMapFullscreen,
         openOverrideModal, onOverrideTypeChange, saveOverride, removeOverride,
