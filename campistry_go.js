@@ -1701,8 +1701,7 @@ function detectRegions() {
                             // Total saving: (srcBefore + tgtBefore) - (srcAfter + tgtAfter)
                             const saving = (srcDistBefore + tgtDistBefore) - (srcDistWithout + tgtResult.dist);
 
-                            const regionThreshold = sameRegion ? 0.1 : 2.0;
-                            const sameRegion = (tgtRoute._regionId && srcRoute._regionId) ? tgtRoute._regionId === srcRoute._regionId : true;
+                           const sameRegion = (tgtRoute._regionId && srcRoute._regionId) ? tgtRoute._regionId === srcRoute._regionId : true;
                             const regionThreshold = sameRegion ? 0.1 : 2.0;
                             if (saving > bestSaving + regionThreshold) {
                                 bestSaving = saving;
