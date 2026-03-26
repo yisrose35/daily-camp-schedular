@@ -148,9 +148,8 @@
     }
 
     function merge(d) {
-       const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:500,orsApiKey:'',graphhopperKey:'',mapboxToken:'',campLat:null,campLng:null }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{} };
-        const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null, dailyOverrides: d.dailyOverrides || {} };        // Migrate: if no dismissal data stored yet, the current buses/shifts ARE the dismissal data
-        if (!result.dismissal && result.buses.length) {
+       const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:500,orsApiKey:'',graphhopperKey:'',mapboxToken:'',campLat:null,campLng:null }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{}, carpoolGroups:{} };      
+        const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null, dailyOverrides: d.dailyOverrides || {}, carpoolGroups: d.carpoolGroups || {} };        if (!result.dismissal && result.buses.length) {
             result.dismissal = { buses: [...result.buses], shifts: [...result.shifts], monitors: [...result.monitors], counselors: [...result.counselors], savedRoutes: result.savedRoutes };
         }
         if (!result.arrival) {
@@ -936,7 +935,7 @@
 
     function downloadAddressTemplate() {
         const roster = getRoster(); const names = Object.keys(roster).sort();
-        let csv = '\uFEFFName,Division,Bunk,Street Address,City,State,ZIP\n';
+        let csv = '\uFEFFName,Division,Bunk,Street Address,City,State,ZIP,Transport,Ride With\n';
         names.forEach(n => { const c = roster[n], a = D.addresses[n] || {}; csv += [n, c.division || '', c.bunk || '', a.street || '', a.city || '', a.state || 'NY', a.zip || ''].map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',') + '\n'; });
         const blob = new Blob([csv], { type: 'text/csv' }); const el = document.createElement('a'); el.href = URL.createObjectURL(blob); el.download = 'campistry_go_addresses.csv'; el.click(); toast('Template downloaded');
     }
@@ -945,8 +944,7 @@
         if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
         const lines = text.split(/\r?\n/).filter(l => l.trim()); if (lines.length < 2) { toast('Empty CSV', 'error'); return; }
         const hdr = parseLine(lines[0]).map(h => h.toLowerCase().trim());
-        const ni = hdr.findIndex(h => h === 'name' || h.includes('camper')), si = hdr.findIndex(h => h.includes('street') || h === 'address'), ci = hdr.findIndex(h => h === 'city'), sti = hdr.findIndex(h => h === 'state'), zi = hdr.findIndex(h => h === 'zip' || h.includes('zip'));
-        if (ni < 0 || si < 0) { toast('Need Name + Street columns', 'error'); return; }
+       const ni = hdr.findIndex(h => h === 'name' || h.includes('camper')), si = hdr.findIndex(h => h.includes('street') || h === 'address'), ci = hdr.findIndex(h => h === 'city'), sti = hdr.findIndex(h => h === 'state'), zi = hdr.findIndex(h => h === 'zip' || h.includes('zip')), tri = hdr.findIndex(h => h === 'transport' || h === 'mode' || h.includes('pickup') || h.includes('carpool')), rwi = hdr.findIndex(h => h === 'ride-with' || h === 'ridewith' || h === 'ride with' || h.includes('pair'));        if (ni < 0 || si < 0) { toast('Need Name + Street columns', 'error'); return; }
         // Clear all existing addresses — CSV overwrites everything
         D.addresses = {};
         const roster = getRoster(); let up = 0;
@@ -954,8 +952,9 @@
             const cols = parseLine(lines[i]); const name = (cols[ni] || '').trim(); if (!name) continue;
             const rn = Object.keys(roster).find(k => k.toLowerCase() === name.toLowerCase()) || name;
             const street = (cols[si] || '').trim(); if (!street) continue;
-            D.addresses[rn] = { street, city: ci >= 0 ? (cols[ci] || '').trim() : '', state: sti >= 0 ? (cols[sti] || '').trim().toUpperCase() : 'NY', zip: zi >= 0 ? (cols[zi] || '').trim() : '', lat: null, lng: null, geocoded: false }; up++;
-        }
+            const transport = tri >= 0 ? (cols[tri] || '').trim().toLowerCase() : 'bus';
+            const rideWith = rwi >= 0 ? (cols[rwi] || '').trim() : '';
+            D.addresses[rn] = { street, city: ci >= 0 ? (cols[ci] || '').trim() : '', state: sti >= 0 ? (cols[sti] || '').trim().toUpperCase() : 'NY', zip: zi >= 0 ? (cols[zi] || '').trim() : '', lat: null, lng: null, geocoded: false, transport: (transport === 'pickup' || transport === 'carpool') ? 'pickup' : 'bus', rideWith: rideWith }; up++;        }
         save(); renderAddresses(); updateStats(); toast(up + ' addresses imported (replaced all previous)');
     }
     function parseLine(line) { const r = []; let cur = '', inQ = false; for (let i = 0; i < line.length; i++) { const ch = line[i]; if (inQ) { if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false; } else cur += ch; } else { if (ch === '"') inQ = true; else if (ch === ',' || ch === '\t') { r.push(cur); cur = ''; } else cur += ch; } } r.push(cur); return r; }
@@ -1009,131 +1008,43 @@
     let _detectedRadius = null; // auto-calculated clustering radius in miles
     let _busAssignments = null;  // { shiftId: { regionId: [busId, ...] } }
 
-    function detectRegions() {
+function detectRegions() {
         const roster = getRoster();
-        const allCampers = [];
+        const zipGroups = {};
         Object.keys(roster).forEach(name => {
             const a = D.addresses[name];
-            if (a?.geocoded && a.lat && a.lng) {
-                allCampers.push({ name, lat: a.lat, lng: a.lng, city: a.city || '', division: roster[name].division || '' });
-            }
+            if (!a?.geocoded || !a.lat || !a.lng) return;
+            if (a.transport === 'pickup') return;
+            const zip = (a.zip || '').trim();
+            if (!zip) return;
+            if (!zipGroups[zip]) zipGroups[zip] = { campers: [], cities: {} };
+            zipGroups[zip].campers.push({ name, lat: a.lat, lng: a.lng, city: a.city || '', division: roster[name].division || '' });
+            const city = a.city || 'Unknown';
+            zipGroups[zip].cities[city] = (zipGroups[zip].cities[city] || 0) + 1;
         });
-        if (!allCampers.length) { toast('No geocoded campers', 'error'); return; }
-
-        // AUTO-DETECT clustering radius from camper density
-        // For each camper, find distance to their Kth nearest neighbor.
-        // Sort those distances and find the "elbow" — where the gap jumps.
-        // Dense NYC neighborhoods → small radius. Spread-out suburbs → large radius.
-        const K = Math.min(5, Math.max(2, Math.floor(allCampers.length * 0.05))); // 5% of campers, min 2, max 5
-        const knnDistances = [];
-        allCampers.forEach(c => {
-            const dists = [];
-            allCampers.forEach(o => {
-                if (o.name === c.name) return;
-                dists.push(haversineMi(c.lat, c.lng, o.lat, o.lng));
-            });
-            dists.sort((a, b) => a - b);
-            if (dists.length >= K) knnDistances.push(dists[K - 1]);
-            else if (dists.length) knnDistances.push(dists[dists.length - 1]);
-        });
-        knnDistances.sort((a, b) => a - b);
-
-        // Find the elbow: biggest jump in the sorted knn distances
-        let threshold;
-        if (knnDistances.length < 3) {
-            threshold = knnDistances.length ? knnDistances[knnDistances.length - 1] * 1.5 : 1.0;
-        } else {
-            // Calculate gaps between consecutive sorted distances
-            let maxGapIdx = 0, maxGap = 0;
-            for (let i = 1; i < knnDistances.length; i++) {
-                const gap = knnDistances[i] - knnDistances[i - 1];
-                if (gap > maxGap) { maxGap = gap; maxGapIdx = i; }
-            }
-            // Threshold = the value just before the biggest gap (the "elbow")
-            // This separates "within-region" distances from "between-region" distances
-            threshold = knnDistances[maxGapIdx];
-            // Safety floor/ceiling: at least 0.1 mi, at most 20 mi
-            threshold = Math.max(0.1, Math.min(20, threshold));
-        }
-
-        console.log('[Go] Auto-detected region radius:', threshold.toFixed(2), 'miles (K=' + K + ', campers=' + allCampers.length + ')');
-
-        // DBSCAN-style clustering with adaptive threshold
-        const assigned = new Set();
+        if (!Object.keys(zipGroups).length) { toast('No geocoded campers with ZIP codes', 'error'); return; }
         const clusters = [];
-
-        // Sort by lat for spatial locality
-        allCampers.sort((a, b) => a.lat - b.lat);
-
-        allCampers.forEach(camper => {
-            if (assigned.has(camper.name)) return;
-            const cluster = [camper];
-            assigned.add(camper.name);
-
-            // BFS expansion: find all campers within threshold of any cluster member
-            let frontier = [camper];
-            while (frontier.length) {
-                const nextFrontier = [];
-                allCampers.forEach(other => {
-                    if (assigned.has(other.name)) return;
-                    for (const f of frontier) {
-                        if (haversineMi(f.lat, f.lng, other.lat, other.lng) <= threshold) {
-                            cluster.push(other);
-                            assigned.add(other.name);
-                            nextFrontier.push(other);
-                            break;
-                        }
-                    }
-                });
-                frontier = nextFrontier;
-            }
-
-            // Name the cluster by most common city
-            const cities = {};
-            cluster.forEach(c => { if (c.city) cities[c.city] = (cities[c.city] || 0) + 1; });
-            const regionName = Object.keys(cities).sort((a, b) => cities[b] - cities[a])[0] || 'Region ' + (clusters.length + 1);
-            const cLat = cluster.reduce((s, c) => s + c.lat, 0) / cluster.length;
-            const cLng = cluster.reduce((s, c) => s + c.lng, 0) / cluster.length;
-
+        Object.entries(zipGroups).forEach(([zip, data]) => {
+            const campers = data.campers;
+            const regionName = Object.keys(data.cities).sort((a, b) => data.cities[b] - data.cities[a])[0] || zip;
+            const cLat = campers.reduce((s, c) => s + c.lat, 0) / campers.length;
+            const cLng = campers.reduce((s, c) => s + c.lng, 0) / campers.length;
             clusters.push({
-                id: 'reg_' + clusters.length,
-                name: regionName,
+                id: 'zip_' + zip, name: regionName + ' (' + zip + ')',
                 color: REGION_COLORS[clusters.length % REGION_COLORS.length],
                 centroidLat: cLat, centroidLng: cLng,
-                camperNames: cluster.map(c => c.name)
+                camperNames: campers.map(c => c.name), zip: zip
             });
         });
-
-        // Merge tiny clusters (< 3 campers) into nearest larger cluster
-        const merged = [];
-        const tiny = clusters.filter(c => c.camperNames.length < 3);
-        const big = clusters.filter(c => c.camperNames.length >= 3);
-
-        if (big.length === 0) {
-            // All small — just keep them
-            merged.push(...clusters);
-        } else {
-            merged.push(...big);
-            tiny.forEach(t => {
-                let nearest = big[0], nearDist = Infinity;
-                big.forEach(b => {
-                    const d = haversineMi(t.centroidLat, t.centroidLng, b.centroidLat, b.centroidLng);
-                    if (d < nearDist) { nearDist = d; nearest = b; }
-                });
-                nearest.camperNames.push(...t.camperNames);
-                // Recalculate centroid
-                const allNames = nearest.camperNames;
-                let sLat = 0, sLng = 0, cnt = 0;
-                allNames.forEach(n => { const a = D.addresses[n]; if (a?.lat) { sLat += a.lat; sLng += a.lng; cnt++; } });
-                if (cnt) { nearest.centroidLat = sLat / cnt; nearest.centroidLng = sLng / cnt; }
-            });
-        }
-
-        _detectedRegions = merged;
-        _detectedRadius = threshold;
+        clusters.sort((a, b) => b.camperNames.length - a.camperNames.length);
+        _detectedRegions = clusters;
+        _detectedRadius = null;
         renderRegionPreview();
-        toast(merged.length + ' region' + (merged.length !== 1 ? 's' : '') + ' detected (radius: ' + threshold.toFixed(1) + ' mi)');
+        console.log('[Go] ZIP-based regions:');
+        clusters.forEach(r => console.log('[Go]   ' + r.name + ': ' + r.camperNames.length + ' campers'));
+        toast(clusters.length + ' region' + (clusters.length !== 1 ? 's' : '') + ' from ZIP codes');
     }
+
 
     function renderRegionPreview() {
         const body = document.getElementById('regionPreviewBody');
@@ -1340,6 +1251,7 @@
             Object.keys(roster).forEach(name => {
                 const c = roster[name]; const a = D.addresses[name];
                 if (!c || !a?.geocoded || !a.lat || !a.lng) return;
+                if (a.transport === 'pickup') return;
                 if (shift._isVirtual || camperMatchesShift(c, shift)) {
                     allCampers.push({ name, division: c.division, bunk: c.bunk || '', lat: a.lat, lng: a.lng, address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ') });
                 }
@@ -1611,18 +1523,121 @@
             return result.dist;
         }
 
-        // ── Phase 3: Cluster ──
-        showProgress('Clustering stops...', 20);
-        const clusters = kMeansGeo(stops, numBuses);
-        clusters.sort((a, b) => b.camperCount - a.camperCount);
-        const sortedVehicles = [...vehicles].sort((a, b) => b.capacity - a.capacity);
-        const routes = clusters.map((cluster, i) => {
-            const v = sortedVehicles[i % sortedVehicles.length];
-            return { busId: v.busId, busName: v.name, busColor: v.color, monitor: v.monitor, counselors: v.counselors || [], stops: cluster.stops, camperCount: cluster.camperCount, _cap: v.capacity, totalDuration: 0 };
+       // ── Phase 3: Region-First Clustering (ZIP-based) ──
+        showProgress('Clustering by neighborhood...', 20);
+        const regionStops = {};
+        if (_detectedRegions && _detectedRegions.length > 0) {
+            _detectedRegions.forEach(reg => { regionStops[reg.id] = []; });
+            stops.forEach(stop => {
+                let bestReg = _detectedRegions[0].id, bestDist = Infinity;
+                _detectedRegions.forEach(reg => {
+                    const inRegion = stop.campers.some(c => reg.camperNames.includes(c.name));
+                    if (inRegion) { bestReg = reg.id; bestDist = -1; }
+                    else if (bestDist > 0) {
+                        const d = haversineMi(stop.lat, stop.lng, reg.centroidLat, reg.centroidLng);
+                        if (d < bestDist) { bestDist = d; bestReg = reg.id; }
+                    }
+                });
+                regionStops[bestReg].push(stop);
+            });
+        } else {
+            regionStops['all'] = [...stops];
+        }
+ 
+        const regionDemand = {};
+        const avgCap = vehicles.reduce((s, v) => s + v.capacity, 0) / vehicles.length;
+        Object.entries(regionStops).forEach(([regId, rs]) => {
+            const cc = rs.reduce((s, st) => s + st.campers.length, 0);
+            if (cc > 0) regionDemand[regId] = { campers: cc, stops: rs };
         });
-
-        // ── Phase 4: Overcapacity ──
-        handleOvercapacity(routes, campLat, campLng);
+ 
+        const sortedRegions = Object.entries(regionDemand).sort((a, b) => b[1].campers - a[1].campers);
+        let busPool = [...vehicles].sort((a, b) => b.capacity - a.capacity);
+        const regionBuses = {};
+        sortedRegions.forEach(([regId]) => { regionBuses[regId] = []; });
+ 
+        // Min 1 bus per region
+        sortedRegions.forEach(([regId]) => { if (busPool.length) regionBuses[regId].push(busPool.shift()); });
+ 
+        // Distribute remaining by worst ratio
+        while (busPool.length) {
+            let worstReg = null, worstRatio = 0;
+            sortedRegions.forEach(([regId, dem]) => {
+                const cap = regionBuses[regId].reduce((s, v) => s + v.capacity, 0);
+                const ratio = dem.campers / Math.max(1, cap);
+                if (ratio > worstRatio) { worstRatio = ratio; worstReg = regId; }
+            });
+            if (worstReg && worstRatio > 0.8) regionBuses[worstReg].push(busPool.shift());
+            else regionBuses[sortedRegions[0][0]].push(busPool.shift());
+        }
+ 
+        // Split within regions
+        const routes = [];
+        Object.entries(regionBuses).forEach(([regId, rBuses]) => {
+            const regStops = regionDemand[regId]?.stops || [];
+            if (!rBuses.length || !regStops.length) return;
+            if (rBuses.length === 1) {
+                const v = rBuses[0];
+                routes.push({ busId: v.busId, busName: v.name, busColor: v.color, monitor: v.monitor, counselors: v.counselors || [], stops: regStops, camperCount: regStops.reduce((s, st) => s + st.campers.length, 0), _cap: v.capacity, totalDuration: 0, _regionId: regId });
+            } else {
+                // Split by principal axis
+                const cLat = regStops.reduce((s, st) => s + st.lat, 0) / regStops.length;
+                const cLng = regStops.reduce((s, st) => s + st.lng, 0) / regStops.length;
+                let covLL = 0, covLG = 0, covGG = 0;
+                regStops.forEach(st => { const dL = st.lat - cLat, dG = st.lng - cLng; covLL += dL*dL; covLG += dL*dG; covGG += dG*dG; });
+                const angle = 0.5 * Math.atan2(2 * covLG, covLL - covGG);
+                regStops.forEach(st => { st._proj = (st.lat - cLat) * Math.cos(angle) + (st.lng - cLng) * Math.sin(angle); });
+                regStops.sort((a, b) => a._proj - b._proj);
+                const totalC = regStops.reduce((s, st) => s + st.campers.length, 0);
+                const target = totalC / rBuses.length;
+                const groups = []; let cg = [], cc = 0;
+                regStops.forEach(st => {
+                    cg.push(st); cc += st.campers.length;
+                    if (cc >= target && groups.length < rBuses.length - 1) { groups.push(cg); cg = []; cc = 0; }
+                });
+                if (cg.length) groups.push(cg);
+                const sb = [...rBuses].sort((a, b) => b.capacity - a.capacity);
+                groups.sort((a, b) => b.reduce((s, st) => s + st.campers.length, 0) - a.reduce((s, st) => s + st.campers.length, 0));
+                groups.forEach((g, gi) => {
+                    const v = sb[gi % sb.length];
+                    routes.push({ busId: v.busId, busName: v.name, busColor: v.color, monitor: v.monitor, counselors: v.counselors || [], stops: g, camperCount: g.reduce((s, st) => s + st.campers.length, 0), _cap: v.capacity, totalDuration: 0, _regionId: regId });
+                });
+            }
+        });
+        stops.forEach(st => { delete st._proj; });
+ 
+        console.log('[Go] Region-first clustering:');
+        Object.entries(regionBuses).forEach(([regId, rBuses]) => {
+            const reg = _detectedRegions?.find(r => r.id === regId);
+            console.log('[Go]   ' + (reg?.name || regId) + ': ' + (regionDemand[regId]?.campers || 0) + ' campers → ' + rBuses.length + ' bus(es) (' + rBuses.map(v => v.name).join(', ') + ')');
+        });
+ 
+        // ── Phase 4: Overcapacity (same-region preferred) ──
+        routes.forEach(r => {
+            while (r.camperCount > r._cap && r.stops.length > 1) {
+                const cLat = r.stops.reduce((s, st) => s + st.lat, 0) / r.stops.length;
+                const cLng = r.stops.reduce((s, st) => s + st.lng, 0) / r.stops.length;
+                let fIdx = -1, fDist = 0;
+                r.stops.forEach((st, i) => { const d = haversineMi(cLat, cLng, st.lat, st.lng); if (d > fDist) { fDist = d; fIdx = i; } });
+                if (fIdx < 0) break;
+                const overflow = r.stops.splice(fIdx, 1)[0];
+                r.camperCount -= overflow.campers.length;
+                let bestBus = null, bestScore = Infinity;
+                routes.forEach(other => {
+                    if (other === r) return;
+                    const spare = other._cap - other.camperCount;
+                    if (spare < overflow.campers.length) return;
+                    const sameReg = other._regionId === r._regionId;
+                    const oCLat = other.stops.length ? other.stops.reduce((s, st) => s + st.lat, 0) / other.stops.length : campLat;
+                    const oCLng = other.stops.length ? other.stops.reduce((s, st) => s + st.lng, 0) / other.stops.length : campLng;
+                    const dd = haversineMi(overflow.lat, overflow.lng, oCLat, oCLng);
+                    const score = (dd / (spare + 1)) * (sameReg ? 1 : 5);
+                    if (score < bestScore) { bestScore = score; bestBus = other; }
+                });
+                if (bestBus) { bestBus.stops.push(overflow); bestBus.camperCount += overflow.campers.length; }
+                else { r.stops.push(overflow); r.camperCount += overflow.campers.length; break; }
+            }
+        });
 
         // ── Phase 5: Initial TSP per bus ──
         showProgress('Solving initial routes...', 30);
@@ -1686,7 +1701,8 @@
                             // Total saving: (srcBefore + tgtBefore) - (srcAfter + tgtAfter)
                             const saving = (srcDistBefore + tgtDistBefore) - (srcDistWithout + tgtResult.dist);
 
-                            if (saving > bestSaving + 0.1) {
+                            const regionThreshold = sameRegion ? 0.1 : 2.0;
+                            if (saving > bestSaving + regionThreshold) {
                                 bestSaving = saving;
                                 bestTarget = ti;
                                 bestTargetDist = tgtResult.dist;
@@ -1738,7 +1754,8 @@
                                 const resultB = solveTSP(stopsB);
                                 const distAfter = resultA.dist + resultB.dist;
 
-                                if (distAfter < distBefore - 0.1) {
+                               const swapSameRegion = rA._regionId === rB._regionId;
+                                if (distAfter < distBefore - (swapSameRegion ? 0.1 : 2.0)) {
                                     // Execute swap
                                     rA.stops[ai] = stopB;
                                     rB.stops[bi] = stopA;
@@ -1824,9 +1841,26 @@
     // STOP CREATION
     // =========================================================================
     function createHouseStops(campers) {
+        const camperMap = {};
+        campers.forEach(c => { camperMap[c.name] = c; });
+        campers.forEach(c => {
+            const a = D.addresses[c.name];
+            if (a?.rideWith) {
+                const partner = camperMap[a.rideWith];
+                if (partner) { c.lat = partner.lat; c.lng = partner.lng; c.address = partner.address; }
+            }
+        });
         const groups = {};
         campers.forEach(c => {
             const key = Math.round(c.lat * 3000) + ',' + Math.round(c.lng * 3000);
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(c);
+        });
+        return Object.values(groups).map(g => ({
+            lat: g[0].lat, lng: g[0].lng, address: g[0].address,
+            campers: g.map(c => ({ name: c.name, division: c.division, bunk: c.bunk }))
+        }));
+    }
             if (!groups[key]) groups[key] = [];
             groups[key].push(c);
         });
@@ -2631,7 +2665,153 @@ window._routeGeomCache = _routeGeomCache;
                     '<button class="btn btn-ghost btn-sm" style="color:var(--red-500)" onclick="CampistryGo.removeOverride(\'' + esc(name.replace(/'/g, "\\'")) + '\')">Remove</button></div>';
             }).join('');
     }
-
+function renderCarpool() {
+        const card = document.getElementById('carpoolCard');
+        const body = document.getElementById('carpoolBody');
+        const countEl = document.getElementById('carpoolCount');
+        if (!card || !body) return;
+        const roster = getRoster();
+        if (!D.carpoolGroups) D.carpoolGroups = {};
+ 
+        const pickups = [], rideWithPairs = [];
+        const allKidsInGroups = new Set();
+        Object.values(D.carpoolGroups).forEach(g => (g.kids || []).forEach(k => allKidsInGroups.add(k)));
+ 
+        Object.keys(roster).forEach(name => {
+            const a = D.addresses[name];
+            if (!a) return;
+            if (a.transport === 'pickup') pickups.push({ name, division: roster[name].division || '', address: [a.street, a.city].filter(Boolean).join(', ') });
+            if (a.rideWith) rideWithPairs.push({ name, partner: a.rideWith, division: roster[name].division || '' });
+        });
+ 
+        const ungrouped = pickups.filter(p => !allKidsInGroups.has(p.name));
+        const groups = Object.entries(D.carpoolGroups).sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
+        card.style.display = '';
+        if (countEl) countEl.textContent = pickups.length + ' pickup, ' + groups.length + ' group' + (groups.length !== 1 ? 's' : '');
+ 
+        let html = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;"><div style="font-size:.875rem;font-weight:700;color:var(--text-primary);">🚗 Carpool Groups</div><button class="btn btn-primary btn-sm" onclick="CampistryGo.openCarpoolGroupModal()">+ New Group</button></div>';
+ 
+        if (groups.length) {
+            html += groups.map(([num, g]) => {
+                const kidRows = (g.kids || []).map(kid => { const c = roster[kid]; return '<div style="display:flex;align-items:center;justify-content:space-between;padding:.3rem 0;border-bottom:1px solid var(--border-light);"><span style="font-size:.8125rem;"><strong>' + esc(kid) + '</strong>' + (c?.division ? ' <span style="color:var(--text-muted);font-size:.75rem;">' + esc(c.division) + '</span>' : '') + '</span><button class="btn btn-ghost btn-sm" style="color:var(--red-500);font-size:.7rem;padding:2px 6px;" onclick="CampistryGo.removeFromCarpoolGroup(\'' + esc(num) + '\',\'' + esc(kid.replace(/'/g, "\\'")) + '\')">×</button></div>'; }).join('');
+                return '<div style="border:1px solid var(--border-light);border-radius:8px;margin-bottom:.75rem;overflow:hidden;"><div style="display:flex;align-items:center;justify-content:space-between;padding:.625rem .75rem;background:var(--surface-secondary,#f9fafb);"><div><span style="font-weight:700;font-size:.875rem;">Carpool ' + esc(num) + '</span>' + (g.driver ? ' <span style="font-size:.75rem;color:var(--text-muted);">— ' + esc(g.driver) + (g.phone ? ' · ' + esc(g.phone) : '') + '</span>' : '') + '</div><div style="display:flex;gap:4px;"><button class="btn btn-ghost btn-sm" style="font-size:.7rem;" onclick="CampistryGo.openAddToCarpoolModal(\'' + esc(num) + '\')">+ Add</button><button class="btn btn-ghost btn-sm" style="font-size:.7rem;" onclick="CampistryGo.editCarpoolGroup(\'' + esc(num) + '\')">Edit</button><button class="btn btn-ghost btn-sm" style="color:var(--red-500);font-size:.7rem;" onclick="CampistryGo.deleteCarpoolGroup(\'' + esc(num) + '\')">Delete</button></div></div><div style="padding:.5rem .75rem;">' + (kidRows || '<div style="font-size:.8125rem;color:var(--text-muted);">No kids yet</div>') + '</div></div>';
+            }).join('');
+        } else {
+            html += '<div style="text-align:center;padding:1rem;color:var(--text-muted);font-size:.8125rem;border:1px dashed var(--border-light);border-radius:8px;margin-bottom:.75rem;">No carpool groups yet</div>';
+        }
+ 
+        if (ungrouped.length) {
+            html += '<div style="margin-top:.75rem;border-top:1px solid var(--border-light);padding-top:.75rem;"><div style="font-size:.8125rem;font-weight:700;color:var(--text-secondary);margin-bottom:.5rem;">Ungrouped Pickup Kids (' + ungrouped.length + ')</div>';
+            html += ungrouped.map(p => {
+                const opts = groups.map(([n]) => '<option value="' + esc(n) + '">Carpool ' + esc(n) + '</option>').join('');
+                return '<div style="display:flex;align-items:center;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--border-light);font-size:.8125rem;"><strong>' + esc(p.name) + '</strong><div style="display:flex;gap:4px;">' + (groups.length ? '<select class="form-input" style="font-size:.7rem;padding:2px 4px;width:auto;" onchange="if(this.value)CampistryGo.addToCarpoolGroup(this.value,\'' + esc(p.name.replace(/'/g, "\\'")) + '\');this.value=\'\'"><option value="">Add to...</option>' + opts + '</select>' : '') + '<button class="btn btn-ghost btn-sm" style="font-size:.7rem;" onclick="CampistryGo.setTransport(\'' + esc(p.name.replace(/'/g, "\\'")) + '\',\'bus\')">→ Bus</button></div></div>';
+            }).join('');
+            html += '</div>';
+        }
+ 
+        if (rideWithPairs.length) {
+            html += '<div style="margin-top:.75rem;border-top:1px solid var(--border-light);padding-top:.75rem;"><div style="font-size:.8125rem;font-weight:700;color:var(--text-secondary);margin-bottom:.5rem;">🤝 Ride-With Pairs (' + rideWithPairs.length + ')</div>';
+            rideWithPairs.forEach(p => { html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--border-light);font-size:.8125rem;"><span><strong>' + esc(p.name) + '</strong> rides with <strong>' + esc(p.partner) + '</strong></span><button class="btn btn-ghost btn-sm" style="color:var(--red-500);font-size:.7rem;" onclick="CampistryGo.removeRideWith(\'' + esc(p.name.replace(/'/g, "\\'")) + '\')">Remove</button></div>'; });
+            html += '</div>';
+        }
+ 
+        body.innerHTML = html;
+    }
+ 
+    function setTransport(name, mode) {
+        if (!D.addresses[name]) return;
+        D.addresses[name].transport = mode;
+        save(); renderCarpool(); renderAddresses(); updateStats();
+        toast(name + ' → ' + (mode === 'pickup' ? 'carpool' : 'bus'));
+    }
+ 
+    function setRideWith(name, partner) {
+        if (!D.addresses[name]) return;
+        D.addresses[name].rideWith = partner;
+        save(); renderCarpool(); toast(name + ' paired with ' + partner);
+    }
+ 
+    function removeRideWith(name) {
+        if (!D.addresses[name]) return;
+        D.addresses[name].rideWith = '';
+        save(); renderCarpool(); toast('Pairing removed');
+    }
+ 
+    function openCarpoolGroupModal(editNum) {
+        const existing = editNum ? D.carpoolGroups[editNum] : null;
+        document.getElementById('carpoolGroupNum').value = editNum || '';
+        document.getElementById('carpoolGroupDriver').value = existing?.driver || '';
+        document.getElementById('carpoolGroupPhone').value = existing?.phone || '';
+        document.getElementById('carpoolGroupNum').disabled = !!editNum;
+        document.getElementById('carpoolGroupModalTitle').textContent = editNum ? 'Edit Carpool ' + editNum : 'New Carpool Group';
+        openModal('carpoolGroupModal');
+    }
+ 
+    function saveCarpoolGroup() {
+        const num = document.getElementById('carpoolGroupNum')?.value.trim();
+        if (!num) { toast('Enter a number', 'error'); return; }
+        if (!D.carpoolGroups) D.carpoolGroups = {};
+        if (!D.carpoolGroups[num]) D.carpoolGroups[num] = { label: 'Carpool ' + num, driver: '', phone: '', kids: [] };
+        D.carpoolGroups[num].driver = document.getElementById('carpoolGroupDriver')?.value.trim() || '';
+        D.carpoolGroups[num].phone = document.getElementById('carpoolGroupPhone')?.value.trim() || '';
+        save(); closeModal('carpoolGroupModal'); renderCarpool();
+        toast('Carpool ' + num + ' saved');
+    }
+ 
+    function editCarpoolGroup(num) { openCarpoolGroupModal(num); }
+ 
+    function deleteCarpoolGroup(num) {
+        if (!D.carpoolGroups?.[num]) return;
+        if (!confirm('Delete Carpool ' + num + '?')) return;
+        delete D.carpoolGroups[num];
+        save(); renderCarpool(); toast('Carpool ' + num + ' deleted');
+    }
+ 
+    function addToCarpoolGroup(num, kidName) {
+        if (!D.carpoolGroups?.[num]) return;
+        if (!D.carpoolGroups[num].kids) D.carpoolGroups[num].kids = [];
+        if (!D.carpoolGroups[num].kids.includes(kidName)) D.carpoolGroups[num].kids.push(kidName);
+        if (D.addresses[kidName]) D.addresses[kidName].transport = 'pickup';
+        save(); renderCarpool(); toast(kidName + ' → Carpool ' + num);
+    }
+ 
+    function removeFromCarpoolGroup(num, kidName) {
+        if (!D.carpoolGroups?.[num]) return;
+        D.carpoolGroups[num].kids = (D.carpoolGroups[num].kids || []).filter(k => k !== kidName);
+        save(); renderCarpool(); toast(kidName + ' removed');
+    }
+ 
+    function openAddToCarpoolModal(num) {
+        const roster = getRoster();
+        const existing = new Set(D.carpoolGroups[num]?.kids || []);
+        const available = Object.keys(roster).sort().filter(n => D.addresses[n] && !existing.has(n));
+        const sel = document.getElementById('addToCarpoolSelect');
+        if (sel) sel.innerHTML = '<option value="">— Select —</option>' + available.map(n => '<option value="' + esc(n) + '">' + esc(n) + (D.addresses[n]?.transport === 'pickup' ? ' 🚗' : ' 🚌') + '</option>').join('');
+        document.getElementById('addToCarpoolSearch').value = '';
+        document.getElementById('addToCarpoolNum').value = num;
+        document.getElementById('addToCarpoolTitle').textContent = 'Add to Carpool ' + num;
+        openModal('addToCarpoolModal');
+    }
+ 
+    function filterAddToCarpool() {
+        const q = (document.getElementById('addToCarpoolSearch')?.value || '').toLowerCase().trim();
+        const num = document.getElementById('addToCarpoolNum')?.value;
+        const roster = getRoster();
+        const existing = new Set(D.carpoolGroups[num]?.kids || []);
+        const names = Object.keys(roster).sort().filter(n => D.addresses[n] && !existing.has(n) && (!q || n.toLowerCase().includes(q)));
+        const sel = document.getElementById('addToCarpoolSelect');
+        if (sel) sel.innerHTML = '<option value="">— Select —</option>' + names.map(n => '<option value="' + esc(n) + '">' + esc(n) + (D.addresses[n]?.transport === 'pickup' ? ' 🚗' : ' 🚌') + '</option>').join('');
+        if (names.length === 1 && sel) sel.value = names[0];
+    }
+ 
+    function confirmAddToCarpool() {
+        const num = document.getElementById('addToCarpoolNum')?.value;
+        const kid = document.getElementById('addToCarpoolSelect')?.value;
+        if (!num || !kid) { toast('Select a camper', 'error'); return; }
+        addToCarpoolGroup(num, kid);
+        closeModal('addToCarpoolModal');
+    }
+ 
     // Override modal helpers
     function openOverrideModal() {
         const roster = getRoster();
@@ -3021,6 +3201,10 @@ window._routeGeomCache = _routeGeomCache;
         searchCamperInRoutes, zoomToStop,
         openMoveModal, renderFilteredMasterList, sortMasterBy,
         switchMode,
+        setTransport, setRideWith, removeRideWith, renderCarpool,
+        openCarpoolGroupModal, saveCarpoolGroup, editCarpoolGroup, deleteCarpoolGroup,
+        addToCarpoolGroup, removeFromCarpoolGroup,
+        openAddToCarpoolModal, filterAddToCarpool, confirmAddToCarpool,
        closeModal, openModal,
         _getMap: function() { return _map; },
         _getSavedRoutes: function() { return D.savedRoutes; },
