@@ -3035,6 +3035,6 @@ window._routeGeomCache = _routeGeomCache;
         },
         _getRouteGeomCache: function() { return _routeGeomCache; },
         _clearGeomCache: function(key) { if (key) delete _routeGeomCache[key]; else _routeGeomCache = {}; }
-
+    };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();
