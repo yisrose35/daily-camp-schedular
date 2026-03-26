@@ -846,6 +846,8 @@
         const hdr = parseLine(lines[0]).map(h => h.toLowerCase().trim());
         const ni = hdr.findIndex(h => h === 'name' || h.includes('camper')), si = hdr.findIndex(h => h.includes('street') || h === 'address'), ci = hdr.findIndex(h => h === 'city'), sti = hdr.findIndex(h => h === 'state'), zi = hdr.findIndex(h => h === 'zip' || h.includes('zip'));
         if (ni < 0 || si < 0) { toast('Need Name + Street columns', 'error'); return; }
+        // Clear all existing addresses — CSV overwrites everything
+        D.addresses = {};
         const roster = getRoster(); let up = 0;
         for (let i = 1; i < lines.length; i++) {
             const cols = parseLine(lines[i]); const name = (cols[ni] || '').trim(); if (!name) continue;
@@ -853,7 +855,7 @@
             const street = (cols[si] || '').trim(); if (!street) continue;
             D.addresses[rn] = { street, city: ci >= 0 ? (cols[ci] || '').trim() : '', state: sti >= 0 ? (cols[sti] || '').trim().toUpperCase() : 'NY', zip: zi >= 0 ? (cols[zi] || '').trim() : '', lat: null, lng: null, geocoded: false }; up++;
         }
-        save(); renderAddresses(); updateStats(); toast(up + ' addresses imported');
+        save(); renderAddresses(); updateStats(); toast(up + ' addresses imported (replaced all previous)');
     }
     function parseLine(line) { const r = []; let cur = '', inQ = false; for (let i = 0; i < line.length; i++) { const ch = line[i]; if (inQ) { if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false; } else cur += ch; } else { if (ch === '"') inQ = true; else if (ch === ',' || ch === '\t') { r.push(cur); cur = ''; } else cur += ch; } } r.push(cur); return r; }
 
