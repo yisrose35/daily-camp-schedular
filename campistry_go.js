@@ -276,7 +276,30 @@
     /** Pull camper roster from Campistry Me (auto-sync, no manual import needed) */
     function getRoster() {
         const g = readCampistrySettings();
-        return g?.app1?.camperRoster || {};
+        const roster = g?.app1?.camperRoster || {};
+        // Backfill camper IDs if missing (same logic as Campistry Me)
+        let needsSave = false;
+        let maxId = 0;
+        Object.values(roster).forEach(c => { if (c.camperId && c.camperId > maxId) maxId = c.camperId; });
+        let nextId = (g?.campistryMe?.nextCamperId) || maxId + 1;
+        if (maxId >= nextId) nextId = maxId + 1;
+        Object.entries(roster).forEach(([n, c]) => {
+            if (!c.camperId) { c.camperId = nextId; nextId++; needsSave = true; }
+        });
+        if (needsSave) {
+            try {
+                const raw = localStorage.getItem('campGlobalSettings_v1');
+                if (raw) {
+                    const data = JSON.parse(raw);
+                    data.app1.camperRoster = roster;
+                    if (!data.campistryMe) data.campistryMe = {};
+                    data.campistryMe.nextCamperId = nextId;
+                    localStorage.setItem('campGlobalSettings_v1', JSON.stringify(data));
+                    console.log('[Go] Backfilled ' + Object.values(roster).filter(c => c.camperId >= (nextId - 100)).length + ' camper IDs');
+                }
+            } catch (e) { console.warn('[Go] ID backfill save error:', e); }
+        }
+        return roster;
     }
 
     /** Pull division structure from Campistry Me */
