@@ -76,6 +76,23 @@
         return points;
     }
     function angleTo(cLat, cLng, lat, lng) { return Math.atan2(lng - cLng, lat - cLat); }
+
+    /** JSONP fetch — Census geocoder doesn't support CORS, so we use JSONP */
+    function censusGeocode(address) {
+        return new Promise((resolve) => {
+            const cbName = '_censusGeo_' + Math.random().toString(36).slice(2);
+            const timeout = setTimeout(() => { cleanup(); resolve(null); }, 8000);
+            function cleanup() { clearTimeout(timeout); delete window[cbName]; const el = document.getElementById(cbName); if (el) el.remove(); }
+            window[cbName] = function(data) { cleanup(); resolve(data); };
+            const url = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?' + new URLSearchParams({
+                address: address, benchmark: 'Public_AR_Current', format: 'jsonp', callback: cbName
+            });
+            const script = document.createElement('script');
+            script.id = cbName; script.src = url;
+            script.onerror = function() { cleanup(); resolve(null); };
+            document.head.appendChild(script);
+        });
+    }
     function formatTime(totalMin) {
         const h = Math.floor(totalMin / 60), m = Math.round(totalMin % 60);
         const p = h >= 12 ? 'PM' : 'AM', h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
@@ -540,24 +557,17 @@
         const a = D.addresses[name]; if (!a?.street) return false;
         const q = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ');
 
-        // PRIMARY: US Census Geocoder — free, no key, exact house-level coordinates
+        // PRIMARY: US Census Geocoder via JSONP (no CORS issues)
         try {
-            const censusUrl = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?' + new URLSearchParams({
-                address: q, benchmark: 'Public_AR_Current', format: 'json'
-            });
-            const r = await fetch(censusUrl);
-            if (r.ok) {
-                const d = await r.json();
-                const matches = d.result?.addressMatches;
-                if (matches?.length) {
-                    const best = matches[0];
-                    a.lat = best.coordinates.y;
-                    a.lng = best.coordinates.x;
-                    a.geocoded = true;
-                    a._zipMismatch = false;
-                    a._geocodeSource = 'census';
-                    return true;
-                }
+            const d = await censusGeocode(q);
+            if (d?.result?.addressMatches?.length) {
+                const best = d.result.addressMatches[0];
+                a.lat = best.coordinates.y;
+                a.lng = best.coordinates.x;
+                a.geocoded = true;
+                a._zipMismatch = false;
+                a._geocodeSource = 'census';
+                return true;
             }
         } catch (e) {
             console.warn('[Go] Census geocoder error for', name, e.message);
@@ -687,25 +697,24 @@
         // ── 6. CSP CHECK ──
         console.log('\n── CSP / CONNECTIVITY ──');
 
-        // Census geocoder
+        // Census geocoder (via JSONP — no CORS issues)
         try {
             const testAddr = D.setup.campAddress || '4600 Silver Hill Rd, Washington, DC, 20233';
-            const cr = await fetch('https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?' + new URLSearchParams({
-                address: testAddr, benchmark: 'Public_AR_Current', format: 'json'
-            }));
-            if (cr.ok) {
-                const cd = await cr.json();
+            const cd = await censusGeocode(testAddr);
+            if (cd) {
                 const matches = cd.result?.addressMatches?.length || 0;
-                P('Census Geocoder: HTTP ' + cr.status + ', ' + matches + ' match(es)');
+                P('Census Geocoder: ' + matches + ' match(es)');
                 if (matches > 0) {
                     const m = cd.result.addressMatches[0];
                     console.log('   → ' + m.matchedAddress + ' [' + m.coordinates.y.toFixed(6) + ', ' + m.coordinates.x.toFixed(6) + ']');
+                } else {
+                    Wr('Census Geocoder: connected but no match for camp address (normal if address format is unusual)');
                 }
             } else {
-                F('Census Geocoder: HTTP ' + cr.status);
+                F('Census Geocoder: no response — check that https://geocoding.geo.census.gov is in script-src CSP');
             }
         } catch (e) {
-            F('Census Geocoder: BLOCKED — add https://geocoding.geo.census.gov to CSP connect-src');
+            F('Census Geocoder: ' + e.message);
         }
 
         // OSM tiles
