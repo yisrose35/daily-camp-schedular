@@ -14,7 +14,7 @@ var nextCamperId=1;
 function init(){
     loadData(); setupSidebar(); setupSearch(); setupModals();
     syncAllAddressesToGo();
-    nav('families');
+    nav('campers');
     console.log('📋 Me ready:',Object.keys(roster).length,'campers');
 }
 
@@ -137,7 +137,7 @@ function renderFamilies(){
             h+='</div>';
         });
         h+='<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px">';
-        (f.camperIds||[]).forEach(function(cn){h+='<span style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600;cursor:pointer" onclick="CampistryMe.viewCamper(\''+je(cn)+'\')">'+av(cn,'s')+' '+esc(cn.split(' ')[0])+'</span>'});
+        (f.camperIds||[]).forEach(function(cn){h+='<span style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600;cursor:pointer" onclick="CampistryMe.viewCamper(\''+je(cn)+'\')">'+esc(cn.split(' ')[0])+'</span>'});
         h+='</div></div>';
     });
     c.innerHTML=h;
@@ -185,14 +185,14 @@ function renderCampers(filter){
     var c=document.getElementById('page-campers'),entries=Object.entries(roster),total=entries.length;
     if(filter){var q=filter.toLowerCase();entries=entries.filter(function([n,d]){return n.toLowerCase().includes(q)||(d.division||'').toLowerCase().includes(q)||(d.bunk||'').toLowerCase().includes(q)||(d.school||'').toLowerCase().includes(q)})}
     entries.sort(function(a,b){return a[0].localeCompare(b[0])});
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Campers</h2><p class="sec-desc">'+total+' total</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import CSV</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Campers</h2><p class="sec-desc">'+total+' total</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Download Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import CSV</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export All</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
     if(!entries.length){h+='<div class="me-empty"><h3>No campers yet</h3><p>Add campers or import from CSV.</p><div style="display:flex;gap:6px;justify-content:center"><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add</button><button class="me-btn me-btn--sec" onclick="CampistryMe.openCsv()">Import</button></div></div>'}
     else{
-        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th style="width:32px"></th><th style="width:50px">ID</th><th>Name</th><th>Age</th><th>School</th><th>Division</th><th>Bunk</th><th>Medical</th><th style="width:60px"></th></tr></thead><tbody>';
+        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th style="width:50px">ID</th><th>Name</th><th>Age</th><th>School</th><th>Division</th><th>Bunk</th><th>Medical</th><th style="width:60px"></th></tr></thead><tbody>';
         entries.forEach(function([n,d]){
             var hasMed=!!(d.allergies||d.medications);
             var idStr=d.camperId?String(d.camperId).padStart(4,'0'):'—';
-            h+='<tr class="click" onclick="CampistryMe.viewCamper(\''+je(n)+'\')">'+'<td>'+av(n,'s')+'</td><td style="font-family:monospace;font-size:.75rem;color:var(--s400)">#'+esc(idStr)+'</td><td class="bold">'+esc(n)+'</td><td>'+(d.dob?age(d.dob):'—')+'</td><td>'+esc(d.school||'—')+'</td><td>'+(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+'</td><td>'+esc(d.bunk||'—')+'</td><td>'+(hasMed?'<span style="color:var(--err);font-size:.7rem;font-weight:600">⚠ '+esc((d.allergies||d.medications||'').split(',')[0])+'</span>':'<span style="color:var(--s300)">—</span>')+'</td><td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button></td></tr>';
+            h+='<tr class="click" onclick="CampistryMe.viewCamper(\''+je(n)+'\')">'+'<td style="font-family:monospace;font-size:.75rem;color:var(--s400)">#'+esc(idStr)+'</td><td class="bold">'+esc(n)+'</td><td>'+(d.dob?age(d.dob):'—')+'</td><td>'+esc(d.school||'—')+'</td><td>'+(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+'</td><td>'+esc(d.bunk||'—')+'</td><td>'+(hasMed?'<span style="color:var(--err);font-size:.7rem;font-weight:600">⚠ '+esc((d.allergies||d.medications||'').split(',')[0])+'</span>':'<span style="color:var(--s300)">—</span>')+'</td><td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button></td></tr>';
         });
         h+='</tbody></table></div></div>';
     }
@@ -203,7 +203,7 @@ function renderCampers(filter){
 function viewCamper(n){
     var d=roster[n];if(!d)return;
     var idStr=d.camperId?String(d.camperId).padStart(4,'0'):'—';
-    document.getElementById('cvHead').innerHTML='<div class="cv-hd">'+av(n,'l')+'<div><h3 class="cv-name">'+esc(n)+'</h3><div class="cv-tags"><span class="badge badge-gray" style="font-family:monospace">#'+esc(idStr)+'</span>'+(d.division?dtag(d.division):'')+(d.bunk?' '+bdg(d.bunk,'gray'):'')+'</div></div></div>';
+    document.getElementById('cvHead').innerHTML='<div class="cv-hd"><div><h3 class="cv-name">'+esc(n)+'</h3><div class="cv-tags"><span class="badge badge-gray" style="font-family:monospace">#'+esc(idStr)+'</span>'+(d.division?dtag(d.division):'')+(d.bunk?' '+bdg(d.bunk,'gray'):'')+'</div></div></div>';
     var b='<div class="cv-sec">Personal</div>';
     if(d.dob)b+=cvR('Born',new Date(d.dob+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})+' (age '+age(d.dob)+')');
     b+=cvR('Gender',d.gender);b+=cvR('School',d.school);b+=cvR('School Grade',d.schoolGrade);
@@ -325,28 +325,49 @@ function bkOpts(div,gr){var o=[''];if(div&&gr&&structure[div]&&structure[div].gr
 function syncAddressToGo(camperName,camperData){
     if(!camperData.street)return;
     try{
+        // Write to Go's direct localStorage store
         var goRaw=localStorage.getItem('campistry_go_data');
         var goData=goRaw?JSON.parse(goRaw):{};
         if(!goData.addresses)goData.addresses={};
         var existing=goData.addresses[camperName]||{};
-        goData.addresses[camperName]={
+        var newAddr={
             street:camperData.street||'',
             city:camperData.city||'',
             state:camperData.state||'NY',
             zip:camperData.zip||'',
             lat:existing.lat||null,
             lng:existing.lng||null,
-            geocoded:false, // Mark for re-geocode since address may have changed
+            geocoded:false,
             transport:existing.transport||'bus',
             rideWith:existing.rideWith||''
         };
-        // If street hasn't changed, preserve geocode status
+        // Preserve geocode if address unchanged
         if(existing.street===camperData.street&&existing.city===camperData.city&&existing.geocoded){
-            goData.addresses[camperName].lat=existing.lat;
-            goData.addresses[camperName].lng=existing.lng;
-            goData.addresses[camperName].geocoded=true;
+            newAddr.lat=existing.lat;newAddr.lng=existing.lng;newAddr.geocoded=true;
         }
+        goData.addresses[camperName]=newAddr;
         localStorage.setItem('campistry_go_data',JSON.stringify(goData));
+
+        // Also write into the cloud-synced global settings path (Go checks this first)
+        var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        if(!g.campistryGo)g.campistryGo={};
+        if(!g.campistryGo.addresses)g.campistryGo.addresses={};
+        var existingCloud=g.campistryGo.addresses[camperName]||{};
+        g.campistryGo.addresses[camperName]={
+            street:camperData.street||'',city:camperData.city||'',
+            state:camperData.state||'NY',zip:camperData.zip||'',
+            lat:existingCloud.lat||null,lng:existingCloud.lng||null,
+            geocoded:existingCloud.geocoded||false,
+            transport:existingCloud.transport||'bus',rideWith:existingCloud.rideWith||''
+        };
+        if(existingCloud.street===camperData.street&&existingCloud.city===camperData.city&&existingCloud.geocoded){
+            g.campistryGo.addresses[camperName].lat=existingCloud.lat;
+            g.campistryGo.addresses[camperName].lng=existingCloud.lng;
+            g.campistryGo.addresses[camperName].geocoded=true;
+        }
+        localStorage.setItem('campGlobalSettings_v1',JSON.stringify(g));
+
+        console.log('[Me→Go] Address synced for',camperName,':',camperData.street,camperData.city);
     }catch(e){console.warn('[Me] Go sync error:',e)}
 }
 
@@ -461,7 +482,7 @@ function renderBB(){
     }
     c.innerHTML=h;
 }
-function bbC(n){var d=roster[n]||{};return'<div class="bb-c" draggable="true" ondragstart="event.dataTransfer.setData(\'text/plain\',\''+je(n)+'\')">'+av(n,'s')+'<div style="flex:1;min-width:0"><div class="bb-c-nm">'+esc(n)+'</div></div>'+(d.allergies||d.medications?'<span style="color:var(--err);font-size:.6rem">⚠</span>':'')+'</div>'}
+function bbC(n){var d=roster[n]||{};return'<div class="bb-c" draggable="true" ondragstart="event.dataTransfer.setData(\'text/plain\',\''+je(n)+'\')"><div style="flex:1;min-width:0"><div class="bb-c-nm">'+esc(n)+'</div></div>'+(d.allergies||d.medications?'<span style="color:var(--err);font-size:.6rem">⚠</span>':'')+'</div>'}
 function bbDrop(t,e){e.preventDefault();var n=e.dataTransfer.getData('text/plain');if(!n)return;Object.keys(bunkAsgn).forEach(function(b){bunkAsgn[b]=bunkAsgn[b].filter(function(x){return x!==n})});if(t!=='__pool__'){if(!bunkAsgn[t])bunkAsgn[t]=[];bunkAsgn[t].push(n)}save();renderBB()}
 function autoAssign(){var allB=[];Object.entries(structure).forEach(function([div,d]){Object.entries(d.grades||{}).forEach(function([gr,g]){(g.bunks||[]).forEach(function(b){allB.push({name:b,gr:gr,div:div})})})});var next={};allB.forEach(function(b){next[b.name]=[]});var campers=Object.entries(roster);campers.sort(function(a,b){return(a[1].grade||'').localeCompare(b[1].grade||'')});campers.forEach(function([n,d]){var el=allB.filter(function(b){return b.gr===d.grade});if(!el.length)el=allB.filter(function(b){return b.div===d.division});if(!el.length)el=allB;if(!el.length)return;el.sort(function(a,b){return next[a.name].length-next[b.name].length});next[el[0].name].push(n)});bunkAsgn=next;save();renderBB();toast('Auto-assigned')}
 function clearBunks(){if(!confirm('Clear all?'))return;bunkAsgn={};save();renderBB();toast('Cleared')}
@@ -472,8 +493,206 @@ function renderBroadcasts(){var c=document.getElementById('page-broadcasts');c.i
 function renderSoon(p){var t={forms:'Forms & Docs',reports:'Reports',settings:'Settings'};document.getElementById('page-'+p).innerHTML='<div class="me-soon"><h2>'+(t[p]||p)+'</h2><p>Coming soon.</p></div>'}
 
 // ── CSV ──────────────────────────────────────────────────────────
-function handleCsv(file){if(!file)return;var r=new FileReader();r.onload=function(e){var t=e.target.result;if(t.charCodeAt(0)===0xFEFF)t=t.slice(1);var lines=t.split(/\r?\n/).filter(function(l){return l.trim()});if(!lines.length)return;var start=lines[0].toLowerCase().includes('name')?1:0;var rows=[];for(var i=start;i<Math.min(lines.length,5001);i++){var cols=lines[i].split(',').map(function(s){return s.trim().replace(/^"|"$/g,'')});if(cols[0])rows.push({name:cols[0],division:cols[1]||'',grade:cols[2]||'',bunk:cols[3]||'',team:cols[4]||''})}if(rows.length){document.getElementById('csvPV').style.display='block';document.getElementById('csvPV').innerHTML='<div style="font-weight:600;margin:8px 0 4px">'+rows.length+' rows</div>';document.getElementById('csvBtn').disabled=false;document.getElementById('csvBtn').onclick=function(){var a=0;rows.forEach(function(r){if(r.division&&!structure[r.division])structure[r.division]={color:COLORS[Object.keys(structure).length%COLORS.length],grades:{}};if(r.division&&r.grade&&structure[r.division]&&!structure[r.division].grades[r.grade])structure[r.division].grades[r.grade]={bunks:[]};if(r.division&&r.grade&&r.bunk&&structure[r.division]?.grades?.[r.grade]&&structure[r.division].grades[r.grade].bunks.indexOf(r.bunk)===-1)structure[r.division].grades[r.grade].bunks.push(r.bunk);if(!roster[r.name])a++;roster[r.name]=Object.assign(roster[r.name]||{},{division:r.division,grade:r.grade,bunk:r.bunk,team:r.team})});save();closeModal('csvModal');render(curPage);toast(a+' imported')}}};r.readAsText(file)}
-function exportCsv(){var e=Object.entries(roster);if(!e.length){toast('No campers','error');return}var csv='\uFEFFName,Division,Grade,Bunk,Team\n';e.forEach(function([n,d]){csv+='"'+n+'","'+(d.division||'')+'","'+(d.grade||'')+'","'+(d.bunk||'')+'","'+(d.team||'')+'"\n'});var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='campers_'+new Date().toISOString().split('T')[0]+'.csv';a.click();toast('Exported')}
+var CSV_HEADERS=['First Name','Last Name','Date of Birth','Gender','School Name','School Grade','Division','Grade','Bunk','Street Address','City','State','ZIP','Parent 1 Name','Parent 1 Phone','Parent 1 Email','Emergency Name','Emergency Phone','Emergency Relation','Allergies','Medications','Dietary Restrictions'];
+
+function downloadTemplate(){
+    // Build template with headers + league columns
+    var leagues=getLeagues();var leagueNames=Object.keys(leagues).sort();
+    var headers=CSV_HEADERS.slice();
+    leagueNames.forEach(function(lg){headers.push('Team: '+lg)});
+    var csv='\uFEFF'+headers.map(function(h){return'"'+h+'"'}).join(',')+'\n';
+    // Add 3 example rows
+    csv+='"John","Smith","2015-03-15","Male","PS 123","3rd","Juniors","3rd Grade","Bunk 1","123 Main St","Brooklyn","NY","11230","Jane Smith","555-123-4567","jane@email.com","Bob Smith","555-987-6543","Uncle","Peanuts","",""\n';
+    csv+='"Sarah","Cohen","2014-07-22","Female","Yeshiva Academy","4th","Seniors","4th Grade","Bunk 7","456 Oak Ave","Woodmere","NY","11598","Rachel Cohen","555-222-3333","rachel@email.com","David Cohen","555-444-5555","Father","","Inhaler","Dairy-free"\n';
+    csv+='"","","","","","","","","","","","","","","","","","","","","",""\n';
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+    a.download='campistry_camper_template.csv';
+    a.click();
+    toast('Template downloaded — fill it out and import');
+}
+
+function handleCsv(file){
+    if(!file)return;
+    var reader=new FileReader();
+    reader.onload=function(e){
+        var text=e.target.result;
+        if(text.charCodeAt(0)===0xFEFF)text=text.slice(1);
+        var lines=text.split(/\r?\n/).filter(function(l){return l.trim()});
+        if(!lines.length)return;
+
+        // Parse header row to find column indices
+        var hdr=parseCsvLine(lines[0]).map(function(h){return h.toLowerCase().trim()});
+        var col=function(names){
+            for(var i=0;i<names.length;i++){var idx=hdr.findIndex(function(h){return h.includes(names[i])});if(idx>=0)return idx}
+            return-1;
+        };
+
+        var iFirst=col(['first name','first']);
+        var iLast=col(['last name','last']);
+        var iName=col(['name','camper']);
+        var iDob=col(['date of birth','dob','birth']);
+        var iGender=col(['gender','sex']);
+        var iSchool=col(['school name','school']);
+        var iSchoolGr=col(['school grade']);
+        var iDiv=col(['division']);
+        var iGrade=col(['grade']);
+        var iBunk=col(['bunk','cabin']);
+        var iStreet=col(['street','address']);
+        var iCity=col(['city']);
+        var iState=col(['state']);
+        var iZip=col(['zip','postal']);
+        var iP1=col(['parent 1 name','parent name','parent1','mother','father']);
+        var iP1Ph=col(['parent 1 phone','parent phone','parent1 phone']);
+        var iP1Em=col(['parent 1 email','parent email','parent1 email']);
+        var iEmN=col(['emergency name','emergency contact']);
+        var iEmPh=col(['emergency phone']);
+        var iEmR=col(['emergency relation']);
+        var iAlg=col(['allergies','allergy']);
+        var iMed=col(['medications','medication','meds']);
+        var iDiet=col(['dietary','diet']);
+
+        // Find league team columns (headers like "Team: League Name")
+        var leagueCols={};
+        hdr.forEach(function(h,idx){
+            var m=h.match(/^team:\s*(.+)/i);
+            if(m)leagueCols[m[1].trim()]=idx;
+        });
+
+        var start=1; // skip header
+        var rows=[];
+        for(var i=start;i<Math.min(lines.length,5001);i++){
+            var c=parseCsvLine(lines[i]);
+            var firstName=(iFirst>=0?c[iFirst]:'').trim();
+            var lastName=(iLast>=0?c[iLast]:'').trim();
+            var fullName='';
+            if(firstName||lastName){fullName=(firstName+' '+lastName).trim()}
+            else if(iName>=0){fullName=(c[iName]||'').trim()}
+            if(!fullName)continue;
+
+            var teams={};
+            Object.entries(leagueCols).forEach(function([lg,idx]){
+                var v=(c[idx]||'').trim();
+                if(v)teams[lg]=v;
+            });
+
+            rows.push({
+                name:fullName,
+                dob:iDob>=0?(c[iDob]||'').trim():'',
+                gender:iGender>=0?(c[iGender]||'').trim():'',
+                school:iSchool>=0?(c[iSchool]||'').trim():'',
+                schoolGrade:iSchoolGr>=0?(c[iSchoolGr]||'').trim():'',
+                division:iDiv>=0?(c[iDiv]||'').trim():'',
+                grade:iGrade>=0?(c[iGrade]||'').trim():'',
+                bunk:iBunk>=0?(c[iBunk]||'').trim():'',
+                street:iStreet>=0?(c[iStreet]||'').trim():'',
+                city:iCity>=0?(c[iCity]||'').trim():'',
+                state:iState>=0?(c[iState]||'').trim():'',
+                zip:iZip>=0?(c[iZip]||'').trim():'',
+                parent1Name:iP1>=0?(c[iP1]||'').trim():'',
+                parent1Phone:iP1Ph>=0?(c[iP1Ph]||'').trim():'',
+                parent1Email:iP1Em>=0?(c[iP1Em]||'').trim():'',
+                emergencyName:iEmN>=0?(c[iEmN]||'').trim():'',
+                emergencyPhone:iEmPh>=0?(c[iEmPh]||'').trim():'',
+                emergencyRel:iEmR>=0?(c[iEmR]||'').trim():'',
+                allergies:iAlg>=0?(c[iAlg]||'').trim():'',
+                medications:iMed>=0?(c[iMed]||'').trim():'',
+                dietary:iDiet>=0?(c[iDiet]||'').trim():'',
+                teams:teams
+            });
+        }
+
+        if(rows.length){
+            var pvEl=document.getElementById('csvPV');
+            if(pvEl){pvEl.style.display='block';pvEl.innerHTML='<div style="font-weight:600;margin:8px 0 4px">'+rows.length+' campers found</div><div style="font-size:.75rem;color:var(--s400)">Columns detected: '+hdr.filter(function(h){return h}).length+'</div>'}
+            var btn=document.getElementById('csvBtn');
+            if(btn){btn.disabled=false;btn.onclick=function(){importRows(rows)}}
+        }
+    };
+    reader.readAsText(file);
+}
+
+function parseCsvLine(line){
+    var result=[],cur='',inQ=false;
+    for(var i=0;i<line.length;i++){
+        var ch=line[i];
+        if(inQ){if(ch==='"'&&line[i+1]==='"'){cur+='"';i++}else if(ch==='"'){inQ=false}else{cur+=ch}}
+        else{if(ch==='"'){inQ=true}else if(ch===','){result.push(cur);cur=''}else{cur+=ch}}
+    }
+    result.push(cur);
+    return result;
+}
+
+function importRows(rows){
+    var added=0;
+    rows.forEach(function(r){
+        // Create structure if needed
+        if(r.division&&!structure[r.division])structure[r.division]={color:COLORS[Object.keys(structure).length%COLORS.length],grades:{}};
+        if(r.division&&r.grade&&structure[r.division]&&!structure[r.division].grades[r.grade])structure[r.division].grades[r.grade]={bunks:[]};
+        if(r.division&&r.grade&&r.bunk&&structure[r.division]&&structure[r.division].grades[r.grade]&&structure[r.division].grades[r.grade].bunks.indexOf(r.bunk)===-1)structure[r.division].grades[r.grade].bunks.push(r.bunk);
+
+        var isNew=!roster[r.name];
+        if(isNew)added++;
+        var existingId=roster[r.name]?roster[r.name].camperId:null;
+        if(!existingId){existingId=nextCamperId;nextCamperId++}
+
+        // Merge: preserve existing data, overwrite with non-empty imported fields
+        var existing=roster[r.name]||{};
+        roster[r.name]={
+            camperId:existingId,
+            dob:r.dob||existing.dob||'',
+            gender:r.gender||existing.gender||'',
+            school:r.school||existing.school||'',
+            schoolGrade:r.schoolGrade||existing.schoolGrade||'',
+            division:r.division||existing.division||'',
+            grade:r.grade||existing.grade||'',
+            bunk:r.bunk||existing.bunk||'',
+            street:r.street||existing.street||'',
+            city:r.city||existing.city||'',
+            state:r.state||existing.state||'',
+            zip:r.zip||existing.zip||'',
+            parent1Name:r.parent1Name||existing.parent1Name||'',
+            parent1Phone:r.parent1Phone||existing.parent1Phone||'',
+            parent1Email:r.parent1Email||existing.parent1Email||'',
+            emergencyName:r.emergencyName||existing.emergencyName||'',
+            emergencyPhone:r.emergencyPhone||existing.emergencyPhone||'',
+            emergencyRel:r.emergencyRel||existing.emergencyRel||'',
+            allergies:r.allergies||existing.allergies||'',
+            medications:r.medications||existing.medications||'',
+            dietary:r.dietary||existing.dietary||'',
+            teams:Object.keys(r.teams).length?r.teams:(existing.teams||{}),
+            team:Object.values(r.teams)[0]||existing.team||''
+        };
+        // Sync address to Go
+        if(roster[r.name].street)syncAddressToGo(r.name,roster[r.name]);
+    });
+    save();closeModal('csvModal');render(curPage);
+    toast(added+' added, '+(rows.length-added)+' updated');
+}
+
+function exportCsv(){
+    var entries=Object.entries(roster);
+    if(!entries.length){toast('No campers','error');return}
+    var leagues=getLeagues();var leagueNames=Object.keys(leagues).sort();
+    var headers=CSV_HEADERS.slice();
+    leagueNames.forEach(function(lg){headers.push('Team: '+lg)});
+    var csv='\uFEFF'+headers.map(function(h){return'"'+h+'"'}).join(',')+'\n';
+    entries.sort(function(a,b){return a[0].localeCompare(b[0])});
+    entries.forEach(function([n,d]){
+        var parts=n.split(' ');
+        var first=parts[0]||'';
+        var last=parts.slice(1).join(' ')||'';
+        var teams=d.teams||{};
+        var row=[first,last,d.dob||'',d.gender||'',d.school||'',d.schoolGrade||'',d.division||'',d.grade||'',d.bunk||'',d.street||'',d.city||'',d.state||'',d.zip||'',d.parent1Name||'',d.parent1Phone||'',d.parent1Email||'',d.emergencyName||'',d.emergencyPhone||'',d.emergencyRel||'',d.allergies||'',d.medications||'',d.dietary||''];
+        leagueNames.forEach(function(lg){row.push(teams[lg]||'')});
+        csv+=row.map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
+    });
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+    a.download='campers_'+new Date().toISOString().split('T')[0]+'.csv';
+    a.click();
+    toast('Exported '+entries.length+' campers');
+}
 
 // ═══ BOOT ════════════════════════════════════════════════════════
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
@@ -483,7 +702,7 @@ window.CampistryMe={
     viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
-    openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,
+    openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,
     _pickColor:_pickColor,_addGradeRow:_addGradeRow,
 };
