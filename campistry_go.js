@@ -404,8 +404,19 @@
             }).join('');
 
             const camperCount = countCampersForShift(sh);
+            const isArrival = D.activeMode === 'arrival';
+            const timeLabel = isArrival ? 'Arrive by:' : 'Depart:';
 
-            return '<div class="shift-card"><div class="shift-card-header"><div class="shift-card-title"><span class="shift-num">' + (idx + 1) + '</span><input type="text" class="form-input" value="' + esc(sh.label || '') + '" placeholder="Shift name" style="max-width:200px;font-size:.875rem;font-weight:700;padding:.25rem .5rem;border:1px solid transparent;" onfocus="this.style.borderColor=\'var(--border-medium)\'" onblur="this.style.borderColor=\'transparent\';CampistryGo.renameShift(\'' + sh.id + '\',this.value)"><span style="font-size:.75rem;font-weight:400;color:var(--text-muted);">' + camperCount + ' campers</span></div><div style="display:flex;align-items:center;gap:.5rem;"><label style="font-size:.75rem;font-weight:600;color:var(--text-secondary)">Depart:</label><input type="time" class="form-input" value="' + esc(sh.departureTime || '16:00') + '" style="width:110px;padding:.35rem .5rem;font-size:.8125rem;" onchange="CampistryGo.updateShiftTime(\'' + sh.id + '\',this.value)"><button class="btn btn-ghost btn-sm" style="color:var(--red-500);" onclick="CampistryGo.deleteShift(\'' + sh.id + '\')">Remove</button></div></div><div style="display:flex;flex-direction:column;gap:.375rem;">' + (divNames.length ? divChips : '<span style="font-size:.8125rem;color:var(--text-muted)">No divisions in Campistry Me</span>') + '</div></div>';
+            // Bus assignment chips
+            if (!sh.assignedBuses) sh.assignedBuses = D.buses.map(b => b.id);
+            const busChips = D.buses.map(b => {
+                const active = sh.assignedBuses.includes(b.id);
+                return '<span class="division-chip' + (active ? ' active' : '') + '" style="font-size:.65rem;padding:.15rem .5rem;" onclick="CampistryGo.toggleShiftBus(\'' + sh.id + '\',\'' + b.id + '\')"><span class="chip-dot" style="background:' + esc(b.color || '#10b981') + '"></span>' + esc(b.name) + '</span>';
+            }).join('');
+            const busCount = sh.assignedBuses.length;
+            const busSection = D.buses.length ? '<div style="margin-top:.5rem;border-top:1px solid var(--border-light);padding-top:.5rem;"><div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.375rem;"><span style="font-size:.75rem;font-weight:600;color:var(--text-secondary);">Buses (' + busCount + '/' + D.buses.length + '):</span><span class="division-chip' + (busCount === D.buses.length ? ' active' : '') + '" style="font-size:.6rem;padding:.1rem .4rem;" onclick="CampistryGo.setAllShiftBuses(\'' + sh.id + '\')">All</span></div><div style="display:flex;flex-wrap:wrap;gap:.25rem;">' + busChips + '</div></div>' : '';
+
+            return '<div class="shift-card"><div class="shift-card-header"><div class="shift-card-title"><span class="shift-num">' + (idx + 1) + '</span><input type="text" class="form-input" value="' + esc(sh.label || '') + '" placeholder="Shift name" style="max-width:200px;font-size:.875rem;font-weight:700;padding:.25rem .5rem;border:1px solid transparent;" onfocus="this.style.borderColor=\'var(--border-medium)\'" onblur="this.style.borderColor=\'transparent\';CampistryGo.renameShift(\'' + sh.id + '\',this.value)"><span style="font-size:.75rem;font-weight:400;color:var(--text-muted);">' + camperCount + ' campers</span></div><div style="display:flex;align-items:center;gap:.5rem;"><label style="font-size:.75rem;font-weight:600;color:var(--text-secondary)">' + timeLabel + '</label><input type="time" class="form-input" value="' + esc(sh.departureTime || (isArrival ? '08:00' : '16:00')) + '" style="width:110px;padding:.35rem .5rem;font-size:.8125rem;" onchange="CampistryGo.updateShiftTime(\'' + sh.id + '\',this.value)"><button class="btn btn-ghost btn-sm" style="color:var(--red-500);" onclick="CampistryGo.deleteShift(\'' + sh.id + '\')">Remove</button></div></div><div style="display:flex;flex-direction:column;gap:.375rem;">' + (divNames.length ? divChips : '<span style="font-size:.8125rem;color:var(--text-muted)">No divisions in Campistry Me</span>') + '</div>' + busSection + '</div>';
         }).join('');
     }
 
@@ -435,12 +446,16 @@
 
     function addShift() {
         const idx = D.shifts.length + 1;
-        const prevTime = D.shifts.length ? D.shifts[D.shifts.length - 1].departureTime : '16:00';
+        const isArrival = D.activeMode === 'arrival';
+        const defaultTime = isArrival ? '08:00' : '16:00';
+        const prevTime = D.shifts.length ? D.shifts[D.shifts.length - 1].departureTime : defaultTime;
         const prevMin = parseTime(prevTime);
-        const newMin = prevMin + 45;
-        const h = Math.floor(newMin / 60), m = newMin % 60;
+        const newMin = isArrival ? prevMin - 45 : prevMin + 45; // arrivals go earlier
+        const h = Math.floor(Math.max(0, newMin) / 60), m = Math.max(0, newMin) % 60;
         const newTime = String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
-        D.shifts.push({ id: uid(), label: 'Shift ' + idx, divisions: [], grades: {}, departureTime: newTime });
+        // Default: all buses assigned
+        const allBusIds = D.buses.map(b => b.id);
+        D.shifts.push({ id: uid(), label: 'Shift ' + idx, divisions: [], grades: {}, departureTime: newTime, assignedBuses: allBusIds });
         save(); renderShifts(); updateStats(); toast('Shift added');
     }
     function deleteShift(id) { D.shifts = D.shifts.filter(s => s.id !== id); save(); renderShifts(); updateStats(); toast('Shift removed'); }
@@ -486,6 +501,26 @@
         save(); renderShifts();
     }
     function updateShiftTime(id, val) { const sh = D.shifts.find(s => s.id === id); if (sh) { sh.departureTime = val; save(); } }
+
+    function toggleShiftBus(shiftId, busId) {
+        const sh = D.shifts.find(s => s.id === shiftId);
+        if (!sh) return;
+        if (!sh.assignedBuses) sh.assignedBuses = D.buses.map(b => b.id);
+        const idx = sh.assignedBuses.indexOf(busId);
+        if (idx >= 0) {
+            if (sh.assignedBuses.length > 1) sh.assignedBuses.splice(idx, 1); // keep at least 1
+        } else {
+            sh.assignedBuses.push(busId);
+        }
+        save(); renderShifts();
+    }
+
+    function setAllShiftBuses(shiftId) {
+        const sh = D.shifts.find(s => s.id === shiftId);
+        if (!sh) return;
+        sh.assignedBuses = D.buses.map(b => b.id);
+        save(); renderShifts();
+    }
     function renameShift(id, val) { const sh = D.shifts.find(s => s.id === id); if (sh) { sh.label = val.trim(); save(); } }
 
     // =========================================================================
@@ -631,17 +666,17 @@
             return !a.geocoded;
         });
         if (!todo.length) { toast('All addresses already geocoded!'); return; }
-        toast((force ? 'Re-geocoding ' : 'Geocoding ') + todo.length + ' addresses via Census...');
-        let ok = 0, fail = 0;
 
-        // Sequential — one at a time, Census JSONP needs breathing room
+        // ── PASS 1: Census (free, no limits, exact) ──
+        toast('Pass 1: Census — ' + todo.length + ' addresses...');
+        let censusOk = 0, censusFail = [];
+
         for (let i = 0; i < todo.length; i++) {
             const name = todo[i];
             const a = D.addresses[name];
-            if (!a?.street) { fail++; continue; }
+            if (!a?.street) { censusFail.push(name); continue; }
             const q = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ');
 
-            // Census only — no ORS fallback during batch (saves quota)
             try {
                 const d = await censusGeocode(q);
                 if (d?.result?.addressMatches?.length) {
@@ -651,30 +686,92 @@
                     a.geocoded = true;
                     a._zipMismatch = false;
                     a._geocodeSource = 'census';
-                    ok++;
+                    censusOk++;
                 } else {
-                    fail++;
-                    console.warn('[Go] Census no match:', name, q);
+                    censusFail.push(name);
                 }
             } catch (e) {
-                fail++;
-                console.warn('[Go] Census error:', name, e.message);
+                censusFail.push(name);
             }
 
-            // Update UI every 10
             if ((i + 1) % 10 === 0 || i === todo.length - 1) {
                 renderAddresses(); updateStats();
-                toast(ok + ' ✓  ' + fail + ' ✗  (' + (i + 1) + ' of ' + todo.length + ')');
+                toast('Census: ' + censusOk + ' ✓  ' + censusFail.length + ' remaining  (' + (i + 1) + '/' + todo.length + ')');
             }
-            // Small pause between each request
             if (i < todo.length - 1) await new Promise(r => setTimeout(r, 300));
         }
 
-        save(); renderAddresses(); updateStats();
-        if (fail > 0) {
-            toast(ok + ' geocoded, ' + fail + ' failed — check console', 'error');
+        save();
+
+        // ── PASS 2: ORS for Census failures ──
+        if (censusFail.length > 0 && getApiKey()) {
+            toast('Pass 2: ORS — ' + censusFail.length + ' addresses Census missed...');
+            let orsOk = 0, orsFail = 0;
+
+            for (let i = 0; i < censusFail.length; i++) {
+                const name = censusFail[i];
+                const a = D.addresses[name];
+                if (!a?.street || a.geocoded) { continue; }
+                const q = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ');
+
+                const params = { text: q, size: '5', 'boundary.country': 'US' };
+                if (_campCoordsCache) {
+                    params['focus.point.lat'] = _campCoordsCache.lat;
+                    params['focus.point.lon'] = _campCoordsCache.lng;
+                }
+
+                try {
+                    const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams(params), {
+                        headers: { 'Authorization': getApiKey(), 'Accept': 'application/json' }
+                    });
+                    if (r.ok) {
+                        const d = await r.json();
+                        if (d.features?.length) {
+                            let best = null;
+                            if (a.zip) best = d.features.find(f => (f.properties?.postalcode || '') === a.zip);
+                            if (!best) best = d.features[0];
+                            const co = best.geometry.coordinates;
+                            a.lng = co[0]; a.lat = co[1]; a.geocoded = true;
+                            a._geocodeSource = 'ors';
+                            const resultZip = best.properties?.postalcode || '';
+                            a._zipMismatch = !!(a.zip && resultZip && resultZip !== a.zip);
+                            orsOk++;
+                        } else { orsFail++; }
+                    } else {
+                        orsFail++;
+                        if (r.status === 429 || r.status === 403) {
+                            console.warn('[Go] ORS rate limited — stopping pass 2');
+                            orsFail += censusFail.length - i - 1;
+                            break;
+                        }
+                    }
+                } catch (e) {
+                    orsFail++;
+                }
+
+                if ((i + 1) % 5 === 0 || i === censusFail.length - 1) {
+                    renderAddresses(); updateStats();
+                    toast('ORS: ' + orsOk + ' ✓  ' + orsFail + ' ✗  (' + (i + 1) + '/' + censusFail.length + ')');
+                }
+                // ORS needs slower pacing
+                if (i < censusFail.length - 1) await new Promise(r => setTimeout(r, 1500));
+            }
+
+            save(); renderAddresses(); updateStats();
+            const totalOk = censusOk + orsOk;
+            const totalFail = censusFail.length - orsOk;
+            if (totalFail > 0) {
+                toast(totalOk + ' geocoded (Census: ' + censusOk + ', ORS: ' + orsOk + '), ' + totalFail + ' failed', 'error');
+            } else {
+                toast('All ' + totalOk + ' geocoded! (Census: ' + censusOk + ', ORS: ' + orsOk + ')');
+            }
         } else {
-            toast('All ' + ok + ' geocoded via Census!');
+            renderAddresses(); updateStats();
+            if (censusFail.length > 0) {
+                toast(censusOk + ' geocoded via Census, ' + censusFail.length + ' failed — set ORS key for fallback', 'error');
+            } else {
+                toast('All ' + censusOk + ' geocoded via Census!');
+            }
         }
     }
 
@@ -884,7 +981,7 @@
         const largestShift = D.shifts.length ? Math.max(...D.shifts.map(s => countCampersForShift(s))) : 0;
         const checks = [
             { label: D.buses.length + ' bus(es)', status: D.buses.length > 0 ? 'ok' : 'fail', detail: D.buses.length === 0 ? 'Add buses in Fleet tab' : '' },
-            { label: D.shifts.length + ' shift(s) configured', status: D.shifts.length > 0 ? 'ok' : 'fail', detail: D.shifts.length === 0 ? 'Add shifts in Shifts tab' : '' },
+            { label: D.shifts.length + ' shift(s) configured', status: D.shifts.length > 0 ? 'ok' : 'warn', detail: D.shifts.length === 0 ? 'No shifts — all campers will be in one group' : '' },
             { label: inShifts + ' of ' + camperCount + ' campers assigned to shifts', status: inShifts === camperCount && camperCount > 0 ? 'ok' : inShifts > 0 ? 'warn' : 'fail', detail: inShifts < camperCount ? (camperCount - inShifts) + ' campers have no shift' : '' },
             { label: geocoded + ' of ' + camperCount + ' geocoded', status: geocoded === camperCount && camperCount > 0 ? 'ok' : geocoded > 0 ? 'warn' : 'fail', detail: geocoded < camperCount ? (camperCount - geocoded) + ' missing — will be skipped' : '' },
             { label: totalSeats + ' seats/shift for up to ' + largestShift + ' in largest shift', status: 'ok', detail: '' },
@@ -892,7 +989,7 @@
             { label: getApiKey() ? 'ORS key set' : 'No ORS key (will use estimates)', status: getApiKey() ? 'ok' : 'warn', detail: '' }
         ];
         const anyFail = checks.some(c => c.status === 'fail');
-        const canGen = D.buses.length > 0 && D.shifts.length > 0 && geocoded > 0;
+        const canGen = D.buses.length > 0 && geocoded > 0;
         const badge = document.getElementById('preflightStatus'); badge.className = 'badge ' + (anyFail ? 'badge-danger' : canGen ? 'badge-success' : 'badge-warning'); badge.textContent = anyFail ? 'Not ready' : 'Ready';
         document.getElementById('preflightBody').innerHTML = checks.map(c => '<div class="preflight-item preflight-' + c.status + '"><div class="preflight-icon">' + (c.status === 'ok' ? '✓' : c.status === 'warn' ? '!' : '✗') + '</div><div><div style="font-weight:600;color:var(--text-primary)">' + esc(c.label) + '</div>' + (c.detail ? '<div style="font-size:.75rem;color:var(--text-muted)">' + esc(c.detail) + '</div>' : '') + '</div></div>').join('');
         document.getElementById('routeMode').value = D.setup.dropoffMode || 'door-to-door';
@@ -1220,30 +1317,34 @@
 
         const allShiftResults = [];
 
-        for (let si = 0; si < D.shifts.length; si++) {
-            const shift = D.shifts[si];
-            const pctBase = (si / D.shifts.length) * 100;
-            showProgress('Shift ' + (si + 1) + ': ' + (shift.label || '') + '...', pctBase + 15);
+        // If no shifts defined, create a virtual "all campers" shift
+        const shifts = D.shifts.length ? D.shifts : [{ id: '__all__', label: 'All Campers', divisions: [], departureTime: D.activeMode === 'arrival' ? '07:00' : '16:00', _isVirtual: true }];
 
-            const divSet = new Set(shift.divisions || []);
+        for (let si = 0; si < shifts.length; si++) {
+            const shift = shifts[si];
+            const pctBase = (si / shifts.length) * 100;
+            showProgress((shift.label || 'Shift ' + (si + 1)) + '...', pctBase + 15);
+
             const routes = [];
 
-            // For each region, build routes with assigned buses
-            _detectedRegions.forEach(reg => {
-                const busIds = assignments[shift.id]?.[reg.id] || [];
-                if (!busIds.length) return;
+            // Get buses for this shift (use assignedBuses if defined, else all)
+            const shiftBusIds = shift.assignedBuses?.length ? shift.assignedBuses : vehicles.map(v => v.busId);
+            const shiftVehicles = shiftBusIds.map(bid => vehicles.find(v => v.busId === bid)).filter(Boolean);
 
+            // For each region, build routes with shift's buses
+            _detectedRegions.forEach(reg => {
                 const campers = [];
                 reg.camperNames.forEach(name => {
                     const c = roster[name]; const a = D.addresses[name];
-                    if (c && camperMatchesShift(c, shift) && a?.geocoded && a.lat && a.lng) {
+                    if (!c || !a?.geocoded || !a.lat || !a.lng) return;
+                    if (shift._isVirtual || camperMatchesShift(c, shift)) {
                         campers.push({ name, division: c.division, bunk: c.bunk || '', lat: a.lat, lng: a.lng, address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ') });
                     }
                 });
                 if (!campers.length) return;
 
-                // Split campers across assigned buses for this region
-                const regionVehicles = busIds.map(bid => vehicles.find(v => v.busId === bid)).filter(Boolean);
+                // Distribute shift's buses across regions proportionally
+                const regionVehicles = shiftVehicles.length <= 1 ? shiftVehicles : shiftVehicles;
                 const regionRoutes = clientSideCluster(campers, regionVehicles, campLat, campLng, mode);
                 routes.push(...regionRoutes);
             });
@@ -1254,18 +1355,49 @@
                 r.counselors.filter(c => c.needsStop === 'yes' && c.address).forEach(c => { r.stops.push({ stopNum: r.stops.length + 1, campers: [], address: c.address, lat: null, lng: null, isCounselor: true, counselorName: c.name }); });
             });
 
-            // Calculate drop-off times (mph based)
-            const depMin = parseTime(shift.departureTime || '16:00');
+            // Calculate times
+            const isArrival = D.activeMode === 'arrival';
+            const timeMin = parseTime(shift.departureTime || (isArrival ? '08:00' : '16:00'));
+
             routes.forEach(r => {
-                let cum = depMin;
-                r.stops.forEach((stop, i) => {
-                    if (i === 0) { cum += 15; }
-                    else { const prev = r.stops[i - 1]; if (stop.lat && prev.lat) { const mi = haversineMi(prev.lat, prev.lng, stop.lat, stop.lng); cum += (mi / avgSpeedMph) * 60; } else cum += 3; }
-                    cum += avgStopMin;
-                    stop.estimatedTime = formatTime(cum);
-                    stop.estimatedMin = cum;
-                });
-                r.totalDuration = Math.round(cum - depMin);
+                if (isArrival) {
+                    // ARRIVAL: "arrive by" time is when bus reaches camp
+                    // Work backwards: camp arrival = timeMin, last stop pickup = earlier, first stop = earliest
+                    // First calculate total route duration
+                    let totalDur = 0;
+                    r.stops.forEach((stop, i) => {
+                        if (i === 0) { totalDur += 15; } // drive from first stop area
+                        else { const prev = r.stops[i - 1]; if (stop.lat && prev.lat) { totalDur += (haversineMi(prev.lat, prev.lng, stop.lat, stop.lng) / avgSpeedMph) * 60; } else totalDur += 3; }
+                        totalDur += avgStopMin;
+                    });
+                    // Add drive from last stop to camp
+                    const lastStop = r.stops[r.stops.length - 1];
+                    if (lastStop?.lat && _campCoordsCache) {
+                        totalDur += (haversineMi(lastStop.lat, lastStop.lng, _campCoordsCache.lat, _campCoordsCache.lng) / avgSpeedMph) * 60;
+                    }
+
+                    // Now assign times: first pickup = arriveBy - totalDur
+                    let cum = timeMin - totalDur;
+                    r.stops.forEach((stop, i) => {
+                        if (i === 0) { cum += 0; } // first stop is the start
+                        else { const prev = r.stops[i - 1]; if (stop.lat && prev.lat) { cum += (haversineMi(prev.lat, prev.lng, stop.lat, stop.lng) / avgSpeedMph) * 60; } else cum += 3; }
+                        cum += avgStopMin;
+                        stop.estimatedTime = formatTime(cum);
+                        stop.estimatedMin = cum;
+                    });
+                    r.totalDuration = Math.round(totalDur);
+                } else {
+                    // DISMISSAL: depart camp at timeMin, stops get later
+                    let cum = timeMin;
+                    r.stops.forEach((stop, i) => {
+                        if (i === 0) { cum += 15; }
+                        else { const prev = r.stops[i - 1]; if (stop.lat && prev.lat) { cum += (haversineMi(prev.lat, prev.lng, stop.lat, stop.lng) / avgSpeedMph) * 60; } else cum += 3; }
+                        cum += avgStopMin;
+                        stop.estimatedTime = formatTime(cum);
+                        stop.estimatedMin = cum;
+                    });
+                    r.totalDuration = Math.round(cum - timeMin);
+                }
                 r.camperCount = r.stops.reduce((s, st) => s + st.campers.length, 0);
             });
 
@@ -1373,35 +1505,69 @@
 
         function orderAndCalcDuration(r) {
             if (r.stops.length < 2) { r.stops.forEach((s, i) => s.stopNum = i + 1); }
-            else if (isArrival) {
-                // ARRIVAL: farthest pickup first, work back toward camp
-                // Sort by distance from camp, farthest first
-                r.stops.sort((a, b) => haversineMi(campLat, campLng, b.lat, b.lng) - haversineMi(campLat, campLng, a.lat, a.lng));
-                // Then nearest-neighbor chain from the farthest point
-                const ordered = [r.stops[0]]; const rem = r.stops.slice(1);
-                let pLat = ordered[0].lat, pLng = ordered[0].lng;
+            else {
+                // Start with nearest-neighbor as initial solution
+                const ordered = []; const rem = [...r.stops];
+                let startLat, startLng;
+
+                if (isArrival) {
+                    // ARRIVAL: start from farthest stop, work toward camp
+                    let fIdx = 0, fDist = 0;
+                    rem.forEach((s, i) => { const d = haversineMi(campLat, campLng, s.lat, s.lng); if (d > fDist) { fDist = d; fIdx = i; } });
+                    ordered.push(rem.splice(fIdx, 1)[0]);
+                    startLat = ordered[0].lat; startLng = ordered[0].lng;
+                } else {
+                    // DISMISSAL: start from camp
+                    startLat = campLat; startLng = campLng;
+                }
+
+                let pLat = startLat, pLng = startLng;
                 while (rem.length) {
                     let ni = 0, nd = Infinity;
                     rem.forEach((s, i) => { const d = haversineMi(pLat, pLng, s.lat, s.lng); if (d < nd) { nd = d; ni = i; } });
                     const nx = rem.splice(ni, 1)[0]; ordered.push(nx); pLat = nx.lat; pLng = nx.lng;
                 }
+
+                // 2-opt improvement: swap pairs to eliminate crossings/backtracking
+                function routeDist(stops) {
+                    let d = haversineMi(isArrival ? stops[0].lat : campLat, isArrival ? stops[0].lng : campLng,
+                        isArrival ? stops[0].lat : stops[0].lat, isArrival ? stops[0].lng : stops[0].lng);
+                    if (!isArrival) d = haversineMi(campLat, campLng, stops[0].lat, stops[0].lng);
+                    for (let i = 0; i < stops.length - 1; i++) {
+                        d += haversineMi(stops[i].lat, stops[i].lng, stops[i + 1].lat, stops[i + 1].lng);
+                    }
+                    return d;
+                }
+
+                let improved = true;
+                let passes = 0;
+                while (improved && passes < 50) {
+                    improved = false;
+                    passes++;
+                    for (let i = 0; i < ordered.length - 1; i++) {
+                        for (let j = i + 1; j < ordered.length; j++) {
+                            // Try reversing the segment between i and j
+                            const newRoute = [...ordered];
+                            const segment = newRoute.splice(i, j - i + 1).reverse();
+                            newRoute.splice(i, 0, ...segment);
+                            if (routeDist(newRoute) < routeDist(ordered)) {
+                                for (let k = 0; k < ordered.length; k++) ordered[k] = newRoute[k];
+                                improved = true;
+                            }
+                        }
+                    }
+                }
+
                 ordered.forEach((s, i) => s.stopNum = i + 1);
                 r.stops = ordered;
-            } else {
-                // DISMISSAL: nearest first, work outward from camp
-                const ordered = []; const rem = [...r.stops];
-                let pLat = campLat, pLng = campLng;
-                while (rem.length) {
-                    let ni = 0, nd = Infinity;
-                    rem.forEach((s, i) => { const d = haversineMi(pLat, pLng, s.lat, s.lng); if (d < nd) { nd = d; ni = i; } });
-                    const nx = rem.splice(ni, 1)[0]; nx.stopNum = ordered.length + 1; ordered.push(nx); pLat = nx.lat; pLng = nx.lng;
-                }
-                r.stops = ordered;
             }
-            // Calculate duration: camp → stops → camp
+
+            // Calculate duration
             let dur = 0, pLat = campLat, pLng = campLng;
             r.stops.forEach(s => { dur += (haversineMi(pLat, pLng, s.lat, s.lng) / avgSpeed) * 60 + stopTime; pLat = s.lat; pLng = s.lng; });
-            if (r.stops.length) dur += (haversineMi(pLat, pLng, campLat, campLng) / avgSpeed) * 60;
+            // Only add return-to-camp for dismissal with multiple shifts
+            const needsReturn = !isArrival && D.shifts.length > 1;
+            if (r.stops.length && needsReturn) dur += (haversineMi(pLat, pLng, campLat, campLng) / avgSpeed) * 60;
             r.totalDuration = Math.round(dur);
         }
         routes.forEach(orderAndCalcDuration);
@@ -1687,11 +1853,12 @@
             const stopsWithCoords = route.stops.filter(s => s.lat && s.lng);
             if (!stopsWithCoords.length) continue;
 
-            // Full route: camp → stops → camp
+            // Route: camp → stops, and only add →camp return for multi-shift dismissal
+            const needsReturn = D.activeMode === 'dismissal' && D.shifts.length > 1;
             const straightCoords = [];
             if (_campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
             stopsWithCoords.forEach(s => straightCoords.push([s.lat, s.lng]));
-            if (_campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
+            if (_campCoordsCache && needsReturn) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
             allLatLngs.push(...straightCoords);
 
             const dashPattern = getDash(route.shiftIdx);
@@ -1714,7 +1881,7 @@
                     const wp = [];
                     if (_campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
                     stopsWithCoords.forEach(s => wp.push([s.lng, s.lat]));
-                    if (_campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
+                    if (_campCoordsCache && needsReturn) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
 
                     (async function(waypoints, color, ck, temp, dash, w, o) {
                         try {
@@ -1832,10 +1999,11 @@
 
                         // Draw updated straight line immediately
                         const stopsWithCoords = rt.stops.filter(s => s.lat && s.lng);
+                        const needsReturn = D.activeMode === 'dismissal' && D.shifts.length > 1;
                         const straightCoords = [];
                         if (_campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
                         stopsWithCoords.forEach(s => straightCoords.push([s.lat, s.lng]));
-                        if (_campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
+                        if (_campCoordsCache && needsReturn) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
 
                         const shiftIndices = [..._activeShifts].sort();
                         const multiShift = shiftIndices.length > 1;
@@ -1855,7 +2023,7 @@
                                 const wp = [];
                                 if (_campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
                                 stopsWithCoords.forEach(s => wp.push([s.lng, s.lat]));
-                                if (_campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
+                                if (_campCoordsCache && needsReturn) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
 
                                 const resp = await fetch('https://api.openrouteservice.org/v2/directions/driving-car', {
                                     method: 'POST',
@@ -2444,6 +2612,7 @@
         openBusModal, saveBus, editBus, deleteBus, _pickColor,
         addShift, deleteShift, toggleShiftDiv, updateShiftTime, renameShift,
         toggleShiftGrade, setShiftGradeMode,
+        toggleShiftBus, setAllShiftBuses,
         openMonitorModal, saveMonitor, editMonitor, deleteMonitor,
         openCounselorModal, saveCounselor, editCounselor, deleteCounselor,
         editAddress, saveAddress, geocodeAll, downloadAddressTemplate, importAddressCsv,
