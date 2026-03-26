@@ -2294,6 +2294,11 @@
                 const popup = '<div style="font-family:DM Sans,sans-serif;min-width:160px;"><div style="font-weight:700;font-size:13px;margin-bottom:4px;color:' + route.busColor + '">' + esc(route.busName) + ' — ' + esc(route.shiftLabel) + '</div><div style="font-weight:600;margin-bottom:2px;">Stop ' + stop.stopNum + '</div><div style="font-size:12px;margin-bottom:4px;">' + names + '</div><div style="font-size:11px;color:#888;">' + esc(stop.address) + '</div>' + (stop.estimatedTime ? '<div style="font-size:12px;font-weight:600;margin-top:4px;">Est: ' + stop.estimatedTime + '</div>' : '') + '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;">Drag to move stop</div></div>';
                 const marker = L.marker([stop.lat, stop.lng], { icon, draggable: !isSpecial }).addTo(_map);
                 marker.bindPopup(popup);
+                marker.on('click', function(e) {
+                    if (window._mapEditorStopClick && window._mapEditorStopClick(stop, route.busId, route.shiftIdx)) {
+                        e.originalEvent?.stopPropagation();
+                    }
+                });
                 _mapLayers.push(marker);
 
                 if (!isSpecial) {
@@ -3013,6 +3018,7 @@
         openMoveModal, renderFilteredMasterList, sortMasterBy,
         switchMode,
         closeModal, openModal
+        _getMap: function() { return _map; },
     };
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
