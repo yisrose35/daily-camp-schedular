@@ -579,7 +579,7 @@
             const hasA = a?.street;
             const full = hasA ? [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ') : '';
             const badge = hasA ? (a.geocoded ? (a._zipMismatch ? '<span class="badge badge-warning" title="ZIP code mismatch — location may be wrong">⚠ Check</span>' : '<span class="badge badge-success">Geocoded</span>') : '<span class="badge badge-warning">Not geocoded</span>') : '<span class="badge badge-danger">Missing</span>';
-            return '<tr><td style="font-weight:600">' + esc(n) + '</td><td>' + (esc(c.division) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (full ? esc(full) : '<span style="color:var(--text-muted)">No address</span>') + '</td><td>' + badge + '</td><td><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editAddress(\'' + esc(n.replace(/'/g, "\\'")) + '\')">' + (hasA ? 'Edit' : 'Add') + '</button></td></tr>';
+            return '<tr><td style="font-size:.75rem;color:var(--text-muted);font-family:monospace;">' + esc(c.id || c.camperId || '') + '</td><td style="font-weight:600">' + esc(n) + '</td><td>' + (esc(c.division) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (full ? esc(full) : '<span style="color:var(--text-muted)">No address</span>') + '</td><td>' + badge + '</td><td><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editAddress(\'' + esc(n.replace(/'/g, "\\'")) + '\')">' + (hasA ? 'Edit' : 'Add') + '</button></td></tr>';
         }).join('');
     }
     function updateAddrProgress(n, t) { const p = t > 0 ? Math.round(n / t * 100) : 0; document.getElementById('addressProgressBar').style.width = p + '%'; document.getElementById('addressProgressText').textContent = n + ' of ' + t + ' (' + p + '%)'; }
@@ -935,9 +935,8 @@
 
     function downloadAddressTemplate() {
         const roster = getRoster(); const names = Object.keys(roster).sort();
-        let csv = '\uFEFFName,Division,Bunk,Street Address,City,State,ZIP,Transport,Ride With\n';
-       names.forEach(n => { const c = roster[n], a = D.addresses[n] || {}; csv += [n, c.division || '', c.bunk || '', a.street || '', a.city || '', a.state || 'NY', a.zip || '', a.transport || 'bus', a.rideWith || ''].map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',') + '\n'; });
-        const blob = new Blob([csv], { type: 'text/csv' }); const el = document.createElement('a'); el.href = URL.createObjectURL(blob); el.download = 'campistry_go_addresses.csv'; el.click(); toast('Template downloaded');
+        let csv = '\uFEFFID,Name,Division,Bunk,Street Address,City,State,ZIP,Transport,Ride With\n';
+      names.forEach(n => { const c = roster[n], a = D.addresses[n] || {}; csv += [c.id || c.camperId || '', n, c.division || '', c.bunk || '', a.street || '', a.city || '', a.state || 'NY', a.zip || '', a.transport || 'bus', a.rideWith || ''].map(v =>        const blob = new Blob([csv], { type: 'text/csv' }); const el = document.createElement('a'); el.href = URL.createObjectURL(blob); el.download = 'campistry_go_addresses.csv'; el.click(); toast('Template downloaded');
     }
     function importAddressCsv() { const inp = document.getElementById('csvFileInput'); inp.onchange = function () { if (!inp.files[0]) return; const r = new FileReader(); r.onload = e => { parseCsv(e.target.result); inp.value = ''; }; r.readAsText(inp.files[0]); }; inp.click(); }
     function parseCsv(text) {
@@ -2997,7 +2996,7 @@ function renderCarpool() {
         if (!_generatedRoutes) { toast('Generate first', 'error'); return; }
         const roster = getRoster();
         const modeLabel = D.activeMode === 'arrival' ? 'Pickup' : 'Drop-off';
-        let csv = '\uFEFFFirst Name,Last Name,Division,Grade,Bunk,Address,City,State,ZIP,Transport,Bus,Stop #,' + modeLabel + ' Location,Est. Time,Shift\n';
+        let csv = '\uFEFFID,First Name,Last Name,Division,Grade,Bunk,Address,City,State,ZIP,Transport,Bus,Stop #,' + modeLabel + ' Location,Est. Time,Shift\n';
         const rows = [];
         // Bus riders
         _generatedRoutes.forEach(sr => {
@@ -3009,6 +3008,7 @@ function renderCarpool() {
                         const camperData = roster[c.name] || {};
                         const addr = D.addresses[c.name] || {};
                         rows.push([
+                            camperData.id || camperData.camperId || '',
                             p[0] || '',
                             p.slice(1).join(' ') || '',
                             c.division || camperData.division || '',
@@ -3043,6 +3043,7 @@ function renderCarpool() {
                 });
             }
             rows.push([
+                c.id || c.camperId || '',
                 p[0] || '',
                 p.slice(1).join(' ') || '',
                 c.division || '',
@@ -3079,6 +3080,7 @@ function renderCarpool() {
                 '<button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'routes\');CampistryGo.closeModal(\'printModal\')">Bus Routes (all shifts & stops)</button>' +
                 '<button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'master\');CampistryGo.closeModal(\'printModal\')">Master List (all campers sorted)</button>' +
                 '<button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'busSheets\');CampistryGo.closeModal(\'printModal\')">Individual Bus Sheets (1 per page)</button>' +
+                '<button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'driverSheets\');CampistryGo.closeModal(\'printModal\')">Driver Sheets (stop # + address only)</button>' +
                 '<button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'all\');CampistryGo.closeModal(\'printModal\')">Everything</button>' +
                 '<button class="btn btn-secondary" onclick="CampistryGo.closeModal(\'printModal\')">Cancel</button>' +
                 '</div>';
@@ -3135,6 +3137,44 @@ function renderCarpool() {
                 });
             });
         }
+
+        // Driver sheets (1 bus per page, stop # + address only)
+        if (printWhat === 'driverSheets') {
+            const isArrival = D.activeMode === 'arrival';
+            const action = isArrival ? 'PICKUP' : 'DROP-OFF';
+            _generatedRoutes.forEach((sr, si) => {
+                sr.routes.filter(r => r.stops.length > 0).forEach((r, ri) => {
+                    if (ri > 0 || si > 0) h += '<div style="page-break-before:always"></div>';
+                    h += '<div style="border:3px solid ' + esc(r.busColor) + ';border-radius:8px;padding:20px;margin-bottom:20px;">';
+                    h += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:15px;padding-bottom:10px;border-bottom:3px solid ' + esc(r.busColor) + ';">';
+                    h += '<div><h1 style="margin:0;font-size:22pt;color:' + esc(r.busColor) + ';">' + esc(r.busName) + '</h1>';
+                    h += '<div style="font-size:11pt;color:#666;margin-top:2px;">' + esc(sr.shift.label || 'Shift ' + (si + 1)) + ' — ' + action + '</div></div>';
+                    h += '<div style="text-align:right;"><div style="font-size:14pt;font-weight:bold;">' + r.stops.filter(s => !s.isMonitor && !s.isCounselor).length + ' Stops</div>';
+                    h += '<div style="font-size:10pt;color:#666;">' + r.camperCount + ' campers · ' + r.totalDuration + ' min</div></div>';
+                    h += '</div>';
+                    h += '<table style="width:100%;border-collapse:collapse;"><thead><tr>';
+                    h += '<th style="width:60px;text-align:center;padding:8px;border:2px solid #ddd;background:#f0f0f0;font-size:10pt;">STOP</th>';
+                    h += '<th style="padding:8px;border:2px solid #ddd;background:#f0f0f0;font-size:10pt;">' + action + ' ADDRESS</th>';
+                    h += '<th style="width:70px;text-align:center;padding:8px;border:2px solid #ddd;background:#f0f0f0;font-size:10pt;">TIME</th>';
+                    h += '<th style="width:50px;text-align:center;padding:8px;border:2px solid #ddd;background:#f0f0f0;font-size:10pt;">KIDS</th>';
+                    h += '</tr></thead><tbody>';
+                    r.stops.forEach(st => {
+                        if (st.isMonitor || st.isCounselor) return;
+                        h += '<tr>';
+                        h += '<td style="text-align:center;font-weight:bold;font-size:18pt;padding:10px 8px;border:2px solid #ddd;color:' + esc(r.busColor) + ';">' + st.stopNum + '</td>';
+                        h += '<td style="padding:10px 8px;border:2px solid #ddd;font-size:12pt;font-weight:600;">' + esc(st.address) + '</td>';
+                        h += '<td style="text-align:center;padding:10px 8px;border:2px solid #ddd;font-size:11pt;font-weight:700;">' + (st.estimatedTime || '—') + '</td>';
+                        h += '<td style="text-align:center;padding:10px 8px;border:2px solid #ddd;font-size:12pt;font-weight:bold;">' + st.campers.length + '</td>';
+                        h += '</tr>';
+                    });
+                    h += '</tbody></table>';
+                    if (r.monitor) h += '<div style="margin-top:10px;font-size:10pt;color:#666;">Monitor: <strong>' + esc(r.monitor.name) + '</strong></div>';
+                    h += '</div>';
+                });
+            });
+        }
+
+        // Master list
 
         // Master list
         if (printWhat === 'master' || printWhat === 'all') {
