@@ -13,6 +13,7 @@ var nextCamperId=1;
 // ═══ INIT ════════════════════════════════════════════════════════
 function init(){
     loadData(); setupSidebar(); setupSearch(); setupModals();
+    syncAllAddressesToGo();
     nav('families');
     console.log('📋 Me ready:',Object.keys(roster).length,'campers');
 }
@@ -221,6 +222,7 @@ function viewCamper(n){
     else b+='<div style="font-size:.8rem;color:var(--err);font-style:italic">Not on file</div>';
     b+='<div class="cv-sec">Parent/Guardian</div>';
     b+=cvR('Parent 1',d.parent1Name);if(d.parent1Phone)b+=cvR('Phone','<a href="tel:'+esc(d.parent1Phone)+'">'+esc(d.parent1Phone)+'</a>');if(d.parent1Email)b+=cvR('Email','<a href="mailto:'+esc(d.parent1Email)+'">'+esc(d.parent1Email)+'</a>');
+    if(d.street){var fullAddr=[d.street,d.city,d.state,d.zip].filter(Boolean).join(', ');b+=cvR('Address',fullAddr)}
     document.getElementById('cvBody').innerHTML=b;
     document.getElementById('cvEditBtn').onclick=function(){closeModal('camperViewModal');editCamper(n)};
     openModal('camperViewModal');
@@ -262,6 +264,10 @@ function editCamper(n){
     h+='<div class="fr">'+ff('Parent 1 Name','ceP1',d.parent1Name||'')+ff('Phone','ceP1Ph',d.parent1Phone||'')+'</div>';
     h+=ff('Email','ceP1Em',d.parent1Email||'','email');
 
+    h+='<div class="fsec">Address</div>';
+    h+=ff('Street Address','ceStreet',d.street||'');
+    h+='<div class="fr">'+ff('City','ceCity',d.city||'')+ff('State','ceState',d.state||'')+ff('ZIP','ceZip',d.zip||'')+'</div>';
+
     h+='<div class="fsec">Emergency Contact</div>';
     h+='<div class="fr">'+ff('Name','ceEmN',d.emergencyName||'')+ff('Phone','ceEmPh',d.emergencyPhone||'')+'</div>';
     h+=ff('Relation','ceEmR',d.emergencyRel||'');
@@ -296,6 +302,8 @@ function saveCamper(){
         division:document.getElementById('ceDiv').value||'',grade:document.getElementById('ceCGrade').value||'',
         bunk:document.getElementById('ceBunk').value||'',
         teams:teams,team:Object.values(teams)[0]||document.getElementById('ceTeamLegacy')?.value||'',
+        street:document.getElementById('ceStreet').value||'',city:document.getElementById('ceCity').value||'',
+        state:document.getElementById('ceState').value||'',zip:document.getElementById('ceZip').value||'',
         parent1Name:document.getElementById('ceP1').value||'',parent1Phone:document.getElementById('ceP1Ph').value||'',
         parent1Email:document.getElementById('ceP1Em').value||'',
         emergencyName:document.getElementById('ceEmN').value||'',emergencyPhone:document.getElementById('ceEmPh').value||'',
@@ -303,10 +311,48 @@ function saveCamper(){
         allergies:document.getElementById('ceAlg').value||'',medications:document.getElementById('ceMed').value||'',
         dietary:document.getElementById('ceDiet').value||''
     };
+    // Sync address to Campistry Go format
+    syncAddressToGo(full,roster[full]);
     save();closeModal('camperEditModal');render(curPage);toast(editingCamper?'Updated':'Added');
 }
 function grOpts(div){var o=[''];if(div&&structure[div])Object.keys(structure[div].grades||{}).sort().forEach(function(g){o.push(g)});return o}
 function bkOpts(div,gr){var o=[''];if(div&&gr&&structure[div]&&structure[div].grades&&structure[div].grades[gr])(structure[div].grades[gr].bunks||[]).forEach(function(b){o.push(b)});return o}
+
+// Sync camper address to Campistry Go's address store
+function syncAddressToGo(camperName,camperData){
+    if(!camperData.street)return;
+    try{
+        var goRaw=localStorage.getItem('campistry_go_data');
+        var goData=goRaw?JSON.parse(goRaw):{};
+        if(!goData.addresses)goData.addresses={};
+        var existing=goData.addresses[camperName]||{};
+        goData.addresses[camperName]={
+            street:camperData.street||'',
+            city:camperData.city||'',
+            state:camperData.state||'NY',
+            zip:camperData.zip||'',
+            lat:existing.lat||null,
+            lng:existing.lng||null,
+            geocoded:false, // Mark for re-geocode since address may have changed
+            transport:existing.transport||'bus',
+            rideWith:existing.rideWith||''
+        };
+        // If street hasn't changed, preserve geocode status
+        if(existing.street===camperData.street&&existing.city===camperData.city&&existing.geocoded){
+            goData.addresses[camperName].lat=existing.lat;
+            goData.addresses[camperName].lng=existing.lng;
+            goData.addresses[camperName].geocoded=true;
+        }
+        localStorage.setItem('campistry_go_data',JSON.stringify(goData));
+    }catch(e){console.warn('[Me] Go sync error:',e)}
+}
+
+// Bulk sync all addresses to Go on load
+function syncAllAddressesToGo(){
+    Object.entries(roster).forEach(function([name,data]){
+        if(data.street)syncAddressToGo(name,data);
+    });
+}
 
 // ── STRUCTURE ────────────────────────────────────────────────────
 function renderStructure(){
