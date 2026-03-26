@@ -1519,169 +1519,176 @@
 
     /**
      * Solve routing using GraphHopper Route Optimization API
-     * Industry-standard VRP solver using real road network, turn costs, capacity
-     * Returns road geometry included — no separate directions call needed
+     * Strategy: Cluster-First Route-Second
+     *   1. K-Means clusters stops into bus-sized groups
+     *   2. For each bus, send 1-vehicle TSP to GraphHopper (free tier = 1 vehicle)
+     *   3. GraphHopper optimizes stop order using real roads + turn costs
      */
     async function solveWithGraphHopper(stops, vehicles, campLat, campLng, isArrival) {
         const ghKey = D.setup.graphhopperKey || window.__CAMPISTRY_GH_KEY__;
         if (!ghKey) return null;
 
         const stopTimeSec = (D.setup.avgStopTime || 2) * 60;
+        const numBuses = vehicles.length;
 
-        // Build vehicle types
-        const vehicleTypes = [{
-            type_id: 'bus',
-            capacity: [Math.max(...vehicles.map(v => v.capacity))],
-            profile: 'car'
-        }];
+        // ── Step 1: Cluster stops into bus groups ──
+        const clusters = kMeansGeo(stops, numBuses);
+        clusters.sort((a, b) => b.camperCount - a.camperCount);
+        const sortedVehicles = [...vehicles].sort((a, b) => b.capacity - a.capacity);
 
-        // Build vehicles
-        const ghVehicles = vehicles.map((v, i) => {
-            const veh = {
-                vehicle_id: 'bus_' + i,
-                type_id: 'bus',
-                max_jobs: 100
-            };
-            if (isArrival) {
-                // Arrival: bus ends at camp
-                veh.end_address = { location_id: 'camp', lon: campLng, lat: campLat };
-            } else if (D.shifts.length > 1) {
-                // Dismissal multi-shift: round trip
-                veh.start_address = { location_id: 'camp', lon: campLng, lat: campLat };
-                veh.end_address = { location_id: 'camp', lon: campLng, lat: campLat };
-            } else {
-                // Dismissal: start at camp, end wherever
-                veh.start_address = { location_id: 'camp', lon: campLng, lat: campLat };
-            }
-            // Per-vehicle capacity
-            if (v.capacity) veh.type_id = 'bus_' + i;
-            return veh;
-        });
-
-        // Per-vehicle types for different capacities
-        const perVehicleTypes = vehicles.map((v, i) => ({
-            type_id: 'bus_' + i,
-            capacity: [v.capacity],
-            profile: 'car'
+        // Handle overcapacity
+        const busGroups = clusters.map((cl, i) => ({
+            vehicle: sortedVehicles[i % sortedVehicles.length],
+            stops: cl.stops
         }));
 
-        // Build services (stops to visit)
-        const services = stops.map((s, i) => ({
-            id: 'stop_' + i,
-            name: s.address,
-            address: { location_id: 'stop_' + i, lon: s.lng, lat: s.lat },
-            size: [s.campers.length],
-            service: stopTimeSec
-        }));
+        console.log('[Go] GraphHopper: ' + busGroups.length + ' buses, optimizing each via TSP...');
 
-        const body = {
-            vehicles: ghVehicles,
-            vehicle_types: perVehicleTypes,
-            services,
-            objectives: [
-                { type: 'min', value: 'transport_time' },
-                { type: 'min', value: 'vehicles' }
-            ]
-        };
+        // ── Step 2: For each bus, solve 1-vehicle TSP via GraphHopper ──
+        const routes = [];
+        let ghSuccess = 0, ghFail = 0;
 
-        console.log('[Go] Calling GraphHopper VRP with', stops.length, 'stops,', vehicles.length, 'buses');
+        for (let bi = 0; bi < busGroups.length; bi++) {
+            const group = busGroups[bi];
+            const v = group.vehicle;
+            const busStops = group.stops;
 
-        const resp = await fetch('https://graphhopper.com/api/1/vrp?key=' + encodeURIComponent(ghKey), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-
-        if (!resp.ok) {
-            const errText = await resp.text().catch(() => '');
-            console.warn('[Go] GraphHopper HTTP ' + resp.status + ':', errText.substring(0, 300));
-            return null;
-        }
-
-        const data = await resp.json();
-        if (data.status !== 'finished' || !data.solution?.routes?.length) {
-            console.warn('[Go] GraphHopper not finished:', data.status);
-            return null;
-        }
-
-        console.log('[Go] GraphHopper solved:', data.solution.routes.length, 'routes,',
-            Math.round(data.solution.distance / 1000) + 'km total,',
-            Math.round(data.solution.transport_time / 60) + 'min');
-
-        // Convert GraphHopper response to our route format
-        const routes = data.solution.routes.map((ghRoute, ri) => {
-            const vIdx = parseInt(ghRoute.vehicle_id.replace('bus_', ''));
-            const v = vehicles[vIdx] || vehicles[0];
-            const routeStops = [];
-            let stopNum = 0;
-
-            // Extract road geometry from points (GeoJSON LineStrings)
-            let roadCoords = [];
-            if (ghRoute.points) {
-                ghRoute.points.forEach(geom => {
-                    if (geom.type === 'LineString' && geom.coordinates) {
-                        geom.coordinates.forEach(c => roadCoords.push([c[1], c[0]])); // [lat, lng]
-                    }
+            if (!busStops.length) continue;
+            if (busStops.length === 1) {
+                // Single stop — no optimization needed
+                busStops[0].stopNum = 1;
+                routes.push({
+                    busId: v.busId, busName: v.name, busColor: v.color,
+                    monitor: v.monitor, counselors: v.counselors || [],
+                    stops: busStops,
+                    camperCount: busStops.reduce((s, st) => s + st.campers.length, 0),
+                    _cap: v.capacity, totalDuration: 10
                 });
+                continue;
             }
 
-            // Extract activities (stop visits)
-            (ghRoute.activities || []).forEach(act => {
-                if (act.type === 'service') {
-                    const stopIdx = parseInt((act.id || '').replace('stop_', ''));
-                    const originalStop = stops[stopIdx];
-                    if (originalStop) {
-                        stopNum++;
-                        routeStops.push({
-                            stopNum,
-                            campers: originalStop.campers,
-                            address: originalStop.address,
-                            lat: originalStop.lat,
-                            lng: originalStop.lng,
-                            _ghArrival: act.arr_time,
-                            _ghDeparture: act.end_time
+            // Build GraphHopper request for this single bus
+            const ghVehicle = { vehicle_id: 'bus_0', type_id: 'bus', max_jobs: busStops.length + 5 };
+            if (isArrival) {
+                ghVehicle.end_address = { location_id: 'camp', lon: campLng, lat: campLat };
+            } else if (D.shifts.length > 1) {
+                ghVehicle.start_address = { location_id: 'camp', lon: campLng, lat: campLat };
+                ghVehicle.end_address = { location_id: 'camp', lon: campLng, lat: campLat };
+            } else {
+                ghVehicle.start_address = { location_id: 'camp', lon: campLng, lat: campLat };
+            }
+
+            const services = busStops.map((s, si) => ({
+                id: 'stop_' + si,
+                name: s.address,
+                address: { location_id: 'stop_' + si, lon: s.lng, lat: s.lat },
+                size: [s.campers.length],
+                service: stopTimeSec
+            }));
+
+            const body = {
+                vehicles: [ghVehicle],
+                vehicle_types: [{ type_id: 'bus', capacity: [v.capacity], profile: 'car' }],
+                services,
+                objectives: [{ type: 'min', value: 'transport_time' }]
+            };
+
+            try {
+                const resp = await fetch('https://graphhopper.com/api/1/vrp?key=' + encodeURIComponent(ghKey), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+
+                if (!resp.ok) {
+                    const errText = await resp.text().catch(() => '');
+                    console.warn('[Go] GH bus ' + (bi + 1) + ' HTTP ' + resp.status + ':', errText.substring(0, 200));
+                    ghFail++;
+                    // Use stops as-is without optimization
+                    busStops.forEach((s, i) => s.stopNum = i + 1);
+                    routes.push({
+                        busId: v.busId, busName: v.name, busColor: v.color,
+                        monitor: v.monitor, counselors: v.counselors || [],
+                        stops: busStops,
+                        camperCount: busStops.reduce((s, st) => s + st.campers.length, 0),
+                        _cap: v.capacity, totalDuration: 30
+                    });
+                    continue;
+                }
+
+                const data = await resp.json();
+                if (data.status === 'finished' && data.solution?.routes?.length) {
+                    const ghRoute = data.solution.routes[0];
+                    const orderedStops = [];
+                    let sn = 0;
+
+                    // Extract road geometry
+                    let roadCoords = [];
+                    if (ghRoute.points) {
+                        ghRoute.points.forEach(geom => {
+                            if (geom.type === 'LineString' && geom.coordinates) {
+                                geom.coordinates.forEach(c => roadCoords.push([c[1], c[0]]));
+                            }
                         });
                     }
+
+                    // Extract optimized stop order from activities
+                    (ghRoute.activities || []).forEach(act => {
+                        if (act.type === 'service') {
+                            const si = parseInt((act.id || '').replace('stop_', ''));
+                            const os = busStops[si];
+                            if (os) { sn++; os.stopNum = sn; orderedStops.push(os); }
+                        }
+                    });
+
+                    const route = {
+                        busId: v.busId, busName: v.name, busColor: v.color,
+                        monitor: v.monitor, counselors: v.counselors || [],
+                        stops: orderedStops.length ? orderedStops : busStops,
+                        camperCount: (orderedStops.length ? orderedStops : busStops).reduce((s, st) => s + st.campers.length, 0),
+                        _cap: v.capacity,
+                        totalDuration: Math.round((ghRoute.transport_time || 0) / 60),
+                        _ghDistance: ghRoute.distance
+                    };
+
+                    // Cache road geometry
+                    if (roadCoords.length > 2) {
+                        _routeGeomCache[v.busId + '_0'] = roadCoords;
+                    }
+
+                    routes.push(route);
+                    ghSuccess++;
+                    console.log('[Go] GH bus ' + (bi + 1) + ' (' + v.name + '): ' + orderedStops.length + ' stops, ' + Math.round((ghRoute.transport_time || 0) / 60) + 'min');
+                } else {
+                    ghFail++;
+                    busStops.forEach((s, i) => s.stopNum = i + 1);
+                    routes.push({
+                        busId: v.busId, busName: v.name, busColor: v.color,
+                        monitor: v.monitor, counselors: v.counselors || [],
+                        stops: busStops,
+                        camperCount: busStops.reduce((s, st) => s + st.campers.length, 0),
+                        _cap: v.capacity, totalDuration: 30
+                    });
                 }
-            });
-
-            const route = {
-                busId: v.busId, busName: v.name, busColor: v.color,
-                monitor: v.monitor, counselors: v.counselors || [],
-                stops: routeStops,
-                camperCount: routeStops.reduce((s, st) => s + st.campers.length, 0),
-                _cap: v.capacity,
-                totalDuration: Math.round((ghRoute.transport_time || 0) / 60),
-                _ghDistance: ghRoute.distance
-            };
-
-            // Cache road geometry so map doesn't need to fetch directions
-            if (roadCoords.length > 2) {
-                const cacheKey = v.busId + '_0';
-                _routeGeomCache[cacheKey] = roadCoords;
+            } catch (e) {
+                console.warn('[Go] GH bus ' + (bi + 1) + ' error:', e.message);
+                ghFail++;
+                busStops.forEach((s, i) => s.stopNum = i + 1);
+                routes.push({
+                    busId: v.busId, busName: v.name, busColor: v.color,
+                    monitor: v.monitor, counselors: v.counselors || [],
+                    stops: busStops,
+                    camperCount: busStops.reduce((s, st) => s + st.campers.length, 0),
+                    _cap: v.capacity, totalDuration: 30
+                });
             }
 
-            return route;
-        });
-
-        // Handle unassigned
-        if (data.solution.unassigned?.services?.length) {
-            console.warn('[Go] GraphHopper unassigned:', data.solution.unassigned.services.length, 'stops');
-            data.solution.unassigned.services.forEach(u => {
-                const stopIdx = parseInt((u.id || '').replace('stop_', ''));
-                const originalStop = stops[stopIdx];
-                if (!originalStop) return;
-                const bestRoute = routes.reduce((a, b) => (a._cap - a.camperCount) > (b._cap - b.camperCount) ? a : b);
-                bestRoute.stops.push({
-                    stopNum: bestRoute.stops.length + 1,
-                    campers: originalStop.campers,
-                    address: originalStop.address,
-                    lat: originalStop.lat, lng: originalStop.lng
-                });
-                bestRoute.camperCount += originalStop.campers.length;
-            });
+            // Small delay between requests to be polite to API
+            if (bi < busGroups.length - 1) await new Promise(r => setTimeout(r, 300));
         }
 
+        console.log('[Go] GraphHopper done: ' + ghSuccess + ' optimized, ' + ghFail + ' fallback');
+        if (ghSuccess === 0) return null; // all failed, let caller try next engine
         return routes.filter(r => r.stops.length > 0);
     }
 
