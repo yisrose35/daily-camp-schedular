@@ -1755,7 +1755,7 @@ function detectRegions() {
                                 const resultB = solveTSP(stopsB);
                                 const distAfter = resultA.dist + resultB.dist;
 
-                               const swapSameRegion = rA._regionId === rB._regionId;
+                               
                                 const swapSameRegion = (rA._regionId && rB._regionId) ? rA._regionId === rB._regionId : true;
                                 if (distAfter < distBefore - (swapSameRegion ? 0.1 : 2.0)) {
                                     // Execute swap
