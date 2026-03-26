@@ -2242,6 +2242,23 @@
                 tempArrows.forEach(a => { a._goRouteKey = cacheKey; _mapLayers.push(a); });
 
                  if (straightCoords.length >= 2) {
+                    // For very short routes, just use straight lines — road routing
+                    // engines sometimes draw weird loops for nearby stops due to
+                    // one-way streets or turn restrictions in OSM data
+                    const totalStraightDist = (function() { let d = 0; for (let i = 0; i < straightCoords.length - 1; i++) d += haversineMi(straightCoords[i][0], straightCoords[i][1], straightCoords[i+1][0], straightCoords[i+1][1]); return d; })();
+                    if (totalStraightDist < 2.0) {
+                        // Short route — straight lines look better than routed loops
+                        const road = L.polyline(straightCoords, { color: route.busColor, weight: lineWeight, opacity: lineOpacity, dashArray: dashPattern }).addTo(_map);
+                        road._goRouteKey = cacheKey;
+                        _mapLayers.push(road);
+                        _routeGeomCache[cacheKey] = straightCoords;
+                        const arrows = addArrowsToLine(straightCoords, route.busColor, _map);
+                        arrows.forEach(a => { a._goRouteKey = cacheKey; _mapLayers.push(a); });
+                        // Remove temp line
+                        _map.removeLayer(tempLine);
+                        const idx = _mapLayers.indexOf(tempLine);
+                        if (idx >= 0) _mapLayers.splice(idx, 1);
+                    } else {
                     const wp = [];
                     if (!isArrival && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
                     stopsWithCoords.forEach(s => wp.push(s.lng + ',' + s.lat));
@@ -2274,6 +2291,7 @@
                         } catch (e) { console.warn('[Go] Road geometry failed:', e.message); }
                     })(wp.join(';'), route.busColor, cacheKey, tempLine, dashPattern, lineWeight, lineOpacity);
                 }
+                     }
             }
 
             // Stop markers (draggable)
