@@ -2295,12 +2295,14 @@ window._routeGeomCache = _routeGeomCache;
                 const names = stop.isMonitor ? '🛡️ ' + (stop.monitorName || 'Monitor') : stop.isCounselor ? '👤 ' + (stop.counselorName || 'Counselor') : stop.campers.map(c => c.name).join('<br>');
                 const popup = '<div style="font-family:DM Sans,sans-serif;min-width:160px;"><div style="font-weight:700;font-size:13px;margin-bottom:4px;color:' + route.busColor + '">' + esc(route.busName) + ' — ' + esc(route.shiftLabel) + '</div><div style="font-weight:600;margin-bottom:2px;">Stop ' + stop.stopNum + '</div><div style="font-size:12px;margin-bottom:4px;">' + names + '</div><div style="font-size:11px;color:#888;">' + esc(stop.address) + '</div>' + (stop.estimatedTime ? '<div style="font-size:12px;font-weight:600;margin-top:4px;">Est: ' + stop.estimatedTime + '</div>' : '') + '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;">Drag to move stop</div></div>';
                 const marker = L.marker([stop.lat, stop.lng], { icon, draggable: !isSpecial }).addTo(_map);
-                marker.bindPopup(popup);
-                marker.on('click', function(e) {
-                    if (window._mapEditorStopClick && window._mapEditorStopClick(stop, route.busId, route.shiftIdx)) {
-                        e.originalEvent?.stopPropagation();
-                    }
-                });
+               marker.bindPopup(popup);
+                (function(theStop, theBusId, theShiftIdx) {
+                    marker.on('click', function(e) {
+                        if (window._mapEditorStopClick && window._mapEditorStopClick(theStop, theBusId, theShiftIdx)) {
+                            marker.closePopup();
+                        }
+                    });
+                })(stop, route.busId, route.shiftIdx);
                 _mapLayers.push(marker);
 
                 if (!isSpecial) {
