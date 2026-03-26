@@ -1415,25 +1415,26 @@
     // CLIENT-SIDE CLUSTERING (within a region)
     // =========================================================================
    // =========================================================================
-    // =========================================================================
-    // ROUTING ENGINE v8 — Real Road Distance TSP (Google-style)
+    // ROUTING ENGINE v9 — OSRM Road Distance TSP
     //
-    // Uses ORS distance matrix for real driving times between every pair of
-    // stops, then solves TSP to find the shortest route. No directional bias,
-    // no compass angles — just the shortest actual driving route.
+    // Uses the free OSRM public demo server for real driving time matrix.
+    // No API key, no signup, supports 100x100 matrices (10,000 elements).
+    // For 68 stops + camp = 69 locations, one single API call gets all
+    // real road distances. Both clustering and stop ordering use real roads.
     //
-    // Falls back to haversine when no ORS key is available.
+    // Falls back to haversine only if OSRM is unreachable.
     //
     // ALGORITHM:
     //   Phase 1: Create stops (merge same-address or cluster nearby)
-    //   Phase 2: Fetch ORS road distance matrix (camp + all stops)
+    //   Phase 2: Fetch OSRM road distance matrix (camp + all stops, one call)
     //   Phase 3: K-Means++ cluster stops into bus-sized groups
-    //   Phase 4: Handle overcapacity
-    //   Phase 5: For each bus, solve TSP using the distance matrix:
-    //            a. Nearest-neighbor initial tour
-    //            b. 2-opt refinement (up to 100 passes)
-    //            c. Or-opt refinement (relocate individual stops)
-    //   Phase 6: Orient route for arrival vs dismissal direction
+    //   Phase 4: Handle overcapacity (using road distances)
+    //   Phase 5: For each bus, solve TSP:
+    //            a. Try every stop as starting point (nearest-neighbor)
+    //            b. Keep the shortest tour
+    //            c. 2-opt refinement (up to 100 passes)
+    //            d. Or-opt refinement (relocate individual stops)
+    //   Phase 6: Orient route for arrival vs dismissal
     //   Phase 7: Calculate ETAs
     // =========================================================================
 
@@ -1452,45 +1453,47 @@
         }
         if (!stops.length) return [];
 
-        console.log('[Go] Engine v8: ' + stops.length + ' stops, ' + numBuses + ' buses, mode=' + (isArrival ? 'arrival' : 'dismissal') + (hasShifts ? '+shifts' : ''));
+        console.log('[Go] Engine v9: ' + stops.length + ' stops, ' + numBuses + ' buses, mode=' + (isArrival ? 'arrival' : 'dismissal') + (hasShifts ? '+shifts' : ''));
 
-        // ── Phase 2: Build distance function ──
+        // ── Phase 2: Fetch OSRM road distance matrix ──
         // Index 0 = camp, indices 1..N = stops
-        // This is the SINGLE source of truth for all distance calculations
-        let _distCache = null;
-        const apiKey = getApiKey();
+        // One single API call for everything — OSRM handles up to 100x100
+        let durations = null; // durations[i][j] = seconds of driving time
 
-        if (apiKey && stops.length <= 49) { // ORS limit: 50 locations total (camp + 49 stops)
-            try {
-                showProgress('Fetching road distances...', 20);
-                const locations = [[campLng, campLat], ...stops.map(s => [s.lng, s.lat])];
-                const resp = await fetch('https://api.openrouteservice.org/v2/matrix/driving-car', {
-                    method: 'POST',
-                    headers: { 'Authorization': apiKey, 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                    body: JSON.stringify({ locations, metrics: ['duration'] })
-                });
-                if (resp.ok) {
-                    const data = await resp.json();
-                    if (data.durations) {
-                        _distCache = data.durations; // durations[i][j] = seconds of driving
-                        console.log('[Go] Road distance matrix: ' + locations.length + 'x' + locations.length);
-                    }
+        showProgress('Fetching road distances from OSRM...', 15);
+        try {
+            // Build coordinate string: lng,lat;lng,lat;...
+            const coords = [campLng + ',' + campLat];
+            stops.forEach(s => coords.push(s.lng + ',' + s.lat));
+            const coordStr = coords.join(';');
+
+            const resp = await fetch(
+                'https://router.project-osrm.org/table/v1/driving/' + coordStr + '?annotations=duration',
+                { headers: { 'Accept': 'application/json' } }
+            );
+
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.code === 'Ok' && data.durations) {
+                    durations = data.durations;
+                    console.log('[Go] OSRM matrix: ' + durations.length + 'x' + durations[0].length + ' (' + (durations.length * durations[0].length) + ' elements)');
+                } else {
+                    console.warn('[Go] OSRM response not Ok:', data.code);
                 }
-            } catch (e) {
-                console.warn('[Go] Distance matrix failed:', e.message);
+            } else {
+                console.warn('[Go] OSRM HTTP ' + resp.status);
             }
+        } catch (e) {
+            console.warn('[Go] OSRM failed, using haversine:', e.message);
         }
 
-        // For stops > 49, split into per-bus matrices after clustering
-        const needsPerBusMatrix = apiKey && stops.length > 49;
-
-        // Distance function: returns driving TIME in minutes
-        // Uses real road durations when available, haversine estimate when not
+        // Distance function: returns driving time in MINUTES
+        // 0 = camp, 1..N = stops (matches the matrix indices)
         function dist(i, j) {
-            if (_distCache && _distCache[i]?.[j] != null && _distCache[i][j] >= 0) {
-                return _distCache[i][j] / 60; // seconds → minutes
+            if (durations && durations[i]?.[j] != null && durations[i][j] >= 0) {
+                return durations[i][j] / 60; // seconds → minutes
             }
-            // Haversine fallback: convert miles to minutes at avg speed
+            // Haversine fallback
             const a = i === 0 ? { lat: campLat, lng: campLng } : stops[i - 1];
             const b = j === 0 ? { lat: campLat, lng: campLng } : stops[j - 1];
             return (haversineMi(a.lat, a.lng, b.lat, b.lng) / (D.setup.avgSpeed || 25)) * 60;
@@ -1515,7 +1518,7 @@
         // ── Phase 4: Handle overcapacity ──
         handleOvercapacity(routes, campLat, campLng);
 
-        // ── Phase 5: Order stops within each bus — TSP ──
+        // ── Phase 5: Solve TSP for each bus ──
         const stopTime = D.setup.avgStopTime || 2;
 
         for (let ri = 0; ri < routes.length; ri++) {
@@ -1527,130 +1530,75 @@
 
             showProgress('Optimizing ' + r.busName + '...', 30 + (ri / routes.length) * 60);
 
-            // Build a local distance function for this bus's stops
-            // localDist(i, j) where 0 = camp, 1..N = this bus's stops
-            let localDist;
-
-            if (_distCache) {
-                // Map local indices to global indices
-                const globalIndices = [0]; // 0 = camp
-                r.stops.forEach(s => {
-                    const gi = stops.indexOf(s) + 1; // +1 because 0 = camp in global matrix
-                    globalIndices.push(gi);
-                });
-                localDist = function(i, j) {
-                    const gi = globalIndices[i], gj = globalIndices[j];
-                    if (_distCache[gi]?.[gj] != null && _distCache[gi][gj] >= 0) {
-                        return _distCache[gi][gj] / 60;
-                    }
-                    const a = i === 0 ? { lat: campLat, lng: campLng } : r.stops[i - 1];
-                    const b = j === 0 ? { lat: campLat, lng: campLng } : r.stops[j - 1];
-                    return (haversineMi(a.lat, a.lng, b.lat, b.lng) / (D.setup.avgSpeed || 25)) * 60;
-                };
-            } else if (needsPerBusMatrix && r.stops.length <= 49) {
-                // Fetch a per-bus matrix for this subset
-                try {
-                    const busLocations = [[campLng, campLat], ...r.stops.map(s => [s.lng, s.lat])];
-                    const resp = await fetch('https://api.openrouteservice.org/v2/matrix/driving-car', {
-                        method: 'POST',
-                        headers: { 'Authorization': apiKey, 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                        body: JSON.stringify({ locations: busLocations, metrics: ['duration'] })
-                    });
-                    if (resp.ok) {
-                        const data = await resp.json();
-                        if (data.durations) {
-                            const busDurations = data.durations;
-                            localDist = function(i, j) {
-                                if (busDurations[i]?.[j] != null && busDurations[i][j] >= 0) return busDurations[i][j] / 60;
-                                const a = i === 0 ? { lat: campLat, lng: campLng } : r.stops[i - 1];
-                                const b = j === 0 ? { lat: campLat, lng: campLng } : r.stops[j - 1];
-                                return (haversineMi(a.lat, a.lng, b.lat, b.lng) / (D.setup.avgSpeed || 25)) * 60;
-                            };
-                            console.log('[Go] Per-bus matrix for ' + r.busName + ': ' + busLocations.length + ' locations');
-                        }
-                    }
-                    await new Promise(resolve => setTimeout(resolve, 200)); // rate limit
-                } catch (e) {
-                    console.warn('[Go] Per-bus matrix failed for ' + r.busName + ':', e.message);
-                }
-            }
-
-            // Fallback: haversine-based distance
-            if (!localDist) {
-                localDist = function(i, j) {
-                    const a = i === 0 ? { lat: campLat, lng: campLng } : r.stops[i - 1];
-                    const b = j === 0 ? { lat: campLat, lng: campLng } : r.stops[j - 1];
-                    return (haversineMi(a.lat, a.lng, b.lat, b.lng) / (D.setup.avgSpeed || 25)) * 60;
-                };
-            }
-
-            // ── Solve TSP for this bus ──
             const n = r.stops.length;
 
-            // Step A: Nearest-neighbor initial tour
-            // Try starting from every stop and pick the best tour
+            // Map this bus's stops to global matrix indices
+            // globalIdx[local] = index in the durations matrix
+            const globalIdx = new Array(n);
+            for (let i = 0; i < n; i++) {
+                globalIdx[i] = stops.indexOf(r.stops[i]) + 1; // +1 because 0 = camp
+            }
+
+            // Local distance function for this bus
+            // local 0 = camp, local 1..n = this bus's stops
+            function busDist(li, lj) {
+                const gi = li === 0 ? 0 : globalIdx[li - 1];
+                const gj = lj === 0 ? 0 : globalIdx[lj - 1];
+                return dist(gi, gj);
+            }
+
+            // Step A: Nearest-neighbor from EVERY starting stop, keep best
             let bestTour = null, bestTourDist = Infinity;
 
-            for (let startIdx = 0; startIdx < Math.min(n, 8); startIdx++) {
+            for (let startIdx = 0; startIdx < n; startIdx++) {
                 const tour = [];
                 const visited = new Set();
-                let current = startIdx;
-                tour.push(current);
-                visited.add(current);
+
+                tour.push(startIdx);
+                visited.add(startIdx);
 
                 while (tour.length < n) {
+                    const current = tour[tour.length - 1];
                     let nearest = -1, nearestDist = Infinity;
                     for (let j = 0; j < n; j++) {
                         if (visited.has(j)) continue;
-                        // localDist uses 1-indexed for stops (0 = camp)
-                        const d = localDist(current + 1, j + 1);
+                        const d = busDist(current + 1, j + 1);
                         if (d < nearestDist) { nearestDist = d; nearest = j; }
                     }
                     if (nearest < 0) break;
                     tour.push(nearest);
                     visited.add(nearest);
-                    current = nearest;
                 }
 
-                // Calculate total tour distance including camp connections
-                let tourDist = 0;
-                if (!isArrival) tourDist += localDist(0, tour[0] + 1); // camp → first stop
-                for (let i = 0; i < tour.length - 1; i++) {
-                    tourDist += localDist(tour[i] + 1, tour[i + 1] + 1);
-                }
-                if (isArrival || hasShifts) tourDist += localDist(tour[tour.length - 1] + 1, 0); // last → camp
-
-                if (tourDist < bestTourDist) {
-                    bestTourDist = tourDist;
-                    bestTour = [...tour];
-                }
+                const td = calcTourDist(tour, busDist, n, isArrival, hasShifts);
+                if (td < bestTourDist) { bestTourDist = td; bestTour = [...tour]; }
             }
 
-            // Step B: 2-opt refinement on the best tour
+            // Step B: 2-opt refinement
             let tour = bestTour;
             for (let pass = 0; pass < 100; pass++) {
                 let improved = false;
-                for (let i = 0; i < tour.length - 1; i++) {
-                    for (let j = i + 2; j < tour.length; j++) {
-                        // Current edges: (prev_i → i+1) and (j → next_j)
-                        const prevI = i === 0 ? (isArrival ? -1 : -2) : tour[i - 1]; // -2 = camp for dismissal start
-                        const nextJ = j === tour.length - 1 ? ((isArrival || hasShifts) ? -2 : -1) : tour[j + 1]; // -2 = camp for end
+                for (let i = 0; i < n - 1; i++) {
+                    for (let j = i + 2; j < n; j++) {
+                        // Current: ...→ tour[i] → tour[i+1] →...→ tour[j] → tour[j+1] →...
+                        // After:   ...→ tour[i] → tour[j] →...→ tour[i+1] → tour[j+1] →...
+                        const prevI = i === 0 ? (isArrival ? null : 'camp') : tour[i - 1];
+                        const nextJ = j === n - 1 ? ((isArrival || hasShifts) ? 'camp' : null) : tour[j + 1];
 
-                        function dIdx(a, b) {
-                            const ai = a === -2 ? 0 : a + 1;
-                            const bi = b === -2 ? 0 : b + 1;
-                            if (a === -1 || b === -1) return 0; // no connection
-                            return localDist(ai, bi);
+                        function d2(a, b) {
+                            if (a === null || b === null) return 0;
+                            const ai = a === 'camp' ? 0 : a + 1;
+                            const bi = b === 'camp' ? 0 : b + 1;
+                            return busDist(ai, bi);
                         }
 
-                        const oldDist = dIdx(tour[i], tour[i + 1]) + dIdx(tour[j], nextJ);
-                        const newDist = dIdx(tour[i], tour[j]) + dIdx(tour[i + 1], nextJ);
+                        const oldD = d2(tour[i], tour[i + 1]) + d2(tour[j], nextJ);
+                        const newD = d2(tour[i], tour[j]) + d2(tour[i + 1], nextJ);
 
-                        if (newDist < oldDist - 0.01) {
-                            // Reverse segment [i+1 .. j]
-                            const segment = tour.splice(i + 1, j - i);
-                            segment.reverse();
-                            tour.splice(i + 1, 0, ...segment);
+                        if (newD < oldD - 0.01) {
+                            const seg = tour.splice(i + 1, j - i);
+                            seg.reverse();
+                            tour.splice(i + 1, 0, ...seg);
                             improved = true;
                         }
                     }
@@ -1658,73 +1606,58 @@
                 if (!improved) break;
             }
 
-            // Step C: Or-opt (move individual stops to better positions)
+            // Step C: Or-opt (try moving each stop to every other position)
             for (let pass = 0; pass < 30; pass++) {
                 let improved = false;
-                for (let i = 0; i < tour.length; i++) {
+                for (let i = 0; i < n; i++) {
                     const stop = tour[i];
                     const without = [...tour];
                     without.splice(i, 1);
-
-                    const currentDist = tourDistance(tour, localDist, isArrival, hasShifts);
+                    const currentDist = calcTourDist(tour, busDist, n, isArrival, hasShifts);
                     let bestPos = i, bestDist = currentDist;
-
                     for (let j = 0; j <= without.length; j++) {
                         if (j === i) continue;
                         const test = [...without];
                         test.splice(j, 0, stop);
-                        const d = tourDistance(test, localDist, isArrival, hasShifts);
-                        if (d < bestDist - 0.01) {
-                            bestDist = d;
-                            bestPos = j;
-                            improved = true;
-                        }
+                        const d = calcTourDist(test, busDist, test.length, isArrival, hasShifts);
+                        if (d < bestDist - 0.01) { bestDist = d; bestPos = j; improved = true; }
                     }
-                    if (bestPos !== i) {
-                        tour.splice(i, 1);
-                        tour.splice(bestPos, 0, stop);
-                    }
+                    if (bestPos !== i) { tour.splice(i, 1); tour.splice(bestPos, 0, stop); }
                 }
                 if (!improved) break;
             }
 
             // ── Phase 6: Orient for arrival vs dismissal ──
-            // For DISMISSAL: first stop should be nearest to camp
-            // For ARRIVAL: first stop should be farthest from camp
             if (tour.length >= 2) {
-                const firstDist = localDist(0, tour[0] + 1);
-                const lastDist = localDist(0, tour[tour.length - 1] + 1);
-
+                const firstDistToCamp = busDist(0, tour[0] + 1);
+                const lastDistToCamp = busDist(0, tour[tour.length - 1] + 1);
                 if (isArrival) {
-                    // First stop should be farthest from camp
-                    if (firstDist < lastDist) tour.reverse();
+                    // First stop = farthest from camp
+                    if (firstDistToCamp < lastDistToCamp) tour.reverse();
                 } else {
-                    // First stop should be nearest to camp
-                    if (firstDist > lastDist) tour.reverse();
+                    // First stop = nearest to camp
+                    if (firstDistToCamp > lastDistToCamp) tour.reverse();
                 }
             }
 
-            // Apply the tour ordering to the stops array
+            // Apply ordering
             const orderedStops = tour.map(idx => r.stops[idx]);
             orderedStops.forEach((s, i) => s.stopNum = i + 1);
             r.stops = orderedStops;
 
             // ── Phase 7: Calculate duration ──
             let dur = 0;
-            // Camp to first stop (or first stop start for arrival)
             if (isArrival) {
-                dur += 15; // drive time to first pickup area
+                dur += 15; // drive to first pickup area
             } else {
-                dur += localDist(0, 1); // camp → first stop (in minutes)
+                dur += busDist(0, tour[0] + 1); // camp → first stop
             }
-            for (let i = 0; i < r.stops.length - 1; i++) {
-                dur += localDist(tour[i] + 1, tour[i + 1] + 1) + stopTime;
+            for (let i = 0; i < tour.length - 1; i++) {
+                dur += busDist(tour[i] + 1, tour[i + 1] + 1) + stopTime;
             }
-            dur += stopTime; // last stop
-            // Return to camp
-            if (isArrival) dur += localDist(tour[tour.length - 1] + 1, 0);
-            if (!isArrival && hasShifts) dur += localDist(tour[tour.length - 1] + 1, 0);
-
+            dur += stopTime; // last stop service time
+            if (isArrival) dur += busDist(tour[tour.length - 1] + 1, 0);
+            if (!isArrival && hasShifts) dur += busDist(tour[tour.length - 1] + 1, 0);
             r.totalDuration = Math.round(dur);
         }
 
@@ -1732,15 +1665,15 @@
         return routes;
     }
 
-    /** Calculate total tour distance in minutes */
-    function tourDistance(tour, localDist, isArrival, hasShifts) {
+    /** Calculate total tour distance in minutes using busDist function */
+    function calcTourDist(tour, busDist, n, isArrival, hasShifts) {
         if (!tour.length) return 0;
         let total = 0;
-        if (!isArrival) total += localDist(0, tour[0] + 1); // camp → first
+        if (!isArrival) total += busDist(0, tour[0] + 1); // camp → first
         for (let i = 0; i < tour.length - 1; i++) {
-            total += localDist(tour[i] + 1, tour[i + 1] + 1);
+            total += busDist(tour[i] + 1, tour[i + 1] + 1);
         }
-        if (isArrival || hasShifts) total += localDist(tour[tour.length - 1] + 1, 0); // last → camp
+        if (isArrival || hasShifts) total += busDist(tour[tour.length - 1] + 1, 0); // last → camp
         return total;
     }
 
@@ -1748,7 +1681,7 @@
     // STOP CREATION
     // =========================================================================
 
-    /** House-by-house: merge kids at the same physical address into one stop */
+    /** House-by-house: merge kids at same address into one stop */
     function createHouseStops(campers) {
         const groups = {};
         campers.forEach(c => {
@@ -1814,9 +1747,6 @@
             }
         });
     }
-
-    
-
     /** K-Means++ geographic clustering */
     function kMeansGeo(stops, K) {
         if (stops.length <= K) {
