@@ -622,8 +622,8 @@
         if (!todo.length) { toast('All addresses already geocoded!'); return; }
         toast((force ? 'Re-geocoding ' : 'Geocoding ') + todo.length + ' addresses...');
         let ok = 0, fail = 0;
-        const BATCH = 3; // 3 at a time (conservative to avoid rate limits)
-        const DELAY = 2500; // 2.5 sec between batches
+        const BATCH = 5; // 5 parallel JSONP requests
+        const DELAY = 500; // 0.5 sec between batches (Census has no rate limit)
         for (let i = 0; i < todo.length; i += BATCH) {
             const batch = todo.slice(i, i + BATCH);
             const results = await Promise.all(batch.map(n => geocodeOne(n)));
@@ -1434,6 +1434,15 @@
     }
 
     async function geocodeSingle(addr) {
+        // Try Census first (free, no key needed)
+        try {
+            const d = await censusGeocode(addr);
+            if (d?.result?.addressMatches?.length) {
+                const m = d.result.addressMatches[0];
+                return { lat: m.coordinates.y, lng: m.coordinates.x };
+            }
+        } catch (_) {}
+        // Fallback to ORS
         const key = getApiKey(); if (!key) return null;
         try { const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams({ text: addr, size: '1', 'boundary.country': 'US' }), { headers: { 'Authorization': key, 'Accept': 'application/json' } }); if (!r.ok) return null; const d = await r.json(); if (d.features?.length) { const co = d.features[0].geometry.coordinates; return { lat: co[1], lng: co[0] }; } } catch (_) {} return null;
     }
