@@ -1512,7 +1512,7 @@
                 return total;
             }
 
-            if (n <= 10) {
+           if (n <= 8) {
                 // BRUTE FORCE
                 let bestDist = Infinity, bestPerm = null;
                 const perm = [];
@@ -1643,7 +1643,7 @@
         {
             let totalImproved = 0;
             let pass = 0;
-            const MAX_PASSES = 5;
+            const MAX_PASSES = 3;
 
             while (pass < MAX_PASSES) {
                 let improved = false;
@@ -1674,7 +1674,7 @@
                             if (tgtRoute.camperCount + stop.campers.length > tgtRoute._cap) continue;
 
                             // Keep target bus at ≤10 stops for brute force
-                            if (tgtRoute.stops.length >= 10) continue;
+                           if (tgtRoute.stops.length >= 9) continue;
 
                             const tgtDistBefore = routeResults[ti].dist;
                             const tgtStopsWith = [...tgtRoute.stops, stop];
@@ -1726,7 +1726,7 @@
                                 if (newACampers > rA._cap || newBCampers > rB._cap) continue;
 
                                 // Keep both at ≤10 for brute force
-                                if (rA.stops.length > 10 || rB.stops.length > 10) continue;
+                                if (rA.stops.length > 9 || rB.stops.length > 9) continue;
 
                                 // Try the swap
                                 const stopsA = rA.stops.slice(); stopsA[ai] = stopB;
