@@ -3473,6 +3473,15 @@ function renderCarpool() {
             load(); renderAddresses(); updateStats(); renderShifts();
         });
 
+        // Auto-sync: detect when Campistry Me (or another tab) saves data
+        window.addEventListener('storage', (e) => {
+            if (e.key === 'campGlobalSettings_v1') {
+                console.log('[Go] Detected roster change from another tab — refreshing...');
+                renderAddresses(); updateStats();
+                if (document.querySelector('.tab-btn.active')?.dataset.tab === 'shifts') renderShifts();
+            }
+        });
+
         // Log data source status
         console.log('[Go] Ready —', D.buses.length, 'buses,', D.shifts.length, 'shifts,',
             Object.keys(getRoster()).length, 'campers in roster,',
