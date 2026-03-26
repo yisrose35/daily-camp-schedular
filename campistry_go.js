@@ -1327,27 +1327,24 @@
 
             const routes = [];
 
-            // Get buses for this shift (use assignedBuses if defined, else all)
+            // Get buses for this shift
             const shiftBusIds = shift.assignedBuses?.length ? shift.assignedBuses : vehicles.map(v => v.busId);
             const shiftVehicles = shiftBusIds.map(bid => vehicles.find(v => v.busId === bid)).filter(Boolean);
 
-            // For each region, build routes with shift's buses
-            _detectedRegions.forEach(reg => {
-                const campers = [];
-                reg.camperNames.forEach(name => {
-                    const c = roster[name]; const a = D.addresses[name];
-                    if (!c || !a?.geocoded || !a.lat || !a.lng) return;
-                    if (shift._isVirtual || camperMatchesShift(c, shift)) {
-                        campers.push({ name, division: c.division, bunk: c.bunk || '', lat: a.lat, lng: a.lng, address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ') });
-                    }
-                });
-                if (!campers.length) return;
-
-                // Distribute shift's buses across regions proportionally
-                const regionVehicles = shiftVehicles.length <= 1 ? shiftVehicles : shiftVehicles;
-                const regionRoutes = clientSideCluster(campers, regionVehicles, campLat, campLng, mode);
-                routes.push(...regionRoutes);
+            // Collect ALL campers for this shift (skip region boundaries — let K-Means cluster naturally)
+            const allCampers = [];
+            Object.keys(roster).forEach(name => {
+                const c = roster[name]; const a = D.addresses[name];
+                if (!c || !a?.geocoded || !a.lat || !a.lng) return;
+                if (shift._isVirtual || camperMatchesShift(c, shift)) {
+                    allCampers.push({ name, division: c.division, bunk: c.bunk || '', lat: a.lat, lng: a.lng, address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ') });
+                }
             });
+
+            if (allCampers.length && shiftVehicles.length) {
+                const shiftRoutes = clientSideCluster(allCampers, shiftVehicles, campLat, campLng, mode);
+                routes.push(...shiftRoutes);
+            }
 
             // Add monitor + counselor stops
             routes.forEach(r => {
@@ -1766,6 +1763,49 @@
     let _pendingMapInit = null;
     let _routeGeomCache = {}; // cache road geometry to avoid re-fetching
 
+    /** Add direction arrows along a polyline */
+    function addArrowsToLine(coords, color, map) {
+        if (!coords || coords.length < 2) return [];
+        const markers = [];
+        // Calculate total distance
+        let totalDist = 0;
+        for (let i = 0; i < coords.length - 1; i++) {
+            totalDist += haversineMi(coords[i][0], coords[i][1], coords[i + 1][0], coords[i + 1][1]);
+        }
+        // Place arrows every ~0.5 miles, min 2, max 8
+        const numArrows = Math.max(2, Math.min(8, Math.floor(totalDist / 0.5)));
+        const interval = totalDist / (numArrows + 1);
+
+        let accDist = 0;
+        let arrowIdx = 1;
+        for (let i = 0; i < coords.length - 1 && arrowIdx <= numArrows; i++) {
+            const segDist = haversineMi(coords[i][0], coords[i][1], coords[i + 1][0], coords[i + 1][1]);
+            if (accDist + segDist >= interval * arrowIdx) {
+                // Place arrow on this segment
+                const frac = (interval * arrowIdx - accDist) / segDist;
+                const lat = coords[i][0] + frac * (coords[i + 1][0] - coords[i][0]);
+                const lng = coords[i][1] + frac * (coords[i + 1][1] - coords[i][1]);
+                // Calculate bearing
+                const dLng = (coords[i + 1][1] - coords[i][1]) * Math.PI / 180;
+                const lat1 = coords[i][0] * Math.PI / 180;
+                const lat2 = coords[i + 1][0] * Math.PI / 180;
+                const y = Math.sin(dLng) * Math.cos(lat2);
+                const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+                const bearing = Math.atan2(y, x) * 180 / Math.PI;
+
+                const arrowIcon = L.divIcon({
+                    html: '<div style="color:' + color + ';font-size:14px;font-weight:bold;transform:rotate(' + (bearing - 90) + 'deg);text-shadow:0 0 3px rgba(255,255,255,0.8);">➤</div>',
+                    className: '', iconSize: [14, 14], iconAnchor: [7, 7]
+                });
+                const m = L.marker([lat, lng], { icon: arrowIcon, interactive: false }).addTo(map);
+                markers.push(m);
+                arrowIdx++;
+            }
+            accDist += segDist;
+        }
+        return markers;
+    }
+
     function initMap(allShifts) {
         _activeShifts = new Set(allShifts.map((_, i) => i));
         _activeMapBus = 'all';
@@ -1871,6 +1911,9 @@
                 const polyline = L.polyline(roadCoords, { color: route.busColor, weight: lineWeight, opacity: lineOpacity, dashArray: dashPattern }).addTo(_map);
                 polyline._goRouteKey = cacheKey;
                 _mapLayers.push(polyline);
+                // Direction arrows
+                const arrows = addArrowsToLine(roadCoords, route.busColor, _map);
+                arrows.forEach(a => { a._goRouteKey = cacheKey; _mapLayers.push(a); });
             } else {
                 // Draw straight lines first (faded), fetch road geometry in background
                 const tempLine = L.polyline(straightCoords, { color: route.busColor, weight: lineWeight, opacity: lineOpacity * 0.4, dashArray: dashPattern }).addTo(_map);
@@ -1935,6 +1978,9 @@
                                 const road = L.polyline(pts, { color: color, weight: w, opacity: o, dashArray: dash }).addTo(_map);
                                 road._goRouteKey = ck;
                                 _mapLayers.push(road);
+                                // Direction arrows
+                                const arrows = addArrowsToLine(pts, color, _map);
+                                arrows.forEach(a => { a._goRouteKey = ck; _mapLayers.push(a); });
                             }
                         } catch (e) { console.warn('[Go] Directions failed:', e.message); }
                     })(wp, route.busColor, cacheKey, tempLine, dashPattern, lineWeight, lineOpacity);
