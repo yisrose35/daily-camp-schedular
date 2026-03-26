@@ -1766,9 +1766,20 @@
     }
 
     let _allMasterRows = [];
+    let _masterSort = { col: 'lastName', dir: 'asc' }; // default sort
+
+    function sortMasterBy(col) {
+        if (_masterSort.col === col) {
+            _masterSort.dir = _masterSort.dir === 'asc' ? 'desc' : 'asc';
+        } else {
+            _masterSort.col = col;
+            _masterSort.dir = 'asc';
+        }
+        renderFilteredMasterList();
+    }
 
     function renderFilteredMasterList() {
-        let rows = _allMasterRows;
+        let rows = [..._allMasterRows];
         // Filter by active shifts
         if (_activeShifts && _activeShifts.size < (_generatedRoutes?.length || 0)) {
             rows = rows.filter(r => _activeShifts.has(r.shiftIdx));
@@ -1777,13 +1788,41 @@
         if (_activeMapBus && _activeMapBus !== 'all') {
             rows = rows.filter(r => r.busId === _activeMapBus);
         }
+        // Sort
+        const dir = _masterSort.dir === 'asc' ? 1 : -1;
+        const col = _masterSort.col;
+        rows.sort((a, b) => {
+            const av = col === 'stopNum' ? a[col] : String(a[col] || '').toLowerCase();
+            const bv = col === 'stopNum' ? b[col] : String(b[col] || '').toLowerCase();
+            if (av < bv) return -1 * dir;
+            if (av > bv) return 1 * dir;
+            return 0;
+        });
+
         const countEl = document.getElementById('masterListCount');
         const label = document.getElementById('masterListLabel');
+        const modeLabel = D.activeMode === 'arrival' ? 'Pickup' : 'Drop-off';
         if (countEl) countEl.textContent = rows.length + (rows.length < _allMasterRows.length ? ' of ' + _allMasterRows.length : '');
         if (label) {
-            if (rows.length < _allMasterRows.length) label.textContent = 'Master Drop-off List (filtered)';
-            else label.textContent = 'Master Drop-off List';
+            if (rows.length < _allMasterRows.length) label.textContent = 'Master ' + modeLabel + ' List (filtered)';
+            else label.textContent = 'Master ' + modeLabel + ' List';
         }
+
+        // Sortable header arrows
+        function arrow(c) { return _masterSort.col === c ? (_masterSort.dir === 'asc' ? ' ▲' : ' ▼') : ''; }
+        const thead = document.getElementById('masterListHead');
+        if (thead) {
+            thead.innerHTML = '<tr>' +
+                '<th style="cursor:pointer" onclick="CampistryGo.sortMasterBy(\'firstName\')">First' + arrow('firstName') + '</th>' +
+                '<th style="cursor:pointer" onclick="CampistryGo.sortMasterBy(\'lastName\')">Last' + arrow('lastName') + '</th>' +
+                '<th style="cursor:pointer" onclick="CampistryGo.sortMasterBy(\'shift\')">Shift' + arrow('shift') + '</th>' +
+                '<th style="cursor:pointer" onclick="CampistryGo.sortMasterBy(\'busName\')">Bus' + arrow('busName') + '</th>' +
+                '<th style="cursor:pointer" onclick="CampistryGo.sortMasterBy(\'stopNum\')">Stop' + arrow('stopNum') + '</th>' +
+                '<th style="cursor:pointer" onclick="CampistryGo.sortMasterBy(\'address\')">Address' + arrow('address') + '</th>' +
+                '<th style="cursor:pointer" onclick="CampistryGo.sortMasterBy(\'time\')">Time' + arrow('time') + '</th>' +
+                '</tr>';
+        }
+
         document.getElementById('masterListBody').innerHTML = rows.map(r => '<tr><td style="font-weight:600">' + esc(r.firstName) + '</td><td style="font-weight:600">' + esc(r.lastName) + '</td><td>' + esc(r.shift) + '</td><td><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(r.busColor) + ';display:inline-block"></span>' + esc(r.busName) + '</span></td><td style="font-weight:700;text-align:center">' + r.stopNum + '</td><td>' + esc(r.address) + '</td><td style="font-weight:600">' + r.time + '</td></tr>').join('');
     }
 
@@ -1928,12 +1967,16 @@
             const stopsWithCoords = route.stops.filter(s => s.lat && s.lng);
             if (!stopsWithCoords.length) continue;
 
-            // Route: camp → stops, and only add →camp return for multi-shift dismissal
-            const needsReturn = D.activeMode === 'dismissal' && D.shifts.length > 1;
+            // Route direction:
+            // ARRIVAL: stop 1 → stop 2 → ... → camp (bus picks up kids, heads to camp)
+            // DISMISSAL: camp → stop 1 → stop 2 → ... (→ camp if multi-shift)
+            const isArrival = D.activeMode === 'arrival';
+            const needsReturn = !isArrival && D.shifts.length > 1;
             const straightCoords = [];
-            if (_campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
+            if (!isArrival && _campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]); // dismissal starts at camp
             stopsWithCoords.forEach(s => straightCoords.push([s.lat, s.lng]));
-            if (_campCoordsCache && needsReturn) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
+            if (isArrival && _campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]); // arrival ends at camp
+            if (needsReturn && _campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]); // dismissal return
             allLatLngs.push(...straightCoords);
 
             const dashPattern = getDash(route.shiftIdx);
@@ -1954,12 +1997,16 @@
                 const tempLine = L.polyline(straightCoords, { color: route.busColor, weight: lineWeight, opacity: lineOpacity * 0.4, dashArray: dashPattern }).addTo(_map);
                 tempLine._goRouteKey = cacheKey;
                 _mapLayers.push(tempLine);
+                // Arrows on straight lines (will be replaced with road arrows when geometry arrives)
+                const tempArrows = addArrowsToLine(straightCoords, route.busColor, _map);
+                tempArrows.forEach(a => { a._goRouteKey = cacheKey; _mapLayers.push(a); });
 
                 if (getApiKey() && straightCoords.length >= 2) {
                     const wp = [];
-                    if (_campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
+                    if (!isArrival && _campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]); // dismissal starts at camp
                     stopsWithCoords.forEach(s => wp.push([s.lng, s.lat]));
-                    if (_campCoordsCache && needsReturn) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
+                    if (isArrival && _campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]); // arrival ends at camp
+                    if (needsReturn && _campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]); // dismissal return
 
                     (async function(waypoints, color, ck, temp, dash, w, o) {
                         try {
@@ -2080,11 +2127,13 @@
 
                         // Draw updated straight line immediately
                         const stopsWithCoords = rt.stops.filter(s => s.lat && s.lng);
-                        const needsReturn = D.activeMode === 'dismissal' && D.shifts.length > 1;
+                        const isArrival = D.activeMode === 'arrival';
+                        const needsReturn = !isArrival && D.shifts.length > 1;
                         const straightCoords = [];
-                        if (_campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
+                        if (!isArrival && _campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
                         stopsWithCoords.forEach(s => straightCoords.push([s.lat, s.lng]));
-                        if (_campCoordsCache && needsReturn) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
+                        if (isArrival && _campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
+                        if (needsReturn && _campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
 
                         const shiftIndices = [..._activeShifts].sort();
                         const multiShift = shiftIndices.length > 1;
@@ -2102,9 +2151,10 @@
                         if (getApiKey() && straightCoords.length >= 2) {
                             try {
                                 const wp = [];
-                                if (_campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
+                                if (!isArrival && _campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
                                 stopsWithCoords.forEach(s => wp.push([s.lng, s.lat]));
-                                if (_campCoordsCache && needsReturn) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
+                                if (isArrival && _campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
+                                if (needsReturn && _campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
 
                                 const resp = await fetch('https://api.openrouteservice.org/v2/directions/driving-car', {
                                     method: 'POST',
@@ -2572,26 +2622,85 @@
         rows.forEach(r => { csv += r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',') + '\n'; });
         const blob = new Blob([csv], { type: 'text/csv' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'campistry_go_routes.csv'; a.click(); toast('Exported');
     }
-    function printRoutes() {
+    function printRoutes(printWhat) {
         if (!_generatedRoutes) { toast('Generate first', 'error'); return; }
+
+        // If no argument, show print options
+        if (!printWhat) {
+            const modal = '<div style="display:flex;flex-direction:column;gap:.75rem;padding:1rem;">' +
+                '<h3 style="margin:0;font-size:1rem;">What do you want to print?</h3>' +
+                '<button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'routes\');CampistryGo.closeModal(\'printModal\')">Bus Routes (all shifts & stops)</button>' +
+                '<button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'master\');CampistryGo.closeModal(\'printModal\')">Master List (all campers sorted)</button>' +
+                '<button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'busSheets\');CampistryGo.closeModal(\'printModal\')">Individual Bus Sheets (1 per page)</button>' +
+                '<button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'all\');CampistryGo.closeModal(\'printModal\')">Everything</button>' +
+                '<button class="btn btn-secondary" onclick="CampistryGo.closeModal(\'printModal\')">Cancel</button>' +
+                '</div>';
+            // Quick inline modal
+            let overlay = document.getElementById('printModal');
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.id = 'printModal';
+                overlay.className = 'modal-overlay';
+                overlay.innerHTML = '<div class="modal" style="max-width:360px;">' + modal + '</div>';
+                document.body.appendChild(overlay);
+                overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.remove('open'); });
+            } else {
+                overlay.querySelector('.modal').innerHTML = modal;
+            }
+            overlay.classList.add('open');
+            return;
+        }
+
         const cn = D.setup.campName || 'Camp';
+        const modeLabel = D.activeMode === 'arrival' ? 'Pickup' : 'Drop-off';
+        const timeLabel = D.activeMode === 'arrival' ? 'Arrive by' : 'Departs';
         let h = '<!DOCTYPE html><html><head><title>Bus Routes — ' + esc(cn) + '</title><style>body{font-family:Arial,sans-serif;font-size:11pt;color:#222;margin:20px}h1{font-size:18pt;margin-bottom:4px}h2{font-size:14pt;margin:20px 0 8px;padding:6px 10px;color:#fff;border-radius:4px}.sub{color:#666;font-size:10pt;margin-bottom:20px}table{width:100%;border-collapse:collapse;margin-bottom:20px;font-size:10pt}th{background:#f5f5f5;text-align:left;padding:6px 8px;border:1px solid #ddd;font-size:9pt;text-transform:uppercase}td{padding:5px 8px;border:1px solid #ddd}.bus-section{page-break-inside:avoid;margin-bottom:30px}.meta{font-size:9pt;color:#666;margin-bottom:10px}@media print{.no-print{display:none}}</style></head><body>';
-        h += '<h1>' + esc(cn) + ' — Bus Routes</h1><div class="sub">Generated: ' + new Date().toLocaleDateString() + '</div>';
-        _generatedRoutes.forEach((sr, si) => {
-            h += '<h1 style="margin-top:30px">Shift ' + (si + 1) + ': ' + esc(sr.shift.label) + ' — Departs ' + esc(sr.shift.departureTime) + '</h1>';
-            sr.routes.filter(r => r.stops.length > 0).forEach(r => {
-                h += '<div class="bus-section"><h2 style="background:' + esc(r.busColor) + '">' + esc(r.busName) + ' — ' + r.camperCount + ' campers, ' + r.stops.length + ' stops (' + r.totalDuration + ' min)</h2>';
-                if (r.monitor) h += '<div class="meta">Monitor: ' + esc(r.monitor.name) + '</div>';
-                h += '<table><thead><tr><th>Stop</th><th>Camper(s)</th><th>Address</th><th>Est. Time</th></tr></thead><tbody>';
-                r.stops.forEach(st => { const nm = st.isMonitor ? esc(st.monitorName) + ' (Monitor)' : st.isCounselor ? esc(st.counselorName) + ' (Counselor)' : st.campers.map(c => esc(c.name)).join(', '); h += '<tr><td style="text-align:center;font-weight:bold">' + st.stopNum + '</td><td>' + nm + '</td><td>' + esc(st.address) + '</td><td style="font-weight:600">' + (st.estimatedTime || '—') + '</td></tr>'; });
-                h += '</tbody></table></div>';
+        h += '<h1>' + esc(cn) + ' — ' + modeLabel + ' Routes</h1><div class="sub">Generated: ' + new Date().toLocaleDateString() + ' | Mode: ' + D.activeMode + '</div>';
+
+        // Routes section
+        if (printWhat === 'routes' || printWhat === 'all') {
+            _generatedRoutes.forEach((sr, si) => {
+                h += '<h1 style="margin-top:30px">' + esc(sr.shift.label || 'Shift ' + (si + 1)) + ' — ' + timeLabel + ' ' + esc(sr.shift.departureTime) + '</h1>';
+                sr.routes.filter(r => r.stops.length > 0).forEach(r => {
+                    h += '<div class="bus-section"><h2 style="background:' + esc(r.busColor) + '">' + esc(r.busName) + ' — ' + r.camperCount + ' campers, ' + r.stops.length + ' stops (' + r.totalDuration + ' min)</h2>';
+                    if (r.monitor) h += '<div class="meta">Monitor: ' + esc(r.monitor.name) + '</div>';
+                    h += '<table><thead><tr><th>Stop</th><th>Camper(s)</th><th>Address</th><th>Est. Time</th></tr></thead><tbody>';
+                    r.stops.forEach(st => { const nm = st.isMonitor ? esc(st.monitorName) + ' (Monitor)' : st.isCounselor ? esc(st.counselorName) + ' (Counselor)' : st.campers.map(c => esc(c.name)).join(', '); h += '<tr><td style="text-align:center;font-weight:bold">' + st.stopNum + '</td><td>' + nm + '</td><td>' + esc(st.address) + '</td><td style="font-weight:600">' + (st.estimatedTime || '—') + '</td></tr>'; });
+                    h += '</tbody></table></div>';
+                });
             });
-        });
-        h += '<div style="page-break-before:always"></div><h1>Master Drop-off List</h1><div class="sub">All shifts, sorted by last name</div><table><thead><tr><th>First</th><th>Last</th><th>Shift</th><th>Bus</th><th>Stop</th><th>Address</th><th>Time</th></tr></thead><tbody>';
-        const rows = []; _generatedRoutes.forEach(sr => { sr.routes.forEach(r => { r.stops.forEach(st => { if (st.isMonitor || st.isCounselor) return; st.campers.forEach(c => { const p = c.name.split(/\s+/); rows.push({ fn: p[0], ln: p.slice(1).join(' '), sh: sr.shift.label, bn: r.busName, sn: st.stopNum, ad: st.address, t: st.estimatedTime || '—' }); }); }); }); });
-        rows.sort((a, b) => a.ln.localeCompare(b.ln) || a.fn.localeCompare(b.fn));
-        rows.forEach(r => { h += '<tr><td>' + esc(r.fn) + '</td><td><strong>' + esc(r.ln) + '</strong></td><td>' + esc(r.sh) + '</td><td>' + esc(r.bn) + '</td><td style="text-align:center;font-weight:bold">' + r.sn + '</td><td>' + esc(r.ad) + '</td><td style="font-weight:600">' + r.t + '</td></tr>'; });
-        h += '</tbody></table></body></html>';
+        }
+
+        // Bus sheets (1 bus per page)
+        if (printWhat === 'busSheets') {
+            _generatedRoutes.forEach((sr, si) => {
+                sr.routes.filter(r => r.stops.length > 0).forEach((r, ri) => {
+                    if (ri > 0 || si > 0) h += '<div style="page-break-before:always"></div>';
+                    h += '<h1 style="margin-bottom:4px;">' + esc(r.busName) + '</h1>';
+                    h += '<div class="sub">' + esc(sr.shift.label || 'Shift ' + (si + 1)) + ' | ' + r.camperCount + ' campers | ' + r.stops.length + ' stops | ' + r.totalDuration + ' min</div>';
+                    if (r.monitor) h += '<div class="meta" style="font-size:11pt;font-weight:600;">Monitor: ' + esc(r.monitor.name) + '</div>';
+                    h += '<table><thead><tr><th style="width:40px">Stop</th><th>Camper(s)</th><th>Address</th><th style="width:70px">Time</th></tr></thead><tbody>';
+                    r.stops.forEach(st => {
+                        const nm = st.isMonitor ? esc(st.monitorName) + ' (Monitor)' : st.isCounselor ? esc(st.counselorName) + ' (Counselor)' : st.campers.map(c => esc(c.name)).join(', ');
+                        h += '<tr><td style="text-align:center;font-weight:bold;font-size:14pt;">' + st.stopNum + '</td><td>' + nm + '</td><td>' + esc(st.address) + '</td><td style="font-weight:600">' + (st.estimatedTime || '—') + '</td></tr>';
+                    });
+                    h += '</tbody></table>';
+                });
+            });
+        }
+
+        // Master list
+        if (printWhat === 'master' || printWhat === 'all') {
+            if (printWhat === 'all') h += '<div style="page-break-before:always"></div>';
+            h += '<h1>Master ' + modeLabel + ' List</h1><div class="sub">Sorted by last name</div>';
+            h += '<table><thead><tr><th>First</th><th>Last</th><th>Shift</th><th>Bus</th><th>Stop</th><th>Address</th><th>Time</th></tr></thead><tbody>';
+            const rows = []; _generatedRoutes.forEach(sr => { sr.routes.forEach(r => { r.stops.forEach(st => { if (st.isMonitor || st.isCounselor) return; st.campers.forEach(c => { const p = c.name.split(/\s+/); rows.push({ fn: p[0], ln: p.slice(1).join(' '), sh: sr.shift.label, bn: r.busName, sn: st.stopNum, ad: st.address, t: st.estimatedTime || '—' }); }); }); }); });
+            rows.sort((a, b) => a.ln.localeCompare(b.ln) || a.fn.localeCompare(b.fn));
+            rows.forEach(r => { h += '<tr><td>' + esc(r.fn) + '</td><td><strong>' + esc(r.ln) + '</strong></td><td>' + esc(r.sh) + '</td><td>' + esc(r.bn) + '</td><td style="text-align:center;font-weight:bold">' + r.sn + '</td><td>' + esc(r.ad) + '</td><td style="font-weight:600">' + r.t + '</td></tr>'; });
+            h += '</tbody></table>';
+        }
+
+        h += '</body></html>';
         const w = window.open('', '_blank'); w.document.write(h); w.document.close(); setTimeout(() => w.print(), 500);
     }
 
@@ -2704,7 +2813,7 @@
         openOverrideModal, onOverrideTypeChange, saveOverride, removeOverride,
         filterOverrideSelect,
         searchCamperInRoutes, zoomToStop,
-        openMoveModal, renderFilteredMasterList,
+        openMoveModal, renderFilteredMasterList, sortMasterBy,
         switchMode,
         closeModal, openModal
     };
