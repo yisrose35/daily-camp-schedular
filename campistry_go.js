@@ -1677,7 +1677,7 @@
                             if (tgtRoute.camperCount + stop.campers.length > tgtRoute._cap) continue;
 
                             // Keep target bus at ≤10 stops for brute force
-                          if (tgtRoute.stops.length >= 12) continue;
+                          if (tgtRoute.stops.length >= 15) continue;
 
                             const tgtDistBefore = routeResults[ti].dist;
                             const tgtStopsWith = [...tgtRoute.stops, stop];
