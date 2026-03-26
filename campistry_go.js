@@ -1358,6 +1358,8 @@ function detectRegions() {
         let stops;
         if (mode === 'optimized-stops') {
             stops = createOptimizedStops(campers);
+        } else if (mode === 'corner-stops') {
+            stops = createCornerStops(campers);
         } else {
             stops = createHouseStops(campers);
         }
@@ -1877,6 +1879,35 @@ function detectRegions() {
             stops.push({ lat: cLat, lng: cLng, address: nearestAddr, campers: cl.map(x => ({ name: x.name, division: x.division, bunk: x.bunk })) });
         });
         return stops;
+    }
+
+    function createCornerStops(campers) {
+        const gridLat = 0.00041;
+        const gridLng = 0.00052;
+        const groups = {};
+        campers.forEach(c => {
+            const snapLat = Math.round(c.lat / gridLat) * gridLat;
+            const snapLng = Math.round(c.lng / gridLng) * gridLng;
+            const key = snapLat.toFixed(6) + ',' + snapLng.toFixed(6);
+            if (!groups[key]) groups[key] = { lat: snapLat, lng: snapLng, campers: [], streets: {} };
+            groups[key].campers.push(c);
+            const street = extractStreetName(c.address);
+            if (street) groups[key].streets[street] = (groups[key].streets[street] || 0) + 1;
+        });
+        return Object.values(groups).map(g => {
+            const streetNames = Object.keys(g.streets).sort((a, b) => g.streets[b] - g.streets[a]);
+            let cornerName;
+            if (streetNames.length >= 2) cornerName = 'Corner of ' + streetNames[0] + ' & ' + streetNames[1];
+            else if (streetNames.length === 1) cornerName = streetNames[0] + ' (corner stop)';
+            else cornerName = 'Corner stop';
+            return { lat: g.lat, lng: g.lng, address: cornerName, campers: g.campers.map(c => ({ name: c.name, division: c.division, bunk: c.bunk })) };
+        });
+    }
+
+    function extractStreetName(address) {
+        if (!address) return '';
+        const firstPart = address.split(',')[0].trim();
+        return firstPart.replace(/^\d+\s*[-/]?\s*\d*\s+/, '').trim();
     }
 
     // =========================================================================
