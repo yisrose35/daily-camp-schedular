@@ -3026,11 +3026,17 @@ window._routeGeomCache = _routeGeomCache;
         _getSavedRoutes: function() { return D.savedRoutes; },
         _setSavedRoutes: function(r) { D.savedRoutes = r; _generatedRoutes = r; },
         _save: function() { save(); },
-        _refreshRoutes: function() {
+        __refreshRoutes: function() {
             if (D.savedRoutes) {
                 _generatedRoutes = D.savedRoutes;
-                _routeGeomCache = {};
+                // Preserve current map view
+                var _savedCenter = _map ? _map.getCenter() : null;
+                var _savedZoom = _map ? _map.getZoom() : null;
                 renderRouteResults(applyOverrides(D.savedRoutes));
+                // Restore map view after re-render
+                if (_map && _savedCenter && _savedZoom != null) {
+                    setTimeout(function() { _map.setView(_savedCenter, _savedZoom, { animate: false }); }, 200);
+                }
             }
         },
         _getRouteGeomCache: function() { return _routeGeomCache; },
