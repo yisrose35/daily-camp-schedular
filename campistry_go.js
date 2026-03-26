@@ -1496,6 +1496,40 @@
             }
         });
 
+        // ── STEP 4b: Fix orphan stops — move any stop that's closer to another bus's center ──
+        for (let pass = 0; pass < 3; pass++) {
+            let moved = false;
+            // Calculate cluster centers
+            const centers = routes.map(r => {
+                if (!r.stops.length) return { lat: campLat, lng: campLng };
+                return { lat: r.stops.reduce((s, st) => s + st.lat, 0) / r.stops.length, lng: r.stops.reduce((s, st) => s + st.lng, 0) / r.stops.length };
+            });
+
+            routes.forEach((r, ri) => {
+                const toMove = [];
+                r.stops.forEach((st, si) => {
+                    const distToOwn = haversineMi(st.lat, st.lng, centers[ri].lat, centers[ri].lng);
+                    // Check if any other bus's center is significantly closer
+                    routes.forEach((other, oi) => {
+                        if (oi === ri || other.camperCount + st.campers.length > other._cap) return;
+                        const distToOther = haversineMi(st.lat, st.lng, centers[oi].lat, centers[oi].lng);
+                        if (distToOther < distToOwn * 0.6) { // 40% closer = clearly wrong bus
+                            toMove.push({ stopIdx: si, targetRoute: oi });
+                        }
+                    });
+                });
+                // Move stops (reverse order to preserve indices)
+                toMove.sort((a, b) => b.stopIdx - a.stopIdx).forEach(m => {
+                    const st = r.stops.splice(m.stopIdx, 1)[0];
+                    r.camperCount -= st.campers.length;
+                    routes[m.targetRoute].stops.push(st);
+                    routes[m.targetRoute].camperCount += st.campers.length;
+                    moved = true;
+                });
+            });
+            if (!moved) break;
+        }
+
         // ── STEP 5: Nearest-neighbor stop ordering from camp ──
         const avgSpeed = D.setup.avgSpeed || 25;
         const stopTime = D.setup.avgStopTime || 2;
@@ -1763,17 +1797,18 @@
     let _pendingMapInit = null;
     let _routeGeomCache = {}; // cache road geometry to avoid re-fetching
 
-    /** Add direction arrows along a polyline */
+    /** Add clean SVG direction arrows along a polyline */
     function addArrowsToLine(coords, color, map) {
-        if (!coords || coords.length < 2) return [];
+        if (!coords || coords.length < 4) return [];
         const markers = [];
         // Calculate total distance
         let totalDist = 0;
         for (let i = 0; i < coords.length - 1; i++) {
             totalDist += haversineMi(coords[i][0], coords[i][1], coords[i + 1][0], coords[i + 1][1]);
         }
-        // Place arrows every ~0.5 miles, min 2, max 8
-        const numArrows = Math.max(2, Math.min(8, Math.floor(totalDist / 0.5)));
+        if (totalDist < 0.3) return []; // too short for arrows
+        // Place arrows every ~0.8 miles, min 1, max 5
+        const numArrows = Math.max(1, Math.min(5, Math.floor(totalDist / 0.8)));
         const interval = totalDist / (numArrows + 1);
 
         let accDist = 0;
@@ -1781,11 +1816,10 @@
         for (let i = 0; i < coords.length - 1 && arrowIdx <= numArrows; i++) {
             const segDist = haversineMi(coords[i][0], coords[i][1], coords[i + 1][0], coords[i + 1][1]);
             if (accDist + segDist >= interval * arrowIdx) {
-                // Place arrow on this segment
                 const frac = (interval * arrowIdx - accDist) / segDist;
                 const lat = coords[i][0] + frac * (coords[i + 1][0] - coords[i][0]);
                 const lng = coords[i][1] + frac * (coords[i + 1][1] - coords[i][1]);
-                // Calculate bearing
+                // Bearing calculation
                 const dLng = (coords[i + 1][1] - coords[i][1]) * Math.PI / 180;
                 const lat1 = coords[i][0] * Math.PI / 180;
                 const lat2 = coords[i + 1][0] * Math.PI / 180;
@@ -1793,11 +1827,12 @@
                 const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
                 const bearing = Math.atan2(y, x) * 180 / Math.PI;
 
+                // Clean SVG arrow — small triangle on the line
                 const arrowIcon = L.divIcon({
-                    html: '<div style="color:' + color + ';font-size:14px;font-weight:bold;transform:rotate(' + (bearing - 90) + 'deg);text-shadow:0 0 3px rgba(255,255,255,0.8);">➤</div>',
-                    className: '', iconSize: [14, 14], iconAnchor: [7, 7]
+                    html: '<svg width="12" height="12" viewBox="0 0 12 12" style="transform:rotate(' + bearing + 'deg);filter:drop-shadow(0 0 1px rgba(255,255,255,0.6));"><polygon points="0,2 12,6 0,10" fill="' + color + '" opacity="0.9"/></svg>',
+                    className: '', iconSize: [12, 12], iconAnchor: [6, 6]
                 });
-                const m = L.marker([lat, lng], { icon: arrowIcon, interactive: false }).addTo(map);
+                const m = L.marker([lat, lng], { icon: arrowIcon, interactive: false, pane: 'overlayPane' }).addTo(map);
                 markers.push(m);
                 arrowIdx++;
             }
