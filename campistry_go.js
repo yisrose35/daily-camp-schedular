@@ -1560,12 +1560,34 @@
                 }
 
                 // 2-opt improvement: swap pairs to eliminate crossings/backtracking
-                function routeDist(stops) {
-                    let d = haversineMi(isArrival ? stops[0].lat : campLat, isArrival ? stops[0].lng : campLng,
-                        isArrival ? stops[0].lat : stops[0].lat, isArrival ? stops[0].lng : stops[0].lng);
-                    if (!isArrival) d = haversineMi(campLat, campLng, stops[0].lat, stops[0].lng);
+                // Route cost = distance + heavy penalty for sharp U-turns (>120° angle change)
+                function angleBetween(lat1, lng1, lat2, lng2, lat3, lng3) {
+                    // Angle at point 2 between segments 1→2 and 2→3
+                    const dx1 = lat2 - lat1, dy1 = lng2 - lng1;
+                    const dx2 = lat3 - lat2, dy2 = lng3 - lng2;
+                    const dot = dx1 * dx2 + dy1 * dy2;
+                    const mag1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+                    const mag2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+                    if (mag1 < 0.00001 || mag2 < 0.00001) return 0;
+                    const cos = Math.max(-1, Math.min(1, dot / (mag1 * mag2)));
+                    return Math.acos(cos) * 180 / Math.PI; // 0=straight, 180=U-turn
+                }
+
+                function routeCost(stops) {
+                    let d = 0;
+                    // Start → first stop
+                    const sLat = isArrival ? stops[0].lat : campLat;
+                    const sLng = isArrival ? stops[0].lng : campLng;
+                    if (!isArrival) d += haversineMi(campLat, campLng, stops[0].lat, stops[0].lng);
+                    // Stop to stop
                     for (let i = 0; i < stops.length - 1; i++) {
                         d += haversineMi(stops[i].lat, stops[i].lng, stops[i + 1].lat, stops[i + 1].lng);
+                        // U-turn penalty: if angle > 120°, add penalty distance
+                        if (i > 0) {
+                            const angle = angleBetween(stops[i - 1].lat, stops[i - 1].lng, stops[i].lat, stops[i].lng, stops[i + 1].lat, stops[i + 1].lng);
+                            if (angle > 120) d += 0.3; // ~0.3 mile penalty for U-turn
+                            else if (angle > 90) d += 0.1; // small penalty for sharp turn
+                        }
                     }
                     return d;
                 }
@@ -1581,7 +1603,7 @@
                             const newRoute = [...ordered];
                             const segment = newRoute.splice(i, j - i + 1).reverse();
                             newRoute.splice(i, 0, ...segment);
-                            if (routeDist(newRoute) < routeDist(ordered)) {
+                            if (routeCost(newRoute) < routeCost(ordered)) {
                                 for (let k = 0; k < ordered.length; k++) ordered[k] = newRoute[k];
                                 improved = true;
                             }
@@ -1836,42 +1858,38 @@
     let _pendingMapInit = null;
     let _routeGeomCache = {}; // cache road geometry to avoid re-fetching
 
-    /** Add clean SVG direction arrows along a polyline */
+    /** Add direction arrows along a polyline — simple chevron markers */
     function addArrowsToLine(coords, color, map) {
         if (!coords || coords.length < 4) return [];
         const markers = [];
-        // Calculate total distance
         let totalDist = 0;
         for (let i = 0; i < coords.length - 1; i++) {
             totalDist += haversineMi(coords[i][0], coords[i][1], coords[i + 1][0], coords[i + 1][1]);
         }
-        if (totalDist < 0.3) return []; // too short for arrows
-        // Place arrows every ~0.8 miles, min 1, max 5
-        const numArrows = Math.max(1, Math.min(5, Math.floor(totalDist / 0.8)));
+        if (totalDist < 0.2) return [];
+        // Arrow every ~0.4 miles
+        const numArrows = Math.max(2, Math.min(12, Math.floor(totalDist / 0.4)));
         const interval = totalDist / (numArrows + 1);
 
-        let accDist = 0;
-        let arrowIdx = 1;
+        let accDist = 0, arrowIdx = 1;
         for (let i = 0; i < coords.length - 1 && arrowIdx <= numArrows; i++) {
             const segDist = haversineMi(coords[i][0], coords[i][1], coords[i + 1][0], coords[i + 1][1]);
-            if (accDist + segDist >= interval * arrowIdx) {
+            while (accDist + segDist >= interval * arrowIdx && arrowIdx <= numArrows) {
                 const frac = (interval * arrowIdx - accDist) / segDist;
                 const lat = coords[i][0] + frac * (coords[i + 1][0] - coords[i][0]);
                 const lng = coords[i][1] + frac * (coords[i + 1][1] - coords[i][1]);
-                // Bearing calculation
                 const dLng = (coords[i + 1][1] - coords[i][1]) * Math.PI / 180;
                 const lat1 = coords[i][0] * Math.PI / 180;
                 const lat2 = coords[i + 1][0] * Math.PI / 180;
                 const y = Math.sin(dLng) * Math.cos(lat2);
                 const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
                 const bearing = Math.atan2(y, x) * 180 / Math.PI;
-
-                // Clean SVG arrow — small triangle on the line
-                const arrowIcon = L.divIcon({
-                    html: '<svg width="12" height="12" viewBox="0 0 12 12" style="transform:rotate(' + bearing + 'deg);filter:drop-shadow(0 0 1px rgba(255,255,255,0.6));"><polygon points="0,2 12,6 0,10" fill="' + color + '" opacity="0.9"/></svg>',
-                    className: '', iconSize: [12, 12], iconAnchor: [6, 6]
+                // Simple > chevron
+                const icon = L.divIcon({
+                    html: '<div style="font-size:11px;font-weight:900;color:' + color + ';transform:rotate(' + bearing + 'deg);opacity:0.85;text-shadow:-1px 0 0 #fff,1px 0 0 #fff;">›</div>',
+                    className: '', iconSize: [10, 10], iconAnchor: [5, 5]
                 });
-                const m = L.marker([lat, lng], { icon: arrowIcon, interactive: false, pane: 'overlayPane' }).addTo(map);
+                const m = L.marker([lat, lng], { icon, interactive: false }).addTo(map);
                 markers.push(m);
                 arrowIdx++;
             }
@@ -2022,7 +2040,7 @@
                                         'Content-Type': 'application/json; charset=utf-8',
                                         'Accept': 'application/json, application/geo+json'
                                     },
-                                    body: JSON.stringify({ coordinates: chunk, radiuses: chunk.map(() => 1000) })
+                                    body: JSON.stringify({ coordinates: chunk, radiuses: chunk.map(() => 1000), continue_straight: true })
                                 });
                                 if (resp.ok) {
                                     const data = await resp.json();
@@ -2159,7 +2177,7 @@
                                 const resp = await fetch('https://api.openrouteservice.org/v2/directions/driving-car', {
                                     method: 'POST',
                                     headers: { 'Authorization': getApiKey(), 'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json, application/geo+json' },
-                                    body: JSON.stringify({ coordinates: wp, radiuses: wp.map(() => 1000) })
+                                    body: JSON.stringify({ coordinates: wp, radiuses: wp.map(() => 1000), continue_straight: true })
                                 });
                                 if (resp.ok) {
                                     const data = await resp.json();
