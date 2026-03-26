@@ -858,7 +858,64 @@
         // Ensure all buses have entries
         vehicles.forEach(v => { if (!allRoutes.find(r => r.busId === v.busId)) allRoutes.push({ busId: v.busId, busName: v.name, busColor: v.color, monitor: v.monitor, counselors: v.counselors || [], stops: [], camperCount: 0, _cap: v.capacity, totalDuration: 0 }); });
 
-        console.log('[Go] VROOM complete:');
+        // ── Geographic re-sorting ──
+        // VROOM is great at assigning stops to buses, but its ordering can zigzag.
+        // Re-sort each bus's stops in a clean geographic sweep:
+        // Dismissal: farthest from camp first, sweep inward
+        // Arrival: nearest to camp first, sweep outward toward camp
+        allRoutes.forEach(r => {
+            if (r.stops.length < 3) return;
+            const cLat = campLat, cLng = campLng;
+
+            // Calculate distance and angle from camp for each stop
+            r.stops.forEach(s => {
+                s._dist = haversineMi(cLat, cLng, s.lat, s.lng);
+                s._angle = Math.atan2(s.lng - cLng, s.lat - cLat);
+            });
+
+            // Find the angular spread of this bus's stops
+            const angles = r.stops.map(s => s._angle);
+            const minAngle = Math.min(...angles), maxAngle = Math.max(...angles);
+            const angularSpread = maxAngle - minAngle;
+
+            // If stops are in a narrow angular band (< 90°), sort by distance
+            // If spread out, sort by angle then distance within angle bands
+            if (angularSpread < Math.PI / 2) {
+                // Narrow corridor: sort by distance from camp
+                if (isArrival) {
+                    // Arrival: nearest first (bus picks up nearest, works outward, ends at camp)
+                    r.stops.sort((a, b) => a._dist - b._dist);
+                } else {
+                    // Dismissal: farthest first (bus drops farthest, works back toward camp)
+                    r.stops.sort((a, b) => b._dist - a._dist);
+                }
+            } else {
+                // Wide spread: use nearest-neighbor sweep starting from farthest (dismissal) or nearest (arrival)
+                const sorted = [];
+                const remaining = [...r.stops];
+
+                // Start from the stop farthest from camp (dismissal) or nearest (arrival)
+                remaining.sort((a, b) => isArrival ? a._dist - b._dist : b._dist - a._dist);
+                sorted.push(remaining.shift());
+
+                // Greedily pick nearest unvisited stop
+                while (remaining.length) {
+                    const last = sorted[sorted.length - 1];
+                    let bestIdx = 0, bestDist = Infinity;
+                    remaining.forEach((s, i) => {
+                        const d = haversineMi(last.lat, last.lng, s.lat, s.lng);
+                        if (d < bestDist) { bestDist = d; bestIdx = i; }
+                    });
+                    sorted.push(remaining.splice(bestIdx, 1)[0]);
+                }
+                r.stops = sorted;
+            }
+
+            // Renumber and clean up
+            r.stops.forEach((s, i) => { s.stopNum = i + 1; delete s._dist; delete s._angle; });
+        });
+
+        console.log('[Go] VROOM complete (geo-sorted):');
         allRoutes.forEach(r => console.log('[Go]   ' + r.busName + ': ' + r.stops.length + ' stops, ' + r.camperCount + ' campers'));
         return allRoutes;
     }
