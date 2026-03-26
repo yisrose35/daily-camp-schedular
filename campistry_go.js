@@ -2241,71 +2241,38 @@
                 const tempArrows = addArrowsToLine(straightCoords, route.busColor, _map);
                 tempArrows.forEach(a => { a._goRouteKey = cacheKey; _mapLayers.push(a); });
 
-                if (getApiKey() && straightCoords.length >= 2) {
+                 if (straightCoords.length >= 2) {
                     const wp = [];
-                    if (!isArrival && _campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]); // dismissal starts at camp
-                    stopsWithCoords.forEach(s => wp.push([s.lng, s.lat]));
-                    if (isArrival && _campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]); // arrival ends at camp
-                    if (needsReturn && _campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]); // dismissal return
-
-                    (async function(waypoints, color, ck, temp, dash, w, o) {
+                    if (!isArrival && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
+                    stopsWithCoords.forEach(s => wp.push(s.lng + ',' + s.lat));
+                    if (isArrival && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
+                    if (needsReturn && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
+ 
+                    (async function(coordStr, color, ck, temp, dash, w, o) {
                         try {
-                            const MAX_WP = 50;
-                            let pts = [];
-                            for (let i = 0; i < waypoints.length - 1; i += MAX_WP - 1) {
-                                const chunk = waypoints.slice(i, i + MAX_WP);
-                                if (chunk.length < 2) break;
-                                const resp = await fetch('https://api.openrouteservice.org/v2/directions/driving-car', {
-                                    method: 'POST',
-                                    headers: {
-                                        'Authorization': getApiKey(),
-                                        'Content-Type': 'application/json; charset=utf-8',
-                                        'Accept': 'application/json, application/geo+json'
-                                    },
-                                    body: JSON.stringify({ coordinates: chunk, radiuses: chunk.map(() => 1000), continue_straight: true })
-                                });
-                                if (resp.ok) {
-                                    const data = await resp.json();
-                                    let seg = null;
-                                    // GeoJSON format (features array)
-                                    if (data.features?.[0]?.geometry?.coordinates) {
-                                        seg = data.features[0].geometry.coordinates.map(c => [c[1], c[0]]);
+                            const resp = await fetch('https://router.project-osrm.org/route/v1/driving/' + coordStr + '?overview=full&geometries=geojson');
+                            if (resp.ok) {
+                                const data = await resp.json();
+                                if (data.code === 'Ok' && data.routes?.[0]?.geometry?.coordinates) {
+                                    const pts = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+                                    if (pts.length > 0 && _map) {
+                                        console.log('[Go] Road geometry for', ck, ':', pts.length, 'points');
+                                        _routeGeomCache[ck] = pts;
+                                        _map.removeLayer(temp);
+                                        const idx = _mapLayers.indexOf(temp);
+                                        if (idx >= 0) _mapLayers.splice(idx, 1);
+                                        const road = L.polyline(pts, { color: color, weight: w, opacity: o, dashArray: dash }).addTo(_map);
+                                        road._goRouteKey = ck;
+                                        _mapLayers.push(road);
+                                        const arrows = addArrowsToLine(pts, color, _map);
+                                        arrows.forEach(a => { a._goRouteKey = ck; _mapLayers.push(a); });
                                     }
-                                    // Standard format (encoded polyline)
-                                    else if (data.routes?.[0]?.geometry) {
-                                        const geom = data.routes[0].geometry;
-                                        if (typeof geom === 'string') {
-                                            seg = decodePolyline(geom);
-                                        } else if (geom.coordinates) {
-                                            seg = geom.coordinates.map(c => [c[1], c[0]]);
-                                        }
-                                    }
-                                    if (seg && seg.length > 0) {
-                                        pts.push(...(pts.length ? seg.slice(1) : seg));
-                                    } else {
-                                        console.warn('[Go] No geometry in response:', Object.keys(data));
-                                    }
-                                } else {
-                                    console.warn('[Go] Directions API:', resp.status, await resp.text().catch(() => ''));
-                                    return;
                                 }
-                                if (i + MAX_WP - 1 < waypoints.length - 1) await new Promise(r => setTimeout(r, 250));
+                            } else {
+                                console.warn('[Go] OSRM route:', resp.status);
                             }
-                            if (pts.length > 0 && _map) {
-                                console.log('[Go] Road geometry for', ck, ':', pts.length, 'points');
-                                _routeGeomCache[ck] = pts;
-                                _map.removeLayer(temp);
-                                const idx = _mapLayers.indexOf(temp);
-                                if (idx >= 0) _mapLayers.splice(idx, 1);
-                                const road = L.polyline(pts, { color: color, weight: w, opacity: o, dashArray: dash }).addTo(_map);
-                                road._goRouteKey = ck;
-                                _mapLayers.push(road);
-                                // Direction arrows
-                                const arrows = addArrowsToLine(pts, color, _map);
-                                arrows.forEach(a => { a._goRouteKey = ck; _mapLayers.push(a); });
-                            }
-                        } catch (e) { console.warn('[Go] Directions failed:', e.message); }
-                    })(wp, route.busColor, cacheKey, tempLine, dashPattern, lineWeight, lineOpacity);
+                        } catch (e) { console.warn('[Go] Road geometry failed:', e.message); }
+                    })(wp.join(';'), route.busColor, cacheKey, tempLine, dashPattern, lineWeight, lineOpacity);
                 }
             }
 
@@ -2387,37 +2354,29 @@
                         tempLine._goRouteKey = ck;
                         _mapLayers.push(tempLine);
 
-                        // Fetch real road geometry in background
-                        if (getApiKey() && straightCoords.length >= 2) {
+                       // Fetch real road geometry from OSRM
+                        if (straightCoords.length >= 2) {
                             try {
                                 const wp = [];
-                                if (!isArrival && _campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
-                                stopsWithCoords.forEach(s => wp.push([s.lng, s.lat]));
-                                if (isArrival && _campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
-                                if (needsReturn && _campCoordsCache) wp.push([_campCoordsCache.lng, _campCoordsCache.lat]);
-
-                                const resp = await fetch('https://api.openrouteservice.org/v2/directions/driving-car', {
-                                    method: 'POST',
-                                    headers: { 'Authorization': getApiKey(), 'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json, application/geo+json' },
-                                    body: JSON.stringify({ coordinates: wp, radiuses: wp.map(() => 1000), continue_straight: true })
-                                });
+                                if (!isArrival && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
+                                stopsWithCoords.forEach(s => wp.push(s.lng + ',' + s.lat));
+                                if (isArrival && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
+                                if (needsReturn && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
+ 
+                                const resp = await fetch('https://router.project-osrm.org/route/v1/driving/' + wp.join(';') + '?overview=full&geometries=geojson');
                                 if (resp.ok) {
                                     const data = await resp.json();
-                                    let seg = null;
-                                    if (data.features?.[0]?.geometry?.coordinates) {
-                                        seg = data.features[0].geometry.coordinates.map(c => [c[1], c[0]]);
-                                    } else if (data.routes?.[0]?.geometry) {
-                                        const geom = data.routes[0].geometry;
-                                        seg = typeof geom === 'string' ? decodePolyline(geom) : geom.coordinates?.map(c => [c[1], c[0]]);
-                                    }
-                                    if (seg && seg.length > 0 && _map) {
-                                        _routeGeomCache[ck] = seg;
-                                        _map.removeLayer(tempLine);
-                                        const ti = _mapLayers.indexOf(tempLine);
-                                        if (ti >= 0) _mapLayers.splice(ti, 1);
-                                        const roadLine = L.polyline(seg, { color: _busColor, weight: w, opacity: o, dashArray: dp }).addTo(_map);
-                                        roadLine._goRouteKey = ck;
-                                        _mapLayers.push(roadLine);
+                                    if (data.code === 'Ok' && data.routes?.[0]?.geometry?.coordinates) {
+                                        const seg = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+                                        if (seg.length > 0 && _map) {
+                                            _routeGeomCache[ck] = seg;
+                                            _map.removeLayer(tempLine);
+                                            const ti = _mapLayers.indexOf(tempLine);
+                                            if (ti >= 0) _mapLayers.splice(ti, 1);
+                                            const roadLine = L.polyline(seg, { color: _busColor, weight: w, opacity: o, dashArray: dp }).addTo(_map);
+                                            roadLine._goRouteKey = ck;
+                                            _mapLayers.push(roadLine);
+                                        }
                                     }
                                 }
                             } catch (e) { /* keep straight line */ }
