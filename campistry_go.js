@@ -1861,15 +1861,7 @@ function detectRegions() {
         return Object.values(groups).map(g => ({
             lat: g[0].lat, lng: g[0].lng, address: g[0].address,
             campers: g.map(c => ({ name: c.name, division: c.division, bunk: c.bunk }))
-        }));
-    }
-            if (!groups[key]) groups[key] = [];
-            groups[key].push(c);
-        });
-        return Object.values(groups).map(g => ({
-            lat: g[0].lat, lng: g[0].lng, address: g[0].address,
-            campers: g.map(c => ({ name: c.name, division: c.division, bunk: c.bunk }))
-        }));
+       }));
     }
 
     function createOptimizedStops(campers) {
