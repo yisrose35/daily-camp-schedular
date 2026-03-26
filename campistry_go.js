@@ -579,7 +579,8 @@
             const hasA = a?.street;
             const full = hasA ? [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ') : '';
             const badge = hasA ? (a.geocoded ? (a._zipMismatch ? '<span class="badge badge-warning" title="ZIP code mismatch — location may be wrong">⚠ Check</span>' : '<span class="badge badge-success">Geocoded</span>') : '<span class="badge badge-warning">Not geocoded</span>') : '<span class="badge badge-danger">Missing</span>';
-           return '<tr><td style="font-size:.75rem;color:var(--text-muted);font-family:monospace;">' + (c.camperId ? '#' + String(c.camperId).padStart(4, '0') : '') + '</td>        }).join('');
+           return '<tr><td style="font-size:.75rem;color:var(--text-muted);font-family:monospace;">' + (c.camperId ? '#' + String(c.camperId).padStart(4, '0') : '') + '</td><td style="font-weight:600">' + esc(n) + '</td><td>' + (esc(c.division) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (full ? esc(full) : '<span style="color:var(--text-muted)">No address</span>') + '</td><td>' + badge + '</td><td><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editAddress(\'' + esc(n.replace(/'/g, "\\'")) + '\')">' + (hasA ? 'Edit' : 'Add') + '</button></td></tr>';
+        }).join('');
     }
     function updateAddrProgress(n, t) { const p = t > 0 ? Math.round(n / t * 100) : 0; document.getElementById('addressProgressBar').style.width = p + '%'; document.getElementById('addressProgressText').textContent = n + ' of ' + t + ' (' + p + '%)'; }
     function editAddress(name) {
