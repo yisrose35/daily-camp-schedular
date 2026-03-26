@@ -121,7 +121,12 @@
                     <div class="form-group full-width">
                         <label class="form-label">API Key</label>
                         <input type="text" class="form-input" id="orsApiKey" placeholder="Paste your ORS token">
-                        <span class="form-hint">Get free at <a href="https://openrouteservice.org/dev/#/signup" target="_blank" style="color:var(--blue-600)">openrouteservice.org</a></span>
+                        <span class="form-hint">Get free at <a href="https://openrouteservice.org/dev/#/signup" target="_blank" style="color:var(--blue-600)">openrouteservice.org</a> (geocoding & directions)</span>
+                    </div>
+                    <div class="form-group full-width" style="margin-top:.75rem;">
+                        <label class="form-label">GraphHopper Key <span style="background:#059669;color:#fff;font-size:.6rem;padding:.1rem .35rem;border-radius:3px;vertical-align:middle;">RECOMMENDED</span></label>
+                        <input type="text" class="form-input" id="ghApiKey" placeholder="Paste your GraphHopper key">
+                        <span class="form-hint">Get free at <a href="https://graphhopper.com/dashboard/signup" target="_blank" style="color:var(--blue-600)">graphhopper.com</a> (route optimization — makes routes 10x better)</span>
                     </div>
                     <div style="margin-top:1rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
                         <button class="btn btn-secondary btn-sm" onclick="CampistryGo.testApiKey()">
