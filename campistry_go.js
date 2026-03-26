@@ -209,6 +209,7 @@
         loadModeData(mode);
         // Clear map cache
         _routeGeomCache = {};
+        window._routeGeomCache = _routeGeomCache;
         _generatedRoutes = D.savedRoutes;
         // Save and refresh everything
         save();
@@ -1406,6 +1407,7 @@
 
         _generatedRoutes = allShiftResults;
         _routeGeomCache = {}; // clear road geometry cache for fresh routes
+        window._routeGeomCache = _routeGeomCache;
         D.savedRoutes = allShiftResults;
         save(); // persist routes across reloads
         showProgress('Done!', 100);
@@ -2080,7 +2082,7 @@
     let _activeMapBus = 'all';
     let _pendingMapInit = null;
     let _routeGeomCache = {}; // cache road geometry to avoid re-fetching
-
+window._routeGeomCache = _routeGeomCache;
     /** Add direction arrows along a polyline — simple chevron markers */
     function addArrowsToLine(coords, color, map) {
         if (!coords || coords.length < 4) return [];
