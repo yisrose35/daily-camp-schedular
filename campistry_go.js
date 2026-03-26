@@ -1729,7 +1729,7 @@
                                 if (newACampers > rA._cap || newBCampers > rB._cap) continue;
 
                                 // Keep both at ≤10 for brute force
-                               if (rA.stops.length > 12 || rB.stops.length > 12) continue;
+                               if (rA.stops.length > 12 || rB.stops.length > 15) continue;
 
                                 // Try the swap
                                 const stopsA = rA.stops.slice(); stopsA[ai] = stopB;
