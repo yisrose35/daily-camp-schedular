@@ -12,204 +12,104 @@
 </head>
 <body>
 
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- HEADER (matches Flow's layout exactly)                        -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- HEADER (matches Flow) -->
 <header class="app-header">
     <div class="header-left">
         <a href="dashboard.html" class="header-back">&larr; Dashboard</a>
-        <button id="hamburgerBtn" class="hamburger-btn" aria-label="Toggle Navigation">
-            <span></span><span></span><span></span>
-        </button>
-        <div class="app-title">
-            <img src="Me_clean.png" alt="Campistry Me" class="app-logo-full app-logo-me-img">
-        </div>
-        <a href="flow.html" class="header-app-switch" title="Open Campistry Flow">
-            <img src="Flow_clean.png" alt="Campistry Flow" class="app-logo-full app-logo-flow-img">
-        </a>
+        <button id="hamburgerBtn" class="hamburger-btn" aria-label="Menu"><span></span><span></span><span></span></button>
+        <div class="app-title"><img src="Me_clean.png" alt="Campistry Me" class="app-logo-full app-logo-me-img"></div>
+        <a href="flow.html" class="header-app-switch" title="Campistry Flow"><img src="Flow_clean.png" alt="Flow" class="app-logo-full app-logo-flow-img"></a>
+        <a href="campistry_go.html" class="header-app-switch" title="Campistry Go"><img src="Go_clean.png" alt="Go" class="app-logo-full app-logo-go-img"></a>
     </div>
     <div class="header-right">
         <div class="me-search-wrap">
             <svg class="me-search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <input type="text" id="globalSearch" class="me-search-input" placeholder="Search campers, families...">
+            <input type="text" id="globalSearch" class="me-search-input" placeholder="Search...">
         </div>
-        <div class="sync-badge" id="syncBadge">
-            <div class="sync-dot"></div>
-            <span>Synced</span>
-        </div>
+        <div class="sync-badge"><div class="sync-dot"></div><span>Synced</span></div>
     </div>
 </header>
 
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- SIDEBAR (hidden behind hamburger, matches Flow's pattern)     -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SIDEBAR (hidden, hamburger toggle) -->
 <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
 <aside id="sidebar" class="sidebar">
     <nav class="sidebar-nav">
         <div class="sidebar-label">People</div>
-        <button class="sidebar-item active" data-page="families">
-            <span class="sidebar-dot"></span> Families
-        </button>
-        <button class="sidebar-item" data-page="campers">
-            <span class="sidebar-dot"></span> Campers
-        </button>
-        <button class="sidebar-item" data-page="structure">
-            <span class="sidebar-dot"></span> Camp Structure
-        </button>
-        <button class="sidebar-item" data-page="bunkbuilder">
-            <span class="sidebar-dot"></span> Bunk Builder
-        </button>
-
+        <button class="sidebar-item active" data-page="families"><span class="sidebar-dot"></span> Families</button>
+        <button class="sidebar-item" data-page="campers"><span class="sidebar-dot"></span> Campers</button>
+        <button class="sidebar-item" data-page="structure"><span class="sidebar-dot"></span> Camp Structure</button>
+        <button class="sidebar-item" data-page="bunkbuilder"><span class="sidebar-dot"></span> Bunk Builder</button>
         <div class="sidebar-label" style="margin-top:12px">Operations</div>
-        <button class="sidebar-item" data-page="billing">
-            <span class="sidebar-dot"></span> Billing
-        </button>
-
+        <button class="sidebar-item" data-page="billing"><span class="sidebar-dot"></span> Billing</button>
         <div class="sidebar-label" style="margin-top:12px">Communication</div>
-        <button class="sidebar-item" data-page="broadcasts">
-            <span class="sidebar-dot"></span> Broadcasts
-        </button>
-        <button class="sidebar-item" data-page="forms">
-            <span class="sidebar-dot"></span> Forms & Docs
-        </button>
-
+        <button class="sidebar-item" data-page="broadcasts"><span class="sidebar-dot"></span> Broadcasts</button>
+        <button class="sidebar-item" data-page="forms"><span class="sidebar-dot"></span> Forms & Docs</button>
         <div class="sidebar-label" style="margin-top:12px">Insights</div>
-        <button class="sidebar-item" data-page="reports">
-            <span class="sidebar-dot"></span> Reports
-        </button>
-        <button class="sidebar-item" data-page="settings">
-            <span class="sidebar-dot"></span> Settings
-        </button>
+        <button class="sidebar-item" data-page="reports"><span class="sidebar-dot"></span> Reports</button>
+        <button class="sidebar-item" data-page="settings"><span class="sidebar-dot"></span> Settings</button>
     </nav>
 </aside>
 
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- MAIN CONTENT                                                  -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<div class="app-main">
-    <main class="app-content" id="meContent">
-        <div id="page-families" class="me-page active"></div>
-        <div id="page-campers" class="me-page"></div>
-        <div id="page-structure" class="me-page"></div>
-        <div id="page-bunkbuilder" class="me-page"></div>
-        <div id="page-billing" class="me-page"></div>
-        <div id="page-broadcasts" class="me-page"></div>
-        <div id="page-forms" class="me-page"></div>
-        <div id="page-reports" class="me-page"></div>
-        <div id="page-settings" class="me-page"></div>
-    </main>
-</div>
+<!-- MAIN CONTENT -->
+<div class="app-main"><main class="app-content" id="meContent">
+    <div id="page-families" class="me-page active"></div>
+    <div id="page-campers" class="me-page"></div>
+    <div id="page-structure" class="me-page"></div>
+    <div id="page-bunkbuilder" class="me-page"></div>
+    <div id="page-billing" class="me-page"></div>
+    <div id="page-broadcasts" class="me-page"></div>
+    <div id="page-forms" class="me-page"></div>
+    <div id="page-reports" class="me-page"></div>
+    <div id="page-settings" class="me-page"></div>
+</main></div>
 
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- CAMPER DETAIL MODAL (centered, blurred background)            -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<div id="camperDetailModal" class="me-modal-overlay" style="display:none">
-    <div class="me-modal me-modal--wide">
-        <div class="me-modal-header" id="camperDetailHeader"></div>
-        <div class="me-modal-body" id="camperDetailBody" style="max-height:70vh;overflow-y:auto"></div>
-        <div class="me-modal-footer">
-            <button class="me-btn me-btn--secondary" onclick="CampistryMe.closeModal('camperDetailModal')">Close</button>
-            <button class="me-btn me-btn--primary" id="editCamperFromDetail">Edit Camper</button>
-        </div>
+<!-- CAMPER VIEW -->
+<div id="camperViewModal" class="me-overlay" style="display:none"><div class="me-modal me-modal--lg">
+    <div class="me-modal-header" id="cvHead"></div>
+    <div class="me-modal-body me-scroll" id="cvBody"></div>
+    <div class="me-modal-footer"><button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal('camperViewModal')">Close</button><button class="me-btn me-btn--pri" id="cvEditBtn">Edit Camper</button></div>
+</div></div>
+
+<!-- CAMPER EDIT -->
+<div id="camperEditModal" class="me-overlay" style="display:none"><div class="me-modal me-modal--lg">
+    <div class="me-modal-header"><h3 id="ceTitle">Add Camper</h3><button class="me-modal-x" onclick="CampistryMe.closeModal('camperEditModal')">&times;</button></div>
+    <div class="me-modal-body me-scroll" id="ceBody"></div>
+    <div class="me-modal-footer"><button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal('camperEditModal')">Cancel</button><button class="me-btn me-btn--pri" id="ceSave">Save Camper</button></div>
+</div></div>
+
+<!-- FAMILY EDIT -->
+<div id="familyModal" class="me-overlay" style="display:none"><div class="me-modal me-modal--lg">
+    <div class="me-modal-header"><h3 id="fmTitle">Add Family</h3><button class="me-modal-x" onclick="CampistryMe.closeModal('familyModal')">&times;</button></div>
+    <div class="me-modal-body me-scroll" id="fmBody"></div>
+    <div class="me-modal-footer"><button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal('familyModal')">Cancel</button><button class="me-btn me-btn--pri" id="fmSave">Save Family</button></div>
+</div></div>
+
+<!-- DIVISION EDIT -->
+<div id="divModal" class="me-overlay" style="display:none"><div class="me-modal">
+    <div class="me-modal-header"><h3 id="dmTitle">Add Division</h3><button class="me-modal-x" onclick="CampistryMe.closeModal('divModal')">&times;</button></div>
+    <div class="me-modal-body" id="dmBody"></div>
+    <div class="me-modal-footer"><button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal('divModal')">Cancel</button><button class="me-btn me-btn--pri" id="dmSave">Save</button></div>
+</div></div>
+
+<!-- CSV IMPORT -->
+<div id="csvModal" class="me-overlay" style="display:none"><div class="me-modal">
+    <div class="me-modal-header"><h3>Import CSV</h3><button class="me-modal-x" onclick="CampistryMe.closeModal('csvModal')">&times;</button></div>
+    <div class="me-modal-body">
+        <div class="me-dropzone" id="csvDZ" tabindex="0"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 5 17 10"/><line x1="12" y1="5" x2="12" y2="15"/></svg><p>Drop CSV or click to browse</p><small>Name, Division, Grade, Bunk, Team</small></div>
+        <input type="file" id="csvFI" accept=".csv,.txt" style="display:none"><div id="csvPV" style="display:none"></div>
     </div>
-</div>
+    <div class="me-modal-footer"><button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal('csvModal')">Cancel</button><button class="me-btn me-btn--pri" id="csvBtn" disabled>Import</button></div>
+</div></div>
 
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- EDIT CAMPER MODAL                                             -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<div id="camperEditModal" class="me-modal-overlay" style="display:none">
-    <div class="me-modal me-modal--wide">
-        <div class="me-modal-header">
-            <h3 id="camperEditTitle">Edit Camper</h3>
-            <button class="me-modal-close" onclick="CampistryMe.closeModal('camperEditModal')">&times;</button>
-        </div>
-        <div class="me-modal-body" id="camperEditBody" style="max-height:65vh;overflow-y:auto"></div>
-        <div class="me-modal-footer">
-            <button class="me-btn me-btn--secondary" onclick="CampistryMe.closeModal('camperEditModal')">Cancel</button>
-            <button class="me-btn me-btn--primary" id="saveCamperBtn">Save</button>
-        </div>
-    </div>
-</div>
+<div id="meToast" class="me-toast"><span id="tI">✓</span> <span id="tM">Done</span></div>
 
-<!-- Division Modal -->
-<div id="divisionModal" class="me-modal-overlay" style="display:none">
-    <div class="me-modal">
-        <div class="me-modal-header">
-            <h3 id="divisionModalTitle">Add Division</h3>
-            <button class="me-modal-close" onclick="CampistryMe.closeModal('divisionModal')">&times;</button>
-        </div>
-        <div class="me-modal-body" id="divisionModalBody"></div>
-        <div class="me-modal-footer">
-            <button class="me-btn me-btn--secondary" onclick="CampistryMe.closeModal('divisionModal')">Cancel</button>
-            <button class="me-btn me-btn--primary" id="saveDivisionBtn">Save</button>
-        </div>
-    </div>
-</div>
-
-<!-- Family Modal -->
-<div id="familyModal" class="me-modal-overlay" style="display:none">
-    <div class="me-modal me-modal--wide">
-        <div class="me-modal-header">
-            <h3 id="familyModalTitle">Add Family</h3>
-            <button class="me-modal-close" onclick="CampistryMe.closeModal('familyModal')">&times;</button>
-        </div>
-        <div class="me-modal-body" id="familyModalBody"></div>
-        <div class="me-modal-footer">
-            <button class="me-btn me-btn--secondary" onclick="CampistryMe.closeModal('familyModal')">Cancel</button>
-            <button class="me-btn me-btn--primary" id="saveFamilyBtn">Save</button>
-        </div>
-    </div>
-</div>
-
-<!-- CSV Modal -->
-<div id="csvModal" class="me-modal-overlay" style="display:none">
-    <div class="me-modal">
-        <div class="me-modal-header">
-            <h3>Import from CSV</h3>
-            <button class="me-modal-close" onclick="CampistryMe.closeModal('csvModal')">&times;</button>
-        </div>
-        <div class="me-modal-body">
-            <div class="me-csv-dropzone" id="csvDropzone" tabindex="0">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-                <p>Drop CSV here or click to browse</p>
-                <small>Format: Name, Division, Grade, Bunk, Team</small>
-            </div>
-            <input type="file" id="csvFileInput" accept=".csv,.txt" style="display:none">
-            <div id="csvPreviewArea" style="display:none"></div>
-        </div>
-        <div class="me-modal-footer">
-            <button class="me-btn me-btn--secondary" onclick="CampistryMe.closeModal('csvModal')">Cancel</button>
-            <button class="me-btn me-btn--primary" id="csvImportBtn" disabled>Import</button>
-        </div>
-    </div>
-</div>
-
-<!-- Toast -->
-<div id="meToast" class="me-toast" role="status" aria-live="polite">
-    <span id="toastIcon">✓</span>
-    <span id="toastMessage">Success</span>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- SCRIPTS                                                       -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
 <script src="offline_data.js" onerror=""></script>
 <script src="demo_mode.js"></script>
 <script src="config.js"></script>
-<script>
-if (window.location.protocol === 'file:') {
-    document.write('<script src="supabase-js-local.js"><\/script>');
-} else {
-    document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>');
-}
-</script>
+<script>if(window.location.protocol==='file:')document.write('<script src="supabase-js-local.js"><\/script>');else document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>');</script>
 <script src="supabase_client.js"></script>
 <script src="campistry_security.js"></script>
 <script src="campistry_me.js"></script>
 <script src="trial_guard.js"></script>
-<script>
-  window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
-</script>
-<script defer src="/_vercel/insights/script.js"></script>
 </body>
 </html>
