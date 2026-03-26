@@ -3026,7 +3026,7 @@ window._routeGeomCache = _routeGeomCache;
         _getSavedRoutes: function() { return D.savedRoutes; },
         _setSavedRoutes: function(r) { D.savedRoutes = r; _generatedRoutes = r; },
         _save: function() { save(); },
-        __refreshRoutes: function() {
+        _refreshRoutes: function() {
             if (D.savedRoutes) {
                 _generatedRoutes = D.savedRoutes;
                 // Preserve current map view
