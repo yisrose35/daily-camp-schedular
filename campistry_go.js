@@ -583,7 +583,34 @@
     // =========================================================================
     // ADDRESSES (auto-pull from Me, just manage geocoding)
     // =========================================================================
+    function syncAddressesFromMe() {
+        try {
+            const raw = localStorage.getItem('campGlobalSettings_v1');
+            if (!raw) return;
+            const settings = JSON.parse(raw);
+            const meRoster = settings?.app1?.camperRoster || {};
+            let synced = 0;
+            Object.entries(meRoster).forEach(([name, camper]) => {
+                if (!camper.street) return;
+                const existing = D.addresses[name];
+                if (existing && existing.street === camper.street && existing.city === camper.city) return;
+                D.addresses[name] = {
+                    street: camper.street || '', city: camper.city || '',
+                    state: camper.state || 'NY', zip: camper.zip || '',
+                    lat: existing?.lat || null, lng: existing?.lng || null,
+                    geocoded: (existing?.street === camper.street && existing?.city === camper.city && existing?.geocoded) || false,
+                    transport: existing?.transport || 'bus', rideWith: existing?.rideWith || ''
+                };
+                if (existing?.street === camper.street && existing?.city === camper.city && existing?.geocoded) {
+                    D.addresses[name].lat = existing.lat; D.addresses[name].lng = existing.lng; D.addresses[name].geocoded = true;
+                }
+                synced++;
+            });
+            if (synced > 0) { console.log('[Go] Synced ' + synced + ' addresses from Campistry Me'); save(); }
+        } catch (e) { console.warn('[Go] Me address sync error:', e); }
+    }
     function renderAddresses() {
+        syncAddressesFromMe();
         const roster = getRoster();
         const names = Object.keys(roster).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
         const filter = (document.getElementById('addressSearch')?.value || '').toLowerCase().trim();
