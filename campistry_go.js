@@ -1854,6 +1854,39 @@ function detectRegions() {
                 if (!isArrival && firstD > lastD) tour.reverse();
             }
 
+            // Detect backtracking: if the tour doubles back >30% of its length,
+            // re-sort by angle from camp for a clean geographic sweep
+            if (tour.length >= 4) {
+                let backtrack = 0;
+                for (let k = 0; k < tour.length - 2; k++) {
+                    const sA = r.stops[tour[k]], sB = r.stops[tour[k+1]], sC = r.stops[tour[k+2]];
+                    if (sA.lat && sB.lat && sC.lat) {
+                        const distAB = haversineMi(sA.lat, sA.lng, sB.lat, sB.lng);
+                        const distBC = haversineMi(sB.lat, sB.lng, sC.lat, sC.lng);
+                        const distAC = haversineMi(sA.lat, sA.lng, sC.lat, sC.lng);
+                        if (distAC < Math.min(distAB, distBC) * 0.8) backtrack++;
+                    }
+                }
+                if (backtrack > tour.length * 0.25) {
+                    console.log('[Go] ' + r.busName + ': detected backtracking (' + backtrack + '/' + tour.length + '), applying geographic sweep');
+                    // Sort stops by distance from camp (farthest first for dismissal, nearest first for arrival)
+                    const campRef = { lat: campLat, lng: campLng };
+                    const indexed = tour.map(idx => ({
+                        idx,
+                        dist: haversineMi(campRef.lat, campRef.lng, r.stops[idx].lat, r.stops[idx].lng),
+                        angle: Math.atan2(r.stops[idx].lng - campRef.lng, r.stops[idx].lat - campRef.lat)
+                    }));
+                    // Group by proximity, then sort by angle within distance bands
+                    indexed.sort((a, b) => {
+                        const bandA = Math.round(a.dist * 5); // ~0.2mi bands
+                        const bandB = Math.round(b.dist * 5);
+                        if (bandA !== bandB) return isArrival ? bandA - bandB : bandB - bandA;
+                        return a.angle - b.angle;
+                    });
+                    tour = indexed.map(x => x.idx);
+                }
+            }
+
             // Apply ordering
             const orderedStops = tour.map(idx => r.stops[idx]);
             orderedStops.forEach((s, i) => s.stopNum = i + 1);
