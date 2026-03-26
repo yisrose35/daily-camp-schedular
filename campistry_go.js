@@ -2250,7 +2250,7 @@
  
                     (async function(coordStr, color, ck, temp, dash, w, o) {
                         try {
-                            const resp = await fetch('https://router.project-osrm.org/route/v1/driving/' + coordStr + '?overview=full&geometries=geojson');
+                            const resp = await fetch('https://router.project-osrm.org/route/v1/driving/' + coordStr + '?overview=full&geometries=geojson&continue_straight=true');
                             if (resp.ok) {
                                 const data = await resp.json();
                                 if (data.code === 'Ok' && data.routes?.[0]?.geometry?.coordinates) {
@@ -2363,7 +2363,7 @@
                                 if (isArrival && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
                                 if (needsReturn && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
  
-                                const resp = await fetch('https://router.project-osrm.org/route/v1/driving/' + wp.join(';') + '?overview=full&geometries=geojson');
+                                const resp = await fetch('https://router.project-osrm.org/route/v1/driving/' + coordStr + '?overview=full&geometries=geojson&continue_straight=true');
                                 if (resp.ok) {
                                     const data = await resp.json();
                                     if (data.code === 'Ok' && data.routes?.[0]?.geometry?.coordinates) {
