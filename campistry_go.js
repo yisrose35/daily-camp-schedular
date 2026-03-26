@@ -579,8 +579,7 @@
             const hasA = a?.street;
             const full = hasA ? [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ') : '';
             const badge = hasA ? (a.geocoded ? (a._zipMismatch ? '<span class="badge badge-warning" title="ZIP code mismatch — location may be wrong">⚠ Check</span>' : '<span class="badge badge-success">Geocoded</span>') : '<span class="badge badge-warning">Not geocoded</span>') : '<span class="badge badge-danger">Missing</span>';
-            return '<tr><td style="font-size:.75rem;color:var(--text-muted);font-family:monospace;">' + esc(c.id || c.camperId || '') + '</td><td style="font-weight:600">' + esc(n) + '</td><td>' + (esc(c.division) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (full ? esc(full) : '<span style="color:var(--text-muted)">No address</span>') + '</td><td>' + badge + '</td><td><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editAddress(\'' + esc(n.replace(/'/g, "\\'")) + '\')">' + (hasA ? 'Edit' : 'Add') + '</button></td></tr>';
-        }).join('');
+           return '<tr><td style="font-size:.75rem;color:var(--text-muted);font-family:monospace;">' + (c.camperId ? '#' + String(c.camperId).padStart(4, '0') : '') + '</td>        }).join('');
     }
     function updateAddrProgress(n, t) { const p = t > 0 ? Math.round(n / t * 100) : 0; document.getElementById('addressProgressBar').style.width = p + '%'; document.getElementById('addressProgressText').textContent = n + ' of ' + t + ' (' + p + '%)'; }
     function editAddress(name) {
@@ -936,7 +935,7 @@
     function downloadAddressTemplate() {
         const roster = getRoster(); const names = Object.keys(roster).sort();
         let csv = '\uFEFFID,Name,Division,Bunk,Street Address,City,State,ZIP,Transport,Ride With\n';
-      names.forEach(n => { const c = roster[n], a = D.addresses[n] || {}; csv += [c.id || c.camperId || '', n, c.division || '', c.bunk || '', a.street || '', a.city || '', a.state || 'NY', a.zip || '', a.transport || 'bus', a.rideWith || ''].map(v =>        const blob = new Blob([csv], { type: 'text/csv' }); const el = document.createElement('a'); el.href = URL.createObjectURL(blob); el.download = 'campistry_go_addresses.csv'; el.click(); toast('Template downloaded');
+      names.forEach(n => { const c = roster[n], a = D.addresses[n] || {}; csv += [c.camperId ? String(c.camperId).padStart(4, '0') : '', n, c.division || '', c.bunk || '', a.street || '', a.city || '', a.state || 'NY', a.zip || '', a.transport || 'bus', a.rideWith || ''].map(v =>        const blob = new Blob([csv], { type: 'text/csv' }); const el = document.createElement('a'); el.href = URL.createObjectURL(blob); el.download = 'campistry_go_addresses.csv'; el.click(); toast('Template downloaded');
     }
     function importAddressCsv() { const inp = document.getElementById('csvFileInput'); inp.onchange = function () { if (!inp.files[0]) return; const r = new FileReader(); r.onload = e => { parseCsv(e.target.result); inp.value = ''; }; r.readAsText(inp.files[0]); }; inp.click(); }
     function parseCsv(text) {
@@ -3008,7 +3007,7 @@ function renderCarpool() {
                         const camperData = roster[c.name] || {};
                         const addr = D.addresses[c.name] || {};
                         rows.push([
-                            camperData.id || camperData.camperId || '',
+                            camperData.camperId ? String(camperData.camperId).padStart(4, '0') : '',
                             p[0] || '',
                             p.slice(1).join(' ') || '',
                             c.division || camperData.division || '',
@@ -3043,7 +3042,7 @@ function renderCarpool() {
                 });
             }
             rows.push([
-                c.id || c.camperId || '',
+                 c.camperId ? String(c.camperId).padStart(4, '0') : '',
                 p[0] || '',
                 p.slice(1).join(' ') || '',
                 c.division || '',
