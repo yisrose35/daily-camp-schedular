@@ -7,8 +7,9 @@ var COLORS=['#D97706','#147D91','#8B5CF6','#0EA5E9','#10B981','#F43F5E','#EC4899
 var AV_BG=['#147D91','#6366F1','#0EA5E9','#10B981','#F43F5E','#8B5CF6','#D97706'];
 
 var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={};
-var curPage='families', editingCamper=null, editingDiv=null, editingFam=null;
+var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
 var nextCamperId=1;
+var _saveLockUntil=0; // timestamp — block cloud overwrites for 5s after local save
 
 // ═══ INIT ════════════════════════════════════════════════════════
 function init(){
@@ -16,6 +17,27 @@ function init(){
     syncAllAddressesToGo();
     nav('campers');
     console.log('📋 Me ready:',Object.keys(roster).length,'campers');
+
+    // Block cloud hydration from overwriting recent saves
+    window.addEventListener('campistry-cloud-hydrated',function(){
+        if(Date.now()<_saveLockUntil){
+            console.log('[Me] Blocked cloud hydration overwrite (save lock active)');
+            // Re-write our data back
+            setTimeout(function(){save()},200);
+        }else{
+            // Cloud data is newer — reload
+            console.log('[Me] Cloud hydration — reloading data');
+            loadData();render(curPage);
+        }
+    });
+
+    // Watch for localStorage changes from other tabs/scripts
+    window.addEventListener('storage',function(e){
+        if(e.key==='campGlobalSettings_v1'&&Date.now()>=_saveLockUntil){
+            console.log('[Me] External storage change — reloading');
+            loadData();render(curPage);
+        }
+    });
 }
 
 // ═══ DATA ════════════════════════════════════════════════════════
@@ -37,6 +59,7 @@ function loadData(){
 }
 function save(){
     try{
+        _saveLockUntil=Date.now()+5000;
         var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
         g.campStructure=structure;
         if(!g.app1)g.app1={};
@@ -47,7 +70,23 @@ function save(){
         g.app1.divisions=m;
         g.campistryMe={families:families,payments:payments,broadcasts:broadcasts,bunkAssignments:bunkAsgn,nextCamperId:nextCamperId};
         g.updated_at=new Date().toISOString();
-        localStorage.setItem('campGlobalSettings_v1',JSON.stringify(g));
+        var json=JSON.stringify(g);
+        localStorage.setItem('campGlobalSettings_v1',json);
+        // Also write to backup keys that other scripts may read
+        localStorage.setItem('CAMPISTRY_LOCAL_CACHE',json);
+        // Verify write after a short delay (catch overwrites from cloud hydration)
+        var rosterCount=Object.keys(roster).length;
+        setTimeout(function(){
+            try{
+                var check=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+                var checkCount=Object.keys((check.app1&&check.app1.camperRoster)||{}).length;
+                if(checkCount<rosterCount){
+                    console.warn('[Me] ⚠ Save was overwritten — re-saving');
+                    localStorage.setItem('campGlobalSettings_v1',json);
+                    localStorage.setItem('CAMPISTRY_LOCAL_CACHE',json);
+                }
+            }catch(e){}
+        },800);
         if(window.saveGlobalSettings&&window.saveGlobalSettings._isAuthoritativeHandler){
             window.saveGlobalSettings('campStructure',structure);
             window.saveGlobalSettings('app1',g.app1);
