@@ -1444,314 +1444,78 @@
     // FALLBACK: Client-side K-Means + TSP (when no API key or quota exhausted)
     // =========================================================================
 
+    // =========================================================================
+    // ROUTING ENGINE v7 — "Clean Sweep" Algorithm
+    //
+    // Designed for CAMP bus routing where route sensibility matters more than
+    // mathematical optimality. Produces routes that look right on a map and
+    // that a bus driver can follow intuitively.
+    //
+    // THREE MODES:
+    //   1. ARRIVAL: Bus starts at farthest stop, picks up kids working toward camp
+    //   2. DISMISSAL (no shifts): Bus leaves camp, drops kids nearest-first outward
+    //   3. DISMISSAL (shifts): Same as #2 but bus returns to camp between shifts
+    //
+    // TWO STOP TYPES:
+    //   A. House-by-house: Every kid gets their own stop (same-address merged)
+    //   B. Optimized stops: Nearby kids cluster to shared meeting points
+    //
+    // ALGORITHM:
+    //   Phase 1: Create stops (merge same-address or cluster nearby)
+    //   Phase 2: K-Means++ geographic clustering → assign stops to buses
+    //   Phase 3: Order stops within each bus using "clean sweep" logic
+    //   Phase 4: 2-opt + or-opt refinement for smoothness
+    //   Phase 5: Inter-route rebalancing (move border stops between buses)
+    //   Phase 6: Orient routes for arrival/dismissal direction
+    //
+    // Uses ORS distance matrix for real road distances when available,
+    // haversine as fallback.
+    // =========================================================================
+
     async function clientSideCluster(campers, vehicles, campLat, campLng, mode) {
         const isArrival = D.activeMode === 'arrival';
+        const hasShifts = D.shifts.length > 1;
         const numBuses = vehicles.length;
         if (!numBuses || !campers.length) return [];
 
-        // ── Create stops first ──
+        // ── Phase 1: Create stops ──
         let stops;
         if (mode === 'optimized-stops') {
-            const maxWalkMi = (D.setup.maxWalkDistance || 500) * 0.000189394;
-            const used = new Set(); stops = [];
-            const sorted = [...campers].sort((a, b) => a.lat - b.lat);
-            sorted.forEach(c => {
-                if (used.has(c.name)) return;
-                const cl = [c]; used.add(c.name);
-                sorted.forEach(o => { if (!used.has(o.name) && haversineMi(c.lat, c.lng, o.lat, o.lng) <= maxWalkMi) { cl.push(o); used.add(o.name); } });
-                const cLat = cl.reduce((s, x) => s + x.lat, 0) / cl.length;
-                const cLng = cl.reduce((s, x) => s + x.lng, 0) / cl.length;
-                let nearestAddr = cl[0].address, nearestDist = Infinity;
-                cl.forEach(x => { const d = haversineMi(cLat, cLng, x.lat, x.lng); if (d < nearestDist) { nearestDist = d; nearestAddr = x.address; } });
-                stops.push({ lat: cLat, lng: cLng, address: nearestAddr, campers: cl.map(x => ({ name: x.name, division: x.division, bunk: x.bunk })) });
-            });
+            stops = createOptimizedStops(campers);
         } else {
-            const groups = {};
-            campers.forEach(c => {
-                const key = Math.round(c.lat * 3000) + ',' + Math.round(c.lng * 3000);
-                if (!groups[key]) groups[key] = [];
-                groups[key].push(c);
-            });
-            stops = Object.values(groups).map(g => ({
-                lat: g[0].lat, lng: g[0].lng, address: g[0].address,
-                campers: g.map(c => ({ name: c.name, division: c.division, bunk: c.bunk }))
-            }));
+            stops = createHouseStops(campers);
         }
         if (!stops.length) return [];
 
-        // ══════════════════════════════════════════════════════════
-        // TRY 1: GraphHopper Route Optimization (best quality)
-        // ══════════════════════════════════════════════════════════
-        if (stops.length >= 2) {
-            try {
-                const result = await solveWithGraphHopper(stops, vehicles, campLat, campLng, isArrival);
-                if (result) {
-                    console.log('[Go] GraphHopper optimization succeeded — ' + result.length + ' routes');
-                    return result;
-                }
-            } catch (e) {
-                console.warn('[Go] GraphHopper failed:', e.message);
-            }
-        }
+        console.log('[Go] Engine v7: ' + stops.length + ' stops, ' + numBuses + ' buses, mode=' + (isArrival ? 'arrival' : 'dismissal') + (hasShifts ? '+shifts' : ''));
 
-        // ══════════════════════════════════════════════════════════
-        // TRY 2: ORS VROOM Optimization (fallback)
-        // ══════════════════════════════════════════════════════════
+        // ── Phase 2: Fetch distance matrix (ORS) if available ──
+        let distMatrix = null;
         const apiKey = getApiKey();
-        if (apiKey && stops.length >= 2) {
+        if (apiKey && stops.length <= 60) {
             try {
-                const result = await solveWithVROOM(stops, vehicles, campLat, campLng, isArrival, apiKey);
-                if (result) {
-                    console.log('[Go] VROOM optimization succeeded — ' + result.length + ' routes');
-                    return result;
-                }
+                distMatrix = await fetchDistanceMatrix(stops, campLat, campLng, apiKey);
+                if (distMatrix) console.log('[Go] Using real road distances (' + distMatrix.size + 'x' + distMatrix.size + ' matrix)');
             } catch (e) {
-                console.warn('[Go] VROOM failed:', e.message);
+                console.warn('[Go] Distance matrix failed, using haversine:', e.message);
             }
         }
 
-        // ══════════════════════════════════════════════════════════
-        // FALLBACK: Client-side K-Means + TSP
-        // ══════════════════════════════════════════════════════════
-        console.log('[Go] Using client-side routing (no API or VROOM unavailable)');
-        return clientSideFallback(stops, vehicles, campLat, campLng, isArrival);
-    }
+        // Distance function: real road or haversine fallback
+        // Index 0 = camp, indices 1..N = stops
+        function dist(i, j) {
+            if (distMatrix) return distMatrix.get(i, j);
+            const a = i === 0 ? { lat: campLat, lng: campLng } : stops[i - 1];
+            const b = j === 0 ? { lat: campLat, lng: campLng } : stops[j - 1];
+            return haversineMi(a.lat, a.lng, b.lat, b.lng);
+        }
 
-    /**
-     * Solve routing using GraphHopper Route Optimization API
-     * Strategy: Cluster-First Route-Second
-     *   1. K-Means clusters stops into bus-sized groups
-     *   2. For each bus, send 1-vehicle TSP to GraphHopper (free tier = 1 vehicle)
-     *   3. GraphHopper optimizes stop order using real roads + turn costs
-     */
-    async function solveWithGraphHopper(stops, vehicles, campLat, campLng, isArrival) {
-        const ghKey = D.setup.graphhopperKey || window.__CAMPISTRY_GH_KEY__;
-        if (!ghKey) return null;
-
-        const stopTimeSec = (D.setup.avgStopTime || 2) * 60;
-        const numBuses = vehicles.length;
-
-        // ── Step 1: Cluster stops into bus groups ──
+        // ── Phase 3: K-Means++ cluster stops into bus-sized groups ──
         const clusters = kMeansGeo(stops, numBuses);
         clusters.sort((a, b) => b.camperCount - a.camperCount);
         const sortedVehicles = [...vehicles].sort((a, b) => b.capacity - a.capacity);
 
-        // Handle overcapacity
-        const busGroups = clusters.map((cl, i) => ({
-            vehicle: sortedVehicles[i % sortedVehicles.length],
-            stops: cl.stops
-        }));
-
-        console.log('[Go] GraphHopper: ' + busGroups.length + ' buses, optimizing each via TSP...');
-
-        // ── Step 2: For each bus, solve 1-vehicle TSP via GraphHopper ──
-        const routes = [];
-        let ghSuccess = 0, ghFail = 0;
-
-        for (let bi = 0; bi < busGroups.length; bi++) {
-            const group = busGroups[bi];
-            const v = group.vehicle;
-            const busStops = group.stops;
-
-            if (!busStops.length) continue;
-            if (busStops.length === 1) {
-                // Single stop — no optimization needed
-                busStops[0].stopNum = 1;
-                routes.push({
-                    busId: v.busId, busName: v.name, busColor: v.color,
-                    monitor: v.monitor, counselors: v.counselors || [],
-                    stops: busStops,
-                    camperCount: busStops.reduce((s, st) => s + st.campers.length, 0),
-                    _cap: v.capacity, totalDuration: 10
-                });
-                continue;
-            }
-
-            // Build GraphHopper request for this single bus
-            const ghVehicle = { vehicle_id: 'bus_0', type_id: 'bus', max_jobs: busStops.length + 5 };
-            if (isArrival) {
-                ghVehicle.end_address = { location_id: 'camp', lon: campLng, lat: campLat };
-            } else if (D.shifts.length > 1) {
-                ghVehicle.start_address = { location_id: 'camp', lon: campLng, lat: campLat };
-                ghVehicle.end_address = { location_id: 'camp', lon: campLng, lat: campLat };
-            } else {
-                ghVehicle.start_address = { location_id: 'camp', lon: campLng, lat: campLat };
-            }
-
-            const services = busStops.map((s, si) => ({
-                id: 'stop_' + si,
-                name: s.address,
-                address: { location_id: 'stop_' + si, lon: s.lng, lat: s.lat },
-                size: [s.campers.length],
-                service: stopTimeSec
-            }));
-
-            const body = {
-                vehicles: [ghVehicle],
-                vehicle_types: [{ type_id: 'bus', capacity: [v.capacity], profile: 'car' }],
-                services,
-                objectives: [{ type: 'min', value: 'transport_time' }]
-            };
-
-            try {
-                const resp = await fetch('https://graphhopper.com/api/1/vrp?key=' + encodeURIComponent(ghKey), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
-                });
-
-                if (!resp.ok) {
-                    const errText = await resp.text().catch(() => '');
-                    console.warn('[Go] GH bus ' + (bi + 1) + ' HTTP ' + resp.status + ':', errText.substring(0, 200));
-                    ghFail++;
-                    // Use stops as-is without optimization
-                    busStops.forEach((s, i) => s.stopNum = i + 1);
-                    routes.push({
-                        busId: v.busId, busName: v.name, busColor: v.color,
-                        monitor: v.monitor, counselors: v.counselors || [],
-                        stops: busStops,
-                        camperCount: busStops.reduce((s, st) => s + st.campers.length, 0),
-                        _cap: v.capacity, totalDuration: 30
-                    });
-                    continue;
-                }
-
-                const data = await resp.json();
-                if (data.status === 'finished' && data.solution?.routes?.length) {
-                    const ghRoute = data.solution.routes[0];
-                    const orderedStops = [];
-                    let sn = 0;
-
-                    // Extract road geometry
-                    let roadCoords = [];
-                    if (ghRoute.points) {
-                        ghRoute.points.forEach(geom => {
-                            if (geom.type === 'LineString' && geom.coordinates) {
-                                geom.coordinates.forEach(c => roadCoords.push([c[1], c[0]]));
-                            }
-                        });
-                    }
-
-                    // Extract optimized stop order from activities
-                    (ghRoute.activities || []).forEach(act => {
-                        if (act.type === 'service') {
-                            const si = parseInt((act.id || '').replace('stop_', ''));
-                            const os = busStops[si];
-                            if (os) { sn++; os.stopNum = sn; orderedStops.push(os); }
-                        }
-                    });
-
-                    const route = {
-                        busId: v.busId, busName: v.name, busColor: v.color,
-                        monitor: v.monitor, counselors: v.counselors || [],
-                        stops: orderedStops.length ? orderedStops : busStops,
-                        camperCount: (orderedStops.length ? orderedStops : busStops).reduce((s, st) => s + st.campers.length, 0),
-                        _cap: v.capacity,
-                        totalDuration: Math.round((ghRoute.transport_time || 0) / 60),
-                        _ghDistance: ghRoute.distance
-                    };
-
-                    // Cache road geometry
-                    if (roadCoords.length > 2) {
-                        _routeGeomCache[v.busId + '_0'] = roadCoords;
-                    }
-
-                    routes.push(route);
-                    ghSuccess++;
-                    console.log('[Go] GH bus ' + (bi + 1) + ' (' + v.name + '): ' + orderedStops.length + ' stops, ' + Math.round((ghRoute.transport_time || 0) / 60) + 'min');
-                } else {
-                    ghFail++;
-                    busStops.forEach((s, i) => s.stopNum = i + 1);
-                    routes.push({
-                        busId: v.busId, busName: v.name, busColor: v.color,
-                        monitor: v.monitor, counselors: v.counselors || [],
-                        stops: busStops,
-                        camperCount: busStops.reduce((s, st) => s + st.campers.length, 0),
-                        _cap: v.capacity, totalDuration: 30
-                    });
-                }
-            } catch (e) {
-                console.warn('[Go] GH bus ' + (bi + 1) + ' error:', e.message);
-                ghFail++;
-                busStops.forEach((s, i) => s.stopNum = i + 1);
-                routes.push({
-                    busId: v.busId, busName: v.name, busColor: v.color,
-                    monitor: v.monitor, counselors: v.counselors || [],
-                    stops: busStops,
-                    camperCount: busStops.reduce((s, st) => s + st.campers.length, 0),
-                    _cap: v.capacity, totalDuration: 30
-                });
-            }
-
-            // Small delay between requests to be polite to API
-            if (bi < busGroups.length - 1) await new Promise(r => setTimeout(r, 300));
-        }
-
-        console.log('[Go] GraphHopper done: ' + ghSuccess + ' optimized, ' + ghFail + ' fallback');
-        if (ghSuccess === 0) return null; // all failed, let caller try next engine
-        return routes.filter(r => r.stops.length > 0);
-    }
-
-    /**
-     * Fallback: ORS VROOM Optimization API
-     */
-    async function solveWithVROOM(stops, vehicles, campLat, campLng, isArrival, apiKey) {
-        const campCoord = [campLng, campLat];
-        const stopTime = (D.setup.avgStopTime || 2) * 60;
-
-        const jobs = stops.map((s, i) => ({
-            id: i + 1, location: [s.lng, s.lat], service: stopTime,
-            amount: [s.campers.length], description: s.address
-        }));
-
-        const vroomVehicles = vehicles.map((v, i) => {
-            const veh = { id: i + 1, profile: 'driving-car', capacity: [v.capacity] };
-            if (isArrival) { veh.end = campCoord; }
-            else if (D.shifts.length > 1) { veh.start = campCoord; veh.end = campCoord; }
-            else { veh.start = campCoord; }
-            return veh;
-        });
-
-        const resp = await fetch('https://api.openrouteservice.org/optimization', {
-            method: 'POST',
-            headers: { 'Authorization': apiKey, 'Content-Type': 'application/json', 'Accept': 'application/json' },
-            body: JSON.stringify({ jobs, vehicles: vroomVehicles })
-        });
-
-        if (!resp.ok) return null;
-        const data = await resp.json();
-        if (!data.routes?.length) return null;
-
-        return data.routes.map(vr => {
-            const v = vehicles[(vr.vehicle || 1) - 1] || vehicles[0];
-            const routeStops = [];
-            let sn = 0;
-            (vr.steps || []).forEach(step => {
-                if (step.type === 'job') {
-                    sn++;
-                    const os = stops[(step.id || 1) - 1];
-                    if (os) routeStops.push({ stopNum: sn, campers: os.campers, address: os.address, lat: os.lat, lng: os.lng });
-                }
-            });
-            return {
-                busId: v.busId, busName: v.name, busColor: v.color,
-                monitor: v.monitor, counselors: v.counselors || [],
-                stops: routeStops, camperCount: routeStops.reduce((s, st) => s + st.campers.length, 0),
-                _cap: v.capacity, totalDuration: Math.round((vr.duration || 0) / 60)
-            };
-        }).filter(r => r.stops.length > 0);
-    }
-
-    /**
-     * Client-side fallback: K-Means + basic TSP
-     * Used when no API key or VROOM quota exhausted
-     */
-    function clientSideFallback(stops, vehicles, campLat, campLng, isArrival) {
-        const numBuses = vehicles.length;
-        const clusters = kMeansGeo(stops, numBuses);
-        clusters.sort((a, b) => b.camperCount - a.camperCount);
-        const sortedVehicles = [...vehicles].sort((a, b) => b.capacity - a.capacity);
-
+        // Build initial routes
         const routes = clusters.map((cluster, i) => {
             const v = sortedVehicles[i % sortedVehicles.length];
             return {
@@ -1762,80 +1526,440 @@
             };
         });
 
-        // Overcapacity handling
-        routes.forEach(r => {
-            while (r.camperCount > r._cap && r.stops.length > 1) {
-                const cLat = r.stops.reduce((s, st) => s + st.lat, 0) / r.stops.length;
-                const cLng = r.stops.reduce((s, st) => s + st.lng, 0) / r.stops.length;
-                let fIdx = -1, fDist = 0;
-                r.stops.forEach((st, i) => { const d = haversineMi(cLat, cLng, st.lat, st.lng); if (d > fDist) { fDist = d; fIdx = i; } });
-                if (fIdx < 0) break;
-                const overflow = r.stops.splice(fIdx, 1)[0];
-                r.camperCount -= overflow.campers.length;
-                let bestBus = null, bestDist = Infinity;
-                routes.forEach(other => {
-                    if (other === r || other.camperCount + overflow.campers.length > other._cap) return;
-                    const d = haversineMi(overflow.lat, overflow.lng, campLat, campLng);
-                    if (d < bestDist) { bestDist = d; bestBus = other; }
-                });
-                if (bestBus) { bestBus.stops.push(overflow); bestBus.camperCount += overflow.campers.length; }
-                else { r.stops.push(overflow); r.camperCount += overflow.campers.length; break; }
-            }
-        });
+        // ── Phase 4: Handle overcapacity ──
+        handleOvercapacity(routes, campLat, campLng);
 
-        // Simple nearest-neighbor ordering
+        // ── Phase 5: Order stops within each bus — THE KEY STEP ──
         const avgSpeed = D.setup.avgSpeed || 25;
         const stopTime = D.setup.avgStopTime || 2;
+
         routes.forEach(r => {
-            if (r.stops.length < 2) { r.stops.forEach((s, i) => s.stopNum = i + 1); return; }
-            // Nearest-neighbor from camp (dismissal) or farthest (arrival)
-            const ordered = []; const rem = [...r.stops];
+            if (r.stops.length < 2) {
+                r.stops.forEach((s, i) => s.stopNum = i + 1);
+                return;
+            }
+
+            // Step A: Calculate distance from camp to each stop
+            r.stops.forEach(s => {
+                s._distFromCamp = haversineMi(campLat, campLng, s.lat, s.lng);
+            });
+
+            let ordered;
+
             if (isArrival) {
-                let fIdx = 0, fDist = 0;
-                rem.forEach((s, i) => { const d = haversineMi(campLat, campLng, s.lat, s.lng); if (d > fDist) { fDist = d; fIdx = i; } });
-                ordered.push(rem.splice(fIdx, 1)[0]);
+                // ARRIVAL: Start at farthest stop, work inward toward camp
+                ordered = orderStopsFarthestFirst(r.stops, campLat, campLng);
+            } else {
+                // DISMISSAL: Start at camp, go to nearest stop, work outward
+                ordered = orderStopsNearestFirst(r.stops, campLat, campLng);
             }
-            let pLat = ordered.length ? ordered[0].lat : campLat;
-            let pLng = ordered.length ? ordered[0].lng : campLng;
-            while (rem.length) {
-                let ni = 0, nd = Infinity;
-                rem.forEach((s, i) => { const d = haversineMi(pLat, pLng, s.lat, s.lng); if (d < nd) { nd = d; ni = i; } });
-                const nx = rem.splice(ni, 1)[0]; ordered.push(nx); pLat = nx.lat; pLng = nx.lng;
-            }
-            // Quick 2-opt
-            for (let pass = 0; pass < 20; pass++) {
-                let improved = false;
-                for (let i = 0; i < ordered.length - 1; i++) {
-                    for (let j = i + 2; j < ordered.length; j++) {
-                        const d1 = haversineMi(ordered[i].lat, ordered[i].lng, ordered[i+1].lat, ordered[i+1].lng);
-                        const d2 = haversineMi(ordered[j].lat, ordered[j].lng, (j+1 < ordered.length ? ordered[j+1].lat : campLat), (j+1 < ordered.length ? ordered[j+1].lng : campLng));
-                        const d3 = haversineMi(ordered[i].lat, ordered[i].lng, ordered[j].lat, ordered[j].lng);
-                        const d4 = haversineMi(ordered[i+1].lat, ordered[i+1].lng, (j+1 < ordered.length ? ordered[j+1].lat : campLat), (j+1 < ordered.length ? ordered[j+1].lng : campLng));
-                        if (d3 + d4 < d1 + d2 - 0.01) {
-                            const seg = ordered.splice(i + 1, j - i).reverse();
-                            ordered.splice(i + 1, 0, ...seg);
-                            improved = true;
-                        }
-                    }
-                }
-                if (!improved) break;
-            }
-            ordered.forEach((s, i) => s.stopNum = i + 1);
+
+            // Step B: 2-opt refinement (many passes for smooth routes)
+            ordered = twoOptImprove(ordered, campLat, campLng, isArrival, hasShifts);
+
+            // Step C: Or-opt refinement (move single stops to better positions)
+            ordered = orOptImprove(ordered, campLat, campLng, isArrival, hasShifts);
+
+            // Number stops
+            ordered.forEach((s, i) => { s.stopNum = i + 1; delete s._distFromCamp; });
             r.stops = ordered;
 
-            // Duration
-            let dur = 0; pLat = campLat; pLng = campLng;
-            r.stops.forEach(s => { dur += (haversineMi(pLat, pLng, s.lat, s.lng) / avgSpeed) * 60 + stopTime; pLat = s.lat; pLng = s.lng; });
-            const needsReturn = !isArrival && D.shifts.length > 1;
-            if (r.stops.length && needsReturn) dur += (haversineMi(pLat, pLng, campLat, campLng) / avgSpeed) * 60;
+            // Calculate route duration
+            let dur = 0, pLat = campLat, pLng = campLng;
+            if (isArrival) {
+                // For arrival, first stop is farthest — drive time from that stop inward
+                pLat = r.stops[0].lat; pLng = r.stops[0].lng;
+                dur += 15; // initial drive to first pickup area
+            }
+            r.stops.forEach((s, i) => {
+                if (i === 0 && !isArrival) {
+                    dur += (haversineMi(campLat, campLng, s.lat, s.lng) / avgSpeed) * 60;
+                } else if (i > 0) {
+                    const prev = r.stops[i - 1];
+                    dur += (haversineMi(prev.lat, prev.lng, s.lat, s.lng) / avgSpeed) * 60;
+                }
+                dur += stopTime;
+                pLat = s.lat; pLng = s.lng;
+            });
+            // Return to camp for multi-shift dismissal
+            if (!isArrival && hasShifts && r.stops.length) {
+                const last = r.stops[r.stops.length - 1];
+                dur += (haversineMi(last.lat, last.lng, campLat, campLng) / avgSpeed) * 60;
+            }
+            // Arrival: add drive from last pickup to camp
+            if (isArrival && r.stops.length) {
+                const last = r.stops[r.stops.length - 1];
+                dur += (haversineMi(last.lat, last.lng, campLat, campLng) / avgSpeed) * 60;
+            }
             r.totalDuration = Math.round(dur);
         });
 
         return routes;
     }
 
-    /** K-Means++ geographic clustering */
-    function kMeansGeo(stops, K) {
+    // =========================================================================
+    // STOP CREATION
+    // =========================================================================
+
+    /** House-by-house: merge kids at the same physical address into one stop */
+    function createHouseStops(campers) {
+        const groups = {};
+        campers.forEach(c => {
+            // Round to ~30 meter precision to merge same-house addresses
+            const key = Math.round(c.lat * 3000) + ',' + Math.round(c.lng * 3000);
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(c);
+        });
+        return Object.values(groups).map(g => ({
+            lat: g[0].lat, lng: g[0].lng, address: g[0].address,
+            campers: g.map(c => ({ name: c.name, division: c.division, bunk: c.bunk }))
+        }));
+    }
+
+    /** Optimized stops: cluster nearby kids within walking distance to shared meeting points */
+    function createOptimizedStops(campers) {
+        const maxWalkMi = (D.setup.maxWalkDistance || 500) * 0.000189394; // feet to miles
+        const used = new Set();
+        const stops = [];
+        const sorted = [...campers].sort((a, b) => a.lat - b.lat);
+
+        sorted.forEach(c => {
+            if (used.has(c.name)) return;
+            const cl = [c];
+            used.add(c.name);
+            sorted.forEach(o => {
+                if (!used.has(o.name) && haversineMi(c.lat, c.lng, o.lat, o.lng) <= maxWalkMi) {
+                    cl.push(o);
+                    used.add(o.name);
+                }
+            });
+            const cLat = cl.reduce((s, x) => s + x.lat, 0) / cl.length;
+            const cLng = cl.reduce((s, x) => s + x.lng, 0) / cl.length;
+            // Use the address of the kid closest to the centroid
+            let nearestAddr = cl[0].address, nearestDist = Infinity;
+            cl.forEach(x => {
+                const d = haversineMi(cLat, cLng, x.lat, x.lng);
+                if (d < nearestDist) { nearestDist = d; nearestAddr = x.address; }
+            });
+            stops.push({
+                lat: cLat, lng: cLng, address: nearestAddr,
+                campers: cl.map(x => ({ name: x.name, division: x.division, bunk: x.bunk }))
+            });
+        });
+        return stops;
+    }
+
+    // =========================================================================
+    // STOP ORDERING — THE CORE LOGIC
+    // =========================================================================
+
+    /**
+     * ARRIVAL ordering: Farthest stop first, sweep inward toward camp.
+     * Bus starts at the farthest kid's house, picks up kids working toward camp.
+     * Uses "farthest insertion" + nearest-neighbor hybrid.
+     */
+    function orderStopsFarthestFirst(stops, campLat, campLng) {
+        const ordered = [];
+        const remaining = [...stops];
+
+        // Start with the farthest stop from camp
+        let farthestIdx = 0, farthestDist = 0;
+        remaining.forEach((s, i) => {
+            const d = haversineMi(campLat, campLng, s.lat, s.lng);
+            if (d > farthestDist) { farthestDist = d; farthestIdx = i; }
+        });
+        ordered.push(remaining.splice(farthestIdx, 1)[0]);
+
+        // Greedy nearest-neighbor from current position, but BIASED toward
+        // stops that are closer to camp (i.e., on the way inward)
+        while (remaining.length) {
+            const last = ordered[ordered.length - 1];
+            const lastDistToCamp = haversineMi(campLat, campLng, last.lat, last.lng);
+
+            let bestIdx = 0, bestScore = Infinity;
+            remaining.forEach((s, i) => {
+                const distFromLast = haversineMi(last.lat, last.lng, s.lat, s.lng);
+                const distToCamp = haversineMi(campLat, campLng, s.lat, s.lng);
+
+                // Score: distance from current stop + penalty for moving AWAY from camp
+                // A stop that's close AND closer to camp scores well
+                // A stop that's close but farther from camp gets penalized
+                const awayPenalty = Math.max(0, distToCamp - lastDistToCamp) * 1.5;
+                const score = distFromLast + awayPenalty;
+
+                if (score < bestScore) { bestScore = score; bestIdx = i; }
+            });
+            ordered.push(remaining.splice(bestIdx, 1)[0]);
+        }
+
+        return ordered;
+    }
+
+    /**
+     * DISMISSAL ordering: Nearest stop first, sweep outward from camp.
+     * Bus leaves camp, drops nearest kid first, then works outward.
+     * Uses nearest-neighbor with outward bias.
+     */
+    function orderStopsNearestFirst(stops, campLat, campLng) {
+        const ordered = [];
+        const remaining = [...stops];
+
+        // Start with the stop nearest to camp
+        let nearestIdx = 0, nearestDist = Infinity;
+        remaining.forEach((s, i) => {
+            const d = haversineMi(campLat, campLng, s.lat, s.lng);
+            if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
+        });
+        ordered.push(remaining.splice(nearestIdx, 1)[0]);
+
+        // Greedy nearest-neighbor, biased toward continuing outward
+        while (remaining.length) {
+            const last = ordered[ordered.length - 1];
+            const lastDistFromCamp = haversineMi(campLat, campLng, last.lat, last.lng);
+
+            let bestIdx = 0, bestScore = Infinity;
+            remaining.forEach((s, i) => {
+                const distFromLast = haversineMi(last.lat, last.lng, s.lat, s.lng);
+                const distFromCamp = haversineMi(campLat, campLng, s.lat, s.lng);
+
+                // Penalty for backtracking toward camp
+                const backtrackPenalty = Math.max(0, lastDistFromCamp - distFromCamp) * 1.5;
+                const score = distFromLast + backtrackPenalty;
+
+                if (score < bestScore) { bestScore = score; bestIdx = i; }
+            });
+            ordered.push(remaining.splice(bestIdx, 1)[0]);
+        }
+
+        return ordered;
+    }
+
+    // =========================================================================
+    // ROUTE REFINEMENT (2-opt and Or-opt)
+    // =========================================================================
+
+    /**
+     * 2-opt: Try reversing segments of the route to reduce total distance.
+     * Runs up to 50 passes for thorough optimization.
+     */
+    function twoOptImprove(stops, campLat, campLng, isArrival, hasShifts) {
+        if (stops.length < 3) return stops;
+        const ordered = [...stops];
+
+        // Define the "anchor" points: where the route starts and ends
+        // These affect what the first and last stop connect to
+        function totalRouteDistance() {
+            let total = 0;
+            // Start leg: depends on mode
+            if (isArrival) {
+                // Arrival: first stop is the start, no connection to camp at beginning
+                // But last stop connects to camp
+            } else {
+                // Dismissal: camp → first stop
+                total += haversineMi(campLat, campLng, ordered[0].lat, ordered[0].lng);
+            }
+            // Inter-stop distances
+            for (let i = 0; i < ordered.length - 1; i++) {
+                total += haversineMi(ordered[i].lat, ordered[i].lng, ordered[i + 1].lat, ordered[i + 1].lng);
+            }
+            // End leg: depends on mode
+            if (isArrival) {
+                // Last stop → camp
+                const last = ordered[ordered.length - 1];
+                total += haversineMi(last.lat, last.lng, campLat, campLng);
+            } else if (hasShifts) {
+                // Last stop → camp (return for next shift)
+                const last = ordered[ordered.length - 1];
+                total += haversineMi(last.lat, last.lng, campLat, campLng);
+            }
+            return total;
+        }
+
+        for (let pass = 0; pass < 50; pass++) {
+            let improved = false;
+            for (let i = 0; i < ordered.length - 1; i++) {
+                for (let j = i + 2; j < ordered.length; j++) {
+                    // Calculate current edges being broken
+                    const a = i === 0 && !isArrival ? { lat: campLat, lng: campLng } : (i > 0 ? ordered[i - 1] : null);
+                    const b = ordered[i];
+                    const c = ordered[j];
+                    const d = j + 1 < ordered.length ? ordered[j + 1] :
+                        (isArrival || hasShifts) ? { lat: campLat, lng: campLng } : null;
+
+                    if (!a && !d) continue; // can't improve without endpoints
+
+                    let oldDist = haversineMi(b.lat, b.lng, ordered[i + 1].lat, ordered[i + 1].lng);
+                    if (d) oldDist += haversineMi(c.lat, c.lng, d.lat, d.lng);
+
+                    // After 2-opt reversal of segment [i+1..j]
+                    let newDist = haversineMi(b.lat, b.lng, c.lat, c.lng);
+                    if (d) newDist += haversineMi(ordered[i + 1].lat, ordered[i + 1].lng, d.lat, d.lng);
+
+                    if (newDist < oldDist - 0.005) { // 0.005 mi threshold to avoid tiny swaps
+                        // Reverse the segment between i+1 and j
+                        const segment = ordered.splice(i + 1, j - i);
+                        segment.reverse();
+                        ordered.splice(i + 1, 0, ...segment);
+                        improved = true;
+                    }
+                }
+            }
+            if (!improved) break;
+        }
+        return ordered;
+    }
+
+    /**
+     * Or-opt: Try moving single stops (or pairs) to better positions.
+     * This catches cases 2-opt misses, like a stop that should be 3 positions earlier.
+     */
+    function orOptImprove(stops, campLat, campLng, isArrival, hasShifts) {
+        if (stops.length < 4) return stops;
+        const ordered = [...stops];
+
+        for (let pass = 0; pass < 20; pass++) {
+            let improved = false;
+            for (let i = 0; i < ordered.length; i++) {
+                const stop = ordered[i];
+                // Try inserting this stop at every other position
+                const without = [...ordered];
+                without.splice(i, 1);
+
+                let bestPos = i, bestDist = routeLength(ordered, campLat, campLng, isArrival, hasShifts);
+                for (let j = 0; j <= without.length; j++) {
+                    if (j === i) continue;
+                    const test = [...without];
+                    test.splice(j, 0, stop);
+                    const d = routeLength(test, campLat, campLng, isArrival, hasShifts);
+                    if (d < bestDist - 0.005) {
+                        bestDist = d;
+                        bestPos = j;
+                        improved = true;
+                    }
+                }
+                if (bestPos !== i) {
+                    ordered.splice(i, 1);
+                    ordered.splice(bestPos, 0, stop);
+                }
+            }
+            if (!improved) break;
+        }
+        return ordered;
+    }
+
+    /** Calculate total route length in miles */
+    function routeLength(stops, campLat, campLng, isArrival, hasShifts) {
+        if (!stops.length) return 0;
+        let total = 0;
+        if (!isArrival) {
+            // Dismissal: camp → first stop
+            total += haversineMi(campLat, campLng, stops[0].lat, stops[0].lng);
+        }
+        for (let i = 0; i < stops.length - 1; i++) {
+            total += haversineMi(stops[i].lat, stops[i].lng, stops[i + 1].lat, stops[i + 1].lng);
+        }
+        if (isArrival || hasShifts) {
+            // Last stop → camp
+            const last = stops[stops.length - 1];
+            total += haversineMi(last.lat, last.lng, campLat, campLng);
+        }
+        return total;
+    }
+
+    // =========================================================================
+    // OVERCAPACITY HANDLING
+    // =========================================================================
+    function handleOvercapacity(routes, campLat, campLng) {
+        routes.forEach(r => {
+            while (r.camperCount > r._cap && r.stops.length > 1) {
+                // Find the stop farthest from the cluster centroid
+                const cLat = r.stops.reduce((s, st) => s + st.lat, 0) / r.stops.length;
+                const cLng = r.stops.reduce((s, st) => s + st.lng, 0) / r.stops.length;
+                let fIdx = -1, fDist = 0;
+                r.stops.forEach((st, i) => {
+                    const d = haversineMi(cLat, cLng, st.lat, st.lng);
+                    if (d > fDist) { fDist = d; fIdx = i; }
+                });
+                if (fIdx < 0) break;
+                const overflow = r.stops.splice(fIdx, 1)[0];
+                r.camperCount -= overflow.campers.length;
+
+                // Find the bus with most spare capacity that's geographically closest
+                let bestBus = null, bestScore = Infinity;
+                routes.forEach(other => {
+                    if (other === r) return;
+                    const spare = other._cap - other.camperCount;
+                    if (spare < overflow.campers.length) return;
+                    // Score: distance to this bus's centroid, penalize buses with less spare capacity
+                    const oCLat = other.stops.length ? other.stops.reduce((s, st) => s + st.lat, 0) / other.stops.length : campLat;
+                    const oCLng = other.stops.length ? other.stops.reduce((s, st) => s + st.lng, 0) / other.stops.length : campLng;
+                    const d = haversineMi(overflow.lat, overflow.lng, oCLat, oCLng);
+                    const score = d / (spare + 1); // prefer closer buses with more room
+                    if (score < bestScore) { bestScore = score; bestBus = other; }
+                });
+                if (bestBus) {
+                    bestBus.stops.push(overflow);
+                    bestBus.camperCount += overflow.campers.length;
+                } else {
+                    // No bus has room — put it back and break
+                    r.stops.push(overflow);
+                    r.camperCount += overflow.campers.length;
+                    break;
+                }
+            }
+        });
+    }
+
+    // =========================================================================
+    // ORS DISTANCE MATRIX (real road distances)
+    // =========================================================================
+    async function fetchDistanceMatrix(stops, campLat, campLng, apiKey) {
+        // ORS matrix API: max 50 locations for free tier
+        // Index 0 = camp, 1..N = stops
+        const locations = [[campLng, campLat], ...stops.map(s => [s.lng, s.lat])];
+
+        if (locations.length > 50) {
+            console.warn('[Go] Too many stops for distance matrix (' + locations.length + '), using haversine');
+            return null;
+        }
+
+        const resp = await fetch('https://api.openrouteservice.org/v2/matrix/driving-car', {
+            method: 'POST',
+            headers: {
+                'Authorization': apiKey,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify({
+                locations,
+                metrics: ['duration'],
+                units: 'mi'
+            })
+        });
+
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        if (!data.durations) return null;
+
+        // Return a lookup function
+        const durations = data.durations;
+        return {
+            size: locations.length,
+            get: function(i, j) {
+                // Return duration in minutes, converted to equivalent miles for distance-based comparisons
+                // (duration in seconds / 60 → minutes, at avgSpeed mph → miles)
+                const secs = durations[i]?.[j];
+                if (secs == null || secs < 0) {
+                    // Fallback to haversine
+                    const a = i === 0 ? { lat: campLat, lng: campLng } : stops[i - 1];
+                    const b = j === 0 ? { lat: campLat, lng: campLng } : stops[j - 1];
+                    return haversineMi(a.lat, a.lng, b.lat, b.lng);
+                }
+                // Convert seconds of driving to equivalent miles (so our distance-based comparisons work)
+                return (secs / 3600) * (D.setup.avgSpeed || 25);
+            }
+        };
+    }
         if (stops.length <= K) {
             return stops.map(s => ({ stops: [s], camperCount: s.campers.length }));
         }
