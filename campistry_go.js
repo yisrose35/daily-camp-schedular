@@ -3019,9 +3019,20 @@ window._routeGeomCache = _routeGeomCache;
         searchCamperInRoutes, zoomToStop,
         openMoveModal, renderFilteredMasterList, sortMasterBy,
         switchMode,
-        closeModal, openModal,
+       closeModal, openModal,
         _getMap: function() { return _map; },
-    };
+        _getSavedRoutes: function() { return D.savedRoutes; },
+        _setSavedRoutes: function(r) { D.savedRoutes = r; _generatedRoutes = r; },
+        _save: function() { save(); },
+        _refreshRoutes: function() {
+            if (D.savedRoutes) {
+                _generatedRoutes = D.savedRoutes;
+                _routeGeomCache = {};
+                renderRouteResults(applyOverrides(D.savedRoutes));
+            }
+        },
+        _getRouteGeomCache: function() { return _routeGeomCache; },
+        _clearGeomCache: function(key) { if (key) delete _routeGeomCache[key]; else _routeGeomCache = {}; }
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();
