@@ -1677,7 +1677,7 @@
                             if (tgtRoute.camperCount + stop.campers.length > tgtRoute._cap) continue;
 
                             // Keep target bus at ≤10 stops for brute force
-                           if (tgtRoute.stops.length >= 9) continue;
+                          if (tgtRoute.stops.length >= 12) continue;
 
                             const tgtDistBefore = routeResults[ti].dist;
                             const tgtStopsWith = [...tgtRoute.stops, stop];
@@ -1729,7 +1729,7 @@
                                 if (newACampers > rA._cap || newBCampers > rB._cap) continue;
 
                                 // Keep both at ≤10 for brute force
-                                if (rA.stops.length > 9 || rB.stops.length > 9) continue;
+                               if (rA.stops.length > 12 || rB.stops.length > 12) continue;
 
                                 // Try the swap
                                 const stopsA = rA.stops.slice(); stopsA[ai] = stopB;
