@@ -80,15 +80,27 @@
     /** JSONP fetch — Census geocoder doesn't support CORS, so we use JSONP */
     function censusGeocode(address) {
         return new Promise((resolve) => {
-            const cbName = '_censusGeo_' + Math.random().toString(36).slice(2);
-            const timeout = setTimeout(() => { cleanup(); resolve(null); }, 8000);
-            function cleanup() { clearTimeout(timeout); delete window[cbName]; const el = document.getElementById(cbName); if (el) el.remove(); }
+            const cbName = '_cg_' + Math.random().toString(36).slice(2, 8);
+            const timeout = setTimeout(() => { cleanup(); resolve(null); }, 10000);
+
+            function cleanup() {
+                clearTimeout(timeout);
+                try { delete window[cbName]; } catch(_) {}
+                // Remove script by callback name
+                document.querySelectorAll('script[data-census="' + cbName + '"]').forEach(s => s.remove());
+            }
+
             window[cbName] = function(data) { cleanup(); resolve(data); };
+
             const url = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?' + new URLSearchParams({
                 address: address, benchmark: 'Public_AR_Current', format: 'jsonp', callback: cbName
             });
+
+            // Create script with marker attribute so security can identify it
             const script = document.createElement('script');
-            script.id = cbName; script.src = url;
+            script.setAttribute('data-census', cbName);
+            script.setAttribute('data-campistry-allowed', 'true');
+            script.src = url;
             script.onerror = function() { cleanup(); resolve(null); };
             document.head.appendChild(script);
         });
