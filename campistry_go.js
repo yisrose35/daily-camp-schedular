@@ -2278,7 +2278,76 @@
                                 console.warn('[Go] Road geometry:', resp.status);
                             }
                         } catch (e) { console.warn('[Go] Road geometry failed:', e.message); }
-                    })(wp.join(';'), route.busColor, cacheKey, tempLine, dashPattern, lineWeight, lineOpacity);
+                   })(wp.join(';'), route.busColor, cacheKey, tempLine, dashPattern, lineWeight, lineOpacity);
+                }
+            }
+
+            // Stop markers (draggable)
+            stopsWithCoords.forEach(stop => {
+                const isSpecial = stop.isMonitor || stop.isCounselor;
+                const size = isSpecial ? 20 : 26;
+                const icon = L.divIcon({
+                    html: '<div class="stop-marker-icon" style="width:' + size + 'px;height:' + size + 'px;background:' + esc(route.busColor) + ';' + (isSpecial ? 'font-size:10px;' : '') + '">' + (isSpecial ? (stop.isMonitor ? 'M' : 'C') : stop.stopNum) + '</div>',
+                    className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2]
+                });
+                const names = stop.isMonitor ? '🛡️ ' + (stop.monitorName || 'Monitor') : stop.isCounselor ? '👤 ' + (stop.counselorName || 'Counselor') : stop.campers.map(c => c.name).join('<br>');
+                const popup = '<div style="font-family:DM Sans,sans-serif;min-width:160px;"><div style="font-weight:700;font-size:13px;margin-bottom:4px;color:' + route.busColor + '">' + esc(route.busName) + ' — ' + esc(route.shiftLabel) + '</div><div style="font-weight:600;margin-bottom:2px;">Stop ' + stop.stopNum + '</div><div style="font-size:12px;margin-bottom:4px;">' + names + '</div><div style="font-size:11px;color:#888;">' + esc(stop.address) + '</div>' + (stop.estimatedTime ? '<div style="font-size:12px;font-weight:600;margin-top:4px;">Est: ' + stop.estimatedTime + '</div>' : '') + '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;">Drag to move stop</div></div>';
+                const marker = L.marker([stop.lat, stop.lng], { icon, draggable: !isSpecial }).addTo(_map);
+                marker.bindPopup(popup);
+                _mapLayers.push(marker);
+
+                if (!isSpecial) {
+                    const _busId = route.busId;
+                    const _shiftIdx = route.shiftIdx;
+                    const _stopNum = stop.stopNum;
+                    const _busColor = route.busColor;
+
+                    marker.on('dragend', async function() {
+                        const pos = marker.getLatLng();
+                        if (!D.savedRoutes) return;
+                        const sr = D.savedRoutes[_shiftIdx];
+                        if (!sr) return;
+                        const rt = sr.routes.find(r => r.busId === _busId);
+                        if (!rt) return;
+                        const st = rt.stops.find(s => s.stopNum === _stopNum);
+                        if (!st) return;
+
+                        st.lat = pos.lat;
+                        st.lng = pos.lng;
+
+                        if (getApiKey()) {
+                            try {
+                                const r = await fetch('https://api.openrouteservice.org/geocode/reverse?point.lat=' + pos.lat + '&point.lon=' + pos.lng + '&size=1', { headers: { 'Authorization': getApiKey() } });
+                                const data = await r.json();
+                                if (data.features?.[0]?.properties?.label) {
+                                    st.address = data.features[0].properties.label;
+                                }
+                            } catch (e) { /* keep old address */ }
+                        }
+
+                        const ck = _busId + '_' + _shiftIdx;
+                        delete _routeGeomCache[ck];
+                        const oldLines = _mapLayers.filter(l => l._goRouteKey === ck);
+                        oldLines.forEach(l => { _map.removeLayer(l); const idx = _mapLayers.indexOf(l); if (idx >= 0) _mapLayers.splice(idx, 1); });
+
+                        const stopsWithCoords = rt.stops.filter(s => s.lat && s.lng);
+                        const isArrival = D.activeMode === 'arrival';
+                        const needsReturn = !isArrival && D.shifts.length > 1;
+                        const straightCoords = [];
+                        if (!isArrival && _campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
+                        stopsWithCoords.forEach(s => straightCoords.push([s.lat, s.lng]));
+                        if (isArrival && _campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
+                        if (needsReturn && _campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
+
+                        const dp = getDash(_shiftIdx);
+                        const w = _activeMapBus === 'all' ? 3 : 5;
+                        const o = _activeMapBus === 'all' ? 0.7 : 0.9;
+
+                        const tempLine = L.polyline(straightCoords, { color: _busColor, weight: w, opacity: o * 0.4, dashArray: dp }).addTo(_map);
+                        tempLine._goRouteKey = ck;
+                        _mapLayers.push(tempLine);
+
+                        // Fetch real road geometry
                         if (straightCoords.length >= 2) {
                             try {
                                 const wp = [];
