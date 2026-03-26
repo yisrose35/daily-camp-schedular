@@ -1537,80 +1537,128 @@
         function orderAndCalcDuration(r) {
             if (r.stops.length < 2) { r.stops.forEach((s, i) => s.stopNum = i + 1); }
             else {
-                // Start with nearest-neighbor as initial solution
-                const ordered = []; const rem = [...r.stops];
-                let startLat, startLng;
-
+                // SWEEP ORDERING: Sort stops so the bus sweeps across the area
+                // without backtracking. Uses the principal axis of the stop cluster.
+                
+                // 1. Find the principal axis (direction of maximum spread)
+                const cLat = r.stops.reduce((s, st) => s + st.lat, 0) / r.stops.length;
+                const cLng = r.stops.reduce((s, st) => s + st.lng, 0) / r.stops.length;
+                
+                // Try multiple angles and pick the one that gives smoothest path
+                let bestAngle = 0, bestCost = Infinity;
+                
+                for (let angle = 0; angle < 180; angle += 15) {
+                    const rad = angle * Math.PI / 180;
+                    const cosA = Math.cos(rad), sinA = Math.sin(rad);
+                    
+                    // Project stops onto this axis and a perpendicular axis
+                    const projected = r.stops.map(s => ({
+                        stop: s,
+                        main: (s.lat - cLat) * cosA + (s.lng - cLng) * sinA,
+                        perp: -(s.lat - cLat) * sinA + (s.lng - cLng) * cosA
+                    }));
+                    
+                    // Sort by main axis, then create sweep lanes
+                    projected.sort((a, b) => a.main - b.main);
+                    
+                    // Group into lanes by perpendicular position
+                    const laneWidth = 0.002; // ~700ft lanes
+                    const lanes = {};
+                    projected.forEach(p => {
+                        const laneKey = Math.round(p.perp / laneWidth);
+                        if (!lanes[laneKey]) lanes[laneKey] = [];
+                        lanes[laneKey].push(p);
+                    });
+                    
+                    // Sort lanes, alternate direction for serpentine sweep
+                    const laneKeys = Object.keys(lanes).map(Number).sort((a, b) => a - b);
+                    const swept = [];
+                    laneKeys.forEach((key, i) => {
+                        const lane = lanes[key];
+                        lane.sort((a, b) => a.main - b.main);
+                        if (i % 2 === 1) lane.reverse(); // serpentine: alternate direction
+                        lane.forEach(p => swept.push(p.stop));
+                    });
+                    
+                    // Calculate cost of this sweep
+                    let cost = 0;
+                    for (let i = 0; i < swept.length - 1; i++) {
+                        cost += haversineMi(swept[i].lat, swept[i].lng, swept[i + 1].lat, swept[i + 1].lng);
+                    }
+                    // Add cost from start point
+                    if (isArrival) {
+                        // Arrival: farthest stop first → camp
+                        const firstDist = haversineMi(campLat, campLng, swept[swept.length - 1].lat, swept[swept.length - 1].lng);
+                        cost += firstDist * 0.5; // prefer ending close to camp
+                    } else {
+                        cost += haversineMi(campLat, campLng, swept[0].lat, swept[0].lng);
+                    }
+                    
+                    if (cost < bestCost) { bestCost = cost; bestAngle = angle; }
+                }
+                
+                // Rebuild with best angle
+                const rad = bestAngle * Math.PI / 180;
+                const cosA = Math.cos(rad), sinA = Math.sin(rad);
+                const projected = r.stops.map(s => ({
+                    stop: s,
+                    main: (s.lat - cLat) * cosA + (s.lng - cLng) * sinA,
+                    perp: -(s.lat - cLat) * sinA + (s.lng - cLng) * cosA
+                }));
+                const laneWidth = 0.002;
+                const lanes = {};
+                projected.forEach(p => {
+                    const laneKey = Math.round(p.perp / laneWidth);
+                    if (!lanes[laneKey]) lanes[laneKey] = [];
+                    lanes[laneKey].push(p);
+                });
+                const laneKeys = Object.keys(lanes).map(Number).sort((a, b) => a - b);
+                const ordered = [];
+                laneKeys.forEach((key, i) => {
+                    const lane = lanes[key];
+                    lane.sort((a, b) => a.main - b.main);
+                    if (i % 2 === 1) lane.reverse();
+                    lane.forEach(p => ordered.push(p.stop));
+                });
+                
+                // For arrival: reverse so farthest from camp is first
                 if (isArrival) {
-                    // ARRIVAL: start from farthest stop, work toward camp
-                    let fIdx = 0, fDist = 0;
-                    rem.forEach((s, i) => { const d = haversineMi(campLat, campLng, s.lat, s.lng); if (d > fDist) { fDist = d; fIdx = i; } });
-                    ordered.push(rem.splice(fIdx, 1)[0]);
-                    startLat = ordered[0].lat; startLng = ordered[0].lng;
+                    // Check if reversing gets the farthest stop at position 0
+                    const d0 = haversineMi(campLat, campLng, ordered[0].lat, ordered[0].lng);
+                    const dN = haversineMi(campLat, campLng, ordered[ordered.length - 1].lat, ordered[ordered.length - 1].lng);
+                    if (d0 > dN) { /* already correct: starts far */ }
+                    else ordered.reverse(); // flip so it starts from farthest
                 } else {
-                    // DISMISSAL: start from camp
-                    startLat = campLat; startLng = campLng;
+                    // Dismissal: check if first stop is nearest to camp
+                    const d0 = haversineMi(campLat, campLng, ordered[0].lat, ordered[0].lng);
+                    const dN = haversineMi(campLat, campLng, ordered[ordered.length - 1].lat, ordered[ordered.length - 1].lng);
+                    if (d0 > dN) ordered.reverse(); // flip so nearest to camp is first
                 }
-
-                let pLat = startLat, pLng = startLng;
-                while (rem.length) {
-                    let ni = 0, nd = Infinity;
-                    rem.forEach((s, i) => { const d = haversineMi(pLat, pLng, s.lat, s.lng); if (d < nd) { nd = d; ni = i; } });
-                    const nx = rem.splice(ni, 1)[0]; ordered.push(nx); pLat = nx.lat; pLng = nx.lng;
-                }
-
-                // 2-opt improvement: swap pairs to eliminate crossings/backtracking
-                // Route cost = distance + heavy penalty for sharp U-turns (>120° angle change)
-                function angleBetween(lat1, lng1, lat2, lng2, lat3, lng3) {
-                    // Angle at point 2 between segments 1→2 and 2→3
-                    const dx1 = lat2 - lat1, dy1 = lng2 - lng1;
-                    const dx2 = lat3 - lat2, dy2 = lng3 - lng2;
-                    const dot = dx1 * dx2 + dy1 * dy2;
-                    const mag1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
-                    const mag2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
-                    if (mag1 < 0.00001 || mag2 < 0.00001) return 0;
-                    const cos = Math.max(-1, Math.min(1, dot / (mag1 * mag2)));
-                    return Math.acos(cos) * 180 / Math.PI; // 0=straight, 180=U-turn
-                }
-
+                
+                // Light 2-opt pass to fix any remaining oddities
                 function routeCost(stops) {
-                    let d = 0;
-                    // Start → first stop
-                    const sLat = isArrival ? stops[0].lat : campLat;
-                    const sLng = isArrival ? stops[0].lng : campLng;
-                    if (!isArrival) d += haversineMi(campLat, campLng, stops[0].lat, stops[0].lng);
-                    // Stop to stop
+                    let d = haversineMi(isArrival ? stops[0].lat : campLat, isArrival ? stops[0].lng : campLng, stops[0].lat, stops[0].lng);
                     for (let i = 0; i < stops.length - 1; i++) {
                         d += haversineMi(stops[i].lat, stops[i].lng, stops[i + 1].lat, stops[i + 1].lng);
-                        // U-turn penalty: if angle > 120°, add penalty distance
-                        if (i > 0) {
-                            const angle = angleBetween(stops[i - 1].lat, stops[i - 1].lng, stops[i].lat, stops[i].lng, stops[i + 1].lat, stops[i + 1].lng);
-                            if (angle > 120) d += 0.3; // ~0.3 mile penalty for U-turn
-                            else if (angle > 90) d += 0.1; // small penalty for sharp turn
-                        }
                     }
                     return d;
                 }
-
-                let improved = true;
-                let passes = 0;
-                while (improved && passes < 50) {
-                    improved = false;
-                    passes++;
+                for (let pass = 0; pass < 20; pass++) {
+                    let improved = false;
                     for (let i = 0; i < ordered.length - 1; i++) {
                         for (let j = i + 1; j < ordered.length; j++) {
-                            // Try reversing the segment between i and j
                             const newRoute = [...ordered];
-                            const segment = newRoute.splice(i, j - i + 1).reverse();
-                            newRoute.splice(i, 0, ...segment);
-                            if (routeCost(newRoute) < routeCost(ordered)) {
+                            const seg = newRoute.splice(i, j - i + 1).reverse();
+                            newRoute.splice(i, 0, ...seg);
+                            if (routeCost(newRoute) < routeCost(ordered) - 0.01) {
                                 for (let k = 0; k < ordered.length; k++) ordered[k] = newRoute[k];
                                 improved = true;
                             }
                         }
                     }
+                    if (!improved) break;
                 }
-
+                
                 ordered.forEach((s, i) => s.stopNum = i + 1);
                 r.stops = ordered;
             }
@@ -1618,7 +1666,6 @@
             // Calculate duration
             let dur = 0, pLat = campLat, pLng = campLng;
             r.stops.forEach(s => { dur += (haversineMi(pLat, pLng, s.lat, s.lng) / avgSpeed) * 60 + stopTime; pLat = s.lat; pLng = s.lng; });
-            // Only add return-to-camp for dismissal with multiple shifts
             const needsReturn = !isArrival && D.shifts.length > 1;
             if (r.stops.length && needsReturn) dur += (haversineMi(pLat, pLng, campLat, campLng) / avgSpeed) * 60;
             r.totalDuration = Math.round(dur);
