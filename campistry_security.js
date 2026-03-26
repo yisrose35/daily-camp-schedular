@@ -856,16 +856,16 @@
     // =========================================================================
 
     function injectCSP() {
-        // Only inject if not already present
         if (document.querySelector('meta[http-equiv="Content-Security-Policy"]')) return;
         
         const csp = [
             "default-src 'self'",
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net",
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://geocoding.geo.census.gov",
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net",
             "font-src 'self' https://fonts.gstatic.com",
             "img-src 'self' data: blob: https:",
-            "connect-src 'self' https://bzqmhcumuarrbueqttfh.supabase.co wss://bzqmhcumuarrbueqttfh.supabase.co https://fonts.googleapis.com https://fonts.gstatic.com https://cdn.jsdelivr.net https://api.openrouteservice.org https://*.tile.openstreetmap.org https://server.arcgisonline.com https://geocoding.geo.census.gov",            "base-uri 'self'",
+            "connect-src 'self' https://bzqmhcumuarrbueqttfh.supabase.co wss://bzqmhcumuarrbueqttfh.supabase.co https://fonts.googleapis.com https://fonts.gstatic.com https://cdn.jsdelivr.net https://api.openrouteservice.org https://*.tile.openstreetmap.org https://server.arcgisonline.com",
+            "base-uri 'self'",
             "form-action 'self'"
         ].join('; ');
         
