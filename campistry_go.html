@@ -135,6 +135,15 @@
                         <span id="apiKeyStatus" style="font-size:.8125rem;"></span>
                     </div>
                 </div>
+                <div class="setup-card">
+                    <h3>Mapbox Access Token</h3>
+                    <p class="muted">Shows road-accurate route lines on the map (free)</p>
+                    <div class="form-group full-width">
+                        <label class="form-label">Access Token</label>
+                        <input type="text" class="form-input" id="mapboxToken" placeholder="pk.eyJ1Ijo...">
+                        <span class="form-hint">Get free at <a href="https://account.mapbox.com/access-tokens/" target="_blank" style="color:var(--blue-600)">mapbox.com</a> — 100K requests/month free. Without this, route lines use OSRM (less accurate in some neighborhoods).</span>
+                    </div>
+                </div>
                 <div class="setup-card" style="display:flex;align-items:center;justify-content:space-between;">
                     <div><h3>Save Configuration</h3><p class="muted" style="margin-bottom:0">Sync across devices</p></div>
                     <button class="btn btn-primary" onclick="CampistryGo.saveSetup()">Save Setup</button>
