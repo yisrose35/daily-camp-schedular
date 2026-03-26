@@ -15,13 +15,19 @@
             reserveSeats: 2, dropoffMode: 'door-to-door',
             avgStopTime: 2, maxWalkDistance: 500, orsApiKey: ''
         },
+        activeMode: 'dismissal', // 'arrival' or 'dismissal'
+        // Active mode data (swapped in/out when switching modes)
         buses: [],       // { id, name, capacity, color, notes }
         shifts: [],      // { id, label, divisions:[], departureTime:'16:00' }
         monitors: [],    // { id, name, address, phone, assignedBus }
         counselors: [],  // { id, name, address, bunk, needsStop, assignedBus }
+        savedRoutes: null,
+        // Mode-specific storage
+        dismissal: null, // { buses, shifts, monitors, counselors, savedRoutes }
+        arrival: null,   // { buses, shifts, monitors, counselors, savedRoutes }
+        // Shared across modes
         addresses: {},   // { camperName: { street, city, state, zip, lat, lng, geocoded } }
-        savedRoutes: null, // last generated routes (persisted across reloads)
-        dailyOverrides: {} // { 'YYYY-MM-DD': { camperName: { type, ... } } }
+        dailyOverrides: {} // { 'YYYY-MM-DD': { arrival: {}, dismissal: {} } }
     };
     let _editBusId = null, _editMonitorId = null, _editCounselorId = null, _editCamper = null;
     let _generatedRoutes = null;
@@ -113,14 +119,22 @@
     }
 
     function merge(d) {
-        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:500,orsApiKey:'',campLat:null,campLng:null }, buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dailyOverrides:{} };
-        return { setup: { ...def.setup, ...(d.setup || {}) }, buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dailyOverrides: d.dailyOverrides || {} };
+        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:500,orsApiKey:'',campLat:null,campLng:null }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{} };
+        const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null, dailyOverrides: d.dailyOverrides || {} };
+        // Migrate: if no dismissal data stored yet, the current buses/shifts ARE the dismissal data
+        if (!result.dismissal && result.buses.length) {
+            result.dismissal = { buses: [...result.buses], shifts: [...result.shifts], monitors: [...result.monitors], counselors: [...result.counselors], savedRoutes: result.savedRoutes };
+        }
+        if (!result.arrival) {
+            result.arrival = { buses: [], shifts: [], monitors: [], counselors: [], savedRoutes: null };
+        }
+        return result;
     }
 
     function save() {
         try {
             setSyncStatus('syncing');
-            // Always write to own localStorage key (immediate, works offline)
+            saveModeData(); // persist active mode's data into its slot
             localStorage.setItem(STORE, JSON.stringify(D));
             // Also write to cloud via integration_hooks (batched + Supabase sync)
             if (typeof window.saveGlobalSettings === 'function') {
@@ -135,6 +149,100 @@
         if (!dot) return;
         dot.className = 'sync-dot' + (s === 'syncing' ? ' syncing' : s === 'error' ? ' error' : '');
         txt.textContent = s === 'syncing' ? 'Saving...' : s === 'error' ? 'Error' : 'Synced';
+    }
+
+    // =========================================================================
+    // ARRIVAL / DISMISSAL MODE SWITCHING
+    // =========================================================================
+    function saveModeData() {
+        // Save current D.buses/shifts/etc into the active mode slot
+        D[D.activeMode] = {
+            buses: D.buses, shifts: D.shifts,
+            monitors: D.monitors, counselors: D.counselors,
+            savedRoutes: D.savedRoutes
+        };
+    }
+
+    function loadModeData(mode) {
+        const data = D[mode] || { buses: [], shifts: [], monitors: [], counselors: [], savedRoutes: null };
+        D.buses = data.buses || [];
+        D.shifts = data.shifts || [];
+        D.monitors = data.monitors || [];
+        D.counselors = data.counselors || [];
+        D.savedRoutes = data.savedRoutes || null;
+    }
+
+    function switchMode(mode) {
+        if (mode === D.activeMode) return;
+        // Save current mode's data
+        saveModeData();
+        // Switch
+        D.activeMode = mode;
+        loadModeData(mode);
+        // Clear map cache
+        _routeGeomCache = {};
+        _generatedRoutes = D.savedRoutes;
+        // Save and refresh everything
+        save();
+        renderFleet(); renderShifts(); renderStaff(); renderAddresses(); updateStats(); updateBusSelects();
+        // Update mode toggle UI
+        document.querySelectorAll('.mode-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.mode === mode);
+        });
+        // Update page subtitle
+        const sub = document.getElementById('modeLabel');
+        if (sub) sub.textContent = mode === 'arrival' ? 'Morning Pickup Routes' : 'Afternoon Drop-off Routes';
+        // If saved routes exist, render them
+        if (D.savedRoutes) {
+            renderRouteResults(applyOverrides(D.savedRoutes));
+        } else {
+            document.getElementById('routeResults').style.display = 'none';
+            document.getElementById('shiftResultsContainer').innerHTML = '';
+        }
+        toast('Switched to ' + (mode === 'arrival' ? 'Arrival' : 'Dismissal') + ' mode');
+    }
+
+    // =========================================================================
+    // BUS CAPACITY WARNINGS
+    // =========================================================================
+    function getCapacityWarnings() {
+        if (!_generatedRoutes) return [];
+        const applied = applyOverrides(_generatedRoutes);
+        const warnings = [];
+        applied.forEach(sr => {
+            sr.routes.forEach(r => {
+                const bus = D.buses.find(b => b.id === r.busId);
+                if (!bus) return;
+                const rs = D.setup.reserveSeats || 0;
+                const mon = D.monitors.find(m => m.assignedBus === bus.id);
+                const couns = D.counselors.filter(c => c.assignedBus === bus.id);
+                const maxCampers = Math.max(0, (bus.capacity || 0) - 1 - (mon ? 1 : 0) - couns.length - rs);
+                const actual = r.camperCount;
+                if (actual > maxCampers) {
+                    warnings.push({
+                        busName: r.busName, busColor: r.busColor,
+                        shift: sr.shift.label || 'Shift',
+                        actual, max: maxCampers,
+                        over: actual - maxCampers
+                    });
+                }
+            });
+        });
+        return warnings;
+    }
+
+    function renderCapacityWarnings() {
+        const el = document.getElementById('capacityWarnings');
+        if (!el) return;
+        const warnings = getCapacityWarnings();
+        if (!warnings.length) { el.style.display = 'none'; return; }
+        el.style.display = '';
+        el.innerHTML = warnings.map(w =>
+            '<div style="display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;background:var(--red-50);border:1px solid var(--red-100);border-radius:var(--radius-sm);margin-bottom:.375rem;font-size:.8125rem;">' +
+            '<span style="width:10px;height:10px;border-radius:50%;background:' + esc(w.busColor) + ';flex-shrink:0;"></span>' +
+            '<strong style="color:var(--red-600);">⚠ ' + esc(w.busName) + '</strong> (' + esc(w.shift) + ') — ' +
+            '<span>' + w.actual + ' campers, only ' + w.max + ' seats available (' + w.over + ' over)</span></div>'
+        ).join('');
     }
 
     /** Pull camper roster from Campistry Me (auto-sync, no manual import needed) */
@@ -430,13 +538,35 @@
     // Geocoding
     async function geocodeOne(name) {
         const a = D.addresses[name]; if (!a?.street) return false;
-        const key = getApiKey(); if (!key) return false;
-
-        // Build query: put ZIP at the end for disambiguation
         const q = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ');
-        const params = { text: q, size: '5', 'boundary.country': 'US' };
 
-        // Camp focus point (dynamic — every camp gets their own)
+        // PRIMARY: US Census Geocoder — free, no key, exact house-level coordinates
+        try {
+            const censusUrl = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?' + new URLSearchParams({
+                address: q, benchmark: 'Public_AR_Current', format: 'json'
+            });
+            const r = await fetch(censusUrl);
+            if (r.ok) {
+                const d = await r.json();
+                const matches = d.result?.addressMatches;
+                if (matches?.length) {
+                    const best = matches[0];
+                    a.lat = best.coordinates.y;
+                    a.lng = best.coordinates.x;
+                    a.geocoded = true;
+                    a._zipMismatch = false;
+                    a._geocodeSource = 'census';
+                    return true;
+                }
+            }
+        } catch (e) {
+            console.warn('[Go] Census geocoder error for', name, e.message);
+        }
+
+        // FALLBACK: ORS geocoder
+        const key = getApiKey();
+        if (!key) return false;
+        const params = { text: q, size: '5', 'boundary.country': 'US' };
         if (_campCoordsCache) {
             params['focus.point.lat'] = _campCoordsCache.lat;
             params['focus.point.lon'] = _campCoordsCache.lng;
@@ -444,46 +574,24 @@
             params['focus.point.lat'] = D.setup.campLat;
             params['focus.point.lon'] = D.setup.campLng;
         }
-
         try {
             const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams(params), {
                 headers: { 'Authorization': key, 'Accept': 'application/json' }
             });
-            if (!r.ok) { console.warn('[Go] Geocode HTTP', r.status, 'for', name); return false; }
+            if (!r.ok) return false;
             const d = await r.json();
-            if (!d.features?.length) { console.warn('[Go] No results for', name); return false; }
-
-            // Pick best result — ZIP match wins, then closest to camp
+            if (!d.features?.length) return false;
             let best = null;
-            if (a.zip) {
-                best = d.features.find(f => (f.properties?.postalcode || '') === a.zip);
-                if (!best) best = d.features.find(f => (f.properties?.postalcode || '').startsWith(a.zip.substring(0, 3)));
-            }
-            if (!best && _campCoordsCache) {
-                let bestDist = Infinity;
-                d.features.forEach(f => {
-                    const co = f.geometry?.coordinates;
-                    if (!co) return;
-                    const dist = haversineMi(_campCoordsCache.lat, _campCoordsCache.lng, co[1], co[0]);
-                    if (dist < bestDist) { bestDist = dist; best = f; }
-                });
-            }
+            if (a.zip) best = d.features.find(f => (f.properties?.postalcode || '') === a.zip);
             if (!best) best = d.features[0];
-
             const co = best.geometry.coordinates;
             a.lng = co[0]; a.lat = co[1]; a.geocoded = true;
-
-            // Flag ZIP mismatch
+            a._geocodeSource = 'ors';
             const resultZip = best.properties?.postalcode || '';
-            if (a.zip && resultZip && resultZip !== a.zip) {
-                console.warn('[Go] ZIP mismatch:', name, '— expected', a.zip, 'got', resultZip);
-                a._zipMismatch = true;
-            } else {
-                a._zipMismatch = false;
-            }
+            a._zipMismatch = !!(a.zip && resultZip && resultZip !== a.zip);
             return true;
         } catch (e) {
-            console.warn('[Go] Geocode error:', name, e.message);
+            console.warn('[Go] ORS geocode error:', name, e.message);
             return false;
         }
     }
@@ -524,81 +632,74 @@
 
     /** Test geocode on ONE address — logs everything to console */
     async function testGeocode() {
-        const key = getApiKey();
-        if (!key) { console.error('[Go] TEST: No API key'); toast('No API key', 'error'); return; }
-
-        // Pick first address that has a street
         const names = Object.keys(D.addresses);
         const testName = names.find(n => D.addresses[n]?.street);
-        if (!testName) { console.error('[Go] TEST: No addresses to test'); toast('No addresses', 'error'); return; }
+        if (!testName) { console.error('[Go] TEST: No addresses'); toast('No addresses', 'error'); return; }
 
         const a = D.addresses[testName];
         const q = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ');
         console.log('========== GEOCODE TEST ==========');
         console.log('[Go] TEST: Camper:', testName);
         console.log('[Go] TEST: Query:', q);
-        console.log('[Go] TEST: ZIP expected:', a.zip || '(none)');
-        console.log('[Go] TEST: Camp coords cache:', _campCoordsCache);
-        console.log('[Go] TEST: API key starts with:', key.substring(0, 10) + '...');
 
-        const params = { text: q, size: '5', 'boundary.country': 'US' };
-        if (_campCoordsCache) {
-            params['focus.point.lat'] = _campCoordsCache.lat;
-            params['focus.point.lon'] = _campCoordsCache.lng;
-        } else if (D.setup.campLat && D.setup.campLng) {
-            params['focus.point.lat'] = D.setup.campLat;
-            params['focus.point.lon'] = D.setup.campLng;
-        }
-        const url = 'https://api.openrouteservice.org/geocode/search?' + new URLSearchParams(params);
-        console.log('[Go] TEST: URL:', url);
-
+        // Test Census Geocoder
+        console.log('\n--- US Census Geocoder ---');
         try {
-            const r = await fetch(url, { headers: { 'Authorization': key, 'Accept': 'application/json' } });
-            console.log('[Go] TEST: HTTP status:', r.status);
-
-            if (!r.ok) {
-                const body = await r.text();
-                console.error('[Go] TEST: Error body:', body);
-                toast('HTTP ' + r.status + ' — see console', 'error');
-                return;
-            }
-
-            const d = await r.json();
-            console.log('[Go] TEST: Response has', d.features?.length || 0, 'results');
-
-            if (d.features?.length) {
-                d.features.forEach((f, i) => {
-                    const co = f.geometry.coordinates;
-                    const props = f.properties || {};
-                    console.log('[Go] TEST: Result #' + (i + 1) + ':', {
-                        label: props.label,
-                        postalcode: props.postalcode,
-                        lat: co[1],
-                        lng: co[0],
-                        confidence: props.confidence,
-                        zipMatch: a.zip ? (props.postalcode === a.zip ? '✅ MATCH' : '❌ MISMATCH') : 'n/a'
+            const url = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?' + new URLSearchParams({
+                address: q, benchmark: 'Public_AR_Current', format: 'json'
+            });
+            console.log('[Go] TEST Census URL:', url);
+            const r = await fetch(url);
+            console.log('[Go] TEST Census HTTP:', r.status);
+            if (r.ok) {
+                const d = await r.json();
+                const matches = d.result?.addressMatches || [];
+                console.log('[Go] TEST Census matches:', matches.length);
+                matches.forEach((m, i) => {
+                    console.log('[Go] TEST Census #' + (i + 1) + ':', {
+                        matchedAddress: m.matchedAddress,
+                        lat: m.coordinates.y,
+                        lng: m.coordinates.x,
+                        tigerLineId: m.tigerLine?.tigerLineId
                     });
                 });
-
-                // Show which one would be picked
-                let best = null;
-                if (a.zip) {
-                    best = d.features.find(f => (f.properties?.postalcode || '') === a.zip);
-                    if (best) console.log('[Go] TEST: ✅ Would pick ZIP-matched result:', best.properties.label);
+                if (matches.length) {
+                    toast('Census: ✅ ' + matches[0].matchedAddress + ' — see console');
+                } else {
+                    toast('Census: no match, will fall back to ORS');
                 }
-                if (!best) {
-                    best = d.features[0];
-                    console.log('[Go] TEST: ⚠️ No ZIP match — would pick first result:', best.properties?.label);
-                }
-
-                toast('Test OK — ' + d.features.length + ' results, see console');
             } else {
-                console.error('[Go] TEST: No features in response:', d);
-                toast('No results — see console', 'error');
+                const body = await r.text();
+                console.error('[Go] TEST Census error:', body);
             }
         } catch (e) {
-            console.error('[Go] TEST: Fetch error:', e);
-            toast('Fetch error — see console', 'error');
+            console.error('[Go] TEST Census failed:', e.message);
+        }
+
+        // Test ORS
+        const key = getApiKey();
+        if (key) {
+            console.log('\n--- ORS Geocoder (fallback) ---');
+            const params = { text: q, size: '3', 'boundary.country': 'US' };
+            if (_campCoordsCache) { params['focus.point.lat'] = _campCoordsCache.lat; params['focus.point.lon'] = _campCoordsCache.lng; }
+            try {
+                const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams(params), {
+                    headers: { 'Authorization': key, 'Accept': 'application/json' }
+                });
+                console.log('[Go] TEST ORS HTTP:', r.status);
+                if (r.ok) {
+                    const d = await r.json();
+                    console.log('[Go] TEST ORS results:', d.features?.length || 0);
+                    (d.features || []).forEach((f, i) => {
+                        console.log('[Go] TEST ORS #' + (i + 1) + ':', {
+                            label: f.properties?.label,
+                            postalcode: f.properties?.postalcode,
+                            lat: f.geometry.coordinates[1],
+                            lng: f.geometry.coordinates[0]
+                        });
+                    });
+                }
+            } catch (e) { console.error('[Go] TEST ORS failed:', e.message); }
         }
         console.log('========== END TEST ==========');
     }
@@ -1058,10 +1159,11 @@
      * 1. Kids at same address = one stop (no size limits)
      * 2. K-Means clusters stops into natural neighborhoods
      * 3. Each neighborhood → one bus
-     * 4. Within each bus: nearest-neighbor ordering from camp outward
+     * 4. Within each bus: order stops for pickup (farthest first) or drop-off (nearest first)
      * 5. Duration rebalancing between buses
      */
     function clientSideCluster(campers, vehicles, campLat, campLng, mode) {
+        const isArrival = D.activeMode === 'arrival';
         // ── STEP 1: Create stops ──
         let stops;
         if (mode === 'optimized-stops') {
@@ -1140,7 +1242,22 @@
 
         function orderAndCalcDuration(r) {
             if (r.stops.length < 2) { r.stops.forEach((s, i) => s.stopNum = i + 1); }
-            else {
+            else if (isArrival) {
+                // ARRIVAL: farthest pickup first, work back toward camp
+                // Sort by distance from camp, farthest first
+                r.stops.sort((a, b) => haversineMi(campLat, campLng, b.lat, b.lng) - haversineMi(campLat, campLng, a.lat, a.lng));
+                // Then nearest-neighbor chain from the farthest point
+                const ordered = [r.stops[0]]; const rem = r.stops.slice(1);
+                let pLat = ordered[0].lat, pLng = ordered[0].lng;
+                while (rem.length) {
+                    let ni = 0, nd = Infinity;
+                    rem.forEach((s, i) => { const d = haversineMi(pLat, pLng, s.lat, s.lng); if (d < nd) { nd = d; ni = i; } });
+                    const nx = rem.splice(ni, 1)[0]; ordered.push(nx); pLat = nx.lat; pLng = nx.lng;
+                }
+                ordered.forEach((s, i) => s.stopNum = i + 1);
+                r.stops = ordered;
+            } else {
+                // DISMISSAL: nearest first, work outward from camp
                 const ordered = []; const rem = [...r.stops];
                 let pLat = campLat, pLng = campLng;
                 while (rem.length) {
@@ -1150,6 +1267,7 @@
                 }
                 r.stops = ordered;
             }
+            // Calculate duration: camp → stops → camp
             let dur = 0, pLat = campLat, pLng = campLng;
             r.stops.forEach(s => { dur += (haversineMi(pLat, pLng, s.lat, s.lng) / avgSpeed) * 60 + stopTime; pLat = s.lat; pLng = s.lng; });
             if (r.stops.length) dur += (haversineMi(pLat, pLng, campLat, campLng) / avgSpeed) * 60;
@@ -1299,6 +1417,8 @@
         } else {
             _pendingMapInit = allShifts;
         }
+        // Check capacity
+        renderCapacityWarnings();
     }
 
     function renderMasterList(allShifts) {
@@ -2108,7 +2228,20 @@
 
     function init() {
         console.log('[Go] Initializing...');
-        load(); initTabs(); populateSetup(); renderFleet(); renderShifts(); renderStaff(); renderAddresses(); updateStats(); updateBusSelects();
+        load();
+
+        // Load active mode data
+        if (D[D.activeMode]) loadModeData(D.activeMode);
+        console.log('[Go] Mode:', D.activeMode);
+
+        // Set mode toggle UI
+        document.querySelectorAll('.mode-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.mode === D.activeMode);
+        });
+        const modeLabel = document.getElementById('modeLabel');
+        if (modeLabel) modeLabel.textContent = D.activeMode === 'arrival' ? 'Morning Pickup Routes' : 'Afternoon Drop-off Routes';
+
+        initTabs(); populateSetup(); renderFleet(); renderShifts(); renderStaff(); renderAddresses(); updateStats(); updateBusSelects();
 
         // Restore camp coordinates from saved data
         if (D.setup.campLat && D.setup.campLng) {
@@ -2182,6 +2315,7 @@
         filterOverrideSelect,
         searchCamperInRoutes, zoomToStop,
         openMoveModal, renderFilteredMasterList,
+        switchMode,
         closeModal, openModal
     };
 
