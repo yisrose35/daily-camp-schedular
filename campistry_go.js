@@ -936,8 +936,7 @@
     function downloadAddressTemplate() {
         const roster = getRoster(); const names = Object.keys(roster).sort();
         let csv = '\uFEFFName,Division,Bunk,Street Address,City,State,ZIP,Transport,Ride With\n';
-        names.forEach(n => { const c = roster[n], a = D.addresses[n] || {}; csv += [n, c.division || '', c.bunk || '', a.street || '', a.city || '', a.state || 'NY', a.zip || ''].map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',') + '\n'; });
-        const blob = new Blob([csv], { type: 'text/csv' }); const el = document.createElement('a'); el.href = URL.createObjectURL(blob); el.download = 'campistry_go_addresses.csv'; el.click(); toast('Template downloaded');
+       names.forEach(n => { const c = roster[n], a = D.addresses[n] || {}; csv += [n, c.division || '', c.bunk || '', a.street || '', a.city || '', a.state || 'NY', a.zip || '', a.transport || 'bus', a.rideWith || ''].map(v =>        const blob = new Blob([csv], { type: 'text/csv' }); const el = document.createElement('a'); el.href = URL.createObjectURL(blob); el.download = 'campistry_go_addresses.csv'; el.click(); toast('Template downloaded');
     }
     function importAddressCsv() { const inp = document.getElementById('csvFileInput'); inp.onchange = function () { if (!inp.files[0]) return; const r = new FileReader(); r.onload = e => { parseCsv(e.target.result); inp.value = ''; }; r.readAsText(inp.files[0]); }; inp.click(); }
     function parseCsv(text) {
@@ -1702,6 +1701,8 @@ function detectRegions() {
                             const saving = (srcDistBefore + tgtDistBefore) - (srcDistWithout + tgtResult.dist);
 
                             const regionThreshold = sameRegion ? 0.1 : 2.0;
+                            const sameRegion = (tgtRoute._regionId && srcRoute._regionId) ? tgtRoute._regionId === srcRoute._regionId : true;
+                            const regionThreshold = sameRegion ? 0.1 : 2.0;
                             if (saving > bestSaving + regionThreshold) {
                                 bestSaving = saving;
                                 bestTarget = ti;
@@ -1755,6 +1756,7 @@ function detectRegions() {
                                 const distAfter = resultA.dist + resultB.dist;
 
                                const swapSameRegion = rA._regionId === rB._regionId;
+                                const swapSameRegion = (rA._regionId && rB._regionId) ? rA._regionId === rB._regionId : true;
                                 if (distAfter < distBefore - (swapSameRegion ? 0.1 : 2.0)) {
                                     // Execute swap
                                     rA.stops[ai] = stopB;
@@ -3102,6 +3104,7 @@ function renderCarpool() {
             if (t === 'fleet') renderFleet(); else if (t === 'shifts') renderShifts(); else if (t === 'staff') renderStaff(); else if (t === 'addresses') renderAddresses(); else if (t === 'preflight') runPreflight(); else if (t === 'routes') {
                 runPreflight(); // enables generate button
                 renderDailyOverrides();
+                renderCarpool();
                 if (_pendingMapInit) { setTimeout(function() { initMap(_pendingMapInit); _pendingMapInit = null; }, 150); }
                 else { setTimeout(function() { if (_map) _map.invalidateSize(); }, 150); }
             }
