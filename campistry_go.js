@@ -630,79 +630,161 @@
         }
     }
 
-    /** Test geocode on ONE address — logs everything to console */
-    async function testGeocode() {
-        const names = Object.keys(D.addresses);
-        const testName = names.find(n => D.addresses[n]?.street);
-        if (!testName) { console.error('[Go] TEST: No addresses'); toast('No addresses', 'error'); return; }
+    /** Full system check — run from console: CampistryGo.systemCheck() */
+    async function systemCheck() {
+        const R = (ok, msg) => console.log((ok ? '✅' : '❌') + ' ' + msg);
+        const W = (msg) => console.log('⚠️  ' + msg);
+        let pass = 0, fail = 0, warn = 0;
+        function P(msg) { pass++; R(true, msg); }
+        function F(msg) { fail++; R(false, msg); }
+        function Wr(msg) { warn++; W(msg); }
 
-        const a = D.addresses[testName];
-        const q = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ');
-        console.log('========== GEOCODE TEST ==========');
-        console.log('[Go] TEST: Camper:', testName);
-        console.log('[Go] TEST: Query:', q);
+        console.log('');
+        console.log('╔══════════════════════════════════════╗');
+        console.log('║   CAMPISTRY GO — FULL SYSTEM CHECK   ║');
+        console.log('╚══════════════════════════════════════╝');
+        console.log('');
 
-        // Test Census Geocoder
-        console.log('\n--- US Census Geocoder ---');
+        // ── 1. DATA ──
+        console.log('── DATA ──');
+        const roster = getRoster();
+        const camperCount = Object.keys(roster).length;
+        camperCount > 0 ? P('Camper roster: ' + camperCount + ' campers loaded') : F('Camper roster: EMPTY — import from Campistry Me');
+
+        const addrCount = Object.keys(D.addresses).length;
+        const geocoded = Object.values(D.addresses).filter(a => a.geocoded).length;
+        const mismatches = Object.values(D.addresses).filter(a => a._zipMismatch).length;
+        addrCount > 0 ? P('Addresses: ' + addrCount + ' entered') : F('Addresses: NONE — add in Addresses tab');
+        geocoded > 0 ? P('Geocoded: ' + geocoded + '/' + addrCount) : F('Geocoded: 0/' + addrCount + ' — click Geocode All or Re-geocode');
+        if (geocoded < addrCount && geocoded > 0) Wr((addrCount - geocoded) + ' addresses not geocoded');
+        if (mismatches > 0) Wr(mismatches + ' addresses have ZIP mismatch — check those');
+
+        // ── 2. MODE ──
+        console.log('\n── MODE ──');
+        P('Active mode: ' + D.activeMode);
+        const disData = D.dismissal;
+        const arrData = D.arrival;
+        P('Dismissal: ' + (disData?.buses?.length || 0) + ' buses, ' + (disData?.shifts?.length || 0) + ' shifts' + (disData?.savedRoutes ? ', has saved routes' : ''));
+        P('Arrival: ' + (arrData?.buses?.length || 0) + ' buses, ' + (arrData?.shifts?.length || 0) + ' shifts' + (arrData?.savedRoutes ? ', has saved routes' : ''));
+
+        // ── 3. FLEET & SHIFTS ──
+        console.log('\n── FLEET & SHIFTS (current mode: ' + D.activeMode + ') ──');
+        D.buses.length > 0 ? P('Buses: ' + D.buses.length + ' — ' + D.buses.map(b => b.name + ' (' + b.capacity + ' seats)').join(', ')) : F('Buses: NONE — add in Fleet tab');
+        D.shifts.length > 0 ? P('Shifts: ' + D.shifts.length + ' — ' + D.shifts.map(s => s.label || 'Unnamed').join(', ')) : F('Shifts: NONE — add in Shifts tab');
+        D.monitors.length > 0 ? P('Monitors: ' + D.monitors.length) : Wr('No bus monitors assigned');
+        D.counselors.length > 0 ? P('Counselors: ' + D.counselors.length) : Wr('No counselors assigned');
+
+        // ── 4. CAMP ADDRESS ──
+        console.log('\n── CAMP ADDRESS ──');
+        D.setup.campAddress ? P('Camp address: ' + D.setup.campAddress) : F('Camp address: NOT SET — add in Setup');
+        _campCoordsCache ? P('Camp coords: ' + _campCoordsCache.lat.toFixed(6) + ', ' + _campCoordsCache.lng.toFixed(6)) : Wr('Camp coords not cached — will geocode on first route generation');
+
+        // ── 5. API KEYS ──
+        console.log('\n── API KEYS ──');
+        const orsKey = getApiKey();
+        orsKey ? P('ORS key: set (' + orsKey.substring(0, 8) + '...)') : Wr('ORS key: not set — directions and satellite map won\'t work (geocoding still works via Census)');
+
+        // ── 6. CSP CHECK ──
+        console.log('\n── CSP / CONNECTIVITY ──');
+
+        // Census geocoder
         try {
-            const url = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?' + new URLSearchParams({
-                address: q, benchmark: 'Public_AR_Current', format: 'json'
-            });
-            console.log('[Go] TEST Census URL:', url);
-            const r = await fetch(url);
-            console.log('[Go] TEST Census HTTP:', r.status);
-            if (r.ok) {
-                const d = await r.json();
-                const matches = d.result?.addressMatches || [];
-                console.log('[Go] TEST Census matches:', matches.length);
-                matches.forEach((m, i) => {
-                    console.log('[Go] TEST Census #' + (i + 1) + ':', {
-                        matchedAddress: m.matchedAddress,
-                        lat: m.coordinates.y,
-                        lng: m.coordinates.x,
-                        tigerLineId: m.tigerLine?.tigerLineId
-                    });
-                });
-                if (matches.length) {
-                    toast('Census: ✅ ' + matches[0].matchedAddress + ' — see console');
-                } else {
-                    toast('Census: no match, will fall back to ORS');
+            const testAddr = D.setup.campAddress || '4600 Silver Hill Rd, Washington, DC, 20233';
+            const cr = await fetch('https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?' + new URLSearchParams({
+                address: testAddr, benchmark: 'Public_AR_Current', format: 'json'
+            }));
+            if (cr.ok) {
+                const cd = await cr.json();
+                const matches = cd.result?.addressMatches?.length || 0;
+                P('Census Geocoder: HTTP ' + cr.status + ', ' + matches + ' match(es)');
+                if (matches > 0) {
+                    const m = cd.result.addressMatches[0];
+                    console.log('   → ' + m.matchedAddress + ' [' + m.coordinates.y.toFixed(6) + ', ' + m.coordinates.x.toFixed(6) + ']');
                 }
             } else {
-                const body = await r.text();
-                console.error('[Go] TEST Census error:', body);
+                F('Census Geocoder: HTTP ' + cr.status);
             }
         } catch (e) {
-            console.error('[Go] TEST Census failed:', e.message);
+            F('Census Geocoder: BLOCKED — add https://geocoding.geo.census.gov to CSP connect-src');
         }
 
-        // Test ORS
-        const key = getApiKey();
-        if (key) {
-            console.log('\n--- ORS Geocoder (fallback) ---');
-            const params = { text: q, size: '3', 'boundary.country': 'US' };
-            if (_campCoordsCache) { params['focus.point.lat'] = _campCoordsCache.lat; params['focus.point.lon'] = _campCoordsCache.lng; }
-            try {
-                const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams(params), {
-                    headers: { 'Authorization': key, 'Accept': 'application/json' }
-                });
-                console.log('[Go] TEST ORS HTTP:', r.status);
-                if (r.ok) {
-                    const d = await r.json();
-                    console.log('[Go] TEST ORS results:', d.features?.length || 0);
-                    (d.features || []).forEach((f, i) => {
-                        console.log('[Go] TEST ORS #' + (i + 1) + ':', {
-                            label: f.properties?.label,
-                            postalcode: f.properties?.postalcode,
-                            lat: f.geometry.coordinates[1],
-                            lng: f.geometry.coordinates[0]
-                        });
-                    });
-                }
-            } catch (e) { console.error('[Go] TEST ORS failed:', e.message); }
+        // OSM tiles
+        try {
+            const tr = await fetch('https://a.tile.openstreetmap.org/0/0/0.png', { method: 'HEAD' });
+            tr.ok ? P('OSM tiles: reachable') : F('OSM tiles: HTTP ' + tr.status);
+        } catch (e) {
+            F('OSM tiles: BLOCKED — add https://*.tile.openstreetmap.org to CSP connect-src');
         }
-        console.log('========== END TEST ==========');
+
+        // Satellite tiles
+        try {
+            const sr = await fetch('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/0/0/0', { method: 'HEAD' });
+            sr.ok ? P('Satellite tiles: reachable') : F('Satellite tiles: HTTP ' + sr.status);
+        } catch (e) {
+            F('Satellite tiles: BLOCKED — add https://server.arcgisonline.com to CSP connect-src');
+        }
+
+        // ORS directions
+        if (orsKey) {
+            try {
+                const dr = await fetch('https://api.openrouteservice.org/v2/directions/driving-car', {
+                    method: 'POST',
+                    headers: { 'Authorization': orsKey, 'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json, application/geo+json' },
+                    body: JSON.stringify({ coordinates: [[-73.75, 40.61], [-73.74, 40.62]], radiuses: [1000, 1000] })
+                });
+                if (dr.ok) {
+                    const dd = await dr.json();
+                    const hasGeom = !!(dd.features?.[0]?.geometry || dd.routes?.[0]?.geometry);
+                    hasGeom ? P('ORS Directions: working, road geometry returned') : Wr('ORS Directions: HTTP 200 but no geometry in response');
+                    if (dd.routes?.[0]?.geometry && typeof dd.routes[0].geometry === 'string') {
+                        console.log('   → Response format: encoded polyline (will be decoded)');
+                    } else if (dd.features?.[0]) {
+                        console.log('   → Response format: GeoJSON');
+                    }
+                } else {
+                    const body = await dr.text().catch(() => '');
+                    F('ORS Directions: HTTP ' + dr.status + ' — ' + body.substring(0, 100));
+                }
+            } catch (e) {
+                F('ORS Directions: BLOCKED — add https://api.openrouteservice.org to CSP connect-src');
+            }
+        } else {
+            Wr('ORS Directions: skipped (no API key) — routes will show straight lines');
+        }
+
+        // ── 7. SAVED ROUTES ──
+        console.log('\n── SAVED ROUTES ──');
+        if (D.savedRoutes?.length) {
+            P('Saved routes: ' + D.savedRoutes.length + ' shift(s)');
+            D.savedRoutes.forEach((sr, i) => {
+                const totalCampers = sr.routes.reduce((s, r) => s + r.camperCount, 0);
+                console.log('   Shift ' + (i + 1) + ': ' + sr.routes.length + ' buses, ' + totalCampers + ' campers');
+            });
+            // Capacity check
+            const warnings = getCapacityWarnings();
+            warnings.length === 0 ? P('Capacity: all buses within limits') : F('Capacity: ' + warnings.length + ' bus(es) over capacity');
+            warnings.forEach(w => console.log('   ⚠ ' + w.busName + ' (' + w.shift + '): ' + w.actual + ' campers, ' + w.max + ' seats'));
+        } else {
+            Wr('No saved routes — generate in Routes tab');
+        }
+
+        // ── 8. MAP ──
+        console.log('\n── MAP ──');
+        _map ? P('Map instance: initialized') : Wr('Map: not initialized (open Routes tab first)');
+        P('Route geometry cache: ' + Object.keys(_routeGeomCache).length + ' cached routes');
+
+        // ── SUMMARY ──
+        console.log('');
+        console.log('╔══════════════════════════════════════╗');
+        console.log('║  ' + pass + ' passed  |  ' + fail + ' failed  |  ' + warn + ' warnings     ║');
+        console.log('╚══════════════════════════════════════╝');
+        if (fail === 0) console.log('🟢 System ready!');
+        else console.log('🔴 Fix the ' + fail + ' failure(s) above before generating routes.');
+        console.log('');
     }
+
+    // Keep testGeocode as alias
+    const testGeocode = systemCheck;
 
     function downloadAddressTemplate() {
         const roster = getRoster(); const names = Object.keys(roster).sort();
@@ -2308,7 +2390,7 @@
         openCounselorModal, saveCounselor, editCounselor, deleteCounselor,
         editAddress, saveAddress, geocodeAll, downloadAddressTemplate, importAddressCsv,
         regeocodeAll: function() { geocodeAll(true); },
-        testGeocode,
+        testGeocode, systemCheck,
         generateRoutes, exportRoutesCsv, printRoutes, detectRegions,
         renderMap, selectMapBus, toggleMapShift, setMapShiftsAll, toggleMapFullscreen,
         openOverrideModal, onOverrideTypeChange, saveOverride, removeOverride,
