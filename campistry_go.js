@@ -937,7 +937,8 @@
         const roster = getRoster(); const names = Object.keys(roster).sort();
         let csv = '\uFEFFID,Name,Division,Bunk,Street Address,City,State,ZIP,Transport,Ride With\n';
       names.forEach(n => { const c = roster[n], a = D.addresses[n] || {}; csv += [c.camperId ? String(c.camperId).padStart(4, '0') : '', n, c.division || '', c.bunk || '', a.street || '', a.city || '', a.state || 'NY', a.zip || '', a.transport || 'bus', a.rideWith || ''].map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',') + '\n'; });
-        const blob = new Blob([csv], { type: 'text/csv' });    }
+        const blob = new Blob([csv], { type: 'text/csv' }); const el = document.createElement('a'); el.href = URL.createObjectURL(blob); el.download = 'campistry_go_addresses.csv'; el.click(); toast('Template downloaded');
+    }
     function importAddressCsv() { const inp = document.getElementById('csvFileInput'); inp.onchange = function () { if (!inp.files[0]) return; const r = new FileReader(); r.onload = e => { parseCsv(e.target.result); inp.value = ''; }; r.readAsText(inp.files[0]); }; inp.click(); }
     function parseCsv(text) {
         if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
