@@ -2993,14 +2993,81 @@ function renderCarpool() {
     // =========================================================================
     // EXPORT / PRINT
     // =========================================================================
-    function exportRoutesCsv() {
+   function exportRoutesCsv() {
         if (!_generatedRoutes) { toast('Generate first', 'error'); return; }
-        let csv = '\uFEFFFirst Name,Last Name,Shift,Bus,Stop #,Address,Est. Time\n';
+        const roster = getRoster();
+        const modeLabel = D.activeMode === 'arrival' ? 'Pickup' : 'Drop-off';
+        let csv = '\uFEFFFirst Name,Last Name,Division,Grade,Bunk,Address,City,State,ZIP,Transport,Bus,Stop #,' + modeLabel + ' Location,Est. Time,Shift\n';
         const rows = [];
-        _generatedRoutes.forEach(sr => { sr.routes.forEach(r => { r.stops.forEach(st => { if (st.isMonitor || st.isCounselor) return; st.campers.forEach(c => { const p = c.name.split(/\s+/); rows.push([p[0] || '', p.slice(1).join(' ') || '', sr.shift.label || '', r.busName, st.stopNum, st.address, st.estimatedTime || '']); }); }); }); });
+        // Bus riders
+        _generatedRoutes.forEach(sr => {
+            sr.routes.forEach(r => {
+                r.stops.forEach(st => {
+                    if (st.isMonitor || st.isCounselor) return;
+                    st.campers.forEach(c => {
+                        const p = c.name.split(/\s+/);
+                        const camperData = roster[c.name] || {};
+                        const addr = D.addresses[c.name] || {};
+                        rows.push([
+                            p[0] || '',
+                            p.slice(1).join(' ') || '',
+                            c.division || camperData.division || '',
+                            camperData.grade || '',
+                            c.bunk || camperData.bunk || '',
+                            addr.street || '',
+                            addr.city || '',
+                            addr.state || '',
+                            addr.zip || '',
+                            'Bus',
+                            r.busName,
+                            st.stopNum,
+                            st.address,
+                            st.estimatedTime || '',
+                            sr.shift.label || ''
+                        ]);
+                    });
+                });
+            });
+        });
+        // Pickup/carpool kids
+        Object.keys(roster).forEach(name => {
+            const a = D.addresses[name];
+            if (a?.transport !== 'pickup') return;
+            const c = roster[name];
+            const p = name.split(/\s+/);
+            // Find carpool group
+            let carpoolLabel = 'Pickup';
+            if (D.carpoolGroups) {
+                Object.entries(D.carpoolGroups).forEach(([num, g]) => {
+                    if ((g.kids || []).includes(name)) carpoolLabel = 'Carpool ' + num;
+                });
+            }
+            rows.push([
+                p[0] || '',
+                p.slice(1).join(' ') || '',
+                c.division || '',
+                c.grade || '',
+                c.bunk || '',
+                a?.street || '',
+                a?.city || '',
+                a?.state || '',
+                a?.zip || '',
+                carpoolLabel,
+                '',
+                '',
+                '',
+                '',
+                ''
+            ]);
+        });
         rows.sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]));
         rows.forEach(r => { csv += r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',') + '\n'; });
-        const blob = new Blob([csv], { type: 'text/csv' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'campistry_go_routes.csv'; a.click(); toast('Exported');
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const el = document.createElement('a');
+        el.href = URL.createObjectURL(blob);
+        el.download = 'campistry_go_' + D.activeMode + '_routes.csv';
+        el.click();
+        toast('Exported ' + rows.length + ' campers');
     }
     function printRoutes(printWhat) {
         if (!_generatedRoutes) { toast('Generate first', 'error'); return; }
