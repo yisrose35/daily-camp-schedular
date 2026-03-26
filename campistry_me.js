@@ -593,7 +593,14 @@ function renderEnrollment(){
     var enrolled=byStatus.enrolled||0,accepted=byStatus.accepted||0,applied=byStatus.applied||0,waitlisted=byStatus.waitlisted||0;
 
     var h='<div class="sec-hd"><div><h2 class="sec-title">Registration & Enrollment</h2><p class="sec-desc">'+total+' application'+(total!==1?'s':'')+' · '+enrolled+' enrolled · '+waitlisted+' waitlisted</p></div>';
-    h+='<div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add Session</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ New Application</button></div></div>';
+    h+='<div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.copyRegLink()">🔗 Copy Registration Link</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add Session</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button></div></div>';
+
+    // Registration link banner
+    h+='<div style="background:#fff;border:1px solid var(--s200);border-radius:var(--r);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
+    h+='<div style="flex:1;min-width:200px"><div style="font-size:.8rem;font-weight:600;color:var(--s500)">PARENT REGISTRATION LINK</div>';
+    h+='<div style="font-size:.85rem;color:var(--me);font-weight:600;word-break:break-all;margin-top:2px">'+esc(window.location.origin+'/campistry_register.html')+'</div></div>';
+    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.copyRegLink()">Copy Link</button>';
+    h+='<a href="campistry_register.html" target="_blank" class="me-btn me-btn--sec me-btn--sm" style="text-decoration:none">Preview Form</a></div>';
 
     // Pipeline stats
     h+='<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">';
@@ -607,19 +614,32 @@ function renderEnrollment(){
 
     // Sessions
     if(sessions.length){
-        h+='<div class="me-card" style="margin-bottom:14px"><div class="me-card-head"><h3>Sessions</h3><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add</button></div>';
+        h+='<div class="me-card" style="margin-bottom:14px"><div class="me-card-head"><h3>Sessions & Pricing</h3><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add</button></div>';
         h+='<div style="padding:12px 18px;display:flex;flex-wrap:wrap;gap:8px">';
         sessions.forEach(function(s,i){
             var sEnrolled=eArr.filter(function([,e]){return e.session===s.name&&e.status==='enrolled'}).length;
+            var sApplied=eArr.filter(function([,e]){return e.session===s.name}).length;
             var cap=s.capacity||'∞';
             var pct=s.capacity?Math.min(sEnrolled/s.capacity,1):0;
-            h+='<div style="flex:1;min-width:180px;padding:12px;border-radius:var(--r);border:1px solid var(--s200);background:var(--s50)">';
-            h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:.85rem;font-weight:600;color:var(--s800)">'+esc(s.name)+'</span>';
-            h+='<button class="me-btn me-btn--ghost" style="font-size:.7rem;padding:2px 6px" onclick="CampistryMe.deleteSession('+i+')">✕</button></div>';
-            if(s.dates)h+='<div style="font-size:.7rem;color:var(--s400);margin-bottom:4px">'+esc(s.dates)+'</div>';
-            h+='<div style="font-size:.75rem;color:var(--s500)">'+sEnrolled+' / '+cap+' enrolled</div>';
+            var isOpen=s.registrationOpen!==false;
+            h+='<div style="flex:1;min-width:200px;padding:14px;border-radius:var(--r);border:1px solid '+(isOpen?'var(--s200)':'var(--err)')+';background:'+(isOpen?'var(--s50)':'rgba(239,68,68,.03)')+'">';
+            h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+            h+='<span style="font-size:.9rem;font-weight:700;color:var(--s800)">'+esc(s.name)+'</span>';
+            h+='<div style="display:flex;gap:3px">';
+            h+='<button class="me-btn me-btn--ghost" style="font-size:.65rem;padding:2px 5px" onclick="CampistryMe.editSession('+i+')" title="Edit">Edit</button>';
+            h+='<button class="me-btn me-btn--ghost" style="font-size:.65rem;padding:2px 5px;color:'+(isOpen?'var(--err)':'var(--ok)')+'" onclick="CampistryMe.toggleSessionReg('+i+')" title="'+(isOpen?'Close':'Open')+' registration">'+(isOpen?'Close':'Open')+'</button>';
+            h+='<button class="me-btn me-btn--ghost" style="font-size:.65rem;padding:2px 5px;color:var(--err)" onclick="CampistryMe.deleteSession('+i+')">✕</button>';
+            h+='</div></div>';
+            if(s.dates)h+='<div style="font-size:.75rem;color:var(--s500);margin-bottom:4px">📅 '+esc(s.dates)+'</div>';
+            h+='<div style="font-size:.75rem;color:var(--s500)">'+sApplied+' applied · '+sEnrolled+' / '+cap+' enrolled</div>';
             if(s.capacity){h+='<div style="height:3px;border-radius:2px;background:var(--s200);margin-top:4px;overflow:hidden"><div style="height:100%;width:'+(pct*100)+'%;background:'+(pct>=0.9?'var(--err)':pct>=0.7?'var(--me)':'var(--ok)')+';border-radius:2px"></div></div>'}
-            if(s.tuition)h+='<div style="font-size:.7rem;color:var(--s400);margin-top:4px">Tuition: '+fm(s.tuition)+'</div>';
+            if(s.tuition)h+='<div style="font-size:.85rem;font-weight:700;color:var(--me);margin-top:6px">$'+Number(s.tuition).toLocaleString()+'</div>';
+            if(s.earlyBird){
+                var today=new Date().toISOString().split('T')[0];
+                var isActive=!s.earlyBirdDeadline||today<=s.earlyBirdDeadline;
+                h+='<div style="font-size:.72rem;color:'+(isActive?'var(--ok)':'var(--s400)')+';font-weight:600;margin-top:2px">Early bird: $'+Number(s.earlyBird).toLocaleString()+(s.earlyBirdDeadline?' (until '+s.earlyBirdDeadline+')':'')+(isActive?'':' — expired')+'</div>';
+            }
+            h+='<div style="margin-top:6px">'+(!isOpen?'<span style="font-size:.7rem;font-weight:700;color:var(--err)">Registration Closed</span>':'<span style="font-size:.7rem;font-weight:700;color:var(--ok)">Registration Open</span>')+'</div>';
             h+='</div>';
         });
         h+='</div></div>';
@@ -670,8 +690,38 @@ function addSession(){
     var dates=prompt('Date range (e.g., "June 22 – August 14"):','');
     var cap=prompt('Capacity (leave blank for unlimited):','');
     var tuition=prompt('Tuition amount ($):','');
-    sessions.push({name:name.trim(),dates:(dates||'').trim(),capacity:cap?parseInt(cap):0,tuition:tuition?parseFloat(tuition):0});
+    var earlyBird=prompt('Early bird price ($ — leave blank for none):','');
+    var earlyBirdDeadline='';
+    if(earlyBird)earlyBirdDeadline=prompt('Early bird deadline (YYYY-MM-DD):','');
+    sessions.push({name:name.trim(),dates:(dates||'').trim(),capacity:cap?parseInt(cap):0,tuition:tuition?parseFloat(tuition):0,earlyBird:earlyBird?parseFloat(earlyBird):0,earlyBirdDeadline:(earlyBirdDeadline||'').trim(),registrationOpen:true});
     save();renderEnrollment();toast('Session created');
+}
+
+function editSession(idx){
+    var s=sessions[idx];if(!s)return;
+    var name=prompt('Session name:',s.name);if(!name)return;
+    var dates=prompt('Date range:',s.dates||'');
+    var cap=prompt('Capacity:',s.capacity||'');
+    var tuition=prompt('Tuition ($):',s.tuition||'');
+    var earlyBird=prompt('Early bird price ($):',s.earlyBird||'');
+    var earlyBirdDeadline=prompt('Early bird deadline (YYYY-MM-DD):',s.earlyBirdDeadline||'');
+    sessions[idx]={name:name.trim(),dates:(dates||'').trim(),capacity:cap?parseInt(cap):0,tuition:tuition?parseFloat(tuition):0,earlyBird:earlyBird?parseFloat(earlyBird):0,earlyBirdDeadline:(earlyBirdDeadline||'').trim(),registrationOpen:s.registrationOpen!==false};
+    save();renderEnrollment();toast('Session updated');
+}
+
+function toggleSessionReg(idx){
+    sessions[idx].registrationOpen=!sessions[idx].registrationOpen;
+    save();renderEnrollment();
+    toast(sessions[idx].registrationOpen?'Registration opened':'Registration closed');
+}
+
+function copyRegLink(){
+    var url=window.location.origin+'/campistry_register.html';
+    if(navigator.clipboard){
+        navigator.clipboard.writeText(url).then(function(){toast('Registration link copied!')});
+    }else{
+        prompt('Copy this link and share with parents:',url);
+    }
 }
 
 function deleteSession(idx){
@@ -990,7 +1040,7 @@ window.CampistryMe={
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,
-    addSession:addSession,deleteSession:deleteSession,addApplication:addApplication,
+    addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,
     updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,
     _pickColor:_pickColor,_addGradeRow:_addGradeRow,
     uploadPhoto:uploadPhoto,
