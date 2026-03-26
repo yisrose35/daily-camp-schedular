@@ -1600,7 +1600,6 @@
                 }
                 return { tour, dist: tourDist(tour) };
             }
-        }
 
         // Helper: calculate route distance for a set of stops
         function routeDist(busStops) {
