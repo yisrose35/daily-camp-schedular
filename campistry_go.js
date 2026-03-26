@@ -3093,6 +3093,148 @@ function renderCarpool() {
     }
 
     // =========================================================================
+    // CARPOOL & RIDE-WITH MANAGEMENT
+    // =========================================================================
+
+    function renderCarpool() {
+        const card = document.getElementById('carpoolCard');
+        const body = document.getElementById('carpoolBody');
+        const countEl = document.getElementById('carpoolCount');
+        if (!card || !body) return;
+        const roster = getRoster();
+        if (!D.carpoolGroups) D.carpoolGroups = {};
+        const pickups = [], rideWithPairs = [];
+        const allKidsInGroups = new Set();
+        Object.values(D.carpoolGroups).forEach(g => (g.kids || []).forEach(k => allKidsInGroups.add(k)));
+        Object.keys(roster).forEach(name => {
+            const a = D.addresses[name]; if (!a) return;
+            if (a.transport === 'pickup') pickups.push({ name, division: roster[name].division || '', address: [a.street, a.city].filter(Boolean).join(', ') });
+            if (a.rideWith) rideWithPairs.push({ name, partner: a.rideWith, division: roster[name].division || '' });
+        });
+        const ungrouped = pickups.filter(p => !allKidsInGroups.has(p.name));
+        const groups = Object.entries(D.carpoolGroups).sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
+        card.style.display = '';
+        if (countEl) countEl.textContent = pickups.length + ' pickup, ' + groups.length + ' group' + (groups.length !== 1 ? 's' : '');
+        let html = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;"><div style="font-size:.875rem;font-weight:700;color:var(--text-primary);">🚗 Carpool Groups</div><button class="btn btn-primary btn-sm" onclick="CampistryGo.openCarpoolGroupModal()">+ New Group</button></div>';
+        if (groups.length) {
+            html += groups.map(([num, g]) => {
+                const kidRows = (g.kids || []).map(kid => { const c = roster[kid]; return '<div style="display:flex;align-items:center;justify-content:space-between;padding:.3rem 0;border-bottom:1px solid var(--border-light);"><span style="font-size:.8125rem;"><strong>' + esc(kid) + '</strong>' + (c?.division ? ' <span style="color:var(--text-muted);font-size:.75rem;">' + esc(c.division) + '</span>' : '') + '</span><button class="btn btn-ghost btn-sm" style="color:var(--red-500);font-size:.7rem;padding:2px 6px;" onclick="CampistryGo.removeFromCarpoolGroup(\'' + esc(num) + '\',\'' + esc(kid.replace(/'/g, "\\'")) + '\')">×</button></div>'; }).join('');
+                return '<div style="border:1px solid var(--border-light);border-radius:8px;margin-bottom:.75rem;overflow:hidden;"><div style="display:flex;align-items:center;justify-content:space-between;padding:.625rem .75rem;background:var(--surface-secondary,#f9fafb);"><div><span style="font-weight:700;font-size:.875rem;">Carpool ' + esc(num) + '</span>' + (g.driver ? ' <span style="font-size:.75rem;color:var(--text-muted);">— ' + esc(g.driver) + (g.phone ? ' · ' + esc(g.phone) : '') + '</span>' : '') + '</div><div style="display:flex;gap:4px;"><button class="btn btn-ghost btn-sm" style="font-size:.7rem;" onclick="CampistryGo.openAddToCarpoolModal(\'' + esc(num) + '\')">+ Add</button><button class="btn btn-ghost btn-sm" style="font-size:.7rem;" onclick="CampistryGo.editCarpoolGroup(\'' + esc(num) + '\')">Edit</button><button class="btn btn-ghost btn-sm" style="color:var(--red-500);font-size:.7rem;" onclick="CampistryGo.deleteCarpoolGroup(\'' + esc(num) + '\')">Delete</button></div></div><div style="padding:.5rem .75rem;">' + (kidRows || '<div style="font-size:.8125rem;color:var(--text-muted);">No kids yet</div>') + '</div></div>';
+            }).join('');
+        } else {
+            html += '<div style="text-align:center;padding:1rem;color:var(--text-muted);font-size:.8125rem;border:1px dashed var(--border-light);border-radius:8px;margin-bottom:.75rem;">No carpool groups yet</div>';
+        }
+        if (ungrouped.length) {
+            html += '<div style="margin-top:.75rem;border-top:1px solid var(--border-light);padding-top:.75rem;"><div style="font-size:.8125rem;font-weight:700;color:var(--text-secondary);margin-bottom:.5rem;">Ungrouped Pickup Kids (' + ungrouped.length + ')</div>';
+            html += ungrouped.map(p => {
+                const opts = groups.map(([n]) => '<option value="' + esc(n) + '">Carpool ' + esc(n) + '</option>').join('');
+                return '<div style="display:flex;align-items:center;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--border-light);font-size:.8125rem;"><strong>' + esc(p.name) + '</strong><div style="display:flex;gap:4px;">' + (groups.length ? '<select class="form-input" style="font-size:.7rem;padding:2px 4px;width:auto;" onchange="if(this.value)CampistryGo.addToCarpoolGroup(this.value,\'' + esc(p.name.replace(/'/g, "\\'")) + '\');this.value=\'\'"><option value="">Add to...</option>' + opts + '</select>' : '') + '<button class="btn btn-ghost btn-sm" style="font-size:.7rem;" onclick="CampistryGo.setTransport(\'' + esc(p.name.replace(/'/g, "\\'")) + '\',\'bus\')">→ Bus</button></div></div>';
+            }).join('');
+            html += '</div>';
+        }
+        if (rideWithPairs.length) {
+            html += '<div style="margin-top:.75rem;border-top:1px solid var(--border-light);padding-top:.75rem;"><div style="font-size:.8125rem;font-weight:700;color:var(--text-secondary);margin-bottom:.5rem;">🤝 Ride-With Pairs (' + rideWithPairs.length + ')</div>';
+            rideWithPairs.forEach(p => { html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--border-light);font-size:.8125rem;"><span><strong>' + esc(p.name) + '</strong> rides with <strong>' + esc(p.partner) + '</strong></span><button class="btn btn-ghost btn-sm" style="color:var(--red-500);font-size:.7rem;" onclick="CampistryGo.removeRideWith(\'' + esc(p.name.replace(/'/g, "\\'")) + '\')">Remove</button></div>'; });
+            html += '</div>';
+        }
+        body.innerHTML = html;
+    }
+
+    function setTransport(name, mode) {
+        if (!D.addresses[name]) return;
+        D.addresses[name].transport = mode;
+        save(); renderCarpool(); renderAddresses(); updateStats();
+        toast(name + ' → ' + (mode === 'pickup' ? 'carpool' : 'bus'));
+    }
+
+    function setRideWith(name, partner) {
+        if (!D.addresses[name]) return;
+        D.addresses[name].rideWith = partner;
+        save(); renderCarpool(); toast(name + ' paired with ' + partner);
+    }
+
+    function removeRideWith(name) {
+        if (!D.addresses[name]) return;
+        D.addresses[name].rideWith = '';
+        save(); renderCarpool(); toast('Pairing removed');
+    }
+
+    function openCarpoolGroupModal(editNum) {
+        const existing = editNum ? D.carpoolGroups[editNum] : null;
+        document.getElementById('carpoolGroupNum').value = editNum || '';
+        document.getElementById('carpoolGroupDriver').value = existing?.driver || '';
+        document.getElementById('carpoolGroupPhone').value = existing?.phone || '';
+        document.getElementById('carpoolGroupNum').disabled = !!editNum;
+        document.getElementById('carpoolGroupModalTitle').textContent = editNum ? 'Edit Carpool ' + editNum : 'New Carpool Group';
+        openModal('carpoolGroupModal');
+    }
+
+    function saveCarpoolGroup() {
+        const num = document.getElementById('carpoolGroupNum')?.value.trim();
+        if (!num) { toast('Enter a number', 'error'); return; }
+        if (!D.carpoolGroups) D.carpoolGroups = {};
+        if (!D.carpoolGroups[num]) D.carpoolGroups[num] = { label: 'Carpool ' + num, driver: '', phone: '', kids: [] };
+        D.carpoolGroups[num].driver = document.getElementById('carpoolGroupDriver')?.value.trim() || '';
+        D.carpoolGroups[num].phone = document.getElementById('carpoolGroupPhone')?.value.trim() || '';
+        save(); closeModal('carpoolGroupModal'); renderCarpool();
+        toast('Carpool ' + num + ' saved');
+    }
+
+    function editCarpoolGroup(num) { openCarpoolGroupModal(num); }
+
+    function deleteCarpoolGroup(num) {
+        if (!D.carpoolGroups?.[num]) return;
+        if (!confirm('Delete Carpool ' + num + '?')) return;
+        delete D.carpoolGroups[num];
+        save(); renderCarpool(); toast('Carpool ' + num + ' deleted');
+    }
+
+    function addToCarpoolGroup(num, kidName) {
+        if (!D.carpoolGroups?.[num]) return;
+        if (!D.carpoolGroups[num].kids) D.carpoolGroups[num].kids = [];
+        if (!D.carpoolGroups[num].kids.includes(kidName)) D.carpoolGroups[num].kids.push(kidName);
+        if (D.addresses[kidName]) D.addresses[kidName].transport = 'pickup';
+        save(); renderCarpool(); toast(kidName + ' → Carpool ' + num);
+    }
+
+    function removeFromCarpoolGroup(num, kidName) {
+        if (!D.carpoolGroups?.[num]) return;
+        D.carpoolGroups[num].kids = (D.carpoolGroups[num].kids || []).filter(k => k !== kidName);
+        save(); renderCarpool(); toast(kidName + ' removed');
+    }
+
+    function openAddToCarpoolModal(num) {
+        const roster = getRoster();
+        const existing = new Set(D.carpoolGroups[num]?.kids || []);
+        const available = Object.keys(roster).sort().filter(n => D.addresses[n] && !existing.has(n));
+        const sel = document.getElementById('addToCarpoolSelect');
+        if (sel) sel.innerHTML = '<option value="">— Select —</option>' + available.map(n => '<option value="' + esc(n) + '">' + esc(n) + (D.addresses[n]?.transport === 'pickup' ? ' 🚗' : ' 🚌') + '</option>').join('');
+        document.getElementById('addToCarpoolSearch').value = '';
+        document.getElementById('addToCarpoolNum').value = num;
+        document.getElementById('addToCarpoolTitle').textContent = 'Add to Carpool ' + num;
+        openModal('addToCarpoolModal');
+    }
+
+    function filterAddToCarpool() {
+        const q = (document.getElementById('addToCarpoolSearch')?.value || '').toLowerCase().trim();
+        const num = document.getElementById('addToCarpoolNum')?.value;
+        const roster = getRoster();
+        const existing = new Set(D.carpoolGroups[num]?.kids || []);
+        const names = Object.keys(roster).sort().filter(n => D.addresses[n] && !existing.has(n) && (!q || n.toLowerCase().includes(q)));
+        const sel = document.getElementById('addToCarpoolSelect');
+        if (sel) sel.innerHTML = '<option value="">— Select —</option>' + names.map(n => '<option value="' + esc(n) + '">' + esc(n) + (D.addresses[n]?.transport === 'pickup' ? ' 🚗' : ' 🚌') + '</option>').join('');
+        if (names.length === 1 && sel) sel.value = names[0];
+    }
+
+    function confirmAddToCarpool() {
+        const num = document.getElementById('addToCarpoolNum')?.value;
+        const kid = document.getElementById('addToCarpoolSelect')?.value;
+        if (!num || !kid) { toast('Select a camper', 'error'); return; }
+        addToCarpoolGroup(num, kid);
+        closeModal('addToCarpoolModal');
+    }
+
+    // =========================================================================
     // TABS + INIT
     // =========================================================================
     function initTabs() {
