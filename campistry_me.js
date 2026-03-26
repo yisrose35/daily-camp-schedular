@@ -242,26 +242,77 @@ function renderCampers(filter){
 function viewCamper(n){
     var d=roster[n];if(!d)return;
     var idStr=d.camperId?String(d.camperId).padStart(4,'0'):'—';
-    document.getElementById('cvHead').innerHTML='<div class="cv-hd"><div><h3 class="cv-name">'+esc(n)+'</h3><div class="cv-tags"><span class="badge badge-gray" style="font-family:monospace">#'+esc(idStr)+'</span>'+(d.division?dtag(d.division):'')+(d.bunk?' '+bdg(d.bunk,'gray'):'')+'</div></div></div>';
-    var b='<div class="cv-sec">Personal</div>';
-    if(d.dob)b+=cvR('Born',new Date(d.dob+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})+' (age '+age(d.dob)+')');
-    b+=cvR('Gender',d.gender);b+=cvR('School',d.school);b+=cvR('School Grade',d.schoolGrade);
-    // Teams
+
+    // Header with photo placeholder
+    var photoUrl=d.photoUrl||'';
+    var photoHtml=photoUrl
+        ?'<img src="'+esc(photoUrl)+'" style="width:72px;height:72px;border-radius:12px;object-fit:cover;border:2px solid var(--s200)">'
+        :'<div style="width:72px;height:72px;border-radius:12px;background:var(--s100);border:2px dashed var(--s300);display:flex;align-items:center;justify-content:center;flex-direction:column;cursor:pointer" onclick="CampistryMe.uploadPhoto(\''+je(n)+'\')" title="Click to add photo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--s400)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span style="font-size:.6rem;color:var(--s400);margin-top:2px">Add Photo</span></div>';
+
+    document.getElementById('cvHead').innerHTML='<div style="display:flex;gap:16px;align-items:flex-start;padding:4px 0">'+photoHtml+'<div style="flex:1"><h3 class="cv-name">'+esc(n)+'</h3><div class="cv-tags" style="margin-top:6px"><span class="badge badge-gray" style="font-family:monospace">#'+esc(idStr)+'</span>'+(d.division?dtag(d.division):'')+(d.bunk?' '+bdg(d.bunk,'gray'):'')+'</div></div></div>';
+
+    var b='';
+
+    // Personal
+    b+='<div class="cv-sec">Personal Information</div>';
+    b+=cvR('Full Name',n);
+    b+=cvR('Camper ID','#'+idStr);
+    if(d.dob)b+=cvR('Date of Birth',new Date(d.dob+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})+' (age '+age(d.dob)+')');
+    b+=cvR('Gender',d.gender);
+    b+=cvR('School',d.school);
+    b+=cvR('School Grade',d.schoolGrade);
+
+    // Camp Assignment
+    b+='<div class="cv-sec">Camp Assignment</div>';
+    b+=cvR('Division',d.division);
+    b+=cvR('Grade',d.grade);
+    b+=cvR('Bunk',d.bunk);
+
+    // League Teams
     var teams=d.teams||{};var teamKeys=Object.keys(teams);
-    if(d.team&&!teamKeys.length)b+=cvR('Team',d.team);
+    if(d.team&&!teamKeys.length){b+='<div class="cv-sec">League Teams</div>';b+=cvR('Team',d.team)}
     else if(teamKeys.length){b+='<div class="cv-sec">League Teams</div>';teamKeys.forEach(function(lg){b+=cvR(lg,teams[lg])})}
+
+    // Parent / Guardian
+    b+='<div class="cv-sec">Parent / Guardian</div>';
+    if(d.parent1Name){
+        b+=cvR('Name',d.parent1Name);
+        if(d.parent1Phone)b+=cvR('Phone','<a href="tel:'+esc(d.parent1Phone)+'" style="color:var(--me);font-weight:600">'+esc(d.parent1Phone)+'</a>');
+        if(d.parent1Email)b+=cvR('Email','<a href="mailto:'+esc(d.parent1Email)+'" style="color:var(--me)">'+esc(d.parent1Email)+'</a>');
+    }else{
+        b+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No parent info on file</div>';
+    }
+
+    // Address
+    b+='<div class="cv-sec">Address</div>';
+    if(d.street){
+        b+=cvR('Street',d.street);
+        b+=cvR('City',d.city);
+        b+=cvR('State',d.state);
+        b+=cvR('ZIP',d.zip);
+        var fullAddr=[d.street,d.city,d.state,d.zip].filter(Boolean).join(', ');
+        b+='<a href="https://maps.google.com/?q='+encodeURIComponent(fullAddr)+'" target="_blank" style="display:inline-flex;align-items:center;gap:4px;font-size:.75rem;font-weight:600;color:var(--me);margin-top:4px;text-decoration:none">Open in Maps →</a>';
+    }else{
+        b+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No address on file</div>';
+    }
+
+    // Emergency Contact
+    b+='<div class="cv-sec">Emergency Contact</div>';
+    if(d.emergencyName){
+        b+=cvR('Name',d.emergencyName+(d.emergencyRel?' ('+d.emergencyRel+')':''));
+        if(d.emergencyPhone)b+=cvR('Phone','<a href="tel:'+esc(d.emergencyPhone)+'" style="color:var(--me);font-weight:600">'+esc(d.emergencyPhone)+'</a>');
+    }else{
+        b+='<div style="font-size:.8rem;color:var(--err);font-style:italic;padding:2px 0">⚠ No emergency contact on file</div>';
+    }
+
+    // Medical
     b+='<div class="cv-sec">Medical Summary</div>';
     if(d.allergies)b+=cvR('Allergies',d.allergies,true);
     if(d.medications)b+=cvR('Medications',d.medications,true);
     if(d.dietary)b+=cvR('Dietary',d.dietary);
     if(!d.allergies&&!d.medications&&!d.dietary)b+='<div style="font-size:.8rem;color:var(--ok);padding:2px 0">✓ No medical flags</div>';
     b+='<div class="cv-health" onclick="toast(\'Campistry Health coming soon\',\'error\')">Open in Campistry Health →</div>';
-    b+='<div class="cv-sec">Emergency Contact</div>';
-    if(d.emergencyName){b+=cvR('Contact',d.emergencyName+(d.emergencyRel?' ('+d.emergencyRel+')':''));if(d.emergencyPhone)b+=cvR('Phone','<a href="tel:'+esc(d.emergencyPhone)+'">'+esc(d.emergencyPhone)+'</a>')}
-    else b+='<div style="font-size:.8rem;color:var(--err);font-style:italic">Not on file</div>';
-    b+='<div class="cv-sec">Parent/Guardian</div>';
-    b+=cvR('Parent 1',d.parent1Name);if(d.parent1Phone)b+=cvR('Phone','<a href="tel:'+esc(d.parent1Phone)+'">'+esc(d.parent1Phone)+'</a>');if(d.parent1Email)b+=cvR('Email','<a href="mailto:'+esc(d.parent1Email)+'">'+esc(d.parent1Email)+'</a>');
-    if(d.street){var fullAddr=[d.street,d.city,d.state,d.zip].filter(Boolean).join(', ');b+=cvR('Address',fullAddr)}
+
     document.getElementById('cvBody').innerHTML=b;
     document.getElementById('cvEditBtn').onclick=function(){closeModal('camperViewModal');editCamper(n)};
     openModal('camperViewModal');
@@ -734,6 +785,27 @@ function exportCsv(){
 }
 
 // ═══ BOOT ════════════════════════════════════════════════════════
+// Photo upload (stores as base64 data URL in camper record)
+function uploadPhoto(camperName){
+    var inp=document.createElement('input');
+    inp.type='file';inp.accept='image/*';
+    inp.onchange=function(){
+        var file=inp.files[0];if(!file)return;
+        if(file.size>2*1024*1024){toast('Photo must be under 2MB','error');return}
+        var reader=new FileReader();
+        reader.onload=function(e){
+            if(roster[camperName]){
+                roster[camperName].photoUrl=e.target.result;
+                save();
+                viewCamper(camperName); // refresh the modal
+                toast('Photo added');
+            }
+        };
+        reader.readAsDataURL(file);
+    };
+    inp.click();
+}
+
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 
 window.CampistryMe={
@@ -744,5 +816,6 @@ window.CampistryMe={
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,
     _pickColor:_pickColor,_addGradeRow:_addGradeRow,
+    uploadPhoto:uploadPhoto,
 };
 })();
