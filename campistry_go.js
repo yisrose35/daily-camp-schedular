@@ -618,7 +618,6 @@
         }
     }
     async function geocodeAll(force) {
-        if (!getApiKey()) { toast('Set ORS key in Setup', 'error'); return; }
         // Cache camp coords first
         if (!_campCoordsCache && D.setup.campAddress) {
             toast('Geocoding camp address first...');
@@ -632,23 +631,50 @@
             return !a.geocoded;
         });
         if (!todo.length) { toast('All addresses already geocoded!'); return; }
-        toast((force ? 'Re-geocoding ' : 'Geocoding ') + todo.length + ' addresses...');
+        toast((force ? 'Re-geocoding ' : 'Geocoding ') + todo.length + ' addresses via Census...');
         let ok = 0, fail = 0;
-        const BATCH = 5; // 5 parallel JSONP requests
-        const DELAY = 500; // 0.5 sec between batches (Census has no rate limit)
-        for (let i = 0; i < todo.length; i += BATCH) {
-            const batch = todo.slice(i, i + BATCH);
-            const results = await Promise.all(batch.map(n => geocodeOne(n)));
-            results.forEach(r => { if (r) ok++; else fail++; });
-            renderAddresses(); updateStats();
-            toast(ok + ' ✓  ' + fail + ' ✗  (' + (i + batch.length) + ' of ' + todo.length + ')');
-            if (i + BATCH < todo.length) await new Promise(r => setTimeout(r, DELAY));
+
+        // Sequential — one at a time, Census JSONP needs breathing room
+        for (let i = 0; i < todo.length; i++) {
+            const name = todo[i];
+            const a = D.addresses[name];
+            if (!a?.street) { fail++; continue; }
+            const q = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ');
+
+            // Census only — no ORS fallback during batch (saves quota)
+            try {
+                const d = await censusGeocode(q);
+                if (d?.result?.addressMatches?.length) {
+                    const best = d.result.addressMatches[0];
+                    a.lat = best.coordinates.y;
+                    a.lng = best.coordinates.x;
+                    a.geocoded = true;
+                    a._zipMismatch = false;
+                    a._geocodeSource = 'census';
+                    ok++;
+                } else {
+                    fail++;
+                    console.warn('[Go] Census no match:', name, q);
+                }
+            } catch (e) {
+                fail++;
+                console.warn('[Go] Census error:', name, e.message);
+            }
+
+            // Update UI every 10
+            if ((i + 1) % 10 === 0 || i === todo.length - 1) {
+                renderAddresses(); updateStats();
+                toast(ok + ' ✓  ' + fail + ' ✗  (' + (i + 1) + ' of ' + todo.length + ')');
+            }
+            // Small pause between each request
+            if (i < todo.length - 1) await new Promise(r => setTimeout(r, 300));
         }
+
         save(); renderAddresses(); updateStats();
         if (fail > 0) {
-            toast(ok + ' geocoded, ' + fail + ' failed — check console for details', 'error');
+            toast(ok + ' geocoded, ' + fail + ' failed — check console', 'error');
         } else {
-            toast(ok + ' geocoded — done!');
+            toast('All ' + ok + ' geocoded via Census!');
         }
     }
 
