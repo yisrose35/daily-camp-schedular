@@ -656,32 +656,113 @@ function renderEnrollment(){
             var formsDone=e.formsCompleted||0,formsTotal=e.formsRequired||0;
             var formsColor=formsTotal===0?'var(--s400)':formsDone>=formsTotal?'var(--ok)':'var(--me)';
             var payColor=e.paymentStatus==='paid'?'var(--ok)':e.paymentStatus==='partial'?'var(--me)':'var(--s400)';
-            h+='<tr>';
+            h+='<tr class="click" onclick="CampistryMe.viewApplication(\''+esc(id)+'\')">';
             h+='<td style="font-size:.75rem;color:var(--s400)">'+esc(e.appliedDate||'—')+'</td>';
-            h+='<td class="bold">'+esc(e.camperName||'—')+'</td>';
+            h+='<td class="bold" style="color:var(--me)">'+esc(e.camperName||'—')+'</td>';
             h+='<td>'+esc(e.parentName||'—')+'</td>';
             h+='<td>'+esc(e.session||'—')+'</td>';
             h+='<td>'+bdg(e.status||'applied',sc)+'</td>';
             h+='<td><span style="font-size:.75rem;font-weight:600;color:'+formsColor+'">'+formsDone+'/'+formsTotal+'</span></td>';
             h+='<td><span style="font-size:.75rem;font-weight:600;color:'+payColor+'">'+esc(e.paymentStatus||'pending')+'</span></td>';
-            h+='<td style="text-align:right"><div style="display:flex;gap:3px;justify-content:flex-end">';
+            h+='<td style="text-align:right" onclick="event.stopPropagation()"><div style="display:flex;gap:3px;justify-content:flex-end">';
+            h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.viewApplication(\''+esc(id)+'\')">Review</button>';
             // Status change buttons
             if(e.status==='applied'){
                 h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\')">Accept</button>';
-                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'waitlisted\')">Waitlist</button>';
             }else if(e.status==='accepted'){
                 h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.enrollCamper(\''+esc(id)+'\')">Enroll</button>';
             }else if(e.status==='waitlisted'){
                 h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\')">Accept</button>';
-            }
-            if(e.status!=='enrolled'&&e.status!=='declined'&&e.status!=='withdrawn'){
-                h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'declined\')">Decline</button>';
             }
             h+='</div></td></tr>';
         });
         h+='</tbody></table></div></div>';
     }
     c.innerHTML=h;
+}
+
+// View full application (review modal)
+function viewApplication(id){
+    var e=enrollments[id];if(!e)return;
+    var sc=e.status==='enrolled'?'ok':e.status==='accepted'?'ok':e.status==='waitlisted'?'warn':e.status==='declined'||e.status==='withdrawn'?'err':'gray';
+
+    var head='<div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h3 style="font-size:1.1rem;font-weight:700;color:var(--s800);margin:0">'+esc(e.camperName||'Application')+'</h3><div style="display:flex;gap:5px;margin-top:5px">'+bdg(e.status||'applied',sc)+' '+bdg(e.session||'No session','gray')+'</div></div><button class="me-modal-x" onclick="CampistryMe.closeModal(\'appViewModal\')">&times;</button></div>';
+    document.getElementById('avHead').innerHTML=head;
+
+    var b='';
+    function sec(title){return'<div style="font-size:.75rem;font-weight:700;color:var(--me);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 6px;padding-bottom:3px;border-bottom:1px solid var(--s100)">'+title+'</div>'}
+    function row(l,v){if(!v)return'';return'<div style="display:flex;gap:8px;padding:2px 0;font-size:.82rem"><span style="color:var(--s400);min-width:100px;flex-shrink:0">'+esc(l)+'</span><span style="color:var(--s800);font-weight:500">'+v+'</span></div>'}
+
+    b+=sec('Application');
+    b+=row('Applied',e.appliedDate||'—');
+    b+=row('Application ID',id);
+    b+=row('Status',e.status);
+    b+=row('Source',e.source);
+
+    b+=sec('Camper');
+    b+=row('Name',esc(e.camperName));
+    b+=row('Date of Birth',e.dob);
+    b+=row('Gender',e.gender);
+    b+=row('School',e.school);
+    b+=row('School Grade',e.schoolGrade);
+    b+=row('Teacher',e.teacher);
+
+    b+=sec('Parent / Guardian');
+    b+=row('Name',esc(e.parentName)+(e.parentRelation?' ('+esc(e.parentRelation)+')':''));
+    if(e.parentPhone)b+=row('Phone','<a href="tel:'+esc(e.parentPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.parentPhone)+'</a>');
+    if(e.parentEmail)b+=row('Email','<a href="mailto:'+esc(e.parentEmail)+'" style="color:var(--me)">'+esc(e.parentEmail)+'</a>');
+    if(e.parent2Name)b+=row('Parent 2',esc(e.parent2Name)+(e.parent2Phone?' — '+esc(e.parent2Phone):''));
+
+    b+=sec('Address');
+    b+=row('Street',e.street);
+    b+=row('City',e.city);
+    b+=row('State',e.state);
+    b+=row('ZIP',e.zip);
+    if(e.street){var fullAddr=[e.street,e.city,e.state,e.zip].filter(Boolean).join(', ');b+='<a href="https://maps.google.com/?q='+encodeURIComponent(fullAddr)+'" target="_blank" style="display:inline-block;font-size:.75rem;font-weight:600;color:var(--me);margin-top:3px;text-decoration:none">Open in Maps →</a>'}
+
+    b+=sec('Emergency Contact');
+    b+=row('Name',esc(e.emergencyName)+(e.emergencyRel?' ('+esc(e.emergencyRel)+')':''));
+    if(e.emergencyPhone)b+=row('Phone','<a href="tel:'+esc(e.emergencyPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.emergencyPhone)+'</a>');
+
+    b+=sec('Medical');
+    if(e.allergies)b+=row('Allergies','<span style="color:var(--err);font-weight:600">'+esc(e.allergies)+'</span>');
+    if(e.medications)b+=row('Medications','<span style="color:var(--err);font-weight:600">'+esc(e.medications)+'</span>');
+    b+=row('Dietary',e.dietary);
+    if(e.medicalNotes)b+=row('Notes',e.medicalNotes);
+    if(!e.allergies&&!e.medications&&!e.dietary&&!e.medicalNotes)b+='<div style="font-size:.82rem;color:var(--ok);padding:2px 0">✓ No medical flags reported</div>';
+
+    b+=sec('Preferences');
+    b+=row('Bunkmate Request',e.bunkmate);
+    b+=row('Separation Request',e.separateFrom);
+    b+=row('Additional Notes',e.notes);
+
+    b+=sec('Payment');
+    b+=row('Session',e.session);
+    b+=row('Tuition',e.sessionTuition?fm(e.sessionTuition):'—');
+    b+=row('Payment Method',e.paymentMethod||'Not selected');
+    b+=row('Payment Status',e.paymentStatus||'pending');
+
+    document.getElementById('avBody').innerHTML=b;
+
+    // Footer buttons
+    var f='';
+    if(e.status==='applied'){
+        f+='<button class="me-btn me-btn--pri" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\');CampistryMe.closeModal(\'appViewModal\')">Accept</button>';
+        f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'waitlisted\');CampistryMe.closeModal(\'appViewModal\')">Waitlist</button>';
+        f+='<button class="me-btn me-btn--danger" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'declined\');CampistryMe.closeModal(\'appViewModal\')">Decline</button>';
+    }else if(e.status==='accepted'){
+        f+='<button class="me-btn me-btn--pri" onclick="CampistryMe.enrollCamper(\''+esc(id)+'\');CampistryMe.closeModal(\'appViewModal\')">Enroll Now</button>';
+        f+='<button class="me-btn me-btn--danger" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'declined\');CampistryMe.closeModal(\'appViewModal\')">Decline</button>';
+    }else if(e.status==='waitlisted'){
+        f+='<button class="me-btn me-btn--pri" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\');CampistryMe.closeModal(\'appViewModal\')">Accept</button>';
+        f+='<button class="me-btn me-btn--danger" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'declined\');CampistryMe.closeModal(\'appViewModal\')">Decline</button>';
+    }else if(e.status==='enrolled'){
+        f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'withdrawn\');CampistryMe.closeModal(\'appViewModal\')">Withdraw</button>';
+    }
+    f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'appViewModal\')">Close</button>';
+    document.getElementById('avFooter').innerHTML=f;
+
+    openModal('appViewModal');
 }
 
 function addSession(){
@@ -1041,7 +1122,7 @@ window.CampistryMe={
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,
     addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,
-    updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,
+    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,
     _pickColor:_pickColor,_addGradeRow:_addGradeRow,
     uploadPhoto:uploadPhoto,
 };
