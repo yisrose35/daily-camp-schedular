@@ -277,12 +277,14 @@ function editCamper(n){
     h+='<div class="fr">'+ff('Allergies','ceAlg',d.allergies||'')+ff('Medications','ceMed',d.medications||'')+'</div>';
     h+=ff('Dietary Restrictions','ceDiet',d.dietary||'');
 
-    document.getElementById('ceBody').innerHTML=h;
+    var ceBodyEl=document.getElementById('ceBody');
+    if(ceBodyEl)ceBodyEl.innerHTML=h;
     // Cascade
     var divS=document.getElementById('ceDiv'),grS=document.getElementById('ceCGrade'),bkS=document.getElementById('ceBunk');
-    if(divS)divS.onchange=function(){grS.innerHTML=grOpts(divS.value).map(function(o){return'<option value="'+esc(o)+'">'+(o||'—')+'</option>'}).join('');bkS.innerHTML=bkOpts(divS.value,'').map(function(o){return'<option value="'+esc(o)+'">'+(o||'—')+'</option>'}).join('')};
-    if(grS)grS.onchange=function(){bkS.innerHTML=bkOpts(divS.value,grS.value).map(function(o){return'<option value="'+esc(o)+'">'+(o||'—')+'</option>'}).join('')};
-    document.getElementById('ceSave').onclick=saveCamper;
+    if(divS)divS.onchange=function(){if(grS)grS.innerHTML=grOpts(divS.value).map(function(o){return'<option value="'+esc(o)+'">'+(o||'—')+'</option>'}).join('');if(bkS)bkS.innerHTML=bkOpts(divS.value,'').map(function(o){return'<option value="'+esc(o)+'">'+(o||'—')+'</option>'}).join('')};
+    if(grS)grS.onchange=function(){if(bkS)bkS.innerHTML=bkOpts(divS.value,grS.value).map(function(o){return'<option value="'+esc(o)+'">'+(o||'—')+'</option>'}).join('')};
+    var saveBtn=document.getElementById('ceSave');
+    if(saveBtn)saveBtn.onclick=saveCamper;
     openModal('camperEditModal');
 }
 function addCamper(){editingCamper=null;editCamper('')}
