@@ -2279,9 +2279,6 @@
                             }
                         } catch (e) { console.warn('[Go] Road geometry failed:', e.message); }
                     })(wp.join(';'), route.busColor, cacheKey, tempLine, dashPattern, lineWeight, lineOpacity);
-                }
-            }
-                        // Fetch real road geometry
                         if (straightCoords.length >= 2) {
                             try {
                                 const wp = [];
