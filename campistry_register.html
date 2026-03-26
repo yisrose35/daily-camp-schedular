@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Camp Registration</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap" rel="stylesheet">
+<style>
+:root{--me:#D97706;--teal:#147D91;--ok:#10B981;--err:#EF4444;--s50:#F8FAFC;--s100:#F1F5F9;--s200:#E2E8F0;--s300:#CBD5E1;--s400:#94A3B8;--s500:#64748B;--s600:#475569;--s700:#334155;--s800:#1E293B;--s900:#0F172A;--r:8px;--font:'DM Sans',system-ui,sans-serif}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-font-smoothing:antialiased;min-height:100vh}
+.wrap{max-width:680px;margin:0 auto;padding:24px 20px 60px}
+.header{text-align:center;margin-bottom:28px;padding:24px 0}
+.header h1{font-size:1.6rem;font-weight:800;color:var(--s900);margin:0 0 4px}
+.header .camp-name{color:var(--me);font-size:1.3rem;font-weight:700}
+.header p{font-size:.9rem;color:var(--s500);margin:6px 0 0}
+.card{background:#fff;border-radius:12px;border:1px solid var(--s200);padding:24px;margin-bottom:16px}
+.card-title{font-size:.95rem;font-weight:700;color:var(--s800);margin:0 0 14px;display:flex;align-items:center;gap:8px}
+.card-title svg{width:18px;height:18px;fill:none;stroke:var(--me);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.fg{margin-bottom:12px}
+.fl{display:block;font-size:.8rem;font-weight:600;color:var(--s600);margin-bottom:4px}
+.fl .req{color:var(--err);margin-left:2px}
+.fi,.fs,.fta{width:100%;padding:10px 14px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:.9rem;color:var(--s800);outline:none;font-family:var(--font);background:#fff;transition:border .15s}
+.fi:focus,.fs:focus,.fta:focus{border-color:var(--me);box-shadow:0 0 0 3px rgba(217,119,6,.08)}
+.fta{resize:vertical;min-height:70px}
+.fr{display:flex;gap:12px}.fr>*{flex:1;min-width:0}
+.session-card{border:1.5px solid var(--s200);border-radius:var(--r);padding:14px;cursor:pointer;transition:all .15s;position:relative}
+.session-card:hover{border-color:var(--me);background:rgba(217,119,6,.02)}
+.session-card.selected{border-color:var(--me);background:rgba(217,119,6,.04);box-shadow:0 0 0 3px rgba(217,119,6,.1)}
+.session-card.selected::after{content:'✓';position:absolute;top:10px;right:12px;width:22px;height:22px;border-radius:50%;background:var(--me);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.session-name{font-size:.9rem;font-weight:700;color:var(--s800)}
+.session-meta{font-size:.78rem;color:var(--s500);margin-top:2px}
+.session-price{font-size:1rem;font-weight:800;color:var(--me);margin-top:6px}
+.pay-opt{display:flex;align-items:center;gap:8px;padding:10px 14px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer;transition:all .15s;margin-bottom:6px}
+.pay-opt:hover{border-color:var(--s300)}
+.pay-opt.selected{border-color:var(--me);background:rgba(217,119,6,.04)}
+.pay-opt input[type=radio]{accent-color:var(--me)}
+.pay-label{font-size:.85rem;font-weight:600;color:var(--s700)}
+.pay-desc{font-size:.75rem;color:var(--s400)}
+.check-row{display:flex;align-items:flex-start;gap:8px;padding:8px 0}
+.check-row input[type=checkbox]{accent-color:var(--me);margin-top:3px;flex-shrink:0}
+.check-row label{font-size:.82rem;color:var(--s600);line-height:1.4;cursor:pointer}
+.submit-btn{width:100%;padding:14px;border:none;border-radius:var(--r);background:var(--me);color:#fff;font-size:1rem;font-weight:700;cursor:pointer;font-family:var(--font);transition:all .15s;margin-top:8px}
+.submit-btn:hover{background:#B45309;box-shadow:0 4px 12px rgba(217,119,6,.25)}
+.submit-btn:disabled{opacity:.5;cursor:not-allowed}
+.success-msg{text-align:center;padding:40px 20px;background:#fff;border-radius:12px;border:1px solid var(--s200)}
+.success-msg h2{font-size:1.3rem;font-weight:700;color:var(--ok);margin:12px 0 6px}
+.success-msg p{font-size:.9rem;color:var(--s500);line-height:1.5}
+.err-msg{font-size:.78rem;color:var(--err);margin-top:4px;display:none}
+.powered{text-align:center;margin-top:24px;font-size:.75rem;color:var(--s400)}
+.powered a{color:var(--me);text-decoration:none;font-weight:600}
+@media(max-width:600px){.wrap{padding:16px 12px 40px}.fr{flex-direction:column}.card{padding:18px 16px}}
+</style>
+</head>
+<body>
+<div class="wrap" id="formWrap">
+    <div class="header">
+        <h1 id="campTitle">Camp Registration</h1>
+        <div class="camp-name" id="campNameDisplay"></div>
+        <p id="campSubtitle">Complete the form below to apply for enrollment</p>
+    </div>
+
+    <!-- Session Selection -->
+    <div class="card" id="sessionCard">
+        <div class="card-title"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> Select Session</div>
+        <div id="sessionList" style="display:flex;flex-direction:column;gap:8px">
+            <p style="color:var(--s400);font-size:.85rem">Loading sessions...</p>
+        </div>
+    </div>
+
+    <!-- Camper Info -->
+    <div class="card">
+        <div class="card-title"><svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> Camper Information</div>
+        <div class="fr"><div class="fg"><label class="fl">First Name <span class="req">*</span></label><input class="fi" id="rFirst" required></div><div class="fg"><label class="fl">Last Name <span class="req">*</span></label><input class="fi" id="rLast" required></div></div>
+        <div class="fr"><div class="fg"><label class="fl">Date of Birth <span class="req">*</span></label><input type="date" class="fi" id="rDob" required></div><div class="fg"><label class="fl">Gender</label><select class="fs" id="rGender"><option value="">—</option><option>Male</option><option>Female</option><option>Non-binary</option><option>Other</option></select></div></div>
+        <div class="fr"><div class="fg"><label class="fl">School Name</label><input class="fi" id="rSchool"></div><div class="fg"><label class="fl">School Grade</label><input class="fi" id="rSchoolGr"></div></div>
+        <div class="fg"><label class="fl">Teacher</label><input class="fi" id="rTeacher"></div>
+    </div>
+
+    <!-- Parent/Guardian -->
+    <div class="card">
+        <div class="card-title"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg> Parent / Guardian</div>
+        <div class="fr"><div class="fg"><label class="fl">Full Name <span class="req">*</span></label><input class="fi" id="rParent" required></div><div class="fg"><label class="fl">Relationship</label><select class="fs" id="rRelation"><option>Mother</option><option>Father</option><option>Guardian</option><option>Grandparent</option><option>Other</option></select></div></div>
+        <div class="fr"><div class="fg"><label class="fl">Phone <span class="req">*</span></label><input type="tel" class="fi" id="rPhone" required></div><div class="fg"><label class="fl">Email <span class="req">*</span></label><input type="email" class="fi" id="rEmail" required></div></div>
+        <p style="font-size:.78rem;color:var(--s400);margin-top:4px">Second parent/guardian (optional):</p>
+        <div class="fr" style="margin-top:6px"><div class="fg"><label class="fl">Name</label><input class="fi" id="rParent2"></div><div class="fg"><label class="fl">Phone</label><input type="tel" class="fi" id="rPhone2"></div></div>
+    </div>
+
+    <!-- Address -->
+    <div class="card">
+        <div class="card-title"><svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg> Home Address</div>
+        <div class="fg"><label class="fl">Street Address <span class="req">*</span></label><input class="fi" id="rStreet" required></div>
+        <div class="fr"><div class="fg"><label class="fl">City <span class="req">*</span></label><input class="fi" id="rCity" required></div><div class="fg"><label class="fl">State</label><input class="fi" id="rState" value="NY"></div><div class="fg"><label class="fl">ZIP <span class="req">*</span></label><input class="fi" id="rZip" required></div></div>
+    </div>
+
+    <!-- Emergency Contact -->
+    <div class="card">
+        <div class="card-title"><svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg> Emergency Contact</div>
+        <div class="fr"><div class="fg"><label class="fl">Name <span class="req">*</span></label><input class="fi" id="rEmName" required></div><div class="fg"><label class="fl">Relationship</label><input class="fi" id="rEmRel" placeholder="e.g., Uncle, Neighbor"></div></div>
+        <div class="fg"><label class="fl">Phone <span class="req">*</span></label><input type="tel" class="fi" id="rEmPhone" required></div>
+    </div>
+
+    <!-- Medical -->
+    <div class="card">
+        <div class="card-title"><svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg> Medical Information</div>
+        <div class="fg"><label class="fl">Allergies</label><input class="fi" id="rAllergy" placeholder="List all known allergies (food, medication, environmental)"></div>
+        <div class="fg"><label class="fl">Medications</label><input class="fi" id="rMeds" placeholder="Current medications and dosages"></div>
+        <div class="fg"><label class="fl">Dietary Restrictions</label><input class="fi" id="rDiet" placeholder="Kosher, vegetarian, gluten-free, etc."></div>
+        <div class="fg"><label class="fl">Additional Medical Notes</label><textarea class="fta" id="rMedNotes" placeholder="Asthma, ADHD, anxiety, physical limitations, etc."></textarea></div>
+    </div>
+
+    <!-- Bunkmate / Preferences -->
+    <div class="card">
+        <div class="card-title"><svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> Preferences</div>
+        <div class="fg"><label class="fl">Bunkmate Request</label><input class="fi" id="rBunkmate" placeholder="Name of camper your child wants to be with"></div>
+        <div class="fg"><label class="fl">Separation Request</label><input class="fi" id="rSeparate" placeholder="Name of camper to keep apart from (optional)"></div>
+        <div class="fg"><label class="fl">How did you hear about us?</label><select class="fs" id="rSource"><option value="">—</option><option>Returning family</option><option>Friend/referral</option><option>School</option><option>Social media</option><option>Website</option><option>Advertisement</option><option>Other</option></select></div>
+        <div class="fg"><label class="fl">Additional Notes</label><textarea class="fta" id="rNotes" placeholder="Anything else we should know about your camper"></textarea></div>
+    </div>
+
+    <!-- Payment Method -->
+    <div class="card">
+        <div class="card-title"><svg viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg> Payment Preference</div>
+        <p style="font-size:.82rem;color:var(--s500);margin-bottom:10px">Select how you'd like to pay. Payment details will be sent after your application is reviewed.</p>
+        <div id="payOpts">
+            <label class="pay-opt" onclick="selPay(this,'credit_card')"><input type="radio" name="payMethod" value="credit_card"><div><div class="pay-label">Credit / Debit Card</div><div class="pay-desc">Visa, Mastercard, Amex — processed securely</div></div></label>
+            <label class="pay-opt" onclick="selPay(this,'ach')"><input type="radio" name="payMethod" value="ach"><div><div class="pay-label">ACH / Bank Transfer</div><div class="pay-desc">Direct from your bank account</div></div></label>
+            <label class="pay-opt" onclick="selPay(this,'zelle')"><input type="radio" name="payMethod" value="zelle"><div><div class="pay-label">Zelle</div><div class="pay-desc">Send directly via Zelle</div></div></label>
+            <label class="pay-opt" onclick="selPay(this,'check')"><input type="radio" name="payMethod" value="check"><div><div class="pay-label">Check</div><div class="pay-desc">Mail or drop off a check</div></div></label>
+            <label class="pay-opt" onclick="selPay(this,'payment_plan')"><input type="radio" name="payMethod" value="payment_plan"><div><div class="pay-label">Payment Plan</div><div class="pay-desc">Split into monthly installments</div></div></label>
+        </div>
+    </div>
+
+    <!-- Agreement -->
+    <div class="card">
+        <div class="card-title"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Agreement</div>
+        <div class="check-row"><input type="checkbox" id="rAgree1"><label for="rAgree1">I certify that all information provided is accurate and complete to the best of my knowledge.</label></div>
+        <div class="check-row"><input type="checkbox" id="rAgree2"><label for="rAgree2">I understand that submitting this form is an application and does not guarantee enrollment.</label></div>
+        <div class="check-row"><input type="checkbox" id="rAgree3"><label for="rAgree3">I authorize the camp to obtain emergency medical treatment for my child if I cannot be reached.</label></div>
+    </div>
+
+    <div id="formError" class="err-msg" style="text-align:center;margin-bottom:8px"></div>
+    <button class="submit-btn" id="submitBtn" onclick="submitApplication()">Submit Application</button>
+    <div class="powered">Powered by <a href="index.html">Campistry</a></div>
+</div>
+
+<!-- Success State (hidden initially) -->
+<div class="wrap" id="successWrap" style="display:none">
+    <div class="success-msg">
+        <div style="font-size:48px;margin-bottom:8px">🎉</div>
+        <h2>Application Submitted!</h2>
+        <p id="successText">Thank you for registering. We'll review your application and be in touch shortly.</p>
+        <div style="margin-top:20px;padding:16px;background:var(--s50);border-radius:var(--r);text-align:left">
+            <div style="font-size:.8rem;font-weight:600;color:var(--s500);margin-bottom:6px">APPLICATION SUMMARY</div>
+            <div id="summaryContent" style="font-size:.85rem;color:var(--s700)"></div>
+        </div>
+    </div>
+    <div class="powered" style="margin-top:16px">Powered by <a href="index.html">Campistry</a></div>
+</div>
+
+<script>
+(function(){
+var selectedSession='',selectedPay='';
+var campData={},sessions=[];
+
+// Load camp data and sessions
+function loadCampData(){
+    try{
+        var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        var me=g.campistryMe||{};
+        sessions=me.sessions||[];
+        // Get camp name
+        var campName=g.campName||g.app1?.campName||'';
+        if(campName){
+            document.getElementById('campTitle').textContent=campName+' Registration';
+            document.getElementById('campNameDisplay').textContent=campName;
+        }
+        renderSessions();
+    }catch(e){console.warn('Load error:',e)}
+}
+
+function renderSessions(){
+    var cont=document.getElementById('sessionList');
+    if(!sessions.length){
+        cont.innerHTML='<p style="color:var(--s400);font-size:.85rem;text-align:center;padding:12px">No sessions available. Please contact the camp office.</p>';
+        return;
+    }
+    var h='';
+    sessions.forEach(function(s,i){
+        h+='<div class="session-card" id="sess_'+i+'" onclick="selectSession('+i+')">';
+        h+='<div class="session-name">'+esc(s.name)+'</div>';
+        if(s.dates)h+='<div class="session-meta">'+esc(s.dates)+'</div>';
+        if(s.capacity)h+='<div class="session-meta">Capacity: '+s.capacity+' campers</div>';
+        if(s.tuition)h+='<div class="session-price">$'+Number(s.tuition).toLocaleString()+'</div>';
+        if(s.earlyBird&&s.earlyBirdDeadline){
+            var today=new Date().toISOString().split('T')[0];
+            if(today<=s.earlyBirdDeadline)h+='<div style="font-size:.75rem;color:var(--ok);font-weight:600;margin-top:2px">Early bird: $'+Number(s.earlyBird).toLocaleString()+' (until '+s.earlyBirdDeadline+')</div>';
+        }
+        h+='</div>';
+    });
+    cont.innerHTML=h;
+}
+
+window.selectSession=function(i){
+    selectedSession=sessions[i].name;
+    document.querySelectorAll('.session-card').forEach(function(c,j){c.classList.toggle('selected',j===i)});
+};
+
+window.selPay=function(el,method){
+    selectedPay=method;
+    document.querySelectorAll('.pay-opt').forEach(function(o){o.classList.remove('selected')});
+    el.classList.add('selected');
+};
+
+function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
+
+window.submitApplication=function(){
+    var errEl=document.getElementById('formError');
+    errEl.style.display='none';
+
+    // Validate required fields
+    var first=(document.getElementById('rFirst').value||'').trim();
+    var last=(document.getElementById('rLast').value||'').trim();
+    var dob=document.getElementById('rDob').value||'';
+    var parent=(document.getElementById('rParent').value||'').trim();
+    var phone=(document.getElementById('rPhone').value||'').trim();
+    var email=(document.getElementById('rEmail').value||'').trim();
+    var street=(document.getElementById('rStreet').value||'').trim();
+    var city=(document.getElementById('rCity').value||'').trim();
+    var zip=(document.getElementById('rZip').value||'').trim();
+    var emName=(document.getElementById('rEmName').value||'').trim();
+    var emPhone=(document.getElementById('rEmPhone').value||'').trim();
+
+    if(!first||!last){return showErr('Please enter the camper\'s first and last name.')}
+    if(!dob){return showErr('Please enter the camper\'s date of birth.')}
+    if(!parent){return showErr('Please enter a parent/guardian name.')}
+    if(!phone){return showErr('Please enter a phone number.')}
+    if(!email){return showErr('Please enter an email address.')}
+    if(!street||!city||!zip){return showErr('Please enter a complete address.')}
+    if(!emName||!emPhone){return showErr('Please enter an emergency contact.')}
+    if(!selectedSession&&sessions.length){return showErr('Please select a session.')}
+    if(!document.getElementById('rAgree1').checked||!document.getElementById('rAgree2').checked||!document.getElementById('rAgree3').checked){return showErr('Please agree to all terms before submitting.')}
+
+    var fullName=first+' '+last;
+    var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,6);
+    var sessionObj=sessions.find(function(s){return s.name===selectedSession})||{};
+
+    var application={
+        camperName:fullName,
+        camperFirst:first,camperLast:last,
+        dob:dob,
+        gender:document.getElementById('rGender').value||'',
+        school:(document.getElementById('rSchool').value||'').trim(),
+        schoolGrade:(document.getElementById('rSchoolGr').value||'').trim(),
+        teacher:(document.getElementById('rTeacher').value||'').trim(),
+        parentName:parent,
+        parentRelation:document.getElementById('rRelation').value||'',
+        parentPhone:phone,parentEmail:email,
+        parent2Name:(document.getElementById('rParent2').value||'').trim(),
+        parent2Phone:(document.getElementById('rPhone2').value||'').trim(),
+        street:street,city:city,
+        state:(document.getElementById('rState').value||'').trim(),
+        zip:zip,
+        emergencyName:emName,
+        emergencyPhone:emPhone,
+        emergencyRel:(document.getElementById('rEmRel').value||'').trim(),
+        allergies:(document.getElementById('rAllergy').value||'').trim(),
+        medications:(document.getElementById('rMeds').value||'').trim(),
+        dietary:(document.getElementById('rDiet').value||'').trim(),
+        medicalNotes:(document.getElementById('rMedNotes').value||'').trim(),
+        bunkmate:(document.getElementById('rBunkmate').value||'').trim(),
+        separateFrom:(document.getElementById('rSeparate').value||'').trim(),
+        source:document.getElementById('rSource').value||'',
+        notes:(document.getElementById('rNotes').value||'').trim(),
+        session:selectedSession,
+        sessionTuition:sessionObj.tuition||0,
+        paymentMethod:selectedPay,
+        paymentStatus:'pending',
+        paymentAmount:0,
+        status:'applied',
+        appliedDate:new Date().toISOString().split('T')[0],
+        appliedTime:new Date().toISOString(),
+        formsRequired:3,formsCompleted:0
+    };
+
+    // Save to localStorage (campistryMe.enrollments)
+    try{
+        var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        if(!g.campistryMe)g.campistryMe={};
+        if(!g.campistryMe.enrollments)g.campistryMe.enrollments={};
+        g.campistryMe.enrollments[id]=application;
+        g.updated_at=new Date().toISOString();
+        localStorage.setItem('campGlobalSettings_v1',JSON.stringify(g));
+        localStorage.setItem('CAMPISTRY_LOCAL_CACHE',JSON.stringify(g));
+        // Try cloud sync
+        if(window.saveGlobalSettings)window.saveGlobalSettings('campistryMe',g.campistryMe);
+        else if(window.forceSyncToCloud)window.forceSyncToCloud();
+    }catch(e){
+        console.error('Save error:',e);
+        return showErr('There was an error submitting your application. Please try again.');
+    }
+
+    // Show success
+    document.getElementById('formWrap').style.display='none';
+    document.getElementById('successWrap').style.display='block';
+    document.getElementById('summaryContent').innerHTML=
+        '<strong>'+esc(fullName)+'</strong><br>'+
+        'Session: '+esc(selectedSession||'—')+'<br>'+
+        'Parent: '+esc(parent)+' ('+esc(phone)+')<br>'+
+        'Applied: '+application.appliedDate+'<br>'+
+        'Payment method: '+esc(selectedPay||'Not selected')+'<br>'+
+        '<br><em style="color:var(--s400)">Application ID: '+id+'</em>';
+
+    window.scrollTo(0,0);
+};
+
+function showErr(msg){
+    var el=document.getElementById('formError');
+    el.textContent=msg;el.style.display='block';
+    el.scrollIntoView({behavior:'smooth',block:'center'});
+}
+
+// Init
+loadCampData();
+})();
+</script>
+</body>
+</html>
