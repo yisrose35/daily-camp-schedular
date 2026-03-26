@@ -56,6 +56,11 @@
     <main class="main">
         <header class="page-header">
             <h1 class="page-title">Bus Routing & Transportation</h1>
+            <div style="display:flex;align-items:center;gap:.5rem;margin-top:.5rem;">
+                <button class="btn btn-secondary mode-btn active" data-mode="dismissal" onclick="CampistryGo.switchMode('dismissal')" style="padding:.4rem 1rem;font-size:.8125rem;">Dismissal (PM)</button>
+                <button class="btn btn-secondary mode-btn" data-mode="arrival" onclick="CampistryGo.switchMode('arrival')" style="padding:.4rem 1rem;font-size:.8125rem;">Arrival (AM)</button>
+                <span id="modeLabel" style="margin-left:.5rem;font-size:.8125rem;color:var(--text-muted);">Afternoon Drop-off Routes</span>
+            </div>
         </header>
 
         <!-- TABS -->
@@ -242,6 +247,9 @@
 
             <!-- Progress -->
             <div class="card" style="margin-bottom:1rem;display:none" id="routeProgressCard"><div class="card-body" style="padding:.75rem 1.25rem"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.375rem"><span style="font-weight:600;font-size:.8125rem" id="routeProgressLabel">Generating...</span><span class="progress-text" id="routeProgressPct">0%</span></div><div class="progress-bar-wrap"><div class="progress-bar-fill" id="routeProgressBar" style="width:0%"></div></div></div></div>
+
+            <!-- Capacity Warnings -->
+            <div id="capacityWarnings" style="display:none;margin-bottom:1rem;"></div>
 
             <!-- Daily Overrides (collapsible) -->
             <details class="collapsible-card" id="overridesSection">
