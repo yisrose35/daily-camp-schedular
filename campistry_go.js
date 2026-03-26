@@ -3019,7 +3019,7 @@ window._routeGeomCache = _routeGeomCache;
         searchCamperInRoutes, zoomToStop,
         openMoveModal, renderFilteredMasterList, sortMasterBy,
         switchMode,
-        closeModal, openModal
+        closeModal, openModal,
         _getMap: function() { return _map; },
     };
 
