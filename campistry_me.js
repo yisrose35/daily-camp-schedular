@@ -7,6 +7,7 @@ var COLORS=['#D97706','#147D91','#8B5CF6','#0EA5E9','#10B981','#F43F5E','#EC4899
 var AV_BG=['#147D91','#6366F1','#0EA5E9','#10B981','#F43F5E','#8B5CF6','#D97706'];
 
 var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={};
+var enrollments={}, sessions=[], enrollSettings={};
 var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
 var nextCamperId=1;
 var _saveLockUntil=0; // timestamp — block cloud overwrites for 5s after local save
@@ -49,6 +50,7 @@ function loadData(){
         var me=s.campistryMe||{};
         families=me.families||{}; payments=me.payments||[];
         broadcasts=me.broadcasts||[]; bunkAsgn=me.bunkAssignments||{};
+        enrollments=me.enrollments||{}; sessions=me.sessions||[]; enrollSettings=me.enrollSettings||{};
         nextCamperId=me.nextCamperId||1;
         // Backfill: assign IDs to any campers that don't have one
         var maxId=0;
@@ -68,7 +70,7 @@ function save(){
         Object.entries(structure).forEach(function([d,dd]){var b=[];Object.values(dd.grades||{}).forEach(function(gr){(gr.bunks||[]).forEach(function(bk){b.push(bk)})});m[d]=Object.assign({},ex[d]||{},{color:dd.color,bunks:b})});
         Object.keys(ex).forEach(function(d){if(!m[d])m[d]=ex[d]});
         g.app1.divisions=m;
-        g.campistryMe={families:families,payments:payments,broadcasts:broadcasts,bunkAssignments:bunkAsgn,nextCamperId:nextCamperId};
+        g.campistryMe={families:families,payments:payments,broadcasts:broadcasts,bunkAssignments:bunkAsgn,nextCamperId:nextCamperId,enrollments:enrollments,sessions:sessions,enrollSettings:enrollSettings};
         g.updated_at=new Date().toISOString();
         var json=JSON.stringify(g);
         localStorage.setItem('campGlobalSettings_v1',json);
@@ -157,7 +159,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={families:renderFamilies,campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,billing:renderBilling,broadcasts:renderBroadcasts};
+    var m={families:renderFamilies,campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,enrollment:renderEnrollment,billing:renderBilling,broadcasts:renderBroadcasts};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -581,6 +583,173 @@ function autoAssign(){var allB=[];Object.entries(structure).forEach(function([di
 function clearBunks(){if(!confirm('Clear all?'))return;bunkAsgn={};save();renderBB();toast('Cleared')}
 
 // ── BILLING / BROADCASTS / SOON ──────────────────────────────────
+// ── REGISTRATION & ENROLLMENT ─────────────────────────────────────
+function renderEnrollment(){
+    var c=document.getElementById('page-enrollment');
+    var eArr=Object.entries(enrollments);
+    var total=eArr.length;
+    var byStatus={applied:0,accepted:0,waitlisted:0,enrolled:0,declined:0,withdrawn:0};
+    eArr.forEach(function([,e]){byStatus[e.status]=(byStatus[e.status]||0)+1});
+    var enrolled=byStatus.enrolled||0,accepted=byStatus.accepted||0,applied=byStatus.applied||0,waitlisted=byStatus.waitlisted||0;
+
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Registration & Enrollment</h2><p class="sec-desc">'+total+' application'+(total!==1?'s':'')+' · '+enrolled+' enrolled · '+waitlisted+' waitlisted</p></div>';
+    h+='<div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add Session</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ New Application</button></div></div>';
+
+    // Pipeline stats
+    h+='<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">';
+    var stages=[{label:'Applied',count:applied,color:'var(--s500)'},{label:'Accepted',count:accepted,color:'#3B82F6'},{label:'Waitlisted',count:waitlisted,color:'var(--me)'},{label:'Enrolled',count:enrolled,color:'var(--ok)'},{label:'Declined',count:byStatus.declined||0,color:'var(--err)'},{label:'Withdrawn',count:byStatus.withdrawn||0,color:'var(--s400)'}];
+    stages.forEach(function(s){
+        h+='<div style="flex:1;min-width:90px;background:#fff;border-radius:var(--r);padding:10px 12px;border:1px solid var(--s200);text-align:center">';
+        h+='<div style="font-size:1.2rem;font-weight:700;color:'+s.color+'">'+s.count+'</div>';
+        h+='<div style="font-size:.65rem;font-weight:600;color:var(--s400);text-transform:uppercase;letter-spacing:.05em">'+s.label+'</div></div>';
+    });
+    h+='</div>';
+
+    // Sessions
+    if(sessions.length){
+        h+='<div class="me-card" style="margin-bottom:14px"><div class="me-card-head"><h3>Sessions</h3><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add</button></div>';
+        h+='<div style="padding:12px 18px;display:flex;flex-wrap:wrap;gap:8px">';
+        sessions.forEach(function(s,i){
+            var sEnrolled=eArr.filter(function([,e]){return e.session===s.name&&e.status==='enrolled'}).length;
+            var cap=s.capacity||'∞';
+            var pct=s.capacity?Math.min(sEnrolled/s.capacity,1):0;
+            h+='<div style="flex:1;min-width:180px;padding:12px;border-radius:var(--r);border:1px solid var(--s200);background:var(--s50)">';
+            h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:.85rem;font-weight:600;color:var(--s800)">'+esc(s.name)+'</span>';
+            h+='<button class="me-btn me-btn--ghost" style="font-size:.7rem;padding:2px 6px" onclick="CampistryMe.deleteSession('+i+')">✕</button></div>';
+            if(s.dates)h+='<div style="font-size:.7rem;color:var(--s400);margin-bottom:4px">'+esc(s.dates)+'</div>';
+            h+='<div style="font-size:.75rem;color:var(--s500)">'+sEnrolled+' / '+cap+' enrolled</div>';
+            if(s.capacity){h+='<div style="height:3px;border-radius:2px;background:var(--s200);margin-top:4px;overflow:hidden"><div style="height:100%;width:'+(pct*100)+'%;background:'+(pct>=0.9?'var(--err)':pct>=0.7?'var(--me)':'var(--ok)')+';border-radius:2px"></div></div>'}
+            if(s.tuition)h+='<div style="font-size:.7rem;color:var(--s400);margin-top:4px">Tuition: '+fm(s.tuition)+'</div>';
+            h+='</div>';
+        });
+        h+='</div></div>';
+    }
+
+    // Applications table
+    if(!eArr.length){
+        h+='<div class="me-empty"><h3>No applications yet</h3><p>Create a session and start accepting applications.</p></div>';
+    }else{
+        h+='<div class="me-card"><div class="me-card-head"><h3>All Applications</h3></div>';
+        h+='<div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Camper</th><th>Parent</th><th>Session</th><th>Status</th><th>Forms</th><th>Payment</th><th style="width:100px"></th></tr></thead><tbody>';
+        eArr.sort(function(a,b){return(b[1].appliedDate||'').localeCompare(a[1].appliedDate||'')}).forEach(function([id,e]){
+            var sc=e.status==='enrolled'?'ok':e.status==='accepted'?'ok':e.status==='waitlisted'?'warn':e.status==='declined'||e.status==='withdrawn'?'err':'gray';
+            var formsDone=e.formsCompleted||0,formsTotal=e.formsRequired||0;
+            var formsColor=formsTotal===0?'var(--s400)':formsDone>=formsTotal?'var(--ok)':'var(--me)';
+            var payColor=e.paymentStatus==='paid'?'var(--ok)':e.paymentStatus==='partial'?'var(--me)':'var(--s400)';
+            h+='<tr>';
+            h+='<td style="font-size:.75rem;color:var(--s400)">'+esc(e.appliedDate||'—')+'</td>';
+            h+='<td class="bold">'+esc(e.camperName||'—')+'</td>';
+            h+='<td>'+esc(e.parentName||'—')+'</td>';
+            h+='<td>'+esc(e.session||'—')+'</td>';
+            h+='<td>'+bdg(e.status||'applied',sc)+'</td>';
+            h+='<td><span style="font-size:.75rem;font-weight:600;color:'+formsColor+'">'+formsDone+'/'+formsTotal+'</span></td>';
+            h+='<td><span style="font-size:.75rem;font-weight:600;color:'+payColor+'">'+esc(e.paymentStatus||'pending')+'</span></td>';
+            h+='<td style="text-align:right"><div style="display:flex;gap:3px;justify-content:flex-end">';
+            // Status change buttons
+            if(e.status==='applied'){
+                h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\')">Accept</button>';
+                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'waitlisted\')">Waitlist</button>';
+            }else if(e.status==='accepted'){
+                h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.enrollCamper(\''+esc(id)+'\')">Enroll</button>';
+            }else if(e.status==='waitlisted'){
+                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\')">Accept</button>';
+            }
+            if(e.status!=='enrolled'&&e.status!=='declined'&&e.status!=='withdrawn'){
+                h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'declined\')">Decline</button>';
+            }
+            h+='</div></td></tr>';
+        });
+        h+='</tbody></table></div></div>';
+    }
+    c.innerHTML=h;
+}
+
+function addSession(){
+    var name=prompt('Session name (e.g., "Summer 2026 — Full Season"):');
+    if(!name||!name.trim())return;
+    var dates=prompt('Date range (e.g., "June 22 – August 14"):','');
+    var cap=prompt('Capacity (leave blank for unlimited):','');
+    var tuition=prompt('Tuition amount ($):','');
+    sessions.push({name:name.trim(),dates:(dates||'').trim(),capacity:cap?parseInt(cap):0,tuition:tuition?parseFloat(tuition):0});
+    save();renderEnrollment();toast('Session created');
+}
+
+function deleteSession(idx){
+    if(!confirm('Delete session "'+sessions[idx].name+'"?'))return;
+    sessions.splice(idx,1);save();renderEnrollment();toast('Session deleted');
+}
+
+function addApplication(){
+    // Gather basic info
+    var camperName=prompt('Camper full name:');if(!camperName||!camperName.trim())return;
+    var parentName=prompt('Parent/Guardian name:','');
+    var parentEmail=prompt('Parent email:','');
+    var parentPhone=prompt('Parent phone:','');
+    var session='';
+    if(sessions.length){
+        var opts=sessions.map(function(s,i){return(i+1)+'. '+s.name}).join('\n');
+        var pick=prompt('Select session:\n'+opts+'\n\nEnter number:','1');
+        var idx=parseInt(pick)-1;
+        if(idx>=0&&idx<sessions.length)session=sessions[idx].name;
+    }
+    var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
+    enrollments[id]={
+        camperName:camperName.trim(),
+        parentName:(parentName||'').trim(),
+        parentEmail:(parentEmail||'').trim(),
+        parentPhone:(parentPhone||'').trim(),
+        session:session,
+        status:'applied',
+        appliedDate:new Date().toISOString().split('T')[0],
+        formsRequired:3,
+        formsCompleted:0,
+        paymentStatus:'pending',
+        paymentAmount:0,
+        notes:''
+    };
+    save();renderEnrollment();toast('Application received');
+}
+
+function updateEnrollStatus(id,status){
+    if(!enrollments[id])return;
+    enrollments[id].status=status;
+    save();renderEnrollment();toast('Status updated to '+status);
+}
+
+function enrollCamper(id){
+    var e=enrollments[id];if(!e)return;
+    e.status='enrolled';
+    // Auto-create camper in roster if not exists
+    if(!roster[e.camperName]){
+        var newId=nextCamperId;nextCamperId++;
+        roster[e.camperName]={
+            camperId:newId,dob:'',gender:'',school:'',schoolGrade:'',teacher:'',
+            division:'',grade:'',bunk:'',teams:{},team:'',
+            street:'',city:'',state:'',zip:'',
+            parent1Name:e.parentName||'',parent1Phone:e.parentPhone||'',parent1Email:e.parentEmail||'',
+            emergencyName:'',emergencyPhone:'',emergencyRel:'',
+            allergies:'',medications:'',dietary:''
+        };
+        toast('Enrolled — camper added to roster');
+    }else{
+        toast('Enrolled — camper already in roster');
+    }
+    // Auto-create family if not exists
+    var lastName=e.camperName.split(' ').pop();
+    var famKey='fam_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'');
+    if(!families[famKey]&&e.parentName){
+        families[famKey]={
+            name:lastName+' Family',
+            households:[{label:'Primary',parents:[{name:e.parentName,phone:e.parentPhone||'',email:e.parentEmail||'',relation:'Parent'}],address:'',billingContact:true}],
+            camperIds:[e.camperName],
+            balance:0,totalPaid:0,notes:'Enrolled via registration'
+        };
+    }else if(families[famKey]&&families[famKey].camperIds.indexOf(e.camperName)<0){
+        families[famKey].camperIds.push(e.camperName);
+    }
+    save();renderEnrollment();
+}
+
 function renderBilling(){var c=document.getElementById('page-billing');var tp=0,td=0;Object.values(families).forEach(function(f){tp+=f.totalPaid||0;td+=f.balance||0});c.innerHTML='<div class="sec-hd"><div><h2 class="sec-title">Billing</h2></div></div><div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px"><div style="flex:1;min-width:120px;background:#fff;border-radius:var(--r);padding:12px;border:1px solid var(--s200)"><div style="font-size:1.1rem;font-weight:700;color:var(--s800)">'+fm(tp)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Collected</div></div><div style="flex:1;min-width:120px;background:#fff;border-radius:var(--r);padding:12px;border:1px solid var(--s200)"><div style="font-size:1.1rem;font-weight:700;color:var(--s800)">'+fm(td)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Outstanding</div></div></div>'+(payments.length?'<div class="me-card"><div class="me-card-head"><h3>Payments</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Family</th><th>Amount</th><th>Status</th></tr></thead><tbody>'+payments.map(function(p){var f=families[p.familyId];return'<tr><td>'+(p.date||'')+'</td><td class="bold">'+(f?esc(f.name):'')+'</td><td style="font-weight:600">'+fm(p.amount)+'</td><td>'+bdg(p.status||'',p.status==='Paid'?'ok':'warn')+'</td></tr>'}).join('')+'</tbody></table></div></div>':'<div class="me-empty"><h3>No payments</h3></div>')}
 function renderBroadcasts(){var c=document.getElementById('page-broadcasts');c.innerHTML='<div class="sec-hd"><div><h2 class="sec-title">Broadcasts</h2></div><div class="sec-actions"><button class="me-btn me-btn--pri">+ New</button></div></div>'+(broadcasts.length?broadcasts.map(function(b){return'<div class="me-card" style="margin-bottom:8px;padding:14px"><div style="font-size:.85rem;font-weight:600">'+esc(b.subject)+'</div><div style="font-size:.7rem;color:var(--s400);margin-top:2px">'+esc(b.to||'')+' · '+esc(b.method||'')+'</div></div>'}).join(''):'<div class="me-empty"><h3>No broadcasts</h3></div>')}
 function renderSoon(p){var t={forms:'Forms & Docs',reports:'Reports',settings:'Settings'};document.getElementById('page-'+p).innerHTML='<div class="me-soon"><h2>'+(t[p]||p)+'</h2><p>Coming soon.</p></div>'}
@@ -821,6 +990,8 @@ window.CampistryMe={
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,
+    addSession:addSession,deleteSession:deleteSession,addApplication:addApplication,
+    updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,
     _pickColor:_pickColor,_addGradeRow:_addGradeRow,
     uploadPhoto:uploadPhoto,
 };
