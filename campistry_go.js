@@ -1933,8 +1933,13 @@ function detectRegions() {
     }
 
     function createCornerStops(campers) {
-        const gridLat = 0.00041;
-        const gridLng = 0.00052;
+        // Grid size based on maxWalkDistance setting (default 500ft)
+        // This determines how far apart corner stops are
+        const walkFt = D.setup.maxWalkDistance || 500;
+        const walkMi = walkFt * 0.000189394;
+        // Convert to degrees: 1 degree lat ≈ 69.17 miles, 1 degree lng ≈ 53 miles at 40°N
+        const gridLat = walkMi / 69.17;
+        const gridLng = walkMi / 53;
         const groups = {};
         campers.forEach(c => {
             const snapLat = Math.round(c.lat / gridLat) * gridLat;
