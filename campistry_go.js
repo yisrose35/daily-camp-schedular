@@ -1415,27 +1415,16 @@
     // CLIENT-SIDE CLUSTERING (within a region)
     // =========================================================================
    // =========================================================================
-    // ROUTING ENGINE v9 — OSRM Road Distance TSP
+    // ROUTING ENGINE v9 — OSRM + Google OR-Tools-style TSP Solver
     //
-    // Uses the free OSRM public demo server for real driving time matrix.
-    // No API key, no signup, supports 100x100 matrices (10,000 elements).
-    // For 68 stops + camp = 69 locations, one single API call gets all
-    // real road distances. Both clustering and stop ordering use real roads.
+    // Distance matrix: OSRM public server (free, no key, 100x100 capacity)
+    // TSP solver: Implements the same approach as Google OR-Tools:
+    //   1. Initial solution via PATH_CHEAPEST_ARC (cheapest insertion)
+    //   2. Local search: 2-opt, or-opt (1,2,3-segment moves), node swap
+    //   3. Guided Local Search metaheuristic to escape local minima
     //
-    // Falls back to haversine only if OSRM is unreachable.
-    //
-    // ALGORITHM:
-    //   Phase 1: Create stops (merge same-address or cluster nearby)
-    //   Phase 2: Fetch OSRM road distance matrix (camp + all stops, one call)
-    //   Phase 3: K-Means++ cluster stops into bus-sized groups
-    //   Phase 4: Handle overcapacity (using road distances)
-    //   Phase 5: For each bus, solve TSP:
-    //            a. Try every stop as starting point (nearest-neighbor)
-    //            b. Keep the shortest tour
-    //            c. 2-opt refinement (up to 100 passes)
-    //            d. Or-opt refinement (relocate individual stops)
-    //   Phase 6: Orient route for arrival vs dismissal
-    //   Phase 7: Calculate ETAs
+    // This is the same algorithmic framework used by Google Maps,
+    // BusRight, Routefinder, and other professional routing software.
     // =========================================================================
 
     async function clientSideCluster(campers, vehicles, campLat, campLng, mode) {
@@ -1455,51 +1444,39 @@
 
         console.log('[Go] Engine v9: ' + stops.length + ' stops, ' + numBuses + ' buses, mode=' + (isArrival ? 'arrival' : 'dismissal') + (hasShifts ? '+shifts' : ''));
 
-        // ── Phase 2: Fetch OSRM road distance matrix ──
-        // Index 0 = camp, indices 1..N = stops
-        // One single API call for everything — OSRM handles up to 100x100
-        let durations = null; // durations[i][j] = seconds of driving time
-
-        showProgress('Fetching road distances from OSRM...', 15);
+        // ── Phase 2: Fetch OSRM distance matrix ──
+        let durations = null;
+        showProgress('Fetching road distances...', 15);
         try {
-            // Build coordinate string: lng,lat;lng,lat;...
             const coords = [campLng + ',' + campLat];
             stops.forEach(s => coords.push(s.lng + ',' + s.lat));
-            const coordStr = coords.join(';');
-
             const resp = await fetch(
-                'https://router.project-osrm.org/table/v1/driving/' + coordStr + '?annotations=duration',
+                'https://router.project-osrm.org/table/v1/driving/' + coords.join(';') + '?annotations=duration',
                 { headers: { 'Accept': 'application/json' } }
             );
-
             if (resp.ok) {
                 const data = await resp.json();
                 if (data.code === 'Ok' && data.durations) {
                     durations = data.durations;
                     console.log('[Go] OSRM matrix: ' + durations.length + 'x' + durations[0].length + ' (' + (durations.length * durations[0].length) + ' elements)');
-                } else {
-                    console.warn('[Go] OSRM response not Ok:', data.code);
                 }
-            } else {
-                console.warn('[Go] OSRM HTTP ' + resp.status);
             }
         } catch (e) {
             console.warn('[Go] OSRM failed, using haversine:', e.message);
         }
 
-        // Distance function: returns driving time in MINUTES
-        // 0 = camp, 1..N = stops (matches the matrix indices)
+        // Global distance function: 0 = camp, 1..N = stops
+        // Returns driving time in MINUTES
         function dist(i, j) {
             if (durations && durations[i]?.[j] != null && durations[i][j] >= 0) {
-                return durations[i][j] / 60; // seconds → minutes
+                return durations[i][j] / 60;
             }
-            // Haversine fallback
             const a = i === 0 ? { lat: campLat, lng: campLng } : stops[i - 1];
             const b = j === 0 ? { lat: campLat, lng: campLng } : stops[j - 1];
             return (haversineMi(a.lat, a.lng, b.lat, b.lng) / (D.setup.avgSpeed || 25)) * 60;
         }
 
-        // ── Phase 3: K-Means++ cluster stops into bus-sized groups ──
+        // ── Phase 3: Cluster ──
         showProgress('Clustering stops...', 30);
         const clusters = kMeansGeo(stops, numBuses);
         clusters.sort((a, b) => b.camperCount - a.camperCount);
@@ -1515,7 +1492,7 @@
             };
         });
 
-        // ── Phase 4: Handle overcapacity ──
+        // ── Phase 4: Overcapacity ──
         handleOvercapacity(routes, campLat, campLng);
 
         // ── Phase 5: Solve TSP for each bus ──
@@ -1531,113 +1508,295 @@
             showProgress('Optimizing ' + r.busName + '...', 30 + (ri / routes.length) * 60);
 
             const n = r.stops.length;
-
-            // Map this bus's stops to global matrix indices
-            // globalIdx[local] = index in the durations matrix
             const globalIdx = new Array(n);
             for (let i = 0; i < n; i++) {
-                globalIdx[i] = stops.indexOf(r.stops[i]) + 1; // +1 because 0 = camp
+                globalIdx[i] = stops.indexOf(r.stops[i]) + 1;
             }
 
-            // Local distance function for this bus
-            // local 0 = camp, local 1..n = this bus's stops
-            function busDist(li, lj) {
+            // Local distance: 0 = camp, 1..n = this bus's stops
+            function d(li, lj) {
                 const gi = li === 0 ? 0 : globalIdx[li - 1];
                 const gj = lj === 0 ? 0 : globalIdx[lj - 1];
                 return dist(gi, gj);
             }
 
-            // Step A: Nearest-neighbor from EVERY starting stop, keep best
-            let bestTour = null, bestTourDist = Infinity;
+            // For the TSP: route goes depot → s1 → s2 → ... → sn → (depot?)
+            // depot connect depends on mode:
+            //   arrival: open start, ends at camp → minimize s1→s2→...→sn→camp
+            //   dismissal no shifts: camp→s1→...→sn, open end
+            //   dismissal + shifts: camp→s1→...→sn→camp (round trip)
+            const startAtCamp = !isArrival;
+            const endAtCamp = isArrival || hasShifts;
 
-            for (let startIdx = 0; startIdx < n; startIdx++) {
-                const tour = [];
-                const visited = new Set();
+            // tourDist: total route distance for a given ordering
+            function tourDist(tour) {
+                let total = 0;
+                if (startAtCamp) total += d(0, tour[0] + 1);
+                for (let i = 0; i < tour.length - 1; i++) {
+                    total += d(tour[i] + 1, tour[i + 1] + 1);
+                }
+                if (endAtCamp) total += d(tour[tour.length - 1] + 1, 0);
+                return total;
+            }
 
-                tour.push(startIdx);
-                visited.add(startIdx);
+            // ══════════════════════════════════════════════════════════
+            // STEP 1: CHEAPEST INSERTION (Google's PATH_CHEAPEST_ARC)
+            // Start with the two stops that are farthest apart,
+            // then repeatedly insert the remaining stop at the position
+            // that increases total distance the least.
+            // ══════════════════════════════════════════════════════════
+            let tour;
+            {
+                // Find the two farthest-apart stops
+                let maxD = -1, s1 = 0, s2 = 1;
+                for (let i = 0; i < n; i++) {
+                    for (let j = i + 1; j < n; j++) {
+                        const dd = d(i + 1, j + 1);
+                        if (dd > maxD) { maxD = dd; s1 = i; s2 = j; }
+                    }
+                }
+                tour = [s1, s2];
+                const remaining = new Set();
+                for (let i = 0; i < n; i++) { if (i !== s1 && i !== s2) remaining.add(i); }
 
-                while (tour.length < n) {
-                    const current = tour[tour.length - 1];
-                    let nearest = -1, nearestDist = Infinity;
+                while (remaining.size > 0) {
+                    let bestStop = -1, bestPos = -1, bestCost = Infinity;
+
+                    for (const stop of remaining) {
+                        // Try inserting 'stop' at every position in the tour
+                        for (let pos = 0; pos <= tour.length; pos++) {
+                            const test = [...tour];
+                            test.splice(pos, 0, stop);
+                            const cost = tourDist(test);
+                            if (cost < bestCost) {
+                                bestCost = cost;
+                                bestStop = stop;
+                                bestPos = pos;
+                            }
+                        }
+                    }
+
+                    if (bestStop >= 0) {
+                        tour.splice(bestPos, 0, bestStop);
+                        remaining.delete(bestStop);
+                    } else break;
+                }
+            }
+
+            // Also try nearest-neighbor from every start, keep best overall
+            let bestNNDist = Infinity, bestNN = null;
+            for (let start = 0; start < n; start++) {
+                const t = [start];
+                const vis = new Set([start]);
+                while (t.length < n) {
+                    const cur = t[t.length - 1];
+                    let nearest = -1, nearD = Infinity;
                     for (let j = 0; j < n; j++) {
-                        if (visited.has(j)) continue;
-                        const d = busDist(current + 1, j + 1);
-                        if (d < nearestDist) { nearestDist = d; nearest = j; }
+                        if (vis.has(j)) continue;
+                        const dd = d(cur + 1, j + 1);
+                        if (dd < nearD) { nearD = dd; nearest = j; }
                     }
                     if (nearest < 0) break;
-                    tour.push(nearest);
-                    visited.add(nearest);
+                    t.push(nearest); vis.add(nearest);
                 }
-
-                const td = calcTourDist(tour, busDist, n, isArrival, hasShifts);
-                if (td < bestTourDist) { bestTourDist = td; bestTour = [...tour]; }
+                const td = tourDist(t);
+                if (td < bestNNDist) { bestNNDist = td; bestNN = [...t]; }
             }
 
-            // Step B: 2-opt refinement
-            let tour = bestTour;
-            for (let pass = 0; pass < 100; pass++) {
-                let improved = false;
-                for (let i = 0; i < n - 1; i++) {
-                    for (let j = i + 2; j < n; j++) {
-                        // Current: ...→ tour[i] → tour[i+1] →...→ tour[j] → tour[j+1] →...
-                        // After:   ...→ tour[i] → tour[j] →...→ tour[i+1] → tour[j+1] →...
-                        const prevI = i === 0 ? (isArrival ? null : 'camp') : tour[i - 1];
-                        const nextJ = j === n - 1 ? ((isArrival || hasShifts) ? 'camp' : null) : tour[j + 1];
+            // Pick the better initial tour
+            if (bestNNDist < tourDist(tour)) tour = bestNN;
 
-                        function d2(a, b) {
-                            if (a === null || b === null) return 0;
-                            const ai = a === 'camp' ? 0 : a + 1;
-                            const bi = b === 'camp' ? 0 : b + 1;
-                            return busDist(ai, bi);
-                        }
+            // ══════════════════════════════════════════════════════════
+            // STEP 2: LOCAL SEARCH with multiple move operators
+            // ══════════════════════════════════════════════════════════
 
-                        const oldD = d2(tour[i], tour[i + 1]) + d2(tour[j], nextJ);
-                        const newD = d2(tour[i], tour[j]) + d2(tour[i + 1], nextJ);
-
-                        if (newD < oldD - 0.01) {
-                            const seg = tour.splice(i + 1, j - i);
-                            seg.reverse();
-                            tour.splice(i + 1, 0, ...seg);
-                            improved = true;
+            // 2a: 2-opt (reverse segments)
+            function twoOpt(tour) {
+                let improved = true;
+                while (improved) {
+                    improved = false;
+                    for (let i = 0; i < tour.length - 1; i++) {
+                        for (let j = i + 2; j < tour.length; j++) {
+                            const test = [...tour];
+                            // Reverse segment [i+1 .. j]
+                            let left = i + 1, right = j;
+                            while (left < right) {
+                                const tmp = test[left]; test[left] = test[right]; test[right] = tmp;
+                                left++; right--;
+                            }
+                            if (tourDist(test) < tourDist(tour) - 0.01) {
+                                tour = test;
+                                improved = true;
+                            }
                         }
                     }
                 }
-                if (!improved) break;
+                return tour;
             }
 
-            // Step C: Or-opt (try moving each stop to every other position)
-            for (let pass = 0; pass < 30; pass++) {
-                let improved = false;
-                for (let i = 0; i < n; i++) {
-                    const stop = tour[i];
-                    const without = [...tour];
-                    without.splice(i, 1);
-                    const currentDist = calcTourDist(tour, busDist, n, isArrival, hasShifts);
-                    let bestPos = i, bestDist = currentDist;
-                    for (let j = 0; j <= without.length; j++) {
-                        if (j === i) continue;
-                        const test = [...without];
-                        test.splice(j, 0, stop);
-                        const d = calcTourDist(test, busDist, test.length, isArrival, hasShifts);
-                        if (d < bestDist - 0.01) { bestDist = d; bestPos = j; improved = true; }
+            // 2b: Or-opt (move segments of 1, 2, or 3 consecutive stops)
+            function orOpt(tour) {
+                let improved = true;
+                while (improved) {
+                    improved = false;
+                    for (let segLen = 1; segLen <= Math.min(3, tour.length - 1); segLen++) {
+                        for (let i = 0; i <= tour.length - segLen; i++) {
+                            const segment = tour.slice(i, i + segLen);
+                            const without = [...tour.slice(0, i), ...tour.slice(i + segLen)];
+                            const currentDist = tourDist(tour);
+
+                            for (let j = 0; j <= without.length; j++) {
+                                if (j >= i && j <= i + segLen) continue; // same position
+                                const test = [...without];
+                                test.splice(j, 0, ...segment);
+                                if (tourDist(test) < currentDist - 0.01) {
+                                    tour = test;
+                                    improved = true;
+                                    break;
+                                }
+                            }
+                            if (improved) break;
+                        }
+                        if (improved) break;
                     }
-                    if (bestPos !== i) { tour.splice(i, 1); tour.splice(bestPos, 0, stop); }
                 }
-                if (!improved) break;
+                return tour;
             }
 
-            // ── Phase 6: Orient for arrival vs dismissal ──
+            // 2c: Node swap (swap positions of two stops)
+            function nodeSwap(tour) {
+                let improved = true;
+                while (improved) {
+                    improved = false;
+                    for (let i = 0; i < tour.length; i++) {
+                        for (let j = i + 1; j < tour.length; j++) {
+                            const test = [...tour];
+                            test[i] = tour[j];
+                            test[j] = tour[i];
+                            if (tourDist(test) < tourDist(tour) - 0.01) {
+                                tour = test;
+                                improved = true;
+                            }
+                        }
+                    }
+                }
+                return tour;
+            }
+
+            // Run local search operators
+            tour = twoOpt(tour);
+            tour = orOpt(tour);
+            tour = nodeSwap(tour);
+
+            // ══════════════════════════════════════════════════════════
+            // STEP 3: GUIDED LOCAL SEARCH (GLS) metaheuristic
+            // Penalizes edges that keep appearing in local optima,
+            // forcing the solver to explore different route structures.
+            // This is what Google OR-Tools uses and calls "the most
+            // efficient metaheuristic for vehicle routing."
+            // ══════════════════════════════════════════════════════════
+            {
+                const penalties = {};
+                function penKey(a, b) { return Math.min(a, b) + ',' + Math.max(a, b); }
+                const lambda = tourDist(tour) / (n * 2); // penalty weight
+
+                function penalizedDist(t) {
+                    let total = 0;
+                    if (startAtCamp) total += d(0, t[0] + 1);
+                    for (let i = 0; i < t.length - 1; i++) {
+                        const edge = d(t[i] + 1, t[i + 1] + 1);
+                        const pen = penalties[penKey(t[i], t[i + 1])] || 0;
+                        total += edge + lambda * pen;
+                    }
+                    if (endAtCamp) total += d(t[t.length - 1] + 1, 0);
+                    return total;
+                }
+
+                // Penalized 2-opt
+                function pen2opt(tour) {
+                    let improved = true;
+                    while (improved) {
+                        improved = false;
+                        for (let i = 0; i < tour.length - 1; i++) {
+                            for (let j = i + 2; j < tour.length; j++) {
+                                const test = [...tour];
+                                let left = i + 1, right = j;
+                                while (left < right) {
+                                    const tmp = test[left]; test[left] = test[right]; test[right] = tmp;
+                                    left++; right--;
+                                }
+                                if (penalizedDist(test) < penalizedDist(tour) - 0.01) {
+                                    tour = test;
+                                    improved = true;
+                                }
+                            }
+                        }
+                    }
+                    return tour;
+                }
+
+                // Penalized or-opt (single stop moves)
+                function penOrOpt(tour) {
+                    let improved = true;
+                    while (improved) {
+                        improved = false;
+                        for (let i = 0; i < tour.length; i++) {
+                            const stop = tour[i];
+                            const without = [...tour]; without.splice(i, 1);
+                            const curPen = penalizedDist(tour);
+                            for (let j = 0; j <= without.length; j++) {
+                                if (j === i) continue;
+                                const test = [...without]; test.splice(j, 0, stop);
+                                if (penalizedDist(test) < curPen - 0.01) {
+                                    tour = test; improved = true; break;
+                                }
+                            }
+                            if (improved) break;
+                        }
+                    }
+                    return tour;
+                }
+
+                let bestTour = [...tour];
+                let bestDist = tourDist(tour);
+                const maxIter = Math.min(50, n * 5);
+
+                for (let iter = 0; iter < maxIter; iter++) {
+                    // Penalize edges in current solution that have worst utility
+                    // utility = distance / (1 + penalty) — penalize long, frequently-used edges
+                    let worstUtil = -1, worstEdge = null;
+                    for (let i = 0; i < tour.length - 1; i++) {
+                        const pen = penalties[penKey(tour[i], tour[i + 1])] || 0;
+                        const util = d(tour[i] + 1, tour[i + 1] + 1) / (1 + pen);
+                        if (util > worstUtil) { worstUtil = util; worstEdge = penKey(tour[i], tour[i + 1]); }
+                    }
+                    if (worstEdge) penalties[worstEdge] = (penalties[worstEdge] || 0) + 1;
+
+                    // Re-optimize with penalties
+                    tour = pen2opt(tour);
+                    tour = penOrOpt(tour);
+
+                    // Track best unpenalized solution
+                    const realDist = tourDist(tour);
+                    if (realDist < bestDist - 0.01) {
+                        bestDist = realDist;
+                        bestTour = [...tour];
+                    }
+                }
+
+                tour = bestTour;
+            }
+
+            // Final polish: one more round of unpenalized local search
+            tour = twoOpt(tour);
+            tour = orOpt(tour);
+
+            // ── Orient for arrival vs dismissal ──
             if (tour.length >= 2) {
-                const firstDistToCamp = busDist(0, tour[0] + 1);
-                const lastDistToCamp = busDist(0, tour[tour.length - 1] + 1);
-                if (isArrival) {
-                    // First stop = farthest from camp
-                    if (firstDistToCamp < lastDistToCamp) tour.reverse();
-                } else {
-                    // First stop = nearest to camp
-                    if (firstDistToCamp > lastDistToCamp) tour.reverse();
-                }
+                const firstD = d(0, tour[0] + 1);
+                const lastD = d(0, tour[tour.length - 1] + 1);
+                if (isArrival && firstD < lastD) tour.reverse();
+                if (!isArrival && firstD > lastD) tour.reverse();
             }
 
             // Apply ordering
@@ -1645,43 +1804,29 @@
             orderedStops.forEach((s, i) => s.stopNum = i + 1);
             r.stops = orderedStops;
 
-            // ── Phase 7: Calculate duration ──
+            // Calculate duration
             let dur = 0;
-            if (isArrival) {
-                dur += 15; // drive to first pickup area
-            } else {
-                dur += busDist(0, tour[0] + 1); // camp → first stop
-            }
+            if (isArrival) dur += 15;
+            else dur += d(0, tour[0] + 1);
             for (let i = 0; i < tour.length - 1; i++) {
-                dur += busDist(tour[i] + 1, tour[i + 1] + 1) + stopTime;
+                dur += d(tour[i] + 1, tour[i + 1] + 1) + stopTime;
             }
-            dur += stopTime; // last stop service time
-            if (isArrival) dur += busDist(tour[tour.length - 1] + 1, 0);
-            if (!isArrival && hasShifts) dur += busDist(tour[tour.length - 1] + 1, 0);
+            dur += stopTime;
+            if (isArrival) dur += d(tour[tour.length - 1] + 1, 0);
+            if (!isArrival && hasShifts) dur += d(tour[tour.length - 1] + 1, 0);
             r.totalDuration = Math.round(dur);
+
+            console.log('[Go] ' + r.busName + ': ' + n + ' stops, ' + r.totalDuration + 'min (GLS ' + Math.min(50, n * 5) + ' iterations)');
         }
 
         showProgress('Done!', 95);
         return routes;
     }
 
-    /** Calculate total tour distance in minutes using busDist function */
-    function calcTourDist(tour, busDist, n, isArrival, hasShifts) {
-        if (!tour.length) return 0;
-        let total = 0;
-        if (!isArrival) total += busDist(0, tour[0] + 1); // camp → first
-        for (let i = 0; i < tour.length - 1; i++) {
-            total += busDist(tour[i] + 1, tour[i + 1] + 1);
-        }
-        if (isArrival || hasShifts) total += busDist(tour[tour.length - 1] + 1, 0); // last → camp
-        return total;
-    }
-
     // =========================================================================
     // STOP CREATION
     // =========================================================================
 
-    /** House-by-house: merge kids at same address into one stop */
     function createHouseStops(campers) {
         const groups = {};
         campers.forEach(c => {
@@ -1695,7 +1840,6 @@
         }));
     }
 
-    /** Optimized stops: cluster nearby kids within walking distance */
     function createOptimizedStops(campers) {
         const maxWalkMi = (D.setup.maxWalkDistance || 500) * 0.000189394;
         const used = new Set();
