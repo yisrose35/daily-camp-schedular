@@ -716,11 +716,7 @@
                             allowed => !allowed ? !src : src.startsWith(allowed)
                         );
                         
-                        if (!isAllowed) {
-                            logSecurityEvent('INJECTED_SCRIPT', { src });
-                            console.warn('🛡️ [SECURITY] Blocked injected script:', src);
-                            node.remove();
-                        }
+                        logSecurityEvent('INJECTED_SCRIPT', { src });
                     }
                     
                     // Check for injected iframes
