@@ -944,7 +944,7 @@
         if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
         const lines = text.split(/\r?\n/).filter(l => l.trim()); if (lines.length < 2) { toast('Empty CSV', 'error'); return; }
         const hdr = parseLine(lines[0]).map(h => h.toLowerCase().trim());
-       const ni = hdr.findIndex(h => h === 'name' || h.includes('camper')), si = hdr.findIndex(h => h.includes('street') || h === 'address'), ci = hdr.findIndex(h => h === 'city'), sti = hdr.findIndex(h => h === 'state'), zi = hdr.findIndex(h => h === 'zip' || h.includes('zip')), tri = hdr.findIndex(h => h === 'transport' || h === 'mode' || h.includes('pickup') || h.includes('carpool')), rwi = hdr.findIndex(h => h === 'ride-with' || h === 'ridewith' || h === 'ride with' || h.includes('pair'));        if (ni < 0 || si < 0) { toast('Need Name + Street columns', 'error'); return; }
+      const ni = hdr.findIndex(h => h === 'name' || h === 'camper name' || h === 'camper'), si = hdr.findIndex(h => h.includes('street') || h === 'address'), ci = hdr.findIndex(h => h === 'city'), sti = hdr.findIndex(h => h === 'state'), zi = hdr.findIndex(h => h === 'zip' || h.includes('zip')), tri = hdr.findIndex(h => h === 'transport' || h === 'mode' || h.includes('pickup') || h.includes('carpool')), rwi = hdr.findIndex(h => h === 'ride-with' || h === 'ridewith' || h === 'ride with' || h.includes('pair'));        if (ni < 0 || si < 0) { toast('Need Name + Street columns', 'error'); return; }
         // Clear all existing addresses — CSV overwrites everything
         D.addresses = {};
         const roster = getRoster(); let up = 0;
