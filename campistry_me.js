@@ -233,7 +233,8 @@ function cvR(l,v,w){if(!v)return'';return'<div class="cv-row"><span class="cv-lb
 function editCamper(n){
     editingCamper=n;
     var d=n?roster[n]||{}:{};var parts=(n||'').split(' ');
-    document.getElementById('ceTitle').textContent=n?'Edit Camper':'Add Camper';
+    var titleEl=document.getElementById('ceTitle');
+    if(titleEl)titleEl.textContent=n?'Edit Camper':'Add Camper';
     var idStr=d.camperId?String(d.camperId).padStart(4,'0'):'Will be assigned on save';
     var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div class="fsec" style="margin:0">Identity</div><span style="font-family:monospace;font-size:.8rem;color:var(--s400);background:var(--s100);padding:3px 10px;border-radius:var(--r)">Camper ID: #'+esc(idStr)+'</span></div>';
     h+='<div class="fr">'+ff('First Name','ceFirst',parts[0]||'')+ff('Last Name','ceLast',parts.slice(1).join(' ')||'')+'</div>';
