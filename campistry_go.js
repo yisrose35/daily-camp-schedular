@@ -13,7 +13,7 @@
         setup: {
             campAddress: '', campName: '', avgSpeed: 25, // mph
             reserveSeats: 2, dropoffMode: 'door-to-door',
-            avgStopTime: 2, maxWalkDistance: 500, orsApiKey: ''
+            avgStopTime: 2, maxWalkDistance: 500, orsApiKey: '', graphhopperKey: ''
         },
         activeMode: 'dismissal', // 'arrival' or 'dismissal'
         // Active mode data (swapped in/out when switching modes)
@@ -148,7 +148,7 @@
     }
 
     function merge(d) {
-        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:500,orsApiKey:'',campLat:null,campLng:null }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{} };
+        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:500,orsApiKey:'',graphhopperKey:'',campLat:null,campLng:null }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{} };
         const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null, dailyOverrides: d.dailyOverrides || {} };
         // Migrate: if no dismissal data stored yet, the current buses/shifts ARE the dismissal data
         if (!result.dismissal && result.buses.length) {
@@ -300,6 +300,7 @@
         document.getElementById('avgStopTime').value = s.avgStopTime ?? 2;
         document.getElementById('maxWalkDistance').value = s.maxWalkDistance ?? 500;
         document.getElementById('orsApiKey').value = s.orsApiKey || '';
+        if (document.getElementById('ghApiKey')) document.getElementById('ghApiKey').value = s.graphhopperKey || '';
     }
     function saveSetup() {
         const el = id => document.getElementById(id);
@@ -311,6 +312,7 @@
         D.setup.avgStopTime = parseInt(el('avgStopTime')?.value) || 2;
         D.setup.maxWalkDistance = parseInt(el('maxWalkDistance')?.value) || 500;
         D.setup.orsApiKey = el('orsApiKey')?.value.trim() || '';
+        D.setup.graphhopperKey = el('ghApiKey')?.value.trim() || '';
         save(); toast('Setup saved');
     }
     async function testApiKey() {
@@ -1478,7 +1480,22 @@
         if (!stops.length) return [];
 
         // ══════════════════════════════════════════════════════════
-        // TRY VROOM OPTIMIZATION API (industry-standard solver)
+        // TRY 1: GraphHopper Route Optimization (best quality)
+        // ══════════════════════════════════════════════════════════
+        if (stops.length >= 2) {
+            try {
+                const result = await solveWithGraphHopper(stops, vehicles, campLat, campLng, isArrival);
+                if (result) {
+                    console.log('[Go] GraphHopper optimization succeeded — ' + result.length + ' routes');
+                    return result;
+                }
+            } catch (e) {
+                console.warn('[Go] GraphHopper failed:', e.message);
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════
+        // TRY 2: ORS VROOM Optimization (fallback)
         // ══════════════════════════════════════════════════════════
         const apiKey = getApiKey();
         if (apiKey && stops.length >= 2) {
@@ -1489,7 +1506,7 @@
                     return result;
                 }
             } catch (e) {
-                console.warn('[Go] VROOM failed, falling back to client-side:', e.message);
+                console.warn('[Go] VROOM failed:', e.message);
             }
         }
 
@@ -1501,112 +1518,157 @@
     }
 
     /**
-     * Solve routing using ORS VROOM Optimization API
-     * This is what Busology, BusBoss etc. use under the hood
+     * Solve routing using GraphHopper Route Optimization API
+     * Industry-standard VRP solver using real road network, turn costs, capacity
+     * Returns road geometry included — no separate directions call needed
      */
-    async function solveWithVROOM(stops, vehicles, campLat, campLng, isArrival, apiKey) {
-        const campCoord = [campLng, campLat]; // ORS uses [lng, lat]
-        const stopTime = (D.setup.avgStopTime || 2) * 60; // seconds
+    async function solveWithGraphHopper(stops, vehicles, campLat, campLng, isArrival) {
+        const ghKey = D.setup.graphhopperKey || window.__CAMPISTRY_GH_KEY__;
+        if (!ghKey) return null;
 
-        // Build VROOM jobs (one per stop)
-        const jobs = stops.map((s, i) => ({
-            id: i + 1,
-            location: [s.lng, s.lat],
-            service: stopTime,
-            amount: [s.campers.length],
-            description: s.address
-        }));
+        const stopTimeSec = (D.setup.avgStopTime || 2) * 60;
 
-        // Build VROOM vehicles (one per bus)
-        const vroomVehicles = vehicles.map((v, i) => {
+        // Build vehicle types
+        const vehicleTypes = [{
+            type_id: 'bus',
+            capacity: [Math.max(...vehicles.map(v => v.capacity))],
+            profile: 'car'
+        }];
+
+        // Build vehicles
+        const ghVehicles = vehicles.map((v, i) => {
             const veh = {
-                id: i + 1,
-                profile: 'driving-car',
-                capacity: [v.capacity],
-                description: v.name
+                vehicle_id: 'bus_' + i,
+                type_id: 'bus',
+                max_jobs: 100
             };
             if (isArrival) {
-                // Arrival: bus ends at camp (picks up kids, goes to camp)
-                // Don't set start — VROOM picks the optimal first stop
-                veh.end = campCoord;
+                // Arrival: bus ends at camp
+                veh.end_address = { location_id: 'camp', lon: campLng, lat: campLat };
             } else if (D.shifts.length > 1) {
-                // Dismissal multi-shift: bus starts and ends at camp (round trip)
-                veh.start = campCoord;
-                veh.end = campCoord;
+                // Dismissal multi-shift: round trip
+                veh.start_address = { location_id: 'camp', lon: campLng, lat: campLat };
+                veh.end_address = { location_id: 'camp', lon: campLng, lat: campLat };
             } else {
-                // Dismissal single-shift: bus starts at camp, ends wherever
-                veh.start = campCoord;
+                // Dismissal: start at camp, end wherever
+                veh.start_address = { location_id: 'camp', lon: campLng, lat: campLat };
             }
+            // Per-vehicle capacity
+            if (v.capacity) veh.type_id = 'bus_' + i;
             return veh;
         });
 
-        const body = { jobs, vehicles: vroomVehicles };
+        // Per-vehicle types for different capacities
+        const perVehicleTypes = vehicles.map((v, i) => ({
+            type_id: 'bus_' + i,
+            capacity: [v.capacity],
+            profile: 'car'
+        }));
 
-        const resp = await fetch('https://api.openrouteservice.org/optimization', {
+        // Build services (stops to visit)
+        const services = stops.map((s, i) => ({
+            id: 'stop_' + i,
+            name: s.address,
+            address: { location_id: 'stop_' + i, lon: s.lng, lat: s.lat },
+            size: [s.campers.length],
+            service: stopTimeSec
+        }));
+
+        const body = {
+            vehicles: ghVehicles,
+            vehicle_types: perVehicleTypes,
+            services,
+            objectives: [
+                { type: 'min', value: 'transport_time' },
+                { type: 'min', value: 'vehicles' }
+            ]
+        };
+
+        console.log('[Go] Calling GraphHopper VRP with', stops.length, 'stops,', vehicles.length, 'buses');
+
+        const resp = await fetch('https://graphhopper.com/api/1/vrp?key=' + encodeURIComponent(ghKey), {
             method: 'POST',
-            headers: {
-                'Authorization': apiKey,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
         });
 
         if (!resp.ok) {
             const errText = await resp.text().catch(() => '');
-            console.warn('[Go] VROOM HTTP ' + resp.status + ':', errText.substring(0, 200));
+            console.warn('[Go] GraphHopper HTTP ' + resp.status + ':', errText.substring(0, 300));
             return null;
         }
 
         const data = await resp.json();
-        if (!data.routes || !data.routes.length) {
-            console.warn('[Go] VROOM returned no routes');
+        if (data.status !== 'finished' || !data.solution?.routes?.length) {
+            console.warn('[Go] GraphHopper not finished:', data.status);
             return null;
         }
 
-        // Convert VROOM response to our route format
-        const routes = data.routes.map(vr => {
-            const vehicleIdx = vr.vehicle - 1;
-            const v = vehicles[vehicleIdx] || vehicles[0];
+        console.log('[Go] GraphHopper solved:', data.solution.routes.length, 'routes,',
+            Math.round(data.solution.distance / 1000) + 'km total,',
+            Math.round(data.solution.transport_time / 60) + 'min');
+
+        // Convert GraphHopper response to our route format
+        const routes = data.solution.routes.map((ghRoute, ri) => {
+            const vIdx = parseInt(ghRoute.vehicle_id.replace('bus_', ''));
+            const v = vehicles[vIdx] || vehicles[0];
             const routeStops = [];
             let stopNum = 0;
 
-            vr.steps.forEach(step => {
-                if (step.type === 'job') {
-                    stopNum++;
-                    const stopIdx = step.id - 1;
+            // Extract road geometry from points (GeoJSON LineStrings)
+            let roadCoords = [];
+            if (ghRoute.points) {
+                ghRoute.points.forEach(geom => {
+                    if (geom.type === 'LineString' && geom.coordinates) {
+                        geom.coordinates.forEach(c => roadCoords.push([c[1], c[0]])); // [lat, lng]
+                    }
+                });
+            }
+
+            // Extract activities (stop visits)
+            (ghRoute.activities || []).forEach(act => {
+                if (act.type === 'service') {
+                    const stopIdx = parseInt((act.id || '').replace('stop_', ''));
                     const originalStop = stops[stopIdx];
                     if (originalStop) {
+                        stopNum++;
                         routeStops.push({
                             stopNum,
                             campers: originalStop.campers,
                             address: originalStop.address,
                             lat: originalStop.lat,
                             lng: originalStop.lng,
-                            _vroomArrival: step.arrival,
-                            _vroomDuration: step.duration
+                            _ghArrival: act.arr_time,
+                            _ghDeparture: act.end_time
                         });
                     }
                 }
             });
 
-            return {
+            const route = {
                 busId: v.busId, busName: v.name, busColor: v.color,
                 monitor: v.monitor, counselors: v.counselors || [],
                 stops: routeStops,
                 camperCount: routeStops.reduce((s, st) => s + st.campers.length, 0),
                 _cap: v.capacity,
-                totalDuration: Math.round((vr.duration || 0) / 60), // seconds → minutes
-                _vroomDistance: vr.distance
+                totalDuration: Math.round((ghRoute.transport_time || 0) / 60),
+                _ghDistance: ghRoute.distance
             };
+
+            // Cache road geometry so map doesn't need to fetch directions
+            if (roadCoords.length > 2) {
+                const cacheKey = v.busId + '_0';
+                _routeGeomCache[cacheKey] = roadCoords;
+            }
+
+            return route;
         });
 
-        // Handle unassigned stops (if any bus was too full)
-        if (data.unassigned?.length) {
-            console.warn('[Go] VROOM could not assign ' + data.unassigned.length + ' stops');
-            // Add to the bus with most remaining capacity
-            data.unassigned.forEach(u => {
-                const stopIdx = u.id - 1;
+        // Handle unassigned
+        if (data.solution.unassigned?.services?.length) {
+            console.warn('[Go] GraphHopper unassigned:', data.solution.unassigned.services.length, 'stops');
+            data.solution.unassigned.services.forEach(u => {
+                const stopIdx = parseInt((u.id || '').replace('stop_', ''));
                 const originalStop = stops[stopIdx];
                 if (!originalStop) return;
                 const bestRoute = routes.reduce((a, b) => (a._cap - a.camperCount) > (b._cap - b.camperCount) ? a : b);
@@ -1621,6 +1683,56 @@
         }
 
         return routes.filter(r => r.stops.length > 0);
+    }
+
+    /**
+     * Fallback: ORS VROOM Optimization API
+     */
+    async function solveWithVROOM(stops, vehicles, campLat, campLng, isArrival, apiKey) {
+        const campCoord = [campLng, campLat];
+        const stopTime = (D.setup.avgStopTime || 2) * 60;
+
+        const jobs = stops.map((s, i) => ({
+            id: i + 1, location: [s.lng, s.lat], service: stopTime,
+            amount: [s.campers.length], description: s.address
+        }));
+
+        const vroomVehicles = vehicles.map((v, i) => {
+            const veh = { id: i + 1, profile: 'driving-car', capacity: [v.capacity] };
+            if (isArrival) { veh.end = campCoord; }
+            else if (D.shifts.length > 1) { veh.start = campCoord; veh.end = campCoord; }
+            else { veh.start = campCoord; }
+            return veh;
+        });
+
+        const resp = await fetch('https://api.openrouteservice.org/optimization', {
+            method: 'POST',
+            headers: { 'Authorization': apiKey, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ jobs, vehicles: vroomVehicles })
+        });
+
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        if (!data.routes?.length) return null;
+
+        return data.routes.map(vr => {
+            const v = vehicles[(vr.vehicle || 1) - 1] || vehicles[0];
+            const routeStops = [];
+            let sn = 0;
+            (vr.steps || []).forEach(step => {
+                if (step.type === 'job') {
+                    sn++;
+                    const os = stops[(step.id || 1) - 1];
+                    if (os) routeStops.push({ stopNum: sn, campers: os.campers, address: os.address, lat: os.lat, lng: os.lng });
+                }
+            });
+            return {
+                busId: v.busId, busName: v.name, busColor: v.color,
+                monitor: v.monitor, counselors: v.counselors || [],
+                stops: routeStops, camperCount: routeStops.reduce((s, st) => s + st.campers.length, 0),
+                _cap: v.capacity, totalDuration: Math.round((vr.duration || 0) / 60)
+            };
+        }).filter(r => r.stops.length > 0);
     }
 
     /**
