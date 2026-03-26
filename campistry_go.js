@@ -148,8 +148,7 @@
     }
 
     function merge(d) {
-        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:500,orsApiKey:'',graphhopperKey:'',campLat:null,campLng:null }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{} };
-        const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null, dailyOverrides: d.dailyOverrides || {} };
+        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:500,orsApiKey:'',graphhopperKey:'',mapboxToken:'',campLat:null,campLng:null },        const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null, dailyOverrides: d.dailyOverrides || {} };
         // Migrate: if no dismissal data stored yet, the current buses/shifts ARE the dismissal data
         if (!result.dismissal && result.buses.length) {
             result.dismissal = { buses: [...result.buses], shifts: [...result.shifts], monitors: [...result.monitors], counselors: [...result.counselors], savedRoutes: result.savedRoutes };
@@ -300,7 +299,8 @@
         document.getElementById('avgStopTime').value = s.avgStopTime ?? 2;
         document.getElementById('maxWalkDistance').value = s.maxWalkDistance ?? 500;
         document.getElementById('orsApiKey').value = s.orsApiKey || '';
-        if (document.getElementById('ghApiKey')) document.getElementById('ghApiKey').value = s.graphhopperKey || '';
+       if (document.getElementById('ghApiKey')) document.getElementById('ghApiKey').value = s.graphhopperKey || '';
+        if (document.getElementById('mapboxToken')) document.getElementById('mapboxToken').value = s.mapboxToken || '';
     }
     function saveSetup() {
         const el = id => document.getElementById(id);
@@ -312,7 +312,8 @@
         D.setup.avgStopTime = parseInt(el('avgStopTime')?.value) || 2;
         D.setup.maxWalkDistance = parseInt(el('maxWalkDistance')?.value) || 500;
         D.setup.orsApiKey = el('orsApiKey')?.value.trim() || '';
-        D.setup.graphhopperKey = el('ghApiKey')?.value.trim() || '';
+         D.setup.graphhopperKey = el('ghApiKey')?.value.trim() || '';
+        D.setup.mapboxToken = el('mapboxToken')?.value.trim() || '';
         save(); toast('Setup saved');
     }
     async function testApiKey() {
