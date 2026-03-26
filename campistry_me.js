@@ -227,11 +227,11 @@ function renderCampers(filter){
     var h='<div class="sec-hd"><div><h2 class="sec-title">Campers</h2><p class="sec-desc">'+total+' total</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Download Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import CSV</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export All</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
     if(!entries.length){h+='<div class="me-empty"><h3>No campers yet</h3><p>Add campers or import from CSV.</p><div style="display:flex;gap:6px;justify-content:center"><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add</button><button class="me-btn me-btn--sec" onclick="CampistryMe.openCsv()">Import</button></div></div>'}
     else{
-        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th style="width:50px">ID</th><th>Name</th><th>Age</th><th>School</th><th>Division</th><th>Bunk</th><th>Medical</th><th style="width:60px"></th></tr></thead><tbody>';
+        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th style="width:50px">ID</th><th>Name</th><th>Age</th><th>School</th><th>Grade</th><th>Teacher</th><th>Division</th><th>Bunk</th><th>Medical</th><th style="width:60px"></th></tr></thead><tbody>';
         entries.forEach(function([n,d]){
             var hasMed=!!(d.allergies||d.medications);
             var idStr=d.camperId?String(d.camperId).padStart(4,'0'):'—';
-            h+='<tr class="click" onclick="CampistryMe.viewCamper(\''+je(n)+'\')">'+'<td style="font-family:monospace;font-size:.75rem;color:var(--s400)">#'+esc(idStr)+'</td><td class="bold">'+esc(n)+'</td><td>'+(d.dob?age(d.dob):'—')+'</td><td>'+esc(d.school||'—')+'</td><td>'+(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+'</td><td>'+esc(d.bunk||'—')+'</td><td>'+(hasMed?'<span style="color:var(--err);font-size:.7rem;font-weight:600">⚠ '+esc((d.allergies||d.medications||'').split(',')[0])+'</span>':'<span style="color:var(--s300)">—</span>')+'</td><td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button></td></tr>';
+            h+='<tr class="click" onclick="CampistryMe.viewCamper(\''+je(n)+'\')">'+'<td style="font-family:monospace;font-size:.75rem;color:var(--s400)">#'+esc(idStr)+'</td><td class="bold">'+esc(n)+'</td><td>'+(d.dob?age(d.dob):'—')+'</td><td>'+esc(d.school||'—')+'</td><td>'+esc(d.schoolGrade||'—')+'</td><td>'+esc(d.teacher||'—')+'</td><td>'+(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+'</td><td>'+esc(d.bunk||'—')+'</td><td>'+(hasMed?'<span style="color:var(--err);font-size:.7rem;font-weight:600">⚠ '+esc((d.allergies||d.medications||'').split(',')[0])+'</span>':'<span style="color:var(--s300)">—</span>')+'</td><td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button></td></tr>';
         });
         h+='</tbody></table></div></div>';
     }
@@ -261,6 +261,7 @@ function viewCamper(n){
     b+=cvR('Gender',d.gender);
     b+=cvR('School',d.school);
     b+=cvR('School Grade',d.schoolGrade);
+    b+=cvR('Teacher',d.teacher);
 
     // Camp Assignment
     b+='<div class="cv-sec">Camp Assignment</div>';
@@ -329,7 +330,8 @@ function editCamper(n){
     var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div class="fsec" style="margin:0">Identity</div><span style="font-family:monospace;font-size:.8rem;color:var(--s400);background:var(--s100);padding:3px 10px;border-radius:var(--r)">Camper ID: #'+esc(idStr)+'</span></div>';
     h+='<div class="fr">'+ff('First Name','ceFirst',parts[0]||'')+ff('Last Name','ceLast',parts.slice(1).join(' ')||'')+'</div>';
     h+='<div class="fr">'+ff('Date of Birth','ceDob',d.dob||'','date')+ff('Gender','ceGender',d.gender||'','select',['','Male','Female','Non-binary','Other'])+'</div>';
-    h+='<div class="fr">'+ff('School Name','ceSchool',d.school||'')+ff('School Grade','ceGrade',d.schoolGrade||'')+'</div>';
+    h+='<div class="fr">'+ff('School Name','ceSchool',d.school||'')+ff('School Grade','ceSchoolGr',d.schoolGrade||'')+'</div>';
+    h+=ff('Teacher','ceTeacher',d.teacher||'');
 
     h+='<div class="fsec">Camp Assignment</div>';
     h+='<div class="fr">'+ff('Division','ceDiv',d.division||'','select',[''].concat(Object.keys(structure).sort()))+ff('Grade','ceCGrade',d.grade||'','select',grOpts(d.division))+'</div>';
@@ -391,7 +393,8 @@ function saveCamper(){
     roster[full]={
         camperId:existingId,
         dob:document.getElementById('ceDob').value||'',gender:document.getElementById('ceGender').value||'',
-        school:document.getElementById('ceSchool').value||'',schoolGrade:document.getElementById('ceGrade').value||'',
+        school:document.getElementById('ceSchool').value||'',schoolGrade:document.getElementById('ceSchoolGr').value||'',
+        teacher:document.getElementById('ceTeacher').value||'',
         division:document.getElementById('ceDiv').value||'',grade:document.getElementById('ceCGrade').value||'',
         bunk:document.getElementById('ceBunk').value||'',
         teams:teams,team:Object.values(teams)[0]||document.getElementById('ceTeamLegacy')?.value||'',
@@ -583,7 +586,7 @@ function renderBroadcasts(){var c=document.getElementById('page-broadcasts');c.i
 function renderSoon(p){var t={forms:'Forms & Docs',reports:'Reports',settings:'Settings'};document.getElementById('page-'+p).innerHTML='<div class="me-soon"><h2>'+(t[p]||p)+'</h2><p>Coming soon.</p></div>'}
 
 // ── CSV ──────────────────────────────────────────────────────────
-var CSV_HEADERS=['First Name','Last Name','Date of Birth','Gender','School Name','School Grade','Division','Grade','Bunk','Street Address','City','State','ZIP','Parent 1 Name','Parent 1 Phone','Parent 1 Email','Emergency Name','Emergency Phone','Emergency Relation','Allergies','Medications','Dietary Restrictions'];
+var CSV_HEADERS=['First Name','Last Name','Date of Birth','Gender','School Name','School Grade','Teacher','Division','Grade','Bunk','Street Address','City','State','ZIP','Parent 1 Name','Parent 1 Phone','Parent 1 Email','Emergency Name','Emergency Phone','Emergency Relation','Allergies','Medications','Dietary Restrictions'];
 
 function downloadTemplate(){
     // Build template with headers + league columns
@@ -591,10 +594,10 @@ function downloadTemplate(){
     var headers=CSV_HEADERS.slice();
     leagueNames.forEach(function(lg){headers.push('Team: '+lg)});
     var csv='\uFEFF'+headers.map(function(h){return'"'+h+'"'}).join(',')+'\n';
-    // Add 3 example rows
-    csv+='"John","Smith","2015-03-15","Male","PS 123","3rd","Juniors","3rd Grade","Bunk 1","123 Main St","Brooklyn","NY","11230","Jane Smith","555-123-4567","jane@email.com","Bob Smith","555-987-6543","Uncle","Peanuts","",""\n';
-    csv+='"Sarah","Cohen","2014-07-22","Female","Yeshiva Academy","4th","Seniors","4th Grade","Bunk 7","456 Oak Ave","Woodmere","NY","11598","Rachel Cohen","555-222-3333","rachel@email.com","David Cohen","555-444-5555","Father","","Inhaler","Dairy-free"\n';
-    csv+='"","","","","","","","","","","","","","","","","","","","","",""\n';
+    // Add 2 example rows
+    csv+='"John","Smith","2015-03-15","Male","PS 123","3rd","Mrs. Johnson","Juniors","3rd Grade","Bunk 1","123 Main St","Brooklyn","NY","11230","Jane Smith","555-123-4567","jane@email.com","Bob Smith","555-987-6543","Uncle","Peanuts","",""\n';
+    csv+='"Sarah","Cohen","2014-07-22","Female","Yeshiva Academy","4th","Rabbi Goldstein","Seniors","4th Grade","Bunk 7","456 Oak Ave","Woodmere","NY","11598","Rachel Cohen","555-222-3333","rachel@email.com","David Cohen","555-444-5555","Father","","Inhaler","Dairy-free"\n';
+    csv+='"","","","","","","","","","","","","","","","","","","","","","",""\n';
     var a=document.createElement('a');
     a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
     a.download='campistry_camper_template.csv';
@@ -625,6 +628,7 @@ function handleCsv(file){
         var iGender=col(['gender','sex']);
         var iSchool=col(['school name','school']);
         var iSchoolGr=col(['school grade']);
+        var iTeacher=col(['teacher']);
         var iDiv=col(['division']);
         var iGrade=col(['grade']);
         var iBunk=col(['bunk','cabin']);
@@ -672,6 +676,7 @@ function handleCsv(file){
                 gender:iGender>=0?(c[iGender]||'').trim():'',
                 school:iSchool>=0?(c[iSchool]||'').trim():'',
                 schoolGrade:iSchoolGr>=0?(c[iSchoolGr]||'').trim():'',
+                teacher:iTeacher>=0?(c[iTeacher]||'').trim():'',
                 division:iDiv>=0?(c[iDiv]||'').trim():'',
                 grade:iGrade>=0?(c[iGrade]||'').trim():'',
                 bunk:iBunk>=0?(c[iBunk]||'').trim():'',
@@ -734,6 +739,7 @@ function importRows(rows){
             gender:r.gender||existing.gender||'',
             school:r.school||existing.school||'',
             schoolGrade:r.schoolGrade||existing.schoolGrade||'',
+            teacher:r.teacher||existing.teacher||'',
             division:r.division||existing.division||'',
             grade:r.grade||existing.grade||'',
             bunk:r.bunk||existing.bunk||'',
@@ -773,7 +779,7 @@ function exportCsv(){
         var first=parts[0]||'';
         var last=parts.slice(1).join(' ')||'';
         var teams=d.teams||{};
-        var row=[first,last,d.dob||'',d.gender||'',d.school||'',d.schoolGrade||'',d.division||'',d.grade||'',d.bunk||'',d.street||'',d.city||'',d.state||'',d.zip||'',d.parent1Name||'',d.parent1Phone||'',d.parent1Email||'',d.emergencyName||'',d.emergencyPhone||'',d.emergencyRel||'',d.allergies||'',d.medications||'',d.dietary||''];
+        var row=[first,last,d.dob||'',d.gender||'',d.school||'',d.schoolGrade||'',d.teacher||'',d.division||'',d.grade||'',d.bunk||'',d.street||'',d.city||'',d.state||'',d.zip||'',d.parent1Name||'',d.parent1Phone||'',d.parent1Email||'',d.emergencyName||'',d.emergencyPhone||'',d.emergencyRel||'',d.allergies||'',d.medications||'',d.dietary||''];
         leagueNames.forEach(function(lg){row.push(teams[lg]||'')});
         csv+=row.map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
     });
