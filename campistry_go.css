@@ -223,6 +223,10 @@ body {
 .toast.show { transform: translateX(-50%) translateY(0); }
 .toast.error { background: var(--red-600); }
 
+/* ==================== MODE TOGGLE ==================== */
+.mode-btn.active { background: var(--blue-600); color: #fff; border-color: var(--blue-600); }
+.mode-btn.active:hover { background: var(--blue-600); }
+
 /* ==================== MAP FULLSCREEN ==================== */
 .map-fullscreen { position: fixed !important; inset: 0 !important; z-index: 999 !important; margin: 0 !important; border-radius: 0 !important; max-height: none !important; overflow: auto; }
 .map-fullscreen #routeMap { height: calc(100vh - 120px) !important; }
