@@ -350,7 +350,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     color: var(--slate-800);
 }
 .dash-notif-header h2 svg { color: var(--slate-400); }
-.dash-notif-dismiss {
+.dash-notif-toggle {
     width: 32px;
     height: 32px;
     display: flex;
@@ -363,7 +363,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     background: none;
     border: none;
 }
-.dash-notif-dismiss:hover {
+.dash-notif-toggle:hover {
     background: var(--slate-100);
     color: var(--slate-600);
 }
