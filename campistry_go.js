@@ -858,136 +858,106 @@
         // Ensure all buses have entries
         vehicles.forEach(v => { if (!allRoutes.find(r => r.busId === v.busId)) allRoutes.push({ busId: v.busId, busName: v.name, busColor: v.color, monitor: v.monitor, counselors: v.counselors || [], stops: [], camperCount: 0, _cap: v.capacity, totalDuration: 0 }); });
 
-        // ── OSRM /trip — optimal stop ordering on the road network ──
-        // VROOM assigns stops to buses. Now OSRM /trip solves TSP per bus
-        // on actual roads — no zigzags, no haversine guessing.
+        // ── Stop ordering: OSRM road-distance nearest-neighbor ──
+        // Uses OSRM /table for actual road distances, then nearest-neighbor
+        // from camp (dismissal) or from farthest (arrival).
+        // This GUARANTEES a sweep pattern — no zigzags.
         //
-        // Three modes:
-        //   1. ARRIVAL: bus starts at farthest stop, picks up toward camp, ends at camp
-        //      → source=first (farthest stop), destination=last (camp)
-        //   2. DISMISSAL (no shifts): bus leaves camp, drops nearest first outward, doesn't return
-        //      → source=first (camp), no destination constraint
-        //   3. DISMISSAL (with shifts): same as #2 but returns to camp
-        //      → source=first (camp), destination=last (camp)
+        // Dismissal: bus leaves camp → nearest stop → next nearest → outward
+        // Arrival: bus starts at farthest → picks up toward camp → ends at camp
         //
-        showProgress('Optimizing stop order (OSRM)...', 80);
+        showProgress('Optimizing stop order...', 80);
 
         for (let ri = 0; ri < allRoutes.length; ri++) {
             const r = allRoutes[ri];
             if (r.stops.length < 2) { r.stops.forEach((s, i) => { s.stopNum = i + 1; }); continue; }
 
+            // Get OSRM distance matrix: camp (index 0) + all stops
+            let roadDist = null; // roadDist[i][j] = seconds between point i and j (0=camp)
             try {
-                // Build coordinates: always include camp as anchor point
-                const stopCoords = r.stops.map(s => s.lng + ',' + s.lat);
-                const campCoord = campLng + ',' + campLat;
-                let coords, campIdx, tripUrl;
-
-                if (isArrival) {
-                    // ARRIVAL: stops first, camp last
-                    // Bus picks up from farthest, works toward camp
-                    coords = [...stopCoords, campCoord];
-                    campIdx = coords.length - 1;
-                    tripUrl = 'https://router.project-osrm.org/trip/v1/driving/' + coords.join(';') +
-                        '?roundtrip=false&destination=last&geometries=geojson';
-                } else if (hasShifts) {
-                    // DISMISSAL WITH SHIFTS: camp first, stops, camp last (round trip)
-                    coords = [campCoord, ...stopCoords, campCoord];
-                    tripUrl = 'https://router.project-osrm.org/trip/v1/driving/' + coords.join(';') +
-                        '?roundtrip=false&source=first&destination=last&geometries=geojson';
-                } else {
-                    // DISMISSAL NO SHIFTS: camp first, stops, no return
-                    coords = [campCoord, ...stopCoords];
-                    tripUrl = 'https://router.project-osrm.org/trip/v1/driving/' + coords.join(';') +
-                        '?roundtrip=false&source=first&geometries=geojson';
-                }
-
-                const resp = await fetch(tripUrl);
+                const coords = [campLng + ',' + campLat];
+                r.stops.forEach(s => coords.push(s.lng + ',' + s.lat));
+                const resp = await fetch('https://router.project-osrm.org/table/v1/driving/' + coords.join(';') + '?annotations=duration');
                 if (resp.ok) {
                     const data = await resp.json();
-                    if (data.code === 'Ok' && data.waypoints?.length) {
-                        // Extract the ordering OSRM chose
-                        // waypoints[i].waypoint_index = position in the optimal trip
-                        const wpOrder = data.waypoints.map((wp, inputIdx) => ({
-                            inputIdx,
-                            tripPos: wp.waypoint_index
-                        })).sort((a, b) => a.tripPos - b.tripPos);
-
-                        // Filter out camp coordinate(s), keep only stop indices
-                        const orderedStopIndices = [];
-                        wpOrder.forEach(wp => {
-                            if (isArrival) {
-                                // Arrival: indices 0..N-1 are stops, N is camp
-                                if (wp.inputIdx < r.stops.length) orderedStopIndices.push(wp.inputIdx);
-                            } else if (hasShifts) {
-                                // Dismissal+shifts: index 0 is camp, 1..N are stops, N+1 is camp
-                                if (wp.inputIdx >= 1 && wp.inputIdx <= r.stops.length) orderedStopIndices.push(wp.inputIdx - 1);
-                            } else {
-                                // Dismissal no shifts: index 0 is camp, 1..N are stops
-                                if (wp.inputIdx >= 1) orderedStopIndices.push(wp.inputIdx - 1);
-                            }
-                        });
-
-                        if (orderedStopIndices.length === r.stops.length) {
-                            const newStops = orderedStopIndices.map(i => r.stops[i]);
-                            r.stops = newStops;
-                            r.stops.forEach((s, i) => { s.stopNum = i + 1; });
-                            console.log('[Go] OSRM trip: ' + r.busName + ' ✓ (' + r.stops.length + ' stops)');
-                        } else {
-                            console.warn('[Go] OSRM trip: ' + r.busName + ' — index mismatch (' + orderedStopIndices.length + ' vs ' + r.stops.length + '), using fallback sort');
-                            sortStopsFallback(r, campLat, campLng, isArrival);
-                        }
-                    } else {
-                        console.warn('[Go] OSRM trip: ' + r.busName + ' — bad response, using fallback sort');
-                        sortStopsFallback(r, campLat, campLng, isArrival);
-                    }
-                } else {
-                    console.warn('[Go] OSRM trip: ' + r.busName + ' — HTTP ' + resp.status + ', using fallback sort');
-                    sortStopsFallback(r, campLat, campLng, isArrival);
+                    if (data.code === 'Ok' && data.durations) roadDist = data.durations;
                 }
-            } catch (e) {
-                console.warn('[Go] OSRM trip error for ' + r.busName + ':', e.message);
-                sortStopsFallback(r, campLat, campLng, isArrival);
+            } catch (e) { /* use haversine fallback */ }
+
+            // Distance function: returns minutes between two indices (0=camp, 1..N=stops)
+            function getDist(i, j) {
+                if (roadDist && roadDist[i]?.[j] != null && roadDist[i][j] >= 0) return roadDist[i][j] / 60;
+                const a = i === 0 ? { lat: campLat, lng: campLng } : r.stops[i - 1];
+                const b = j === 0 ? { lat: campLat, lng: campLng } : r.stops[j - 1];
+                return (haversineMi(a.lat, a.lng, b.lat, b.lng) / (D.setup.avgSpeed || 25)) * 60;
             }
 
-            // Small delay between OSRM calls to be polite to public server
-            if (ri < allRoutes.length - 1) await new Promise(resolve => setTimeout(resolve, 200));
+            const n = r.stops.length;
+            const sorted = [];
+            const used = new Set();
+
+            if (isArrival) {
+                // ARRIVAL: start at the stop farthest from camp (by road), sweep toward camp
+                let farthestIdx = 0, farthestDist = 0;
+                for (let i = 0; i < n; i++) {
+                    const d = getDist(0, i + 1); // distance from camp to stop i
+                    if (d > farthestDist) { farthestDist = d; farthestIdx = i; }
+                }
+                sorted.push(farthestIdx);
+                used.add(farthestIdx);
+
+                // Nearest-neighbor: always pick the closest unvisited stop
+                while (sorted.length < n) {
+                    const lastStop = sorted[sorted.length - 1];
+                    let bestIdx = -1, bestDist = Infinity;
+                    for (let i = 0; i < n; i++) {
+                        if (used.has(i)) continue;
+                        const d = getDist(lastStop + 1, i + 1);
+                        if (d < bestDist) { bestDist = d; bestIdx = i; }
+                    }
+                    if (bestIdx < 0) break;
+                    sorted.push(bestIdx);
+                    used.add(bestIdx);
+                }
+            } else {
+                // DISMISSAL: start from camp, drop nearest first, sweep outward
+                // First stop = nearest to camp by road
+                let nearestIdx = 0, nearestDist = Infinity;
+                for (let i = 0; i < n; i++) {
+                    const d = getDist(0, i + 1);
+                    if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
+                }
+                sorted.push(nearestIdx);
+                used.add(nearestIdx);
+
+                // Nearest-neighbor from current position
+                while (sorted.length < n) {
+                    const lastStop = sorted[sorted.length - 1];
+                    let bestIdx = -1, bestDist = Infinity;
+                    for (let i = 0; i < n; i++) {
+                        if (used.has(i)) continue;
+                        const d = getDist(lastStop + 1, i + 1);
+                        if (d < bestDist) { bestDist = d; bestIdx = i; }
+                    }
+                    if (bestIdx < 0) break;
+                    sorted.push(bestIdx);
+                    used.add(bestIdx);
+                }
+            }
+
+            // Apply the ordering
+            const newStops = sorted.map(i => r.stops[i]);
+            r.stops = newStops;
+            r.stops.forEach((s, i) => { s.stopNum = i + 1; });
+            console.log('[Go] Route ordered: ' + r.busName + ' (' + r.stops.length + ' stops, ' + (roadDist ? 'OSRM road distances' : 'haversine fallback') + ')');
+
+            // Small delay between OSRM calls
+            if (ri < allRoutes.length - 1 && roadDist) await new Promise(resolve => setTimeout(resolve, 200));
         }
 
-        console.log('[Go] VROOM + OSRM complete:');
+        console.log('[Go] VROOM + ordering complete:');
         allRoutes.forEach(r => console.log('[Go]   ' + r.busName + ': ' + r.stops.length + ' stops, ' + r.camperCount + ' campers'));
         return allRoutes;
-    }
-
-    /** Fallback stop sorting when OSRM /trip is unavailable */
-    function sortStopsFallback(route, campLat, campLng, isArrival) {
-        // Simple nearest-neighbor from camp (dismissal) or from farthest (arrival)
-        route.stops.forEach(s => { s._dist = haversineMi(campLat, campLng, s.lat, s.lng); });
-
-        const sorted = [];
-        const remaining = [...route.stops];
-
-        if (isArrival) {
-            // Arrival: start at farthest, work toward camp
-            remaining.sort((a, b) => b._dist - a._dist);
-        } else {
-            // Dismissal: start at nearest to camp (first drop-off), work outward
-            remaining.sort((a, b) => a._dist - b._dist);
-        }
-        sorted.push(remaining.shift());
-
-        // Nearest-neighbor from current position
-        while (remaining.length) {
-            const last = sorted[sorted.length - 1];
-            let bestIdx = 0, bestDist = Infinity;
-            remaining.forEach((s, i) => {
-                const d = haversineMi(last.lat, last.lng, s.lat, s.lng);
-                if (d < bestDist) { bestDist = d; bestIdx = i; }
-            });
-            sorted.push(remaining.splice(bestIdx, 1)[0]);
-        }
-
-        route.stops = sorted;
-        route.stops.forEach((s, i) => { s.stopNum = i + 1; delete s._dist; });
     }
 
     // =========================================================================
@@ -1087,21 +1057,34 @@
         camperStreets.forEach(c => {
             if (!corridorSet.has(c.streetName)) return;
 
-            // Find the nearest other camper on a DIFFERENT street to identify the cross street
+            // Find the nearest camper on a SIDE STREET (not another corridor) for cross-street name
             let nearestCross = '', nearestDist = Infinity;
             camperStreets.forEach(other => {
                 if (other.name === c.name) return;
                 if (other.streetName === c.streetName) return;
+                if (corridorSet.has(other.streetName)) return; // skip other corridor streets!
                 const d = haversineMi(c.lat, c.lng, other.lat, other.lng);
-                if (d < nearestDist && d < walkMi * 2) {
+                if (d < nearestDist && d < walkMi * 3) {
                     nearestDist = d;
                     nearestCross = other.streetName;
                 }
             });
+            // If no side-street kid found, try ANY different street
+            if (!nearestCross) {
+                camperStreets.forEach(other => {
+                    if (other.name === c.name) return;
+                    if (other.streetName === c.streetName) return;
+                    const d = haversineMi(c.lat, c.lng, other.lat, other.lng);
+                    if (d < nearestDist && d < walkMi * 3) {
+                        nearestDist = d;
+                        nearestCross = other.streetName;
+                    }
+                });
+            }
 
             // Round position along the corridor to group nearby houses
-            // Use a ~300ft grid along the corridor direction
-            const gridSize = 0.0004; // ~90ft precision for grouping
+            // Use walking-distance-based grid so stops merge at block level
+            const gridSize = Math.max(0.001, walkMi / 69.17); // ~walkDist grid
             const snapLat = Math.round(c.lat / gridSize) * gridSize;
             const snapLng = Math.round(c.lng / gridSize) * gridSize;
             const key = c.streetName + '|' + snapLat.toFixed(5) + ',' + snapLng.toFixed(5);
