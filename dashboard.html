@@ -327,7 +327,15 @@ if (window.location.protocol === 'file:') {
 
         // ── WEATHER (uses free Open-Meteo API, no key needed) ──
         function loadWeather() {
-            // Try to get camp address from profile, fallback to NYC
+            // file:// protocol blocks fetch — show friendly fallback
+            if (window.location.protocol === 'file:') {
+                var tempEl = document.getElementById('dashWeatherTemp');
+                var descEl = document.getElementById('dashWeatherDesc');
+                if (tempEl) tempEl.textContent = '☀️';
+                if (descEl) descEl.textContent = 'Deploy to see live weather';
+                return;
+            }
+
             var lat = 40.7128, lon = -74.006;
             fetch('https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon + '&current_weather=true&temperature_unit=fahrenheit')
                 .then(function(r) { return r.json(); })
@@ -344,8 +352,10 @@ if (window.location.protocol === 'file:') {
                     }
                 })
                 .catch(function() {
-                    var el = document.getElementById('dashWeatherDesc');
-                    if (el) el.textContent = 'Unavailable';
+                    var tempEl = document.getElementById('dashWeatherTemp');
+                    var descEl = document.getElementById('dashWeatherDesc');
+                    if (tempEl) tempEl.textContent = '☀️';
+                    if (descEl) descEl.textContent = 'Check back later';
                 });
         }
 
