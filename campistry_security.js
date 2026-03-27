@@ -861,7 +861,7 @@
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net",
         "font-src 'self' https://fonts.gstatic.com",
         "img-src 'self' data: blob: https:",
-        "connect-src 'self' https://bzqmhcumuarrbueqttfh.supabase.co wss://bzqmhcumuarrbueqttfh.supabase.co https://fonts.googleapis.com https://fonts.gstatic.com https://cdn.jsdelivr.net https://api.openrouteservice.org https://*.tile.openstreetmap.org https://server.arcgisonline.com https://geocoding.geo.census.gov https://graphhopper.com https://router.project-osrm.org https://api.mapbox.com",
+        "connect-src 'self' https://bzqmhcumuarrbueqttfh.supabase.co wss://bzqmhcumuarrbueqttfh.supabase.co https://fonts.googleapis.com https://fonts.gstatic.com https://cdn.jsdelivr.net https://api.openrouteservice.org https://*.tile.openstreetmap.org https://server.arcgisonline.com https://geocoding.geo.census.gov https://graphhopper.com https://router.project-osrm.org https://api.mapbox.com https://overpass-api.de",
         "base-uri 'self'",
         "form-action 'self'"
     ].join('; ');
