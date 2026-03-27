@@ -437,6 +437,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .product-me { border-left: 4px solid var(--me-color); }
 .product-flow:not(.disabled):hover { border-color: var(--flow-color); }
 .product-me:not(.disabled):hover { border-color: var(--me-color); }
+.product-health:not(.disabled):hover { border-color: #8B5CF6; }
 
 .product-icon {
     font-size: 2rem;
@@ -478,6 +479,10 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .product-status.active {
     background: rgba(20,125,145,0.08);
     color: #0F5F6E;
+}
+.product-status.health-active {
+    background: rgba(139, 92, 246, 0.08);
+    color: #7C3AED;
 }
 .product-status.coming-soon {
     background: var(--slate-100);
