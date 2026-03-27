@@ -215,6 +215,68 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .dash-weather-desc { font-size: 0.72rem; opacity: 0.7; }
 
 /* ============================================
+   QUICK LAUNCH TILES
+   ============================================ */
+.dash-quick-launch {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 24px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+}
+.dash-quick-launch::-webkit-scrollbar { display: none; }
+.dash-ql-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 14px 16px 10px;
+    min-width: 88px;
+    background: white;
+    border: 1px solid var(--slate-200);
+    border-radius: var(--radius-md);
+    text-decoration: none;
+    color: inherit;
+    transition: all 0.2s ease;
+    cursor: pointer;
+    position: relative;
+    border-bottom: 3px solid var(--ql-color, var(--slate-200));
+}
+.dash-ql-tile:hover {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+    border-color: var(--ql-color, var(--slate-300));
+}
+.dash-ql-tile.dash-ql-disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    background: var(--slate-50);
+}
+.dash-ql-tile.dash-ql-disabled:hover {
+    box-shadow: none;
+    transform: none;
+}
+.dash-ql-logo {
+    height: 28px;
+    width: auto;
+    max-width: 64px;
+    object-fit: contain;
+    display: block;
+}
+.dash-ql-tile span {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--slate-500);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.dash-ql-tile:not(.dash-ql-disabled) span {
+    color: var(--slate-700);
+}
+
+/* ============================================
    QUICK STATS ROW
    ============================================ */
 .dash-stats-row {
@@ -274,6 +336,9 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     margin-bottom: 28px;
 }
 .dash-notif-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     margin-bottom: 14px;
 }
 .dash-notif-header h2 {
@@ -285,6 +350,23 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     color: var(--slate-800);
 }
 .dash-notif-header h2 svg { color: var(--slate-400); }
+.dash-notif-dismiss {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    color: var(--slate-400);
+    transition: all 0.2s ease;
+    cursor: pointer;
+    background: none;
+    border: none;
+}
+.dash-notif-dismiss:hover {
+    background: var(--slate-100);
+    color: var(--slate-600);
+}
 .dash-notif-list {
     display: flex;
     flex-direction: column;
