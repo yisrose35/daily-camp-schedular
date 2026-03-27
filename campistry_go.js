@@ -995,330 +995,104 @@
         }
 
         // ══════════════════════════════════════════════════════════════
-        // ROUTE OPTIMIZER — finds the best driving order for each bus
+        // ROUTE OPTIMIZER — OSRM /trip + /route for real-world ordering
         //
-        // 1. Pre-fetch ALL OSRM distance matrices in parallel
-        // 2. Per bus: multi-start NN + 2-opt + or-opt + double-bridge
-        // 3. Orient for arrival/dismissal
-        // 4. Direction enforcement
+        // For each bus:
+        //   1. OSRM /trip → optimal visiting order on actual road network
+        //   2. Orient for arrival/dismissal
+        //   3. Direction enforcement
+        //   4. OSRM /route → exact leg durations for ETAs
+        //
+        // Three modes:
+        //   Arrival: bus ends at camp → destination=last
+        //   Dismissal (no shifts): bus starts at camp → source=first
+        //   Dismissal (shifts): bus starts+ends at camp → source=first&destination=last
         // ══════════════════════════════════════════════════════════════
 
-        // ── Pre-fetch all OSRM matrices in parallel ──
-        showProgress('Fetching road distances (parallel)...', 75);
-        const matrixPromises = allRoutes.map(async r => {
-            if (r.stops.length < 2) return null;
-            try {
-                const coords = [campLng + ',' + campLat];
-                r.stops.forEach(s => coords.push(s.lng + ',' + s.lat));
-                const resp = await fetch('https://router.project-osrm.org/table/v1/driving/' + coords.join(';') + '?annotations=duration');
-                if (resp.ok) {
-                    const data = await resp.json();
-                    if (data.code === 'Ok' && data.durations) return data.durations;
-                }
-            } catch (e) { /* haversine fallback */ }
-            return null;
-        });
-        const matrices = await Promise.all(matrixPromises);
-        const osrmCount = matrices.filter(m => m).length;
-        console.log('[Go] OSRM matrices: ' + osrmCount + '/' + allRoutes.length + ' fetched in parallel');
+        // ── Phase 1: Get OSRM /trip ordering for all buses in parallel ──
+        showProgress('Computing optimal stop order (OSRM)...', 80);
 
-        // ── Optimize each bus ──
-        showProgress('Optimizing stop order...', 85);
+        const tripPromises = allRoutes.map(async r => {
+            if (r.stops.length < 2) return null;
+            const campCoord = campLng + ',' + campLat;
+            const stopCoords = r.stops.map(s => s.lng + ',' + s.lat);
+
+            let coords, tripUrl;
+            if (isArrival) {
+                coords = [...stopCoords, campCoord]; // stops, then camp at end
+                tripUrl = 'https://router.project-osrm.org/trip/v1/driving/' + coords.join(';') + '?roundtrip=false&destination=last&geometries=geojson&overview=false';
+            } else if (hasShifts) {
+                coords = [campCoord, ...stopCoords, campCoord]; // camp, stops, camp
+                tripUrl = 'https://router.project-osrm.org/trip/v1/driving/' + coords.join(';') + '?roundtrip=false&source=first&destination=last&geometries=geojson&overview=false';
+            } else {
+                coords = [campCoord, ...stopCoords]; // camp, then stops
+                tripUrl = 'https://router.project-osrm.org/trip/v1/driving/' + coords.join(';') + '?roundtrip=false&source=first&geometries=geojson&overview=false';
+            }
+
+            try {
+                const resp = await fetch(tripUrl);
+                if (!resp.ok) return null;
+                const data = await resp.json();
+                if (data.code !== 'Ok' || !data.waypoints?.length) return null;
+                return data;
+            } catch (e) { return null; }
+        });
+
+        const tripResults = await Promise.all(tripPromises);
+
+        // ── Phase 2: Apply OSRM ordering + direction enforcement per bus ──
+        showProgress('Applying route order...', 88);
 
         for (let ri = 0; ri < allRoutes.length; ri++) {
             const r = allRoutes[ri];
             if (r.stops.length < 2) { r.stops.forEach((s, i) => { s.stopNum = i + 1; }); continue; }
 
             const n = r.stops.length;
-            const matrix = matrices[ri]; // pre-fetched
+            const tripData = tripResults[ri];
+            let ordered = false;
 
-            // Tag each stop with its matrix index (preserved through reordering)
-            r.stops.forEach((s, i) => { s._matrixIdx = i + 1; }); // 0=camp, 1..N=stops
+            if (tripData && tripData.waypoints) {
+                // Extract stop order from OSRM waypoints
+                // Each waypoint has waypoint_index = position in the optimal trip
+                const waypoints = tripData.waypoints;
+                const wpByTrip = waypoints.map((wp, inputIdx) => ({ inputIdx, tripPos: wp.waypoint_index }))
+                    .sort((a, b) => a.tripPos - b.tripPos);
 
-            // dist(i, j) — road-seconds between matrix indices (0=camp, 1..N=stops)
-            function dist(i, j) {
-                if (matrix && matrix[i]?.[j] != null && matrix[i][j] >= 0) return matrix[i][j];
-                const a = i === 0 ? { lat: campLat, lng: campLng } : r.stops[i - 1];
-                const b = j === 0 ? { lat: campLat, lng: campLng } : r.stops[j - 1];
-                return (haversineMi(a.lat, a.lng, b.lat, b.lng) / (D.setup.avgSpeed || 25)) * 3600;
-            }
-
-            // ── Helper: total route cost for a tour (stop indices, not matrix indices) ──
-            function tourCost(tour) {
-                let cost = dist(0, tour[0] + 1); // camp → first stop
-                for (let i = 0; i < tour.length - 1; i++) cost += dist(tour[i] + 1, tour[i + 1] + 1);
-                // For dismissal-with-shifts: bus must return to camp → penalize far last stop
-                // For arrival: bus ends at camp → include last-stop-to-camp cost
-                if (hasShifts || isArrival) cost += dist(tour[tour.length - 1] + 1, 0); // last stop → camp
-                return cost;
-            }
-
-            // ── Nearest-neighbor from a given starting stop index ──
-            function nearestNeighbor(startIdx) {
-                const tour = [startIdx];
-                const visited = new Set([startIdx]);
-                while (tour.length < n) {
-                    const last = tour[tour.length - 1];
-                    let bestIdx = -1, bestD = Infinity;
-                    for (let i = 0; i < n; i++) {
-                        if (visited.has(i)) continue;
-                        const d = dist(last + 1, i + 1);
-                        if (d < bestD) { bestD = d; bestIdx = i; }
+                // Filter out camp coordinate(s), map back to stop indices
+                const stopOrder = [];
+                wpByTrip.forEach(wp => {
+                    if (isArrival) {
+                        // indices 0..N-1 = stops, N = camp
+                        if (wp.inputIdx < n) stopOrder.push(wp.inputIdx);
+                    } else if (hasShifts) {
+                        // 0 = camp, 1..N = stops, N+1 = camp
+                        if (wp.inputIdx >= 1 && wp.inputIdx <= n) stopOrder.push(wp.inputIdx - 1);
+                    } else {
+                        // 0 = camp, 1..N = stops
+                        if (wp.inputIdx >= 1) stopOrder.push(wp.inputIdx - 1);
                     }
-                    if (bestIdx < 0) break;
-                    tour.push(bestIdx);
-                    visited.add(bestIdx);
-                }
-                return tour;
-            }
+                });
 
-            // ── 2-opt improvement: repeatedly swap pairs to remove crossings ──
-            function twoOpt(tour) {
-                const t = [...tour];
-                let improved = true;
-                let iterations = 0;
-                const maxIter = Math.min(n * n * 4, 3000); // thorough search
-                while (improved && iterations < maxIter) {
-                    improved = false;
-                    iterations++;
-                    for (let i = 0; i < t.length - 1; i++) {
-                        for (let j = i + 2; j < t.length; j++) {
-                            const prevI = i === 0 ? 0 : t[i - 1] + 1;
-                            const curA = t[i] + 1, curB = t[j] + 1;
-                            const nextJ = j + 1 < t.length ? t[j + 1] + 1 : -1;
-
-                            const oldCost = dist(prevI, curA) + (nextJ >= 0 ? dist(curB, nextJ) : 0);
-                            const newCost = dist(prevI, curB) + (nextJ >= 0 ? dist(curA, nextJ) : 0);
-
-                            if (newCost < oldCost - 0.1) {
-                                const segment = t.slice(i, j + 1).reverse();
-                                for (let k = 0; k < segment.length; k++) t[i + k] = segment[k];
-                                improved = true;
-                            }
-                        }
-                    }
-                }
-                return t;
-            }
-
-            // ── Or-opt: relocate single stops to better positions ──
-            function orOpt(tour) {
-                const t = [...tour];
-                let improved = true;
-                let iterations = 0;
-                while (improved && iterations < 500) {
-                    improved = false;
-                    iterations++;
-                    for (let i = 0; i < t.length; i++) {
-                        // Cost of removing stop i from its current position
-                        const prev = i === 0 ? 0 : t[i - 1] + 1;
-                        const cur = t[i] + 1;
-                        const next = i + 1 < t.length ? t[i + 1] + 1 : -1;
-                        const removeCost = dist(prev, cur) + (next >= 0 ? dist(cur, next) : 0);
-                        const bridgeCost = next >= 0 ? dist(prev, next) : 0;
-                        const savings = removeCost - bridgeCost;
-
-                        // Try inserting stop i between every other pair of consecutive stops
-                        let bestJ = -1, bestGain = 0;
-                        for (let j = 0; j < t.length; j++) {
-                            if (j === i || j === i - 1) continue;
-                            const a = j === 0 ? 0 : t[j - 1] + 1;
-                            const b = t[j] + 1;
-                            const insertCost = dist(a, cur) + dist(cur, b) - dist(a, b);
-                            const gain = savings - insertCost;
-                            if (gain > bestGain + 0.1) { bestGain = gain; bestJ = j; }
-                        }
-
-                        if (bestJ >= 0) {
-                            const stopIdx = t.splice(i, 1)[0];
-                            const insertAt = bestJ > i ? bestJ - 1 : bestJ;
-                            t.splice(insertAt, 0, stopIdx);
-                            improved = true;
-                            break; // restart
-                        }
-                    }
-                }
-                return t;
-            }
-
-            // ══════════════════════════════════════════════════════════
-            // PROFESSIONAL TSP SOLVER
-            //
-            // Phase A: Generate candidates (NN from every start + sorted seeds)
-            // Phase B: Improve each with 2-opt → or-opt → 2-opt cycle
-            // Phase C: Perturbation — double-bridge + re-optimize (escape local minima)
-            // Phase D: Orient for arrival/dismissal
-            // Phase E: Direction enforcement — fix remaining backtracks
-            // ══════════════════════════════════════════════════════════
-
-            // Full improvement cycle: 2-opt → or-opt singles → or-opt pairs → 2-opt polish
-            function fullImprove(tour) {
-                let t = [...tour];
-                let prevCost = tourCost(t);
-                // Iterate improvement cycle until convergence (no improvement found)
-                for (let cycle = 0; cycle < 5; cycle++) {
-                    t = twoOpt(t);
-                    t = orOpt(t);
-                    t = orOptPairs(t);
-                    t = twoOpt(t);
-                    const newCost = tourCost(t);
-                    if (newCost >= prevCost - 0.5) break; // converged
-                    prevCost = newCost;
-                }
-                return t;
-            }
-
-            // Or-opt for pairs: move 2 consecutive stops to a better position
-            function orOptPairs(tour) {
-                const t = [...tour];
-                let improved = true, iter = 0;
-                while (improved && iter < 400) {
-                    improved = false; iter++;
-                    for (let i = 0; i < t.length - 1; i++) {
-                        const prevI = i === 0 ? 0 : t[i - 1] + 1;
-                        const a = t[i] + 1, b = t[i + 1] + 1;
-                        const nextI = i + 2 < t.length ? t[i + 2] + 1 : -1;
-                        const removeCost = dist(prevI, a) + dist(b, nextI >= 0 ? nextI : 0) + dist(a, b);
-                        const bridge = nextI >= 0 ? dist(prevI, nextI) : dist(prevI, 0);
-
-                        let bestJ = -1, bestGain = 0;
-                        for (let j = 0; j < t.length; j++) {
-                            if (j >= i - 1 && j <= i + 2) continue;
-                            const pJ = j === 0 ? 0 : t[j - 1] + 1;
-                            const cJ = t[j] + 1;
-                            const insertCost = dist(pJ, a) + dist(b, cJ) - dist(pJ, cJ);
-                            const gain = (removeCost - bridge) - insertCost - dist(a, b);
-                            if (gain > bestGain + 0.5) { bestGain = gain; bestJ = j; }
-                        }
-                        if (bestJ >= 0) {
-                            const pair = t.splice(i, 2);
-                            const insertAt = bestJ > i ? bestJ - 2 : bestJ;
-                            t.splice(Math.max(0, insertAt), 0, ...pair);
-                            improved = true; break;
-                        }
-                    }
-                }
-                return t;
-            }
-
-            // Double-bridge perturbation: split tour into 4 segments, reconnect differently
-            // This is the key move that escapes local minima (used by LKH solver)
-            function doubleBridge(tour) {
-                if (tour.length < 8) return [...tour]; // too small
-                const len = tour.length;
-                const cuts = [0];
-                const positions = new Set();
-                while (positions.size < 3) positions.add(1 + Math.floor(Math.random() * (len - 2)));
-                [...positions].sort((a, b) => a - b).forEach(p => cuts.push(p));
-                cuts.push(len);
-                // Segments: [0..cut1), [cut1..cut2), [cut2..cut3), [cut3..end)
-                const A = tour.slice(cuts[0], cuts[1]);
-                const B = tour.slice(cuts[1], cuts[2]);
-                const C = tour.slice(cuts[2], cuts[3]);
-                const D = tour.slice(cuts[3], cuts[4]);
-                // Reconnect as A-C-B-D (different from A-B-C-D)
-                return [...A, ...C, ...B, ...D];
-            }
-
-            // ── Phase A+B: Generate + improve candidates ──
-            let bestTour = null, bestCost = Infinity;
-
-            // Nearest-neighbor from every starting stop
-            for (let startIdx = 0; startIdx < n; startIdx++) {
-                let tour = nearestNeighbor(startIdx);
-                tour = fullImprove(tour);
-                const cost = tourCost(tour);
-                if (cost < bestCost) { bestCost = cost; bestTour = tour; }
-            }
-
-            // Sorted seeds: by distance, reverse distance, angle sweep
-            const seeds = [];
-            const byDist = Array.from({ length: n }, (_, i) => i);
-            byDist.sort((a, b) => dist(0, a + 1) - dist(0, b + 1));
-            seeds.push([...byDist], [...byDist].reverse());
-
-            const byAngle = Array.from({ length: n }, (_, i) => i);
-            byAngle.sort((a, b) => {
-                const angA = Math.atan2(r.stops[a].lng - campLng, r.stops[a].lat - campLat);
-                const angB = Math.atan2(r.stops[b].lng - campLng, r.stops[b].lat - campLat);
-                return angA - angB;
-            });
-            seeds.push([...byAngle], [...byAngle].reverse());
-
-            // Direction-biased seed: for dismissal, sort by increasing distance from camp
-            // This seed explicitly avoids backtracking
-            if (!isArrival) {
-                const directional = [...byDist]; // nearest first = dismissal order
-                seeds.push(directional);
-            } else {
-                const directional = [...byDist].reverse(); // farthest first = arrival order
-                seeds.push(directional);
-            }
-
-            seeds.forEach(seed => {
-                let tour = fullImprove(seed);
-                const cost = tourCost(tour);
-                if (cost < bestCost) { bestCost = cost; bestTour = tour; }
-            });
-
-            // ── Phase C: Exhaustive optimization ──
-            // Goal: find the TRUE best route, not just a good one.
-            // Small routes (≤10 stops): try every possible permutation origin
-            // Medium routes (11-25): heavy perturbation (n*5 rounds, 3 restart cycles)  
-            // Large routes (26+): standard perturbation but more rounds
-            if (n >= 6 && bestTour) {
-                if (n <= 10) {
-                    // Small: try ALL permutations from every NN start × multiple perturbation cycles
-                    for (let cycle = 0; cycle < 5; cycle++) {
-                        for (let p = 0; p < n * 3; p++) {
-                            let perturbed = doubleBridge(bestTour);
-                            perturbed = fullImprove(perturbed);
-                            const cost = tourCost(perturbed);
-                            if (cost < bestCost) { bestCost = cost; bestTour = perturbed; }
-                        }
-                    }
-                } else if (n <= 25) {
-                    // Medium: 3 restart cycles with heavy perturbation each
-                    for (let cycle = 0; cycle < 3; cycle++) {
-                        let cycleBest = bestTour;
-                        for (let p = 0; p < n * 5; p++) {
-                            let perturbed = doubleBridge(cycleBest);
-                            perturbed = fullImprove(perturbed);
-                            const cost = tourCost(perturbed);
-                            if (cost < bestCost) { bestCost = cost; bestTour = perturbed; cycleBest = perturbed; }
-                        }
-                    }
-                } else {
-                    // Large: 2 cycles, n*3 rounds each
-                    for (let cycle = 0; cycle < 2; cycle++) {
-                        for (let p = 0; p < n * 3; p++) {
-                            let perturbed = doubleBridge(bestTour);
-                            perturbed = fullImprove(perturbed);
-                            const cost = tourCost(perturbed);
-                            if (cost < bestCost) { bestCost = cost; bestTour = perturbed; }
-                        }
-                    }
+                if (stopOrder.length === n) {
+                    r.stops = stopOrder.map(i => r.stops[i]);
+                    ordered = true;
+                    console.log('[Go] OSRM /trip: ' + r.busName + ' ✓ (' + n + ' stops)');
                 }
             }
 
-            // ── Phase D: Orient for arrival vs dismissal ──
-            if (bestTour && bestTour.length === n) {
-                const firstDist = dist(0, bestTour[0] + 1);
-                const lastDist = dist(0, bestTour[bestTour.length - 1] + 1);
-
-                if (isArrival) {
-                    if (firstDist < lastDist) bestTour.reverse();
-                } else {
-                    if (firstDist > lastDist) bestTour.reverse();
-                }
-                r.stops = bestTour.map(i => r.stops[i]);
+            if (!ordered) {
+                // Fallback: sort by road distance from camp (nearest first for dismissal)
+                console.warn('[Go] OSRM /trip failed for ' + r.busName + ' — using distance sort');
+                r.stops.forEach(s => { s._campDist = haversineMi(campLat, campLng, s.lat, s.lng); });
+                if (isArrival) r.stops.sort((a, b) => b._campDist - a._campDist); // farthest first
+                else r.stops.sort((a, b) => a._campDist - b._campDist); // nearest first
+                r.stops.forEach(s => { delete s._campDist; });
             }
 
-            // ── Phase E: Direction enforcement ──
-            // After TSP optimization + orientation, enforce directional flow.
-            // Dismissal: each stop should be farther from camp than the previous (allow 15% tolerance)
-            // Arrival: each stop should be closer to camp than the previous
-            // If violated, try relocating the offending stop to a better position.
+            // ── Direction enforcement ──
+            // Dismissal: each stop should be progressively farther from camp
+            // Arrival: each stop should be progressively closer to camp
+            // If a stop violates this, relocate it to the best fitting position
             if (r.stops.length >= 4) {
                 let relocations = 0;
                 for (let pass = 0; pass < 3; pass++) {
@@ -1329,28 +1103,23 @@
                         const wrongDir = isArrival ? (dCur > dPrev * 1.15) : (dCur < dPrev * 0.85);
                         if (!wrongDir) continue;
 
-                        // Find the best position for this stop that doesn't violate direction
                         const stop = r.stops.splice(i, 1)[0];
-                        let bestPos = i, bestCostDelta = 0;
+                        const dStop = haversineMi(campLat, campLng, stop.lat, stop.lng);
+                        let bestPos = i, bestCost = Infinity;
 
                         for (let j = 0; j <= r.stops.length; j++) {
-                            // Check if inserting at j maintains direction
                             const dBefore = j > 0 ? haversineMi(campLat, campLng, r.stops[j - 1].lat, r.stops[j - 1].lng) : 0;
                             const dAfter = j < r.stops.length ? haversineMi(campLat, campLng, r.stops[j].lat, r.stops[j].lng) : Infinity;
-                            const dStop = haversineMi(campLat, campLng, stop.lat, stop.lng);
-
                             let fits;
                             if (isArrival) fits = (j === 0 || dStop <= dBefore * 1.1) && (j >= r.stops.length || dStop >= dAfter * 0.9);
                             else fits = (j === 0 || dStop >= dBefore * 0.9) && (j >= r.stops.length || dStop <= dAfter * 1.1);
 
                             if (fits) {
-                                // Calculate insertion cost
-                                const prevPt = j > 0 ? r.stops[j - 1] : { lat: campLat, lng: campLng };
-                                const nextPt = j < r.stops.length ? r.stops[j] : null;
-                                const cost = haversineMi(prevPt.lat, prevPt.lng, stop.lat, stop.lng) +
-                                    (nextPt ? haversineMi(stop.lat, stop.lng, nextPt.lat, nextPt.lng) : 0) -
-                                    (nextPt ? haversineMi(prevPt.lat, prevPt.lng, nextPt.lat, nextPt.lng) : 0);
-                                if (bestPos === i || cost < bestCostDelta) { bestCostDelta = cost; bestPos = j; }
+                                const prev = j > 0 ? r.stops[j - 1] : { lat: campLat, lng: campLng };
+                                const next = j < r.stops.length ? r.stops[j] : null;
+                                const cost = haversineMi(prev.lat, prev.lng, stop.lat, stop.lng) +
+                                    (next ? haversineMi(stop.lat, stop.lng, next.lat, next.lng) - haversineMi(prev.lat, prev.lng, next.lat, next.lng) : 0);
+                                if (cost < bestCost) { bestCost = cost; bestPos = j; }
                             }
                         }
                         r.stops.splice(bestPos, 0, stop);
@@ -1362,17 +1131,86 @@
             }
 
             r.stops.forEach((s, i) => { s.stopNum = i + 1; });
-            r._osrmMatrix = matrix;
+        }
 
-            // Per-bus metrics
-            let routeDist = 0;
-            for (let i = 0; i < r.stops.length; i++) {
-                const fromIdx = i === 0 ? 0 : (r.stops[i - 1]._matrixIdx || 0);
-                const toIdx = r.stops[i]._matrixIdx || 0;
-                routeDist += dist(fromIdx, toIdx);
+        // ── Phase 3: Get exact driving times via OSRM /route (parallel) ──
+        showProgress('Getting exact drive times...', 92);
+
+        const routePromises = allRoutes.map(async r => {
+            if (r.stops.length < 1) return null;
+            const wp = [campLng + ',' + campLat];
+            r.stops.forEach(s => { if (s.lat && s.lng) wp.push(s.lng + ',' + s.lat); });
+            if (isArrival) wp.push(campLng + ',' + campLat); // return to camp
+            if (!isArrival && hasShifts) wp.push(campLng + ',' + campLat); // return for next shift
+
+            try {
+                const resp = await fetch('https://router.project-osrm.org/route/v1/driving/' + wp.join(';') + '?overview=false&steps=false');
+                if (!resp.ok) return null;
+                const data = await resp.json();
+                if (data.code !== 'Ok' || !data.routes?.[0]?.legs) return null;
+                return data.routes[0].legs.map(l => (l.duration || 0) / 60); // seconds → minutes
+            } catch (e) { return null; }
+        });
+
+        const routeLegResults = await Promise.all(routePromises);
+
+        // ── Phase 4: Calculate ETAs from leg durations ──
+        for (let ri = 0; ri < allRoutes.length; ri++) {
+            const r = allRoutes[ri];
+            if (!r.stops.length) continue;
+            const legs = routeLegResults[ri]; // [camp→stop1, stop1→stop2, ..., stopN→camp?]
+            const avgStopMinLocal = D.setup.avgStopTime || 2;
+
+            // Haversine fallback for individual legs
+            function legFallback(a, b) {
+                if (a.lat && b.lat) return (haversineMi(a.lat, a.lng, b.lat, b.lng) / (D.setup.avgSpeed || 25)) * 60;
+                return 3;
             }
-            console.log('[Go] Optimized: ' + r.busName + ' (' + n + ' stops, ' + r.camperCount + ' kids, ~' + Math.round(routeDist / 60) + ' min drive, ' + (matrix ? 'OSRM' : 'haversine') + ')');
 
+            if (isArrival) {
+                // Arrival: work backward from arrival time
+                // Legs: [camp→stop1, stop1→stop2, ..., stopN→camp]
+                // But for arrival, stops are in pickup order, last leg is lastStop→camp
+                let totalDur = 0;
+                for (let i = 0; i < r.stops.length; i++) {
+                    const legMin = legs ? (legs[i] || 3) : (i === 0 ? 15 : legFallback(r.stops[i - 1], r.stops[i]));
+                    totalDur += legMin + avgStopMinLocal;
+                }
+                // Last leg: last stop to camp
+                if (legs && legs.length > r.stops.length) totalDur += legs[r.stops.length];
+                else if (r.stops.length > 0) totalDur += legFallback(r.stops[r.stops.length - 1], { lat: campLat, lng: campLng });
+
+                const timeMin = parseTime(shift.departureTime || '08:00');
+                let cum = timeMin - totalDur;
+                for (let i = 0; i < r.stops.length; i++) {
+                    const legMin = legs ? (legs[i] || 3) : (i === 0 ? 15 : legFallback(r.stops[i - 1], r.stops[i]));
+                    cum += legMin + avgStopMinLocal;
+                    r.stops[i].estimatedTime = formatTime(cum);
+                    r.stops[i].estimatedMin = cum;
+                }
+                r.totalDuration = Math.round(totalDur);
+
+            } else {
+                // Dismissal: forward from departure
+                // Legs: [camp→stop1, stop1→stop2, ..., (stopN→camp if hasShifts)]
+                const timeMin = parseTime(shift.departureTime || '16:00');
+                let cum = timeMin;
+                for (let i = 0; i < r.stops.length; i++) {
+                    const legMin = legs ? (legs[i] || 3) : (i === 0 ? 15 : legFallback(r.stops[i - 1], r.stops[i]));
+                    cum += legMin + avgStopMinLocal;
+                    r.stops[i].estimatedTime = formatTime(cum);
+                    r.stops[i].estimatedMin = cum;
+                }
+                r.totalDuration = Math.round(cum - timeMin);
+                if (hasShifts && legs && legs.length > r.stops.length) {
+                    r.returnTocamp = Math.round(legs[r.stops.length]);
+                    r.totalDuration += r.returnTocamp;
+                }
+            }
+
+            r.camperCount = r.stops.reduce((s, st) => s + st.campers.length, 0);
+            const totalLegMin = legs ? legs.reduce((s, l) => s + l, 0) : r.totalDuration;
+            console.log('[Go] ' + r.busName + ': ' + r.stops.length + ' stops, ' + r.camperCount + ' kids, ' + Math.round(totalLegMin) + ' min' + (legs ? ' (OSRM exact)' : ' (estimated)'));
         }
 
         // ── Route quality summary ──
@@ -1417,202 +1255,104 @@
         if (!campLat || !campLng) { toast('No camp coordinates', 'error'); return; }
 
         toast('Re-optimizing ' + route.busName + '...');
-        console.log('[Go] Re-optimizing ' + route.busName + ' (' + route.stops.length + ' stops)');
-
-        const n = route.stops.length;
         const stops = route.stops.filter(s => !s.isMonitor && !s.isCounselor);
+        const specialStops = route.stops.filter(s => s.isMonitor || s.isCounselor);
         if (stops.length < 2) { toast('Not enough stops'); return; }
 
-        // Fetch fresh OSRM matrix
-        let matrix = null;
+        // OSRM /trip for optimal order
+        const campCoord = campLng + ',' + campLat;
+        const stopCoords = stops.map(s => s.lng + ',' + s.lat);
+        let coords, tripUrl;
+        if (isArrival) {
+            coords = [...stopCoords, campCoord];
+            tripUrl = 'https://router.project-osrm.org/trip/v1/driving/' + coords.join(';') + '?roundtrip=false&destination=last&geometries=geojson&overview=false';
+        } else if (hasShifts) {
+            coords = [campCoord, ...stopCoords, campCoord];
+            tripUrl = 'https://router.project-osrm.org/trip/v1/driving/' + coords.join(';') + '?roundtrip=false&source=first&destination=last&geometries=geojson&overview=false';
+        } else {
+            coords = [campCoord, ...stopCoords];
+            tripUrl = 'https://router.project-osrm.org/trip/v1/driving/' + coords.join(';') + '?roundtrip=false&source=first&geometries=geojson&overview=false';
+        }
+
+        let newStops = stops;
         try {
-            const coords = [campLng + ',' + campLat];
-            stops.forEach(s => coords.push(s.lng + ',' + s.lat));
-            const resp = await fetch('https://router.project-osrm.org/table/v1/driving/' + coords.join(';') + '?annotations=duration');
+            const resp = await fetch(tripUrl);
             if (resp.ok) {
                 const data = await resp.json();
-                if (data.code === 'Ok' && data.durations) matrix = data.durations;
-            }
-        } catch (e) { console.warn('[Go] OSRM matrix failed:', e.message); }
-
-        const nn = stops.length;
-        stops.forEach((s, i) => { s._matrixIdx = i + 1; });
-
-        function dist(i, j) {
-            if (matrix && matrix[i]?.[j] != null && matrix[i][j] >= 0) return matrix[i][j];
-            const a = i === 0 ? { lat: campLat, lng: campLng } : stops[i - 1];
-            const b = j === 0 ? { lat: campLat, lng: campLng } : stops[j - 1];
-            return (haversineMi(a.lat, a.lng, b.lat, b.lng) / (D.setup.avgSpeed || 25)) * 3600;
-        }
-
-        function tourCost(tour) {
-            let cost = dist(0, tour[0] + 1);
-            for (let i = 0; i < tour.length - 1; i++) cost += dist(tour[i] + 1, tour[i + 1] + 1);
-            if (hasShifts || isArrival) cost += dist(tour[tour.length - 1] + 1, 0);
-            return cost;
-        }
-
-        function nearestNeighbor(startIdx) {
-            const tour = [startIdx]; const visited = new Set([startIdx]);
-            while (tour.length < nn) {
-                const last = tour[tour.length - 1]; let bestIdx = -1, bestD = Infinity;
-                for (let i = 0; i < nn; i++) { if (visited.has(i)) continue; const d = dist(last + 1, i + 1); if (d < bestD) { bestD = d; bestIdx = i; } }
-                if (bestIdx < 0) break; tour.push(bestIdx); visited.add(bestIdx);
-            }
-            return tour;
-        }
-
-        function twoOpt(tour) {
-            const t = [...tour]; let improved = true, iter = 0;
-            while (improved && iter < Math.min(nn * nn * 2, 1000)) {
-                improved = false; iter++;
-                for (let i = 0; i < t.length - 1; i++) for (let j = i + 2; j < t.length; j++) {
-                    const pI = i === 0 ? 0 : t[i - 1] + 1, cA = t[i] + 1, cB = t[j] + 1, nJ = j + 1 < t.length ? t[j + 1] + 1 : -1;
-                    if (dist(pI, cB) + (nJ >= 0 ? dist(cA, nJ) : 0) < dist(pI, cA) + (nJ >= 0 ? dist(cB, nJ) : 0) - 0.1) {
-                        const seg = t.slice(i, j + 1).reverse(); for (let k = 0; k < seg.length; k++) t[i + k] = seg[k]; improved = true;
-                    }
+                if (data.code === 'Ok' && data.waypoints?.length) {
+                    const n = stops.length;
+                    const wpByTrip = data.waypoints.map((wp, idx) => ({ idx, pos: wp.waypoint_index })).sort((a, b) => a.pos - b.pos);
+                    const order = [];
+                    wpByTrip.forEach(wp => {
+                        if (isArrival && wp.idx < n) order.push(wp.idx);
+                        else if (hasShifts && wp.idx >= 1 && wp.idx <= n) order.push(wp.idx - 1);
+                        else if (!isArrival && !hasShifts && wp.idx >= 1) order.push(wp.idx - 1);
+                    });
+                    if (order.length === n) newStops = order.map(i => stops[i]);
                 }
             }
-            return t;
-        }
+        } catch (e) { console.warn('[Go] OSRM /trip failed:', e.message); }
 
-        function orOpt(tour) {
-            const t = [...tour]; let improved = true, iter = 0;
-            while (improved && iter < 200) {
-                improved = false; iter++;
-                for (let i = 0; i < t.length; i++) {
-                    const prev = i === 0 ? 0 : t[i - 1] + 1, cur = t[i] + 1, next = i + 1 < t.length ? t[i + 1] + 1 : -1;
-                    const removeCost = dist(prev, cur) + (next >= 0 ? dist(cur, next) : 0);
-                    const bridgeCost = next >= 0 ? dist(prev, next) : 0;
-                    const savings = removeCost - bridgeCost;
-                    let bestJ = -1, bestGain = 0;
-                    for (let j = 0; j < t.length; j++) {
-                        if (j === i || j === i - 1) continue;
-                        const a = j === 0 ? 0 : t[j - 1] + 1, b = t[j] + 1;
-                        const gain = savings - (dist(a, cur) + dist(cur, b) - dist(a, b));
-                        if (gain > bestGain + 0.1) { bestGain = gain; bestJ = j; }
-                    }
-                    if (bestJ >= 0) { const si = t.splice(i, 1)[0]; t.splice(bestJ > i ? bestJ - 1 : bestJ, 0, si); improved = true; break; }
+        // Direction enforcement
+        for (let pass = 0; pass < 3; pass++) {
+            let moved = false;
+            for (let i = 1; i < newStops.length; i++) {
+                const dP = haversineMi(campLat, campLng, newStops[i - 1].lat, newStops[i - 1].lng);
+                const dC = haversineMi(campLat, campLng, newStops[i].lat, newStops[i].lng);
+                const wrong = isArrival ? (dC > dP * 1.15) : (dC < dP * 0.85);
+                if (!wrong) continue;
+                const stop = newStops.splice(i, 1)[0];
+                const dS = haversineMi(campLat, campLng, stop.lat, stop.lng);
+                let bestPos = i, bestCd = Infinity;
+                for (let j = 0; j <= newStops.length; j++) {
+                    const dB = j > 0 ? haversineMi(campLat, campLng, newStops[j - 1].lat, newStops[j - 1].lng) : 0;
+                    const dA = j < newStops.length ? haversineMi(campLat, campLng, newStops[j].lat, newStops[j].lng) : Infinity;
+                    let fits = isArrival ? (j === 0 || dS <= dB * 1.1) && (j >= newStops.length || dS >= dA * 0.9) : (j === 0 || dS >= dB * 0.9) && (j >= newStops.length || dS <= dA * 1.1);
+                    if (fits) { const prev = j > 0 ? newStops[j - 1] : { lat: campLat, lng: campLng }; const nxt = j < newStops.length ? newStops[j] : null; const cost = haversineMi(prev.lat, prev.lng, stop.lat, stop.lng) + (nxt ? haversineMi(stop.lat, stop.lng, nxt.lat, nxt.lng) - haversineMi(prev.lat, prev.lng, nxt.lat, nxt.lng) : 0); if (cost < bestCd) { bestCd = cost; bestPos = j; } }
                 }
+                newStops.splice(bestPos, 0, stop);
+                if (bestPos !== i) moved = true;
             }
-            return t;
+            if (!moved) break;
         }
 
-        function doubleBridge(tour) {
-            if (tour.length < 8) return [...tour];
-            const len = tour.length, positions = new Set();
-            while (positions.size < 3) positions.add(1 + Math.floor(Math.random() * (len - 2)));
-            const cuts = [0, ...[...positions].sort((a, b) => a - b), len];
-            return [...tour.slice(cuts[0], cuts[1]), ...tour.slice(cuts[2], cuts[3]), ...tour.slice(cuts[1], cuts[2]), ...tour.slice(cuts[3], cuts[4])];
-        }
-
-        function fullImprove(t) { t = twoOpt(t); t = orOpt(t); t = twoOpt(t); return t; }
-
-        // Run full optimizer
-        let bestTour = null, bestCost = Infinity;
-        for (let s = 0; s < nn; s++) {
-            let tour = fullImprove(nearestNeighbor(s));
-            const cost = tourCost(tour);
-            if (cost < bestCost) { bestCost = cost; bestTour = tour; }
-        }
-
-        // Seed strategies
-        const byDist = Array.from({ length: nn }, (_, i) => i).sort((a, b) => dist(0, a + 1) - dist(0, b + 1));
-        [byDist, [...byDist].reverse()].forEach(seed => {
-            const t = fullImprove([...seed]); const c = tourCost(t);
-            if (c < bestCost) { bestCost = c; bestTour = t; }
-        });
-
-        // Perturbation
-        if (nn >= 6 && bestTour) {
-            for (let p = 0; p < Math.min(nn, 25); p++) {
-                const t = fullImprove(doubleBridge(bestTour)); const c = tourCost(t);
-                if (c < bestCost) { bestCost = c; bestTour = t; }
-            }
-        }
-
-        // Orient
-        if (bestTour && bestTour.length === nn) {
-            const fd = dist(0, bestTour[0] + 1), ld = dist(0, bestTour[bestTour.length - 1] + 1);
-            if (isArrival && fd < ld) bestTour.reverse();
-            if (!isArrival && fd > ld) bestTour.reverse();
-            const newStops = bestTour.map(i => stops[i]);
-
-            // Direction enforcement
-            for (let pass = 0; pass < 3; pass++) {
-                let moved = false;
-                for (let i = 1; i < newStops.length; i++) {
-                    const dP = haversineMi(campLat, campLng, newStops[i - 1].lat, newStops[i - 1].lng);
-                    const dC = haversineMi(campLat, campLng, newStops[i].lat, newStops[i].lng);
-                    const wrong = isArrival ? (dC > dP * 1.15) : (dC < dP * 0.85);
-                    if (!wrong) continue;
-                    const stop = newStops.splice(i, 1)[0];
-                    let bestPos = i, bestCd = Infinity;
-                    for (let j = 0; j <= newStops.length; j++) {
-                        const dB = j > 0 ? haversineMi(campLat, campLng, newStops[j - 1].lat, newStops[j - 1].lng) : 0;
-                        const dA = j < newStops.length ? haversineMi(campLat, campLng, newStops[j].lat, newStops[j].lng) : Infinity;
-                        const dS = haversineMi(campLat, campLng, stop.lat, stop.lng);
-                        let fits = isArrival ? (j === 0 || dS <= dB * 1.1) && (j >= newStops.length || dS >= dA * 0.9) : (j === 0 || dS >= dB * 0.9) && (j >= newStops.length || dS <= dA * 1.1);
-                        if (fits) {
-                            const prev = j > 0 ? newStops[j - 1] : { lat: campLat, lng: campLng };
-                            const nxt = j < newStops.length ? newStops[j] : null;
-                            const cost = haversineMi(prev.lat, prev.lng, stop.lat, stop.lng) + (nxt ? haversineMi(stop.lat, stop.lng, nxt.lat, nxt.lng) - haversineMi(prev.lat, prev.lng, nxt.lat, nxt.lng) : 0);
-                            if (cost < bestCd) { bestCd = cost; bestPos = j; }
-                        }
-                    }
-                    newStops.splice(bestPos, 0, stop);
-                    if (bestPos !== i) moved = true;
-                }
-                if (!moved) break;
-            }
-
-            // Rebuild route stops (preserve monitor/counselor stops at end)
-            const specialStops = route.stops.filter(s => s.isMonitor || s.isCounselor);
-            route.stops = [...newStops, ...specialStops];
-        }
-
+        route.stops = [...newStops, ...specialStops];
         route.stops.forEach((s, i) => { s.stopNum = i + 1; });
-        route._osrmMatrix = matrix;
         route.camperCount = route.stops.reduce((s, st) => s + st.campers.length, 0);
 
-        // Recalculate ETAs
-        const avgStopMin = D.setup.avgStopTime || 2;
-        const avgSpeedMph = D.setup.avgSpeed || 25;
-        const timeMin = parseTime(sr.shift.departureTime || (isArrival ? '08:00' : '16:00'));
-
-        function driveMin(a, b) {
-            if (matrix && a._matrixIdx != null && b._matrixIdx != null) { const v = matrix[a._matrixIdx]?.[b._matrixIdx]; if (v != null && v >= 0) return v / 60; }
-            if (a.lat && b.lat) return (haversineMi(a.lat, a.lng, b.lat, b.lng) / avgSpeedMph) * 60;
-            return 3;
-        }
-        function campToStopMin(s) {
-            if (matrix && s._matrixIdx != null) { const v = matrix[0]?.[s._matrixIdx]; if (v != null && v >= 0) return v / 60; }
-            if (s.lat && campLat) return (haversineMi(campLat, campLng, s.lat, s.lng) / avgSpeedMph) * 60;
-            return 15;
-        }
-
-        if (isArrival) {
-            let totalDur = 0;
-            for (let i = 0; i < route.stops.length; i++) { totalDur += (i === 0 ? campToStopMin(route.stops[0]) : driveMin(route.stops[i - 1], route.stops[i])) + avgStopMin; }
-            totalDur += campToStopMin(route.stops[route.stops.length - 1]);
-            let cum = timeMin - totalDur;
-            route.stops.forEach((s, i) => { cum += (i === 0 ? campToStopMin(s) : driveMin(route.stops[i - 1], s)) + avgStopMin; s.estimatedTime = formatTime(cum); s.estimatedMin = cum; });
-            route.totalDuration = Math.round(totalDur);
-        } else {
-            let cum = timeMin;
-            route.stops.forEach((s, i) => { cum += (i === 0 ? campToStopMin(s) : driveMin(route.stops[i - 1], s)) + avgStopMin; s.estimatedTime = formatTime(cum); s.estimatedMin = cum; });
-            route.totalDuration = Math.round(cum - timeMin);
-            if (hasShifts) route.totalDuration += Math.round(campToStopMin(route.stops[route.stops.length - 1]));
-        }
-
-        // Clean up
-        route.stops.forEach(s => { delete s._matrixIdx; });
-        delete route._osrmMatrix;
+        // Get exact ETAs via OSRM /route
+        const wp = [campLng + ',' + campLat];
+        newStops.forEach(s => wp.push(s.lng + ',' + s.lat));
+        if (isArrival || hasShifts) wp.push(campLng + ',' + campLat);
+        try {
+            const resp = await fetch('https://router.project-osrm.org/route/v1/driving/' + wp.join(';') + '?overview=false&steps=false');
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.code === 'Ok' && data.routes?.[0]?.legs) {
+                    const legs = data.routes[0].legs.map(l => (l.duration || 0) / 60);
+                    const avgStopMin = D.setup.avgStopTime || 2;
+                    const timeMin = parseTime(sr.shift.departureTime || (isArrival ? '08:00' : '16:00'));
+                    if (isArrival) {
+                        let totalDur = 0;
+                        for (let i = 0; i < newStops.length; i++) totalDur += (legs[i] || 3) + avgStopMin;
+                        if (legs.length > newStops.length) totalDur += legs[newStops.length];
+                        let cum = timeMin - totalDur;
+                        for (let i = 0; i < newStops.length; i++) { cum += (legs[i] || 3) + avgStopMin; newStops[i].estimatedTime = formatTime(cum); newStops[i].estimatedMin = cum; }
+                        route.totalDuration = Math.round(totalDur);
+                    } else {
+                        let cum = timeMin;
+                        for (let i = 0; i < newStops.length; i++) { cum += (legs[i] || 3) + avgStopMin; newStops[i].estimatedTime = formatTime(cum); newStops[i].estimatedMin = cum; }
+                        route.totalDuration = Math.round(cum - timeMin);
+                        if (hasShifts && legs.length > newStops.length) route.totalDuration += Math.round(legs[newStops.length]);
+                    }
+                }
+            }
+        } catch (e) { /* keep existing ETAs */ }
 
         _generatedRoutes = D.savedRoutes;
         save();
         renderRouteResults(applyOverrides(D.savedRoutes));
-        console.log('[Go] Re-optimized ' + route.busName + ': ' + Math.round(bestCost / 60) + ' min (' + (matrix ? 'OSRM' : 'haversine') + ')');
+        console.log('[Go] Re-optimized ' + route.busName + ' via OSRM /trip');
         toast(route.busName + ' re-optimized!');
     }
 
