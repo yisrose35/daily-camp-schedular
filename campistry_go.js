@@ -1015,186 +1015,126 @@
         const walkFt = D.setup.maxWalkDistance || 500;
         const walkMi = walkFt * 0.000189394;
 
-        // ── Step 1: Parse every camper's street name and house number ──
-        const camperStreets = campers.map(c => {
-            const parsed = parseAddress(c.address);
-            return { ...c, streetName: parsed.street, houseNum: parsed.num, sideStreet: '' };
+        // ── Step 1: Parse every camper's street ──
+        const parsed = campers.map(c => {
+            const p = parseAddress(c.address);
+            return { ...c, streetName: p.street, houseNum: p.num };
         });
 
-        // ── Step 2: Identify CORRIDOR streets ──
-        // A corridor street is one where many kids live. The bus drives along corridors.
-        // Side streets are streets with fewer kids — those kids walk to the corridor.
-        const streetCounts = {};
-        camperStreets.forEach(c => {
-            if (c.streetName) streetCounts[c.streetName] = (streetCounts[c.streetName] || 0) + 1;
+        // ── Step 2: Group campers by street ──
+        const byStreet = {};
+        parsed.forEach(c => {
+            if (!c.streetName) return;
+            if (!byStreet[c.streetName]) byStreet[c.streetName] = [];
+            byStreet[c.streetName].push(c);
         });
 
-        // Sort streets by kid count descending
-        const sortedStreets = Object.entries(streetCounts).sort((a, b) => b[1] - a[1]);
-        console.log('[Go] Street frequency:', sortedStreets.map(([s, n]) => s + ':' + n).join(', '));
+        // Sort each street's campers by house number
+        Object.values(byStreet).forEach(arr => arr.sort((a, b) => a.houseNum - b.houseNum));
 
-        // Corridors = streets with 3+ kids (or top streets if none have 3+)
-        const corridorThreshold = Math.max(2, Math.floor(campers.length / 20));
-        const corridorSet = new Set();
-        sortedStreets.forEach(([street, count]) => {
-            if (count >= corridorThreshold) corridorSet.add(street);
-        });
-        // If no corridors found, use top 3 streets
-        if (corridorSet.size === 0) {
-            sortedStreets.slice(0, 3).forEach(([street]) => corridorSet.add(street));
-        }
+        console.log('[Go] Streets:', Object.entries(byStreet).map(([s, c]) => s + ':' + c.length).sort((a, b) => parseInt(b.split(':')[1]) - parseInt(a.split(':')[1])).join(', '));
 
-        console.log('[Go] Corridor streets (' + corridorSet.size + '):', [...corridorSet].join(', '));
+        // ── Step 3: Create stops along each street ──
+        // Walk along the street by house number. Consecutive houses within walk distance = same stop.
+        const allStops = [];
 
-        // ── Step 3: Build corridor intersections ──
-        // For each kid on a corridor, identify their cross street
-        // For each kid on a side street, find the nearest corridor kid
-        // Group into intersections: "Corridor St & Cross St"
+        Object.entries(byStreet).forEach(([streetName, streetCampers]) => {
+            if (!streetCampers.length) return;
+            let currentGroup = [streetCampers[0]];
 
-        const intersections = {}; // key → { lat, lng, campers[], corridorSt, crossSt }
+            for (let i = 1; i < streetCampers.length; i++) {
+                const prev = currentGroup[currentGroup.length - 1];
+                const curr = streetCampers[i];
+                const dist = haversineMi(prev.lat, prev.lng, curr.lat, curr.lng);
 
-        // First pass: place corridor kids at their intersections
-        camperStreets.forEach(c => {
-            if (!corridorSet.has(c.streetName)) return;
-
-            // Find the nearest camper on a SIDE STREET (not another corridor) for cross-street name
-            let nearestCross = '', nearestDist = Infinity;
-            camperStreets.forEach(other => {
-                if (other.name === c.name) return;
-                if (other.streetName === c.streetName) return;
-                if (corridorSet.has(other.streetName)) return; // skip other corridor streets!
-                const d = haversineMi(c.lat, c.lng, other.lat, other.lng);
-                if (d < nearestDist && d < walkMi * 3) {
-                    nearestDist = d;
-                    nearestCross = other.streetName;
-                }
-            });
-            // If no side-street kid found, try ANY different street
-            if (!nearestCross) {
-                camperStreets.forEach(other => {
-                    if (other.name === c.name) return;
-                    if (other.streetName === c.streetName) return;
-                    const d = haversineMi(c.lat, c.lng, other.lat, other.lng);
-                    if (d < nearestDist && d < walkMi * 3) {
-                        nearestDist = d;
-                        nearestCross = other.streetName;
-                    }
-                });
-            }
-
-            // Round position along the corridor to group nearby houses
-            // Use walking-distance-based grid so stops merge at block level
-            const gridSize = Math.max(0.001, walkMi / 69.17); // ~walkDist grid
-            const snapLat = Math.round(c.lat / gridSize) * gridSize;
-            const snapLng = Math.round(c.lng / gridSize) * gridSize;
-            const key = c.streetName + '|' + snapLat.toFixed(5) + ',' + snapLng.toFixed(5);
-
-            if (!intersections[key]) {
-                intersections[key] = {
-                    lat: snapLat, lng: snapLng,
-                    campers: [], corridorSt: c.streetName,
-                    crossStreets: {}
-                };
-            }
-            intersections[key].campers.push(c);
-            if (nearestCross) {
-                intersections[key].crossStreets[nearestCross] = (intersections[key].crossStreets[nearestCross] || 0) + 1;
-            }
-        });
-
-        // Second pass: assign side-street kids to nearest corridor intersection
-        camperStreets.forEach(c => {
-            if (corridorSet.has(c.streetName)) return; // already placed
-
-            // Find nearest existing intersection within walking distance
-            let bestKey = null, bestDist = Infinity;
-            Object.entries(intersections).forEach(([key, inter]) => {
-                const d = haversineMi(c.lat, c.lng, inter.lat, inter.lng);
-                if (d < bestDist) { bestDist = d; bestKey = key; }
-            });
-
-            // If within walking distance, add to that intersection
-            if (bestKey && bestDist <= walkMi) {
-                intersections[bestKey].campers.push(c);
-                intersections[bestKey].crossStreets[c.streetName] = (intersections[bestKey].crossStreets[c.streetName] || 0) + 1;
-            } else {
-                // Too far from any corridor — create a standalone stop
-                const key = 'side|' + c.lat.toFixed(5) + ',' + c.lng.toFixed(5);
-                if (!intersections[key]) {
-                    intersections[key] = {
-                        lat: c.lat, lng: c.lng,
-                        campers: [], corridorSt: c.streetName,
-                        crossStreets: {}
-                    };
-                }
-                intersections[key].campers.push(c);
-            }
-        });
-
-        // ── Step 4: Merge nearby intersections on the same corridor ──
-        // If two intersections on the same corridor are within walkMi, merge them
-        const interArray = Object.values(intersections);
-        let merged = true;
-        while (merged) {
-            merged = false;
-            for (let i = 0; i < interArray.length; i++) {
-                for (let j = i + 1; j < interArray.length; j++) {
-                    if (interArray[i].corridorSt !== interArray[j].corridorSt) continue;
-                    const d = haversineMi(interArray[i].lat, interArray[i].lng, interArray[j].lat, interArray[j].lng);
-                    if (d <= walkMi * 0.7) {
-                        // Merge j into i
-                        interArray[i].campers.push(...interArray[j].campers);
-                        Object.entries(interArray[j].crossStreets).forEach(([st, cnt]) => {
-                            interArray[i].crossStreets[st] = (interArray[i].crossStreets[st] || 0) + cnt;
-                        });
-                        // Recalculate centroid
-                        const all = interArray[i].campers;
-                        interArray[i].lat = all.reduce((s, c) => s + c.lat, 0) / all.length;
-                        interArray[i].lng = all.reduce((s, c) => s + c.lng, 0) / all.length;
-                        interArray.splice(j, 1);
-                        merged = true;
-                        break;
-                    }
-                }
-                if (merged) break;
-            }
-        }
-
-        // ── Step 5: Name intersections and build stops ──
-        const stops = interArray.filter(inter => inter.campers.length > 0).map(inter => {
-            // Best cross street = most frequent non-corridor street at this intersection
-            const crossStreets = Object.entries(inter.crossStreets)
-                .filter(([st]) => st !== inter.corridorSt)
-                .sort((a, b) => b[1] - a[1]);
-
-            let stopName;
-            if (crossStreets.length > 0) {
-                stopName = 'Corner of ' + inter.corridorSt + ' & ' + crossStreets[0][0];
-            } else {
-                // No cross street found — use corridor + approximate location
-                const otherStreets = Object.keys(inter.crossStreets).filter(s => s !== inter.corridorSt);
-                if (otherStreets.length) {
-                    stopName = 'Corner of ' + inter.corridorSt + ' & ' + otherStreets[0];
+                if (dist <= walkMi) {
+                    currentGroup.push(curr);
                 } else {
-                    stopName = inter.corridorSt + ' (stop)';
+                    allStops.push(makeStop(currentGroup, streetName, byStreet));
+                    currentGroup = [curr];
                 }
             }
-
-            return {
-                lat: inter.lat, lng: inter.lng,
-                address: stopName,
-                campers: inter.campers.map(c => ({ name: c.name, division: c.division, bunk: c.bunk })),
-                _corridor: inter.corridorSt
-            };
+            if (currentGroup.length) allStops.push(makeStop(currentGroup, streetName, byStreet));
         });
 
-        console.log('[Go] Smart corners: ' + stops.length + ' stops from ' + campers.length + ' campers');
-        stops.forEach(s => console.log('[Go]   ' + s.address + ' (' + s.campers.length + ' kids)'));
+        // ── Step 4: Merge tiny stops (<=2 kids) into nearest larger stop ──
+        let didMerge = true;
+        while (didMerge) {
+            didMerge = false;
+            for (let i = allStops.length - 1; i >= 0; i--) {
+                if (allStops[i].campers.length > 2) continue;
+                let bestJ = -1, bestDist = walkMi * 2.5;
+                for (let j = 0; j < allStops.length; j++) {
+                    if (j === i) continue;
+                    const d = haversineMi(allStops[i].lat, allStops[i].lng, allStops[j].lat, allStops[j].lng);
+                    if (d < bestDist) { bestDist = d; bestJ = j; }
+                }
+                if (bestJ >= 0) {
+                    allStops[bestJ].campers.push(...allStops[i].campers);
+                    allStops.splice(i, 1);
+                    didMerge = true;
+                    break;
+                }
+            }
+        }
 
-        return stops;
+        // ── Step 5: Name each stop ──
+        allStops.forEach(stop => {
+            const streetNames = {};
+            stop.campers.forEach(c => {
+                const p = parseAddress(c._origAddr || c.address || '');
+                if (p.street) streetNames[p.street] = (streetNames[p.street] || 0) + 1;
+            });
+            const streets = Object.entries(streetNames).sort((a, b) => b[1] - a[1]);
+
+            if (streets.length >= 2) {
+                stop.address = streets[0][0] + ' & ' + streets[1][0];
+            } else if (streets.length === 1) {
+                const nums = stop.campers.map(c => parseAddress(c._origAddr || c.address || '').num).filter(n => n > 0).sort((a, b) => a - b);
+                if (nums.length >= 2) stop.address = nums[0] + '-' + nums[nums.length - 1] + ' ' + streets[0][0];
+                else if (nums.length === 1) stop.address = 'Near ' + nums[0] + ' ' + streets[0][0];
+                else stop.address = streets[0][0];
+            }
+        });
+
+        // Clean up internal fields
+        allStops.forEach(s => {
+            s.campers = s.campers.map(c => ({ name: c.name, division: c.division, bunk: c.bunk }));
+        });
+
+        console.log('[Go] Corner stops: ' + allStops.length + ' stops from ' + campers.length + ' campers');
+        allStops.forEach(s => console.log('[Go]   ' + s.address + ' (' + s.campers.length + ' kids)'));
+        return allStops;
     }
 
-    /** Parse "123 Main St, City, State, ZIP" → { num: 123, street: "Main St" } */
+    function makeStop(group, streetName, allStreetData) {
+        const lat = group.reduce((s, c) => s + c.lat, 0) / group.length;
+        const lng = group.reduce((s, c) => s + c.lng, 0) / group.length;
+        group.forEach(c => { c._origAddr = c.address; });
+
+        // Find cross street: nearest kid on a DIFFERENT street
+        let crossStreet = '', crossDist = Infinity;
+        Object.entries(allStreetData).forEach(([otherSt, others]) => {
+            if (otherSt === streetName) return;
+            others.forEach(oc => {
+                const d = haversineMi(lat, lng, oc.lat, oc.lng);
+                if (d < crossDist) { crossDist = d; crossStreet = otherSt; }
+            });
+        });
+
+        let name;
+        if (crossStreet && crossDist < 0.15) {
+            name = streetName + ' & ' + crossStreet;
+        } else {
+            const nums = group.map(c => c.houseNum).filter(n => n > 0).sort((a, b) => a - b);
+            if (nums.length >= 2) name = nums[0] + '-' + nums[nums.length - 1] + ' ' + streetName;
+            else if (nums.length === 1) name = 'Near ' + nums[0] + ' ' + streetName;
+            else name = streetName;
+        }
+
+        return { lat, lng, address: name, campers: [...group] };
+    }
+
     function parseAddress(address) {
         if (!address) return { num: 0, street: '' };
         const firstPart = address.split(',')[0].trim();
