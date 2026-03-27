@@ -24,6 +24,10 @@
     --flow-color: #147D91;
     --go-color: #0EA5E9;
     --me-color: #F59E0B;
+   --health-color: #8B5CF6;
+    --live-color: #1E3A8A;
+    --snacks-color: #92400E;
+    --link-color: #4ADE80;
 
     --font-display: 'Fraunces', Georgia, serif;
     --font-body: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -435,6 +439,10 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .product-flow { border-left: 4px solid var(--flow-color); }
 .product-go { border-left: 4px solid var(--go-color); }
 .product-me { border-left: 4px solid var(--me-color); }
+.product-health { border-left: 4px solid var(--health-color); }
+.product-live { border-left: 4px solid var(--live-color); }
+.product-snacks { border-left: 4px solid var(--snacks-color); }
+.product-link { border-left: 4px solid var(--link-color); }
 .product-flow:not(.disabled):hover { border-color: var(--flow-color); }
 .product-me:not(.disabled):hover { border-color: var(--me-color); }
 
