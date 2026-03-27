@@ -858,104 +858,152 @@
         // Ensure all buses have entries
         vehicles.forEach(v => { if (!allRoutes.find(r => r.busId === v.busId)) allRoutes.push({ busId: v.busId, busName: v.name, busColor: v.color, monitor: v.monitor, counselors: v.counselors || [], stops: [], camperCount: 0, _cap: v.capacity, totalDuration: 0 }); });
 
-        // ── Stop ordering: OSRM road-distance nearest-neighbor ──
-        // Uses OSRM /table for actual road distances, then nearest-neighbor
-        // from camp (dismissal) or from farthest (arrival).
-        // This GUARANTEES a sweep pattern — no zigzags.
+        // ══════════════════════════════════════════════════════════════
+        // ROUTE OPTIMIZER — finds the best driving order for each bus
         //
-        // Dismissal: bus leaves camp → nearest stop → next nearest → outward
-        // Arrival: bus starts at farthest → picks up toward camp → ends at camp
-        //
+        // 1. Get OSRM road-distance matrix (camp + all stops)
+        // 2. Try nearest-neighbor from EVERY possible starting stop
+        // 3. Apply 2-opt improvement to each candidate (swap pairs to remove crossings)
+        // 4. Keep the shortest total-distance route
+        // 5. Orient for arrival/dismissal:
+        //      Dismissal: camp → nearest → outward (stop 1 = nearest to camp)
+        //      Arrival:   farthest → toward camp (stop 1 = farthest from camp)
+        // ══════════════════════════════════════════════════════════════
         showProgress('Optimizing stop order...', 80);
 
         for (let ri = 0; ri < allRoutes.length; ri++) {
             const r = allRoutes[ri];
             if (r.stops.length < 2) { r.stops.forEach((s, i) => { s.stopNum = i + 1; }); continue; }
 
-            // Get OSRM distance matrix: camp (index 0) + all stops
-            let roadDist = null; // roadDist[i][j] = seconds between point i and j (0=camp)
+            const n = r.stops.length;
+
+            // ── Get OSRM distance matrix ──
+            // Index 0 = camp, indices 1..N = stops
+            let matrix = null;
             try {
                 const coords = [campLng + ',' + campLat];
                 r.stops.forEach(s => coords.push(s.lng + ',' + s.lat));
                 const resp = await fetch('https://router.project-osrm.org/table/v1/driving/' + coords.join(';') + '?annotations=duration');
                 if (resp.ok) {
                     const data = await resp.json();
-                    if (data.code === 'Ok' && data.durations) roadDist = data.durations;
+                    if (data.code === 'Ok' && data.durations) matrix = data.durations;
                 }
-            } catch (e) { /* use haversine fallback */ }
+            } catch (e) { /* haversine fallback below */ }
 
-            // Distance function: returns minutes between two indices (0=camp, 1..N=stops)
-            function getDist(i, j) {
-                if (roadDist && roadDist[i]?.[j] != null && roadDist[i][j] >= 0) return roadDist[i][j] / 60;
+            // dist(i, j) — road-seconds between matrix indices (0=camp, 1..N=stops)
+            function dist(i, j) {
+                if (matrix && matrix[i]?.[j] != null && matrix[i][j] >= 0) return matrix[i][j];
                 const a = i === 0 ? { lat: campLat, lng: campLng } : r.stops[i - 1];
                 const b = j === 0 ? { lat: campLat, lng: campLng } : r.stops[j - 1];
-                return (haversineMi(a.lat, a.lng, b.lat, b.lng) / (D.setup.avgSpeed || 25)) * 60;
+                return (haversineMi(a.lat, a.lng, b.lat, b.lng) / (D.setup.avgSpeed || 25)) * 3600;
             }
 
-            const n = r.stops.length;
-            const sorted = [];
-            const used = new Set();
-
-            if (isArrival) {
-                // ARRIVAL: start at the stop farthest from camp (by road), sweep toward camp
-                let farthestIdx = 0, farthestDist = 0;
-                for (let i = 0; i < n; i++) {
-                    const d = getDist(0, i + 1); // distance from camp to stop i
-                    if (d > farthestDist) { farthestDist = d; farthestIdx = i; }
-                }
-                sorted.push(farthestIdx);
-                used.add(farthestIdx);
-
-                // Nearest-neighbor: always pick the closest unvisited stop
-                while (sorted.length < n) {
-                    const lastStop = sorted[sorted.length - 1];
-                    let bestIdx = -1, bestDist = Infinity;
-                    for (let i = 0; i < n; i++) {
-                        if (used.has(i)) continue;
-                        const d = getDist(lastStop + 1, i + 1);
-                        if (d < bestDist) { bestDist = d; bestIdx = i; }
-                    }
-                    if (bestIdx < 0) break;
-                    sorted.push(bestIdx);
-                    used.add(bestIdx);
-                }
-            } else {
-                // DISMISSAL: start from camp, drop nearest first, sweep outward
-                // First stop = nearest to camp by road
-                let nearestIdx = 0, nearestDist = Infinity;
-                for (let i = 0; i < n; i++) {
-                    const d = getDist(0, i + 1);
-                    if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
-                }
-                sorted.push(nearestIdx);
-                used.add(nearestIdx);
-
-                // Nearest-neighbor from current position
-                while (sorted.length < n) {
-                    const lastStop = sorted[sorted.length - 1];
-                    let bestIdx = -1, bestDist = Infinity;
-                    for (let i = 0; i < n; i++) {
-                        if (used.has(i)) continue;
-                        const d = getDist(lastStop + 1, i + 1);
-                        if (d < bestDist) { bestDist = d; bestIdx = i; }
-                    }
-                    if (bestIdx < 0) break;
-                    sorted.push(bestIdx);
-                    used.add(bestIdx);
-                }
+            // ── Helper: total route cost for a tour (stop indices, not matrix indices) ──
+            function tourCost(tour) {
+                let cost = dist(0, tour[0] + 1); // camp → first stop
+                for (let i = 0; i < tour.length - 1; i++) cost += dist(tour[i] + 1, tour[i + 1] + 1);
+                return cost;
             }
 
-            // Apply the ordering
-            const newStops = sorted.map(i => r.stops[i]);
-            r.stops = newStops;
+            // ── Nearest-neighbor from a given starting stop index ──
+            function nearestNeighbor(startIdx) {
+                const tour = [startIdx];
+                const visited = new Set([startIdx]);
+                while (tour.length < n) {
+                    const last = tour[tour.length - 1];
+                    let bestIdx = -1, bestD = Infinity;
+                    for (let i = 0; i < n; i++) {
+                        if (visited.has(i)) continue;
+                        const d = dist(last + 1, i + 1);
+                        if (d < bestD) { bestD = d; bestIdx = i; }
+                    }
+                    if (bestIdx < 0) break;
+                    tour.push(bestIdx);
+                    visited.add(bestIdx);
+                }
+                return tour;
+            }
+
+            // ── 2-opt improvement: repeatedly swap pairs to remove crossings ──
+            function twoOpt(tour) {
+                const t = [...tour];
+                let improved = true;
+                let iterations = 0;
+                const maxIter = Math.min(n * n, 500); // cap iterations for large routes
+                while (improved && iterations < maxIter) {
+                    improved = false;
+                    iterations++;
+                    for (let i = 0; i < t.length - 1; i++) {
+                        for (let j = i + 2; j < t.length; j++) {
+                            // Cost of current edges
+                            const prevI = i === 0 ? 0 : t[i - 1] + 1; // matrix index
+                            const curA = t[i] + 1, curB = t[j] + 1;
+                            const nextJ = j + 1 < t.length ? t[j + 1] + 1 : -1;
+
+                            const oldCost = dist(prevI, curA) + (nextJ >= 0 ? dist(curB, nextJ) : 0);
+                            const newCost = dist(prevI, curB) + (nextJ >= 0 ? dist(curA, nextJ) : 0);
+
+                            if (newCost < oldCost - 0.1) {
+                                // Reverse the segment between i and j
+                                const segment = t.slice(i, j + 1).reverse();
+                                for (let k = 0; k < segment.length; k++) t[i + k] = segment[k];
+                                improved = true;
+                            }
+                        }
+                    }
+                }
+                return t;
+            }
+
+            // ── Try nearest-neighbor from every starting stop + 2-opt each ──
+            let bestTour = null, bestCost = Infinity;
+
+            for (let startIdx = 0; startIdx < n; startIdx++) {
+                let tour = nearestNeighbor(startIdx);
+                tour = twoOpt(tour);
+                const cost = tourCost(tour);
+                if (cost < bestCost) { bestCost = cost; bestTour = tour; }
+            }
+
+            // Also try sorted by distance from camp + 2-opt
+            const byDist = Array.from({ length: n }, (_, i) => i);
+            byDist.sort((a, b) => dist(0, a + 1) - dist(0, b + 1));
+            const distTour = twoOpt([...byDist]);
+            const distCost = tourCost(distTour);
+            if (distCost < bestCost) { bestCost = distCost; bestTour = distTour; }
+
+            // Also try reverse
+            const revTour = twoOpt([...byDist].reverse());
+            const revCost = tourCost(revTour);
+            if (revCost < bestCost) { bestCost = revCost; bestTour = revTour; }
+
+            // ── Orient the tour for arrival vs dismissal ──
+            if (bestTour && bestTour.length === n) {
+                // Check which end is closer to camp
+                const firstDist = dist(0, bestTour[0] + 1);
+                const lastDist = dist(0, bestTour[bestTour.length - 1] + 1);
+
+                if (isArrival) {
+                    // Arrival: stop 1 = farthest from camp, last stop = nearest to camp
+                    // Bus picks up from far, drives toward camp
+                    if (firstDist < lastDist) bestTour.reverse();
+                } else {
+                    // Dismissal: stop 1 = nearest to camp, last stop = farthest
+                    // Bus leaves camp, drops nearest first, works outward
+                    if (firstDist > lastDist) bestTour.reverse();
+                }
+
+                r.stops = bestTour.map(i => r.stops[i]);
+            }
+
             r.stops.forEach((s, i) => { s.stopNum = i + 1; });
-            console.log('[Go] Route ordered: ' + r.busName + ' (' + r.stops.length + ' stops, ' + (roadDist ? 'OSRM road distances' : 'haversine fallback') + ')');
+            console.log('[Go] Optimized: ' + r.busName + ' (' + n + ' stops, ' + (n * (n + 2)) + ' candidates, ' + Math.round(bestCost / 60) + ' min, ' + (matrix ? 'OSRM' : 'haversine') + ')');
 
-            // Small delay between OSRM calls
-            if (ri < allRoutes.length - 1 && roadDist) await new Promise(resolve => setTimeout(resolve, 200));
+            // Rate-limit OSRM calls
+            if (ri < allRoutes.length - 1 && matrix) await new Promise(resolve => setTimeout(resolve, 200));
         }
 
-        console.log('[Go] VROOM + ordering complete:');
+        console.log('[Go] Route optimization complete:');
         allRoutes.forEach(r => console.log('[Go]   ' + r.busName + ': ' + r.stops.length + ' stops, ' + r.camperCount + ' campers'));
         return allRoutes;
     }
