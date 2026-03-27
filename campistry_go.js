@@ -1,10 +1,34 @@
 // =============================================================================
-// campistry_go.js — Campistry Go v3.0
+// campistry_go.js — Campistry Go v3.1
 // VROOM-powered bus routing with ZIP-based region clustering
+//
+// v3.1 Changes:
+//   FIX 1: Distance matrix: Mapbox Matrix API (primary) → OSRM (fallback)
+//          Staggered requests with retry on 429
+//   FIX 2: Per-region bus rebalancing (only between buses in same ZIP region)
+//   FIX 3: Overpass API retry + kumi.systems mirror fallback
+//   FIX 4: Stop marker uses nearest-kid coords when no OSM snap (not centroid)
+//   FIX 5: Default walk cap 375ft; user setting now acts as optional cap
+//   FIX 6: Manhattan distance for walk checks (models grid streets, not crow-flies)
+//   FIX 7: Dynamic cluster radius — auto-scales to housing density
+//          Dense city (~0.01mi NN) → ~0.07mi radius
+//          Suburban   (~0.03mi NN) → ~0.15mi radius
+//          Spread out (~0.10mi NN) → ~0.50mi radius
+//          Rural      (~0.20mi NN) → ~1.00mi radius
+//   FIX 8: Region merging when more ZIPs than buses (nearest-neighbor merge)
+//   FIX 9: Optimal stop placement within each cluster
+//          Optimized mode: coordinate-wise median (exact L1 optimum) — the
+//            mathematically most central point, can be anywhere on the grid
+//          Corner mode: scores intersections by street match + total kid walking
+//  FIX 10: Route optimization pipeline — VROOM VRP → road-distance TSP refinement
+//          Mode A (arrival):   first_stop → stops → camp (bus starts at first stop)
+//          Mode B (dismissal): camp → stops → last_stop (bus done, driver home)
+//          Mode C (shifts):    camp → stops → last_stop → camp (returns for next)
+//          VROOM's ordering preserved as TSP seed (not discarded)
 // =============================================================================
 (function () {
     'use strict';
-    console.log('[Go] Campistry Go v3.0 loading...');
+    console.log('[Go] Campistry Go v3.1 loading...');
 
     // =========================================================================
     // STATE
@@ -13,7 +37,7 @@
         setup: {
             campAddress: '', campName: '', avgSpeed: 25,
             reserveSeats: 2, dropoffMode: 'door-to-door',
-            avgStopTime: 2, maxWalkDistance: 500, orsApiKey: '', graphhopperKey: '', mapboxToken: '',
+            avgStopTime: 2, maxWalkDistance: 375, orsApiKey: '', graphhopperKey: '', mapboxToken: '',
             campLat: null, campLng: null
         },
         activeMode: 'dismissal',
@@ -47,6 +71,235 @@
         const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
         const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
         return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    // ── FIX 6: Manhattan distance for realistic grid-street walking ──
+    // Instead of crow-flies haversine, this measures "walk north/south then
+    // east/west" — which is how kids actually walk on a street grid.
+    // At ~40.6° latitude this adds ~40% over haversine for diagonal paths.
+    function manhattanMi(lat1, lng1, lat2, lng2) {
+        return haversineMi(lat1, lng1, lat2, lng1) + haversineMi(lat2, lng1, lat2, lng2);
+    }
+
+    // =========================================================================
+    // SMART CLUSTERING ENGINE
+    // Street-aware distance, major road barriers, capacity caps
+    // =========================================================================
+
+    const MAX_STOP_CAPACITY = 15; // split clusters bigger than this
+    let _majorRoadSegments = null; // [{lat1,lng1,lat2,lng2,name}] from Overpass
+
+    /** Line segment intersection test (2D) */
+    function segmentsIntersect(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
+        const d = (bx2 - bx1) * (ay2 - ay1) - (by2 - by1) * (ax2 - ax1);
+        if (Math.abs(d) < 1e-12) return false;
+        const t = ((bx1 - ax1) * (ay2 - ay1) - (by1 - ay1) * (ax2 - ax1)) / d;
+        const u = ((bx1 - ax1) * (by2 - by1) - (by1 - ay1) * (bx2 - bx1)) / d;
+        return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+    }
+
+    /** Check if a straight line between two points crosses any cached major road */
+    function crossesMajorRoad(lat1, lng1, lat2, lng2) {
+        if (!_majorRoadSegments || !_majorRoadSegments.length) return false;
+        for (const seg of _majorRoadSegments) {
+            if (segmentsIntersect(lat1, lng1, lat2, lng2, seg.lat1, seg.lng1, seg.lat2, seg.lng2)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Street-aware cluster distance.
+     * - Same street: 0.7× (kids can walk along their own block)
+     * - Different street, no major road between: 1.0×
+     * - Different street, major road between: 2.5× (don't make kids cross Broadway)
+     * - Same street + same parity (same side): extra 0.1× bonus
+     */
+    function smartClusterDist(lat1, lng1, addr1, lat2, lng2, addr2) {
+        let dist = manhattanMi(lat1, lng1, lat2, lng2);
+        if (dist < 0.001) return dist; // same house
+
+        const p1 = parseAddress(addr1);
+        const p2 = parseAddress(addr2);
+        const st1 = normalizeStreet(p1.street);
+        const st2 = normalizeStreet(p2.street);
+
+        if (st1 && st2 && st1 === st2) {
+            // Same street — big bonus
+            dist *= 0.7;
+            // Same parity = same side of street → extra bonus
+            if (p1.num > 0 && p2.num > 0 && (p1.num % 2) === (p2.num % 2)) {
+                dist *= 0.85;
+            }
+        } else if (crossesMajorRoad(lat1, lng1, lat2, lng2)) {
+            // Crossing a major arterial — heavy penalty
+            dist *= 2.5;
+        }
+
+        return dist;
+    }
+
+    /**
+     * Smart clustering: shared by both optimized and corner stop modes.
+     * Uses smartClusterDist for street-aware grouping.
+     * Supports sibling linking and multi-start strategies.
+     */
+    function smartCluster(campers, walkMi, sibMap) {
+
+        function runOnePass(sortedList) {
+            const clusters = [], assigned = new Set();
+            sortedList.forEach(c => {
+                if (assigned.has(c.name)) return;
+                const cluster = [];
+                const sibGid = sibMap[c.name];
+                if (sibGid) {
+                    sortedList.forEach(k => { if (!assigned.has(k.name) && sibMap[k.name] === sibGid) { cluster.push(k); assigned.add(k.name); } });
+                } else {
+                    cluster.push(c); assigned.add(c.name);
+                }
+
+                let changed = true;
+                while (changed) {
+                    changed = false;
+                    sortedList.forEach(other => {
+                        if (assigned.has(other.name)) return;
+                        const toAdd = [other];
+                        const oGid = sibMap[other.name];
+                        if (oGid) sortedList.forEach(k => { if (!assigned.has(k.name) && k.name !== other.name && sibMap[k.name] === oGid) toAdd.push(k); });
+                        const trial = [...cluster, ...toAdd];
+                        const nLat = trial.reduce((s, k) => s + k.lat, 0) / trial.length;
+                        const nLng = trial.reduce((s, k) => s + k.lng, 0) / trial.length;
+
+                        // Use street-aware distance for every kid in the trial
+                        const allFit = trial.every(k =>
+                            smartClusterDist(nLat, nLng, '', k.lat, k.lng, k.address) <= walkMi
+                        );
+                        if (allFit) {
+                            toAdd.forEach(k => { cluster.push(k); assigned.add(k.name); });
+                            changed = true;
+                        }
+                    });
+                }
+                clusters.push(cluster);
+            });
+            return clusters;
+        }
+
+        // Multi-start: different sort orders find different cluster groupings
+        const avgLat = campers.reduce((s, c) => s + c.lat, 0) / campers.length;
+        const avgLng = campers.reduce((s, c) => s + c.lng, 0) / campers.length;
+        const strategies = [
+            [...campers].sort((a, b) => a.lat - b.lat),
+            [...campers].sort((a, b) => b.lat - a.lat),
+            [...campers].sort((a, b) => a.lng - b.lng),
+            [...campers].sort((a, b) => b.lng - a.lng),
+            [...campers].sort((a, b) => haversineMi(avgLat, avgLng, a.lat, a.lng) - haversineMi(avgLat, avgLng, b.lat, b.lng)),
+            [...campers].sort((a, b) => haversineMi(avgLat, avgLng, b.lat, b.lng) - haversineMi(avgLat, avgLng, a.lat, a.lng)),
+            // Sort by street name then house number — groups same-street kids
+            [...campers].sort((a, b) => {
+                const pa = parseAddress(a.address), pb = parseAddress(b.address);
+                const sc = (pa.street || '').localeCompare(pb.street || '');
+                return sc !== 0 ? sc : pa.num - pb.num;
+            }),
+        ];
+
+        let bestClusters = null, bestCount = Infinity;
+        strategies.forEach(s => {
+            const r = runOnePass(s);
+            if (r.length < bestCount) { bestCount = r.length; bestClusters = r; }
+        });
+
+        // ── Capacity cap: split oversized clusters ──
+        const finalClusters = [];
+        bestClusters.forEach(cluster => {
+            if (cluster.length <= MAX_STOP_CAPACITY) {
+                finalClusters.push(cluster);
+                return;
+            }
+            // Split using K-means (k=2) on the cluster positions
+            console.log('[Go] Splitting oversized cluster (' + cluster.length + ' kids) into 2');
+            const sorted = [...cluster].sort((a, b) => {
+                // Split along the longer axis (lat or lng spread)
+                const latSpread = Math.abs(a.lat - b.lat);
+                const lngSpread = Math.abs(a.lng - b.lng);
+                return latSpread > lngSpread ? a.lat - b.lat : a.lng - b.lng;
+            });
+            const mid = Math.ceil(sorted.length / 2);
+            finalClusters.push(sorted.slice(0, mid));
+            finalClusters.push(sorted.slice(mid));
+        });
+
+        console.log('[Go] Clustered ' + campers.length + ' campers → ' + finalClusters.length + ' groups (best of ' + strategies.length + ')' +
+            (finalClusters.length > bestClusters.length ? ', ' + (finalClusters.length - bestClusters.length) + ' split for capacity' : ''));
+
+        return finalClusters;
+    }
+
+    // ── Distance matrix: Mapbox (primary) → OSRM (fallback) ──
+    // Mapbox Matrix API is more reliable than public OSRM and uses the
+    // same token already configured for route geometry rendering.
+    // Returns an NxN duration matrix in seconds, or null on failure.
+    async function fetchDistanceMatrix(coords, campLat, campLng) {
+        // coords = array of {lat, lng} with index 0 = camp
+        const n = coords.length;
+        if (n < 2) return null;
+
+        // Build coordinate string: lng,lat;lng,lat;...
+        const coordStr = coords.map(c => c.lng + ',' + c.lat).join(';');
+
+        // ── Try Mapbox Matrix API first ──
+        const mbToken = D.setup.mapboxToken || '';
+        if (mbToken) {
+            try {
+                // Mapbox allows up to 25 coordinates per request
+                if (n <= 25) {
+                    const url = 'https://api.mapbox.com/directions-matrix/v1/mapbox/driving/' + coordStr + '?annotations=duration&access_token=' + mbToken;
+                    const resp = await fetch(url);
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        if (data.code === 'Ok' && data.durations) {
+                            console.log('[Go] Matrix: Mapbox (' + n + ' points)');
+                            return data.durations;
+                        }
+                    }
+                } else {
+                    // >25 coords: split into chunks (rare for bus routes)
+                    console.log('[Go] Matrix: ' + n + ' points exceeds Mapbox limit, falling back to OSRM');
+                }
+            } catch (e) {
+                console.warn('[Go] Mapbox Matrix failed:', e.message);
+            }
+        }
+
+        // ── Fallback: OSRM with retry ──
+        return await fetchOSRMWithRetry(coordStr, 3);
+    }
+
+    async function fetchOSRMWithRetry(coordStr, retries) {
+        if (retries === undefined) retries = 3;
+        for (let attempt = 0; attempt < retries; attempt++) {
+            if (attempt > 0) {
+                const delay = 1000 * Math.pow(2, attempt - 1);
+                console.log('[Go] OSRM retry ' + attempt + ' after ' + delay + 'ms...');
+                await new Promise(r => setTimeout(r, delay));
+            }
+            try {
+                const resp = await fetch('https://router.project-osrm.org/table/v1/driving/' + coordStr + '?annotations=duration');
+                if (resp.status === 429) {
+                    console.warn('[Go] OSRM 429 (rate limited) — attempt ' + (attempt + 1) + '/' + retries);
+                    continue;
+                }
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.code === 'Ok' && data.durations) return data.durations;
+                }
+                return null;
+            } catch (e) {
+                if (attempt === retries - 1) return null;
+            }
+        }
+        return null;
     }
 
     function decodePolyline(encoded) {
@@ -107,7 +360,7 @@
     }
 
     function merge(d) {
-        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:500,orsApiKey:'',graphhopperKey:'',mapboxToken:'',campLat:null,campLng:null }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{}, carpoolGroups:{} };
+        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,orsApiKey:'',graphhopperKey:'',mapboxToken:'',campLat:null,campLng:null }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{}, carpoolGroups:{} };
         const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null, dailyOverrides: d.dailyOverrides || {}, carpoolGroups: d.carpoolGroups || {} };
         if (!result.dismissal && result.buses.length) { result.dismissal = { buses: [...result.buses], shifts: [...result.shifts], monitors: [...result.monitors], counselors: [...result.counselors], savedRoutes: result.savedRoutes }; }
         if (!result.arrival) { result.arrival = { buses: [], shifts: [], monitors: [], counselors: [], savedRoutes: null }; }
@@ -176,7 +429,6 @@
     function getRoster() {
         const g = readCampistrySettings();
         const roster = g?.app1?.camperRoster || {};
-        // Backfill camper IDs if missing
         let needsSave = false, maxId = 0;
         Object.values(roster).forEach(c => { if (c.camperId && c.camperId > maxId) maxId = c.camperId; });
         let nextId = (g?.campistryMe?.nextCamperId) || maxId + 1;
@@ -201,7 +453,7 @@
         document.getElementById('reserveSeats').value = s.reserveSeats ?? 2;
         document.getElementById('dropoffMode').value = s.dropoffMode || 'door-to-door';
         document.getElementById('avgStopTime').value = s.avgStopTime ?? 2;
-        document.getElementById('maxWalkDistance').value = s.maxWalkDistance ?? 500;
+        document.getElementById('maxWalkDistance').value = s.maxWalkDistance ?? 375;
         document.getElementById('orsApiKey').value = s.orsApiKey || '';
         if (document.getElementById('ghApiKey')) document.getElementById('ghApiKey').value = s.graphhopperKey || '';
         if (document.getElementById('mapboxToken')) document.getElementById('mapboxToken').value = s.mapboxToken || '';
@@ -214,7 +466,7 @@
         D.setup.reserveSeats = parseInt(el('reserveSeats')?.value) || 0;
         D.setup.dropoffMode = el('dropoffMode')?.value || 'door-to-door';
         D.setup.avgStopTime = parseInt(el('avgStopTime')?.value) || 2;
-        D.setup.maxWalkDistance = parseInt(el('maxWalkDistance')?.value) || 500;
+        D.setup.maxWalkDistance = parseInt(el('maxWalkDistance')?.value) || 375;
         D.setup.orsApiKey = el('orsApiKey')?.value.trim() || '';
         D.setup.graphhopperKey = el('ghApiKey')?.value.trim() || '';
         D.setup.mapboxToken = el('mapboxToken')?.value.trim() || '';
@@ -483,7 +735,7 @@
     async function systemCheck() {
         let pass = 0, fail = 0, warn = 0;
         function P(msg) { pass++; console.log('✅ ' + msg); } function F(msg) { fail++; console.log('❌ ' + msg); } function Wr(msg) { warn++; console.log('⚠️  ' + msg); }
-        console.log('\n╔══════════════════════════════════════╗\n║   CAMPISTRY GO v3 — SYSTEM CHECK     ║\n╚══════════════════════════════════════╝\n');
+        console.log('\n╔══════════════════════════════════════╗\n║   CAMPISTRY GO v3.1 — SYSTEM CHECK   ║\n╚══════════════════════════════════════╝\n');
         const roster = getRoster(); const cc = Object.keys(roster).length;
         cc > 0 ? P('Roster: ' + cc + ' campers') : F('Roster: EMPTY');
         const ac = Object.keys(D.addresses).length, gc = Object.values(D.addresses).filter(a => a.geocoded).length;
@@ -491,7 +743,6 @@
         P('Mode: ' + D.activeMode); D.buses.length > 0 ? P('Buses: ' + D.buses.length) : F('Buses: NONE');
         D.setup.campAddress ? P('Camp: ' + D.setup.campAddress) : F('Camp address: NOT SET');
         const key = getApiKey(); key ? P('ORS key: set') : Wr('ORS key: not set — VROOM optimization will not work');
-        // Test VROOM
         if (key) { try { const r = await fetch('https://api.openrouteservice.org/optimization', { method: 'POST', headers: { 'Authorization': key, 'Content-Type': 'application/json' }, body: JSON.stringify({ jobs: [{ id: 1, location: [-73.747, 40.606], service: 60 }], vehicles: [{ id: 1, profile: 'driving-car', start: [-73.747, 40.606], end: [-73.747, 40.606], capacity: [47] }] }) }); r.ok ? P('VROOM optimization: working') : F('VROOM: HTTP ' + r.status); } catch (e) { F('VROOM: ' + e.message); } }
         try { const tr = await fetch('https://a.tile.openstreetmap.org/0/0/0.png', { method: 'HEAD' }); tr.ok ? P('OSM tiles: OK') : F('OSM tiles: ' + tr.status); } catch (e) { F('OSM tiles: BLOCKED'); }
         console.log('\n' + pass + ' passed | ' + fail + ' failed | ' + warn + ' warnings');
@@ -616,17 +867,9 @@
     }
 
     // =========================================================================
-    // ROUTING ENGINE v10 — VROOM-powered
+    // ROUTING ENGINE v10.1 — VROOM-powered
     //
-    // Replaces the custom TSP + K-Means + inter-bus optimization with a single
-    // call to OpenRouteService's VROOM endpoint. VROOM solves bus ASSIGNMENT
-    // and stop ORDERING simultaneously using a proper VRP metaheuristic.
-    //
-    // Phase 1: Create stops (door-to-door / optimized / corner)
-    // Phase 2: Build VROOM request (jobs + vehicles)
-    // Phase 3: Call ORS optimization endpoint → get optimal routes
-    // Phase 4: Parse response into our route format
-    // Phase 5: Orient for arrival/dismissal, calculate ETAs
+    // v10.1 changes: OSRM retry, aggressive rebalancing, Manhattan walk distance
     // =========================================================================
 
     async function generateRoutes() {
@@ -691,22 +934,19 @@
                 r.counselors.filter(c => c.needsStop === 'yes' && c.address).forEach(c => { r.stops.push({ stopNum: r.stops.length + 1, campers: [], address: c.address, lat: null, lng: null, isCounselor: true, counselorName: c.name }); });
             });
 
-            // Calculate ETAs — uses stored OSRM matrix from optimizer when available
+            // Calculate ETAs
             const isArrival = D.activeMode === 'arrival';
             const hasShifts = shifts.length > 1;
             const timeMin = parseTime(shift.departureTime || (isArrival ? '08:00' : '16:00'));
 
             for (const r of routes) {
-                const mx = r._osrmMatrix; // OSRM duration matrix (seconds), index 0=camp
+                const mx = r._osrmMatrix;
 
-                // Get drive time between two stops using matrix or haversine
                 function driveMin(stopA, stopB) {
-                    // Try stored matrix first (fastest, most accurate)
                     if (mx && stopA._matrixIdx != null && stopB._matrixIdx != null) {
                         const val = mx[stopA._matrixIdx]?.[stopB._matrixIdx];
                         if (val != null && val >= 0) return val / 60;
                     }
-                    // Haversine fallback
                     if (stopA.lat && stopB.lat) return (haversineMi(stopA.lat, stopA.lng, stopB.lat, stopB.lng) / avgSpeedMph) * 60;
                     return 3;
                 }
@@ -728,49 +968,38 @@
                 }
 
                 if (isArrival) {
-                    // ── MODE 1: ARRIVAL ──
-                    // Bus starts at farthest stop, picks up toward camp, arrives at timeMin
-                    // Calculate total duration first, then work backward
                     let totalDur = 0;
                     for (let i = 0; i < r.stops.length; i++) {
-                        if (i === 0) totalDur += campToStop(r.stops[0]); // travel to first stop area
+                        if (i === 0) totalDur += campToStop(r.stops[0]);
                         else totalDur += driveMin(r.stops[i - 1], r.stops[i]);
                         totalDur += avgStopMin;
                     }
-                    totalDur += stopToCamp(r.stops[r.stops.length - 1]); // last stop → camp
-
+                    totalDur += stopToCamp(r.stops[r.stops.length - 1]);
                     let cum = timeMin - totalDur;
                     for (let i = 0; i < r.stops.length; i++) {
-                        if (i === 0) cum += campToStop(r.stops[0]); // initial travel
+                        if (i === 0) cum += campToStop(r.stops[0]);
                         else cum += driveMin(r.stops[i - 1], r.stops[i]);
                         cum += avgStopMin;
                         r.stops[i].estimatedTime = formatTime(cum);
                         r.stops[i].estimatedMin = cum;
                     }
                     r.totalDuration = Math.round(totalDur);
-
                 } else {
-                    // ── MODE 2 & 3: DISMISSAL ──
-                    // Bus leaves camp at timeMin, drops nearest first, works outward
                     let cum = timeMin;
                     for (let i = 0; i < r.stops.length; i++) {
-                        if (i === 0) cum += campToStop(r.stops[0]); // camp → first stop
+                        if (i === 0) cum += campToStop(r.stops[0]);
                         else cum += driveMin(r.stops[i - 1], r.stops[i]);
                         cum += avgStopMin;
                         r.stops[i].estimatedTime = formatTime(cum);
                         r.stops[i].estimatedMin = cum;
                     }
                     r.totalDuration = Math.round(cum - timeMin);
-
-                    // MODE 3 only: add return leg for display
                     if (hasShifts && r.stops.length > 0) {
                         r.returnTocamp = Math.round(stopToCamp(r.stops[r.stops.length - 1]));
                         r.totalDuration += r.returnTocamp;
                     }
                 }
                 r.camperCount = r.stops.reduce((s, st) => s + st.campers.length, 0);
-
-                // Clean up internal fields
                 r.stops.forEach(s => { delete s._matrixIdx; });
                 delete r._osrmMatrix;
             }
@@ -793,7 +1022,7 @@
         const isArrival = D.activeMode === 'arrival';
         const hasShifts = totalShifts > 1;
         const numBuses = vehicles.length;
-        const serviceTime = (D.setup.avgStopTime || 2) * 60; // VROOM uses seconds
+        const serviceTime = (D.setup.avgStopTime || 2) * 60;
 
         // Phase 1: Create stops
         let stops;
@@ -802,18 +1031,13 @@
         else stops = createHouseStops(campers);
         if (!stops.length) return [];
 
-        // ── Post-clustering deduplication ──
-        // Merge stops within ~200ft (0.038mi) of each other regardless of street grouping.
-        // This catches cases where two clusters on different streets produced stops
-        // that are essentially the same intersection.
-        const dedupDist = 0.038; // ~200ft
+        // Post-clustering deduplication (~200ft)
+        const dedupDist = 0.038;
         let dedups = 0;
         for (let i = 0; i < stops.length; i++) {
             for (let j = i + 1; j < stops.length; j++) {
                 if (haversineMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng) <= dedupDist) {
-                    // Merge j into i
                     stops[i].campers.push(...stops[j].campers);
-                    // Keep the name with more street info
                     if (stops[j].address.includes('&') && !stops[i].address.includes('&')) stops[i].address = stops[j].address;
                     stops.splice(j, 1);
                     j--; dedups++;
@@ -824,11 +1048,9 @@
 
         console.log('[Go] VROOM Engine: ' + stops.length + ' stops, ' + numBuses + ' buses, mode=' + mode);
 
-        // Phase 2: Split by region to stay under ORS 70-location limit
-        // Each ZIP region gets its own VROOM call with its own buses
+        // Phase 2: Split by region
         showProgress('Optimizing routes (VROOM)...', 25 + (shiftIdx / totalShifts) * 50);
 
-        // Group stops by region
         const regionChunks = {};
         if (_detectedRegions && _detectedRegions.length > 0) {
             _detectedRegions.forEach(reg => { regionChunks[reg.id] = []; });
@@ -842,6 +1064,53 @@
             regionChunks['all'] = stops.map((stop, i) => ({ stop, globalIdx: i }));
         }
 
+        // ── Merge regions when more ZIPs than buses ──
+        // If we have 5 ZIP regions and 4 buses, the smallest region gets
+        // merged into its geographically nearest neighbor so every kid
+        // gets assigned to a bus.
+        const nonEmptyRegIds = Object.keys(regionChunks).filter(k => regionChunks[k].length > 0);
+        if (nonEmptyRegIds.length > numBuses && _detectedRegions?.length) {
+            console.log('[Go] ' + nonEmptyRegIds.length + ' regions but only ' + numBuses + ' buses — merging smallest regions');
+            while (true) {
+                const activeRegIds = Object.keys(regionChunks).filter(k => regionChunks[k].length > 0);
+                if (activeRegIds.length <= numBuses) break;
+
+                // Find the smallest region
+                let smallestId = activeRegIds[0], smallestCount = Infinity;
+                activeRegIds.forEach(rid => {
+                    const count = regionChunks[rid].reduce((s, it) => s + it.stop.campers.length, 0);
+                    if (count < smallestCount) { smallestCount = count; smallestId = rid; }
+                });
+
+                // Find its nearest neighbor by centroid distance
+                const smallReg = _detectedRegions.find(r => r.id === smallestId);
+                if (!smallReg) break;
+                let nearestId = null, nearestDist = Infinity;
+                activeRegIds.forEach(rid => {
+                    if (rid === smallestId) return;
+                    const otherReg = _detectedRegions.find(r => r.id === rid);
+                    if (!otherReg) return;
+                    const d = haversineMi(smallReg.centroidLat, smallReg.centroidLng, otherReg.centroidLat, otherReg.centroidLng);
+                    if (d < nearestDist) { nearestDist = d; nearestId = rid; }
+                });
+                if (!nearestId) break;
+
+                const smallName = _detectedRegions.find(r => r.id === smallestId)?.name || smallestId;
+                const nearName = _detectedRegions.find(r => r.id === nearestId)?.name || nearestId;
+                console.log('[Go]   Merging ' + smallName + ' (' + smallestCount + ' kids) → ' + nearName + ' (dist: ' + nearestDist.toFixed(1) + ' mi)');
+
+                // Move all stops from smallest into nearest
+                regionChunks[nearestId].push(...regionChunks[smallestId]);
+                regionChunks[smallestId] = [];
+
+                // Update the _detectedRegions camperNames so rebalancing region tags stay correct
+                const nearReg = _detectedRegions.find(r => r.id === nearestId);
+                if (nearReg && smallReg) {
+                    smallReg.camperNames.forEach(n => { if (!nearReg.camperNames.includes(n)) nearReg.camperNames.push(n); });
+                }
+            }
+        }
+
         // Allocate vehicles to regions proportionally
         const regionDemandV = {};
         Object.entries(regionChunks).forEach(([regId, items]) => {
@@ -851,11 +1120,7 @@
         const regionVehiclesV = {};
         const sortedRegsV = Object.entries(regionDemandV).filter(([_, d]) => d > 0).sort((a, b) => b[1] - a[1]);
         sortedRegsV.forEach(([regId]) => { regionVehiclesV[regId] = []; });
-
-        // At least 1 bus per region
         sortedRegsV.forEach(([regId]) => { if (vehiclePoolV.length) regionVehiclesV[regId].push(vehiclePoolV.shift()); });
-
-        // Distribute remaining by worst campers-per-capacity ratio
         while (vehiclePoolV.length) {
             let worstReg = sortedRegsV[0][0], worstRatio = 0;
             sortedRegsV.forEach(([regId, dem]) => {
@@ -875,36 +1140,29 @@
         const regionPromises = regionEntries.map(async ([regId, items]) => {
             const regVehicles = regionVehiclesV[regId] || [];
             if (!regVehicles.length || !items.length) return [];
-
             const regName = _detectedRegions?.find(r => r.id === regId)?.name || regId;
-
             const jobs = items.map((it, i) => ({
                 id: i + 1, location: [it.stop.lng, it.stop.lat],
                 service: serviceTime, amount: [it.stop.campers.length], description: it.stop.address
             }));
-
             const vroomVehicles = regVehicles.map((v, vi) => {
                 const veh = { id: vi + 1, profile: 'driving-car', capacity: [v.capacity], description: v.name };
                 if (isArrival) { veh.end = [campLng, campLat]; }
                 else { veh.start = [campLng, campLat]; if (hasShifts) veh.end = [campLng, campLat]; }
                 return veh;
             });
-
             try {
                 console.log('[Go] VROOM → ' + regName + ': ' + jobs.length + ' jobs, ' + vroomVehicles.length + ' vehicles');
                 const resp = await fetch('https://api.openrouteservice.org/optimization', {
                     method: 'POST', headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
                     body: JSON.stringify({ jobs, vehicles: vroomVehicles })
                 });
-
                 if (!resp.ok) {
                     console.error('[Go] VROOM error for ' + regName + ':', resp.status);
                     return fallbackRegionRouting(items.map(it => it.stop), regVehicles, campLat, campLng);
                 }
-
                 const result = await resp.json();
                 console.log('[Go] VROOM ← ' + regName + ': ' + (result.routes?.length || 0) + ' routes, ' + (result.unassigned?.length || 0) + ' unassigned');
-
                 const routes = [];
                 (result.routes || []).forEach(vroomRoute => {
                     const vehicleIdx = vroomRoute.vehicle - 1;
@@ -916,11 +1174,9 @@
                         routeStops.push({ stopNum: routeStops.length + 1, campers: item.stop.campers, address: item.stop.address, lat: item.stop.lat, lng: item.stop.lng });
                     });
                     if (routeStops.length > 0) {
-                        routes.push({ busId: v.busId, busName: v.name, busColor: v.color, monitor: v.monitor, counselors: v.counselors || [], stops: routeStops, camperCount: routeStops.reduce((s, st) => s + st.campers.length, 0), _cap: v.capacity, totalDuration: Math.round((vroomRoute.duration || 0) / 60) });
+                        routes.push({ busId: v.busId, busName: v.name, busColor: v.color, monitor: v.monitor, counselors: v.counselors || [], stops: routeStops, camperCount: routeStops.reduce((s, st) => s + st.campers.length, 0), _cap: v.capacity, totalDuration: Math.round((vroomRoute.duration || 0) / 60), _regId: regId });
                     }
                 });
-
-                // Handle unassigned
                 if (result.unassigned?.length) {
                     result.unassigned.forEach(ua => {
                         const item = items[ua.id - 1]; if (!item) return;
@@ -943,80 +1199,125 @@
         // Ensure all buses have entries
         vehicles.forEach(v => { if (!allRoutes.find(r => r.busId === v.busId)) allRoutes.push({ busId: v.busId, busName: v.name, busColor: v.color, monitor: v.monitor, counselors: v.counselors || [], stops: [], camperCount: 0, _cap: v.capacity, totalDuration: 0 }); });
 
-        // ── Bus rebalancing ──
-        // VROOM sometimes creates lopsided assignments. If any bus has >30% more kids
-        // than average, move its most geographically isolated stop to the nearest
-        // underloaded bus.
-        const busesWithStops = allRoutes.filter(r => r.stops.length > 0);
-        if (busesWithStops.length >= 2) {
-            const avgKidsPerBus = busesWithStops.reduce((s, r) => s + r.camperCount, 0) / busesWithStops.length;
+        // ══════════════════════════════════════════════════════════════
+        // FIX 2: Per-region bus rebalancing
+        //
+        // Only moves stops between buses WITHIN the same ZIP region.
+        // A 40-kid bus in Lawrence and a 20-kid bus in Hewlett is
+        // expected — different regions have different populations.
+        // We only fix imbalance between buses serving the same area.
+        // ══════════════════════════════════════════════════════════════
+        const regionGroups = {};
+        allRoutes.forEach(r => {
+            if (!r._regId || r.camperCount === 0) return;
+            if (!regionGroups[r._regId]) regionGroups[r._regId] = [];
+            regionGroups[r._regId].push(r);
+        });
+
+        let totalRebalanced = 0;
+        Object.entries(regionGroups).forEach(([regId, regionBuses]) => {
+            if (regionBuses.length < 2) return;
+
             let rebalanced = 0;
-            for (let pass = 0; pass < 5; pass++) {
-                let moved = false;
-                for (const overBus of allRoutes) {
-                    if (overBus.camperCount <= avgKidsPerBus * 1.3) continue; // not overloaded
-                    if (overBus.stops.length <= 1) continue;
+            for (let pass = 0; pass < 10; pass++) {
+                const active = regionBuses.filter(r => r.camperCount > 0);
+                if (active.length < 2) break;
+                const totalKidsR = active.reduce((s, r) => s + r.camperCount, 0);
+                const avgR = totalKidsR / active.length;
+                const maxR = Math.max(...active.map(r => r.camperCount));
+                const minR = Math.min(...active.map(r => r.camperCount));
+                const imbR = maxR > 0 ? ((maxR - minR) / maxR * 100) : 0;
 
-                    // Find the stop farthest from this bus's centroid (most isolated)
-                    const cLat = overBus.stops.reduce((s, st) => s + st.lat, 0) / overBus.stops.length;
-                    const cLng = overBus.stops.reduce((s, st) => s + st.lng, 0) / overBus.stops.length;
-                    let worstIdx = -1, worstDist = 0;
-                    overBus.stops.forEach((st, i) => {
-                        const d = haversineMi(cLat, cLng, st.lat, st.lng);
-                        if (d > worstDist) { worstDist = d; worstIdx = i; }
-                    });
-                    if (worstIdx < 0) continue;
-                    const stopToMove = overBus.stops[worstIdx];
+                if (imbR <= 25) break; // balanced enough within this region
 
-                    // Find nearest underloaded bus
-                    let bestBus = null, bestDist = Infinity;
-                    for (const underBus of allRoutes) {
-                        if (underBus === overBus) continue;
-                        if (underBus.camperCount + stopToMove.campers.length > underBus._cap) continue;
-                        if (underBus.camperCount >= avgKidsPerBus * 1.1) continue; // not underloaded enough
-                        const uLat = underBus.stops.length ? underBus.stops.reduce((s, st) => s + st.lat, 0) / underBus.stops.length : campLat;
-                        const uLng = underBus.stops.length ? underBus.stops.reduce((s, st) => s + st.lng, 0) / underBus.stops.length : campLng;
-                        const d = haversineMi(stopToMove.lat, stopToMove.lng, uLat, uLng);
-                        if (d < bestDist) { bestDist = d; bestBus = underBus; }
-                    }
-                    if (bestBus) {
-                        overBus.stops.splice(worstIdx, 1);
-                        overBus.camperCount -= stopToMove.campers.length;
-                        bestBus.stops.push(stopToMove);
-                        bestBus.camperCount += stopToMove.campers.length;
-                        rebalanced++;
-                        moved = true;
-                        break;
+                // Find the most overloaded bus in this region
+                let overBus = null, overMax = 0;
+                for (const r of regionBuses) {
+                    if (r.stops.length <= 1) continue;
+                    if (r.camperCount > avgR * 1.15 && r.camperCount > overMax) {
+                        overMax = r.camperCount; overBus = r;
                     }
                 }
-                if (!moved) break;
+                if (!overBus) break;
+
+                // Find the stop farthest from this bus's centroid
+                const cLat = overBus.stops.reduce((s, st) => s + st.lat, 0) / overBus.stops.length;
+                const cLng = overBus.stops.reduce((s, st) => s + st.lng, 0) / overBus.stops.length;
+                let worstIdx = -1, worstDist = 0;
+                overBus.stops.forEach((st, i) => {
+                    const d = haversineMi(cLat, cLng, st.lat, st.lng);
+                    if (d > worstDist) { worstDist = d; worstIdx = i; }
+                });
+                if (worstIdx < 0) break;
+                const stopToMove = overBus.stops[worstIdx];
+
+                // Find nearest underloaded bus IN THE SAME REGION
+                let bestBus = null, bestDist = Infinity;
+                for (const underBus of regionBuses) {
+                    if (underBus === overBus) continue;
+                    if (underBus.camperCount + stopToMove.campers.length > underBus._cap) continue;
+                    if (underBus.camperCount >= avgR) continue;
+                    const uLat = underBus.stops.length ? underBus.stops.reduce((s, st) => s + st.lat, 0) / underBus.stops.length : campLat;
+                    const uLng = underBus.stops.length ? underBus.stops.reduce((s, st) => s + st.lng, 0) / underBus.stops.length : campLng;
+                    const d = haversineMi(stopToMove.lat, stopToMove.lng, uLat, uLng);
+                    if (d < bestDist) { bestDist = d; bestBus = underBus; }
+                }
+                if (!bestBus) break;
+
+                overBus.stops.splice(worstIdx, 1);
+                overBus.camperCount -= stopToMove.campers.length;
+                bestBus.stops.push(stopToMove);
+                bestBus.camperCount += stopToMove.campers.length;
+                rebalanced++;
             }
-            if (rebalanced) console.log('[Go] Bus rebalancing: moved ' + rebalanced + ' stop(s) for better balance');
-        }
-
-        // ══════════════════════════════════════════════════════════════
-        // ROUTE OPTIMIZER — OSRM road-distance matrix + multi-start TSP
-        //
-        // 1. Pre-fetch ALL OSRM distance matrices in parallel
-        // 2. Per bus: multi-start NN + 2-opt + or-opt + or-opt-pairs + double-bridge
-        // 3. Orient for arrival/dismissal
-        // 4. Direction enforcement
-        // ══════════════════════════════════════════════════════════════
-
-        // ── Pre-fetch all OSRM matrices in parallel ──
-        showProgress('Fetching road distances (parallel)...', 75);
-        const matrixPromises = allRoutes.map(async r => {
-            if (r.stops.length < 2) return null;
-            try {
-                const coords = [campLng + ',' + campLat];
-                r.stops.forEach(s => coords.push(s.lng + ',' + s.lat));
-                const resp = await fetch('https://router.project-osrm.org/table/v1/driving/' + coords.join(';') + '?annotations=duration');
-                if (resp.ok) { const data = await resp.json(); if (data.code === 'Ok' && data.durations) return data.durations; }
-            } catch (e) {}
-            return null;
+            if (rebalanced) {
+                const regName = _detectedRegions?.find(r => r.id === regId)?.name || regId;
+                console.log('[Go] Rebalanced ' + regName + ': moved ' + rebalanced + ' stop(s)');
+                totalRebalanced += rebalanced;
+            }
         });
-        const matrices = await Promise.all(matrixPromises);
-        console.log('[Go] OSRM matrices: ' + matrices.filter(m => m).length + '/' + allRoutes.length + ' fetched in parallel');
+        if (totalRebalanced) console.log('[Go] Bus rebalancing: ' + totalRebalanced + ' total stop(s) moved across ' + Object.keys(regionGroups).length + ' regions');
+
+        // Clean up internal region tags
+        allRoutes.forEach(r => { delete r._regId; });
+
+        // ══════════════════════════════════════════════════════════════
+        // ROUTE OPTIMIZER — road-distance matrix + multi-start TSP
+        //
+        // Pipeline:
+        //   1. Fetch distance matrices (Mapbox primary → OSRM fallback)
+        //   2. Per bus: multi-start NN + 2-opt + or-opt + or-opt-pairs
+        //      + double-bridge perturbation. VROOM's order is a seed.
+        //   3. Orient for arrival/dismissal
+        //   4. Direction enforcement
+        //
+        // Routing modes (handled in tourCost):
+        //   ARRIVAL:            first_stop → stops → camp  [no camp→first leg]
+        //   DISMISSAL:          camp → stops → last_stop   [no return]
+        //   DISMISSAL + SHIFTS: camp → stops → last_stop → camp [return]
+        // ══════════════════════════════════════════════════════════════
+
+        showProgress('Fetching road distances...', 75);
+
+        // Stagger matrix requests 200ms apart
+        const matrices = new Array(allRoutes.length).fill(null);
+        const matrixFetchPromises = [];
+        for (let ri = 0; ri < allRoutes.length; ri++) {
+            const r = allRoutes[ri];
+            if (r.stops.length < 2) continue;
+            const coordsArr = [{ lat: campLat, lng: campLng }];
+            r.stops.forEach(s => coordsArr.push({ lat: s.lat, lng: s.lng }));
+            const idx = ri;
+            const staggerDelay = ri * 200;
+            matrixFetchPromises.push(
+                new Promise(resolve => setTimeout(resolve, staggerDelay))
+                    .then(() => fetchDistanceMatrix(coordsArr, campLat, campLng))
+                    .then(matrix => { matrices[idx] = matrix; })
+            );
+        }
+        await Promise.all(matrixFetchPromises);
+        const matrixHits = matrices.filter(m => m).length;
+        console.log('[Go] Distance matrices: ' + matrixHits + '/' + allRoutes.length + ' fetched');
 
         // ── Optimize each bus ──
         showProgress('Optimizing stop order...', 85);
@@ -1029,7 +1330,6 @@
             const matrix = matrices[ri];
             r.stops.forEach((s, i) => { s._matrixIdx = i + 1; });
 
-            // dist(i, j) — road-seconds between matrix indices (0=camp, 1..N=stops)
             function dist(i, j) {
                 if (matrix && matrix[i]?.[j] != null && matrix[i][j] >= 0) return matrix[i][j];
                 const a = i === 0 ? { lat: campLat, lng: campLng } : r.stops[i - 1];
@@ -1037,10 +1337,31 @@
                 return (haversineMi(a.lat, a.lng, b.lat, b.lng) / (D.setup.avgSpeed || 25)) * 3600;
             }
 
+            // ── Tour cost function ──
+            // Calculates total road-seconds for a given stop ordering.
+            //
+            //   ARRIVAL (morning pickup):
+            //     Bus starts at first stop, picks up kids, ends at camp.
+            //     Cost = stop→stop + last_stop→camp
+            //     (NO camp→first leg — driver gets there on their own)
+            //
+            //   DISMISSAL (single shift, afternoon drop-off):
+            //     Bus leaves camp, drops kids off, ends at last stop.
+            //     Cost = camp→first_stop + stop→stop
+            //     (NO return — driver goes home from last stop)
+            //
+            //   DISMISSAL + SHIFTS (multi-shift drop-off):
+            //     Bus leaves camp, drops kids off, returns to camp for next shift.
+            //     Cost = camp→first_stop + stop→stop + last_stop→camp
+
+            const startsAtCamp = !isArrival;          // dismissal starts at camp
+            const endsAtCamp = isArrival || hasShifts; // arrival ends at camp, shifts return
+
             function tourCost(tour) {
-                let cost = dist(0, tour[0] + 1);
+                let cost = 0;
+                if (startsAtCamp) cost += dist(0, tour[0] + 1);  // camp → first stop
                 for (let i = 0; i < tour.length - 1; i++) cost += dist(tour[i] + 1, tour[i + 1] + 1);
-                if (hasShifts || isArrival) cost += dist(tour[tour.length - 1] + 1, 0);
+                if (endsAtCamp) cost += dist(tour[tour.length - 1] + 1, 0); // last stop → camp
                 return cost;
             }
 
@@ -1132,23 +1453,35 @@
                 return t;
             }
 
-            // ── Generate + improve candidates ──
             let bestTour = null, bestCost = Infinity;
 
+            // ── Seed 0: VROOM's ordering (already optimized by ORS) ──
+            // VROOM solved this with its own road-distance VRP. Don't throw
+            // it away — it's often already near-optimal, especially when the
+            // OSRM/Mapbox matrix agrees with ORS.
+            const vroomOrder = Array.from({ length: n }, (_, i) => i); // current stop order IS vroom's order
+            {
+                const t = fullImprove(vroomOrder);
+                const c = tourCost(t);
+                if (c < bestCost) { bestCost = c; bestTour = t; }
+            }
+
+            // ── Seed 1: Multi-start nearest-neighbor from every stop ──
             for (let startIdx = 0; startIdx < n; startIdx++) {
                 let tour = fullImprove(nearestNeighbor(startIdx));
                 const cost = tourCost(tour); if (cost < bestCost) { bestCost = cost; bestTour = tour; }
             }
 
-            // Seed strategies
+            // ── Seed 2: Geometric orderings ──
             const byDist = Array.from({ length: n }, (_, i) => i).sort((a, b) => dist(0, a + 1) - dist(0, b + 1));
             const seeds = [[...byDist], [...byDist].reverse()];
             const byAngle = Array.from({ length: n }, (_, i) => i).sort((a, b) => Math.atan2(r.stops[a].lng - campLng, r.stops[a].lat - campLat) - Math.atan2(r.stops[b].lng - campLng, r.stops[b].lat - campLat));
             seeds.push([...byAngle], [...byAngle].reverse());
-            seeds.push(isArrival ? [...byDist].reverse() : [...byDist]); // direction-biased
+            // Direction-biased: arrival wants far→near, dismissal wants near→far
+            seeds.push(isArrival ? [...byDist].reverse() : [...byDist]);
             seeds.forEach(seed => { let t = fullImprove(seed); const c = tourCost(t); if (c < bestCost) { bestCost = c; bestTour = t; } });
 
-            // Perturbation — double-bridge + re-optimize
+            // ── Perturbation: double-bridge + re-optimize ──
             if (n >= 6 && bestTour) {
                 const rounds = n <= 10 ? n * 15 : n <= 25 ? n * 5 : n * 3;
                 const cycles = n <= 10 ? 5 : n <= 25 ? 3 : 2;
@@ -1161,7 +1494,9 @@
                 }
             }
 
-            // ── Orient for arrival vs dismissal ──
+            // ── Orient for mode ──
+            // Arrival: first stop should be farthest from camp (bus drives out, picks up inward)
+            // Dismissal: first stop should be nearest (bus drops off outward)
             if (bestTour && bestTour.length === n) {
                 const fd = dist(0, bestTour[0] + 1), ld = dist(0, bestTour[bestTour.length - 1] + 1);
                 if (isArrival && fd < ld) bestTour.reverse();
@@ -1169,7 +1504,7 @@
                 r.stops = bestTour.map(i => r.stops[i]);
             }
 
-            // ── Direction enforcement ──
+            // Direction enforcement
             if (r.stops.length >= 4) {
                 let relocations = 0;
                 for (let pass = 0; pass < 3; pass++) {
@@ -1198,10 +1533,10 @@
 
             r.stops.forEach((s, i) => { s.stopNum = i + 1; });
             r._osrmMatrix = matrix;
-            console.log('[Go] Optimized: ' + r.busName + ' (' + n + ' stops, ' + r.camperCount + ' kids, ~' + Math.round(bestCost / 60) + ' min, ' + (matrix ? 'OSRM' : 'haversine') + ')');
+            console.log('[Go] Optimized: ' + r.busName + ' (' + n + ' stops, ' + r.camperCount + ' kids, ~' + Math.round(bestCost / 60) + ' min, ' + (matrix ? 'road-matrix' : 'haversine') + ')');
         }
 
-        // ── Route quality summary ──
+        // Route quality summary
         const totalKids = allRoutes.reduce((s, r) => s + r.camperCount, 0);
         const totalStops = allRoutes.reduce((s, r) => s + r.stops.length, 0);
         const busesUsed = allRoutes.filter(r => r.stops.length > 0).length;
@@ -1244,21 +1579,20 @@
         const specialStops = route.stops.filter(s => s.isMonitor || s.isCounselor);
         const nn = stops.length; if (nn < 2) { toast('Not enough stops'); return; }
 
-        // Fetch fresh OSRM matrix
-        let matrix = null;
-        try {
-            const coords = [campLng + ',' + campLat]; stops.forEach(s => coords.push(s.lng + ',' + s.lat));
-            const resp = await fetch('https://router.project-osrm.org/table/v1/driving/' + coords.join(';') + '?annotations=duration');
-            if (resp.ok) { const data = await resp.json(); if (data.code === 'Ok' && data.durations) matrix = data.durations; }
-        } catch (e) {}
+        // Fetch distance matrix (Mapbox → OSRM fallback)
+        const coordsArr = [{ lat: campLat, lng: campLng }];
+        stops.forEach(s => coordsArr.push({ lat: s.lat, lng: s.lng }));
+        const matrix = await fetchDistanceMatrix(coordsArr, campLat, campLng);
 
+        const startsAtCamp = !isArrival;
+        const endsAtCamp = isArrival || hasShifts;
         function dist(i, j) {
             if (matrix && matrix[i]?.[j] != null && matrix[i][j] >= 0) return matrix[i][j];
             const a = i === 0 ? { lat: campLat, lng: campLng } : stops[i - 1];
             const b = j === 0 ? { lat: campLat, lng: campLng } : stops[j - 1];
             return (haversineMi(a.lat, a.lng, b.lat, b.lng) / (D.setup.avgSpeed || 25)) * 3600;
         }
-        function tourCost(tour) { let c = dist(0, tour[0] + 1); for (let i = 0; i < tour.length - 1; i++) c += dist(tour[i] + 1, tour[i + 1] + 1); if (hasShifts || isArrival) c += dist(tour[tour.length - 1] + 1, 0); return c; }
+        function tourCost(tour) { let c = 0; if (startsAtCamp) c += dist(0, tour[0] + 1); for (let i = 0; i < tour.length - 1; i++) c += dist(tour[i] + 1, tour[i + 1] + 1); if (endsAtCamp) c += dist(tour[tour.length - 1] + 1, 0); return c; }
         function nearestNeighbor(si) { const t = [si]; const v = new Set([si]); while (t.length < nn) { const l = t[t.length-1]; let bi=-1,bd=Infinity; for(let i=0;i<nn;i++){if(v.has(i))continue;const d=dist(l+1,i+1);if(d<bd){bd=d;bi=i;}} if(bi<0)break;t.push(bi);v.add(bi);} return t; }
         function twoOpt(tour) { const t=[...tour];let imp=true,it=0;while(imp&&it<Math.min(nn*nn*4,3000)){imp=false;it++;for(let i=0;i<t.length-1;i++)for(let j=i+2;j<t.length;j++){const p=i===0?0:t[i-1]+1,a=t[i]+1,b=t[j]+1,x=j+1<t.length?t[j+1]+1:-1;if(dist(p,b)+(x>=0?dist(a,x):0)<dist(p,a)+(x>=0?dist(b,x):0)-0.1){const s=t.slice(i,j+1).reverse();for(let k=0;k<s.length;k++)t[i+k]=s[k];imp=true;}}}return t; }
         function orOpt(tour) { const t=[...tour];let imp=true,it=0;while(imp&&it<500){imp=false;it++;for(let i=0;i<t.length;i++){const p=i===0?0:t[i-1]+1,c=t[i]+1,nx=i+1<t.length?t[i+1]+1:-1;const sv=(dist(p,c)+(nx>=0?dist(c,nx):0))-(nx>=0?dist(p,nx):0);let bj=-1,bg=0;for(let j=0;j<t.length;j++){if(j===i||j===i-1)continue;const a=j===0?0:t[j-1]+1,b=t[j]+1;const g=sv-(dist(a,c)+dist(c,b)-dist(a,b));if(g>bg+0.1){bg=g;bj=j;}}if(bj>=0){const si=t.splice(i,1)[0];t.splice(bj>i?bj-1:bj,0,si);imp=true;break;}}}return t; }
@@ -1266,6 +1600,8 @@
         function fullImprove(t) { t=[...t];let pc=tourCost(t);for(let c=0;c<5;c++){t=twoOpt(t);t=orOpt(t);t=twoOpt(t);const nc=tourCost(t);if(nc>=pc-0.5)break;pc=nc;}return t; }
 
         let bestTour = null, bestCost = Infinity;
+        // Seed: current order (may be from previous optimization)
+        { const t = fullImprove(Array.from({length:nn},(_,i)=>i)); const c = tourCost(t); if (c < bestCost) { bestCost = c; bestTour = t; } }
         for (let s = 0; s < nn; s++) { let t = fullImprove(nearestNeighbor(s)); const c = tourCost(t); if (c < bestCost) { bestCost = c; bestTour = t; } }
         const byDist = Array.from({length:nn},(_,i)=>i).sort((a,b)=>dist(0,a+1)-dist(0,b+1));
         [[...byDist],[...byDist].reverse()].forEach(seed => { const t = fullImprove(seed); const c = tourCost(t); if (c < bestCost) { bestCost = c; bestTour = t; } });
@@ -1277,7 +1613,6 @@
             if (!isArrival && fd > ld) bestTour.reverse();
             const newStops = bestTour.map(i => stops[i]);
 
-            // Direction enforcement
             for (let pass = 0; pass < 3; pass++) {
                 let moved = false;
                 for (let i = 1; i < newStops.length; i++) {
@@ -1304,7 +1639,6 @@
         route._osrmMatrix = matrix;
         route.camperCount = route.stops.reduce((s, st) => s + st.campers.length, 0);
 
-        // Recalculate ETAs
         const avgStopMin = D.setup.avgStopTime || 2;
         const avgSpeedMph = D.setup.avgSpeed || 25;
         const timeMin = parseTime(sr.shift.departureTime || (isArrival ? '08:00' : '16:00'));
@@ -1329,12 +1663,12 @@
         route.stops.forEach(s => { delete s._matrixIdx; }); delete route._osrmMatrix;
         _generatedRoutes = D.savedRoutes; save();
         renderRouteResults(applyOverrides(D.savedRoutes));
-        console.log('[Go] Re-optimized ' + route.busName + ': ~' + Math.round(bestCost / 60) + ' min (' + (matrix ? 'OSRM' : 'haversine') + ')');
+        console.log('[Go] Re-optimized ' + route.busName + ': ~' + Math.round(bestCost / 60) + ' min (' + (matrix ? 'road-matrix' : 'haversine') + ')');
         toast(route.busName + ' re-optimized!');
     }
 
     // =========================================================================
-    // FALLBACK ROUTING (if VROOM fails — simple geographic clustering)
+    // FALLBACK ROUTING
     // =========================================================================
     function fallbackRouting(stops, vehicles, campLat, campLng) {
         console.warn('[Go] Using fallback geographic routing');
@@ -1369,9 +1703,6 @@
     // =========================================================================
     // STOP CREATION
     // =========================================================================
-    // =========================================================================
-    // SHARED HELPERS FOR ALL STOP MODES
-    // =========================================================================
 
     /** Detect sibling groups: same last name + addresses within ~100ft */
     function detectSiblings(campers) {
@@ -1405,7 +1736,6 @@
         return sibMap;
     }
 
-    /** Pre-process ride-with pairs (shared across all modes) */
     function applyRideWith(campers) {
         const map = {}; campers.forEach(c => { map[c.name] = c; });
         campers.forEach(c => {
@@ -1418,14 +1748,10 @@
     }
 
     function createHouseStops(campers) {
-        // Handle ride-with pairs: move kid to partner's location
         const camperMap = {}; campers.forEach(c => { camperMap[c.name] = c; });
         campers.forEach(c => { const a = D.addresses[c.name]; if (a?.rideWith) { const partner = camperMap[a.rideWith]; if (partner) { c.lat = partner.lat; c.lng = partner.lng; c.address = partner.address; } } });
-
-        // Group by exact address (normalized) — siblings at same address always together
         const groups = {};
         campers.forEach(c => {
-            // Normalize: round to ~30ft precision for same-house matching
             const key = Math.round(c.lat * 5000) + ',' + Math.round(c.lng * 5000);
             if (!groups[key]) groups[key] = [];
             groups[key].push(c);
@@ -1438,85 +1764,106 @@
         }));
     }
 
-    function createOptimizedStops(campers) {
-        const walkFt = D.setup.maxWalkDistance || 500;
-        const walkMi = walkFt * 0.000189394;
+    // =========================================================================
+    // DYNAMIC CLUSTER RADIUS — adapts to housing density
+    //
+    // Measures median nearest-neighbor distance among campers to detect
+    // whether we're in a dense city grid (~0.01mi between houses) or
+    // a spread-out rural/suburban area (~0.2mi between houses).
+    //
+    // Dense city  → median NN ~0.01mi → cluster radius ~0.07mi (~370ft)
+    // Suburban    → median NN ~0.03mi → cluster radius ~0.15mi (~790ft)
+    // Spread out  → median NN ~0.10mi → cluster radius ~0.50mi (~2640ft)
+    // Rural       → median NN ~0.20mi → cluster radius ~1.00mi
+    //
+    // The radius is clamped between 0.05mi (floor) and 1.0mi (ceiling).
+    // User's maxWalkDistance setting acts as an additional cap.
+    // =========================================================================
+    function calcDensityRadius(campers) {
+        if (campers.length < 3) return 0.1; // not enough data, use reasonable default
 
-        // Handle ride-with pairs
+        // Calculate nearest-neighbor distance for each camper
+        const nnDists = [];
+        for (let i = 0; i < campers.length; i++) {
+            let minDist = Infinity;
+            for (let j = 0; j < campers.length; j++) {
+                if (i === j) continue;
+                const d = haversineMi(campers[i].lat, campers[i].lng, campers[j].lat, campers[j].lng);
+                if (d < minDist) minDist = d;
+            }
+            if (minDist < Infinity) nnDists.push(minDist);
+        }
+
+        if (!nnDists.length) return 0.1;
+
+        // Median nearest-neighbor distance
+        nnDists.sort((a, b) => a - b);
+        const median = nnDists[Math.floor(nnDists.length / 2)];
+
+        // Scale: cluster radius = 5× median NN distance
+        // This means a cluster can span roughly 5 "house gaps"
+        const FLOOR = 0.05;   // ~265ft — minimum even in Manhattan
+        const CEILING = 1.0;  // ~1 mile — maximum even in rural areas
+        const MULTIPLIER = 5;
+
+        const radius = Math.max(FLOOR, Math.min(CEILING, median * MULTIPLIER));
+
+        return radius;
+    }
+
+    function createOptimizedStops(campers) {
         const camperMap = {}; campers.forEach(c => { camperMap[c.name] = c; });
         campers.forEach(c => { const a = D.addresses[c.name]; if (a?.rideWith) { const partner = camperMap[a.rideWith]; if (partner) { c.lat = partner.lat; c.lng = partner.lng; c.address = partner.address; } } });
 
-        // Detect siblings (same last name + close proximity)
+        // Dynamic cluster radius based on housing density
+        const densityRadius = calcDensityRadius(campers);
+        const userCapMi = (D.setup.maxWalkDistance || 0) > 0 ? D.setup.maxWalkDistance * 0.000189394 : Infinity;
+        const walkMi = Math.min(densityRadius, userCapMi);
+        console.log('[Go] Density radius: ' + (densityRadius * 5280).toFixed(0) + 'ft → cluster radius: ' + (walkMi * 5280).toFixed(0) + 'ft');
+
         const sibMap = detectSiblings(campers);
 
-        // Multi-start clustering (same logic as corner stops)
-        function runCluster(sortedList) {
-            const clusters = [], assigned = new Set();
-            sortedList.forEach(c => {
-                if (assigned.has(c.name)) return;
-                const cluster = [];
-                const sibGid = sibMap[c.name];
-                if (sibGid) { sortedList.forEach(k => { if (!assigned.has(k.name) && sibMap[k.name] === sibGid) { cluster.push(k); assigned.add(k.name); } }); }
-                else { cluster.push(c); assigned.add(c.name); }
-                let changed = true;
-                while (changed) {
-                    changed = false;
-                    sortedList.forEach(other => {
-                        if (assigned.has(other.name)) return;
-                        const toAdd = [other];
-                        const oGid = sibMap[other.name];
-                        if (oGid) sortedList.forEach(k => { if (!assigned.has(k.name) && k.name !== other.name && sibMap[k.name] === oGid) toAdd.push(k); });
-                        const trial = [...cluster, ...toAdd];
-                        const nLat = trial.reduce((s, k) => s + k.lat, 0) / trial.length;
-                        const nLng = trial.reduce((s, k) => s + k.lng, 0) / trial.length;
-                        if (trial.every(k => haversineMi(nLat, nLng, k.lat, k.lng) <= walkMi)) {
-                            toAdd.forEach(k => { cluster.push(k); assigned.add(k.name); });
-                            changed = true;
-                        }
-                    });
-                }
-                clusters.push(cluster);
-            });
-            return clusters;
-        }
+        // Smart clustering: street-aware, capacity-capped
+        const bestClusters = smartCluster(campers, walkMi, sibMap);
 
-        const avgLat = campers.reduce((s, c) => s + c.lat, 0) / campers.length;
-        const avgLng = campers.reduce((s, c) => s + c.lng, 0) / campers.length;
-        const strategies = [
-            [...campers].sort((a, b) => a.lat - b.lat),
-            [...campers].sort((a, b) => b.lat - a.lat),
-            [...campers].sort((a, b) => a.lng - b.lng),
-            [...campers].sort((a, b) => b.lng - a.lng),
-            [...campers].sort((a, b) => haversineMi(avgLat, avgLng, a.lat, a.lng) - haversineMi(avgLat, avgLng, b.lat, b.lng)),
-        ];
-        let bestClusters = null, bestCount = Infinity;
-        strategies.forEach(s => { const r = runCluster(s); if (r.length < bestCount) { bestCount = r.length; bestClusters = r; } });
-
-        // Build stops from clusters
+        // Build stops — median point for optimal pickup location
         const stops = bestClusters.map(cluster => {
-            const cLat = cluster.reduce((s, k) => s + k.lat, 0) / cluster.length;
-            const cLng = cluster.reduce((s, k) => s + k.lng, 0) / cluster.length;
+            if (cluster.length === 1) {
+                return { lat: cluster[0].lat, lng: cluster[0].lng, address: cluster[0].address, campers: cluster.map(c => ({ name: c.name, division: c.division, bunk: c.bunk })) };
+            }
+
+            // Coordinate-wise median = exact L1 optimal point
+            const sortedLats = cluster.map(k => k.lat).sort((a, b) => a - b);
+            const sortedLngs = cluster.map(k => k.lng).sort((a, b) => a - b);
+            const medianLat = sortedLats[Math.floor(sortedLats.length / 2)];
+            const medianLng = sortedLngs[Math.floor(sortedLngs.length / 2)];
+
             let nearestAddr = cluster[0].address, nearestDist = Infinity;
-            cluster.forEach(k => { const d = haversineMi(cLat, cLng, k.lat, k.lng); if (d < nearestDist) { nearestDist = d; nearestAddr = k.address; } });
-            return { lat: cLat, lng: cLng, address: nearestAddr, campers: cluster.map(c => ({ name: c.name, division: c.division, bunk: c.bunk })) };
+            cluster.forEach(k => {
+                const d = manhattanMi(medianLat, medianLng, k.lat, k.lng);
+                if (d < nearestDist) { nearestDist = d; nearestAddr = k.address; }
+            });
+
+            const parsed = parseAddress(nearestAddr);
+            const streetLabel = parsed.street || nearestAddr.split(',')[0];
+            const label = nearestDist < 0.01 ? nearestAddr : 'Near ' + streetLabel;
+
+            return { lat: medianLat, lng: medianLng, address: label, campers: cluster.map(c => ({ name: c.name, division: c.division, bunk: c.bunk })) };
         });
 
-        console.log('[Go] Optimized stops: ' + stops.length + ' from ' + campers.length + ' campers (best of ' + strategies.length + ')');
+        console.log('[Go] Optimized stops: ' + stops.length + ' from ' + campers.length + ' campers');
         return stops;
     }
 
     // =========================================================================
-    // CORNER STOPS — Real intersection-aware (OpenStreetMap Overpass API)
-    //
-    // 1. Cluster nearby kids within walking distance
-    // 2. Query OSM for real intersections WHERE THE KIDS LIVE
-    // 3. Snap each cluster to its nearest real intersection
-    // 4. That intersection = the bus stop
+    // CORNER STOPS — Real intersection-aware
+    // FIX 3: Overpass retry + mirror
+    // FIX 4: Nearest-kid coords when no OSM snap
+    // FIX 5+6: Manhattan distance + 375ft default
     // =========================================================================
 
     let _intersectionCache = null;
 
-    // Load cached intersections from localStorage
     try {
         const cached = localStorage.getItem('campistry_go_intersections');
         if (cached) {
@@ -1529,72 +1876,19 @@
     } catch (_) {}
 
     async function createCornerStops(campers) {
-        const walkFt = D.setup.maxWalkDistance || 500;
-        const walkMi = walkFt * 0.000189394;
-
         applyRideWith(campers);
+
+        // Dynamic cluster radius based on housing density
+        const densityRadius = calcDensityRadius(campers);
+        const userCapMi = (D.setup.maxWalkDistance || 0) > 0 ? D.setup.maxWalkDistance * 0.000189394 : Infinity;
+        const walkMi = Math.min(densityRadius, userCapMi);
+        console.log('[Go] Corner stops — density radius: ' + (densityRadius * 5280).toFixed(0) + 'ft → cluster radius: ' + (walkMi * 5280).toFixed(0) + 'ft');
+
         const sibMap = detectSiblings(campers);
 
-        // ══════════════════════════════════════════════════════════════
-        // CORNER STOPS: Cluster → Analyze streets → Find best corner
-        //
-        // 1. Cluster nearby kids (midpoint-aware, sibling-linked)
-        // 2. For each cluster, parse addresses → find most common street
-        // 3. Find the most frequent cross-street in the cluster
-        // 4. Stop name = "CrossStreet & MainStreet"
-        // 5. Snap to real intersection coordinates if Overpass available
-        // ══════════════════════════════════════════════════════════════
+        // Smart clustering: street-aware, capacity-capped
+        const bestClusters = smartCluster(campers, walkMi, sibMap);
 
-        // ── Step 1: Cluster nearby kids ──
-        function runClustering(sortedList) {
-            const clusters = [], assigned = new Set();
-            sortedList.forEach(c => {
-                if (assigned.has(c.name)) return;
-                const cluster = [];
-                const sibGid = sibMap[c.name];
-                if (sibGid) { sortedList.forEach(k => { if (!assigned.has(k.name) && sibMap[k.name] === sibGid) { cluster.push(k); assigned.add(k.name); } }); }
-                else { cluster.push(c); assigned.add(c.name); }
-
-                let changed = true;
-                while (changed) {
-                    changed = false;
-                    sortedList.forEach(other => {
-                        if (assigned.has(other.name)) return;
-                        const toAdd = [other];
-                        const oGid = sibMap[other.name];
-                        if (oGid) sortedList.forEach(k => { if (!assigned.has(k.name) && k.name !== other.name && sibMap[k.name] === oGid) toAdd.push(k); });
-                        const trial = [...cluster, ...toAdd];
-                        const nLat = trial.reduce((s, k) => s + k.lat, 0) / trial.length;
-                        const nLng = trial.reduce((s, k) => s + k.lng, 0) / trial.length;
-                        if (trial.every(k => haversineMi(nLat, nLng, k.lat, k.lng) <= walkMi)) {
-                            toAdd.forEach(k => { cluster.push(k); assigned.add(k.name); });
-                            changed = true;
-                        }
-                    });
-                }
-                clusters.push(cluster);
-            });
-            return clusters;
-        }
-
-        // Multi-start: try different sort orders
-        const avgLat = campers.reduce((s, c) => s + c.lat, 0) / campers.length;
-        const avgLng = campers.reduce((s, c) => s + c.lng, 0) / campers.length;
-        const strategies = [
-            [...campers].sort((a, b) => a.lat - b.lat),
-            [...campers].sort((a, b) => b.lat - a.lat),
-            [...campers].sort((a, b) => a.lng - b.lng),
-            [...campers].sort((a, b) => b.lng - a.lng),
-            [...campers].sort((a, b) => haversineMi(avgLat, avgLng, a.lat, a.lng) - haversineMi(avgLat, avgLng, b.lat, b.lng)),
-            [...campers].sort((a, b) => haversineMi(avgLat, avgLng, b.lat, b.lng) - haversineMi(avgLat, avgLng, a.lat, a.lng)),
-            [...campers].sort((a, b) => { const pa = parseAddress(a.address), pb = parseAddress(b.address); const sc = (pa.street || '').localeCompare(pb.street || ''); return sc !== 0 ? sc : pa.num - pb.num; }),
-        ];
-        let bestClusters = null, bestCount = Infinity;
-        strategies.forEach(s => { const r = runClustering(s); if (r.length < bestCount) { bestCount = r.length; bestClusters = r; } });
-
-        console.log('[Go] Clustered ' + campers.length + ' campers → ' + bestClusters.length + ' groups (best of ' + strategies.length + ')');
-
-        // ── Step 2: Try to get real intersections from Overpass ──
         let osmIntersections = _intersectionCache;
         if (!osmIntersections) {
             showProgress('Fetching real intersections...', 15);
@@ -1608,52 +1902,61 @@
             }
         }
 
-        // ── Step 3: For each cluster, find the best corner ──
+        // For each cluster, find the best corner
         const stops = bestClusters.map(cluster => {
-            // Parse all addresses in this cluster
             const streetCounts = {};
             cluster.forEach(c => {
                 const p = parseAddress(c.address);
                 if (p.street) streetCounts[p.street] = (streetCounts[p.street] || 0) + 1;
             });
 
-            // Sort streets by frequency — most common = the main street for this cluster
             const sortedStreets = Object.entries(streetCounts).sort((a, b) => b[1] - a[1]);
             const mainStreet = sortedStreets[0]?.[0] || '';
             const crossStreet = sortedStreets[1]?.[0] || '';
 
-            // Cluster center
-            const cLat = cluster.reduce((s, k) => s + k.lat, 0) / cluster.length;
-            const cLng = cluster.reduce((s, k) => s + k.lng, 0) / cluster.length;
+            // ── Helper: total Manhattan walk from all kids to a point ──
+            function totalWalkTo(lat, lng) {
+                return cluster.reduce((sum, k) => sum + manhattanMi(lat, lng, k.lat, k.lng), 0);
+            }
 
-            // Build stop name and find best coordinates
-            let stopName = '', stopLat = cLat, stopLng = cLng;
+            // ── Fallback: best kid location (minimizes total walk, guaranteed on-street) ──
+            let fallbackLat = cluster[0].lat, fallbackLng = cluster[0].lng;
+            if (cluster.length > 1) {
+                let bestKidWalk = Infinity;
+                cluster.forEach(k => {
+                    const tw = totalWalkTo(k.lat, k.lng);
+                    if (tw < bestKidWalk) { bestKidWalk = tw; fallbackLat = k.lat; fallbackLng = k.lng; }
+                });
+            }
+
+            let stopName = '', stopLat = fallbackLat, stopLng = fallbackLng;
 
             if (mainStreet && crossStreet) {
                 stopName = crossStreet + ' & ' + mainStreet;
 
                 if (osmIntersections) {
-                    // Score each intersection: prefer ones that match BOTH streets
+                    // ── Score intersections by: street match + total walk from all kids ──
+                    // Street match gives a bonus; total walk is the tiebreaker.
+                    // This finds the intersection most accessible to the whole cluster.
                     let bestInter = null, bestScore = -Infinity;
 
                     osmIntersections.forEach(inter => {
-                        const d = haversineMi(cLat, cLng, inter.lat, inter.lng);
-                        if (d > walkMi * 2) return; // too far, skip
+                        // Quick reject: too far from any kid
+                        const d = haversineMi(fallbackLat, fallbackLng, inter.lat, inter.lng);
+                        if (d > walkMi * 3) return;
 
-                        // Check how well this intersection's street names match ours
                         const interStreets = (inter.streets || []).map(s => s.toLowerCase());
                         const mainMatch = interStreets.some(s => streetMatch(s, mainStreet));
                         const crossMatch = interStreets.some(s => streetMatch(s, crossStreet));
 
-                        // Score: +10 for both streets, +4 for main only, +2 for cross only
-                        // Subtract distance penalty (closer = better)
                         let score = 0;
                         if (mainMatch && crossMatch) score = 10;
                         else if (mainMatch) score = 4;
                         else if (crossMatch) score = 2;
-                        else return; // doesn't match any of our streets — skip
+                        else return; // no street match — skip
 
-                        score -= d * 20; // distance penalty
+                        // Subtract total walking distance (lower = better)
+                        score -= totalWalkTo(inter.lat, inter.lng) * 20;
 
                         if (score > bestScore) { bestScore = score; bestInter = inter; }
                     });
@@ -1662,7 +1965,7 @@
                         stopLat = bestInter.lat;
                         stopLng = bestInter.lng;
                         stopName = bestInter.name;
-                        console.log('[Go]   Snapped to OSM: ' + bestInter.name + ' (score ' + bestScore.toFixed(1) + ')');
+                        console.log('[Go]   Best corner: ' + bestInter.name + ' (score ' + bestScore.toFixed(1) + ', total walk ' + (totalWalkTo(bestInter.lat, bestInter.lng) * 5280).toFixed(0) + 'ft)');
                     }
                 }
             } else if (mainStreet) {
@@ -1670,16 +1973,17 @@
                 if (nums.length >= 2) stopName = nums[0] + '-' + nums[nums.length - 1] + ' ' + mainStreet;
                 else stopName = mainStreet;
 
-                // Find nearest intersection that involves this street
                 if (osmIntersections) {
-                    let bestInter = null, bestDist = walkMi;
+                    // Single street — find the intersection on this street
+                    // that minimizes total walk from all kids
+                    let bestInter = null, bestWalk = Infinity;
                     osmIntersections.forEach(inter => {
-                        const d = haversineMi(cLat, cLng, inter.lat, inter.lng);
-                        if (d >= bestDist) return;
+                        const d = haversineMi(fallbackLat, fallbackLng, inter.lat, inter.lng);
+                        if (d > walkMi * 3) return;
                         const interStreets = (inter.streets || []).map(s => s.toLowerCase());
-                        if (interStreets.some(s => streetMatch(s, mainStreet))) {
-                            bestDist = d; bestInter = inter;
-                        }
+                        if (!interStreets.some(s => streetMatch(s, mainStreet))) return;
+                        const tw = totalWalkTo(inter.lat, inter.lng);
+                        if (tw < bestWalk) { bestWalk = tw; bestInter = inter; }
                     });
                     if (bestInter) { stopLat = bestInter.lat; stopLng = bestInter.lng; stopName = bestInter.name; }
                 }
@@ -1693,7 +1997,8 @@
             };
         });
 
-        // ── Step 4: Merge tiny stops (<=2 kids) into nearest within walkMi ──
+        // Merge tiny stops (<=2 kids) into nearest within walkMi
+        // FIX 6: Use manhattanMi for merge distance check too
         let didMerge = true;
         while (didMerge) {
             didMerge = false;
@@ -1702,7 +2007,7 @@
                 let bestJ = -1, bestDist = walkMi;
                 for (let j = 0; j < stops.length; j++) {
                     if (j === i) continue;
-                    const d = haversineMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng);
+                    const d = manhattanMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng);
                     if (d < bestDist) { bestDist = d; bestJ = j; }
                 }
                 if (bestJ >= 0) {
@@ -1720,7 +2025,7 @@
         return final;
     }
 
-    // ── Fetch real intersections from OpenStreetMap Overpass API ──
+    // ── FIX 3: Fetch intersections with retry + mirror fallback ──
     async function fetchIntersections(campers) {
         let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
         campers.forEach(c => { if (c.lat < minLat) minLat = c.lat; if (c.lat > maxLat) maxLat = c.lat; if (c.lng < minLng) minLng = c.lng; if (c.lng > maxLng) maxLng = c.lng; });
@@ -1731,45 +2036,76 @@
             'way["highway"~"^(residential|secondary|tertiary|primary|trunk|unclassified|living_street)$"]["name"](' + bbox + ');' +
             'out body;>;out skel;';
 
-        try {
-            const resp = await fetch('https://overpass-api.de/api/interpreter', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: 'data=' + encodeURIComponent(query)
-            });
-            if (!resp.ok) return null;
-            const data = await resp.json();
-            if (!data.elements?.length) return null;
+        // Try primary + mirror
+        const endpoints = [
+            'https://overpass-api.de/api/interpreter',
+            'https://overpass.kumi.systems/api/interpreter'
+        ];
 
-            const nodes = {};
-            data.elements.filter(e => e.type === 'node' && e.lat && e.lon).forEach(e => { nodes[e.id] = { lat: e.lat, lng: e.lon }; });
+        for (const url of endpoints) {
+            try {
+                console.log('[Go] Overpass: trying ' + url.split('//')[1].split('/')[0] + '...');
+                const resp = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: 'data=' + encodeURIComponent(query)
+                });
 
-            const nodeStreets = {};
-            data.elements.filter(e => e.type === 'way' && e.tags?.name && e.nodes?.length).forEach(way => {
-                way.nodes.forEach(nid => { if (!nodeStreets[nid]) nodeStreets[nid] = new Set(); nodeStreets[nid].add(way.tags.name); });
-            });
+                if (resp.status === 504 || resp.status === 429) {
+                    console.warn('[Go] Overpass ' + resp.status + ' at ' + url + ', trying next mirror...');
+                    continue;
+                }
+                if (!resp.ok) {
+                    console.warn('[Go] Overpass HTTP ' + resp.status + ' at ' + url);
+                    continue;
+                }
 
-            const intersections = [];
-            Object.entries(nodeStreets).forEach(([nid, streets]) => {
-                if (streets.size < 2) return;
-                const node = nodes[nid]; if (!node) return;
-                const arr = [...streets].sort();
-                intersections.push({ lat: node.lat, lng: node.lng, name: arr[0] + ' & ' + arr[1], streets: arr });
-            });
+                const data = await resp.json();
+                if (!data.elements?.length) return null;
 
-            console.log('[Go] Overpass: ' + intersections.length + ' intersections');
-            return intersections.length > 0 ? intersections : null;
-        } catch (e) {
-            console.error('[Go] Overpass error:', e.message);
-            return null;
+                const nodes = {};
+                data.elements.filter(e => e.type === 'node' && e.lat && e.lon).forEach(e => { nodes[e.id] = { lat: e.lat, lng: e.lon }; });
+
+                const nodeStreets = {};
+                data.elements.filter(e => e.type === 'way' && e.tags?.name && e.nodes?.length).forEach(way => {
+                    way.nodes.forEach(nid => { if (!nodeStreets[nid]) nodeStreets[nid] = new Set(); nodeStreets[nid].add(way.tags.name); });
+                });
+
+                const intersections = [];
+                Object.entries(nodeStreets).forEach(([nid, streets]) => {
+                    if (streets.size < 2) return;
+                    const node = nodes[nid]; if (!node) return;
+                    const arr = [...streets].sort();
+                    intersections.push({ lat: node.lat, lng: node.lng, name: arr[0] + ' & ' + arr[1], streets: arr });
+                });
+
+                // ── Extract major road segments for crossing detection ──
+                const majorSegments = [];
+                data.elements.filter(e => e.type === 'way' && e.tags?.highway && e.nodes?.length >= 2).forEach(way => {
+                    const cls = way.tags.highway;
+                    // Only primary, secondary, and trunk roads count as "major"
+                    if (cls !== 'primary' && cls !== 'secondary' && cls !== 'trunk') return;
+                    for (let i = 0; i < way.nodes.length - 1; i++) {
+                        const a = nodes[way.nodes[i]], b = nodes[way.nodes[i + 1]];
+                        if (a && b) majorSegments.push({ lat1: a.lat, lng1: a.lng, lat2: b.lat, lng2: b.lng, name: way.tags.name || '' });
+                    }
+                });
+                _majorRoadSegments = majorSegments;
+                console.log('[Go] Overpass: ' + intersections.length + ' intersections, ' + majorSegments.length + ' major road segments');
+                return intersections.length > 0 ? intersections : null;
+            } catch (e) {
+                console.warn('[Go] Overpass error at ' + url + ':', e.message);
+                continue;
+            }
         }
+
+        console.error('[Go] All Overpass endpoints failed');
+        return null;
     }
 
-    /** Normalize a street name for comparison: lowercase, expand/collapse abbreviations */
     function normalizeStreet(name) {
         if (!name) return '';
         let s = name.toLowerCase().trim();
-        // Common abbreviations → full form
         const abbrevs = [
             [/\bst\b\.?/g, 'street'], [/\bave?\b\.?/g, 'avenue'], [/\bblvd\b\.?/g, 'boulevard'],
             [/\bdr\b\.?/g, 'drive'], [/\brd\b\.?/g, 'road'], [/\bct\b\.?/g, 'court'],
@@ -1781,16 +2117,12 @@
         return s.replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
     }
 
-    /** Check if two street names refer to the same street */
     function streetMatch(osmName, ourName) {
         const a = normalizeStreet(osmName);
         const b = normalizeStreet(ourName);
         if (!a || !b) return false;
-        // Exact match after normalization
         if (a === b) return true;
-        // One contains the other (handles "Broadway" matching "West Broadway")
         if (a.includes(b) || b.includes(a)) return true;
-        // Check if the core words overlap (ignoring direction prefixes and suffixes)
         const coreA = a.replace(/^(north|south|east|west)\s+/, '').replace(/\s+(street|avenue|boulevard|drive|road|court|lane|place|parkway)$/, '');
         const coreB = b.replace(/^(north|south|east|west)\s+/, '').replace(/\s+(street|avenue|boulevard|drive|road|court|lane|place|parkway)$/, '');
         if (coreA && coreB && (coreA === coreB || coreA.includes(coreB) || coreB.includes(coreA))) return true;
@@ -1809,7 +2141,7 @@
     function hideProgress() { document.getElementById('routeProgressCard').style.display = 'none'; }
 
     // =========================================================================
-    // RENDER ROUTE RESULTS (same as v2)
+    // RENDER ROUTE RESULTS
     // =========================================================================
     function renderRouteResults(allShifts) {
         document.getElementById('routeResults').style.display = '';
@@ -1886,11 +2218,11 @@
     }
 
     // =========================================================================
-    // ROUTE MAP (Leaflet)
+    // ROUTE MAP (Leaflet) — unchanged from v3.0
     // =========================================================================
     let _map = null;
     let _mapLayers = [];
-    let _addressPinLayers = []; // separate layer for camper address pins
+    let _addressPinLayers = [];
     let _showAddressPins = false;
     let _activeShifts = new Set();
     let _activeMapBus = 'all';
@@ -2017,7 +2349,6 @@
                 }
             }
 
-            // Stop markers
             stopsWithCoords.forEach(stop => {
                 const isSpecial = stop.isMonitor || stop.isCounselor;
                 const size = isSpecial ? 20 : 26;
@@ -2038,7 +2369,6 @@
             if (multiShift) { legendEl.innerHTML = shiftIndices.map(si => { const sr = _generatedRoutes[si]; const d = getDash(si); const svgLine = !d ? '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3"/>' : d.startsWith('18') ? '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3" stroke-dasharray="9,6"/>' : '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3" stroke-dasharray="3,5"/>'; return '<span style="display:inline-flex;align-items:center;gap:.375rem;font-size:.75rem;"><svg width="40" height="12">' + svgLine + '</svg>' + esc(sr.shift.label || 'Shift ' + (si + 1)) + '</span>'; }).join('<span style="margin:0 .5rem;color:var(--border-medium);">|</span>'); legendEl.style.display = ''; }
             else legendEl.style.display = 'none';
         }
-        // Render address pins if toggled on
         if (_showAddressPins) renderAddressPins();
     }
 
@@ -2048,137 +2378,35 @@
     function toggleMapFullscreen() { const card = document.getElementById('routeMapCard'); if (!card) return; card.classList.toggle('map-fullscreen'); setTimeout(() => { if (_map) _map.invalidateSize(); }, 100); }
 
     // =========================================================================
-    // ADDRESS PINS — show camper home locations on the map
+    // ADDRESS PINS
     // =========================================================================
-    function toggleAddressPins() {
-        _showAddressPins = !_showAddressPins;
-        if (_showAddressPins) {
-            renderAddressPins();
-        } else {
-            clearAddressPins();
-        }
-        // Re-render bus tabs to update the button state
-        if (_generatedRoutes) renderMap();
-        else if (_showAddressPins) renderAddressPinsAll(); // no routes yet — show all
-    }
-
-    function clearAddressPins() {
-        _addressPinLayers.forEach(l => { if (_map) _map.removeLayer(l); });
-        _addressPinLayers = [];
-    }
-
-    /** Render address pins — filtered by selected bus if routes exist */
+    function toggleAddressPins() { _showAddressPins = !_showAddressPins; if (_showAddressPins) renderAddressPins(); else clearAddressPins(); if (_generatedRoutes) renderMap(); else if (_showAddressPins) renderAddressPinsAll(); }
+    function clearAddressPins() { _addressPinLayers.forEach(l => { if (_map) _map.removeLayer(l); }); _addressPinLayers = []; }
     function renderAddressPins() {
-        if (!_map) return;
-        clearAddressPins();
-
-        const roster = getRoster();
-        const shiftIndices = [..._activeShifts].sort();
-
-        // Build list of campers to show, with bus color
-        const camperPins = []; // { name, lat, lng, address, color, busName, division, bunk }
-
+        if (!_map) return; clearAddressPins();
+        const roster = getRoster(); const shiftIndices = [..._activeShifts].sort();
+        const camperPins = [];
         if (_generatedRoutes) {
-            // Routes exist — show campers from visible routes
-            shiftIndices.forEach(si => {
-                const sr = _generatedRoutes[si];
-                if (!sr) return;
-                sr.routes.forEach(r => {
-                    if (_activeMapBus !== 'all' && r.busId !== _activeMapBus) return;
-                    r.stops.forEach(st => {
-                        if (st.isMonitor || st.isCounselor) return;
-                        st.campers.forEach(c => {
-                            const a = D.addresses[c.name];
-                            if (!a?.geocoded || !a.lat || !a.lng) return;
-                            camperPins.push({
-                                name: c.name, lat: a.lat, lng: a.lng,
-                                address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', '),
-                                color: r.busColor, busName: r.busName,
-                                division: c.division || '', bunk: c.bunk || ''
-                            });
-                        });
-                    });
-                });
-            });
-        } else {
-            // No routes yet — show all geocoded campers
-            renderAddressPinsAll();
-            return;
-        }
-
-        // Render pins
+            shiftIndices.forEach(si => { const sr = _generatedRoutes[si]; if (!sr) return; sr.routes.forEach(r => { if (_activeMapBus !== 'all' && r.busId !== _activeMapBus) return; r.stops.forEach(st => { if (st.isMonitor || st.isCounselor) return; st.campers.forEach(c => { const a = D.addresses[c.name]; if (!a?.geocoded || !a.lat || !a.lng) return; camperPins.push({ name: c.name, lat: a.lat, lng: a.lng, address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', '), color: r.busColor, busName: r.busName, division: c.division || '', bunk: c.bunk || '' }); }); }); }); });
+        } else { renderAddressPinsAll(); return; }
         camperPins.forEach(pin => {
-            const icon = L.divIcon({
-                html: '<div style="width:10px;height:10px;background:' + esc(pin.color) + ';border:2px solid #fff;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,.4);"></div>',
-                className: '', iconSize: [10, 10], iconAnchor: [5, 5]
-            });
+            const icon = L.divIcon({ html: '<div style="width:10px;height:10px;background:' + esc(pin.color) + ';border:2px solid #fff;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,.4);"></div>', className: '', iconSize: [10, 10], iconAnchor: [5, 5] });
             const marker = L.marker([pin.lat, pin.lng], { icon, zIndexOffset: -100 }).addTo(_map);
-            marker.bindPopup(
-                '<div style="font-family:DM Sans,sans-serif;min-width:150px;">' +
-                '<div style="font-weight:700;">' + esc(pin.name) + '</div>' +
-                '<div style="font-size:12px;color:#666;">' + esc(pin.division) + (pin.bunk ? ' / Bunk ' + esc(pin.bunk) : '') + '</div>' +
-                '<div style="font-size:12px;margin-top:4px;">' + esc(pin.address) + '</div>' +
-                '<div style="font-size:11px;margin-top:4px;display:flex;align-items:center;gap:4px;">' +
-                '<span style="width:8px;height:8px;border-radius:50%;background:' + esc(pin.color) + ';display:inline-block;"></span>' +
-                '<span style="font-weight:600;">' + esc(pin.busName) + '</span></div></div>'
-            );
+            marker.bindPopup('<div style="font-family:DM Sans,sans-serif;min-width:150px;"><div style="font-weight:700;">' + esc(pin.name) + '</div><div style="font-size:12px;color:#666;">' + esc(pin.division) + (pin.bunk ? ' / Bunk ' + esc(pin.bunk) : '') + '</div><div style="font-size:12px;margin-top:4px;">' + esc(pin.address) + '</div><div style="font-size:11px;margin-top:4px;display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:' + esc(pin.color) + ';display:inline-block;"></span><span style="font-weight:600;">' + esc(pin.busName) + '</span></div></div>');
             _addressPinLayers.push(marker);
         });
-
-        console.log('[Go] Address pins: ' + camperPins.length + ' campers' + (_activeMapBus !== 'all' ? ' (filtered to ' + camperPins[0]?.busName + ')' : ''));
+        console.log('[Go] Address pins: ' + camperPins.length + ' campers' + (_activeMapBus !== 'all' ? ' (filtered)' : ''));
     }
-
-    /** Show ALL geocoded camper addresses (when no routes exist yet) */
     function renderAddressPinsAll() {
-        if (!_map) return;
-        clearAddressPins();
-
-        const roster = getRoster();
-        const allLatLngs = [];
-
-        Object.entries(roster).forEach(([name, c]) => {
-            const a = D.addresses[name];
-            if (!a?.geocoded || !a.lat || !a.lng) return;
-            if (a.transport === 'pickup') return;
-
-            const icon = L.divIcon({
-                html: '<div style="width:8px;height:8px;background:#3b82f6;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,.3);"></div>',
-                className: '', iconSize: [8, 8], iconAnchor: [4, 4]
-            });
-            const marker = L.marker([a.lat, a.lng], { icon, zIndexOffset: -100 }).addTo(_map);
-            marker.bindPopup(
-                '<div style="font-family:DM Sans,sans-serif;">' +
-                '<div style="font-weight:700;">' + esc(name) + '</div>' +
-                '<div style="font-size:12px;color:#666;">' + esc(c.division || '') + (c.bunk ? ' / Bunk ' + esc(c.bunk) : '') + '</div>' +
-                '<div style="font-size:12px;margin-top:4px;">' + esc([a.street, a.city, a.state, a.zip].filter(Boolean).join(', ')) + '</div></div>'
-            );
-            _addressPinLayers.push(marker);
-            allLatLngs.push([a.lat, a.lng]);
-        });
-
-        if (allLatLngs.length > 0 && !_generatedRoutes) {
-            _map.fitBounds(L.latLngBounds(allLatLngs), { padding: [50, 50], maxZoom: 14 });
-        }
-
+        if (!_map) return; clearAddressPins();
+        const roster = getRoster(); const allLatLngs = [];
+        Object.entries(roster).forEach(([name, c]) => { const a = D.addresses[name]; if (!a?.geocoded || !a.lat || !a.lng) return; if (a.transport === 'pickup') return; const icon = L.divIcon({ html: '<div style="width:8px;height:8px;background:#3b82f6;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,.3);"></div>', className: '', iconSize: [8, 8], iconAnchor: [4, 4] }); const marker = L.marker([a.lat, a.lng], { icon, zIndexOffset: -100 }).addTo(_map); marker.bindPopup('<div style="font-family:DM Sans,sans-serif;"><div style="font-weight:700;">' + esc(name) + '</div><div style="font-size:12px;color:#666;">' + esc(c.division || '') + (c.bunk ? ' / Bunk ' + esc(c.bunk) : '') + '</div><div style="font-size:12px;margin-top:4px;">' + esc([a.street, a.city, a.state, a.zip].filter(Boolean).join(', ')) + '</div></div>'); _addressPinLayers.push(marker); allLatLngs.push([a.lat, a.lng]); });
+        if (allLatLngs.length > 0 && !_generatedRoutes) _map.fitBounds(L.latLngBounds(allLatLngs), { padding: [50, 50], maxZoom: 14 });
         console.log('[Go] Address pins: ' + _addressPinLayers.length + ' campers (all)');
     }
-
-    /** Show address pins without routes — can be called from Addresses tab */
     function showAddressesOnMap() {
-        // Initialize map if needed
-        if (!_map) {
-            const container = document.getElementById('routeMap');
-            if (!container) return;
-            _map = L.map(container, { scrollWheelZoom: true, zoomControl: true });
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OSM', maxZoom: 19 }).addTo(_map);
-            if (_campCoordsCache) {
-                const campIcon = L.divIcon({ html: '<div style="width:32px;height:32px;background:#1e293b;border:3px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.4);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>', className: '', iconSize: [32, 32], iconAnchor: [16, 16] });
-                L.marker([_campCoordsCache.lat, _campCoordsCache.lng], { icon: campIcon, zIndexOffset: 1000 }).addTo(_map).bindPopup('<strong>' + esc(D.setup.campName || 'Camp') + '</strong>');
-            }
-        }
-        _showAddressPins = true;
-        renderAddressPinsAll();
-        // Switch to routes tab to show the map
+        if (!_map) { const container = document.getElementById('routeMap'); if (!container) return; _map = L.map(container, { scrollWheelZoom: true, zoomControl: true }); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OSM', maxZoom: 19 }).addTo(_map); if (_campCoordsCache) { const campIcon = L.divIcon({ html: '<div style="width:32px;height:32px;background:#1e293b;border:3px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.4);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>', className: '', iconSize: [32, 32], iconAnchor: [16, 16] }); L.marker([_campCoordsCache.lat, _campCoordsCache.lng], { icon: campIcon, zIndexOffset: 1000 }).addTo(_map).bindPopup('<strong>' + esc(D.setup.campName || 'Camp') + '</strong>'); } }
+        _showAddressPins = true; renderAddressPinsAll();
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
         document.querySelector('.tab-btn[data-tab="routes"]')?.classList.add('active');
@@ -2349,7 +2577,7 @@
     let _addrSearchTimer;
 
     function init() {
-        console.log('[Go] Initializing v3.0 (VROOM)...');
+        console.log('[Go] Initializing v3.1 (VROOM + Manhattan walk)...');
         load();
         if (D[D.activeMode]) loadModeData(D.activeMode);
         document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === D.activeMode));
