@@ -1,2004 +1,349 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Campistry Health | Medical & Wellness</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
-<style>
-/* ══════════════════════════════════════════════════════════
-   CAMPISTRY HEALTH — Design System
-   Purple #8B5CF6 · DM Sans + Fraunces
-   ══════════════════════════════════════════════════════════ */
-:root {
-  /* Health Brand */
-  --health: #8B5CF6;
-  --health-dark: #7C3AED;
-  --health-darker: #6D28D9;
-  --health-light: #A78BFA;
-  --health-50: #F5F3FF;
-  --health-100: #EDE9FE;
-  --health-200: #DDD6FE;
-
-  /* Campistry shared */
-  --forest: #0A4A56;
-  --teal: #147D91;
-
-  /* Neutrals */
-  --white: #FFFFFF;
-  --slate-50: #F8FAFC;
-  --slate-100: #F1F5F9;
-  --slate-200: #E2E8F0;
-  --slate-300: #CBD5E1;
-  --slate-400: #94A3B8;
-  --slate-500: #64748B;
-  --slate-600: #475569;
-  --slate-700: #334155;
-  --slate-800: #1E293B;
-  --slate-900: #0F172A;
-  --slate-950: #020617;
-
-  /* Semantic */
-  --success: #22C55E;
-  --success-light: #DCFCE7;
-  --warning: #F59E0B;
-  --warning-light: #FEF3C7;
-  --danger: #EF4444;
-  --danger-light: #FEE2E2;
-  --info: #0EA5E9;
-  --info-light: #E0F2FE;
-
-  /* Type */
-  --font-display: 'Fraunces', Georgia, serif;
-  --font-body: 'DM Sans', system-ui, sans-serif;
-
-  /* Radius */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
-  --radius-full: 999px;
-
-  /* Shadow */
-  --shadow-xs: 0 1px 2px rgba(15,23,42,0.04);
-  --shadow-sm: 0 1px 3px rgba(15,23,42,0.06);
-  --shadow-md: 0 4px 8px rgba(15,23,42,0.07);
-  --shadow-lg: 0 8px 20px rgba(15,23,42,0.09);
-}
-
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html { scroll-behavior: smooth; }
-
-body {
-  font-family: var(--font-body);
-  font-size: 15px;
-  line-height: 1.6;
-  color: var(--slate-800);
-  background: var(--slate-50);
-  min-height: 100vh;
-  -webkit-font-smoothing: antialiased;
-}
-
-/* ══════════════ NAV ══════════════ */
-.nav {
-  position: sticky; top: 0; z-index: 100;
-  background: rgba(255,255,255,0.92);
-  backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--slate-200);
-  padding: 0 24px;
-  height: 60px;
-  display: flex; align-items: center;
-}
-.nav-inner {
-  max-width: 1360px; margin: 0 auto; width: 100%;
-  display: flex; align-items: center; justify-content: space-between;
-}
-.nav-left { display: flex; align-items: center; gap: 16px; }
-.nav-back {
-  display: flex; align-items: center; gap: 4px;
-  color: var(--slate-500); text-decoration: none;
-  font-size: 0.8rem; font-weight: 500;
-  transition: color 0.15s;
-}
-.nav-back:hover { color: var(--health); }
-.nav-brand {
-  font-family: var(--font-display);
-  font-weight: 700; font-size: 1.25rem;
-  display: flex; align-items: baseline; gap: 5px;
-}
-.nav-brand .camp { color: var(--forest); }
-.nav-brand .product { color: var(--health); }
-.nav-right { display: flex; align-items: center; gap: 12px; }
-.nav-user {
-  font-size: 0.8rem; color: var(--slate-500);
-  padding: 6px 14px; background: var(--slate-100);
-  border-radius: var(--radius-full);
-}
-.sync-badge {
-  display: flex; align-items: center; gap: 6px;
-  padding: 4px 10px; background: var(--slate-100);
-  border-radius: var(--radius-full);
-  font-size: 0.7rem; font-weight: 500; color: var(--slate-500);
-}
-.sync-dot {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--success);
-}
-
-/* ══════════════ LAYOUT ══════════════ */
-.app-layout { display: flex; min-height: calc(100vh - 60px); }
-
-/* ══════════════ SIDEBAR ══════════════ */
-.sidebar {
-  width: 220px; flex-shrink: 0;
-  background: var(--slate-950);
-  border-right: 1px solid rgba(255,255,255,0.06);
-  padding: 20px 12px;
-  display: flex; flex-direction: column; gap: 4px;
-}
-.sb-label {
-  font-size: 0.65rem; text-transform: uppercase;
-  letter-spacing: 0.1em; color: var(--slate-500);
-  padding: 0 10px; margin-bottom: 6px; margin-top: 16px;
-}
-.sb-label:first-child { margin-top: 0; }
-.sb-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 9px 12px; border-radius: var(--radius-full);
-  border: 1px solid transparent;
-  font-size: 0.82rem; color: rgba(255,255,255,0.45);
-  cursor: pointer; transition: all 0.15s; background: none;
-  text-align: left; width: 100%;
-}
-.sb-item:hover { color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.04); }
-.sb-item.active {
-  background: rgba(139,92,246,0.12);
-  color: var(--health-light);
-  border-color: rgba(139,92,246,0.2);
-}
-.sb-icon {
-  width: 18px; height: 18px; display: flex;
-  align-items: center; justify-content: center;
-  flex-shrink: 0;
-}
-.sb-item.active .sb-icon svg { stroke: var(--health-light); }
-.sb-item svg { stroke: rgba(255,255,255,0.35); transition: stroke 0.15s; }
-.sb-item:hover svg { stroke: rgba(255,255,255,0.6); }
-.sb-badge {
-  margin-left: auto; padding: 1px 7px;
-  font-size: 0.65rem; font-weight: 700;
-  border-radius: var(--radius-full);
-  background: var(--health); color: white;
-}
-
-/* ══════════════ MAIN CONTENT ══════════════ */
-.main { flex: 1; padding: 28px 32px 48px; overflow-y: auto; max-width: 1140px; }
-
-.page-header {
-  display: flex; align-items: flex-start;
-  justify-content: space-between; margin-bottom: 24px;
-}
-.page-title {
-  font-family: var(--font-display);
-  font-size: 1.6rem; font-weight: 700;
-  color: var(--slate-900); letter-spacing: -0.02em;
-}
-.page-subtitle { color: var(--slate-500); font-size: 0.85rem; margin-top: 2px; }
-.page-actions { display: flex; gap: 8px; }
-
-/* ══════════════ BUTTONS ══════════════ */
-.btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 9px 18px; border-radius: var(--radius-md);
-  font-family: var(--font-body); font-size: 0.82rem;
-  font-weight: 600; border: none; cursor: pointer;
-  transition: all 0.15s;
-}
-.btn-primary { background: var(--health); color: white; }
-.btn-primary:hover { background: var(--health-dark); box-shadow: 0 2px 8px rgba(139,92,246,0.3); }
-.btn-secondary { background: var(--slate-100); color: var(--slate-700); border: 1px solid var(--slate-200); }
-.btn-secondary:hover { background: var(--slate-200); }
-.btn-ghost { background: none; color: var(--slate-600); }
-.btn-ghost:hover { background: var(--slate-100); }
-.btn-sm { padding: 6px 12px; font-size: 0.75rem; }
-.btn-danger { background: var(--danger-light); color: var(--danger); }
-.btn-danger:hover { background: var(--danger); color: white; }
-.btn svg { width: 15px; height: 15px; }
-
-/* ══════════════ STAT CARDS ══════════════ */
-.stats-grid {
-  display: grid; grid-template-columns: repeat(4, 1fr);
-  gap: 14px; margin-bottom: 24px;
-}
-.stat-card {
-  background: white; border: 1px solid var(--slate-200);
-  border-radius: var(--radius-lg); padding: 18px 20px;
-  display: flex; align-items: center; gap: 14px;
-  transition: all 0.2s;
-}
-.stat-card:hover { border-color: var(--health-200); box-shadow: var(--shadow-md); }
-.stat-icon {
-  width: 44px; height: 44px; border-radius: var(--radius-md);
-  display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0;
-}
-.stat-icon.purple { background: var(--health-50); border: 1px solid var(--health-200); color: var(--health); }
-.stat-icon.green { background: var(--success-light); border: 1px solid #BBF7D0; color: var(--success); }
-.stat-icon.amber { background: var(--warning-light); border: 1px solid #FDE68A; color: var(--warning); }
-.stat-icon.red { background: var(--danger-light); border: 1px solid #FECACA; color: var(--danger); }
-.stat-value { font-size: 1.4rem; font-weight: 700; line-height: 1.2; color: var(--slate-900); }
-.stat-label { font-size: 0.7rem; color: var(--slate-500); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 500; }
-
-/* ══════════════ CARDS ══════════════ */
-.card {
-  background: white; border: 1px solid var(--slate-200);
-  border-radius: var(--radius-lg); overflow: hidden;
-  margin-bottom: 20px;
-}
-.card-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 16px 20px; border-bottom: 1px solid var(--slate-100);
-}
-.card-header h2 {
-  font-size: 0.95rem; font-weight: 700; color: var(--slate-900);
-  display: flex; align-items: center; gap: 8px;
-}
-.card-body { padding: 20px; }
-.card-count {
-  font-size: 0.7rem; font-weight: 700;
-  padding: 2px 8px; border-radius: var(--radius-full);
-  background: var(--health-50); color: var(--health);
-}
-
-/* ══════════════ TABLES ══════════════ */
-.data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
-.data-table thead { background: var(--slate-50); }
-.data-table th {
-  padding: 10px 16px; text-align: left;
-  font-weight: 600; color: var(--slate-500);
-  font-size: 0.72rem; text-transform: uppercase;
-  letter-spacing: 0.05em; border-bottom: 1px solid var(--slate-200);
-}
-.data-table td {
-  padding: 12px 16px; border-bottom: 1px solid var(--slate-100);
-  color: var(--slate-700); vertical-align: middle;
-}
-.data-table tr:last-child td { border-bottom: none; }
-.data-table tr:hover td { background: var(--slate-50); }
-
-/* ══════════════ BADGES ══════════════ */
-.badge {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 3px 10px; border-radius: var(--radius-full);
-  font-size: 0.7rem; font-weight: 600;
-}
-.badge-purple { background: var(--health-50); color: var(--health); }
-.badge-green { background: var(--success-light); color: #16A34A; }
-.badge-amber { background: var(--warning-light); color: #D97706; }
-.badge-red { background: var(--danger-light); color: var(--danger); }
-.badge-gray { background: var(--slate-100); color: var(--slate-600); }
-.badge-blue { background: var(--info-light); color: #0284C7; }
-
-/* ══════════════ MED QUEUE ══════════════ */
-.med-queue { display: flex; flex-direction: column; gap: 8px; }
-.med-item {
-  display: flex; align-items: center; gap: 14px;
-  padding: 14px 18px; border-radius: var(--radius-md);
-  border: 1px solid var(--slate-200); background: white;
-  transition: all 0.15s;
-}
-.med-item:hover { border-color: var(--health-200); box-shadow: var(--shadow-sm); }
-.med-item.overdue { border-left: 3px solid var(--danger); background: #FFFBFB; }
-.med-item.due-now { border-left: 3px solid var(--health); background: var(--health-50); }
-.med-item.upcoming { border-left: 3px solid var(--slate-300); }
-.med-avatar {
-  width: 38px; height: 38px; border-radius: var(--radius-full);
-  display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 0.75rem; color: white; flex-shrink: 0;
-}
-.med-info { flex: 1; min-width: 0; }
-.med-name { font-weight: 700; font-size: 0.88rem; color: var(--slate-900); }
-.med-detail { font-size: 0.78rem; color: var(--slate-500); margin-top: 1px; }
-.med-time {
-  font-size: 0.78rem; font-weight: 600;
-  text-align: right; flex-shrink: 0;
-}
-.med-actions { display: flex; gap: 6px; flex-shrink: 0; }
-.btn-give {
-  padding: 6px 14px; border-radius: var(--radius-md);
-  font-size: 0.75rem; font-weight: 700;
-  background: var(--success); color: white;
-  border: none; cursor: pointer; transition: all 0.15s;
-}
-.btn-give:hover { background: #16A34A; box-shadow: 0 2px 8px rgba(34,197,94,0.3); }
-.btn-skip {
-  padding: 6px 12px; border-radius: var(--radius-md);
-  font-size: 0.75rem; font-weight: 600;
-  background: var(--slate-100); color: var(--slate-600);
-  border: none; cursor: pointer; transition: all 0.15s;
-}
-.btn-skip:hover { background: var(--slate-200); }
-
-/* ══════════════ VISIT LOG ══════════════ */
-.visit-list { display: flex; flex-direction: column; gap: 10px; }
-.visit-card {
-  display: flex; align-items: flex-start; gap: 14px;
-  padding: 16px 18px; border-radius: var(--radius-md);
-  border: 1px solid var(--slate-200); background: white;
-  transition: border-color 0.15s;
-}
-.visit-card:hover { border-color: var(--health-200); }
-.visit-time {
-  font-size: 0.72rem; font-weight: 600; color: var(--slate-400);
-  min-width: 50px; padding-top: 2px; text-align: right;
-}
-.visit-body { flex: 1; }
-.visit-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-.visit-camper { font-weight: 700; font-size: 0.88rem; color: var(--slate-900); }
-.visit-complaint { font-size: 0.82rem; color: var(--slate-600); }
-.visit-treatment {
-  font-size: 0.75rem; color: var(--slate-500); margin-top: 4px;
-  display: flex; align-items: center; gap: 6px;
-}
-.visit-disposition {
-  margin-left: auto; flex-shrink: 0;
-}
-
-/* ══════════════ ALLERGY CARDS ══════════════ */
-.allergy-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
-.allergy-card {
-  padding: 16px; border-radius: var(--radius-md);
-  border: 1px solid var(--slate-200); background: white;
-  transition: border-color 0.15s;
-}
-.allergy-card:hover { border-color: var(--health-200); }
-.allergy-card.severe { border-left: 3px solid var(--danger); }
-.allergy-card.moderate { border-left: 3px solid var(--warning); }
-.allergy-card.mild { border-left: 3px solid var(--success); }
-.allergy-camper { font-weight: 700; font-size: 0.88rem; color: var(--slate-900); margin-bottom: 4px; }
-.allergy-detail { font-size: 0.78rem; color: var(--slate-600); margin-bottom: 2px; }
-.allergy-protocol {
-  font-size: 0.72rem; color: var(--slate-500);
-  padding: 6px 10px; background: var(--slate-50);
-  border-radius: var(--radius-sm); margin-top: 8px;
-}
-
-/* ══════════════ TABS ══════════════ */
-.tab-bar { display: flex; gap: 4px; margin-bottom: 20px; }
-.tab-btn {
-  padding: 8px 16px; border-radius: var(--radius-full);
-  font-size: 0.8rem; font-weight: 600; border: none;
-  cursor: pointer; transition: all 0.15s;
-  background: var(--slate-100); color: var(--slate-500);
-}
-.tab-btn:hover { background: var(--slate-200); color: var(--slate-700); }
-.tab-btn.active { background: var(--health); color: white; }
-.tab-content { display: none; }
-.tab-content.active { display: block; }
-
-/* ══════════════ SEARCH ══════════════ */
-.search-bar {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 16px; background: var(--slate-50);
-  border: 1px solid var(--slate-200); border-radius: var(--radius-md);
-  margin-bottom: 16px; transition: border-color 0.15s;
-}
-.search-bar:focus-within { border-color: var(--health); box-shadow: 0 0 0 3px rgba(139,92,246,0.08); }
-.search-bar svg { color: var(--slate-400); flex-shrink: 0; }
-.search-bar input {
-  border: none; background: none; outline: none;
-  font-family: var(--font-body); font-size: 0.85rem;
-  color: var(--slate-700); flex: 1;
-}
-.search-bar input::placeholder { color: var(--slate-400); }
-
-/* ══════════════ NIGHT LOG ══════════════ */
-.night-calendar { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-bottom: 16px; }
-.night-day {
-  aspect-ratio: 1; border-radius: var(--radius-sm);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 0.7rem; font-weight: 600; color: var(--slate-400);
-  background: var(--slate-50); position: relative;
-}
-.night-day.has-event { background: var(--health-100); color: var(--health-dark); }
-.night-day.today { border: 2px solid var(--health); color: var(--health); }
-.night-day-header { font-size: 0.6rem; color: var(--slate-400); font-weight: 700; text-transform: uppercase; }
-
-/* ══════════════ MODAL ══════════════ */
-.modal-overlay {
-  position: fixed; inset: 0; z-index: 200;
-  background: rgba(15,23,42,0.5);
-  backdrop-filter: blur(4px);
-  display: none; align-items: center; justify-content: center;
-  padding: 24px;
-}
-.modal-overlay.open { display: flex; }
-.modal {
-  background: white; border-radius: var(--radius-xl);
-  width: 100%; max-width: 520px; max-height: 85vh;
-  overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.15);
-}
-.modal-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 20px 24px; border-bottom: 1px solid var(--slate-100);
-}
-.modal-header h3 { font-size: 1rem; font-weight: 700; color: var(--slate-900); }
-.modal-close {
-  width: 32px; height: 32px; border-radius: var(--radius-full);
-  display: flex; align-items: center; justify-content: center;
-  border: none; background: var(--slate-100); cursor: pointer;
-  color: var(--slate-500); transition: all 0.15s;
-}
-.modal-close:hover { background: var(--slate-200); }
-.modal-body { padding: 24px; }
-.form-group { margin-bottom: 16px; }
-.form-label { display: block; font-size: 0.78rem; font-weight: 600; color: var(--slate-700); margin-bottom: 6px; }
-.form-input, .form-select {
-  width: 100%; padding: 10px 14px; border: 1px solid var(--slate-200);
-  border-radius: var(--radius-md); font-family: var(--font-body);
-  font-size: 0.85rem; color: var(--slate-700); background: white;
-  transition: border-color 0.15s;
-}
-.form-input:focus, .form-select:focus { outline: none; border-color: var(--health); box-shadow: 0 0 0 3px rgba(139,92,246,0.08); }
-.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.form-hint { font-size: 0.72rem; color: var(--slate-400); margin-top: 4px; }
-.modal-footer {
-  display: flex; justify-content: flex-end; gap: 8px;
-  padding: 16px 24px; border-top: 1px solid var(--slate-100);
-}
-
-/* ══════════════ RESPONSIVE ══════════════ */
-@media (max-width: 768px) {
-  .sidebar { display: none; }
-  .main { padding: 20px 16px 40px; }
-  .stats-grid { grid-template-columns: repeat(2, 1fr); }
-  .allergy-grid { grid-template-columns: 1fr; }
-  .form-row { grid-template-columns: 1fr; }
-}
-/* ══════════════ CLICKABLE TABLE ROWS ══════════════ */
-.data-table tr.click { cursor: pointer; }
-.data-table tr.click:hover td { background: var(--health-50); }
-
-/* ══════════════ SLIDEOUT PANEL ══════════════ */
-.panel-overlay {
-  position: fixed; inset: 0; z-index: 190;
-  background: rgba(15,23,42,0.35); backdrop-filter: blur(2px);
-  opacity: 0; pointer-events: none;
-  transition: opacity 0.25s;
-}
-.panel-overlay.open { opacity: 1; pointer-events: all; }
-.panel-slideout {
-  position: fixed; top: 0; right: 0; bottom: 0; z-index: 195;
-  width: 440px; max-width: 92vw;
-  background: white; box-shadow: -8px 0 30px rgba(0,0,0,0.12);
-  transform: translateX(100%);
-  transition: transform 0.3s cubic-bezier(0.16,1,0.3,1);
-  display: flex; flex-direction: column;
-  overflow: hidden;
-}
-.panel-slideout.open { transform: translateX(0); }
-.panel-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 20px 24px; border-bottom: 1px solid var(--slate-200);
-  background: var(--health-50); flex-shrink: 0;
-}
-.panel-body {
-  flex: 1; overflow-y: auto; padding: 0;
-}
-.panel-actions {
-  display: flex; gap: 8px; padding: 16px 24px;
-  border-bottom: 1px solid var(--slate-100);
-  background: var(--slate-50);
-}
-.panel-section {
-  padding: 16px 24px; border-bottom: 1px solid var(--slate-100);
-}
-.panel-section-title {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.08em; color: var(--slate-500);
-  margin-bottom: 12px;
-}
-.panel-sync-tag {
-  margin-left: auto; padding: 2px 8px;
-  font-size: 0.6rem; font-weight: 600; text-transform: none;
-  letter-spacing: 0; border-radius: var(--radius-full);
-  background: var(--warning-light); color: #B45309;
-}
-.panel-info-grid { display: flex; flex-direction: column; gap: 8px; }
-.panel-info-row {
-  display: flex; justify-content: space-between; align-items: flex-start;
-  font-size: 0.82rem; gap: 12px;
-}
-.panel-info-label { color: var(--slate-400); font-weight: 500; flex-shrink: 0; min-width: 90px; }
-.panel-info-value { color: var(--slate-800); font-weight: 500; text-align: right; }
-.panel-link { color: var(--health); text-decoration: none; font-weight: 600; }
-.panel-link:hover { text-decoration: underline; }
-
-/* Alert cards */
-.panel-alert {
-  padding: 10px 14px; border-radius: var(--radius-md);
-  margin-bottom: 8px; font-size: 0.82rem; color: var(--slate-700);
-}
-.panel-alert.alert-severe { background: var(--danger-light); border: 1px solid #FECACA; }
-.panel-alert.alert-info { background: var(--health-50); border: 1px solid var(--health-200); }
-
-/* Timeline */
-.panel-timeline { display: flex; flex-direction: column; gap: 0; }
-.timeline-item {
-  display: flex; gap: 12px; padding: 8px 0;
-  position: relative;
-}
-.timeline-item:not(:last-child)::after {
-  content: ''; position: absolute; left: 5px; top: 24px;
-  bottom: -4px; width: 2px; background: var(--slate-200);
-}
-.timeline-dot {
-  width: 12px; height: 12px; border-radius: 50%;
-  flex-shrink: 0; margin-top: 3px;
-  position: relative; z-index: 1;
-}
-.timeline-content { flex: 1; }
-.timeline-date { font-size: 0.7rem; color: var(--slate-400); font-weight: 600; margin-bottom: 2px; }
-.timeline-text { font-size: 0.8rem; color: var(--slate-700); }
-
-/* Me link */
-.panel-me-link {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 0.8rem; font-weight: 600;
-  color: var(--warning); text-decoration: none;
-  padding: 8px 16px; border-radius: var(--radius-md);
-  background: var(--warning-light); transition: all 0.15s;
-}
-.panel-me-link:hover { background: #FDE68A; }
-
-@media (max-width: 768px) {
-  .panel-slideout { width: 100vw; max-width: 100vw; }
-}
-</style>
+    <meta charset="UTF-8" />
+    <title>Campistry Health | Medical & Wellness</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="Campistry_logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FOUC Prevention -->
+    <style>
+        html:not(.css-ready) body { opacity: 0; }
+        html.css-ready body { transition: opacity 0.15s ease; }
+    </style>
+    <link rel="stylesheet" href="campistry_health.css" onload="document.documentElement.classList.add('css-ready')">
+    <link rel="stylesheet" href="mobile-responsive.css">
+    <noscript><style>html body { opacity: 1 !important; }</style></noscript>
 </head>
 <body>
+<!-- Auth Loading Screen -->
+<div id="auth-loading-screen" style="position:fixed;inset:0;z-index:9999;background:#fafafa;display:flex;align-items:center;justify-content:center;">
+    <div style="text-align:center;color:#a1a1aa;font-family:'DM Sans',sans-serif;">
+        <div style="font-size:1.25rem;font-weight:600;margin-bottom:.5rem;color:#8B5CF6;">Campistry Health</div>
+        <div style="font-size:.875rem;">Loading...</div>
+    </div>
+</div>
 
-<!-- ══════════════════════════════════════════
-     NAVIGATION
-     ══════════════════════════════════════════ -->
+<div id="main-app-container" style="display:none;">
+
+<!-- ═══════════ NAV ═══════════ -->
 <nav class="nav">
-  <div class="nav-inner">
-    <div class="nav-left">
-      <a href="#" class="nav-back">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
-        Dashboard
-      </a>
-      <div class="nav-brand">
-        <span class="camp">Campistry</span>
-        <span class="product">Health</span>
-      </div>
+    <div class="nav-inner">
+        <div class="nav-left">
+            <a href="dashboard.html" class="nav-back">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+                Dashboard
+            </a>
+            <div class="nav-brand">
+                <div class="nav-title">Campistry <span>Health</span></div>
+            </div>
+            <!-- Quick link to Me -->
+            <a href="campistry_me.html" class="nav-app-switch" title="Open Campistry Me">
+                <img src="Me_clean.png" alt="Campistry Me" style="height:40px;width:auto;object-fit:contain;">
+            </a>
+        </div>
+        <div class="nav-right">
+            <div class="sync-badge"><span class="sync-dot" id="syncDot"></span> <span id="syncLabel">Synced</span></div>
+        </div>
     </div>
-    <div class="nav-right">
-      <div class="sync-badge"><span class="sync-dot"></span> Synced</div>
-      <span class="nav-user">Nurse Sarah</span>
-    </div>
-  </div>
 </nav>
 
-<div class="app-layout">
+<!-- ═══════════ MAIN ═══════════ -->
+<div class="main">
 
-<!-- ══════════════════════════════════════════
-     SIDEBAR
-     ══════════════════════════════════════════ -->
-<aside class="sidebar">
-  <div class="sb-label">Health Center</div>
-
-  <button class="sb-item active" onclick="showTab('dashboard')">
-    <span class="sb-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
-    Dashboard
-  </button>
-
-  <button class="sb-item" onclick="showTab('medications')">
-    <span class="sb-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3"/></svg></span>
-    Medications
-    <span class="sb-badge">12</span>
-  </button>
-
-  <button class="sb-item" onclick="showTab('sick-visits')">
-    <span class="sb-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></span>
-    Sick Visits
-    <span class="sb-badge">3</span>
-  </button>
-
-  <button class="sb-item" onclick="showTab('doctor')">
-    <span class="sb-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4.8 2.3A.3.3 0 105 2H4a2 2 0 00-2 2v5a2 2 0 002 2h1a2 2 0 002-2V4a2 2 0 00-2-2z"/><path d="M8 15v1a6 6 0 006 6v0a6 6 0 006-6v-4"/><line x1="11" y1="11" x2="11" y2="15"/><line x1="9" y1="13" x2="13" y2="13"/></svg></span>
-    Doctor Visits
-  </button>
-
-  <button class="sb-item" onclick="showTab('allergies')">
-    <span class="sb-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z"/><path d="M12 15.75h.008v.008H12v-.008z"/></svg></span>
-    Allergies & Dietary
-  </button>
-
-  <button class="sb-item" onclick="showTab('nighttime')">
-    <span class="sb-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg></span>
-    Nighttime Care
-  </button>
-
-  <div class="sb-label">Directory</div>
-
-  <button class="sb-item" onclick="showTab('campers')">
-    <span class="sb-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg></span>
-    Camper Directory
-    <span class="sb-badge">24</span>
-  </button>
-
-  <div class="sb-label">Pre-Camp</div>
-
-  <button class="sb-item" onclick="showTab('intake')">
-    <span class="sb-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><path d="M9 15l2 2 4-4"/></svg></span>
-    Medical Forms
-    <span class="sb-badge" style="background:var(--warning);">4</span>
-  </button>
-
-  <div class="sb-label">Reports</div>
-
-  <button class="sb-item" onclick="showTab('reports')">
-    <span class="sb-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span>
-    Reports & Export
-  </button>
-</aside>
-
-<!-- ══════════════════════════════════════════
-     MAIN CONTENT
-     ══════════════════════════════════════════ -->
-<main class="main">
-
-  <!-- ═══════════ DASHBOARD TAB ═══════════ -->
-  <div id="tab-dashboard" class="tab-content active">
-    <div class="page-header">
-      <div>
-        <div class="page-title">Health Dashboard</div>
-        <div class="page-subtitle">Tuesday, July 14 — Camp Ruach</div>
-      </div>
-      <div class="page-actions">
-        <button class="btn btn-secondary" onclick="openModal('visitModal')">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-          Log Visit
+    <!-- Tab buttons (sidebar alternative — simpler, matches Go's tab pattern) -->
+    <div class="tabs">
+        <button class="tab-btn active" data-tab="dashboard" onclick="CampistryHealth.showTab('dashboard')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px;"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            Dashboard
         </button>
-        <button class="btn btn-primary" onclick="openModal('medModal')">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          Dispense Med
-        </button>
-      </div>
+        <button class="tab-btn" data-tab="medications" onclick="CampistryHealth.showTab('medications')">Medications</button>
+        <button class="tab-btn" data-tab="visits" onclick="CampistryHealth.showTab('visits')">Sick Visits</button>
+        <button class="tab-btn" data-tab="doctor" onclick="CampistryHealth.showTab('doctor')">Doctor</button>
+        <button class="tab-btn" data-tab="allergies" onclick="CampistryHealth.showTab('allergies')">Allergies</button>
+        <button class="tab-btn" data-tab="nighttime" onclick="CampistryHealth.showTab('nighttime')">Nighttime</button>
+        <button class="tab-btn" data-tab="campers" onclick="CampistryHealth.showTab('campers')">Camper Directory</button>
+        <button class="tab-btn" data-tab="reports" onclick="CampistryHealth.showTab('reports')">Reports</button>
     </div>
 
-    <!-- Stats -->
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-icon purple"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3"/></svg></div>
-        <div><div class="stat-value">12</div><div class="stat-label">Meds Due Today</div></div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></div>
-        <div><div class="stat-value">8</div><div class="stat-label">Given Today</div></div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon amber"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>
-        <div><div class="stat-value">3</div><div class="stat-label">Sick Visits Today</div></div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon red"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z"/></svg></div>
-        <div><div class="stat-value">1</div><div class="stat-label">Follow-Ups Due</div></div>
-      </div>
-    </div>
-
-    <!-- Two-column: Med Queue + Recent Visits -->
-    <div style="display:grid;grid-template-columns:1.2fr 1fr;gap:20px;">
-
-      <!-- Medication Queue -->
-      <div class="card">
-        <div class="card-header">
-          <h2>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--health)" stroke-width="2"><path d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3"/></svg>
-            Medication Queue
-          </h2>
-          <span class="card-count">4 remaining</span>
-        </div>
-        <div class="card-body">
-          <div class="med-queue">
-            <!-- Overdue -->
-            <div class="med-item overdue">
-              <div class="med-avatar" style="background:var(--danger);">EG</div>
-              <div class="med-info">
-                <div class="med-name">Ethan Goldberg</div>
-                <div class="med-detail">Ritalin 10mg — Bunk 4B (Juniors)</div>
-              </div>
-              <div class="med-time" style="color:var(--danger);">8:00 AM<br><span style="font-size:0.65rem;">OVERDUE</span></div>
-              <div class="med-actions">
-                <button class="btn-give" onclick="markGiven(this)">Given</button>
-                <button class="btn-skip">Skip</button>
-              </div>
+    <!-- ═══════════ DASHBOARD ═══════════ -->
+    <div id="tab-dashboard" class="tab-content active">
+        <div class="page-header">
+            <div>
+                <div class="page-title">Health Dashboard</div>
+                <div class="page-subtitle" id="dashSubtitle">Loading...</div>
             </div>
-            <!-- Due Now -->
-            <div class="med-item due-now">
-              <div class="med-avatar" style="background:var(--health);">SL</div>
-              <div class="med-info">
-                <div class="med-name">Sophie Levine</div>
-                <div class="med-detail">Zyrtec 5mg — Bunk 7A (Seniors)</div>
-              </div>
-              <div class="med-time" style="color:var(--health);">12:00 PM<br><span style="font-size:0.65rem;">DUE NOW</span></div>
-              <div class="med-actions">
-                <button class="btn-give" onclick="markGiven(this)">Given</button>
-                <button class="btn-skip">Skip</button>
-              </div>
+            <div class="page-actions">
+                <button class="btn btn-secondary" onclick="CampistryHealth.openVisitModal()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    Log Visit
+                </button>
+                <button class="btn btn-primary" onclick="CampistryHealth.openMedModal()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    Dispense Med
+                </button>
             </div>
-            <!-- Due Now -->
-            <div class="med-item due-now">
-              <div class="med-avatar" style="background:var(--health);">JR</div>
-              <div class="med-info">
-                <div class="med-name">Jacob Rosen</div>
-                <div class="med-detail">Albuterol Inhaler (PRN) — Bunk 3A (Juniors)</div>
-              </div>
-              <div class="med-time" style="color:var(--health);">12:00 PM<br><span style="font-size:0.65rem;">DUE NOW</span></div>
-              <div class="med-actions">
-                <button class="btn-give" onclick="markGiven(this)">Given</button>
-                <button class="btn-skip">Skip</button>
-              </div>
-            </div>
-            <!-- Upcoming -->
-            <div class="med-item upcoming">
-              <div class="med-avatar" style="background:var(--slate-400);">MK</div>
-              <div class="med-info">
-                <div class="med-name">Maya Klein</div>
-                <div class="med-detail">Concerta 18mg — Bunk 5B (Inters)</div>
-              </div>
-              <div class="med-time" style="color:var(--slate-500);">4:00 PM<br><span style="font-size:0.65rem;">UPCOMING</span></div>
-              <div class="med-actions">
-                <button class="btn-give" onclick="markGiven(this)" style="opacity:0.5;">Given</button>
-              </div>
-            </div>
-          </div>
         </div>
-      </div>
-
-      <!-- Recent Visits -->
-      <div class="card">
-        <div class="card-header">
-          <h2>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--health)" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            Today's Visits
-          </h2>
-          <span class="card-count">3 visits</span>
+        <div class="stats-grid">
+            <div class="stat-card"><div class="stat-icon purple"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5"/></svg></div><div><div class="stat-value" id="statMedCount">0</div><div class="stat-label">Medications</div></div></div>
+            <div class="stat-card"><div class="stat-icon green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div><div><div class="stat-value" id="statVisitCount">0</div><div class="stat-label">Visits Today</div></div></div>
+            <div class="stat-card"><div class="stat-icon amber"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div><div><div class="stat-value" id="statCamperCount">0</div><div class="stat-label">Campers</div></div></div>
+            <div class="stat-card"><div class="stat-icon red"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z"/></svg></div><div><div class="stat-value" id="statAllergyCount">0</div><div class="stat-label">Severe Allergies</div></div></div>
         </div>
-        <div class="card-body">
-          <div class="visit-list">
-            <div class="visit-card">
-              <div class="visit-time">11:42<br>AM</div>
-              <div class="visit-body">
-                <div class="visit-header">
-                  <span class="visit-camper">Noah Shapiro</span>
-                  <span class="badge badge-amber">Follow-up</span>
-                </div>
-                <div class="visit-complaint">Headache, mild fever (100.2°F)</div>
-                <div class="visit-treatment">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-                  Tylenol 325mg, rest 30min
-                </div>
-              </div>
-              <div class="visit-disposition"><span class="badge badge-blue">Resting</span></div>
-            </div>
-            <div class="visit-card">
-              <div class="visit-time">10:15<br>AM</div>
-              <div class="visit-body">
-                <div class="visit-header">
-                  <span class="visit-camper">Ava Cohen</span>
-                  <span class="badge badge-green">Resolved</span>
-                </div>
-                <div class="visit-complaint">Scraped knee from soccer</div>
-                <div class="visit-treatment">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-                  Cleaned, bandaged, ice pack
-                </div>
-              </div>
-              <div class="visit-disposition"><span class="badge badge-green">Returned</span></div>
-            </div>
-            <div class="visit-card">
-              <div class="visit-time">9:30<br>AM</div>
-              <div class="visit-body">
-                <div class="visit-header">
-                  <span class="visit-camper">Liam Berger</span>
-                  <span class="badge badge-green">Resolved</span>
-                </div>
-                <div class="visit-complaint">Stomachache, nausea</div>
-                <div class="visit-treatment">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-                  Rest, crackers, water
-                </div>
-              </div>
-              <div class="visit-disposition"><span class="badge badge-green">Returned</span></div>
-            </div>
-          </div>
+        <div class="two-col">
+            <div class="card"><div class="card-header"><h2>Medication Queue</h2></div><div class="card-body" id="medQueueBody"></div></div>
+            <div class="card"><div class="card-header"><h2>Recent Visits</h2></div><div class="card-body" id="recentVisitsBody"></div></div>
         </div>
-      </div>
+        <div class="card"><div class="card-header"><h2>Critical Allergy Alerts</h2></div><div class="card-body" id="allergyAlertsBody"></div></div>
     </div>
 
-    <!-- Allergy Alerts -->
-    <div class="card">
-      <div class="card-header">
-        <h2>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z"/></svg>
-          Critical Allergy Alerts
-        </h2>
-        <span class="card-count">4 severe</span>
-      </div>
-      <div class="card-body">
-        <div class="allergy-grid">
-          <div class="allergy-card severe">
-            <div class="allergy-camper">Ethan Goldberg <span class="badge badge-red">Severe</span></div>
-            <div class="allergy-detail">Peanuts — Anaphylaxis risk</div>
-            <div class="allergy-protocol">EpiPen in Health Center fridge, Shelf 2. Call 911 immediately.</div>
-          </div>
-          <div class="allergy-card severe">
-            <div class="allergy-camper">Sophie Levine <span class="badge badge-red">Severe</span></div>
-            <div class="allergy-detail">Bee stings — Anaphylaxis risk</div>
-            <div class="allergy-protocol">EpiPen in camper's backpack (pink bag). Notify camp mother immediately.</div>
-          </div>
-          <div class="allergy-card moderate">
-            <div class="allergy-camper">Ava Cohen <span class="badge badge-amber">Moderate</span></div>
-            <div class="allergy-detail">Dairy — Hives, stomach pain</div>
-            <div class="allergy-protocol">Benadryl 25mg if reaction. Dairy-free meals confirmed with kitchen.</div>
-          </div>
-          <div class="allergy-card mild">
-            <div class="allergy-camper">Liam Berger <span class="badge badge-green">Mild</span></div>
-            <div class="allergy-detail">Grass pollen — Seasonal sneezing</div>
-            <div class="allergy-protocol">Zyrtec daily (already in med schedule). No activity restrictions.</div>
-          </div>
+    <!-- ═══════════ MEDICATIONS ═══════════ -->
+    <div id="tab-medications" class="tab-content">
+        <div class="page-header">
+            <div><div class="page-title">Medications</div><div class="page-subtitle">Manage camper medications and dispensing</div></div>
+            <div class="page-actions"><button class="btn btn-primary" onclick="CampistryHealth.openMedModal()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add Medication</button></div>
         </div>
-      </div>
+        <div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" class="health-search" placeholder="Search medications..."></div>
+        <div class="card"><div class="table-wrapper"><table class="data-table"><thead><tr><th>Camper</th><th>Medication</th><th>Dosage</th><th>Schedule</th><th>Bunk</th><th>Last Given</th><th></th></tr></thead><tbody id="medsTableBody"></tbody></table></div></div>
     </div>
-  </div>
 
-  <!-- ═══════════ MEDICATIONS TAB ═══════════ -->
-  <div id="tab-medications" class="tab-content">
-    <div class="page-header">
-      <div>
-        <div class="page-title">Medications</div>
-        <div class="page-subtitle">Manage camper medications and dispensing schedules</div>
-      </div>
-      <div class="page-actions">
-        <button class="btn btn-primary" onclick="openModal('medModal')">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          Add Medication
-        </button>
-      </div>
-    </div>
-    <div class="search-bar">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input type="text" placeholder="Search by camper name, medication, or bunk...">
-    </div>
-    <div class="tab-bar">
-      <button class="tab-btn active">All Active (18)</button>
-      <button class="tab-btn">Scheduled (14)</button>
-      <button class="tab-btn">PRN / As Needed (4)</button>
-      <button class="tab-btn">Dispensing Log</button>
-    </div>
-    <div class="card">
-      <table class="data-table">
-        <thead>
-          <tr><th>Camper</th><th>Medication</th><th>Dosage</th><th>Schedule</th><th>Last Given</th><th>Status</th><th></th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td style="font-weight:700">Ethan Goldberg</td>
-            <td>Ritalin</td>
-            <td>10mg tablet</td>
-            <td>8:00 AM daily</td>
-            <td>Jul 13, 7:58 AM</td>
-            <td><span class="badge badge-red">Overdue</span></td>
-            <td><button class="btn btn-sm btn-primary" onclick="markGiven(this)">Give</button></td>
-          </tr>
-          <tr>
-            <td style="font-weight:700">Sophie Levine</td>
-            <td>Zyrtec</td>
-            <td>5mg tablet</td>
-            <td>12:00 PM daily</td>
-            <td>Jul 13, 12:05 PM</td>
-            <td><span class="badge badge-purple">Due Now</span></td>
-            <td><button class="btn btn-sm btn-primary" onclick="markGiven(this)">Give</button></td>
-          </tr>
-          <tr>
-            <td style="font-weight:700">Jacob Rosen</td>
-            <td>Albuterol Inhaler</td>
-            <td>2 puffs</td>
-            <td>PRN (as needed)</td>
-            <td>Jul 12, 3:20 PM</td>
-            <td><span class="badge badge-gray">PRN</span></td>
-            <td><button class="btn btn-sm btn-secondary">Log Use</button></td>
-          </tr>
-          <tr>
-            <td style="font-weight:700">Maya Klein</td>
-            <td>Concerta</td>
-            <td>18mg capsule</td>
-            <td>8:00 AM, 4:00 PM</td>
-            <td>Jul 14, 8:02 AM</td>
-            <td><span class="badge badge-green">On Track</span></td>
-            <td><button class="btn btn-sm btn-secondary">Details</button></td>
-          </tr>
-          <tr>
-            <td style="font-weight:700">Noah Shapiro</td>
-            <td>Amoxicillin</td>
-            <td>250mg liquid</td>
-            <td>8AM, 2PM, 8PM</td>
-            <td>Jul 14, 8:10 AM</td>
-            <td><span class="badge badge-green">On Track</span></td>
-            <td><button class="btn btn-sm btn-secondary">Details</button></td>
-          </tr>
-          <tr>
-            <td style="font-weight:700">Ava Cohen</td>
-            <td>EpiPen</td>
-            <td>0.3mg auto-injector</td>
-            <td>Emergency only</td>
-            <td>—</td>
-            <td><span class="badge badge-gray">Emergency</span></td>
-            <td><button class="btn btn-sm btn-secondary">Details</button></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- ═══════════ SICK VISITS TAB ═══════════ -->
-  <div id="tab-sick-visits" class="tab-content">
-    <div class="page-header">
-      <div>
-        <div class="page-title">Sick Visits</div>
-        <div class="page-subtitle">Health center visit log and follow-ups</div>
-      </div>
-      <div class="page-actions">
-        <button class="btn btn-primary" onclick="openModal('visitModal')">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          New Visit
-        </button>
-      </div>
-    </div>
-    <div class="search-bar">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input type="text" placeholder="Search visits by camper, complaint, or date...">
-    </div>
-    <div class="tab-bar">
-      <button class="tab-btn active">All Visits (47)</button>
-      <button class="tab-btn">Follow-Up Due (1)</button>
-      <button class="tab-btn">In Infirmary (1)</button>
-      <button class="tab-btn">Repeat Visitors</button>
-    </div>
-    <div class="card">
-      <table class="data-table">
-        <thead>
-          <tr><th>Time</th><th>Camper</th><th>Bunk</th><th>Complaint</th><th>Treatment</th><th>Disposition</th><th>Nurse</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td style="font-weight:600;color:var(--slate-500);">11:42 AM</td>
-            <td style="font-weight:700">Noah Shapiro</td>
-            <td>6A</td>
-            <td>Headache, fever 100.2°F</td>
-            <td>Tylenol 325mg</td>
-            <td><span class="badge badge-blue">Resting</span></td>
-            <td>Sarah</td>
-          </tr>
-          <tr>
-            <td style="font-weight:600;color:var(--slate-500);">10:15 AM</td>
-            <td style="font-weight:700">Ava Cohen</td>
-            <td>2B</td>
-            <td>Scraped knee</td>
-            <td>Clean, bandage, ice</td>
-            <td><span class="badge badge-green">Returned</span></td>
-            <td>Sarah</td>
-          </tr>
-          <tr>
-            <td style="font-weight:600;color:var(--slate-500);">9:30 AM</td>
-            <td style="font-weight:700">Liam Berger</td>
-            <td>3B</td>
-            <td>Stomachache, nausea</td>
-            <td>Rest, crackers, water</td>
-            <td><span class="badge badge-green">Returned</span></td>
-            <td>Rachel</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- ═══════════ DOCTOR VISITS TAB ═══════════ -->
-  <div id="tab-doctor" class="tab-content">
-    <div class="page-header">
-      <div>
-        <div class="page-title">Doctor Visits</div>
-        <div class="page-subtitle">Consultations with the camp doctor</div>
-      </div>
-    </div>
-    <div class="card">
-      <table class="data-table">
-        <thead><tr><th>Date</th><th>Camper</th><th>Reason</th><th>Diagnosis</th><th>Restrictions</th><th>Cleared</th></tr></thead>
-        <tbody>
-          <tr>
-            <td style="font-weight:600;color:var(--slate-500);">Jul 13</td>
-            <td style="font-weight:700">Noah Shapiro</td>
-            <td>Persistent fever</td>
-            <td>Strep throat</td>
-            <td><span class="badge badge-amber">No swimming 48hr</span></td>
-            <td><span class="badge badge-amber">Pending</span></td>
-          </tr>
-          <tr>
-            <td style="font-weight:600;color:var(--slate-500);">Jul 11</td>
-            <td style="font-weight:700">Maya Klein</td>
-            <td>Ankle sprain</td>
-            <td>Grade 1 sprain</td>
-            <td><span class="badge badge-amber">No running 5 days</span></td>
-            <td><span class="badge badge-green">Jul 16</span></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- ═══════════ ALLERGIES TAB ═══════════ -->
-  <div id="tab-allergies" class="tab-content">
-    <div class="page-header">
-      <div>
-        <div class="page-title">Allergies & Dietary</div>
-        <div class="page-subtitle">Source of truth for all camper allergy and dietary data</div>
-      </div>
-      <div class="page-actions">
-        <button class="btn btn-primary">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          Add Record
-        </button>
-      </div>
-    </div>
-    <div class="tab-bar">
-      <button class="tab-btn active">Allergies (9)</button>
-      <button class="tab-btn">Dietary Restrictions (6)</button>
-    </div>
-    <div class="card">
-      <table class="data-table">
-        <thead><tr><th>Camper</th><th>Allergen</th><th>Category</th><th>Severity</th><th>Protocol</th><th>EpiPen</th></tr></thead>
-        <tbody>
-          <tr>
-            <td style="font-weight:700">Ethan Goldberg</td>
-            <td>Peanuts</td>
-            <td><span class="badge badge-gray">Food</span></td>
-            <td><span class="badge badge-red">Severe</span></td>
-            <td>EpiPen + call 911</td>
-            <td>HC Fridge, Shelf 2</td>
-          </tr>
-          <tr>
-            <td style="font-weight:700">Sophie Levine</td>
-            <td>Bee stings</td>
-            <td><span class="badge badge-gray">Insect</span></td>
-            <td><span class="badge badge-red">Severe</span></td>
-            <td>EpiPen + notify camp mother</td>
-            <td>Camper backpack</td>
-          </tr>
-          <tr>
-            <td style="font-weight:700">Ava Cohen</td>
-            <td>Dairy</td>
-            <td><span class="badge badge-gray">Food</span></td>
-            <td><span class="badge badge-amber">Moderate</span></td>
-            <td>Benadryl 25mg</td>
-            <td>—</td>
-          </tr>
-          <tr>
-            <td style="font-weight:700">Liam Berger</td>
-            <td>Grass pollen</td>
-            <td><span class="badge badge-gray">Environmental</span></td>
-            <td><span class="badge badge-green">Mild</span></td>
-            <td>Daily Zyrtec</td>
-            <td>—</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- ═══════════ NIGHTTIME CARE TAB ═══════════ -->
-  <div id="tab-nighttime" class="tab-content">
-    <div class="page-header">
-      <div>
-        <div class="page-title">Nighttime Care</div>
-        <div class="page-subtitle">Discreet tracking for nighttime incidents</div>
-      </div>
-      <div class="page-actions">
-        <button class="btn btn-primary">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          Log Incident
-        </button>
-      </div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
-      <div class="card">
-        <div class="card-header"><h2>July 2026</h2></div>
-        <div class="card-body">
-          <div class="night-calendar">
-            <div class="night-day night-day-header">S</div>
-            <div class="night-day night-day-header">M</div>
-            <div class="night-day night-day-header">T</div>
-            <div class="night-day night-day-header">W</div>
-            <div class="night-day night-day-header">T</div>
-            <div class="night-day night-day-header">F</div>
-            <div class="night-day night-day-header">S</div>
-            <div class="night-day"></div>
-            <div class="night-day"></div>
-            <div class="night-day">1</div>
-            <div class="night-day has-event">2</div>
-            <div class="night-day">3</div>
-            <div class="night-day">4</div>
-            <div class="night-day">5</div>
-            <div class="night-day">6</div>
-            <div class="night-day has-event">7</div>
-            <div class="night-day">8</div>
-            <div class="night-day has-event">9</div>
-            <div class="night-day">10</div>
-            <div class="night-day">11</div>
-            <div class="night-day">12</div>
-            <div class="night-day">13</div>
-            <div class="night-day today">14</div>
-            <div class="night-day">15</div>
-            <div class="night-day">16</div>
-            <div class="night-day">17</div>
-            <div class="night-day">18</div>
-          </div>
-          <div style="font-size:0.75rem;color:var(--slate-500);">
-            <span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--health-100);margin-right:4px;vertical-align:middle;"></span> Incident recorded
-          </div>
+    <!-- ═══════════ SICK VISITS ═══════════ -->
+    <div id="tab-visits" class="tab-content">
+        <div class="page-header">
+            <div><div class="page-title">Sick Visits</div><div class="page-subtitle">Health center visit log</div></div>
+            <div class="page-actions"><button class="btn btn-primary" onclick="CampistryHealth.openVisitModal()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Log Visit</button></div>
         </div>
-      </div>
-      <div class="card">
-        <div class="card-header"><h2>Recent Logs</h2><span class="card-count">3 this week</span></div>
-        <div class="card-body">
-          <div class="visit-list">
-            <div class="visit-card">
-              <div class="visit-time">Jul 9<br>2 AM</div>
-              <div class="visit-body">
-                <div class="visit-header"><span class="visit-camper">Daniel F.</span></div>
-                <div class="visit-complaint">Linen changed. 2nd incident this week.</div>
-              </div>
-            </div>
-            <div class="visit-card">
-              <div class="visit-time">Jul 7<br>3 AM</div>
-              <div class="visit-body">
-                <div class="visit-header"><span class="visit-camper">Daniel F.</span></div>
-                <div class="visit-complaint">Linen changed. Night staff notified.</div>
-              </div>
-            </div>
-            <div class="visit-card">
-              <div class="visit-time">Jul 2<br>1 AM</div>
-              <div class="visit-body">
-                <div class="visit-header"><span class="visit-camper">Sam R.</span></div>
-                <div class="visit-complaint">Single incident. No pattern.</div>
-              </div>
-            </div>
-          </div>
+        <div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" class="health-search" placeholder="Search visits..."></div>
+        <div class="card"><div class="table-wrapper"><table class="data-table"><thead><tr><th>Date/Time</th><th>Camper</th><th>Bunk</th><th>Complaint</th><th>Treatment</th><th>Status</th><th>Nurse</th></tr></thead><tbody id="visitsTableBody"></tbody></table></div></div>
+    </div>
+
+    <!-- ═══════════ DOCTOR VISITS ═══════════ -->
+    <div id="tab-doctor" class="tab-content">
+        <div class="page-header"><div><div class="page-title">Doctor Visits</div><div class="page-subtitle">Camp doctor consultations</div></div></div>
+        <div class="card"><div class="table-wrapper"><table class="data-table"><thead><tr><th>Date</th><th>Camper</th><th>Reason</th><th>Diagnosis</th><th>Restrictions</th><th>Cleared</th></tr></thead><tbody id="doctorTableBody"></tbody></table></div></div>
+    </div>
+
+    <!-- ═══════════ ALLERGIES ═══════════ -->
+    <div id="tab-allergies" class="tab-content">
+        <div class="page-header">
+            <div><div class="page-title">Allergies & Dietary</div><div class="page-subtitle">Source of truth — syncs flags to Campistry Me</div></div>
+            <div class="page-actions"><button class="btn btn-primary" onclick="CampistryHealth.openAllergyModal()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add Record</button></div>
         </div>
-      </div>
+        <div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" class="health-search" placeholder="Search allergies..."></div>
+        <div class="card"><div class="table-wrapper"><table class="data-table"><thead><tr><th>Camper</th><th>Allergen</th><th>Category</th><th>Severity</th><th>Protocol</th><th>EpiPen</th></tr></thead><tbody id="allergiesTableBody"></tbody></table></div></div>
     </div>
-  </div>
 
-  <!-- ═══════════ REPORTS TAB ═══════════ -->
-  <div id="tab-reports" class="tab-content">
-    <div class="page-header">
-      <div>
-        <div class="page-title">Reports & Export</div>
-        <div class="page-subtitle">Generate summaries and export health data</div>
-      </div>
+    <!-- ═══════════ NIGHTTIME CARE ═══════════ -->
+    <div id="tab-nighttime" class="tab-content">
+        <div class="page-header"><div><div class="page-title">Nighttime Care</div><div class="page-subtitle">Discreet incident tracking</div></div></div>
+        <div class="card"><div class="card-body" id="nighttimeBody"></div></div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;">
-      <div class="card" style="cursor:pointer;" onmouseenter="this.style.borderColor='var(--health-200)'" onmouseleave="this.style.borderColor=''">
-        <div class="card-body" style="text-align:center;padding:32px 20px;">
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--health)" stroke-width="1.5" style="margin:0 auto 12px;"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
-          <div style="font-weight:700;font-size:0.9rem;margin-bottom:4px;">Daily Summary</div>
-          <div style="font-size:0.78rem;color:var(--slate-500);">All visits, meds, and incidents for a given day</div>
+
+    <!-- ═══════════ CAMPER DIRECTORY ═══════════ -->
+    <div id="tab-campers" class="tab-content">
+        <div class="page-header">
+            <div><div class="page-title">Camper Directory</div><div class="page-subtitle">Real-time from Campistry Me — click any camper for full details</div></div>
+            <div class="page-actions"><div class="sync-badge" style="padding:8px 14px;font-size:.75rem;"><span class="sync-dot"></span> Live sync with Campistry Me</div></div>
         </div>
-      </div>
-      <div class="card" style="cursor:pointer;" onmouseenter="this.style.borderColor='var(--health-200)'" onmouseleave="this.style.borderColor=''">
-        <div class="card-body" style="text-align:center;padding:32px 20px;">
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--health)" stroke-width="1.5" style="margin:0 auto 12px;"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
-          <div style="font-weight:700;font-size:0.9rem;margin-bottom:4px;">Camper Health Card</div>
-          <div style="font-size:0.78rem;color:var(--slate-500);">Full medical history for one camper (PDF)</div>
+        <div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" class="health-search" placeholder="Search by name, bunk, division, or allergy..."></div>
+        <div class="card"><div class="table-wrapper"><table class="data-table"><thead><tr><th></th><th>Camper</th><th>ID</th><th>Age</th><th>Division</th><th>Bunk</th><th>Medical Flags</th><th>Emergency Contact</th></tr></thead><tbody id="camperDirBody"></tbody></table></div></div>
+    </div>
+
+    <!-- ═══════════ REPORTS ═══════════ -->
+    <div id="tab-reports" class="tab-content">
+        <div class="page-header"><div><div class="page-title">Reports & Export</div><div class="page-subtitle">Generate summaries and export data</div></div></div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem;">
+            <div class="card" style="cursor:pointer;" onclick="alert('Daily summary export coming soon')"><div class="card-body" style="text-align:center;padding:2rem 1rem;"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--health)" stroke-width="1.5" style="margin:0 auto .75rem;"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg><div style="font-weight:700;font-size:.9rem;margin-bottom:.25rem;">Daily Summary</div><div style="font-size:.78rem;color:var(--text-muted);">All visits, meds, and incidents for a given day</div></div></div>
+            <div class="card" style="cursor:pointer;" onclick="alert('Camper health card export coming soon')"><div class="card-body" style="text-align:center;padding:2rem 1rem;"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--health)" stroke-width="1.5" style="margin:0 auto .75rem;"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg><div style="font-weight:700;font-size:.9rem;margin-bottom:.25rem;">Camper Health Card</div><div style="font-size:.78rem;color:var(--text-muted);">Full medical history for one camper</div></div></div>
+            <div class="card" style="cursor:pointer;" onclick="alert('Season export coming soon')"><div class="card-body" style="text-align:center;padding:2rem 1rem;"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--health)" stroke-width="1.5" style="margin:0 auto .75rem;"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg><div style="font-weight:700;font-size:.9rem;margin-bottom:.25rem;">Season Export</div><div style="font-size:.78rem;color:var(--text-muted);">Full data export as CSV</div></div></div>
         </div>
-      </div>
-      <div class="card" style="cursor:pointer;" onmouseenter="this.style.borderColor='var(--health-200)'" onmouseleave="this.style.borderColor=''">
-        <div class="card-body" style="text-align:center;padding:32px 20px;">
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--health)" stroke-width="1.5" style="margin:0 auto 12px;"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
-          <div style="font-weight:700;font-size:0.9rem;margin-bottom:4px;">Season Export</div>
-          <div style="font-size:0.78rem;color:var(--slate-500);">Full data export as CSV for end-of-summer</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ═══════════ CAMPER DIRECTORY TAB ═══════════ -->
-  <div id="tab-campers" class="tab-content">
-    <div class="page-header">
-      <div>
-        <div class="page-title">Camper Directory</div>
-        <div class="page-subtitle">Real-time synced from Campistry Me — tap any camper for full details</div>
-      </div>
-      <div class="page-actions">
-        <div class="sync-badge" style="font-size:0.75rem;padding:8px 14px;">
-          <span class="sync-dot"></span> Live sync with Campistry Me
-        </div>
-      </div>
-    </div>
-    <div class="search-bar" id="camperSearch">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input type="text" placeholder="Search by name, bunk, division, or allergy..." oninput="filterCampers(this.value)">
-    </div>
-    <div class="tab-bar">
-      <button class="tab-btn active" onclick="filterDivision(this,'all')">All Campers (24)</button>
-      <button class="tab-btn" onclick="filterDivision(this,'juniors')">Juniors (10)</button>
-      <button class="tab-btn" onclick="filterDivision(this,'inters')">Inters (8)</button>
-      <button class="tab-btn" onclick="filterDivision(this,'seniors')">Seniors (6)</button>
     </div>
 
-    <!-- Camper table -->
-    <div class="card">
-      <table class="data-table" id="camperTable">
-        <thead>
-          <tr>
-            <th></th>
-            <th>Camper</th>
-            <th>ID</th>
-            <th>Age</th>
-            <th>Division</th>
-            <th>Bunk</th>
-            <th>Medical Flags</th>
-            <th>Emergency</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr class="click camper-row" data-div="juniors" onclick="openCamperPanel('ethan-goldberg')">
-            <td><div class="med-avatar" style="background:#EF4444;width:32px;height:32px;font-size:0.65rem;">EG</div></td>
-            <td style="font-weight:700">Ethan Goldberg</td>
-            <td style="font-family:monospace;font-size:0.72rem;color:var(--slate-400)">#0012</td>
-            <td>9</td>
-            <td><span class="badge badge-purple">Juniors</span></td>
-            <td>4B</td>
-            <td><span class="badge badge-red">Peanut allergy</span> <span class="badge badge-purple">Ritalin</span></td>
-            <td style="font-size:0.78rem;color:var(--slate-500)">Ruth Goldberg</td>
-            <td><button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();openCamperPanel('ethan-goldberg')">View</button></td>
-          </tr>
-          <tr class="click camper-row" data-div="seniors" onclick="openCamperPanel('sophie-levine')">
-            <td><div class="med-avatar" style="background:#8B5CF6;width:32px;height:32px;font-size:0.65rem;">SL</div></td>
-            <td style="font-weight:700">Sophie Levine</td>
-            <td style="font-family:monospace;font-size:0.72rem;color:var(--slate-400)">#0003</td>
-            <td>12</td>
-            <td><span class="badge badge-blue">Seniors</span></td>
-            <td>7A</td>
-            <td><span class="badge badge-red">Bee stings</span> <span class="badge badge-gray">Zyrtec</span></td>
-            <td style="font-size:0.78rem;color:var(--slate-500)">Miriam Levine</td>
-            <td><button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();openCamperPanel('sophie-levine')">View</button></td>
-          </tr>
-          <tr class="click camper-row" data-div="juniors" onclick="openCamperPanel('jacob-rosen')">
-            <td><div class="med-avatar" style="background:#0EA5E9;width:32px;height:32px;font-size:0.65rem;">JR</div></td>
-            <td style="font-weight:700">Jacob Rosen</td>
-            <td style="font-family:monospace;font-size:0.72rem;color:var(--slate-400)">#0007</td>
-            <td>8</td>
-            <td><span class="badge badge-purple">Juniors</span></td>
-            <td>3A</td>
-            <td><span class="badge badge-purple">Albuterol</span></td>
-            <td style="font-size:0.78rem;color:var(--slate-500)">David Rosen</td>
-            <td><button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();openCamperPanel('jacob-rosen')">View</button></td>
-          </tr>
-          <tr class="click camper-row" data-div="inters" onclick="openCamperPanel('maya-klein')">
-            <td><div class="med-avatar" style="background:#F59E0B;width:32px;height:32px;font-size:0.65rem;">MK</div></td>
-            <td style="font-weight:700">Maya Klein</td>
-            <td style="font-family:monospace;font-size:0.72rem;color:var(--slate-400)">#0015</td>
-            <td>10</td>
-            <td><span class="badge badge-amber">Inters</span></td>
-            <td>5B</td>
-            <td><span class="badge badge-purple">Concerta</span></td>
-            <td style="font-size:0.78rem;color:var(--slate-500)">Leah Klein</td>
-            <td><button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();openCamperPanel('maya-klein')">View</button></td>
-          </tr>
-          <tr class="click camper-row" data-div="inters" onclick="openCamperPanel('noah-shapiro')">
-            <td><div class="med-avatar" style="background:#22C55E;width:32px;height:32px;font-size:0.65rem;">NS</div></td>
-            <td style="font-weight:700">Noah Shapiro</td>
-            <td style="font-family:monospace;font-size:0.72rem;color:var(--slate-400)">#0018</td>
-            <td>11</td>
-            <td><span class="badge badge-amber">Inters</span></td>
-            <td>6A</td>
-            <td><span class="badge badge-amber">Amoxicillin</span> <span class="badge badge-amber">Strep</span></td>
-            <td style="font-size:0.78rem;color:var(--slate-500)">Yael Shapiro</td>
-            <td><button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();openCamperPanel('noah-shapiro')">View</button></td>
-          </tr>
-          <tr class="click camper-row" data-div="juniors" onclick="openCamperPanel('ava-cohen')">
-            <td><div class="med-avatar" style="background:#A78BFA;width:32px;height:32px;font-size:0.65rem;">AC</div></td>
-            <td style="font-weight:700">Ava Cohen</td>
-            <td style="font-family:monospace;font-size:0.72rem;color:var(--slate-400)">#0021</td>
-            <td>9</td>
-            <td><span class="badge badge-purple">Juniors</span></td>
-            <td>2B</td>
-            <td><span class="badge badge-amber">Dairy allergy</span></td>
-            <td style="font-size:0.78rem;color:var(--slate-500)">Rachel Cohen</td>
-            <td><button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();openCamperPanel('ava-cohen')">View</button></td>
-          </tr>
-          <tr class="click camper-row" data-div="juniors" onclick="openCamperPanel('liam-berger')">
-            <td><div class="med-avatar" style="background:#64748B;width:32px;height:32px;font-size:0.65rem;">LB</div></td>
-            <td style="font-weight:700">Liam Berger</td>
-            <td style="font-family:monospace;font-size:0.72rem;color:var(--slate-400)">#0024</td>
-            <td>8</td>
-            <td><span class="badge badge-purple">Juniors</span></td>
-            <td>3B</td>
-            <td><span class="badge badge-green">Pollen (mild)</span></td>
-            <td style="font-size:0.78rem;color:var(--slate-500)">Sarah Berger</td>
-            <td><button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();openCamperPanel('liam-berger')">View</button></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- ═══════════ MEDICAL FORMS INTAKE TAB ═══════════ -->
-  <div id="tab-intake" class="tab-content">
-    <div class="page-header">
-      <div>
-        <div class="page-title">Pre-Camp Medical Forms</div>
-        <div class="page-subtitle">Parents submit forms online — nurse reviews and approves before camp starts</div>
-      </div>
-      <div class="page-actions">
-        <button class="btn btn-secondary" onclick="copyIntakeLink()">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
-          Copy Parent Link
-        </button>
-        <button class="btn btn-primary">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-          Send Reminders
-        </button>
-      </div>
-    </div>
-
-    <!-- Progress Overview -->
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-icon green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></div>
-        <div><div class="stat-value">18</div><div class="stat-label">Approved</div></div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon amber"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>
-        <div><div class="stat-value">4</div><div class="stat-label">Pending Review</div></div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon red"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z"/></svg></div>
-        <div><div class="stat-value">2</div><div class="stat-label">Issues Flagged</div></div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon purple"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div>
-        <div><div class="stat-value">24</div><div class="stat-label">Total Campers</div></div>
-      </div>
-    </div>
-
-    <!-- Completion Progress Bar -->
-    <div class="card" style="margin-bottom:20px;">
-      <div class="card-body" style="padding:16px 20px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-          <span style="font-size:0.82rem;font-weight:700;color:var(--slate-900);">Overall Completion</span>
-          <span style="font-size:0.82rem;font-weight:700;color:var(--health);">75% (18/24)</span>
-        </div>
-        <div style="height:10px;background:var(--slate-100);border-radius:var(--radius-full);overflow:hidden;">
-          <div style="height:100%;width:75%;background:linear-gradient(90deg,var(--health),var(--health-light));border-radius:var(--radius-full);transition:width 0.5s;"></div>
-        </div>
-        <div style="display:flex;gap:16px;margin-top:10px;font-size:0.72rem;color:var(--slate-500);">
-          <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--success);margin-right:4px;vertical-align:middle;"></span>18 Approved</span>
-          <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--warning);margin-right:4px;vertical-align:middle;"></span>4 Pending</span>
-          <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--danger);margin-right:4px;vertical-align:middle;"></span>2 Issues</span>
-          <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--slate-300);margin-right:4px;vertical-align:middle;"></span>0 Not Started</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Filter Tabs -->
-    <div class="tab-bar">
-      <button class="tab-btn active" onclick="filterForms(this,'all')">All (24)</button>
-      <button class="tab-btn" onclick="filterForms(this,'pending')">Pending Review (4)</button>
-      <button class="tab-btn" onclick="filterForms(this,'flagged')">Flagged (2)</button>
-      <button class="tab-btn" onclick="filterForms(this,'approved')">Approved (18)</button>
-    </div>
-
-    <!-- Forms Table -->
-    <div class="card">
-      <table class="data-table" id="intakeTable">
-        <thead>
-          <tr>
-            <th>Camper</th>
-            <th>Bunk</th>
-            <th>Submitted</th>
-            <th>Sections</th>
-            <th>Status</th>
-            <th>Nurse Notes</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <!-- Pending Review -->
-          <tr class="intake-row" data-status="pending">
-            <td style="font-weight:700">Ava Cohen</td>
-            <td>2B</td>
-            <td style="font-size:0.78rem;color:var(--slate-500);">Mar 15, 2026</td>
-            <td>
-              <span class="badge badge-green" style="margin-right:2px;">ID</span>
-              <span class="badge badge-green" style="margin-right:2px;">Meds</span>
-              <span class="badge badge-green" style="margin-right:2px;">Allergy</span>
-              <span class="badge badge-green" style="margin-right:2px;">Insurance</span>
-              <span class="badge badge-amber">Physical</span>
-            </td>
-            <td><span class="badge badge-amber">Pending Review</span></td>
-            <td style="font-size:0.78rem;color:var(--slate-500);">—</td>
-            <td>
-              <button class="btn btn-sm btn-primary" onclick="openFormReview('ava-cohen')">Review</button>
-            </td>
-          </tr>
-          <tr class="intake-row" data-status="pending">
-            <td style="font-weight:700">Daniel Friedman</td>
-            <td>6B</td>
-            <td style="font-size:0.78rem;color:var(--slate-500);">Mar 18, 2026</td>
-            <td>
-              <span class="badge badge-green" style="margin-right:2px;">ID</span>
-              <span class="badge badge-green" style="margin-right:2px;">Meds</span>
-              <span class="badge badge-green" style="margin-right:2px;">Allergy</span>
-              <span class="badge badge-green" style="margin-right:2px;">Insurance</span>
-              <span class="badge badge-green">Physical</span>
-            </td>
-            <td><span class="badge badge-amber">Pending Review</span></td>
-            <td style="font-size:0.78rem;color:var(--slate-500);">—</td>
-            <td>
-              <button class="btn btn-sm btn-primary" onclick="openFormReview('daniel-f')">Review</button>
-            </td>
-          </tr>
-          <tr class="intake-row" data-status="pending">
-            <td style="font-weight:700">Sam Rubin</td>
-            <td>3A</td>
-            <td style="font-size:0.78rem;color:var(--slate-500);">Mar 20, 2026</td>
-            <td>
-              <span class="badge badge-green" style="margin-right:2px;">ID</span>
-              <span class="badge badge-green" style="margin-right:2px;">Meds</span>
-              <span class="badge badge-amber" style="margin-right:2px;">Allergy</span>
-              <span class="badge badge-green" style="margin-right:2px;">Insurance</span>
-              <span class="badge badge-green">Physical</span>
-            </td>
-            <td><span class="badge badge-amber">Pending Review</span></td>
-            <td style="font-size:0.78rem;color:var(--slate-500);">—</td>
-            <td>
-              <button class="btn btn-sm btn-primary">Review</button>
-            </td>
-          </tr>
-          <tr class="intake-row" data-status="pending">
-            <td style="font-weight:700">Talia Weiss</td>
-            <td>7B</td>
-            <td style="font-size:0.78rem;color:var(--slate-500);">Mar 22, 2026</td>
-            <td>
-              <span class="badge badge-green" style="margin-right:2px;">ID</span>
-              <span class="badge badge-green" style="margin-right:2px;">Meds</span>
-              <span class="badge badge-green" style="margin-right:2px;">Allergy</span>
-              <span class="badge badge-green" style="margin-right:2px;">Insurance</span>
-              <span class="badge badge-green">Physical</span>
-            </td>
-            <td><span class="badge badge-amber">Pending Review</span></td>
-            <td style="font-size:0.78rem;color:var(--slate-500);">—</td>
-            <td>
-              <button class="btn btn-sm btn-primary">Review</button>
-            </td>
-          </tr>
-          <!-- Flagged -->
-          <tr class="intake-row" data-status="flagged">
-            <td style="font-weight:700">Ethan Goldberg</td>
-            <td>4B</td>
-            <td style="font-size:0.78rem;color:var(--slate-500);">Feb 28, 2026</td>
-            <td>
-              <span class="badge badge-green" style="margin-right:2px;">ID</span>
-              <span class="badge badge-green" style="margin-right:2px;">Meds</span>
-              <span class="badge badge-red" style="margin-right:2px;">Allergy</span>
-              <span class="badge badge-green" style="margin-right:2px;">Insurance</span>
-              <span class="badge badge-red">Physical</span>
-            </td>
-            <td><span class="badge badge-red">Issue Flagged</span></td>
-            <td style="font-size:0.78rem;color:var(--danger);">EpiPen prescription expired. Physical older than 12 months.</td>
-            <td>
-              <button class="btn btn-sm btn-danger">Resolve</button>
-            </td>
-          </tr>
-          <tr class="intake-row" data-status="flagged">
-            <td style="font-weight:700">Noah Shapiro</td>
-            <td>6A</td>
-            <td style="font-size:0.78rem;color:var(--slate-500);">Mar 5, 2026</td>
-            <td>
-              <span class="badge badge-green" style="margin-right:2px;">ID</span>
-              <span class="badge badge-red" style="margin-right:2px;">Meds</span>
-              <span class="badge badge-green" style="margin-right:2px;">Allergy</span>
-              <span class="badge badge-green" style="margin-right:2px;">Insurance</span>
-              <span class="badge badge-green">Physical</span>
-            </td>
-            <td><span class="badge badge-red">Issue Flagged</span></td>
-            <td style="font-size:0.78rem;color:var(--danger);">Missing dosage info for Amoxicillin. Parent notified 3/10.</td>
-            <td>
-              <button class="btn btn-sm btn-danger">Resolve</button>
-            </td>
-          </tr>
-          <!-- Approved (sample) -->
-          <tr class="intake-row" data-status="approved">
-            <td style="font-weight:700">Sophie Levine</td>
-            <td>7A</td>
-            <td style="font-size:0.78rem;color:var(--slate-500);">Feb 20, 2026</td>
-            <td>
-              <span class="badge badge-green" style="margin-right:2px;">ID</span>
-              <span class="badge badge-green" style="margin-right:2px;">Meds</span>
-              <span class="badge badge-green" style="margin-right:2px;">Allergy</span>
-              <span class="badge badge-green" style="margin-right:2px;">Insurance</span>
-              <span class="badge badge-green">Physical</span>
-            </td>
-            <td><span class="badge badge-green">Approved</span></td>
-            <td style="font-size:0.78rem;color:var(--slate-500);">Reviewed by Nurse Sarah, 3/1</td>
-            <td>
-              <button class="btn btn-sm btn-ghost">View</button>
-            </td>
-          </tr>
-          <tr class="intake-row" data-status="approved">
-            <td style="font-weight:700">Maya Klein</td>
-            <td>5B</td>
-            <td style="font-size:0.78rem;color:var(--slate-500);">Mar 1, 2026</td>
-            <td>
-              <span class="badge badge-green" style="margin-right:2px;">ID</span>
-              <span class="badge badge-green" style="margin-right:2px;">Meds</span>
-              <span class="badge badge-green" style="margin-right:2px;">Allergy</span>
-              <span class="badge badge-green" style="margin-right:2px;">Insurance</span>
-              <span class="badge badge-green">Physical</span>
-            </td>
-            <td><span class="badge badge-green">Approved</span></td>
-            <td style="font-size:0.78rem;color:var(--slate-500);">Reviewed by Nurse Sarah, 3/5</td>
-            <td>
-              <button class="btn btn-sm btn-ghost">View</button>
-            </td>
-          </tr>
-          <tr class="intake-row" data-status="approved">
-            <td style="font-weight:700">Jacob Rosen</td>
-            <td>3A</td>
-            <td style="font-size:0.78rem;color:var(--slate-500);">Mar 8, 2026</td>
-            <td>
-              <span class="badge badge-green" style="margin-right:2px;">ID</span>
-              <span class="badge badge-green" style="margin-right:2px;">Meds</span>
-              <span class="badge badge-green" style="margin-right:2px;">Allergy</span>
-              <span class="badge badge-green" style="margin-right:2px;">Insurance</span>
-              <span class="badge badge-green">Physical</span>
-            </td>
-            <td><span class="badge badge-green">Approved</span></td>
-            <td style="font-size:0.78rem;color:var(--slate-500);">Reviewed by Nurse Rachel, 3/12</td>
-            <td>
-              <button class="btn btn-sm btn-ghost">View</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <!-- What Parents See -->
-    <div class="card">
-      <div class="card-header">
-        <h2>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--health)" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
-          Form Sections (what parents fill out)
-        </h2>
-      </div>
-      <div class="card-body">
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;">
-          <div style="padding:14px;border:1px solid var(--slate-200);border-radius:var(--radius-md);border-left:3px solid var(--health);">
-            <div style="font-weight:700;font-size:0.85rem;margin-bottom:4px;">1. Camper Identification</div>
-            <div style="font-size:0.75rem;color:var(--slate-500);">Auto-filled from Campistry Me: name, DOB, address, parent contacts</div>
-          </div>
-          <div style="padding:14px;border:1px solid var(--slate-200);border-radius:var(--radius-md);border-left:3px solid var(--health);">
-            <div style="font-weight:700;font-size:0.85rem;margin-bottom:4px;">2. Medications</div>
-            <div style="font-size:0.75rem;color:var(--slate-500);">Current meds, dosages, schedule, prescribing doctor, authorization to dispense</div>
-          </div>
-          <div style="padding:14px;border:1px solid var(--slate-200);border-radius:var(--radius-md);border-left:3px solid var(--health);">
-            <div style="font-weight:700;font-size:0.85rem;margin-bottom:4px;">3. Allergies & Dietary</div>
-            <div style="font-size:0.75rem;color:var(--slate-500);">All allergies, severity, treatment protocols, EpiPen info, dietary restrictions</div>
-          </div>
-          <div style="padding:14px;border:1px solid var(--slate-200);border-radius:var(--radius-md);border-left:3px solid var(--health);">
-            <div style="font-weight:700;font-size:0.85rem;margin-bottom:4px;">4. Insurance Card</div>
-            <div style="font-size:0.75rem;color:var(--slate-500);">Photo upload of front and back of insurance card</div>
-          </div>
-          <div style="padding:14px;border:1px solid var(--slate-200);border-radius:var(--radius-md);border-left:3px solid var(--health);">
-            <div style="font-weight:700;font-size:0.85rem;margin-bottom:4px;">5. Physical Exam</div>
-            <div style="font-size:0.75rem;color:var(--slate-500);">Upload of recent physical (must be within 12 months), immunization records</div>
-          </div>
-          <div style="padding:14px;border:1px solid var(--slate-200);border-radius:var(--radius-md);border-left:3px solid var(--health);">
-            <div style="font-weight:700;font-size:0.85rem;margin-bottom:4px;">6. Consent & Authorization</div>
-            <div style="font-size:0.75rem;color:var(--slate-500);">Permission to treat, OTC authorization, sunscreen consent, photo release</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-</main>
 </div>
-<div class="panel-overlay" id="camperPanelOverlay" onclick="closeCamperPanel()"></div>
-<div class="panel-slideout" id="camperPanel">
-  <div class="panel-header">
-    <div style="display:flex;align-items:center;gap:12px;">
-      <div class="med-avatar" style="background:var(--health);width:44px;height:44px;font-size:0.85rem;" id="panelAvatar">EG</div>
-      <div>
-        <div style="font-weight:700;font-size:1.1rem;color:var(--slate-900);" id="panelName">Ethan Goldberg</div>
-        <div style="font-size:0.78rem;color:var(--slate-500);" id="panelMeta">Bunk 4B · Juniors · Age 9 · #0012</div>
-      </div>
-    </div>
-    <button class="modal-close" onclick="closeCamperPanel()">&times;</button>
-  </div>
+<!-- /main -->
 
-  <div class="panel-body" id="panelBody">
-    <!-- Section: Quick Actions -->
-    <div class="panel-actions">
-      <button class="btn btn-primary btn-sm" onclick="closePanel();openModal('visitModal')">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        Log Visit
-      </button>
-      <button class="btn btn-secondary btn-sm" onclick="closePanel();openModal('medModal')">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5"/></svg>
-        Dispense Med
-      </button>
-    </div>
-
-    <!-- Section: Medical Alerts -->
-    <div class="panel-section">
-      <div class="panel-section-title">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z"/></svg>
-        Medical Alerts
-      </div>
-      <div id="panelAlerts">
-        <div class="panel-alert alert-severe">
-          <span class="badge badge-red">Severe</span>
-          <strong>Peanut allergy</strong> — Anaphylaxis risk
-          <div style="font-size:0.72rem;color:var(--slate-500);margin-top:4px;">EpiPen: HC Fridge, Shelf 2 · Protocol: Administer EpiPen, call 911</div>
-        </div>
-        <div class="panel-alert alert-info">
-          <span class="badge badge-purple">Medication</span>
-          <strong>Ritalin 10mg</strong> — Daily at 8:00 AM
-          <div style="font-size:0.72rem;color:var(--slate-500);margin-top:4px;">Last given: Jul 13, 7:58 AM · Status: <span style="color:var(--danger);font-weight:600;">OVERDUE</span></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Section: Contact Info (from Me) -->
-    <div class="panel-section">
-      <div class="panel-section-title">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--health)" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
-        Contact Information
-        <span class="panel-sync-tag">from Campistry Me</span>
-      </div>
-      <div class="panel-info-grid" id="panelContacts">
-        <div class="panel-info-row">
-          <span class="panel-info-label">Parent 1</span>
-          <span class="panel-info-value">Ruth Goldberg (Mother)</span>
-        </div>
-        <div class="panel-info-row">
-          <span class="panel-info-label">Phone</span>
-          <span class="panel-info-value"><a href="tel:+15551234567" class="panel-link">+1 (555) 123-4567</a></span>
-        </div>
-        <div class="panel-info-row">
-          <span class="panel-info-label">Email</span>
-          <span class="panel-info-value"><a href="/cdn-cgi/l/email-protection#1c6e696874327b7370787e796e7b5c79717d7570327f7371" class="panel-link"><span class="__cf_email__" data-cfemail="90e2e5e4f8bef7fffcf4f2f5e2f7d0f5fdf1f9fcbef3fffd">[email&#160;protected]</span></a></span>
-        </div>
-        <div class="panel-info-row">
-          <span class="panel-info-label">Address</span>
-          <span class="panel-info-value">42 Maple Drive, Teaneck, NJ 07666</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Section: Emergency Contact (from Me) -->
-    <div class="panel-section">
-      <div class="panel-section-title">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
-        Emergency Contact
-        <span class="panel-sync-tag">from Campistry Me</span>
-      </div>
-      <div class="panel-info-grid" id="panelEmergency">
-        <div class="panel-info-row">
-          <span class="panel-info-label">Name</span>
-          <span class="panel-info-value">Dr. Michael Goldberg (Father)</span>
-        </div>
-        <div class="panel-info-row">
-          <span class="panel-info-label">Phone</span>
-          <span class="panel-info-value"><a href="tel:+15559876543" class="panel-link">+1 (555) 987-6543</a></span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Section: Personal Info (from Me) -->
-    <div class="panel-section">
-      <div class="panel-section-title">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/></svg>
-        Personal Details
-        <span class="panel-sync-tag">from Campistry Me</span>
-      </div>
-      <div class="panel-info-grid" id="panelPersonal">
-        <div class="panel-info-row">
-          <span class="panel-info-label">Date of Birth</span>
-          <span class="panel-info-value">March 12, 2017 (Age 9)</span>
-        </div>
-        <div class="panel-info-row">
-          <span class="panel-info-label">Gender</span>
-          <span class="panel-info-value">Male</span>
-        </div>
-        <div class="panel-info-row">
-          <span class="panel-info-label">School</span>
-          <span class="panel-info-value">Yavneh Academy — 4th Grade</span>
-        </div>
-        <div class="panel-info-row">
-          <span class="panel-info-label">Division</span>
-          <span class="panel-info-value">Juniors</span>
-        </div>
-        <div class="panel-info-row">
-          <span class="panel-info-label">Bunk</span>
-          <span class="panel-info-value">4B</span>
-        </div>
-        <div class="panel-info-row">
-          <span class="panel-info-label">Camper ID</span>
-          <span class="panel-info-value" style="font-family:monospace;">#0012</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Section: Recent Health Activity -->
-    <div class="panel-section">
-      <div class="panel-section-title">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--health)" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-        Recent Health Activity
-      </div>
-      <div class="panel-timeline" id="panelTimeline">
-        <div class="timeline-item">
-          <div class="timeline-dot" style="background:var(--danger);"></div>
-          <div class="timeline-content">
-            <div class="timeline-date">Today, 8:00 AM</div>
-            <div class="timeline-text"><strong>Ritalin 10mg</strong> — <span style="color:var(--danger)">OVERDUE (not yet given)</span></div>
-          </div>
-        </div>
-        <div class="timeline-item">
-          <div class="timeline-dot" style="background:var(--success);"></div>
-          <div class="timeline-content">
-            <div class="timeline-date">Jul 13, 7:58 AM</div>
-            <div class="timeline-text"><strong>Ritalin 10mg</strong> — Given by Nurse Sarah</div>
-          </div>
-        </div>
-        <div class="timeline-item">
-          <div class="timeline-dot" style="background:var(--info);"></div>
-          <div class="timeline-content">
-            <div class="timeline-date">Jul 11, 2:15 PM</div>
-            <div class="timeline-text"><strong>Sick visit</strong> — Stomachache. Rested 20min. Returned to activity.</div>
-          </div>
-        </div>
-        <div class="timeline-item">
-          <div class="timeline-dot" style="background:var(--success);"></div>
-          <div class="timeline-content">
-            <div class="timeline-date">Jul 10, 8:01 AM</div>
-            <div class="timeline-text"><strong>Ritalin 10mg</strong> — Given by Nurse Rachel</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Open in Me link -->
-    <div style="text-align:center;padding:16px 0 8px;">
-      <a href="#" class="panel-me-link" onclick="event.preventDefault();">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-        Open full profile in Campistry Me
-      </a>
-    </div>
-  </div>
 </div>
+<!-- /main-app-container -->
 
-<!-- New Visit Modal -->
-<div class="modal-overlay" id="visitModal">
-  <div class="modal">
-    <div class="modal-header">
-      <h3>Log Sick Visit</h3>
-      <button class="modal-close" onclick="closeModal('visitModal')">&times;</button>
-    </div>
-    <div class="modal-body">
-      <div class="form-group">
-        <label class="form-label">Camper</label>
-        <input type="text" class="form-input" placeholder="Search by name or bunk...">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Chief Complaint</label>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
-          <button class="btn btn-sm btn-secondary" onclick="this.classList.toggle('btn-primary');this.classList.toggle('btn-secondary')">Headache</button>
-          <button class="btn btn-sm btn-secondary" onclick="this.classList.toggle('btn-primary');this.classList.toggle('btn-secondary')">Stomachache</button>
-          <button class="btn btn-sm btn-secondary" onclick="this.classList.toggle('btn-primary');this.classList.toggle('btn-secondary')">Fever</button>
-          <button class="btn btn-sm btn-secondary" onclick="this.classList.toggle('btn-primary');this.classList.toggle('btn-secondary')">Nausea</button>
-          <button class="btn btn-sm btn-secondary" onclick="this.classList.toggle('btn-primary');this.classList.toggle('btn-secondary')">Injury</button>
-          <button class="btn btn-sm btn-secondary" onclick="this.classList.toggle('btn-primary');this.classList.toggle('btn-secondary')">Homesick</button>
-        </div>
-        <input type="text" class="form-input" placeholder="Or type custom complaint...">
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Temperature (if taken)</label>
-          <input type="text" class="form-input" placeholder="e.g. 100.2">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Disposition</label>
-          <select class="form-select">
-            <option>Returned to activity</option>
-            <option>Sent to rest in bunk</option>
-            <option>Kept in infirmary</option>
-            <option>Sent to doctor</option>
-            <option>Sent home</option>
-          </select>
-        </div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Treatment Given</label>
-        <input type="text" class="form-input" placeholder="e.g. Tylenol 325mg, ice pack, rest">
-      </div>
-      <div class="form-group">
-        <label class="form-label" style="display:flex;align-items:center;gap:8px;">
-          <input type="checkbox"> Follow-up required
-        </label>
-        <div class="form-hint">A reminder will appear in the follow-up queue</div>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary" onclick="closeModal('visitModal')">Cancel</button>
-      <button class="btn btn-primary" onclick="closeModal('visitModal')">Save Visit</button>
-    </div>
-  </div>
-</div>
+<!-- ═══════════ MODALS ═══════════ -->
 
-<!-- Dispense Med Modal -->
+<!-- Add Medication Modal -->
 <div class="modal-overlay" id="medModal">
-  <div class="modal">
-    <div class="modal-header">
-      <h3>Dispense Medication</h3>
-      <button class="modal-close" onclick="closeModal('medModal')">&times;</button>
-    </div>
-    <div class="modal-body">
-      <div class="form-group">
-        <label class="form-label">Camper</label>
-        <input type="text" class="form-input" placeholder="Search by name or bunk...">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Medication</label>
-        <select class="form-select">
-          <option>Select medication...</option>
-          <option>Ritalin 10mg</option>
-          <option>Zyrtec 5mg</option>
-          <option>Concerta 18mg</option>
-          <option>Amoxicillin 250mg</option>
-        </select>
-        <div class="form-hint">Only medications assigned to this camper will appear</div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Status</label>
-          <select class="form-select">
-            <option>Given</option>
-            <option>Refused</option>
-            <option>Missed</option>
-            <option>Held (with reason)</option>
-          </select>
+    <div class="modal">
+        <div class="modal-header"><h3>Add Medication</h3><button class="modal-close" onclick="CampistryHealth.closeModal('medModal')">×</button></div>
+        <div class="modal-body">
+            <div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="medCamper"><option value="">Loading campers...</option></select></div>
+            <div class="form-group"><label class="form-label">Medication Name</label><input type="text" class="form-input" id="medName" placeholder="e.g. Ritalin, Zyrtec, Amoxicillin"></div>
+            <div class="form-row">
+                <div class="form-group"><label class="form-label">Dosage</label><input type="text" class="form-input" id="medDosage" placeholder="e.g. 10mg tablet"></div>
+                <div class="form-group"><label class="form-label">Schedule</label><input type="text" class="form-input" id="medSchedule" placeholder="e.g. 8AM daily, PRN"></div>
+            </div>
+            <div class="form-group"><label class="form-label">Prescribing Doctor</label><input type="text" class="form-input" id="medPrescriber" placeholder="Doctor name & phone"></div>
+            <div class="form-group"><label class="form-label">Notes</label><input type="text" class="form-input" id="medNotes" placeholder="Special instructions..."></div>
         </div>
-        <div class="form-group">
-          <label class="form-label">Time</label>
-          <input type="time" class="form-input" value="12:00">
-        </div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Notes (optional)</label>
-        <input type="text" class="form-input" placeholder="Any observations...">
-      </div>
+        <div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryHealth.closeModal('medModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryHealth.saveMed()">Save Medication</button></div>
     </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary" onclick="closeModal('medModal')">Cancel</button>
-      <button class="btn btn-primary" onclick="closeModal('medModal')">Log Dispensing</button>
-    </div>
-  </div>
 </div>
 
-<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
-// ── Tab Navigation ──
-function showTab(id) {
-  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.sb-item').forEach(s => s.classList.remove('active'));
-  const tab = document.getElementById('tab-' + id);
-  if (tab) tab.classList.add('active');
-  event.currentTarget.classList.add('active');
-}
+<!-- Log Visit Modal -->
+<div class="modal-overlay" id="visitModal">
+    <div class="modal">
+        <div class="modal-header"><h3>Log Sick Visit</h3><button class="modal-close" onclick="CampistryHealth.closeModal('visitModal')">×</button></div>
+        <div class="modal-body">
+            <div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="visitCamper"><option value="">Loading campers...</option></select></div>
+            <div class="form-group"><label class="form-label">Chief Complaint</label>
+                <div class="preset-chips" id="complaintChips">
+                    <span class="preset-chip" onclick="this.classList.toggle('active');document.getElementById('visitComplaint').value=this.textContent">Headache</span>
+                    <span class="preset-chip" onclick="this.classList.toggle('active');document.getElementById('visitComplaint').value=this.textContent">Stomachache</span>
+                    <span class="preset-chip" onclick="this.classList.toggle('active');document.getElementById('visitComplaint').value=this.textContent">Fever</span>
+                    <span class="preset-chip" onclick="this.classList.toggle('active');document.getElementById('visitComplaint').value=this.textContent">Nausea</span>
+                    <span class="preset-chip" onclick="this.classList.toggle('active');document.getElementById('visitComplaint').value=this.textContent">Injury</span>
+                    <span class="preset-chip" onclick="this.classList.toggle('active');document.getElementById('visitComplaint').value=this.textContent">Homesick</span>
+                </div>
+                <input type="text" class="form-input" id="visitComplaint" placeholder="Or type custom complaint...">
+            </div>
+            <div class="form-row">
+                <div class="form-group"><label class="form-label">Temperature</label><input type="text" class="form-input" id="visitTemp" placeholder="e.g. 100.2"></div>
+                <div class="form-group"><label class="form-label">Disposition</label><select class="form-select" id="visitDisposition"><option>Returned</option><option>Resting</option><option>Infirmary</option><option>Sent to doctor</option><option>Sent home</option></select></div>
+            </div>
+            <div class="form-group"><label class="form-label">Treatment Given</label><input type="text" class="form-input" id="visitTreatment" placeholder="e.g. Tylenol 325mg, ice pack, rest"></div>
+            <div class="form-group"><label class="form-label"><input type="checkbox" id="visitFollowUp" style="accent-color:var(--health);margin-right:.375rem;">Follow-up required</label></div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryHealth.closeModal('visitModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryHealth.saveVisit()">Save Visit</button></div>
+    </div>
+</div>
 
-// ── Modal ──
-function openModal(id) { document.getElementById(id).classList.add('open'); }
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+<!-- Add Allergy Modal -->
+<div class="modal-overlay" id="allergyModal">
+    <div class="modal">
+        <div class="modal-header"><h3>Add Allergy Record</h3><button class="modal-close" onclick="CampistryHealth.closeModal('allergyModal')">×</button></div>
+        <div class="modal-body">
+            <div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="allergyCamper"><option value="">Loading campers...</option></select></div>
+            <div class="form-group"><label class="form-label">Allergen</label><input type="text" class="form-input" id="allergyAllergen" placeholder="e.g. Peanuts, Bee stings, Dairy"></div>
+            <div class="form-row">
+                <div class="form-group"><label class="form-label">Category</label><select class="form-select" id="allergyCategory"><option>Food</option><option>Environmental</option><option>Medication</option><option>Insect</option><option>Other</option></select></div>
+                <div class="form-group"><label class="form-label">Severity</label><select class="form-select" id="allergySeverity"><option>mild</option><option>moderate</option><option>severe</option></select></div>
+            </div>
+            <div class="form-group"><label class="form-label">Reaction Description</label><input type="text" class="form-input" id="allergyReaction" placeholder="e.g. Hives, anaphylaxis"></div>
+            <div class="form-group"><label class="form-label">Treatment Protocol</label><input type="text" class="form-input" id="allergyProtocol" placeholder="e.g. Administer EpiPen, call 911"></div>
+            <div class="form-group"><label class="form-label">EpiPen Location</label><input type="text" class="form-input" id="allergyEpipen" placeholder="e.g. Health center fridge, Shelf 2"></div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryHealth.closeModal('allergyModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryHealth.saveAllergy()">Save Allergy</button></div>
+    </div>
+</div>
 
-// Close modal on overlay click
-document.querySelectorAll('.modal-overlay').forEach(overlay => {
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) overlay.classList.remove('open');
-  });
-});
-
-// ── Quick "Given" action ──
-function markGiven(btn) {
-  const item = btn.closest('.med-item') || btn.closest('tr');
-  if (!item) return;
-  if (item.classList.contains('med-item')) {
-    item.style.opacity = '0.4';
-    item.style.transform = 'translateX(20px)';
-    item.style.transition = 'all 0.3s ease';
-    setTimeout(() => item.style.display = 'none', 300);
-  } else {
-    const statusCell = item.querySelector('.badge');
-    if (statusCell) {
-      statusCell.className = 'badge badge-green';
-      statusCell.textContent = 'Given';
-    }
-    btn.textContent = 'Done';
-    btn.disabled = true;
-    btn.style.opacity = '0.5';
-  }
-}
-
-// ── Camper Panel Slideout ──
-function openCamperPanel(id) {
-  document.getElementById('camperPanelOverlay').classList.add('open');
-  document.getElementById('camperPanel').classList.add('open');
-}
-function closeCamperPanel() {
-  document.getElementById('camperPanelOverlay').classList.remove('open');
-  document.getElementById('camperPanel').classList.remove('open');
-}
-
-// ── Camper Search Filter ──
-function filterCampers(query) {
-  const q = query.toLowerCase();
-  document.querySelectorAll('.camper-row').forEach(row => {
-    const text = row.textContent.toLowerCase();
-    row.style.display = text.includes(q) ? '' : 'none';
-  });
-}
-
-// ── Division Filter ──
-function filterDivision(btn, div) {
-  btn.closest('.tab-bar').querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  document.querySelectorAll('.camper-row').forEach(row => {
-    if (div === 'all') { row.style.display = ''; return; }
-    row.style.display = row.dataset.div === div ? '' : 'none';
-  });
-}
-
-// ── Form Intake Filters ──
-function filterForms(btn, status) {
-  btn.closest('.tab-bar').querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  document.querySelectorAll('.intake-row').forEach(row => {
-    if (status === 'all') { row.style.display = ''; return; }
-    row.style.display = row.dataset.status === status ? '' : 'none';
-  });
-}
-
-// ── Form Review ──
-function openFormReview(id) {
-  alert('Form review panel would open here for: ' + id + '\n\nThis would show the full submitted form with each section expandable, uploaded documents (physical, insurance card), and Approve / Flag / Request Changes buttons.');
-}
-
-// ── Copy Intake Link ──
-function copyIntakeLink() {
-  const link = 'https://health.campistry.com/forms/camp-ruach-2026';
-  navigator.clipboard?.writeText(link);
-  const btn = event.currentTarget;
-  const orig = btn.innerHTML;
-  btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Copied!';
-  setTimeout(() => btn.innerHTML = orig, 2000);
-}
+<!-- ═══════════ SCRIPTS (same load order as Go/Flow) ═══════════ -->
+<script src="offline_data.js" onerror=""></script>
+<script src="demo_mode.js"></script>
+<script src="config.js"></script>
+<script>
+// Non-blocking Supabase loader (matches Go/Flow pattern)
+(function() {
+    var src = window.location.protocol === 'file:'
+        ? 'supabase-js-local.js'
+        : 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+    var s = document.createElement('script');
+    s.src = src;
+    s.onload = function() {
+        var c = document.createElement('script');
+        c.src = 'supabase_client.js';
+        document.head.appendChild(c);
+    };
+    s.onerror = function() {
+        console.error('[Health] Failed to load Supabase SDK from:', src);
+    };
+    document.head.appendChild(s);
+})();
 </script>
+<script src="campistry_security.js"></script>
+<script src="access_control.js"></script>
+<script src="integration_hooks.js"></script>
+<script src="cloud_sync_helpers.js"></script>
+
+<!-- AUTH CHECK (matches Go/Me pattern) -->
+<script>
+(function() {
+    'use strict';
+    var loadingScreen = document.getElementById('auth-loading-screen');
+    var mainApp = document.getElementById('main-app-container');
+
+    async function checkAuthAndBoot() {
+        try {
+            var attempts = 0;
+            while ((!window.supabase || !window.supabase.auth) && attempts < 50) {
+                await new Promise(function(r) { setTimeout(r, 100); });
+                attempts++;
+            }
+
+            var cachedUserId = localStorage.getItem('campistry_auth_user_id') || localStorage.getItem('campistry_user_id');
+            var cachedCampId = localStorage.getItem('campistry_camp_id');
+            var hasLocalAuth = !!(cachedUserId && cachedCampId);
+
+            if (window.supabase && window.supabase.auth) {
+                var result = await window.supabase.auth.getSession();
+                var session = result && result.data ? result.data.session : null;
+
+                if (!session && !hasLocalAuth) {
+                    window.location.href = 'index.html';
+                    return;
+                }
+            } else if (!hasLocalAuth) {
+                window.location.href = 'index.html';
+                return;
+            }
+
+            // Show app
+            if (mainApp) mainApp.style.display = 'block';
+            if (loadingScreen) loadingScreen.style.display = 'none';
+
+            // Set date subtitle
+            var dashSub = document.getElementById('dashSubtitle');
+            if (dashSub) {
+                var campName = localStorage.getItem('campistry_camp_name') || 'Your Camp';
+                dashSub.textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) + ' — ' + campName;
+            }
+
+            // Wait for cloud data then init Health
+            if (!window.__CAMPISTRY_CLOUD_READY__) {
+                await new Promise(function(resolve) {
+                    var handler = function() {
+                        window.removeEventListener('campistry-cloud-hydrated', handler);
+                        clearTimeout(timeout);
+                        resolve();
+                    };
+                    window.addEventListener('campistry-cloud-hydrated', handler);
+                    var timeout = setTimeout(function() {
+                        window.removeEventListener('campistry-cloud-hydrated', handler);
+                        resolve();
+                    }, 3000);
+                });
+            }
+
+            // Re-init Health with fresh cloud data
+            if (window.CampistryHealth) {
+                window.CampistryHealth.loadData();
+                window.CampistryHealth.showTab('dashboard');
+            }
+
+        } catch (e) {
+            console.error('[Health] Auth error:', e);
+            if (mainApp) mainApp.style.display = 'block';
+            if (loadingScreen) loadingScreen.style.display = 'none';
+        }
+    }
+
+    checkAuthAndBoot();
+})();
+</script>
+
+<!-- Health Engine (must load after integration_hooks) -->
+<script src="campistry_health.js"></script>
+
+<script>
+  window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+</script>
+<script defer src="/_vercel/insights/script.js"></script>
 </body>
 </html>
