@@ -981,6 +981,7 @@
             const timeMin = parseTime(shift.departureTime || (isArrival ? '08:00' : '16:00'));
 
             for (const r of routes) {
+                if (!r.stops.length) continue;
                 const mx = r._osrmMatrix;
 
                 function driveMin(stopA, stopB) {
@@ -1287,7 +1288,7 @@
             if (regionBuses.length < 2) return;
 
             let rebalanced = 0;
-            for (let pass = 0; pass < 10; pass++) {
+            for (let pass = 0; pass < 30; pass++) {
                 const active = regionBuses.filter(r => r.camperCount > 0);
                 if (active.length < 2) break;
                 const totalKidsR = active.reduce((s, r) => s + r.camperCount, 0);
@@ -1296,17 +1297,24 @@
                 const minR = Math.min(...active.map(r => r.camperCount));
                 const imbR = maxR > 0 ? ((maxR - minR) / maxR * 100) : 0;
 
-                if (imbR <= 25) break; // balanced enough within this region
+                // Stop if balanced AND no bus over capacity
+                const anyOverCap = active.some(r => r.camperCount > r._cap);
+                if (imbR <= 25 && !anyOverCap) break;
 
                 // Find the most overloaded bus in this region
+                // Trigger on: over capacity OR significantly above average
                 let overBus = null, overMax = 0;
                 for (const r of regionBuses) {
                     if (r.stops.length <= 1) continue;
-                    if (r.camperCount > avgR * 1.15 && r.camperCount > overMax) {
+                    const isOverCap = r.camperCount > r._cap;
+                    const isOverAvg = r.camperCount > avgR * 1.15;
+                    if ((isOverCap || isOverAvg) && r.camperCount > overMax) {
                         overMax = r.camperCount; overBus = r;
                     }
                 }
                 if (!overBus) break;
+
+                const overBusOverCap = overBus.camperCount > overBus._cap;
 
                 // Find the stop farthest from this bus's centroid
                 const cLat = overBus.stops.reduce((s, st) => s + st.lat, 0) / overBus.stops.length;
@@ -1320,11 +1328,12 @@
                 const stopToMove = overBus.stops[worstIdx];
 
                 // Find nearest underloaded bus IN THE SAME REGION
+                // If donor is over capacity, accept any bus under capacity (even above avg)
                 let bestBus = null, bestDist = Infinity;
                 for (const underBus of regionBuses) {
                     if (underBus === overBus) continue;
                     if (underBus.camperCount + stopToMove.campers.length > underBus._cap) continue;
-                    if (underBus.camperCount >= avgR) continue;
+                    if (!overBusOverCap && underBus.camperCount >= avgR) continue; // normal balance check
                     const uLat = underBus.stops.length ? underBus.stops.reduce((s, st) => s + st.lat, 0) / underBus.stops.length : campLat;
                     const uLng = underBus.stops.length ? underBus.stops.reduce((s, st) => s + st.lng, 0) / underBus.stops.length : campLng;
                     const d = haversineMi(stopToMove.lat, stopToMove.lng, uLat, uLng);
@@ -1696,7 +1705,11 @@
             const farthest = r.stops.length ? haversineMi(campLat, campLng, r.stops[r.stops.length - 1].lat, r.stops[r.stops.length - 1].lng).toFixed(1) : '?';
             console.log('[Go]   ' + r.busName + ': ' + r.camperCount + ' kids, ' + r.stops.length + ' stops, farthest: ' + farthest + ' mi');
         });
-        if (parseInt(imbalance) > 40) console.warn('[Go]   ⚠ High bus imbalance (' + imbalance + '%) — consider rebalancing');
+        // Flag buses over capacity (real problem) — skip global imbalance warning
+        // since different-sized ZIP regions naturally produce different bus loads
+        allRoutes.filter(r => r.camperCount > r._cap).forEach(r => {
+            console.warn('[Go]   ⚠ ' + r.busName + ': ' + r.camperCount + ' kids exceeds capacity ' + r._cap);
+        });
         console.log('[Go] ═══════════════════════════════');
 
         return allRoutes;
