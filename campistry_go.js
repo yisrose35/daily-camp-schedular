@@ -33,8 +33,8 @@
 //          Inwood (dense grid) → tight clusters; Hewlett (suburban) → wider
 //  FIX 12: Post-routing same-street merge — consecutive stops on the same
 //          street within 300ft get consolidated into one stop
-//  FIX 13: VROOM capacity set to 999 (assign ALL stops) — real capacity
-//          enforced by downstream rebalancer. Eliminates "2 unassigned" bug.
+//  FIX 13: VROOM capacity = balanced share per bus (regionKids/buses × 1.3,
+//          capped by real capacity). Forces distribution, no 87-kid buses.
 // =============================================================================
 (function () {
     'use strict';
@@ -1210,12 +1210,18 @@
             const regVehicles = regionVehiclesV[regId] || [];
             if (!regVehicles.length || !items.length) return [];
             const regName = _detectedRegions?.find(r => r.id === regId)?.name || regId;
+            const totalRegionKids = items.reduce((s, it) => s + it.stop.campers.length, 0);
             const jobs = items.map((it, i) => ({
                 id: i + 1, location: [it.stop.lng, it.stop.lat],
                 service: serviceTime, amount: [it.stop.campers.length], description: it.stop.address
             }));
+            // Capacity: balanced share per bus with 30% headroom, but never
+            // exceed real bus capacity. This forces VROOM to distribute stops
+            // across all buses in the region instead of dumping everything on one.
+            const balancedCap = Math.ceil(totalRegionKids / regVehicles.length * 1.3);
             const vroomVehicles = regVehicles.map((v, vi) => {
-                const veh = { id: vi + 1, profile: 'driving-car', capacity: [999], description: v.name };
+                const cap = Math.min(balancedCap, v.capacity);
+                const veh = { id: vi + 1, profile: 'driving-car', capacity: [cap], description: v.name };
                 if (isArrival) { veh.end = [campLng, campLat]; }
                 else { veh.start = [campLng, campLat]; if (hasShifts) veh.end = [campLng, campLat]; }
                 return veh;
@@ -1247,10 +1253,16 @@
                     }
                 });
                 if (result.unassigned?.length) {
+                    console.log('[Go]   ' + regName + ': ' + result.unassigned.length + ' unassigned — force-inserting');
                     result.unassigned.forEach(ua => {
                         const item = items[ua.id - 1]; if (!item) return;
+                        // First try: nearest bus with capacity
                         let bestRoute = null, bestDist = Infinity;
                         routes.forEach(r => { if (r.camperCount + item.stop.campers.length > r._cap) return; const last = r.stops[r.stops.length - 1]; if (last?.lat) { const d = haversineMi(last.lat, last.lng, item.stop.lat, item.stop.lng); if (d < bestDist) { bestDist = d; bestRoute = r; } } });
+                        // Fallback: nearest bus regardless of capacity — never drop kids
+                        if (!bestRoute) {
+                            routes.forEach(r => { const last = r.stops.length ? r.stops[r.stops.length - 1] : null; if (last?.lat) { const d = haversineMi(last.lat, last.lng, item.stop.lat, item.stop.lng); if (d < bestDist) { bestDist = d; bestRoute = r; } } });
+                        }
                         if (bestRoute) { const newStop = { stopNum: 0, campers: item.stop.campers, address: item.stop.address, lat: item.stop.lat, lng: item.stop.lng }; directionalInsert(bestRoute.stops, newStop, campLat, campLng); bestRoute.camperCount += item.stop.campers.length; }
                     });
                 }
@@ -1382,7 +1394,7 @@
         showProgress('Optimizing routes...', 75);
 
         const mbToken = D.setup.mapboxToken || '';
-        const DIRECTION_PENALTY = 0.4; // backward travel costs 1.4× in the optimizer
+        const DIRECTION_PENALTY = 1.5; // backward travel costs 2.5× in the optimizer
 
         // ── Mapbox Optimization API (primary, ≤ 12 coordinates) ──
         async function mapboxOptimize(stops, campLat, campLng) {
@@ -1776,7 +1788,7 @@
 
             const startsAtCamp = !isArrival;
             const endsAtCamp = isArrival || hasShifts;
-            const DPEN = 0.4;
+            const DPEN = 1.5;
             function dist(i, j) {
                 if (matrix && matrix[i]?.[j] != null && matrix[i][j] >= 0) return matrix[i][j];
                 const a = i === 0 ? { lat: campLat, lng: campLng } : stops[i - 1];
