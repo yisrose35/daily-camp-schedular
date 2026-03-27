@@ -1044,14 +1044,181 @@
     function createCornerStops(campers) {
         const walkFt = D.setup.maxWalkDistance || 500;
         const walkMi = walkFt * 0.000189394;
-        const gridLat = walkMi / 69.17;
-        const gridLng = walkMi / 53;
-        const groups = {};
-        campers.forEach(c => { const snapLat = Math.round(c.lat / gridLat) * gridLat; const snapLng = Math.round(c.lng / gridLng) * gridLng; const key = snapLat.toFixed(6) + ',' + snapLng.toFixed(6); if (!groups[key]) groups[key] = { lat: snapLat, lng: snapLng, campers: [], streets: {} }; groups[key].campers.push(c); const street = extractStreetName(c.address); if (street) groups[key].streets[street] = (groups[key].streets[street] || 0) + 1; });
-        return Object.values(groups).map(g => { const sn = Object.keys(g.streets).sort((a, b) => g.streets[b] - g.streets[a]); let cornerName; if (sn.length >= 2) cornerName = 'Corner of ' + sn[0] + ' & ' + sn[1]; else if (sn.length === 1) cornerName = sn[0] + ' (corner stop)'; else cornerName = 'Corner stop'; return { lat: g.lat, lng: g.lng, address: cornerName, campers: g.campers.map(c => ({ name: c.name, division: c.division, bunk: c.bunk })) }; });
+
+        // ── Step 1: Parse every camper's street name and house number ──
+        const camperStreets = campers.map(c => {
+            const parsed = parseAddress(c.address);
+            return { ...c, streetName: parsed.street, houseNum: parsed.num, sideStreet: '' };
+        });
+
+        // ── Step 2: Identify CORRIDOR streets ──
+        // A corridor street is one where many kids live. The bus drives along corridors.
+        // Side streets are streets with fewer kids — those kids walk to the corridor.
+        const streetCounts = {};
+        camperStreets.forEach(c => {
+            if (c.streetName) streetCounts[c.streetName] = (streetCounts[c.streetName] || 0) + 1;
+        });
+
+        // Sort streets by kid count descending
+        const sortedStreets = Object.entries(streetCounts).sort((a, b) => b[1] - a[1]);
+        console.log('[Go] Street frequency:', sortedStreets.map(([s, n]) => s + ':' + n).join(', '));
+
+        // Corridors = streets with 3+ kids (or top streets if none have 3+)
+        const corridorThreshold = Math.max(2, Math.floor(campers.length / 20));
+        const corridorSet = new Set();
+        sortedStreets.forEach(([street, count]) => {
+            if (count >= corridorThreshold) corridorSet.add(street);
+        });
+        // If no corridors found, use top 3 streets
+        if (corridorSet.size === 0) {
+            sortedStreets.slice(0, 3).forEach(([street]) => corridorSet.add(street));
+        }
+
+        console.log('[Go] Corridor streets (' + corridorSet.size + '):', [...corridorSet].join(', '));
+
+        // ── Step 3: Build corridor intersections ──
+        // For each kid on a corridor, identify their cross street
+        // For each kid on a side street, find the nearest corridor kid
+        // Group into intersections: "Corridor St & Cross St"
+
+        const intersections = {}; // key → { lat, lng, campers[], corridorSt, crossSt }
+
+        // First pass: place corridor kids at their intersections
+        camperStreets.forEach(c => {
+            if (!corridorSet.has(c.streetName)) return;
+
+            // Find the nearest other camper on a DIFFERENT street to identify the cross street
+            let nearestCross = '', nearestDist = Infinity;
+            camperStreets.forEach(other => {
+                if (other.name === c.name) return;
+                if (other.streetName === c.streetName) return;
+                const d = haversineMi(c.lat, c.lng, other.lat, other.lng);
+                if (d < nearestDist && d < walkMi * 2) {
+                    nearestDist = d;
+                    nearestCross = other.streetName;
+                }
+            });
+
+            // Round position along the corridor to group nearby houses
+            // Use a ~300ft grid along the corridor direction
+            const gridSize = 0.0004; // ~90ft precision for grouping
+            const snapLat = Math.round(c.lat / gridSize) * gridSize;
+            const snapLng = Math.round(c.lng / gridSize) * gridSize;
+            const key = c.streetName + '|' + snapLat.toFixed(5) + ',' + snapLng.toFixed(5);
+
+            if (!intersections[key]) {
+                intersections[key] = {
+                    lat: snapLat, lng: snapLng,
+                    campers: [], corridorSt: c.streetName,
+                    crossStreets: {}
+                };
+            }
+            intersections[key].campers.push(c);
+            if (nearestCross) {
+                intersections[key].crossStreets[nearestCross] = (intersections[key].crossStreets[nearestCross] || 0) + 1;
+            }
+        });
+
+        // Second pass: assign side-street kids to nearest corridor intersection
+        camperStreets.forEach(c => {
+            if (corridorSet.has(c.streetName)) return; // already placed
+
+            // Find nearest existing intersection within walking distance
+            let bestKey = null, bestDist = Infinity;
+            Object.entries(intersections).forEach(([key, inter]) => {
+                const d = haversineMi(c.lat, c.lng, inter.lat, inter.lng);
+                if (d < bestDist) { bestDist = d; bestKey = key; }
+            });
+
+            // If within walking distance, add to that intersection
+            if (bestKey && bestDist <= walkMi) {
+                intersections[bestKey].campers.push(c);
+                intersections[bestKey].crossStreets[c.streetName] = (intersections[bestKey].crossStreets[c.streetName] || 0) + 1;
+            } else {
+                // Too far from any corridor — create a standalone stop
+                const key = 'side|' + c.lat.toFixed(5) + ',' + c.lng.toFixed(5);
+                if (!intersections[key]) {
+                    intersections[key] = {
+                        lat: c.lat, lng: c.lng,
+                        campers: [], corridorSt: c.streetName,
+                        crossStreets: {}
+                    };
+                }
+                intersections[key].campers.push(c);
+            }
+        });
+
+        // ── Step 4: Merge nearby intersections on the same corridor ──
+        // If two intersections on the same corridor are within walkMi, merge them
+        const interArray = Object.values(intersections);
+        let merged = true;
+        while (merged) {
+            merged = false;
+            for (let i = 0; i < interArray.length; i++) {
+                for (let j = i + 1; j < interArray.length; j++) {
+                    if (interArray[i].corridorSt !== interArray[j].corridorSt) continue;
+                    const d = haversineMi(interArray[i].lat, interArray[i].lng, interArray[j].lat, interArray[j].lng);
+                    if (d <= walkMi * 0.7) {
+                        // Merge j into i
+                        interArray[i].campers.push(...interArray[j].campers);
+                        Object.entries(interArray[j].crossStreets).forEach(([st, cnt]) => {
+                            interArray[i].crossStreets[st] = (interArray[i].crossStreets[st] || 0) + cnt;
+                        });
+                        // Recalculate centroid
+                        const all = interArray[i].campers;
+                        interArray[i].lat = all.reduce((s, c) => s + c.lat, 0) / all.length;
+                        interArray[i].lng = all.reduce((s, c) => s + c.lng, 0) / all.length;
+                        interArray.splice(j, 1);
+                        merged = true;
+                        break;
+                    }
+                }
+                if (merged) break;
+            }
+        }
+
+        // ── Step 5: Name intersections and build stops ──
+        const stops = interArray.filter(inter => inter.campers.length > 0).map(inter => {
+            // Best cross street = most frequent non-corridor street at this intersection
+            const crossStreets = Object.entries(inter.crossStreets)
+                .filter(([st]) => st !== inter.corridorSt)
+                .sort((a, b) => b[1] - a[1]);
+
+            let stopName;
+            if (crossStreets.length > 0) {
+                stopName = 'Corner of ' + inter.corridorSt + ' & ' + crossStreets[0][0];
+            } else {
+                // No cross street found — use corridor + approximate location
+                const otherStreets = Object.keys(inter.crossStreets).filter(s => s !== inter.corridorSt);
+                if (otherStreets.length) {
+                    stopName = 'Corner of ' + inter.corridorSt + ' & ' + otherStreets[0];
+                } else {
+                    stopName = inter.corridorSt + ' (stop)';
+                }
+            }
+
+            return {
+                lat: inter.lat, lng: inter.lng,
+                address: stopName,
+                campers: inter.campers.map(c => ({ name: c.name, division: c.division, bunk: c.bunk })),
+                _corridor: inter.corridorSt
+            };
+        });
+
+        console.log('[Go] Smart corners: ' + stops.length + ' stops from ' + campers.length + ' campers');
+        stops.forEach(s => console.log('[Go]   ' + s.address + ' (' + s.campers.length + ' kids)'));
+
+        return stops;
     }
 
-    function extractStreetName(address) { if (!address) return ''; const firstPart = address.split(',')[0].trim(); return firstPart.replace(/^\d+\s*[-/]?\s*\d*\s+/, '').trim(); }
+    /** Parse "123 Main St, City, State, ZIP" → { num: 123, street: "Main St" } */
+    function parseAddress(address) {
+        if (!address) return { num: 0, street: '' };
+        const firstPart = address.split(',')[0].trim();
+        const numMatch = firstPart.match(/^(\d+)\s+(.+)$/);
+        if (numMatch) return { num: parseInt(numMatch[1]), street: numMatch[2].trim() };
+        return { num: 0, street: firstPart };
+    }
 
     function showProgress(label, pct) { const c = document.getElementById('routeProgressCard'); c.style.display = ''; document.getElementById('routeProgressLabel').textContent = label; document.getElementById('routeProgressPct').textContent = Math.round(pct) + '%'; document.getElementById('routeProgressBar').style.width = pct + '%'; }
     function hideProgress() { document.getElementById('routeProgressCard').style.display = 'none'; }
