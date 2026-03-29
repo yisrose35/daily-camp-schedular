@@ -853,18 +853,19 @@
     // =========================================================================
 
     function injectCSP() {
-    if (document.querySelector('meta[http-equiv="Content-Security-Policy"]')) return;
-    
-    const csp = [
-        "default-src 'self'",
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://geocoding.geo.census.gov",
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net",
-        "font-src 'self' https://fonts.gstatic.com",
-        "img-src 'self' data: blob: https:",
-        "connect-src 'self' https://bzqmhcumuarrbueqttfh.supabase.co wss://bzqmhcumuarrbueqttfh.supabase.co https://fonts.googleapis.com https://fonts.gstatic.com https://cdn.jsdelivr.net https://api.openrouteservice.org https://*.tile.openstreetmap.org https://server.arcgisonline.com https://geocoding.geo.census.gov https://graphhopper.com https://router.project-osrm.org https://api.mapbox.com https://overpass-api.de",
-        "base-uri 'self'",
-        "form-action 'self'"
-    ].join('; ');
+        // Only inject if not already present
+        if (document.querySelector('meta[http-equiv="Content-Security-Policy"]')) return;
+        
+        const csp = [
+            "default-src 'self'",
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net",
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+            "font-src 'self' https://fonts.gstatic.com",
+            "img-src 'self' data: blob: https:",
+            "connect-src 'self' https://bzqmhcumuarrbueqttfh.supabase.co wss://bzqmhcumuarrbueqttfh.supabase.co https://fonts.googleapis.com https://fonts.gstatic.com https://cdn.jsdelivr.net https://api.open-meteo.com",
+            "base-uri 'self'",
+            "form-action 'self'"
+        ].join('; ');
         
         const meta = document.createElement('meta');
         meta.httpEquiv = 'Content-Security-Policy';
