@@ -691,7 +691,7 @@
             const hasA = a?.street;
             const full = hasA ? [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ') : '';
             const badge = hasA ? (a.geocoded ? (a._zipMismatch ? '<span class="badge badge-warning" title="ZIP mismatch">⚠ Check</span>' : '<span class="badge badge-success">Geocoded</span>') : '<span class="badge badge-warning">Not geocoded</span>') : '<span class="badge badge-danger">Missing</span>';
-            return '<tr><td style="font-size:.75rem;color:var(--text-muted);font-family:monospace;">' + (c.camperId ? '#' + String(c.camperId).padStart(4, '0') : '') + '</td><td style="font-weight:600">' + esc(n) + '</td><td>' + (esc(c.division) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (full ? esc(full) : '<span style="color:var(--text-muted)">No address</span>') + '</td><td>' + badge + '</td><td><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editAddress(\'' + esc(n.replace(/'/g, "\\'")) + '\')">' + (hasA ? 'Edit' : 'Add') + '</button></td></tr>';
+            return '<tr><td style="font-size:.75rem;color:var(--text-muted);font-family:monospace;">' + (c.camperId ? '#' + String(c.camperId).padStart(4, '0') : '') + '</td><td style="font-weight:600">' + esc(n) + '</td><td>' + (esc(c.division) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (full ? esc(full) : '<span style="color:var(--text-muted)">No address</span>') + '</td><td>' + badge + '</td><td><div style="display:flex;gap:4px;"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editAddress(\'' + esc(n.replace(/'/g, "\\'")) + '\')">' + (hasA ? 'Edit' : 'Add') + '</button>' + (a?.geocoded ? '<button class="btn btn-ghost btn-sm" onclick="CampistryGo.locateCamper(\'' + esc(n.replace(/'/g, "\\'")) + '\')" title="Show on map" style="font-size:.7rem;">📍</button>' : '') + '</div></td></tr>';
         }).join('');
     }
     function updateAddrProgress(n, t) { const p = t > 0 ? Math.round(n / t * 100) : 0; document.getElementById('addressProgressBar').style.width = p + '%'; document.getElementById('addressProgressText').textContent = n + ' of ' + t + ' (' + p + '%)'; }
@@ -1113,56 +1113,203 @@
 
         console.log('[Go] VROOM Engine: ' + stops.length + ' stops, ' + numBuses + ' buses, mode=' + mode);
 
+
         // ══════════════════════════════════════════════════════════════
-        // UNIFIED VROOM SOLVER
+        // VROOM SOLVER WITH SKILLS-BASED REGION LOCKING
         //
-        // Based on the "Cluster-first, Route-second" approach from VRP
-        // literature (Fisher & Jaikumar, BiRD/MIT, etc.):
+        // Uses VROOM's native "skills" feature to keep buses in their
+        // geographic zones while still getting optimal stop ordering.
         //
-        // 1. Stop creation already happened per-region (density-adaptive)
-        // 2. Send ALL stops + ALL buses to ONE VROOM call
-        //    - VROOM handles both assignment (which bus) AND ordering
-        //    - Real bus capacity enforced natively by VROOM
-        //    - Geographically coherent routes emerge naturally because
-        //      VROOM minimizes total drive time
-        // 3. Orient each route (reverse if pointing wrong direction)
-        // 4. Post-routing same-street merge
-        //
-        // This replaces the old region-split → per-region VROOM → rebalance
-        // → local TSP → hard sort pipeline that fought itself at every step.
+        // Pipeline:
+        //   1. Map each stop to its ZIP region
+        //   2. Merge smallest regions until every group has enough
+        //      bus seats for its kids
+        //   3. Allocate buses to groups (capacity-aware)
+        //   4. Tag jobs with skills=[groupId], vehicles with skills=[groupId]
+        //   5. ONE VROOM call — handles assignment AND ordering
+        //   6. Orient + same-street merge + capacity enforcement
         // ══════════════════════════════════════════════════════════════
 
-        showProgress('Optimizing routes (VROOM)...', 30);
+        showProgress('Building region groups...', 25);
 
-        // Build VROOM jobs from ALL stops
-        const vroomJobs = stops.map((stop, i) => ({
-            id: i + 1,
-            location: [stop.lng, stop.lat],
-            service: serviceTime,
-            amount: [stop.campers.length],
-            description: stop.address
-        }));
+        // ── Step 1: Map stops to regions ──
+        const stopRegions = []; // parallel array: stopRegions[i] = regionId for stops[i]
+        if (_detectedRegions?.length) {
+            stops.forEach(stop => {
+                let bestReg = _detectedRegions[0].id;
+                _detectedRegions.forEach(reg => {
+                    if (stop.campers.some(c => reg.camperNames.includes(c.name))) bestReg = reg.id;
+                });
+                stopRegions.push(bestReg);
+            });
+        } else {
+            stops.forEach(() => stopRegions.push('all'));
+        }
 
-        // Build VROOM vehicles from ALL buses with REAL capacity
-        const vroomVehicles = vehicles.map((v, vi) => {
-            const veh = {
-                id: vi + 1,
-                profile: 'driving-car',
-                capacity: [v.capacity],
-                description: v.name
-            };
-            // Set start/end based on mode
-            if (isArrival) {
-                veh.end = [campLng, campLat]; // bus ends at camp
-            } else {
-                veh.start = [campLng, campLat]; // bus starts at camp
-                if (hasShifts) veh.end = [campLng, campLat]; // returns for next shift
-            }
-            return veh;
+        // ── Step 2: Build groups & merge until every group has enough bus seats ──
+        // Count kids per region
+        const regionKids = {};
+        stops.forEach((stop, i) => {
+            const regId = stopRegions[i];
+            regionKids[regId] = (regionKids[regId] || 0) + stop.campers.length;
         });
 
-        console.log('[Go] VROOM: ' + vroomJobs.length + ' jobs, ' + vroomVehicles.length + ' vehicles');
+        // Sort regions by size descending
+        let groups = Object.entries(regionKids)
+            .filter(([_, kids]) => kids > 0)
+            .sort((a, b) => b[1] - a[1])
+            .map(([regId, kids]) => ({
+                id: regId,
+                kids,
+                name: _detectedRegions?.find(r => r.id === regId)?.name || regId,
+                centroidLat: _detectedRegions?.find(r => r.id === regId)?.centroidLat || campLat,
+                centroidLng: _detectedRegions?.find(r => r.id === regId)?.centroidLng || campLng,
+                regionIds: [regId] // track merged regions
+            }));
 
+        // Total capacity
+        const totalCap = vehicles.reduce((s, v) => s + v.capacity, 0);
+        const perBusCap = vehicles.length ? Math.floor(totalCap / vehicles.length) : 47;
+
+        // Merge: while more groups than buses can serve, merge smallest into nearest
+        while (groups.length > vehicles.length) {
+            groups.sort((a, b) => a.kids - b.kids);
+            const smallest = groups[0];
+            let nearestIdx = 1, nearestDist = Infinity;
+            for (let i = 1; i < groups.length; i++) {
+                const d = haversineMi(smallest.centroidLat, smallest.centroidLng, groups[i].centroidLat, groups[i].centroidLng);
+                if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
+            }
+            const target = groups[nearestIdx];
+            console.log('[Go]   Merging ' + smallest.name + ' (' + smallest.kids + ') → ' + target.name + ' (' + target.kids + ')');
+            target.kids += smallest.kids;
+            target.regionIds.push(...smallest.regionIds);
+            target.name = target.name.split(' + ')[0] + ' + ' + smallest.name.split(' (')[0];
+            // Recalculate centroid
+            const allStopsInGroup = [];
+            stops.forEach((s, i) => { if (target.regionIds.includes(stopRegions[i]) || smallest.regionIds.includes(stopRegions[i])) allStopsInGroup.push(s); });
+            if (allStopsInGroup.length) {
+                target.centroidLat = allStopsInGroup.reduce((s, st) => s + st.lat, 0) / allStopsInGroup.length;
+                target.centroidLng = allStopsInGroup.reduce((s, st) => s + st.lng, 0) / allStopsInGroup.length;
+            }
+            // Update stopRegions for merged region
+            stops.forEach((_, i) => { if (smallest.regionIds.includes(stopRegions[i])) stopRegions[i] = target.id; });
+            groups.splice(groups.indexOf(smallest), 1);
+        }
+
+        // Also merge if a group needs more buses than available
+        // (e.g., 56 kids in one group but only 47-seat buses → needs 2 buses)
+        let needsMerge = true;
+        while (needsMerge) {
+            needsMerge = false;
+            const totalBusesNeeded = groups.reduce((s, g) => s + Math.ceil(g.kids / perBusCap), 0);
+            if (totalBusesNeeded > vehicles.length && groups.length > 1) {
+                groups.sort((a, b) => a.kids - b.kids);
+                const smallest = groups[0];
+                let nearestIdx = 1, nearestDist = Infinity;
+                for (let i = 1; i < groups.length; i++) {
+                    const d = haversineMi(smallest.centroidLat, smallest.centroidLng, groups[i].centroidLat, groups[i].centroidLng);
+                    if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
+                }
+                const target = groups[nearestIdx];
+                console.log('[Go]   Capacity merge: ' + smallest.name + ' → ' + target.name);
+                target.kids += smallest.kids;
+                target.regionIds.push(...smallest.regionIds);
+                stops.forEach((_, i) => { if (smallest.regionIds.includes(stopRegions[i])) stopRegions[i] = target.id; });
+                groups.splice(groups.indexOf(smallest), 1);
+                needsMerge = true;
+            }
+        }
+
+        // ── Step 3: Allocate buses to groups (capacity-aware) ──
+        groups.sort((a, b) => b.kids - a.kids);
+        const groupBuses = {}; // groupId → [vehicle indices]
+        groups.forEach(g => { groupBuses[g.id] = []; });
+
+        // Phase 1: one bus per group
+        let busPool = vehicles.map((v, i) => i);
+        groups.forEach(g => {
+            if (busPool.length) { groupBuses[g.id].push(busPool.shift()); }
+        });
+
+        // Phase 2: give extra buses to groups that lack capacity
+        let changed = true;
+        while (changed && busPool.length) {
+            changed = false;
+            let worstGroup = null, worstDeficit = 0;
+            groups.forEach(g => {
+                const cap = groupBuses[g.id].reduce((s, vi) => s + vehicles[vi].capacity, 0);
+                const deficit = g.kids - cap;
+                if (deficit > worstDeficit) { worstDeficit = deficit; worstGroup = g; }
+            });
+            if (worstGroup && worstDeficit > 0) {
+                groupBuses[worstGroup.id].push(busPool.shift());
+                changed = true;
+            }
+        }
+
+        // Phase 3: remaining buses to highest demand/capacity ratio
+        while (busPool.length) {
+            let worstGroup = groups[0], worstRatio = 0;
+            groups.forEach(g => {
+                const cap = groupBuses[g.id].reduce((s, vi) => s + vehicles[vi].capacity, 0);
+                const ratio = g.kids / Math.max(1, cap);
+                if (ratio > worstRatio) { worstRatio = ratio; worstGroup = g; }
+            });
+            groupBuses[worstGroup.id].push(busPool.shift());
+        }
+
+        // Log allocation
+        groups.forEach(g => {
+            const busIndices = groupBuses[g.id];
+            const cap = busIndices.reduce((s, vi) => s + vehicles[vi].capacity, 0);
+            const busNames = busIndices.map(vi => vehicles[vi].name).join(', ');
+            console.log('[Go]   ' + g.name + ': ' + g.kids + ' kids → ' + busIndices.length + ' bus(es) [' + busNames + '] (' + cap + ' seats)' + (g.kids > cap ? ' ⚠ OVER' : ''));
+        });
+
+        // ── Step 4: Build VROOM request with skills ──
+        showProgress('Optimizing routes (VROOM)...', 35);
+
+        // Map group IDs to skill numbers (VROOM uses integer skills)
+        const groupSkillMap = {};
+        groups.forEach((g, i) => { groupSkillMap[g.id] = i + 1; });
+
+        const vroomJobs = stops.map((stop, i) => {
+            const regId = stopRegions[i];
+            // Find which group this region belongs to
+            const group = groups.find(g => g.regionIds.includes(regId));
+            const skillId = group ? groupSkillMap[group.id] : 1;
+            return {
+                id: i + 1,
+                location: [stop.lng, stop.lat],
+                service: serviceTime,
+                amount: [stop.campers.length],
+                skills: [skillId],
+                description: stop.address
+            };
+        });
+
+        const vroomVehicles = [];
+        groups.forEach(g => {
+            const skillId = groupSkillMap[g.id];
+            groupBuses[g.id].forEach(vi => {
+                const v = vehicles[vi];
+                const veh = {
+                    id: vi + 1,
+                    profile: 'driving-car',
+                    capacity: [v.capacity],
+                    skills: [skillId],
+                    description: v.name
+                };
+                if (isArrival) { veh.end = [campLng, campLat]; }
+                else { veh.start = [campLng, campLat]; if (hasShifts) veh.end = [campLng, campLat]; }
+                vroomVehicles.push(veh);
+            });
+        });
+
+        console.log('[Go] VROOM: ' + vroomJobs.length + ' jobs, ' + vroomVehicles.length + ' vehicles, ' + groups.length + ' skill groups');
+
+        // ── Step 5: Send to VROOM ──
         let allRoutes = [];
         let vroomSuccess = false;
 
@@ -1178,7 +1325,6 @@
                 console.log('[Go] VROOM: ' + (result.routes?.length || 0) + ' routes, ' +
                     (result.unassigned?.length || 0) + ' unassigned');
 
-                // Parse VROOM routes
                 (result.routes || []).forEach(vroomRoute => {
                     const vehicleIdx = vroomRoute.vehicle - 1;
                     const v = vehicles[vehicleIdx]; if (!v) return;
@@ -1190,8 +1336,7 @@
                             stopNum: routeStops.length + 1,
                             campers: stop.campers,
                             address: stop.address,
-                            lat: stop.lat,
-                            lng: stop.lng
+                            lat: stop.lat, lng: stop.lng
                         });
                     });
                     if (routeStops.length > 0) {
@@ -1208,34 +1353,25 @@
 
                 // Handle unassigned — force-insert into nearest bus (never drop kids)
                 if (result.unassigned?.length) {
-                    console.log('[Go] VROOM: ' + result.unassigned.length + ' unassigned — force-inserting');
+                    console.warn('[Go] VROOM: ' + result.unassigned.length + ' unassigned — force-inserting');
                     result.unassigned.forEach(ua => {
                         const stop = stops[ua.id - 1]; if (!stop) return;
                         let bestRoute = null, bestDist = Infinity;
-                        // First: nearest bus with capacity
+                        // Prefer bus with capacity
                         allRoutes.forEach(r => {
                             if (r.camperCount + stop.campers.length > r._cap) return;
                             const last = r.stops[r.stops.length - 1];
-                            if (last?.lat) {
-                                const d = haversineMi(last.lat, last.lng, stop.lat, stop.lng);
-                                if (d < bestDist) { bestDist = d; bestRoute = r; }
-                            }
+                            if (last?.lat) { const d = haversineMi(last.lat, last.lng, stop.lat, stop.lng); if (d < bestDist) { bestDist = d; bestRoute = r; } }
                         });
-                        // Fallback: nearest bus regardless of capacity
+                        // Fallback: nearest regardless of capacity
                         if (!bestRoute) {
                             allRoutes.forEach(r => {
                                 const last = r.stops.length ? r.stops[r.stops.length - 1] : null;
-                                if (last?.lat) {
-                                    const d = haversineMi(last.lat, last.lng, stop.lat, stop.lng);
-                                    if (d < bestDist) { bestDist = d; bestRoute = r; }
-                                }
+                                if (last?.lat) { const d = haversineMi(last.lat, last.lng, stop.lat, stop.lng); if (d < bestDist) { bestDist = d; bestRoute = r; } }
                             });
                         }
                         if (bestRoute) {
-                            directionalInsert(bestRoute.stops, {
-                                stopNum: 0, campers: stop.campers,
-                                address: stop.address, lat: stop.lat, lng: stop.lng
-                            }, campLat, campLng);
+                            directionalInsert(bestRoute.stops, { stopNum: 0, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng }, campLat, campLng);
                             bestRoute.camperCount += stop.campers.length;
                         }
                     });
@@ -1249,13 +1385,13 @@
             console.error('[Go] VROOM failed:', e.message);
         }
 
-        // Fallback: geographic routing if VROOM fails
+        // Fallback
         if (!vroomSuccess || allRoutes.length === 0) {
             console.warn('[Go] Using fallback geographic routing');
             allRoutes = fallbackRouting(stops, vehicles, campLat, campLng);
         }
 
-        // Ensure all buses have route entries (even if empty)
+        // Ensure all buses have route entries
         vehicles.forEach(v => {
             if (!allRoutes.find(r => r.busId === v.busId)) {
                 allRoutes.push({
@@ -1268,14 +1404,8 @@
 
         // ══════════════════════════════════════════════════════════════
         // ORIENT ROUTES
-        //
-        // VROOM found the optimal ordering. Just check direction:
-        // Arrival: first stop should be farther from camp than last
-        // Dismissal: first stop should be closer to camp than last
-        // If wrong, reverse the whole route.
         // ══════════════════════════════════════════════════════════════
         showProgress('Finalizing routes...', 85);
-
         allRoutes.forEach(r => {
             if (r.stops.length < 2) return;
             const fd = haversineMi(campLat, campLng, r.stops[0].lat, r.stops[0].lng);
@@ -1295,16 +1425,14 @@
             for (let i = 0; i < r.stops.length - 1; i++) {
                 const a = r.stops[i], b = r.stops[i + 1];
                 if (!a.lat || !b.lat) continue;
-                const d = haversineMi(a.lat, a.lng, b.lat, b.lng);
-                if (d > 0.057) continue; // ~300ft
+                if (haversineMi(a.lat, a.lng, b.lat, b.lng) > 0.057) continue;
                 const stA = normalizeStreet(parseAddress(a.address).street);
                 const stB = normalizeStreet(parseAddress(b.address).street);
                 if (!stA || !stB) continue;
                 if (stA === stB || stA.includes(stB) || stB.includes(stA)) {
                     a.campers.push(...b.campers);
                     if (b.address.includes('&') && !a.address.includes('&')) a.address = b.address;
-                    r.stops.splice(i + 1, 1);
-                    merged++; i--;
+                    r.stops.splice(i + 1, 1); merged++; i--;
                 }
             }
             if (merged) {
@@ -1316,25 +1444,17 @@
         if (totalMerged) console.log('[Go] Post-route merge: ' + totalMerged + ' stop(s) consolidated');
 
         // ══════════════════════════════════════════════════════════════
-        // CAPACITY ENFORCEMENT
-        //
-        // Hard constraint: no bus exceeds its seat count.
-        // Strategy:
-        //   1. Try moving whole stops (farthest outlier first)
-        //   2. If no bus can fit the whole stop, split it — move
-        //      individual campers to the nearest bus with any room
+        // CAPACITY ENFORCEMENT (safety net)
         // ══════════════════════════════════════════════════════════════
         let capMoves = 0;
         for (let capPass = 0; capPass < 100; capPass++) {
-            // Find any bus over capacity
             let overBus = null, worstOver = 0;
             for (const r of allRoutes) {
                 const over = r.camperCount - r._cap;
                 if (over > worstOver && r.stops.length > 0) { worstOver = over; overBus = r; }
             }
-            if (!overBus) break; // all buses within capacity
+            if (!overBus) break;
 
-            // Find the outlier stop (farthest from centroid)
             const cLat = overBus.stops.reduce((s, st) => s + st.lat, 0) / overBus.stops.length;
             const cLng = overBus.stops.reduce((s, st) => s + st.lng, 0) / overBus.stops.length;
             let moveIdx = 0, moveDist = 0;
@@ -1344,7 +1464,7 @@
             });
             const stopToMove = overBus.stops[moveIdx];
 
-            // Try 1: move the whole stop to a bus with room
+            // Try whole-stop move
             let bestBus = null, bestDist = Infinity;
             for (const r of allRoutes) {
                 if (r === overBus) continue;
@@ -1356,7 +1476,6 @@
             }
 
             if (bestBus) {
-                // Whole-stop move
                 overBus.stops.splice(moveIdx, 1);
                 overBus.camperCount -= stopToMove.campers.length;
                 overBus.stops.forEach((s, i) => { s.stopNum = i + 1; });
@@ -1364,39 +1483,27 @@
                 bestBus.camperCount += stopToMove.campers.length;
                 capMoves++;
             } else {
-                // Try 2: split the stop — move campers one at a time to buses with room
+                // Split stop — move campers individually
                 let movedAny = false;
                 while (overBus.camperCount > overBus._cap && stopToMove.campers.length > 1) {
-                    // Find nearest bus with at least 1 seat
                     let splitBus = null, splitDist = Infinity;
                     for (const r of allRoutes) {
-                        if (r === overBus) continue;
-                        if (r.camperCount >= r._cap) continue;
+                        if (r === overBus || r.camperCount >= r._cap) continue;
                         const rLat = r.stops.length ? r.stops.reduce((s, st) => s + st.lat, 0) / r.stops.length : campLat;
                         const rLng = r.stops.length ? r.stops.reduce((s, st) => s + st.lng, 0) / r.stops.length : campLng;
                         const d = haversineMi(stopToMove.lat, stopToMove.lng, rLat, rLng);
                         if (d < splitDist) { splitDist = d; splitBus = r; }
                     }
-                    if (!splitBus) break; // truly no room anywhere
-
-                    // How many can this bus take?
+                    if (!splitBus) break;
                     const room = splitBus._cap - splitBus.camperCount;
                     const toMove = Math.min(room, overBus.camperCount - overBus._cap);
                     if (toMove <= 0) break;
-
-                    // Split: move campers to a new stop on the receiving bus
                     const movedCampers = stopToMove.campers.splice(0, toMove);
                     overBus.camperCount -= toMove;
-                    const newStop = {
-                        stopNum: 0, campers: movedCampers,
-                        address: stopToMove.address, lat: stopToMove.lat, lng: stopToMove.lng
-                    };
-                    directionalInsert(splitBus.stops, newStop, campLat, campLng);
+                    directionalInsert(splitBus.stops, { stopNum: 0, campers: movedCampers, address: stopToMove.address, lat: stopToMove.lat, lng: stopToMove.lng }, campLat, campLng);
                     splitBus.camperCount += toMove;
-                    movedAny = true;
-                    capMoves++;
+                    movedAny = true; capMoves++;
                 }
-                // Remove the stop if all campers were moved
                 if (stopToMove.campers.length === 0) {
                     overBus.stops.splice(moveIdx, 1);
                     overBus.stops.forEach((s, i) => { s.stopNum = i + 1; });
@@ -2390,6 +2497,32 @@
     }
     function zoomToStop(lat, lng, busId, shiftIdx) { if (!_map || !lat || !lng) return; _activeShifts = new Set([shiftIdx]); _activeMapBus = busId; renderMap(); _map.setView([lat, lng], 16); const sr = document.getElementById('camperSearchResults'); if (sr) sr.style.display = 'none'; }
 
+    let _locateMarker = null;
+    function locateCamper(name) {
+        const a = D.addresses[name]; if (!a?.geocoded || !a.lat || !a.lng) { toast('No geocoded address for ' + name, 'error'); return; }
+        // Switch to routes tab and ensure map is initialized
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        document.querySelector('.tab-btn[data-tab="routes"]')?.classList.add('active');
+        document.getElementById('tab-routes')?.classList.add('active');
+        if (!_map) showAddressesOnMap();
+        setTimeout(() => {
+            if (!_map) return;
+            _map.invalidateSize();
+            // Remove previous locate marker
+            if (_locateMarker) { _map.removeLayer(_locateMarker); _locateMarker = null; }
+            // Add highlighted pin
+            const roster = getRoster(); const c = roster[name] || {};
+            const icon = L.divIcon({
+                html: '<div style="width:16px;height:16px;background:#ef4444;border:3px solid #fff;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,.5);animation:pulse 1.5s ease infinite;"></div>',
+                className: '', iconSize: [16, 16], iconAnchor: [8, 8]
+            });
+            _locateMarker = L.marker([a.lat, a.lng], { icon, zIndexOffset: 2000 }).addTo(_map);
+            _locateMarker.bindPopup('<div style="font-family:DM Sans,sans-serif;min-width:150px;"><div style="font-weight:700;">' + esc(name) + '</div><div style="font-size:12px;color:#666;">' + esc(c.division || '') + (c.bunk ? ' / Bunk ' + esc(c.bunk) : '') + '</div><div style="font-size:12px;margin-top:4px;">' + esc([a.street, a.city, a.state, a.zip].filter(Boolean).join(', ')) + '</div></div>').openPopup();
+            _map.setView([a.lat, a.lng], 16);
+        }, 200);
+    }
+
     function moveCamperToBus(camperName, fromBusId, toBusId, shiftIdx) {
         if (!_generatedRoutes || !D.savedRoutes) return;
         const sr = D.savedRoutes[shiftIdx]; if (!sr) return;
@@ -2526,7 +2659,7 @@
         testGeocode, systemCheck,
         generateRoutes, reOptimizeBus, exportRoutesCsv, printRoutes, detectRegions,
         renderMap, selectMapBus, toggleMapShift, setMapShiftsAll, toggleMapFullscreen,
-        toggleAddressPins, showAddressesOnMap,
+        toggleAddressPins, showAddressesOnMap, locateCamper,
         openOverrideModal, onOverrideTypeChange, saveOverride, removeOverride, filterOverrideSelect,
         searchCamperInRoutes, zoomToStop, openMoveModal, renderFilteredMasterList, sortMasterBy,
         switchMode,
