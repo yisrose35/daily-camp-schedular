@@ -1431,6 +1431,42 @@
             } else {
                 subClusters = geoBisect(groupStops.map((_, i) => i), groupStops, numBusesInGroup);
 
+                // ── Outlier swap: fix stops that ended up in wrong zone ──
+                // geoBisect cuts along lat/lng axes which can put a stop
+                // geographically "in" one neighborhood into the wrong zone.
+                // Move any stop that is significantly closer to another zone's centroid.
+                for (let pass = 0; pass < 3; pass++) {
+                    let swapped = false;
+                    // Compute centroids
+                    const centroids = subClusters.map(sc => {
+                        if (!sc.length) return { lat: 0, lng: 0 };
+                        return {
+                            lat: sc.reduce((s, i) => s + groupStops[i].lat, 0) / sc.length,
+                            lng: sc.reduce((s, i) => s + groupStops[i].lng, 0) / sc.length
+                        };
+                    });
+                    for (let ci = 0; ci < subClusters.length; ci++) {
+                        for (let si = subClusters[ci].length - 1; si >= 0; si--) {
+                            const idx = subClusters[ci][si];
+                            const st = groupStops[idx];
+                            const myDist = haversineMi(st.lat, st.lng, centroids[ci].lat, centroids[ci].lng);
+                            // Find if any other zone is significantly closer
+                            for (let ti = 0; ti < subClusters.length; ti++) {
+                                if (ti === ci || !subClusters[ti].length) continue;
+                                const tDist = haversineMi(st.lat, st.lng, centroids[ti].lat, centroids[ti].lng);
+                                // Only swap if target is at least 30% closer (not marginal differences)
+                                if (tDist < myDist * 0.7) {
+                                    subClusters[ci].splice(si, 1);
+                                    subClusters[ti].push(idx);
+                                    swapped = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (!swapped) break;
+                }
+
                 // Log sub-cluster sizes
                 const sizes = subClusters.map(sc => sc.reduce((s, i) => s + groupStops[i].campers.length, 0));
                 console.log('[Go] Pre-cluster ' + groupName + ': ' + numBusesInGroup + ' zones → [' + sizes.join(', ') + '] kids');
@@ -1493,11 +1529,6 @@
                                 cheapestInsert(orderedStops, stop);
                             });
                         }
-                        // VROOM optimizes total drive time → produces circular tours.
-                        // For camp buses we want directional sweeps (far→camp for arrival).
-                        // Since geoBisect already guarantees compact zones, sorting by
-                        // distance from camp produces clean sweeps with minimal extra driving.
-                        directionalSort(orderedStops, campLat, campLng);
                         return { busStops: orderedStops, v, duration: Math.round((vroomRoute.duration || 0) / 60) };
                     }
                     return { busStops, v, duration: 0 };
