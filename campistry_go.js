@@ -2687,7 +2687,7 @@
     function renderFilteredMasterList() {
         let rows = [..._allMasterRows];
         if (_activeShifts && _activeShifts.size < (_generatedRoutes?.length || 0)) rows = rows.filter(r => _activeShifts.has(r.shiftIdx));
-        if (_activeMapBus && _activeMapBus !== 'all') rows = rows.filter(r => r.busId === _activeMapBus);
+        if (_activeMapBuses.size > 0) rows = rows.filter(r => _activeMapBuses.has(r.busId));
         const dir = _masterSort.dir === 'asc' ? 1 : -1; const col = _masterSort.col;
         rows.sort((a, b) => { const av = col === 'stopNum' ? a[col] : String(a[col] || '').toLowerCase(); const bv = col === 'stopNum' ? b[col] : String(b[col] || '').toLowerCase(); if (av < bv) return -1 * dir; if (av > bv) return 1 * dir; return 0; });
         const countEl = document.getElementById('masterListCount'); const label = document.getElementById('masterListLabel');
@@ -2707,11 +2707,16 @@
     let _mapLayers = [];
     let _addressPinLayers = [];
     let _showAddressPins = false;
+    let _addressPinMode = 'both'; // 'campers', 'staff', 'both'
+    let _hideRoutes = false;
     let _activeShifts = new Set();
-    let _activeMapBus = 'all';
+    let _activeMapBuses = new Set(); // empty = all buses visible
     let _pendingMapInit = null;
     let _routeGeomCache = {};
     window._routeGeomCache = _routeGeomCache;
+
+    function isBusVisible(busId) { return _activeMapBuses.size === 0 || _activeMapBuses.has(busId); }
+    function isAllBuses() { return _activeMapBuses.size === 0; }
 
     function addArrowsToLine(coords, color, map) {
         if (!coords || coords.length < 4) return [];
@@ -2743,7 +2748,7 @@
 
     function initMap(allShifts) {
         _activeShifts = new Set(allShifts.map((_, i) => i));
-        _activeMapBus = 'all';
+        _activeMapBuses = new Set();
         const container = document.getElementById('routeMap');
         if (_map) { _map.remove(); _map = null; }
         _map = L.map(container, { scrollWheelZoom: true, zoomControl: true });
@@ -2772,9 +2777,14 @@
         const tabsEl = document.getElementById('mapBusTabs');
         const uniqueBuses = []; const seen = new Set();
         allRoutes.forEach(r => { if (!seen.has(r.busId)) { seen.add(r.busId); uniqueBuses.push({ busId: r.busId, busName: r.busName, busColor: r.busColor }); } });
-        tabsEl.innerHTML = '<button class="bus-tab all-tab' + (_activeMapBus === 'all' ? ' active' : '') + '" onclick="CampistryGo.selectMapBus(\'all\')">All Buses</button>' +
-            uniqueBuses.map(b => '<button class="bus-tab' + (_activeMapBus === b.busId ? ' active' : '') + '" onclick="CampistryGo.selectMapBus(\'' + b.busId + '\')"><span class="bus-tab-dot" style="background:' + esc(b.busColor) + '"></span>' + esc(b.busName) + '</button>').join('') +
-            '<button class="bus-tab' + (_showAddressPins ? ' active' : '') + '" onclick="CampistryGo.toggleAddressPins()" style="margin-left:auto;' + (_showAddressPins ? 'background:var(--blue-50);border-color:var(--blue-300);' : '') + '">📍 Addresses</button>';
+        tabsEl.innerHTML = '<button class="bus-tab all-tab' + (isAllBuses() ? ' active' : '') + '" onclick="CampistryGo.selectMapBus(\'all\')">All Buses</button>' +
+            uniqueBuses.map(b => '<button class="bus-tab' + (_activeMapBuses.has(b.busId) ? ' active' : '') + '" onclick="CampistryGo.toggleMapBus(\'' + b.busId + '\')"><span class="bus-tab-dot" style="background:' + esc(b.busColor) + '"></span>' + esc(b.busName) + '</button>').join('') +
+            '<span style="margin-left:auto;display:flex;gap:4px;align-items:center;">' +
+            '<button class="bus-tab' + (_hideRoutes ? ' active' : '') + '" onclick="CampistryGo.toggleHideRoutes()" style="' + (_hideRoutes ? 'background:var(--amber-50);border-color:var(--amber-300);' : '') + '" title="Hide/show route lines">🗺️ Routes</button>' +
+            '<button class="bus-tab' + (_showAddressPins && _addressPinMode === 'both' ? ' active' : '') + '" onclick="CampistryGo.setAddressPinMode(\'both\')" style="' + (_showAddressPins && _addressPinMode === 'both' ? 'background:var(--blue-50);border-color:var(--blue-300);' : '') + '">📍 All</button>' +
+            '<button class="bus-tab' + (_showAddressPins && _addressPinMode === 'campers' ? ' active' : '') + '" onclick="CampistryGo.setAddressPinMode(\'campers\')" style="' + (_showAddressPins && _addressPinMode === 'campers' ? 'background:var(--blue-50);border-color:var(--blue-300);' : '') + '">🧒 Campers</button>' +
+            '<button class="bus-tab' + (_showAddressPins && _addressPinMode === 'staff' ? ' active' : '') + '" onclick="CampistryGo.setAddressPinMode(\'staff\')" style="' + (_showAddressPins && _addressPinMode === 'staff' ? 'background:var(--amber-50);border-color:var(--amber-300);' : '') + '">🎒 Staff</button>' +
+            '</span>';
 
         _mapLayers.forEach(l => _map.removeLayer(l)); _mapLayers = [];
         const allLatLngs = [];
@@ -2786,7 +2796,7 @@
             _mapLayers.push(campMarker); allLatLngs.push([_campCoordsCache.lat, _campCoordsCache.lng]);
         }
 
-        const visibleRoutes = _activeMapBus === 'all' ? allRoutes : allRoutes.filter(r => r.busId === _activeMapBus);
+        const visibleRoutes = isAllBuses() ? allRoutes : allRoutes.filter(r => _activeMapBuses.has(r.busId));
         function getDash(shiftIdx) { if (totalShifts <= 1 || !multiShift) return null; if (shiftIdx === 0) return null; if (shiftIdx === 1) return '18, 12'; return '6, 10'; }
 
         for (const route of visibleRoutes) {
@@ -2802,8 +2812,10 @@
             allLatLngs.push(...straightCoords);
 
             const dashPattern = getDash(route.shiftIdx);
-            const lineWeight = _activeMapBus === 'all' ? 3 : 5;
-            const lineOpacity = _activeMapBus === 'all' ? 0.7 : 0.9;
+            const lineWeight = isAllBuses() ? 3 : 5;
+            const lineOpacity = isAllBuses() ? 0.7 : 0.9;
+
+            if (_hideRoutes) continue; // skip route lines + stop markers when hidden
             const cacheKey = route.busId + '_' + route.shiftIdx;
             let roadCoords = _routeGeomCache[cacheKey];
 
@@ -2836,8 +2848,9 @@
                 const isSpecial = stop.isMonitor || stop.isCounselor;
                 const size = isSpecial ? 20 : 26;
                 const icon = L.divIcon({ html: '<div class="stop-marker-icon" style="width:' + size + 'px;height:' + size + 'px;background:' + esc(route.busColor) + ';' + (isSpecial ? 'font-size:10px;' : '') + '">' + (isSpecial ? (stop.isMonitor ? 'M' : 'C') : stop.stopNum) + '</div>', className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
-                const names = stop.isMonitor ? '🛡️ ' + (stop.monitorName || 'Monitor') : stop.isCounselor ? '👤 ' + (stop.counselorName || 'Counselor') : stop.campers.map(c => c.name).join('<br>');
-                const popup = '<div style="font-family:DM Sans,sans-serif;min-width:160px;"><div style="font-weight:700;color:' + route.busColor + '">' + esc(route.busName) + ' — ' + esc(route.shiftLabel) + '</div><div style="font-weight:600;">Stop ' + stop.stopNum + '</div><div style="font-size:12px;">' + names + '</div><div style="font-size:11px;color:#888;">' + esc(stop.address) + '</div>' + (stop.estimatedTime ? '<div style="font-weight:600;">Est: ' + stop.estimatedTime + '</div>' : '') + '</div>';
+                const names = stop.isMonitor ? '🛡️ ' + (stop.monitorName || 'Monitor') : stop.isCounselor ? '🎒 ' + (stop.counselorName || 'Counselor') : stop.campers.map(c => c.name).join('<br>');
+                const counselorNames = (stop._counselors?.length) ? '<div style="margin-top:6px;padding-top:6px;border-top:1px solid #eee;">' + stop._counselors.map(c => '<div style="font-size:11px;display:flex;align-items:center;gap:4px;">🎒 <strong>' + esc(c.name) + '</strong> <span style="color:#888;">(' + c.walkFt + 'ft walk)</span></div>').join('') + '</div>' : '';
+                const popup = '<div style="font-family:DM Sans,sans-serif;min-width:160px;"><div style="font-weight:700;color:' + route.busColor + '">' + esc(route.busName) + ' — ' + esc(route.shiftLabel) + '</div><div style="font-weight:600;">Stop ' + stop.stopNum + '</div><div style="font-size:12px;">' + names + '</div>' + counselorNames + '<div style="font-size:11px;color:#888;">' + esc(stop.address) + '</div>' + (stop.estimatedTime ? '<div style="font-weight:600;">Est: ' + stop.estimatedTime + '</div>' : '') + '</div>';
                 const marker = L.marker([stop.lat, stop.lng], { icon, draggable: !isSpecial }).addTo(_map);
                 marker.bindPopup(popup);
                 (function(theStop, theBusId, theShiftIdx) { marker.on('click', function(e) { if (window._mapEditorStopClick && window._mapEditorStopClick(theStop, theBusId, theShiftIdx)) marker.closePopup(); }); })(stop, route.busId, route.shiftIdx);
@@ -2855,7 +2868,29 @@
         if (_showAddressPins) renderAddressPins();
     }
 
-    function selectMapBus(busId) { _activeMapBus = busId; renderMap(); renderFilteredMasterList(); }
+    function selectMapBus(busId) {
+        if (busId === 'all') { _activeMapBuses = new Set(); }
+        else { _activeMapBuses = new Set([busId]); }
+        renderMap(); renderFilteredMasterList();
+    }
+    function toggleMapBus(busId) {
+        if (_activeMapBuses.has(busId)) { _activeMapBuses.delete(busId); }
+        else { _activeMapBuses.add(busId); }
+        renderMap(); renderFilteredMasterList();
+    }
+    function setAddressPinMode(mode) {
+        if (_showAddressPins && _addressPinMode === mode) {
+            // Toggle off if clicking same mode
+            _showAddressPins = false; clearAddressPins();
+        } else {
+            _addressPinMode = mode;
+            _showAddressPins = true;
+            renderAddressPins();
+        }
+        if (_generatedRoutes) renderMap(); else if (_showAddressPins) renderAddressPinsAll();
+    }
+    function toggleHideRoutes() { _hideRoutes = !_hideRoutes; renderMap(); }
+    function toggleAddressPins() { setAddressPinMode(_addressPinMode); }
     function toggleMapShift(idx) { if (_activeShifts.has(idx)) { if (_activeShifts.size > 1) _activeShifts.delete(idx); } else _activeShifts.add(idx); renderMap(); renderFilteredMasterList(); }
     function setMapShiftsAll() { _activeShifts = new Set(_generatedRoutes.map((_, i) => i)); renderMap(); renderFilteredMasterList(); }
     function toggleMapFullscreen() { const card = document.getElementById('routeMapCard'); if (!card) return; card.classList.toggle('map-fullscreen'); setTimeout(() => { if (_map) _map.invalidateSize(); }, 100); }
@@ -2863,28 +2898,29 @@
     // =========================================================================
     // ADDRESS PINS
     // =========================================================================
-    function toggleAddressPins() { _showAddressPins = !_showAddressPins; if (_showAddressPins) renderAddressPins(); else clearAddressPins(); if (_generatedRoutes) renderMap(); else if (_showAddressPins) renderAddressPinsAll(); }
-    function clearAddressPins() { _addressPinLayers.forEach(l => { if (_map) _map.removeLayer(l); }); _addressPinLayers = []; }
+    function clearAddressPins() { _addressPinLayers.forEach(l => { if (_map) _map.removeLayer(l); }); _addressPinLayers = []; if (_map?._addressLegend) { _map.removeControl(_map._addressLegend); _map._addressLegend = null; } }
     function renderAddressPins() {
         if (!_map) return; clearAddressPins();
         const roster = getRoster(); const shiftIndices = [..._activeShifts].sort();
+        const showCampers = _addressPinMode === 'both' || _addressPinMode === 'campers';
+        const showStaff = _addressPinMode === 'both' || _addressPinMode === 'staff';
         const camperPins = [];
-        if (_generatedRoutes) {
-            shiftIndices.forEach(si => { const sr = _generatedRoutes[si]; if (!sr) return; sr.routes.forEach(r => { if (_activeMapBus !== 'all' && r.busId !== _activeMapBus) return; r.stops.forEach(st => { if (st.isMonitor || st.isCounselor) return; st.campers.forEach(c => { const a = D.addresses[c.name]; if (!a?.geocoded || !a.lat || !a.lng) return; camperPins.push({ name: c.name, lat: a.lat, lng: a.lng, address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', '), color: r.busColor, busName: r.busName, division: c.division || '', bunk: c.bunk || '' }); }); }); }); });
-        } else { renderAddressPinsAll(); return; }
+        if (_generatedRoutes && showCampers) {
+            shiftIndices.forEach(si => { const sr = _generatedRoutes[si]; if (!sr) return; sr.routes.forEach(r => { if (!isBusVisible(r.busId)) return; r.stops.forEach(st => { if (st.isMonitor || st.isCounselor) return; st.campers.forEach(c => { const a = D.addresses[c.name]; if (!a?.geocoded || !a.lat || !a.lng) return; camperPins.push({ name: c.name, lat: a.lat, lng: a.lng, address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', '), color: r.busColor, busName: r.busName, division: c.division || '', bunk: c.bunk || '' }); }); }); }); });
+        } else if (showCampers) { renderAddressPinsAll(); return; }
         camperPins.forEach(pin => {
             const icon = L.divIcon({ html: '<div style="width:10px;height:10px;background:' + esc(pin.color) + ';border:2px solid #fff;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,.4);"></div>', className: '', iconSize: [10, 10], iconAnchor: [5, 5] });
             const marker = L.marker([pin.lat, pin.lng], { icon, zIndexOffset: -100 }).addTo(_map);
             marker.bindPopup('<div style="font-family:DM Sans,sans-serif;min-width:150px;"><div style="font-weight:700;">' + esc(pin.name) + '</div><div style="font-size:12px;color:#666;">' + esc(pin.division) + (pin.bunk ? ' / Bunk ' + esc(pin.bunk) : '') + '</div><div style="font-size:12px;margin-top:4px;">' + esc(pin.address) + '</div><div style="font-size:11px;margin-top:4px;display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:' + esc(pin.color) + ';display:inline-block;"></span><span style="font-weight:600;">' + esc(pin.busName) + '</span></div></div>');
             _addressPinLayers.push(marker);
         });
-        console.log('[Go] Address pins: ' + camperPins.length + ' campers' + (_activeMapBus !== 'all' ? ' (filtered)' : ''));
+        if (camperPins.length) console.log('[Go] Address pins: ' + camperPins.length + ' campers' + (!isAllBuses() ? ' (filtered)' : ''));
 
-        // Staff/counselor pins — square shape to differentiate from camper circles
+        // Staff/counselor pins — diamond shape to differentiate from camper circles
         const staffPins = [];
+        if (showStaff) {
         D.counselors.filter(c => c.address && c._lat && c._lng).forEach(c => {
-            // Filter by selected bus if applicable
-            if (_activeMapBus !== 'all' && c._assignedBus && c._assignedBus !== _activeMapBus) return;
+            if (!isAllBuses() && c._assignedBus && !_activeMapBuses.has(c._assignedBus)) return;
             const bus = D.buses.find(b => b.id === c._assignedBus);
             const color = bus?.color || '#f59e0b';
             staffPins.push({ name: c.name, lat: c._lat, lng: c._lng, address: c.address, color, busName: c._assignedBusName || '—', bunk: c.bunk || '', walkFt: c._walkFt || '?' });
@@ -2893,38 +2929,75 @@
             const a = D.addresses[m.name] || {};
             if (!a.lat || !a.lng) return;
             const bus = D.buses.find(b => b.id === m.assignedBus);
-            if (_activeMapBus !== 'all' && m.assignedBus && m.assignedBus !== _activeMapBus) return;
+            if (!isAllBuses() && m.assignedBus && !_activeMapBuses.has(m.assignedBus)) return;
             const color = bus?.color || '#f59e0b';
             staffPins.push({ name: m.name + ' (monitor)', lat: a.lat, lng: a.lng, address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', '), color, busName: bus?.name || '—', bunk: '', walkFt: '' });
         });
+        } // end if (showStaff)
         staffPins.forEach(pin => {
-            const icon = L.divIcon({ html: '<div style="width:10px;height:10px;background:' + esc(pin.color) + ';border:2px solid #fff;border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,.4);transform:rotate(45deg);"></div>', className: '', iconSize: [10, 10], iconAnchor: [5, 5] });
+            const icon = L.divIcon({ html: '<div style="width:14px;height:14px;background:' + esc(pin.color) + ';border:2.5px solid #fbbf24;border-radius:3px;box-shadow:0 1px 4px rgba(0,0,0,.5);transform:rotate(45deg);position:relative;"><div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;transform:rotate(-45deg);font-size:8px;color:#fff;font-weight:bold;">★</div></div>', className: '', iconSize: [14, 14], iconAnchor: [7, 7] });
             const marker = L.marker([pin.lat, pin.lng], { icon, zIndexOffset: -50 }).addTo(_map);
             marker.bindPopup('<div style="font-family:DM Sans,sans-serif;min-width:150px;"><div style="font-weight:700;">🎒 ' + esc(pin.name) + '</div><div style="font-size:12px;color:#666;">Staff' + (pin.bunk ? ' / Bunk ' + esc(pin.bunk) : '') + '</div><div style="font-size:12px;margin-top:4px;">' + esc(pin.address) + '</div>' + (pin.walkFt ? '<div style="font-size:11px;margin-top:4px;color:var(--text-muted)">Walk to stop: ' + pin.walkFt + 'ft</div>' : '') + '<div style="font-size:11px;margin-top:4px;display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:2px;background:' + esc(pin.color) + ';display:inline-block;transform:rotate(45deg);"></span><span style="font-weight:600;">' + esc(pin.busName) + '</span></div></div>');
             _addressPinLayers.push(marker);
         });
-        if (staffPins.length) console.log('[Go] Address pins: ' + staffPins.length + ' staff (◆ square pins)');
+        if (staffPins.length) console.log('[Go] Address pins: ' + staffPins.length + ' staff (◆ diamond pins)');
+
+        // Add legend to map
+        if (!_map._addressLegend) {
+            const legend = L.control({ position: 'bottomleft' });
+            legend.onAdd = function() {
+                const div = L.DomUtil.create('div', '');
+                div.style.cssText = 'background:rgba(255,255,255,.92);backdrop-filter:blur(4px);padding:8px 12px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.15);font-family:DM Sans,sans-serif;font-size:12px;line-height:1.6;';
+                div.innerHTML = '<div style="font-weight:700;margin-bottom:4px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#64748b;">Map Legend</div>'
+                    + '<div style="display:flex;align-items:center;gap:6px;"><div style="width:10px;height:10px;background:#3b82f6;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.3);flex-shrink:0;"></div> Camper home</div>'
+                    + '<div style="display:flex;align-items:center;gap:6px;margin-top:2px;"><div style="width:12px;height:12px;background:#f59e0b;border:2px solid #fbbf24;border-radius:2px;box-shadow:0 1px 2px rgba(0,0,0,.3);transform:rotate(45deg);flex-shrink:0;position:relative;"><div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;transform:rotate(-45deg);font-size:7px;color:#fff;">★</div></div> Staff home</div>';
+                return div;
+            };
+            legend.addTo(_map);
+            _map._addressLegend = legend;
+        }
     }
     function renderAddressPinsAll() {
         if (!_map) return; clearAddressPins();
+        const showCampers = _addressPinMode === 'both' || _addressPinMode === 'campers';
+        const showStaff = _addressPinMode === 'both' || _addressPinMode === 'staff';
         const roster = getRoster(); const allLatLngs = [];
+        if (showCampers) {
         Object.entries(roster).forEach(([name, c]) => { const a = D.addresses[name]; if (!a?.geocoded || !a.lat || !a.lng) return; if (a.transport === 'pickup') return; const icon = L.divIcon({ html: '<div style="width:8px;height:8px;background:#3b82f6;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,.3);"></div>', className: '', iconSize: [8, 8], iconAnchor: [4, 4] }); const marker = L.marker([a.lat, a.lng], { icon, zIndexOffset: -100 }).addTo(_map); marker.bindPopup('<div style="font-family:DM Sans,sans-serif;"><div style="font-weight:700;">' + esc(name) + '</div><div style="font-size:12px;color:#666;">' + esc(c.division || '') + (c.bunk ? ' / Bunk ' + esc(c.bunk) : '') + '</div><div style="font-size:12px;margin-top:4px;">' + esc([a.street, a.city, a.state, a.zip].filter(Boolean).join(', ')) + '</div></div>'); _addressPinLayers.push(marker); allLatLngs.push([a.lat, a.lng]); });
+        }
         if (allLatLngs.length > 0 && !_generatedRoutes) _map.fitBounds(L.latLngBounds(allLatLngs), { padding: [50, 50], maxZoom: 14 });
-        console.log('[Go] Address pins: ' + _addressPinLayers.length + ' campers (all)');
+        if (showCampers) console.log('[Go] Address pins: ' + _addressPinLayers.length + ' campers (all)');
 
-        // Staff pins (square, amber) — pre-generation mode, geocode on the fly
+        // Staff pins (diamond, amber) — pre-generation mode
         let staffCount = 0;
+        if (showStaff) {
         [...D.counselors, ...D.monitors].filter(s => s.address).forEach(s => {
             let lat = s._lat, lng = s._lng;
             const a = D.addresses[s.name];
             if (!lat && a?.lat) { lat = a.lat; lng = a.lng; }
             if (!lat || !lng) return;
-            const icon = L.divIcon({ html: '<div style="width:8px;height:8px;background:#f59e0b;border:2px solid #fff;border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,.3);transform:rotate(45deg);"></div>', className: '', iconSize: [8, 8], iconAnchor: [4, 4] });
+            const icon = L.divIcon({ html: '<div style="width:12px;height:12px;background:#f59e0b;border:2.5px solid #fbbf24;border-radius:2px;box-shadow:0 1px 4px rgba(0,0,0,.4);transform:rotate(45deg);position:relative;"><div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;transform:rotate(-45deg);font-size:7px;color:#fff;font-weight:bold;">★</div></div>', className: '', iconSize: [12, 12], iconAnchor: [6, 6] });
             const marker = L.marker([lat, lng], { icon, zIndexOffset: -50 }).addTo(_map);
             marker.bindPopup('<div style="font-family:DM Sans,sans-serif;"><div style="font-weight:700;">🎒 ' + esc(s.name) + '</div><div style="font-size:12px;color:#666;">Staff' + (s.bunk ? ' / Bunk ' + esc(s.bunk) : '') + '</div><div style="font-size:12px;margin-top:4px;">' + esc(s.address) + '</div></div>');
             _addressPinLayers.push(marker); allLatLngs.push([lat, lng]); staffCount++;
         });
-        if (staffCount) console.log('[Go] Address pins: ' + staffCount + ' staff (◆ square pins)');
+        } // end if (showStaff)
+        if (staffCount) console.log('[Go] Address pins: ' + staffCount + ' staff (◆ diamond pins)');
+
+        // Add legend
+        if (!_map._addressLegend) {
+            const legend = L.control({ position: 'bottomleft' });
+            legend.onAdd = function() {
+                const div = L.DomUtil.create('div', '');
+                div.style.cssText = 'background:rgba(255,255,255,.92);backdrop-filter:blur(4px);padding:8px 12px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.15);font-family:DM Sans,sans-serif;font-size:12px;line-height:1.6;';
+                div.innerHTML = '<div style="font-weight:700;margin-bottom:4px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#64748b;">Map Legend</div>'
+                    + '<div style="display:flex;align-items:center;gap:6px;"><div style="width:10px;height:10px;background:#3b82f6;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.3);flex-shrink:0;"></div> Camper home</div>'
+                    + '<div style="display:flex;align-items:center;gap:6px;margin-top:2px;"><div style="width:12px;height:12px;background:#f59e0b;border:2px solid #fbbf24;border-radius:2px;box-shadow:0 1px 2px rgba(0,0,0,.3);transform:rotate(45deg);flex-shrink:0;position:relative;"><div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;transform:rotate(-45deg);font-size:7px;color:#fff;">★</div></div> Staff home</div>';
+                return div;
+            };
+            legend.addTo(_map);
+            _map._addressLegend = legend;
+        }
     }
     function showAddressesOnMap() {
         if (!_map) { const container = document.getElementById('routeMap'); if (!container) return; _map = L.map(container, { scrollWheelZoom: true, zoomControl: true }); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OSM', maxZoom: 19 }).addTo(_map); if (_campCoordsCache) { const campIcon = L.divIcon({ html: '<div style="width:32px;height:32px;background:#1e293b;border:3px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.4);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>', className: '', iconSize: [32, 32], iconAnchor: [16, 16] }); L.marker([_campCoordsCache.lat, _campCoordsCache.lng], { icon: campIcon, zIndexOffset: 1000 }).addTo(_map).bindPopup('<strong>' + esc(D.setup.campName || 'Camp') + '</strong>'); } }
@@ -2998,7 +3071,7 @@
         container.innerHTML = results.map(r => '<div style="display:flex;align-items:center;gap:.75rem;padding:.625rem .75rem;border-bottom:1px solid var(--border-light);font-size:.8125rem;cursor:pointer;" onclick="CampistryGo.zoomToStop(' + (r.lat||0) + ',' + (r.lng||0) + ',\'' + esc(r.busId) + '\',' + r.shiftIdx + ')"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(r.busColor) + ';display:inline-block;"></span><strong>' + esc(r.name) + '</strong><span style="color:var(--text-muted)">' + esc(r.shift) + ' · ' + esc(r.busName) + ' · Stop ' + r.stopNum + '</span><span style="margin-left:auto;font-weight:600;">' + r.time + '</span></div>').join('');
         container.style.display = '';
     }
-    function zoomToStop(lat, lng, busId, shiftIdx) { if (!_map || !lat || !lng) return; _activeShifts = new Set([shiftIdx]); _activeMapBus = busId; renderMap(); _map.setView([lat, lng], 16); const sr = document.getElementById('camperSearchResults'); if (sr) sr.style.display = 'none'; }
+    function zoomToStop(lat, lng, busId, shiftIdx) { if (!_map || !lat || !lng) return; _activeShifts = new Set([shiftIdx]); _activeMapBuses = new Set([busId]); renderMap(); _map.setView([lat, lng], 16); const sr = document.getElementById('camperSearchResults'); if (sr) sr.style.display = 'none'; }
 
     let _locateMarker = null;
     function locateCamper(name) {
@@ -3220,7 +3293,8 @@
         regeocodeAll: function() { geocodeAll(true); },
         testGeocode, systemCheck,
         generateRoutes, reOptimizeBus, exportRoutesCsv, printRoutes, detectRegions, diagnoseBus,
-        renderMap, selectMapBus, toggleMapShift, setMapShiftsAll, toggleMapFullscreen,
+        renderMap, selectMapBus, toggleMapBus, toggleMapShift, setMapShiftsAll, toggleMapFullscreen,
+        setAddressPinMode, toggleHideRoutes,
         toggleAddressPins, showAddressesOnMap, locateCamper,
         openOverrideModal, onOverrideTypeChange, saveOverride, removeOverride, filterOverrideSelect,
         searchCamperInRoutes, zoomToStop, openMoveModal, renderFilteredMasterList, sortMasterBy,
