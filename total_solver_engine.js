@@ -249,8 +249,30 @@
             if (!prefProps?.preferences?.enabled) { var actProps = props[cand.activityName]; if (actProps?.preferences?.enabled) prefProps = actProps; }
             if (prefProps?.preferences?.enabled) { prefList = prefProps.preferences.list || []; prefExclusive = !!prefProps.preferences.exclusive; }
 
-            _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, prefList: prefList, prefExclusive: prefExclusive, hasProps: true });
+           _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, prefList: prefList, prefExclusive: prefExclusive, hasProps: true });
         }
+
+        // ★★★ FIX v15.4: Also index SPECIALS in _fieldPropertyMap ★★★
+        // Specials aren't solver candidates but appear in the field-time-index
+        // from Phase 0. Without this, the solver can't check their sharing rules.
+        try {
+            var gs2 = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
+            var storedSpecials = gs2.app1?.specialActivities || gs2.specialActivities || [];
+            var specialsAdded = 0;
+            for (var si2 = 0; si2 < storedSpecials.length; si2++) {
+                var spec = storedSpecials[si2];
+                if (!spec || !spec.name || _fieldPropertyMap.has(spec.name)) continue;
+                var specSW = spec.sharableWith || {};
+                var specCap = 1, specST = 'not_sharable';
+                if (specSW.type === 'same_division') { specCap = parseInt(specSW.capacity) || 2; specST = 'same_division'; }
+                else if (specSW.type === 'custom') { specCap = parseInt(specSW.capacity) || 2; specST = 'custom'; }
+                else if (specSW.type === 'all') { specCap = parseInt(specSW.capacity) || 999; specST = 'all'; }
+                _fieldPropertyMap.set(spec.name, { capacity: specCap, sharingType: specST, prefList: null, prefExclusive: false, hasProps: true, _isSpecial: true });
+                specialsAdded++;
+            }
+            if (specialsAdded > 0) v12Log('Added ' + specialsAdded + ' specials to _fieldPropertyMap');
+        } catch(e2) {}
+
         v12Log('Field properties pre-computed: ' + _fieldPropertyMap.size + ' fields' + (_isRainyDay ? ' (🌧️ rainy overrides applied)' : ''));
     }
 
