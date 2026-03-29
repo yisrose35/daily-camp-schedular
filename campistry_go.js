@@ -144,7 +144,7 @@
         stops.forEach((s, i) => { s.stopNum = i + 1; });
     }
 
-    const MAX_STOP_CAPACITY = 8; // split clusters bigger than this — smaller = easier to rebalance
+    const MAX_STOP_CAPACITY = Infinity; // no cap — walk distance is the only constraint
     let _majorRoadSegments = null; // [{lat1,lng1,lat2,lng2,name}] from Overpass
 
     /** Line segment intersection test (2D) */
@@ -1134,6 +1134,60 @@
         }
         if (dedups) console.log('[Go] Dedup: merged ' + dedups + ' nearby duplicate stop(s)');
 
+        // ── Walk audit: split stops where any kid walks > 500ft ──
+        // The cluster centroid may be close to all kids, but the actual stop
+        // (at an intersection) can be at one end of a long street cluster.
+        const MAX_WALK_FT = 500;
+        let walkSplits = 0;
+        for (let i = 0; i < stops.length; i++) {
+            const st = stops[i];
+            if (st.campers.length <= 2) continue; // tiny stops are fine
+
+            // Check max walk from any kid to this stop
+            let maxWalk = 0;
+            st.campers.forEach(c => {
+                const a = D.addresses[c.name];
+                if (!a?.lat || !a.lng || !st.lat || !st.lng) return;
+                const ft = manhattanMi(a.lat, a.lng, st.lat, st.lng) * 5280;
+                if (ft > maxWalk) maxWalk = ft;
+            });
+
+            if (maxWalk <= MAX_WALK_FT) continue;
+
+            // Split: sort kids by walk distance, move far half to a new stop
+            const withDist = st.campers.map(c => {
+                const a = D.addresses[c.name];
+                const ft = (a?.lat && st.lat) ? manhattanMi(a.lat, a.lng, st.lat, st.lng) * 5280 : 0;
+                return { camper: c, ft, lat: a?.lat || st.lat, lng: a?.lng || st.lng };
+            }).sort((a, b) => a.ft - b.ft);
+
+            const keepCount = Math.ceil(withDist.length / 2);
+            const keepKids = withDist.slice(0, keepCount);
+            const moveKids = withDist.slice(keepCount);
+
+            if (!moveKids.length) continue;
+
+            // New stop at median of moved kids' homes
+            const mLats = moveKids.map(k => k.lat).sort((a, b) => a - b);
+            const mLngs = moveKids.map(k => k.lng).sort((a, b) => a - b);
+            const newLat = mLats[Math.floor(mLats.length / 2)];
+            const newLng = mLngs[Math.floor(mLngs.length / 2)];
+
+            // Update original stop
+            st.campers = keepKids.map(k => k.camper);
+
+            // Create new stop
+            const newStop = {
+                lat: newLat, lng: newLng,
+                address: st.address + ' (split)',
+                campers: moveKids.map(k => k.camper)
+            };
+            stops.splice(i + 1, 0, newStop);
+            walkSplits++;
+            i++; // skip the new stop
+        }
+        if (walkSplits) console.log('[Go] Walk audit: split ' + walkSplits + ' stop(s) where kids walked > ' + MAX_WALK_FT + 'ft');
+
         console.log('[Go] VROOM Engine: ' + stops.length + ' stops, ' + numBuses + ' buses, mode=' + mode);
 
 
@@ -1275,7 +1329,7 @@
                 if (!worstGroup) break; // all groups fit
 
                 // Safety: if overflow is small (≤ 1 stop), let capacity enforcement handle it
-                if (worstOver <= MAX_STOP_CAPACITY) break;
+                if (worstOver <= 8) break; // small overflow — let cap enforcement handle it
 
                 // Merge it with its nearest geographic neighbor
                 let nearestIdx = -1, nearestDist = Infinity;
@@ -1743,6 +1797,29 @@
             console.warn('[Go]   ⚠ ' + r.busName + ': ' + r.camperCount + ' kids exceeds capacity ' + r._cap);
         });
         console.log('[Go] ═══════════════════════════════');
+
+        // ── Per-bus stop + camper distance audit ──
+        console.log('\n[Go] ═══ PER-BUS STOP AUDIT ═══');
+        allRoutes.filter(r => r.stops.length > 0).forEach(r => {
+            console.log('\n[Go] ── ' + r.busName + ' (' + r.camperCount + '/' + r._cap + ' kids) ──');
+            r.stops.forEach(st => {
+                if (st.isMonitor || st.isCounselor) return;
+                const stopDist = (st.lat && campLat) ? haversineMi(campLat, campLng, st.lat, st.lng).toFixed(2) : '?';
+                let farKids = 0;
+                const kidLines = st.campers.map(c => {
+                    const a = D.addresses[c.name];
+                    if (!a?.geocoded || !a.lat || !a.lng || !st.lat || !st.lng) return '      ' + c.name + ' (no address)';
+                    const walkFt = Math.round(manhattanMi(a.lat, a.lng, st.lat, st.lng) * 5280);
+                    const flag = walkFt > 500 ? ' ⚠ FAR' : '';
+                    if (walkFt > 500) farKids++;
+                    return '      ' + c.name + ' — ' + walkFt + 'ft' + flag + '  [' + (a.zip || '') + ']';
+                });
+                const farTag = farKids > 0 ? ' ⚠ ' + farKids + ' far' : '';
+                console.log('[Go]   Stop ' + st.stopNum + ': ' + st.address + ' (' + st.campers.length + ' kids, ' + stopDist + 'mi from camp)' + farTag);
+                kidLines.forEach(l => console.log('[Go] ' + l));
+            });
+        });
+        console.log('\n[Go] ═══ END AUDIT ═══\n');
 
         return allRoutes;
     }
@@ -2849,6 +2926,65 @@
     }
 
     // =========================================================================
+    // DIAGNOSTIC: Bus stop + camper distance audit
+    // Usage: CampistryGo.diagnoseBus('Bus 2')  or  CampistryGo.diagnoseBus(2)
+    // =========================================================================
+    function diagnoseBus(busNameOrNum, shiftIdx) {
+        if (!_generatedRoutes?.length) { console.error('[Go] No routes generated'); return; }
+        const si = shiftIdx || 0;
+        const sr = _generatedRoutes[si];
+        if (!sr) { console.error('[Go] Shift ' + si + ' not found'); return; }
+
+        // Find bus by name or number
+        let route = null;
+        if (typeof busNameOrNum === 'number') {
+            const busName = 'Bus ' + busNameOrNum;
+            route = sr.routes.find(r => r.busName === busName);
+        } else {
+            route = sr.routes.find(r => r.busName === busNameOrNum || r.busId === busNameOrNum);
+        }
+        if (!route) { console.error('[Go] Bus "' + busNameOrNum + '" not found in shift ' + si); return; }
+
+        const campLat = D.setup.campLat || _campCoordsCache?.lat;
+        const campLng = D.setup.campLng || _campCoordsCache?.lng;
+
+        console.log('\n╔══════════════════════════════════════════════════════════════╗');
+        console.log('║  BUS DIAGNOSTIC: ' + route.busName + ' (' + route.camperCount + ' kids, cap ' + route._cap + ')');
+        console.log('╚══════════════════════════════════════════════════════════════╝\n');
+
+        let totalKids = 0;
+        let flagged = 0;
+
+        route.stops.forEach(st => {
+            if (st.isMonitor || st.isCounselor) return;
+
+            const stopDistFromCamp = (st.lat && campLat) ? haversineMi(campLat, campLng, st.lat, st.lng).toFixed(2) : '?';
+            console.log('── Stop ' + st.stopNum + ': ' + st.address + ' (' + st.campers.length + ' kids) — ' + stopDistFromCamp + ' mi from camp ──');
+
+            st.campers.forEach(c => {
+                const a = D.addresses[c.name];
+                if (!a?.geocoded || !a.lat || !a.lng || !st.lat || !st.lng) {
+                    console.log('   ' + c.name + ' — no geocoded address');
+                    return;
+                }
+                const walkFt = Math.round(manhattanMi(a.lat, a.lng, st.lat, st.lng) * 5280);
+                const homeZip = a.zip || '?';
+                const flag = walkFt > 500 ? ' ⚠ FAR' : '';
+                if (walkFt > 500) flagged++;
+                console.log('   ' + c.name + ' — ' + walkFt + 'ft walk' + flag + '  [' + [a.street, a.city, homeZip].filter(Boolean).join(', ') + ']');
+                totalKids++;
+            });
+            console.log('');
+        });
+
+        console.log('═══════════════════════════════════════');
+        console.log('Total: ' + totalKids + ' kids across ' + route.stops.length + ' stops');
+        if (flagged) console.warn(flagged + ' kid(s) walking > 500ft — may be misassigned');
+        console.log('Capacity: ' + route.camperCount + '/' + route._cap + (route.camperCount > route._cap ? ' ⚠ OVER' : ' ✓'));
+        console.log('═══════════════════════════════════════\n');
+    }
+
+    // =========================================================================
     // PUBLIC API
     // =========================================================================
     window.CampistryGo = {
@@ -2861,7 +2997,7 @@
         editAddress, saveAddress, geocodeAll, downloadAddressTemplate, importAddressCsv,
         regeocodeAll: function() { geocodeAll(true); },
         testGeocode, systemCheck,
-        generateRoutes, reOptimizeBus, exportRoutesCsv, printRoutes, detectRegions,
+        generateRoutes, reOptimizeBus, exportRoutesCsv, printRoutes, detectRegions, diagnoseBus,
         renderMap, selectMapBus, toggleMapShift, setMapShiftsAll, toggleMapFullscreen,
         toggleAddressPins, showAddressesOnMap, locateCamper,
         openOverrideModal, onOverrideTypeChange, saveOverride, removeOverride, filterOverrideSelect,
