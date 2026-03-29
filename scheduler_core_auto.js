@@ -431,8 +431,17 @@
             shareType = shareType || 'not_sharable';
             cap = parseInt(cap) || 1;
 
-            for (let m = startMin; m < endMin; m += 5) {
-                const bucket = specialUsageTracker[m]?.[key];
+            // ★ TEMP DEBUG: Log cross-div checks for specials
+            if (key === 'painting' || key === 'bubble lady') {
+                let hasOtherGrade = false;
+                for (let dm = startMin; dm < endMin; dm += 5) {
+                    const db = specialUsageTracker[dm]?.[key];
+                    if (db && db.grades.size > 0 && !db.grades.has(grade)) { hasOtherGrade = true; break; }
+                }
+                console.log(`[P0-XDIV] canUseSpecialAtTime("${specialName}", "${grade}", ${startMin}-${endMin}) shareType=${shareType} cap=${cap} otherGradeBlocking=${hasOtherGrade} trackerBuckets=${Object.keys(specialUsageTracker).length}`);
+            }
+
+            for (let m = startMin; m < endMin; m += 5) {                const bucket = specialUsageTracker[m]?.[key];
                 if (!bucket) continue;
 
                 // Capacity check (all sharing types)
