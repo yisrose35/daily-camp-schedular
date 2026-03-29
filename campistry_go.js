@@ -1197,50 +1197,13 @@
             groups.splice(groups.indexOf(smallest), 1);
         }
 
-        // Smart merge: find pairs of adjacent groups whose merge saves a bus
-        // H(61,needs 2) + W(79,needs 2) = HW(140,needs 3) → saves 1 bus
-        while (true) {
-            const totalNeeded = groups.reduce((s, g) => s + Math.ceil(g.kids / perBusCap), 0);
-            if (totalNeeded <= vehicles.length || groups.length <= 1) break;
+        // NOTE: Only the "more groups than buses" merge above applies.
+        // We do NOT merge to save buses — that creates massive groups where
+        // VROOM mixes geographically distant stops on the same bus.
+        // Instead, allocate buses proportionally and let capacity enforcement
+        // handle regions where kids > seats.
 
-            // Find best merge pair (saves most buses, closest geographically)
-            let bestI = -1, bestJ = -1, bestSave = 0, bestDist = Infinity;
-            for (let i = 0; i < groups.length; i++) {
-                for (let j = i + 1; j < groups.length; j++) {
-                    const separate = Math.ceil(groups[i].kids / perBusCap) + Math.ceil(groups[j].kids / perBusCap);
-                    const merged = Math.ceil((groups[i].kids + groups[j].kids) / perBusCap);
-                    const save = separate - merged;
-                    const dist = haversineMi(groups[i].centroidLat, groups[i].centroidLng, groups[j].centroidLat, groups[j].centroidLng);
-                    if (save > bestSave || (save === bestSave && dist < bestDist)) {
-                        bestSave = save; bestDist = dist; bestI = i; bestJ = j;
-                    }
-                }
-            }
-            if (bestI < 0 || bestSave <= 0) {
-                // No merge saves buses — merge closest pair anyway
-                bestI = 0; bestJ = 1; bestDist = Infinity;
-                for (let i = 0; i < groups.length; i++) {
-                    for (let j = i + 1; j < groups.length; j++) {
-                        const d = haversineMi(groups[i].centroidLat, groups[i].centroidLng, groups[j].centroidLat, groups[j].centroidLng);
-                        if (d < bestDist) { bestDist = d; bestI = i; bestJ = j; }
-                    }
-                }
-            }
-            const a = groups[bestI], b = groups[bestJ];
-            console.log('[Go]   Merge: ' + a.name + '(' + a.kids + ') + ' + b.name + '(' + b.kids + ') → saves ' + bestSave + ' bus(es)');
-            a.kids += b.kids;
-            a.regionIds.push(...b.regionIds);
-            a.name = a.name.split(' +')[0] + ' + ' + b.name.split(' (')[0];
-            // Recalculate centroid
-            const allGroupStops = [];
-            stops.forEach((s, i) => { if (a.regionIds.includes(stopRegions[i]) || b.regionIds.includes(stopRegions[i])) allGroupStops.push(s); });
-            if (allGroupStops.length) {
-                a.centroidLat = allGroupStops.reduce((s, st) => s + st.lat, 0) / allGroupStops.length;
-                a.centroidLng = allGroupStops.reduce((s, st) => s + st.lng, 0) / allGroupStops.length;
-            }
-            stops.forEach((_, i) => { if (b.regionIds.includes(stopRegions[i])) stopRegions[i] = a.id; });
-            groups.splice(bestJ, 1);
-        }
+        console.log('[Go] ' + groups.length + ' groups, ' + vehicles.length + ' buses — allocating proportionally');
 
         // ── Step 3: Allocate buses to groups (capacity-aware) ──
         groups.sort((a, b) => b.kids - a.kids);
