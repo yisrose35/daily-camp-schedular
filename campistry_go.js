@@ -1481,9 +1481,10 @@
             const startsAtCamp = !isArrival;
             const endsAtCamp = isArrival || hasShifts;
 
-            // Pre-compute each stop's distance from camp (for directional penalty)
+            // Haversine distance from camp — for directional penalty only
+            // (road distance gets distorted by one-way streets)
             const campDists = [];
-            for (let i = 0; i < n; i++) campDists[i] = dist(0, i + 1);
+            for (let i = 0; i < n; i++) campDists[i] = haversineMi(campLat, campLng, stops[i].lat, stops[i].lng);
 
             // Tour cost with directional bias:
             // Going "backward" (farther from camp on arrival, closer on dismissal)
@@ -1650,25 +1651,24 @@
             }
 
             // ── FINAL DIRECTIONAL SORT ──
-            // After all optimization, enforce absolute directional order.
+            // After all optimization, enforce geographic directional order.
+            // Uses haversine (crow-flies), NOT road distance — road distance
+            // gets distorted by one-way streets and indirect routes, causing
+            // stop 4 to appear before stop 3 even when stop 3 is geographically
+            // farther. Crow-flies gives clean inward/outward geographic sweep.
+            //
             // Arrival: stop 1 = farthest from camp, last stop = nearest
             // Dismissal: stop 1 = nearest to camp, last stop = farthest
-            // Uses road-distance from matrix when available, haversine fallback.
             if (r.stops.length >= 2) {
                 r.stops.forEach(s => {
-                    if (matrix && s._matrixIdx != null) {
-                        const val = matrix[0]?.[s._matrixIdx];
-                        s._campRoadDist = (val != null && val >= 0) ? val : haversineMi(campLat, campLng, s.lat, s.lng);
-                    } else {
-                        s._campRoadDist = haversineMi(campLat, campLng, s.lat, s.lng);
-                    }
+                    s._campGeoDist = (s.lat && s.lng) ? haversineMi(campLat, campLng, s.lat, s.lng) : 0;
                 });
                 if (isArrival) {
-                    r.stops.sort((a, b) => b._campRoadDist - a._campRoadDist);
+                    r.stops.sort((a, b) => b._campGeoDist - a._campGeoDist);
                 } else {
-                    r.stops.sort((a, b) => a._campRoadDist - b._campRoadDist);
+                    r.stops.sort((a, b) => a._campGeoDist - b._campGeoDist);
                 }
-                r.stops.forEach(s => { delete s._campRoadDist; });
+                r.stops.forEach(s => { delete s._campGeoDist; });
             }
 
             r.stops.forEach((s, i) => { s.stopNum = i + 1; });
@@ -1817,7 +1817,7 @@
                 const b = j === 0 ? { lat: campLat, lng: campLng } : stops[j - 1];
                 return (haversineMi(a.lat, a.lng, b.lat, b.lng) / (D.setup.avgSpeed || 25)) * 3600;
             }
-            const campDists = []; for (let i = 0; i < nn; i++) campDists[i] = dist(0, i + 1);
+            const campDists = []; for (let i = 0; i < nn; i++) campDists[i] = haversineMi(campLat, campLng, stops[i].lat, stops[i].lng);
             function tourCost(tour) {
                 let c = 0; if (startsAtCamp) c += dist(0, tour[0] + 1);
                 for (let i = 0; i < tour.length - 1; i++) {
@@ -1848,19 +1848,14 @@
         if (optimizedOrder && optimizedOrder.length === nn) {
             const newStops = optimizedOrder.map(i => stops[i]);
 
-            // Final directional sort
+            // Final directional sort — haversine for clean geographic sweep
             if (newStops.length >= 2) {
                 newStops.forEach(s => {
-                    if (matrix && s._matrixIdx != null) {
-                        const val = matrix[0]?.[s._matrixIdx];
-                        s._campRoadDist = (val != null && val >= 0) ? val : haversineMi(campLat, campLng, s.lat, s.lng);
-                    } else {
-                        s._campRoadDist = haversineMi(campLat, campLng, s.lat, s.lng);
-                    }
+                    s._campGeoDist = (s.lat && s.lng) ? haversineMi(campLat, campLng, s.lat, s.lng) : 0;
                 });
-                if (isArrival) newStops.sort((a, b) => b._campRoadDist - a._campRoadDist);
-                else newStops.sort((a, b) => a._campRoadDist - b._campRoadDist);
-                newStops.forEach(s => { delete s._campRoadDist; });
+                if (isArrival) newStops.sort((a, b) => b._campGeoDist - a._campGeoDist);
+                else newStops.sort((a, b) => a._campGeoDist - b._campGeoDist);
+                newStops.forEach(s => { delete s._campGeoDist; });
             }
 
             route.stops = [...newStops, ...specialStops];
