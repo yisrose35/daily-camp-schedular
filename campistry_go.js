@@ -1431,6 +1431,52 @@
                 subClusters = [groupStops.map((_, i) => i)];
             } else {
                 subClusters = kMeansGeo(groupStops, numBusesInGroup);
+
+                // ── Boundary swap: move border stops to improve compactness + balance ──
+                // After k-means, some stops are on the boundary between zones.
+                // Move them to the zone whose centroid is closer, IF it improves balance.
+                const targetKids = Math.ceil(groupStops.reduce((s, st) => s + st.campers.length, 0) / numBusesInGroup);
+                for (let swapPass = 0; swapPass < 5; swapPass++) {
+                    let swapped = false;
+                    // Calc centroids
+                    const centroids = subClusters.map(sc => {
+                        if (!sc.length) return { lat: 0, lng: 0 };
+                        return {
+                            lat: sc.reduce((s, i) => s + groupStops[i].lat, 0) / sc.length,
+                            lng: sc.reduce((s, i) => s + groupStops[i].lng, 0) / sc.length
+                        };
+                    });
+                    const scKids = subClusters.map(sc => sc.reduce((s, i) => s + groupStops[i].campers.length, 0));
+
+                    for (let ci = 0; ci < subClusters.length; ci++) {
+                        for (let si = subClusters[ci].length - 1; si >= 0; si--) {
+                            const stopIdx = subClusters[ci][si];
+                            const st = groupStops[stopIdx];
+                            const myDist = haversineMi(st.lat, st.lng, centroids[ci].lat, centroids[ci].lng);
+
+                            let bestTarget = -1, bestDist = myDist;
+                            for (let ti = 0; ti < subClusters.length; ti++) {
+                                if (ti === ci) continue;
+                                const tDist = haversineMi(st.lat, st.lng, centroids[ti].lat, centroids[ti].lng);
+                                // Move only if: closer to target AND source is over-target or target is under-target
+                                const srcOverTarget = scKids[ci] > targetKids * 1.15;
+                                const tgtUnderTarget = scKids[ti] < targetKids * 1.15;
+                                if (tDist < bestDist && (srcOverTarget || tgtUnderTarget)) {
+                                    bestTarget = ti; bestDist = tDist;
+                                }
+                            }
+                            if (bestTarget >= 0) {
+                                subClusters[ci].splice(si, 1);
+                                subClusters[bestTarget].push(stopIdx);
+                                scKids[ci] -= st.campers.length;
+                                scKids[bestTarget] += st.campers.length;
+                                swapped = true;
+                            }
+                        }
+                    }
+                    if (!swapped) break;
+                }
+
                 // Log sub-cluster sizes
                 const sizes = subClusters.map(sc => sc.reduce((s, i) => s + groupStops[i].campers.length, 0));
                 console.log('[Go] Pre-cluster ' + groupName + ': ' + numBusesInGroup + ' zones → [' + sizes.join(', ') + '] kids');
@@ -1459,8 +1505,19 @@
                 }));
 
                 const veh = { id: 1, profile: 'driving-car', capacity: [v.capacity], description: v.name };
-                if (isArrival) { veh.end = [campLng, campLat]; }
-                else { veh.start = [campLng, campLat]; if (hasShifts) veh.end = [campLng, campLat]; }
+                if (isArrival) {
+                    // Start at the farthest stop from camp → sweep toward camp
+                    let farthestStop = busStops[0], farthestDist = 0;
+                    busStops.forEach(s => {
+                        const d = haversineMi(campLat, campLng, s.lat, s.lng);
+                        if (d > farthestDist) { farthestDist = d; farthestStop = s; }
+                    });
+                    veh.start = [farthestStop.lng, farthestStop.lat];
+                    veh.end = [campLng, campLat];
+                } else {
+                    veh.start = [campLng, campLat];
+                    if (hasShifts) veh.end = [campLng, campLat];
+                }
 
                 console.log('[Go] VROOM → ' + v.name + ' (' + groupName + '): ' + jobs.length + ' stops, ' + clusterKids[ci] + ' kids');
 
