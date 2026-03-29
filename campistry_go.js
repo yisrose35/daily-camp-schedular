@@ -994,6 +994,8 @@
             // Calculate ETAs
             const isArrival = D.activeMode === 'arrival';
             const hasShifts = shifts.length > 1;
+            const isLastShift = si === shifts.length - 1;
+            const shiftNeedsReturn = hasShifts && !isLastShift;
             const timeMin = parseTime(shift.departureTime || (isArrival ? '08:00' : '16:00'));
 
             for (const r of routes) {
@@ -1052,7 +1054,7 @@
                         r.stops[i].estimatedMin = cum;
                     }
                     r.totalDuration = Math.round(cum - timeMin);
-                    if (hasShifts && r.stops.length > 0) {
+                    if (shiftNeedsReturn && r.stops.length > 0) {
                         r.returnTocamp = Math.round(stopToCamp(r.stops[r.stops.length - 1]));
                         r.totalDuration += r.returnTocamp;
                     }
@@ -1079,6 +1081,8 @@
     async function solveWithVROOM(campers, vehicles, campLat, campLng, mode, apiKey, shift, shiftIdx, totalShifts) {
         const isArrival = D.activeMode === 'arrival';
         const hasShifts = totalShifts > 1;
+        const isLastShift = shiftIdx === totalShifts - 1;
+        const needsReturn = hasShifts && !isLastShift; // last shift doesn't come back
         const numBuses = vehicles.length;
         const serviceTime = (D.setup.avgStopTime || 2) * 60;
 
@@ -1576,7 +1580,7 @@
                     veh.end = [campLng, campLat];
                 } else {
                     veh.start = [campLng, campLat];
-                    if (hasShifts) veh.end = [campLng, campLat];
+                    if (needsReturn) veh.end = [campLng, campLat];
                 }
 
                 console.log('[Go] VROOM → ' + v.name + ' (' + groupName + '): ' + jobs.length + ' stops, ' + clusterKids[ci] + ' kids');
@@ -1801,7 +1805,7 @@
         const imbalance = maxKids > 0 ? ((maxKids - minKids) / maxKids * 100).toFixed(0) : 0;
 
         console.log('[Go] ═══ ROUTE QUALITY SUMMARY ═══');
-        console.log('[Go]   Mode: ' + (isArrival ? 'ARRIVAL' : 'DISMISSAL' + (hasShifts ? ' (return to camp)' : ' (no return)')));
+        console.log('[Go]   Mode: ' + (isArrival ? 'ARRIVAL' : 'DISMISSAL' + (needsReturn ? ' (return to camp)' : ' (no return)')));
         console.log('[Go]   ' + totalKids + ' kids across ' + totalStops + ' stops on ' + busesUsed + ' buses');
         console.log('[Go]   Kids per bus: avg ' + Math.round(avgKids) + ', min ' + minKids + ', max ' + maxKids + ' (imbalance: ' + imbalance + '%)');
         allRoutes.filter(r => r.stops.length > 0).forEach(r => {
@@ -2018,6 +2022,8 @@
 
         const isArrival = D.activeMode === 'arrival';
         const hasShifts = D.shifts.length > 1;
+        const isLastShift = (shiftIdx ?? 0) === (D.savedRoutes?.length || 1) - 1;
+        const reoptNeedsReturn = hasShifts && !isLastShift;
         const campLat = D.setup.campLat || _campCoordsCache?.lat;
         const campLng = D.setup.campLng || _campCoordsCache?.lng;
         if (!campLat || !campLng) { toast('No camp coordinates', 'error'); return; }
@@ -2038,7 +2044,7 @@
             if (isArrival) {
                 coords = stops.map(s => s.lng + ',' + s.lat).join(';') + ';' + campLng + ',' + campLat;
                 sourceP = 'any'; destP = 'last'; roundtripP = 'false';
-            } else if (hasShifts) {
+            } else if (reoptNeedsReturn) {
                 coords = campLng + ',' + campLat + ';' + stops.map(s => s.lng + ',' + s.lat).join(';');
                 sourceP = 'first'; destP = 'any'; roundtripP = 'true';
             } else {
@@ -2067,7 +2073,7 @@
             matrix = await fetchDistanceMatrix(coordsArr, campLat, campLng);
 
             const startsAtCamp = !isArrival;
-            const endsAtCamp = isArrival || hasShifts;
+            const endsAtCamp = isArrival || reoptNeedsReturn;
             const DPEN = 1.5;
             function dist(i, j) {
                 if (matrix && matrix[i]?.[j] != null && matrix[i][j] >= 0) return matrix[i][j];
@@ -2139,7 +2145,7 @@
             let cum = timeMin;
             rStops.forEach((s, i) => { cum += (i === 0 ? campToStopMin(s) : driveMin(rStops[i-1], s)) + avgStopMin; s.estimatedTime = formatTime(cum); s.estimatedMin = cum; });
             route.totalDuration = Math.round(cum - timeMin);
-            if (hasShifts) route.totalDuration += Math.round(campToStopMin(rStops[rStops.length - 1]));
+            if (reoptNeedsReturn) route.totalDuration += Math.round(campToStopMin(rStops[rStops.length - 1]));
         }
 
         route.stops.forEach(s => { delete s._matrixIdx; }); delete route._osrmMatrix;
@@ -2780,10 +2786,10 @@
         tabsEl.innerHTML = '<button class="bus-tab all-tab' + (isAllBuses() ? ' active' : '') + '" onclick="CampistryGo.selectMapBus(\'all\')">All Buses</button>' +
             uniqueBuses.map(b => '<button class="bus-tab' + (_activeMapBuses.has(b.busId) ? ' active' : '') + '" onclick="CampistryGo.toggleMapBus(\'' + b.busId + '\')"><span class="bus-tab-dot" style="background:' + esc(b.busColor) + '"></span>' + esc(b.busName) + '</button>').join('') +
             '<span style="margin-left:auto;display:flex;gap:4px;align-items:center;">' +
-            '<button class="bus-tab' + (_hideRoutes ? ' active' : '') + '" onclick="CampistryGo.toggleHideRoutes()" style="' + (_hideRoutes ? 'background:var(--amber-50);border-color:var(--amber-300);' : '') + '" title="Hide/show route lines">🗺️ Routes</button>' +
-            '<button class="bus-tab' + (_showAddressPins && _addressPinMode === 'both' ? ' active' : '') + '" onclick="CampistryGo.setAddressPinMode(\'both\')" style="' + (_showAddressPins && _addressPinMode === 'both' ? 'background:var(--blue-50);border-color:var(--blue-300);' : '') + '">📍 All</button>' +
-            '<button class="bus-tab' + (_showAddressPins && _addressPinMode === 'campers' ? ' active' : '') + '" onclick="CampistryGo.setAddressPinMode(\'campers\')" style="' + (_showAddressPins && _addressPinMode === 'campers' ? 'background:var(--blue-50);border-color:var(--blue-300);' : '') + '">🧒 Campers</button>' +
-            '<button class="bus-tab' + (_showAddressPins && _addressPinMode === 'staff' ? ' active' : '') + '" onclick="CampistryGo.setAddressPinMode(\'staff\')" style="' + (_showAddressPins && _addressPinMode === 'staff' ? 'background:var(--amber-50);border-color:var(--amber-300);' : '') + '">🎒 Staff</button>' +
+            '<button class="bus-tab' + (!_hideRoutes ? ' active' : '') + '" onclick="CampistryGo.toggleHideRoutes()" style="' + (!_hideRoutes ? 'background:var(--blue-50);border-color:var(--blue-300);' : '') + '" title="Show/hide route lines">Routes</button>' +
+            '<button class="bus-tab' + (_showAddressPins && _addressPinMode === 'both' ? ' active' : '') + '" onclick="CampistryGo.setAddressPinMode(\'both\')" style="' + (_showAddressPins && _addressPinMode === 'both' ? 'background:var(--blue-50);border-color:var(--blue-300);' : '') + '">All Pins</button>' +
+            '<button class="bus-tab' + (_showAddressPins && _addressPinMode === 'campers' ? ' active' : '') + '" onclick="CampistryGo.setAddressPinMode(\'campers\')" style="' + (_showAddressPins && _addressPinMode === 'campers' ? 'background:var(--blue-50);border-color:var(--blue-300);' : '') + '">Campers</button>' +
+            '<button class="bus-tab' + (_showAddressPins && _addressPinMode === 'staff' ? ' active' : '') + '" onclick="CampistryGo.setAddressPinMode(\'staff\')" style="' + (_showAddressPins && _addressPinMode === 'staff' ? 'background:var(--amber-50);border-color:var(--amber-300);' : '') + '">Staff</button>' +
             '</span>';
 
         _mapLayers.forEach(l => _map.removeLayer(l)); _mapLayers = [];
@@ -2797,18 +2803,18 @@
         }
 
         const visibleRoutes = isAllBuses() ? allRoutes : allRoutes.filter(r => _activeMapBuses.has(r.busId));
-        function getDash(shiftIdx) { if (totalShifts <= 1 || !multiShift) return null; if (shiftIdx === 0) return null; if (shiftIdx === 1) return '18, 12'; return '6, 10'; }
+        function getDash(shiftIdx) { if (totalShifts <= 1 || !multiShift) return null; if (shiftIdx === 0) return null; if (shiftIdx === 1) return '10, 6'; return '4, 6'; }
 
         for (const route of visibleRoutes) {
             const stopsWithCoords = route.stops.filter(s => s.lat && s.lng);
             if (!stopsWithCoords.length) continue;
             const isArrival = D.activeMode === 'arrival';
-            const needsReturn = !isArrival && D.shifts.length > 1;
+            const mapNeedsReturn = !isArrival && D.shifts.length > 1 && route.shiftIdx < _generatedRoutes.length - 1;
             const straightCoords = [];
             if (!isArrival && _campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
             stopsWithCoords.forEach(s => straightCoords.push([s.lat, s.lng]));
             if (isArrival && _campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
-            if (needsReturn && _campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
+            if (mapNeedsReturn && _campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
             allLatLngs.push(...straightCoords);
 
             const dashPattern = getDash(route.shiftIdx);
@@ -2822,8 +2828,6 @@
             if (roadCoords) {
                 const polyline = L.polyline(roadCoords, { color: route.busColor, weight: lineWeight, opacity: lineOpacity, dashArray: dashPattern }).addTo(_map);
                 polyline._goRouteKey = cacheKey; _mapLayers.push(polyline);
-                const arrows = addArrowsToLine(roadCoords, route.busColor, _map);
-                arrows.forEach(a => { a._goRouteKey = cacheKey; _mapLayers.push(a); });
             } else {
                 const tempLine = L.polyline(straightCoords, { color: route.busColor, weight: lineWeight, opacity: lineOpacity * 0.4, dashArray: dashPattern }).addTo(_map);
                 tempLine._goRouteKey = cacheKey; _mapLayers.push(tempLine);
@@ -2834,11 +2838,11 @@
                     if (!isArrival && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
                     stopsWithCoords.forEach(s => wp.push(s.lng + ',' + s.lat));
                     if (isArrival && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
-                    if (needsReturn && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
+                    if (mapNeedsReturn && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
                     (async function(coordStr, color, ck, temp, dash, w, o) {
                         try {
                             const url = mbToken ? 'https://api.mapbox.com/directions/v5/mapbox/driving/' + coordStr + '?overview=full&geometries=geojson&access_token=' + mbToken : 'https://router.project-osrm.org/route/v1/driving/' + coordStr + '?overview=full&geometries=geojson&continue_straight=true';
-                            const resp = await fetch(url); if (resp.ok) { const data = await resp.json(); const coords = data.routes?.[0]?.geometry?.coordinates; if (coords) { const pts = coords.map(c => [c[1], c[0]]); if (pts.length > 0 && _map) { _routeGeomCache[ck] = pts; _map.removeLayer(temp); const idx = _mapLayers.indexOf(temp); if (idx >= 0) _mapLayers.splice(idx, 1); const road = L.polyline(pts, { color, weight: w, opacity: o, dashArray: dash }).addTo(_map); road._goRouteKey = ck; _mapLayers.push(road); const arrows = addArrowsToLine(pts, color, _map); arrows.forEach(a => { a._goRouteKey = ck; _mapLayers.push(a); }); } } }
+                            const resp = await fetch(url); if (resp.ok) { const data = await resp.json(); const coords = data.routes?.[0]?.geometry?.coordinates; if (coords) { const pts = coords.map(c => [c[1], c[0]]); if (pts.length > 0 && _map) { _routeGeomCache[ck] = pts; _map.removeLayer(temp); const idx = _mapLayers.indexOf(temp); if (idx >= 0) _mapLayers.splice(idx, 1); const road = L.polyline(pts, { color, weight: w, opacity: o, dashArray: dash }).addTo(_map); road._goRouteKey = ck; _mapLayers.push(road); } } }
                         } catch (e) { console.warn('[Go] Road geometry failed:', e.message); }
                     })(wp.join(';'), route.busColor, cacheKey, tempLine, dashPattern, lineWeight, lineOpacity);
                 }
@@ -2862,7 +2866,7 @@
 
         const legendEl = document.getElementById('mapLegend');
         if (legendEl) {
-            if (multiShift) { legendEl.innerHTML = shiftIndices.map(si => { const sr = _generatedRoutes[si]; const d = getDash(si); const svgLine = !d ? '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3"/>' : d.startsWith('18') ? '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3" stroke-dasharray="9,6"/>' : '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3" stroke-dasharray="3,5"/>'; return '<span style="display:inline-flex;align-items:center;gap:.375rem;font-size:.75rem;"><svg width="40" height="12">' + svgLine + '</svg>' + esc(sr.shift.label || 'Shift ' + (si + 1)) + '</span>'; }).join('<span style="margin:0 .5rem;color:var(--border-medium);">|</span>'); legendEl.style.display = ''; }
+            if (multiShift) { legendEl.innerHTML = shiftIndices.map(si => { const sr = _generatedRoutes[si]; const d = getDash(si); const svgLine = !d ? '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3"/>' : d.startsWith('10') ? '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3" stroke-dasharray="5,3"/>' : '<line x1="0" y1="6" x2="40" y2="6" stroke="#555" stroke-width="3" stroke-dasharray="2,3"/>'; return '<span style="display:inline-flex;align-items:center;gap:.375rem;font-size:.75rem;"><svg width="40" height="12">' + svgLine + '</svg>' + esc(sr.shift.label || 'Shift ' + (si + 1)) + '</span>'; }).join('<span style="margin:0 .5rem;color:var(--border-medium);">|</span>'); legendEl.style.display = ''; }
             else legendEl.style.display = 'none';
         }
         if (_showAddressPins) renderAddressPins();
@@ -2878,13 +2882,26 @@
         else { _activeMapBuses.add(busId); }
         renderMap(); renderFilteredMasterList();
     }
-    function setAddressPinMode(mode) {
+    async function setAddressPinMode(mode) {
         if (_showAddressPins && _addressPinMode === mode) {
-            // Toggle off if clicking same mode
             _showAddressPins = false; clearAddressPins();
         } else {
             _addressPinMode = mode;
             _showAddressPins = true;
+            // Geocode any counselors that don't have coords yet
+            if (mode === 'staff' || mode === 'both') {
+                for (const c of D.counselors.filter(x => x.address && !x._lat)) {
+                    const geo = await geocodeSingle(c.address);
+                    if (geo) { c._lat = geo.lat; c._lng = geo.lng; }
+                }
+                for (const m of D.monitors.filter(x => x.address)) {
+                    const a = D.addresses[m.name];
+                    if (a && !a.geocoded && m.address) {
+                        const geo = await geocodeSingle(m.address);
+                        if (geo) { a.lat = geo.lat; a.lng = geo.lng; a.geocoded = true; }
+                    }
+                }
+            }
             renderAddressPins();
         }
         if (_generatedRoutes) renderMap(); else if (_showAddressPins) renderAddressPinsAll();
@@ -2919,11 +2936,15 @@
         // Staff/counselor pins — diamond shape to differentiate from camper circles
         const staffPins = [];
         if (showStaff) {
-        D.counselors.filter(c => c.address && c._lat && c._lng).forEach(c => {
+        D.counselors.filter(c => c.address).forEach(c => {
+            // Use cached coords, or try D.addresses fallback
+            let lat = c._lat, lng = c._lng;
+            if (!lat) { const a = D.addresses[c.name]; if (a?.lat) { lat = a.lat; lng = a.lng; } }
+            if (!lat || !lng) return;
             if (!isAllBuses() && c._assignedBus && !_activeMapBuses.has(c._assignedBus)) return;
             const bus = D.buses.find(b => b.id === c._assignedBus);
             const color = bus?.color || '#f59e0b';
-            staffPins.push({ name: c.name, lat: c._lat, lng: c._lng, address: c.address, color, busName: c._assignedBusName || '—', bunk: c.bunk || '', walkFt: c._walkFt || '?' });
+            staffPins.push({ name: c.name, lat, lng, address: c.address, color, busName: c._assignedBusName || '—', bunk: c.bunk || '', walkFt: c._walkFt || '?' });
         });
         D.monitors.filter(m => m.address).forEach(m => {
             const a = D.addresses[m.name] || {};
