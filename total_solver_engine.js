@@ -1418,13 +1418,16 @@ else penalty += 200;
                 }
                 var fn2=c2._fieldNorm, fName=c2.field;
                 var fp=S._fieldPropertyMap.get(fName), cap=fp?fp.capacity:S.getFieldCapacity(fName), st=fp?fp.sharingType:S.getSharingType(fName);
-               var grpUse=fieldUsageGrp.get(fn2)||0;
-                var existUse=(b2.startTime!==undefined&&b2.endTime!==undefined)?S.getFieldUsageFromTimeIndex(fn2,b2.startTime,b2.endTime,b2.bunk):0;
-                var totalUse=existUse+grpUse;
-                var canFit=false;
-                if (totalUse>=cap) { canFit=false; }
-                else if (st==='not_sharable') { canFit=true; }
-                else if (st==='same_division'||st==='custom') {
+               var canFit=false;
+                if (b2.startTime!==undefined&&b2.endTime!==undefined) {
+                    var liveUse;
+                    if (st==='not_sharable') {
+                        liveUse=S.getFieldUsageFromTimeIndex(fn2,b2.startTime,b2.endTime,b2.bunk);
+                    } else {
+                        liveUse=S.countSameDivisionUsage(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk);
+                    }
+                    if (liveUse>=cap) { canFit=false; }
+                    else if (st==='not_sharable') { canFit=true; }                else if (st==='same_division'||st==='custom') {
                     var xc=S.checkCrossDivisionTimeConflict(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk);
                     if (!xc&&b2.divName) { for (var ri=0;ri<results.length;ri++) { var r=results[ri]; if (r.candIdx===-1||normName(r.pick.field)!==fn2) continue; var rb=activityBlocks[r.blockIdx]; if (rb.divName&&rb.divName!==b2.divName&&rb.startTime<b2.endTime&&rb.endTime>b2.startTime) { xc=true; break; } } }
                     if (!xc) { var am=S.checkSameFieldActivityMismatch(fName,b2.startTime,b2.endTime,c2.activityName,b2.bunk); if (!am) { var cAn2=normName(c2.activityName); for (var ri2=0;ri2<results.length;ri2++) { var r2=results[ri2]; if (r2.candIdx===-1||normName(r2.pick.field)!==fn2) continue; var rb2=activityBlocks[r2.blockIdx]; if (rb2.startTime<b2.endTime&&rb2.endTime>b2.startTime) { var ra=normName(r2.pick._activity); if (ra&&cAn2&&ra!==cAn2) { am=ra; break; } } } }
@@ -1453,18 +1456,7 @@ else penalty += 200;
                         console.log('[FULL_GRADE] Capacity bypass: ' + b2.bunk + ' → ' + c2.activityName + ' (grade: ' + b2.divName + ')');
                     }
                 }
-               // ★★★ FIX v15.6: Hard capacity enforcement — time index is source of truth ★★★
-                // The grpUse + existUse double-counting and sdgu logic can miscalculate.
-                // Use the live time index (updated after each pick) as the single authority.
-                if (canFit && b2.startTime !== undefined && b2.endTime !== undefined) {
-                    var hardUse;
-                    if (st === 'same_division' || st === 'custom' || st === 'all') {
-                        hardUse = S.countSameDivisionUsage(fName, b2.divName, b2.startTime, b2.endTime, b2.bunk);
-                    } else {
-                        hardUse = S.getFieldUsageFromTimeIndex(fn2, b2.startTime, b2.endTime, b2.bunk);
-                    }
-                    if (hardUse >= cap) canFit = false;
-                }
+              // v15.8: Hard capacity check removed — primary check now uses time index directly
 
                 if (canFit) {
                     var newPk = S.clonePick(c2);
