@@ -2179,18 +2179,23 @@
             }
 
             // ★★★ FIX v3.4: Post-expand cross-division clamp for specials ★★★
+            // The expand phase can stretch blocks far beyond their registered range.
+            // We must re-register the ACTUAL expanded range so later grades see it,
+            // and shrink/convert blocks that expanded into cross-div conflicts.
             for (let i = 0; i < template.length; i++) {
                 const blk = template[i];
                 if ((blk.type || '').toLowerCase() !== 'special') continue;
                 const sName = blk.event || blk._assignedSpecial || blk.name;
                 if (!sName) continue;
                 if (!canUseSpecialAtTime(sName, grade, blk.startMin, blk.endMin)) {
+                    // Block expanded into a cross-div conflict — try to shrink
                     const origStart = blk.startMin, origEnd = blk.endMin;
+                    const minDur = blk.dMin || 20;
                     let found = false;
-                    for (let t = origStart; t + blk.dMin <= origEnd; t += 5) {
-                        if (canUseSpecialAtTime(sName, grade, t, t + blk.dMin)) {
+                    for (let t = origStart; t + minDur <= origEnd; t += 5) {
+                        if (canUseSpecialAtTime(sName, grade, t, t + minDur)) {
                             blk.startMin = t;
-                            blk.endMin = t + blk.dMin;
+                            blk.endMin = t + minDur;
                             registerSpecialUsage(sName, grade, blk.startMin, blk.endMin);
                             found = true;
                             break;
@@ -2202,6 +2207,10 @@
                         blk._assignedSpecial = null;
                         blk._activityLocked = false;
                     }
+                } else {
+                    // Block is OK — but re-register the ACTUAL expanded range
+                    // so subsequent grades see the real time footprint
+                    registerSpecialUsage(sName, grade, blk.startMin, blk.endMin);
                 }
             }
 
