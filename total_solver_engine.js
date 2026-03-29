@@ -1418,6 +1418,19 @@ else penalty += 200;
                         console.log('[FULL_GRADE] Capacity bypass: ' + b2.bunk + ' → ' + c2.activityName + ' (grade: ' + b2.divName + ')');
                     }
                 }
+               // ★★★ FIX v15.6: Hard capacity enforcement — time index is source of truth ★★★
+                // The grpUse + existUse double-counting and sdgu logic can miscalculate.
+                // Use the live time index (updated after each pick) as the single authority.
+                if (canFit && b2.startTime !== undefined && b2.endTime !== undefined) {
+                    var hardUse;
+                    if (st === 'same_division' || st === 'custom' || st === 'all') {
+                        hardUse = S.countSameDivisionUsage(fName, b2.divName, b2.startTime, b2.endTime, b2.bunk);
+                    } else {
+                        hardUse = S.getFieldUsageFromTimeIndex(fn2, b2.startTime, b2.endTime, b2.bunk);
+                    }
+                    if (hardUse >= cap) canFit = false;
+                }
+
                 if (canFit) {
                     var newPk = S.clonePick(c2);
                     results.push({blockIdx:bo.bi,candIdx:opt.ci,pick:newPk,cost:opt.cost});
