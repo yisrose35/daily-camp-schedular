@@ -1392,15 +1392,19 @@
             const k2 = k - k1;
             const targetLeft = totalKids * (k1 / k);
 
+            // Find split point that minimizes imbalance
             let cumKids = 0, splitAt = Math.floor(sorted.length / 2);
-            for (let i = 0; i < sorted.length; i++) {
+            let bestImbalance = Infinity;
+            for (let i = 0; i < sorted.length - 1; i++) {
                 cumKids += points[sorted[i]].campers.length;
-                if (cumKids >= targetLeft) {
-                    // Split after this point (ensure at least 1 on each side)
-                    splitAt = Math.max(1, Math.min(sorted.length - 1, i + 1));
-                    break;
+                const imbalance = Math.abs(cumKids - targetLeft);
+                if (imbalance < bestImbalance) {
+                    bestImbalance = imbalance;
+                    splitAt = i + 1;
                 }
             }
+            // Ensure at least 1 on each side
+            splitAt = Math.max(1, Math.min(sorted.length - 1, splitAt));
 
             const left = sorted.slice(0, splitAt);
             const right = sorted.slice(splitAt);
@@ -1435,9 +1439,10 @@
                 // geoBisect cuts along lat/lng axes which can put a stop
                 // geographically "in" one neighborhood into the wrong zone.
                 // Move any stop that is significantly closer to another zone's centroid.
+                // Respects capacity: won't push a zone over bus seat limit.
+                const perBusCapForSwap = vehicles.length ? Math.floor(vehicles.reduce((s, v) => s + v.capacity, 0) / vehicles.length) : 47;
                 for (let pass = 0; pass < 3; pass++) {
                     let swapped = false;
-                    // Compute centroids
                     const centroids = subClusters.map(sc => {
                         if (!sc.length) return { lat: 0, lng: 0 };
                         return {
@@ -1445,19 +1450,22 @@
                             lng: sc.reduce((s, i) => s + groupStops[i].lng, 0) / sc.length
                         };
                     });
+                    const scKids = subClusters.map(sc => sc.reduce((s, i) => s + groupStops[i].campers.length, 0));
                     for (let ci = 0; ci < subClusters.length; ci++) {
                         for (let si = subClusters[ci].length - 1; si >= 0; si--) {
                             const idx = subClusters[ci][si];
                             const st = groupStops[idx];
                             const myDist = haversineMi(st.lat, st.lng, centroids[ci].lat, centroids[ci].lng);
-                            // Find if any other zone is significantly closer
                             for (let ti = 0; ti < subClusters.length; ti++) {
                                 if (ti === ci || !subClusters[ti].length) continue;
+                                // Don't push target zone over capacity
+                                if (scKids[ti] + st.campers.length > perBusCapForSwap) continue;
                                 const tDist = haversineMi(st.lat, st.lng, centroids[ti].lat, centroids[ti].lng);
-                                // Only swap if target is at least 30% closer (not marginal differences)
                                 if (tDist < myDist * 0.7) {
                                     subClusters[ci].splice(si, 1);
                                     subClusters[ti].push(idx);
+                                    scKids[ci] -= st.campers.length;
+                                    scKids[ti] += st.campers.length;
                                     swapped = true;
                                     break;
                                 }
@@ -1495,8 +1503,20 @@
                 }));
 
                 const veh = { id: 1, profile: 'driving-car', capacity: [v.capacity], description: v.name };
-                if (isArrival) { veh.end = [campLng, campLat]; }
-                else { veh.start = [campLng, campLat]; if (hasShifts) veh.end = [campLng, campLat]; }
+                if (isArrival) {
+                    // Start at farthest stop from camp → sweep toward camp
+                    // Works with geoBisect's contiguous strips (farthest = strip end)
+                    let fIdx = 0, fDist = 0;
+                    busStops.forEach((s, i) => {
+                        const d = haversineMi(campLat, campLng, s.lat, s.lng);
+                        if (d > fDist) { fDist = d; fIdx = i; }
+                    });
+                    veh.start = [busStops[fIdx].lng, busStops[fIdx].lat];
+                    veh.end = [campLng, campLat];
+                } else {
+                    veh.start = [campLng, campLat];
+                    if (hasShifts) veh.end = [campLng, campLat];
+                }
 
                 console.log('[Go] VROOM → ' + v.name + ' (' + groupName + '): ' + jobs.length + ' stops, ' + clusterKids[ci] + ' kids');
 
@@ -1590,6 +1610,8 @@
                 const stB = normalizeStreet(parseAddress(b.address).street);
                 if (!stA || !stB) continue;
                 if (stA === stB || stA.includes(stB) || stB.includes(stA)) {
+                    // Don't create oversized stops
+                    if (a.campers.length + b.campers.length > MAX_STOP_CAPACITY) continue;
                     a.campers.push(...b.campers);
                     if (b.address.includes('&') && !a.address.includes('&')) a.address = b.address;
                     r.stops.splice(i + 1, 1); merged++; i--;
@@ -1621,6 +1643,8 @@
             if (!overBus) break;
 
             // Find best (stop, receiving bus) pair — stop closest to receiving bus
+            // Max distance: only move stops to buses within 1 mile (same neighborhood)
+            const CAP_MAX_MOVE_MI = 1.0;
             let bestStopIdx = -1, bestBus = null, bestDist = Infinity;
             for (let si = 0; si < overBus.stops.length; si++) {
                 const st = overBus.stops[si];
@@ -1631,13 +1655,14 @@
                     const rLat = r.stops.length ? r.stops.reduce((s, x) => s + x.lat, 0) / r.stops.length : campLat;
                     const rLng = r.stops.length ? r.stops.reduce((s, x) => s + x.lng, 0) / r.stops.length : campLng;
                     const d = haversineMi(st.lat, st.lng, rLat, rLng);
-                    if (d < bestDist) { bestDist = d; bestStopIdx = si; bestBus = r; }
+                    if (d < bestDist && d <= CAP_MAX_MOVE_MI) { bestDist = d; bestStopIdx = si; bestBus = r; }
                 }
             }
 
             if (bestBus && bestStopIdx >= 0) {
-                // Whole-stop move using cheapestInsert
+                // Whole-stop move — stop keeps its geographic location
                 const stopToMove = overBus.stops[bestStopIdx];
+                console.log('[Go]   Cap move: ' + stopToMove.campers.length + ' kids (' + stopToMove.address + ') from ' + overBus.busName + ' → ' + bestBus.busName + ' (' + bestDist.toFixed(2) + 'mi)');
                 overBus.stops.splice(bestStopIdx, 1);
                 overBus.camperCount -= stopToMove.campers.length;
                 overBus.stops.forEach((s, i) => { s.stopNum = i + 1; });
@@ -1645,7 +1670,8 @@
                 bestBus.camperCount += stopToMove.campers.length;
                 capMoves++;
             } else {
-                // No whole-stop fits — split: move campers individually
+                // No whole-stop fits within 1mi — split: move campers individually
+                // Creates a NEW stop on the receiving bus at the same location
                 let splitStopIdx = -1, splitBus = null, splitDist = Infinity;
                 for (let si = 0; si < overBus.stops.length; si++) {
                     const st = overBus.stops[si];
@@ -1655,11 +1681,11 @@
                         const rLat = r.stops.length ? r.stops.reduce((s, x) => s + x.lat, 0) / r.stops.length : campLat;
                         const rLng = r.stops.length ? r.stops.reduce((s, x) => s + x.lng, 0) / r.stops.length : campLng;
                         const d = haversineMi(st.lat, st.lng, rLat, rLng);
-                        if (d < splitDist) { splitDist = d; splitStopIdx = si; splitBus = r; }
+                        if (d < splitDist && d <= CAP_MAX_MOVE_MI) { splitDist = d; splitStopIdx = si; splitBus = r; }
                     }
                 }
                 if (!splitBus || splitStopIdx < 0) {
-                    console.warn('[Go] ⚠ ' + overBus.busName + ': ' + overBus.camperCount + '/' + overBus._cap + ' — no room anywhere');
+                    console.warn('[Go] ⚠ ' + overBus.busName + ': ' + overBus.camperCount + '/' + overBus._cap + ' — no nearby bus with room (max ' + CAP_MAX_MOVE_MI + 'mi)');
                     break;
                 }
                 const stopToSplit = overBus.stops[splitStopIdx];
@@ -1668,6 +1694,8 @@
                 if (toMove <= 0) break;
                 const movedCampers = stopToSplit.campers.splice(0, toMove);
                 overBus.camperCount -= toMove;
+                // Create a NEW stop on receiving bus at the SAME location — kids stay near their home
+                console.log('[Go]   Cap split: ' + toMove + ' kids from ' + stopToSplit.address + ' → new stop on ' + splitBus.busName + ' (' + splitDist.toFixed(2) + 'mi)');
                 cheapestInsert(splitBus.stops, { stopNum: 0, campers: movedCampers, address: stopToSplit.address, lat: stopToSplit.lat, lng: stopToSplit.lng });
                 splitBus.camperCount += toMove;
                 if (stopToSplit.campers.length === 0) {
