@@ -1586,13 +1586,12 @@ else penalty += 200;
     }
     function findBlockIdx(activityBlocks,bunk,sM,eM) { for (var i=0;i<activityBlocks.length;i++) { if (activityBlocks[i].bunk===bunk&&activityBlocks[i].startTime===sM&&activityBlocks[i].endTime===eM) return i; } return -1; }
 
-    function deepFreeResolution(activityBlocks) {
+   function deepFreeResolution(activityBlocks) {
         var allCands=S.allCandidateOptions, actProps=S.activityProperties, gCfg=S.globalConfig;
         S._todayCache.clear();
         var freeIdx=[]; for (var i=0;i<activityBlocks.length;i++) { var a=S._assignments.get(i); if (!a) continue; var an=normName(a.pick._activity||a.pick.field); if (an==='free'||an==='free (timeout)') freeIdx.push(i); }
         if (freeIdx.length===0) return 0;
         console.log('[SOLVER-v12.4] 🧠 Deep Free Resolution: '+freeIdx.length+' Free blocks');
-        // Sort by division density (divisions with most Free blocks first)
         var divFree = {};
         for (var dfi of freeIdx) { var dfn = activityBlocks[dfi].divName || ''; divFree[dfn] = (divFree[dfn] || 0) + 1; }
         freeIdx.sort(function(a, b) { return (divFree[activityBlocks[b].divName || ''] || 0) - (divFree[activityBlocks[a].divName || ''] || 0); });
@@ -1601,16 +1600,21 @@ else penalty += 200;
             var bi=freeIdx[idx],blk=activityBlocks[bi],bunk=blk.bunk,bDiv=blk.divName||'',sM=blk.startTime,eM=blk.endTime,slots=blk.slots||[];
             if (sM===undefined||eM===undefined) continue; S._todayCache.clear();
             var fresh=[];
-            for (var ci=0;ci<allCands.length;ci++) { var c=allCands[ci]; if (disabled.indexOf(c.field)!==-1) continue; if (window.GlobalFieldLocks?.isFieldLocked(c.field,slots)) continue; if (S.isFieldLockedByTime(c.field,sM,eM,bDiv)) continue; if (S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue;
+            for (var ci=0;ci<allCands.length;ci++) {
+                var c=allCands[ci];
+                if (disabled.indexOf(c.field)!==-1) continue;
+                if (window.GlobalFieldLocks?.isFieldLocked(c.field,slots)) continue;
+                if (S.isFieldLockedByTime(c.field,sM,eM,bDiv)) continue;
+                if (S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue;
                 var fp=S._fieldPropertyMap.get(c.field),cap=fp?fp.capacity:S.getFieldCapacity(c.field),st=fp?fp.sharingType:S.getSharingType(c.field);
                 if (st==='not_sharable') { if (S.getFieldUsageFromTimeIndex(c._fieldNorm,sM,eM,bunk)>=cap) continue; } else { if (S.countSameDivisionUsage(c.field,bDiv,sM,eM,bunk)>=cap) continue; }
                 var td=S.getActivitiesDoneToday(bunk,slots[0]??999),cAn=normName(c.activityName); if (cAn&&cAn!=='free'&&cAn!=='free play'&&td.has(cAn)) continue;
-               if (!actProps[c.field]&&!actProps[c.activityName]&&c.type!=='special') continue;
-               if (window.unifiedTimes && window.SchedulerCoreUtils?.canBlockFit && !(S._isRainyDay && S._rainyTimeBypasses.has(c.field)) && !window.SchedulerCoreUtils.canBlockFit(blk,c.field,actProps,null,c.activityName,false)) continue;
-                S.setScratchPick(c); var dfCost = S.calculatePenaltyCost(blk, S.setScratchPick(c)); if (dfCost < 900000) fresh.push({ci: ci, cost: dfCost});
+                if (!actProps[c.field]&&!actProps[c.activityName]&&c.type!=='special') continue;
+                if (window.unifiedTimes && window.SchedulerCoreUtils?.canBlockFit && !(S._isRainyDay && S._rainyTimeBypasses.has(c.field)) && !window.SchedulerCoreUtils.canBlockFit(blk,c.field,actProps,null,c.activityName,false)) continue;
+                S.setScratchPick(c); var dfCost=S.calculatePenaltyCost(blk,S.setScratchPick(c)); if (dfCost<900000) fresh.push({ci:ci,cost:dfCost});
             }
-            if (fresh.length>0) { { fresh.sort(function(a,b){return a.cost-b.cost;}); var pk=S.clonePick(allCands[fresh[0].ci]); S.undoPickFromSchedule(blk,S._assignments.get(bi).pick); S._assignments.set(bi,{candIdx:fresh[0].ci,pick:pk,cost:fresh[0].cost}); S.applyPickToSchedule(blk,pk); var pfn=normName(pk.field); S.addToFieldTimeIndex(pfn,sM,eM,bunk,bDiv,normName(pk._activity)); var pan=normName(pk._activity); if (pan&&pan!==pfn) S.addToFieldTimeIndex(pan,sM,eM,bunk,bDiv,pan); S.invalidateRotationCacheForBunk(bunk); S._todayCache.clear(); resolved++; continue; }
-            // Phase 2: Displacement (abbreviated for space — same logic as v12.4)
+            if (fresh.length>0) { fresh.sort(function(a,b){return a.cost-b.cost;}); var pk=S.clonePick(allCands[fresh[0].ci]); S.undoPickFromSchedule(blk,S._assignments.get(bi).pick); S._assignments.set(bi,{candIdx:fresh[0].ci,pick:pk,cost:fresh[0].cost}); S.applyPickToSchedule(blk,pk); var pfn=normName(pk.field); S.addToFieldTimeIndex(pfn,sM,eM,bunk,bDiv,normName(pk._activity)); var pan=normName(pk._activity); if (pan&&pan!==pfn) S.addToFieldTimeIndex(pan,sM,eM,bunk,bDiv,pan); S.invalidateRotationCacheForBunk(bunk); S._todayCache.clear(); resolved++; continue; }
+            // Phase 2: Displacement
             for (var obi=0;obi<activityBlocks.length;obi++) {
                 var ob=activityBlocks[obi]; if (obi===bi||ob.divName!==bDiv||ob.bunk===bunk) continue;
                 if (ob.startTime===undefined||ob.endTime===undefined) continue; if (ob.startTime>=eM||ob.endTime<=sM) continue;
