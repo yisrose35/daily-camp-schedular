@@ -986,10 +986,9 @@
                 routes = await solveWithVROOM(allCampers, shiftVehicles, campLat, campLng, mode, key, shift, si, shifts.length);
             }
 
-            // Add monitor + counselor stops
+            // Add monitor stops (counselors handled post-generation)
             routes.forEach(r => {
                 if (r.monitor?.address) r.stops.push({ stopNum: r.stops.length + 1, campers: [], address: r.monitor.address, lat: null, lng: null, isMonitor: true, monitorName: r.monitor.name });
-                r.counselors.filter(c => c.needsStop === 'yes' && c.address).forEach(c => { r.stops.push({ stopNum: r.stops.length + 1, campers: [], address: c.address, lat: null, lng: null, isCounselor: true, counselorName: c.name }); });
             });
 
             // Calculate ETAs
@@ -1123,8 +1122,16 @@
         for (let i = 0; i < stops.length; i++) {
             for (let j = i + 1; j < stops.length; j++) {
                 if (haversineMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng) <= dedupDist) {
-                    // Don't merge if combined would be too large
-                    if (stops[i].campers.length + stops[j].campers.length > MAX_STOP_CAPACITY) continue;
+                    // Don't merge if any kid would walk > 500ft to combined stop
+                    const keepLat = stops[i].lat, keepLng = stops[i].lng;
+                    let tooFar = false;
+                    for (const c of [...stops[i].campers, ...stops[j].campers]) {
+                        const a = D.addresses[c.name];
+                        if (a?.lat && a.lng && manhattanMi(a.lat, a.lng, keepLat, keepLng) * 5280 > 500) {
+                            tooFar = true; break;
+                        }
+                    }
+                    if (tooFar) continue;
                     stops[i].campers.push(...stops[j].campers);
                     if (stops[j].address.includes('&') && !stops[i].address.includes('&')) stops[i].address = stops[j].address;
                     stops.splice(j, 1);
@@ -1141,7 +1148,7 @@
         let walkSplits = 0;
         for (let i = 0; i < stops.length; i++) {
             const st = stops[i];
-            if (st.campers.length <= 2) continue; // tiny stops are fine
+            if (st.campers.length <= 1) continue; // can't split a single kid
 
             // Check max walk from any kid to this stop
             let maxWalk = 0;
@@ -1664,8 +1671,18 @@
                 const stB = normalizeStreet(parseAddress(b.address).street);
                 if (!stA || !stB) continue;
                 if (stA === stB || stA.includes(stB) || stB.includes(stA)) {
-                    // Don't create oversized stops
-                    if (a.campers.length + b.campers.length > MAX_STOP_CAPACITY) continue;
+                    // Don't merge if any kid would walk > MAX_WALK_FT to the combined stop
+                    const mergedLat = a.lat, mergedLng = a.lng; // keep stop A's location
+                    const allKids = [...a.campers, ...b.campers];
+                    let wouldBeFar = false;
+                    for (const c of allKids) {
+                        const addr = D.addresses[c.name];
+                        if (!addr?.lat || !addr.lng) continue;
+                        if (manhattanMi(addr.lat, addr.lng, mergedLat, mergedLng) * 5280 > 500) {
+                            wouldBeFar = true; break;
+                        }
+                    }
+                    if (wouldBeFar) continue;
                     a.campers.push(...b.campers);
                     if (b.address.includes('&') && !a.address.includes('&')) a.address = b.address;
                     r.stops.splice(i + 1, 1); merged++; i--;
@@ -1817,11 +1834,177 @@
                 const farTag = farKids > 0 ? ' ⚠ ' + farKids + ' far' : '';
                 console.log('[Go]   Stop ' + st.stopNum + ': ' + st.address + ' (' + st.campers.length + ' kids, ' + stopDist + 'mi from camp)' + farTag);
                 kidLines.forEach(l => console.log('[Go] ' + l));
+                // Show counselors assigned to this stop
+                if (st._counselors?.length) {
+                    st._counselors.forEach(c => {
+                        const tag = c.walkFt > 1850 ? ' ⚠ FAR' : '';
+                        console.log('[Go]       🎒 ' + c.name + ' (counselor) — ' + c.walkFt + 'ft walk' + tag + '  [' + c.address + ']');
+                    });
+                }
             });
         });
         console.log('\n[Go] ═══ END AUDIT ═══\n');
 
+        // ══════════════════════════════════════════════════════════════
+        // COUNSELOR STOP ASSIGNMENT
+        // Counselors don't get their own stops — they get off at the
+        // closest existing camper stop. Flag anyone >7 min walk away.
+        // ══════════════════════════════════════════════════════════════
+        const allStops = []; // flat list of {stop, route} for proximity search
+        allRoutes.forEach(r => r.stops.forEach(st => {
+            if (!st.isMonitor && st.lat && st.lng) allStops.push({ stop: st, route: r });
+        }));
+
+        const counselorsToAssign = D.counselors.filter(c => c.address);
+        if (counselorsToAssign.length && allStops.length) {
+            console.log('[Go] ═══ COUNSELOR ASSIGNMENT ═══');
+            const OUTLIER_WALK_FT = 1850; // ~7 min at 3mph
+            const outliers = [];
+
+            for (const c of counselorsToAssign) {
+                // Geocode if we don't have coords yet
+                if (!c._lat || !c._lng) {
+                    const geo = await geocodeSingle(c.address);
+                    if (geo) { c._lat = geo.lat; c._lng = geo.lng; }
+                    else {
+                        console.warn('[Go]   ⚠ Could not geocode: ' + c.name + ' (' + c.address + ')');
+                        continue;
+                    }
+                }
+
+                // Find nearest stop
+                let bestStop = null, bestRoute = null, bestDist = Infinity;
+                for (const { stop, route } of allStops) {
+                    const d = manhattanMi(c._lat, c._lng, stop.lat, stop.lng);
+                    if (d < bestDist) { bestDist = d; bestStop = stop; bestRoute = route; }
+                }
+
+                if (!bestStop) continue;
+
+                const walkFt = Math.round(bestDist * 5280);
+                c._assignedStop = bestStop.address;
+                c._assignedBus = bestRoute.busId;
+                c._assignedBusName = bestRoute.busName;
+                c._walkFt = walkFt;
+
+                // Tag the stop with counselor info
+                if (!bestStop._counselors) bestStop._counselors = [];
+                bestStop._counselors.push({ name: c.name, walkFt, address: c.address, id: c.id });
+
+                if (walkFt > OUTLIER_WALK_FT) {
+                    outliers.push(c);
+                    console.warn('[Go]   ⚠ ' + c.name + ' → ' + bestStop.address + ' on ' + bestRoute.busName + ' — ' + walkFt + 'ft walk (>' + OUTLIER_WALK_FT + 'ft)');
+                } else {
+                    console.log('[Go]   ' + c.name + ' → ' + bestStop.address + ' on ' + bestRoute.busName + ' — ' + walkFt + 'ft walk ✓');
+                }
+            }
+
+            console.log('[Go] ═══════════════════════════════');
+
+            // Store outliers for UI prompt
+            if (outliers.length) {
+                _counselorOutliers = outliers;
+                // Defer UI prompt until after routes render
+                setTimeout(() => showCounselorOutlierModal(outliers), 800);
+            }
+        }
+
         return allRoutes;
+    }
+
+    // ── Counselor outlier prompt ──
+    let _counselorOutliers = [];
+
+    function showCounselorOutlierModal(outliers) {
+        const existing = document.getElementById('counselorOutlierModal');
+        if (existing) existing.remove();
+
+        const rows = outliers.map((c, i) => {
+            const walkMin = (c._walkFt / 264).toFixed(1); // ~264ft per min at 3mph
+            return '<tr data-idx="' + i + '">'
+                + '<td style="font-weight:600">' + esc(c.name) + '</td>'
+                + '<td style="font-size:.8rem">' + esc(c.address) + '</td>'
+                + '<td style="font-size:.8rem">' + esc(c._assignedStop) + '<br><span style="color:var(--text-muted)">' + esc(c._assignedBusName) + '</span></td>'
+                + '<td style="text-align:center"><span style="color:var(--red-600);font-weight:600">' + walkMin + ' min</span><br><span style="font-size:.7rem;color:var(--text-muted)">' + c._walkFt + 'ft</span></td>'
+                + '<td style="text-align:center"><select class="counselor-outlier-action" data-idx="' + i + '" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border-primary);font-size:.8rem;background:var(--bg-primary)">'
+                + '<option value="ignore">Ignore</option>'
+                + '<option value="add-stop">Add dedicated stop</option>'
+                + '</select></td></tr>';
+        }).join('');
+
+        const modal = document.createElement('div');
+        modal.id = 'counselorOutlierModal';
+        modal.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.5)';
+        modal.innerHTML = '<div style="background:var(--bg-primary);border-radius:12px;max-width:800px;width:95%;max-height:80vh;overflow:auto;padding:1.5rem;box-shadow:0 20px 60px rgba(0,0,0,.3)">'
+            + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem"><h3 style="margin:0;font-size:1.1rem">⚠️ Counselors Far From Any Stop</h3>'
+            + '<button onclick="document.getElementById(\'counselorOutlierModal\').remove()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:var(--text-muted)">×</button></div>'
+            + '<p style="color:var(--text-muted);font-size:.85rem;margin-bottom:1rem">These counselors live more than a 7-minute walk from the nearest bus stop. You can ignore this or add a dedicated stop for them (routes will regenerate).</p>'
+            + '<table style="width:100%;border-collapse:collapse;font-size:.85rem"><thead><tr style="border-bottom:2px solid var(--border-primary)">'
+            + '<th style="text-align:left;padding:8px">Name</th><th style="text-align:left;padding:8px">Home Address</th><th style="text-align:left;padding:8px">Nearest Stop</th><th style="text-align:center;padding:8px">Walk</th><th style="text-align:center;padding:8px">Action</th></tr></thead>'
+            + '<tbody>' + rows + '</tbody></table>'
+            + '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:1.25rem">'
+            + '<button id="counselorOutlierIgnoreAll" style="padding:8px 16px;border-radius:8px;border:1px solid var(--border-primary);background:var(--bg-primary);cursor:pointer;font-size:.85rem">Ignore All</button>'
+            + '<button id="counselorOutlierApply" style="padding:8px 16px;border-radius:8px;border:none;background:var(--blue-600);color:white;cursor:pointer;font-size:.85rem;font-weight:600">Apply Changes</button>'
+            + '</div></div>';
+
+        document.body.appendChild(modal);
+
+        document.getElementById('counselorOutlierIgnoreAll').addEventListener('click', () => {
+            modal.remove();
+            toast('Counselor assignments kept as-is');
+        });
+
+        document.getElementById('counselorOutlierApply').addEventListener('click', () => {
+            const selects = modal.querySelectorAll('.counselor-outlier-action');
+            let added = 0;
+
+            selects.forEach(sel => {
+                const idx = parseInt(sel.dataset.idx);
+                const action = sel.value;
+                const c = outliers[idx];
+                if (action === 'add-stop' && c._lat && c._lng) {
+                    // Find the bus whose route centroid is closest
+                    let bestRoute = null, bestDist = Infinity;
+                    const routes = D.savedRoutes?.[0]?.routes || [];
+                    for (const r of routes) {
+                        if (!r.stops.length) continue;
+                        for (const st of r.stops) {
+                            if (!st.lat) continue;
+                            const d = haversineMi(c._lat, c._lng, st.lat, st.lng);
+                            if (d < bestDist) { bestDist = d; bestRoute = r; }
+                        }
+                    }
+                    if (bestRoute) {
+                        const newStop = {
+                            stopNum: 0, campers: [],
+                            address: c.address,
+                            lat: c._lat, lng: c._lng,
+                            isCounselor: true, counselorName: c.name,
+                            _counselors: [{ name: c.name, walkFt: 0, address: c.address, id: c.id }]
+                        };
+                        cheapestInsert(bestRoute.stops, newStop);
+                        bestRoute.stops.forEach((s, i) => { s.stopNum = i + 1; });
+                        c._assignedBus = bestRoute.busId;
+                        c._assignedBusName = bestRoute.busName;
+                        c._assignedStop = c.address;
+                        c._walkFt = 0;
+                        added++;
+                        console.log('[Go] Added dedicated stop for ' + c.name + ' on ' + bestRoute.busName);
+                    }
+                }
+            });
+
+            modal.remove();
+
+            if (added) {
+                save();
+                _generatedRoutes = D.savedRoutes;
+                renderRouteResults(applyOverrides(D.savedRoutes));
+                toast(added + ' dedicated counselor stop' + (added > 1 ? 's' : '') + ' added');
+            } else {
+                toast('Counselor assignments kept as-is');
+            }
+        });
     }
 
     // =========================================================================
@@ -2696,6 +2879,31 @@
             _addressPinLayers.push(marker);
         });
         console.log('[Go] Address pins: ' + camperPins.length + ' campers' + (_activeMapBus !== 'all' ? ' (filtered)' : ''));
+
+        // Staff/counselor pins — square shape to differentiate from camper circles
+        const staffPins = [];
+        D.counselors.filter(c => c.address && c._lat && c._lng).forEach(c => {
+            // Filter by selected bus if applicable
+            if (_activeMapBus !== 'all' && c._assignedBus && c._assignedBus !== _activeMapBus) return;
+            const bus = D.buses.find(b => b.id === c._assignedBus);
+            const color = bus?.color || '#f59e0b';
+            staffPins.push({ name: c.name, lat: c._lat, lng: c._lng, address: c.address, color, busName: c._assignedBusName || '—', bunk: c.bunk || '', walkFt: c._walkFt || '?' });
+        });
+        D.monitors.filter(m => m.address).forEach(m => {
+            const a = D.addresses[m.name] || {};
+            if (!a.lat || !a.lng) return;
+            const bus = D.buses.find(b => b.id === m.assignedBus);
+            if (_activeMapBus !== 'all' && m.assignedBus && m.assignedBus !== _activeMapBus) return;
+            const color = bus?.color || '#f59e0b';
+            staffPins.push({ name: m.name + ' (monitor)', lat: a.lat, lng: a.lng, address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', '), color, busName: bus?.name || '—', bunk: '', walkFt: '' });
+        });
+        staffPins.forEach(pin => {
+            const icon = L.divIcon({ html: '<div style="width:10px;height:10px;background:' + esc(pin.color) + ';border:2px solid #fff;border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,.4);transform:rotate(45deg);"></div>', className: '', iconSize: [10, 10], iconAnchor: [5, 5] });
+            const marker = L.marker([pin.lat, pin.lng], { icon, zIndexOffset: -50 }).addTo(_map);
+            marker.bindPopup('<div style="font-family:DM Sans,sans-serif;min-width:150px;"><div style="font-weight:700;">🎒 ' + esc(pin.name) + '</div><div style="font-size:12px;color:#666;">Staff' + (pin.bunk ? ' / Bunk ' + esc(pin.bunk) : '') + '</div><div style="font-size:12px;margin-top:4px;">' + esc(pin.address) + '</div>' + (pin.walkFt ? '<div style="font-size:11px;margin-top:4px;color:var(--text-muted)">Walk to stop: ' + pin.walkFt + 'ft</div>' : '') + '<div style="font-size:11px;margin-top:4px;display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:2px;background:' + esc(pin.color) + ';display:inline-block;transform:rotate(45deg);"></span><span style="font-weight:600;">' + esc(pin.busName) + '</span></div></div>');
+            _addressPinLayers.push(marker);
+        });
+        if (staffPins.length) console.log('[Go] Address pins: ' + staffPins.length + ' staff (◆ square pins)');
     }
     function renderAddressPinsAll() {
         if (!_map) return; clearAddressPins();
@@ -2703,6 +2911,20 @@
         Object.entries(roster).forEach(([name, c]) => { const a = D.addresses[name]; if (!a?.geocoded || !a.lat || !a.lng) return; if (a.transport === 'pickup') return; const icon = L.divIcon({ html: '<div style="width:8px;height:8px;background:#3b82f6;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,.3);"></div>', className: '', iconSize: [8, 8], iconAnchor: [4, 4] }); const marker = L.marker([a.lat, a.lng], { icon, zIndexOffset: -100 }).addTo(_map); marker.bindPopup('<div style="font-family:DM Sans,sans-serif;"><div style="font-weight:700;">' + esc(name) + '</div><div style="font-size:12px;color:#666;">' + esc(c.division || '') + (c.bunk ? ' / Bunk ' + esc(c.bunk) : '') + '</div><div style="font-size:12px;margin-top:4px;">' + esc([a.street, a.city, a.state, a.zip].filter(Boolean).join(', ')) + '</div></div>'); _addressPinLayers.push(marker); allLatLngs.push([a.lat, a.lng]); });
         if (allLatLngs.length > 0 && !_generatedRoutes) _map.fitBounds(L.latLngBounds(allLatLngs), { padding: [50, 50], maxZoom: 14 });
         console.log('[Go] Address pins: ' + _addressPinLayers.length + ' campers (all)');
+
+        // Staff pins (square, amber) — pre-generation mode, geocode on the fly
+        let staffCount = 0;
+        [...D.counselors, ...D.monitors].filter(s => s.address).forEach(s => {
+            let lat = s._lat, lng = s._lng;
+            const a = D.addresses[s.name];
+            if (!lat && a?.lat) { lat = a.lat; lng = a.lng; }
+            if (!lat || !lng) return;
+            const icon = L.divIcon({ html: '<div style="width:8px;height:8px;background:#f59e0b;border:2px solid #fff;border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,.3);transform:rotate(45deg);"></div>', className: '', iconSize: [8, 8], iconAnchor: [4, 4] });
+            const marker = L.marker([lat, lng], { icon, zIndexOffset: -50 }).addTo(_map);
+            marker.bindPopup('<div style="font-family:DM Sans,sans-serif;"><div style="font-weight:700;">🎒 ' + esc(s.name) + '</div><div style="font-size:12px;color:#666;">Staff' + (s.bunk ? ' / Bunk ' + esc(s.bunk) : '') + '</div><div style="font-size:12px;margin-top:4px;">' + esc(s.address) + '</div></div>');
+            _addressPinLayers.push(marker); allLatLngs.push([lat, lng]); staffCount++;
+        });
+        if (staffCount) console.log('[Go] Address pins: ' + staffCount + ' staff (◆ square pins)');
     }
     function showAddressesOnMap() {
         if (!_map) { const container = document.getElementById('routeMap'); if (!container) return; _map = L.map(container, { scrollWheelZoom: true, zoomControl: true }); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OSM', maxZoom: 19 }).addTo(_map); if (_campCoordsCache) { const campIcon = L.divIcon({ html: '<div style="width:32px;height:32px;background:#1e293b;border:3px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.4);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>', className: '', iconSize: [32, 32], iconAnchor: [16, 16] }); L.marker([_campCoordsCache.lat, _campCoordsCache.lng], { icon: campIcon, zIndexOffset: 1000 }).addTo(_map).bindPopup('<strong>' + esc(D.setup.campName || 'Camp') + '</strong>'); } }
