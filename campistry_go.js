@@ -123,25 +123,7 @@
         stops.forEach((s, i) => { s.stopNum = i + 1; });
     }
 
-    /** Insert a stop at the position that adds the least driving distance.
-     *  Preserves VROOM's route flow — doesn't sort by camp distance. */
-    function cheapestInsert(stops, newStop) {
-        if (!newStop.lat || !newStop.lng || stops.length === 0) { stops.push(newStop); stops.forEach((s, i) => { s.stopNum = i + 1; }); return; }
-        let bestPos = stops.length, bestCost = Infinity;
-        for (let i = 0; i <= stops.length; i++) {
-            const prev = i > 0 ? stops[i - 1] : null;
-            const next = i < stops.length ? stops[i] : null;
-            let cost = 0;
-            if (prev && prev.lat) cost += haversineMi(prev.lat, prev.lng, newStop.lat, newStop.lng);
-            if (next && next.lat) cost += haversineMi(newStop.lat, newStop.lng, next.lat, next.lng);
-            if (prev && next && prev.lat && next.lat) cost -= haversineMi(prev.lat, prev.lng, next.lat, next.lng);
-            if (cost < bestCost) { bestCost = cost; bestPos = i; }
-        }
-        stops.splice(bestPos, 0, newStop);
-        stops.forEach((s, i) => { s.stopNum = i + 1; });
-    }
-
-    const MAX_STOP_CAPACITY = 8; // split clusters bigger than this — smaller = easier to rebalance
+    const MAX_STOP_CAPACITY = 15; // split clusters bigger than this
     let _majorRoadSegments = null; // [{lat1,lng1,lat2,lng2,name}] from Overpass
 
     /** Line segment intersection test (2D) */
@@ -1120,8 +1102,6 @@
         for (let i = 0; i < stops.length; i++) {
             for (let j = i + 1; j < stops.length; j++) {
                 if (haversineMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng) <= dedupDist) {
-                    // Don't merge if combined would be too large
-                    if (stops[i].campers.length + stops[j].campers.length > MAX_STOP_CAPACITY) continue;
                     stops[i].campers.push(...stops[j].campers);
                     if (stops[j].address.includes('&') && !stops[i].address.includes('&')) stops[i].address = stops[j].address;
                     stops.splice(j, 1);
@@ -1364,7 +1344,7 @@
                             });
                         }
                         if (bestRoute) {
-                            cheapestInsert(bestRoute.stops, { stopNum: 0, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng });
+                            directionalInsert(bestRoute.stops, { stopNum: 0, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng }, campLat, campLng);
                             bestRoute.camperCount += stop.campers.length;
                         }
                     });
@@ -1392,7 +1372,18 @@
             }
         });
 
-        // (Orient moved to after capacity enforcement)
+        // ══════════════════════════════════════════════════════════════
+        // ORIENT ROUTES
+        // ══════════════════════════════════════════════════════════════
+        showProgress('Finalizing routes...', 85);
+        allRoutes.forEach(r => {
+            if (r.stops.length < 2) return;
+            const fd = haversineMi(campLat, campLng, r.stops[0].lat, r.stops[0].lng);
+            const ld = haversineMi(campLat, campLng, r.stops[r.stops.length - 1].lat, r.stops[r.stops.length - 1].lng);
+            if (isArrival && fd < ld) r.stops.reverse();
+            if (!isArrival && fd > ld) r.stops.reverse();
+            r.stops.forEach((s, i) => { s.stopNum = i + 1; });
+        });
 
         // ══════════════════════════════════════════════════════════════
         // POST-ROUTING: Merge consecutive same-street stops
@@ -1434,84 +1425,66 @@
             }
             if (!overBus) break;
 
-            // Find the best (stop, receiving bus) pair — the stop from overBus
-            // that is CLOSEST to a receiving bus. This naturally picks border
-            // stops between adjacent regions.
-            let bestStopIdx = -1, bestBus = null, bestDist = Infinity;
-            for (let si = 0; si < overBus.stops.length; si++) {
-                const st = overBus.stops[si];
-                if (!st.lat) continue;
-                for (const r of allRoutes) {
-                    if (r === overBus) continue;
-                    if (r.camperCount + st.campers.length > r._cap) continue;
-                    const rLat = r.stops.length ? r.stops.reduce((s, x) => s + x.lat, 0) / r.stops.length : campLat;
-                    const rLng = r.stops.length ? r.stops.reduce((s, x) => s + x.lng, 0) / r.stops.length : campLng;
-                    const d = haversineMi(st.lat, st.lng, rLat, rLng);
-                    if (d < bestDist) { bestDist = d; bestStopIdx = si; bestBus = r; }
-                }
+            const cLat = overBus.stops.reduce((s, st) => s + st.lat, 0) / overBus.stops.length;
+            const cLng = overBus.stops.reduce((s, st) => s + st.lng, 0) / overBus.stops.length;
+            let moveIdx = 0, moveDist = 0;
+            overBus.stops.forEach((st, i) => {
+                const d = haversineMi(cLat, cLng, st.lat, st.lng);
+                if (d > moveDist) { moveDist = d; moveIdx = i; }
+            });
+            const stopToMove = overBus.stops[moveIdx];
+
+            // Try whole-stop move
+            let bestBus = null, bestDist = Infinity;
+            for (const r of allRoutes) {
+                if (r === overBus) continue;
+                if (r.camperCount + stopToMove.campers.length > r._cap) continue;
+                const rLat = r.stops.length ? r.stops.reduce((s, st) => s + st.lat, 0) / r.stops.length : campLat;
+                const rLng = r.stops.length ? r.stops.reduce((s, st) => s + st.lng, 0) / r.stops.length : campLng;
+                const d = haversineMi(stopToMove.lat, stopToMove.lng, rLat, rLng);
+                if (d < bestDist) { bestDist = d; bestBus = r; }
             }
 
-            if (bestBus && bestStopIdx >= 0) {
-                const stopToMove = overBus.stops[bestStopIdx];
-                overBus.stops.splice(bestStopIdx, 1);
+            if (bestBus) {
+                overBus.stops.splice(moveIdx, 1);
                 overBus.camperCount -= stopToMove.campers.length;
                 overBus.stops.forEach((s, i) => { s.stopNum = i + 1; });
-                cheapestInsert(bestBus.stops, stopToMove);
+                directionalInsert(bestBus.stops, stopToMove, campLat, campLng);
                 bestBus.camperCount += stopToMove.campers.length;
                 capMoves++;
             } else {
-                // No whole-stop fits — split the largest stop's campers individually
-                // Pick the stop closest to any bus with room
-                let splitStopIdx = -1, splitBus = null, splitDist = Infinity;
-                for (let si = 0; si < overBus.stops.length; si++) {
-                    const st = overBus.stops[si];
-                    if (!st.lat || st.campers.length <= 1) continue;
+                // Split stop — move campers individually
+                let movedAny = false;
+                while (overBus.camperCount > overBus._cap && stopToMove.campers.length > 1) {
+                    let splitBus = null, splitDist = Infinity;
                     for (const r of allRoutes) {
                         if (r === overBus || r.camperCount >= r._cap) continue;
-                        const rLat = r.stops.length ? r.stops.reduce((s, x) => s + x.lat, 0) / r.stops.length : campLat;
-                        const rLng = r.stops.length ? r.stops.reduce((s, x) => s + x.lng, 0) / r.stops.length : campLng;
-                        const d = haversineMi(st.lat, st.lng, rLat, rLng);
-                        if (d < splitDist) { splitDist = d; splitStopIdx = si; splitBus = r; }
+                        const rLat = r.stops.length ? r.stops.reduce((s, st) => s + st.lat, 0) / r.stops.length : campLat;
+                        const rLng = r.stops.length ? r.stops.reduce((s, st) => s + st.lng, 0) / r.stops.length : campLng;
+                        const d = haversineMi(stopToMove.lat, stopToMove.lng, rLat, rLng);
+                        if (d < splitDist) { splitDist = d; splitBus = r; }
                     }
+                    if (!splitBus) break;
+                    const room = splitBus._cap - splitBus.camperCount;
+                    const toMove = Math.min(room, overBus.camperCount - overBus._cap);
+                    if (toMove <= 0) break;
+                    const movedCampers = stopToMove.campers.splice(0, toMove);
+                    overBus.camperCount -= toMove;
+                    directionalInsert(splitBus.stops, { stopNum: 0, campers: movedCampers, address: stopToMove.address, lat: stopToMove.lat, lng: stopToMove.lng }, campLat, campLng);
+                    splitBus.camperCount += toMove;
+                    movedAny = true; capMoves++;
                 }
-                if (!splitBus || splitStopIdx < 0) {
+                if (stopToMove.campers.length === 0) {
+                    overBus.stops.splice(moveIdx, 1);
+                    overBus.stops.forEach((s, i) => { s.stopNum = i + 1; });
+                }
+                if (!movedAny) {
                     console.warn('[Go] ⚠ ' + overBus.busName + ': ' + overBus.camperCount + '/' + overBus._cap + ' — no room anywhere');
                     break;
                 }
-                const stopToSplit = overBus.stops[splitStopIdx];
-                const room = splitBus._cap - splitBus.camperCount;
-                const toMove = Math.min(room, overBus.camperCount - overBus._cap);
-                if (toMove <= 0) break;
-                const movedCampers = stopToSplit.campers.splice(0, toMove);
-                overBus.camperCount -= toMove;
-                cheapestInsert(splitBus.stops, { stopNum: 0, campers: movedCampers, address: stopToSplit.address, lat: stopToSplit.lat, lng: stopToSplit.lng });
-                splitBus.camperCount += toMove;
-                if (stopToSplit.campers.length === 0) {
-                    overBus.stops.splice(splitStopIdx, 1);
-                    overBus.stops.forEach((s, i) => { s.stopNum = i + 1; });
-                }
-                capMoves++;
             }
         }
         if (capMoves) console.log('[Go] Capacity enforcement: ' + capMoves + ' move(s)');
-
-        // ══════════════════════════════════════════════════════════════
-        // ORIENT ROUTES (final step — after all moves/merges)
-        //
-        // VROOM's ordering is optimized. Capacity enforcement used
-        // cheapestInsert to preserve flow. Just check direction:
-        // Arrival: first stop farther from camp than last
-        // Dismissal: first stop closer to camp than last
-        // ══════════════════════════════════════════════════════════════
-        showProgress('Finalizing routes...', 95);
-        allRoutes.forEach(r => {
-            if (r.stops.length < 2) return;
-            const fd = haversineMi(campLat, campLng, r.stops[0].lat, r.stops[0].lng);
-            const ld = haversineMi(campLat, campLng, r.stops[r.stops.length - 1].lat, r.stops[r.stops.length - 1].lng);
-            if (isArrival && fd < ld) r.stops.reverse();
-            if (!isArrival && fd > ld) r.stops.reverse();
-            r.stops.forEach((s, i) => { s.stopNum = i + 1; });
-        });
 
         // Route quality summary
         const totalKids = allRoutes.reduce((s, r) => s + r.camperCount, 0);
