@@ -721,11 +721,13 @@
                     const campEnd = Math.max(...Object.values(divisions).map(d => parseTimeToMinutes(d.endTime) || 990));
                     timeRules.push({ startMin: campStart, endMin: campEnd, divisions: null });
                 }
-                const capacity = props.capacity || props.sharableWith?.capacity || 2;
-                const shareType = props.sharableWith?.type || 'same_division';
+                const sharing = props.sharableWith || {};
+                const shareType = sharing.type || 'not_sharable';  // ★ v4.1: Default to NOT sharable
+                const capacity = parseInt(sharing.capacity) || (shareType === 'not_sharable' ? 1 : (shareType === 'all' ? 999 : 2));
 
                 fieldLedger[field.name] = {
-                    name: field.name, capacity: parseInt(capacity) || 2, shareType,
+                    name: field.name, capacity, shareType,
+                    allowedDivisions: sharing.divisions || [],
                     isIndoor: field.isIndoor || false,
                     timeRules, activities: field.activities || [],
                     claims: []
@@ -2041,90 +2043,98 @@
         // =====================================================================
 
         function buildRotationMatrix(grades, seed) {
-            // Identify which types each grade actually has
-            const typeSlots = ['swim', 'league', 'special', 'sport'];
+            // ★ v4.2: Only stagger OFF-FIELD types. Sport is never in the matrix.
+            // The matrix answers: "When should this grade do its off-field activities?"
+            // Sport fills whatever time remains — no band needed.
+            //
+            // Off-field types (take bunks OFF fields, relieving contention):
+            //   swim    — exclusive pool
+            //   league  — on fields BUT all bunks together (concentrated, not spread)
+            //   special — usually indoor/location-based
+            //   snack   — off-field break
+            //
+            // Each grade gets a rotated subset of these based on what layers it has.
+            // The day is divided into bands equal to the MAXIMUM off-field count
+            // across all grades. Grades with fewer off-field types leave some bands
+            // empty (no preference = sport fills naturally).
 
-            // Seeded shuffle of grades
+            // Seeded shuffle
             const shuffled = [...grades];
             for (let i = shuffled.length - 1; i > 0; i--) {
                 const j = ((seed * 2654435761 + i * 1597) >>> 0) % (i + 1);
                 [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
             }
 
-            // For each grade, figure out its day span and which staggerable types it has
+            // Determine which off-field types each grade has
             const gradeInfo = {};
+            let maxOffField = 0;
             shuffled.forEach(grade => {
                 const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
                 const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
                 const layers = layersByGrade[grade] || [];
-                const hasSwim = layers.some(l => (l.type || '').toLowerCase() === 'swim');
-                const hasLeague = layers.some(l => {
-                    const t = (l.type || '').toLowerCase();
-                    return t === 'league' || t === 'specialty_league';
-                });
-                const hasSpecial = layers.some(l => (l.type || '').toLowerCase() === 'special');
-                gradeInfo[grade] = { start: gs, end: ge, duration: ge - gs, hasSwim, hasLeague, hasSpecial };
+                const offField = [];
+                if (layers.some(l => (l.type || '').toLowerCase() === 'swim')) offField.push('swim');
+                if (layers.some(l => { const t = (l.type || '').toLowerCase(); return t === 'league' || t === 'specialty_league'; })) offField.push('league');
+                if (layers.some(l => (l.type || '').toLowerCase() === 'special')) offField.push('special');
+                if (layers.some(l => ['snack', 'snacks'].includes((l.type || '').toLowerCase()))) offField.push('snack');
+                gradeInfo[grade] = { start: gs, end: ge, duration: ge - gs, offField };
+                if (offField.length > maxOffField) maxOffField = offField.length;
             });
 
-            // Build the matrix: each grade gets a rotated sequence of types.
-            // Position in shuffled array determines the rotation offset.
-            // Types that a grade doesn't have get replaced with 'sport'.
-            const plan = {};
-            const n = shuffled.length;
+            // If no grade has any off-field types, skip rotation entirely
+            if (maxOffField === 0) {
+                const plan = {};
+                shuffled.forEach((grade, idx) => {
+                    plan[grade] = { offset: idx, searchDirection: idx % 2 === 0 ? 'early' : 'late', sequence: [], typeBands: {}, gradeStart: gradeInfo[grade].start, gradeEnd: gradeInfo[grade].end };
+                });
+                return plan;
+            }
 
+            // Divide the day into bands — one per off-field slot (max across grades)
+            // Minimum 3 bands so off-field activities spread across early/mid/late
+            const bandCount = Math.max(3, maxOffField);
+
+            const plan = {};
             shuffled.forEach((grade, idx) => {
                 const info = gradeInfo[grade];
-                // Build this grade's type sequence by rotating the master list
-                const sequence = [];
-                for (let s = 0; s < typeSlots.length; s++) {
-                    const typeIdx = (s + idx) % typeSlots.length;
-                    let t = typeSlots[typeIdx];
-                    // If this grade doesn't have the type, substitute with sport
-                    if (t === 'swim' && !info.hasSwim) t = 'sport';
-                    if (t === 'league' && !info.hasLeague) t = 'sport';
-                    if (t === 'special' && !info.hasSpecial) t = 'sport';
-                    sequence.push(t);
-                }
-
-                // Divide the grade's day into bands (one per sequence slot)
-                // Pinned layers (lunch, dismissal) occupy fixed time — bands
-                // are for the FLEXIBLE portion only. We use the full day span
-                // and let the packer's gap logic handle walls.
-                const bandCount = sequence.length;
                 const bandDur = Math.floor(info.duration / bandCount);
-                const bands = {};
+
+                // Assign this grade's off-field types to rotated band positions
+                // Band position = (original_position + grade_offset) % bandCount
                 const typeBands = {};
-                sequence.forEach((type, i) => {
-                    const bandStart = info.start + i * bandDur;
-                    const bandEnd = (i === bandCount - 1) ? info.end : (bandStart + bandDur);
-                    if (!typeBands[type]) typeBands[type] = { start: bandStart, end: bandEnd };
-                    else {
-                        // Same type appears twice (e.g. sport replaces missing swim)
-                        // Merge: extend the band
-                        typeBands[type].start = Math.min(typeBands[type].start, bandStart);
-                        typeBands[type].end = Math.max(typeBands[type].end, bandEnd);
-                    }
+                const sequence = [];
+                info.offField.forEach((type, typeIdx) => {
+                    const bandPos = (typeIdx + idx) % bandCount;
+                    const bandStart = info.start + bandPos * bandDur;
+                    const bandEnd = (bandPos === bandCount - 1) ? info.end : (bandStart + bandDur);
+                    typeBands[type] = { start: bandStart, end: bandEnd };
+                    sequence.push(type);
                 });
 
                 plan[grade] = {
                     offset: idx,
                     searchDirection: idx % 2 === 0 ? 'early' : 'late',
                     sequence,
-                    typeBands,   // { swim: {start, end}, league: {start, end}, special: {start, end}, sport: {start, end} }
+                    typeBands,   // ONLY contains off-field types, never sport
                     gradeStart: info.start,
                     gradeEnd: info.end
                 };
             });
 
-            // Log the matrix (first iteration only)
+            // Log the matrix
             if (totalIters < 1) {
-                log('[ROTATION MATRIX] Grade activity bands:');
+                log('[ROTATION MATRIX] Off-field activity bands (sport fills remaining time):');
                 shuffled.forEach(grade => {
                     const p = plan[grade];
+                    if (p.sequence.length === 0) {
+                        log('  ' + grade + ': no off-field types — all sport');
+                        return;
+                    }
                     const bandStr = Object.entries(p.typeBands)
+                        .sort((a, b) => a[1].start - b[1].start)
                         .map(([t, b]) => t + '=' + minutesToTimeLabel(b.start) + '-' + minutesToTimeLabel(b.end))
                         .join(', ');
-                    log('  ' + grade + ': [' + p.sequence.join('→') + '] ' + bandStr);
+                    log('  ' + grade + ': [' + p.sequence.join(', ') + '] ' + bandStr);
                 });
             }
 
@@ -2854,31 +2864,39 @@
 
         window._rotationReport = function() {
             console.log('%c═══ ROTATION MATRIX REPORT ═══', 'color:#6A1B9A;font-weight:bold');
-            console.log('Shows which activity type each grade is doing at each time band.');
-            console.log('Goal: at any time, different grades do different types.\n');
+            console.log('Off-field types are staggered. Sport fills remaining time (not in matrix).');
+            console.log('Goal: minimize grades competing for fields simultaneously.\n');
             allGrades.forEach(grade => {
                 const p = staggerPlan[grade] || {};
-                const seq = (p.sequence || []).join(' → ');
-                const bands = Object.entries(p.typeBands || {}).map(([t, b]) =>
-                    '  ' + t.padEnd(8) + ' ' + minutesToTimeLabel(b.start) + ' – ' + minutesToTimeLabel(b.end)
-                ).join('\n');
-                console.log(grade + ': [' + seq + ']');
+                const seq = (p.sequence || []).join(', ') || '(none)';
+                const bands = Object.entries(p.typeBands || {})
+                    .sort((a, b) => a[1].start - b[1].start)
+                    .map(([t, b]) => '  ' + t.padEnd(8) + ' ' + minutesToTimeLabel(b.start) + ' – ' + minutesToTimeLabel(b.end))
+                    .join('\n');
+                console.log(grade + ': off-field=[' + seq + ']');
                 if (bands) console.log(bands);
+                else console.log('  (all sport — no off-field types)');
             });
-            // Show overlap analysis
-            console.log('\n%cTime-slice analysis (who does what when):', 'font-weight:bold');
+            // Time-slice analysis with field contention count
+            console.log('\n%cTime-slice analysis (⚽=on fields, 🏊=off-field):', 'font-weight:bold');
             const campStart = Math.min(...allGrades.map(g => parseTimeToMinutes(divisions[g]?.startTime) || 540));
             const campEnd = Math.max(...allGrades.map(g => parseTimeToMinutes(divisions[g]?.endTime) || 960));
             for (let t = campStart; t < campEnd; t += 30) {
+                let onFields = 0;
                 const doing = allGrades.map(grade => {
+                    const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                    const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                    if (t < gs || t >= ge) return null;
                     const p = staggerPlan[grade] || {};
                     const tb = p.typeBands || {};
                     for (const [type, band] of Object.entries(tb)) {
                         if (t >= band.start && t < band.end) return grade.replace(' Grade','') + '=' + type;
                     }
-                    return grade.replace(' Grade','') + '=sport';
-                }).join(', ');
-                console.log('  ' + minutesToTimeLabel(t) + ': ' + doing);
+                    onFields++;
+                    return grade.replace(' Grade','') + '=⚽';
+                }).filter(Boolean).join(', ');
+                const total = allGrades.filter(g => { const gs = parseTimeToMinutes(divisions[g]?.startTime) || 540; const ge = parseTimeToMinutes(divisions[g]?.endTime) || 960; return t >= gs && t < ge; }).length;
+                console.log('  ' + minutesToTimeLabel(t) + ': ' + doing + '  [' + onFields + '/' + total + ' on fields]');
             }
         };
 
