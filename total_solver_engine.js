@@ -1320,7 +1320,7 @@ else penalty += 200;
         globalFullGradeMap = globalFullGradeMap || new Map();
         var results = [], blockOpts = [];
         for (var bi of unassigned) {
-            var dom = S._domains.get(bi);
+           var dom = S._domains.get(bi);
             if (!dom||dom.size===0) { results.push({blockIdx:bi,candIdx:-1,pick:{field:"Free",sport:null,_activity:"Free"},cost:100000}); continue; }
             var blk = activityBlocks[bi], sc = [];
             for (var ci of dom) { var c = allCands[ci]; if (!isPickStillValid(blk,c)) continue;
@@ -1328,6 +1328,9 @@ else penalty += 200;
                 if (an&&an!=='free'&&an!=='free play') { var gd = globalBunkActs.get(blk.bunk); if (gd&&gd.has(an)) continue; }
                 S.setScratchPick(c); var cost = S.calculatePenaltyCost(blk,S.setScratchPick(c)); if (cost<900000) sc.push({bi:bi,ci:ci,cost:cost}); }
             sc.sort(function(a,b){return a.cost-b.cost;});
+            // ★★★ FIX v15.5: If NO valid candidates (all >= 900000), assign Free ★★★
+            // A Free block is always preferable to a cross-division violation.
+            if (sc.length === 0) { results.push({blockIdx:bi,candIdx:-1,pick:{field:"Free",sport:null,_activity:"Free"},cost:100000}); continue; }
             blockOpts.push({bi:bi,options:sc,domainSize:sc.length});
         }
        // ★★★ v15.2: Blocks planned for scarce activities get processed first ★★★
