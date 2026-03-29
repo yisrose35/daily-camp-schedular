@@ -123,6 +123,24 @@
         stops.forEach((s, i) => { s.stopNum = i + 1; });
     }
 
+    /** Insert a stop at the position that adds the least driving distance.
+     *  Preserves VROOM's route flow — doesn't sort by camp distance. */
+    function cheapestInsert(stops, newStop) {
+        if (!newStop.lat || !newStop.lng || stops.length === 0) { stops.push(newStop); stops.forEach((s, i) => { s.stopNum = i + 1; }); return; }
+        let bestPos = stops.length, bestCost = Infinity;
+        for (let i = 0; i <= stops.length; i++) {
+            const prev = i > 0 ? stops[i - 1] : null;
+            const next = i < stops.length ? stops[i] : null;
+            let cost = 0;
+            if (prev && prev.lat) cost += haversineMi(prev.lat, prev.lng, newStop.lat, newStop.lng);
+            if (next && next.lat) cost += haversineMi(newStop.lat, newStop.lng, next.lat, next.lng);
+            if (prev && next && prev.lat && next.lat) cost -= haversineMi(prev.lat, prev.lng, next.lat, next.lng);
+            if (cost < bestCost) { bestCost = cost; bestPos = i; }
+        }
+        stops.splice(bestPos, 0, newStop);
+        stops.forEach((s, i) => { s.stopNum = i + 1; });
+    }
+
     const MAX_STOP_CAPACITY = 8; // split clusters bigger than this — smaller = easier to rebalance
     let _majorRoadSegments = null; // [{lat1,lng1,lat2,lng2,name}] from Overpass
 
@@ -1346,7 +1364,7 @@
                             });
                         }
                         if (bestRoute) {
-                            directionalInsert(bestRoute.stops, { stopNum: 0, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng }, campLat, campLng);
+                            cheapestInsert(bestRoute.stops, { stopNum: 0, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng });
                             bestRoute.camperCount += stop.campers.length;
                         }
                     });
@@ -1374,18 +1392,7 @@
             }
         });
 
-        // ══════════════════════════════════════════════════════════════
-        // ORIENT ROUTES
-        // ══════════════════════════════════════════════════════════════
-        showProgress('Finalizing routes...', 85);
-        allRoutes.forEach(r => {
-            if (r.stops.length < 2) return;
-            const fd = haversineMi(campLat, campLng, r.stops[0].lat, r.stops[0].lng);
-            const ld = haversineMi(campLat, campLng, r.stops[r.stops.length - 1].lat, r.stops[r.stops.length - 1].lng);
-            if (isArrival && fd < ld) r.stops.reverse();
-            if (!isArrival && fd > ld) r.stops.reverse();
-            r.stops.forEach((s, i) => { s.stopNum = i + 1; });
-        });
+        // (Orient moved to after capacity enforcement)
 
         // ══════════════════════════════════════════════════════════════
         // POST-ROUTING: Merge consecutive same-street stops
@@ -1449,7 +1456,7 @@
                 overBus.stops.splice(bestStopIdx, 1);
                 overBus.camperCount -= stopToMove.campers.length;
                 overBus.stops.forEach((s, i) => { s.stopNum = i + 1; });
-                directionalInsert(bestBus.stops, stopToMove, campLat, campLng);
+                cheapestInsert(bestBus.stops, stopToMove);
                 bestBus.camperCount += stopToMove.campers.length;
                 capMoves++;
             } else {
@@ -1477,7 +1484,7 @@
                 if (toMove <= 0) break;
                 const movedCampers = stopToSplit.campers.splice(0, toMove);
                 overBus.camperCount -= toMove;
-                directionalInsert(splitBus.stops, { stopNum: 0, campers: movedCampers, address: stopToSplit.address, lat: stopToSplit.lat, lng: stopToSplit.lng }, campLat, campLng);
+                cheapestInsert(splitBus.stops, { stopNum: 0, campers: movedCampers, address: stopToSplit.address, lat: stopToSplit.lat, lng: stopToSplit.lng });
                 splitBus.camperCount += toMove;
                 if (stopToSplit.campers.length === 0) {
                     overBus.stops.splice(splitStopIdx, 1);
@@ -1487,6 +1494,24 @@
             }
         }
         if (capMoves) console.log('[Go] Capacity enforcement: ' + capMoves + ' move(s)');
+
+        // ══════════════════════════════════════════════════════════════
+        // ORIENT ROUTES (final step — after all moves/merges)
+        //
+        // VROOM's ordering is optimized. Capacity enforcement used
+        // cheapestInsert to preserve flow. Just check direction:
+        // Arrival: first stop farther from camp than last
+        // Dismissal: first stop closer to camp than last
+        // ══════════════════════════════════════════════════════════════
+        showProgress('Finalizing routes...', 95);
+        allRoutes.forEach(r => {
+            if (r.stops.length < 2) return;
+            const fd = haversineMi(campLat, campLng, r.stops[0].lat, r.stops[0].lng);
+            const ld = haversineMi(campLat, campLng, r.stops[r.stops.length - 1].lat, r.stops[r.stops.length - 1].lng);
+            if (isArrival && fd < ld) r.stops.reverse();
+            if (!isArrival && fd > ld) r.stops.reverse();
+            r.stops.forEach((s, i) => { s.stopNum = i + 1; });
+        });
 
         // Route quality summary
         const totalKids = allRoutes.reduce((s, r) => s + r.camperCount, 0);
