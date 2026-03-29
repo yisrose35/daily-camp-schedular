@@ -1605,10 +1605,11 @@ else penalty += 200;
                 var fp=S._fieldPropertyMap.get(c.field),cap=fp?fp.capacity:S.getFieldCapacity(c.field),st=fp?fp.sharingType:S.getSharingType(c.field);
                 if (st==='not_sharable') { if (S.getFieldUsageFromTimeIndex(c._fieldNorm,sM,eM,bunk)>=cap) continue; } else { if (S.countSameDivisionUsage(c.field,bDiv,sM,eM,bunk)>=cap) continue; }
                 var td=S.getActivitiesDoneToday(bunk,slots[0]??999),cAn=normName(c.activityName); if (cAn&&cAn!=='free'&&cAn!=='free play'&&td.has(cAn)) continue;
-                if (!actProps[c.field]&&!actProps[c.activityName]&&c.type!=='special') continue;
+               if (!actProps[c.field]&&!actProps[c.activityName]&&c.type!=='special') continue;
                if (window.unifiedTimes && window.SchedulerCoreUtils?.canBlockFit && !(S._isRainyDay && S._rainyTimeBypasses.has(c.field)) && !window.SchedulerCoreUtils.canBlockFit(blk,c.field,actProps,null,c.activityName,false)) continue;
+                S.setScratchPick(c); var dfCost = S.calculatePenaltyCost(blk, S.setScratchPick(c)); if (dfCost < 900000) fresh.push({ci: ci, cost: dfCost});
             }
-            if (fresh.length>0) { fresh.sort(function(a,b){return a.cost-b.cost;}); var pk=S.clonePick(allCands[fresh[0].ci]); S.undoPickFromSchedule(blk,S._assignments.get(bi).pick); S._assignments.set(bi,{candIdx:fresh[0].ci,pick:pk,cost:fresh[0].cost}); S.applyPickToSchedule(blk,pk); var pfn=normName(pk.field); S.addToFieldTimeIndex(pfn,sM,eM,bunk,bDiv,normName(pk._activity)); var pan=normName(pk._activity); if (pan&&pan!==pfn) S.addToFieldTimeIndex(pan,sM,eM,bunk,bDiv,pan); S.invalidateRotationCacheForBunk(bunk); S._todayCache.clear(); resolved++; continue; }
+            if (fresh.length>0) { { fresh.sort(function(a,b){return a.cost-b.cost;}); var pk=S.clonePick(allCands[fresh[0].ci]); S.undoPickFromSchedule(blk,S._assignments.get(bi).pick); S._assignments.set(bi,{candIdx:fresh[0].ci,pick:pk,cost:fresh[0].cost}); S.applyPickToSchedule(blk,pk); var pfn=normName(pk.field); S.addToFieldTimeIndex(pfn,sM,eM,bunk,bDiv,normName(pk._activity)); var pan=normName(pk._activity); if (pan&&pan!==pfn) S.addToFieldTimeIndex(pan,sM,eM,bunk,bDiv,pan); S.invalidateRotationCacheForBunk(bunk); S._todayCache.clear(); resolved++; continue; }
             // Phase 2: Displacement (abbreviated for space — same logic as v12.4)
             for (var obi=0;obi<activityBlocks.length;obi++) {
                 var ob=activityBlocks[obi]; if (obi===bi||ob.divName!==bDiv||ob.bunk===bunk) continue;
