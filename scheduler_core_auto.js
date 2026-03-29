@@ -2894,6 +2894,45 @@
         window._autoDivisionTimesBuilt = true;
         window._preGenClearActive = false;
 
+       // ★★★ v3.2: Pre-write capacity-checked sport blocks ★★★
+        // The packer verified field capacity at actual placement time.
+        // Write these directly so the solver sees them as occupied and doesn't
+        // try to re-assign (which fails because capacity is now full → Free).
+        let sportWriteCount = 0;
+        allGrades.forEach(grade => {
+            const pbs = window.divisionTimes?.[grade]?._perBunkSlots || window._perBunkSlots?.[grade]; if (!pbs) return;
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                const arr = pbs[String(bunk)] || [];
+                (bunkTimelines[bunk] || []).filter(b =>
+                    (b.type === 'sport' || b.type === 'slot') &&
+                    b._source === 'capacity_checked' &&
+                    b._assignedSport && b.field
+                ).forEach(block => {
+                    const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
+                    if (idx === -1 || !window.scheduleAssignments[String(bunk)]) return;
+                    if (window.scheduleAssignments[String(bunk)][idx]) return; // don't overwrite
+                    window.scheduleAssignments[String(bunk)][idx] = {
+                        field: block.field,
+                        sport: block._assignedSport,
+                        _activity: block._assignedSport,
+                        _fixed: true,
+                        _bunkOverride: true,
+                        _activityLocked: false,
+                        _autoMode: true,
+                        _capacityChecked: true,
+                        continuation: false
+                    };
+                    // Register in fieldUsageBySlot so solver's domain building sees it
+                    if (!fieldUsageBySlot[idx]) fieldUsageBySlot[idx] = {};
+                    if (!fieldUsageBySlot[idx][block.field]) fieldUsageBySlot[idx][block.field] = { count: 0, bunks: {} };
+                    fieldUsageBySlot[idx][block.field].count++;
+                    fieldUsageBySlot[idx][block.field].bunks[String(bunk)] = block._assignedSport;
+                    sportWriteCount++;
+                });
+            });
+        });
+        if (sportWriteCount > 0) log('[2.7] ★ Pre-wrote ' + sportWriteCount + ' capacity-checked sport assignments');
+
         // Write activity-locked anchor blocks (swim, soft-anchored snacks, etc.)
         // These aren't specials or pinned but have a fixed activity that the solver shouldn't change.
         let anchorWriteCount = 0;
