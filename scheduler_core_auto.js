@@ -299,6 +299,10 @@
         window.fieldUsageBySlot = {};
         window.locationUsageBySlot = {};
         if (window.GlobalFieldLocks) window.GlobalFieldLocks.reset();
+        if (window.AutoFieldLocks) {
+            window.AutoFieldLocks.reset();
+            window.AutoFieldLocks.buildFieldPropertyCache();
+        }
         if (window.RotationEngine && window.RotationEngine.rebuildAllHistory)
             window.RotationEngine.rebuildAllHistory();
         log('[STEP 0] ✅ Wiped');
@@ -548,8 +552,23 @@
         }
 
         function canUsePoolAtTime(grade, startMin, endMin) {
-            // Pool is exclusive: one grade at a time, capacity = 1 grade
-            return rtCanUse('pool', '_pool', grade, startMin, endMin, 'not_sharable', 1, []);
+            // Pool is exclusive PER GRADE — unlimited bunks within same grade,
+            // but zero bunks from any other grade at the same time.
+            // We DON'T use rtCanUse here because its capacity check (count >= cap)
+            // would block the 2nd bunk of the same grade. Instead we only check
+            // whether a DIFFERENT grade has registered in any overlapping bucket.
+            const key = _rtKey('pool', '_pool');
+            const buckets = _resourceBuckets[key];
+            if (!buckets) return true;
+            for (let m = startMin; m < endMin; m += 5) {
+                const b = buckets[m];
+                if (!b) continue;
+                // Same grade already registered → fine, any number of bunks OK
+                if (b.grades.has(grade)) continue;
+                // A DIFFERENT grade is on the pool → blocked
+                if (b.grades.size > 0) return false;
+            }
+            return true;
         }
 
         // Cross-grade tracker for stagger scoring
@@ -1017,6 +1036,7 @@
             }
 
             const gradeStagger = staggerPlan[grade] || { offset: 0, searchDirection: 'early' };
+            const leagueBand = gradeStagger.typeBands?.league || null;
             const times = [];
             for (let ts = layer.startMin; ts + dMin <= layer.endMin; ts += 5) times.push(ts);
             if (gradeStagger.searchDirection === 'late') times.reverse();
@@ -1027,6 +1047,9 @@
                 if (!bunks.every(bk => !(bunkTimelines[bk] || []).some(b => b.startMin < te && b.endMin > ts))) continue;
                 let score = scorePositionByContention(ts, te, 'league', null, null);
                 score += getCrossGradeConflicts('league', ts, te, grade) * 10000;
+                // ★ v4.0: Prefer the rotation matrix's league band (strong suggestion)
+                if (leagueBand && ts >= leagueBand.start && te <= leagueBand.end) score -= 500;
+                else if (leagueBand) score += 200;
                 if (score < bestScore) { bestScore = score; bestStart = ts; }
             }
             if (bestStart === null) { warn('[P0] No free league gap for ' + grade); return null; }
@@ -1335,6 +1358,9 @@
             const sportC = shoppingList.sports?.constraints || resolveConstraints(null, 'sport');
             const minFill = getMinFillable(grade);
             const ABSORB_MAX = 10;
+            // ★ v4.0: Rotation matrix — preferred time bands per activity type
+            const rotation = staggerPlan[grade] || {};
+            const typeBands = rotation.typeBands || {};
 
             // ── Step 1: Walls (Phase 0 blocks) ───────────────────────────
             const walls = (bunkTimelines[bunk] || []).map(b => {
@@ -1354,15 +1380,23 @@
             // ── Step 2: Build needs ──────────────────────────────────────
             const needs = [];
 
-            // Swim
+            // Swim — MRC band narrows the window (hard constraint for pool exclusivity),
+            // but rotation band is only a scoring preference (applied at candidate sort)
             const swimLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'swim');
             if (swimLayer && swimsToday !== false && !walls.some(w => (w.type || '').toLowerCase() === 'swim')) {
                 const c = resolveConstraints(swimLayer, 'swim');
+                const mrc = getSwimWindow(grade);
+                let winStart = Math.max(swimLayer.startMin || 0, gradeStart);
+                let winEnd = Math.min(swimLayer.endMin || 1440, gradeEnd);
+                // MRC narrows (pool exclusivity is a real constraint)
+                if (mrc && (Math.min(mrc.end, winEnd) - Math.max(mrc.start, winStart)) >= c.dMin) {
+                    winStart = Math.max(mrc.start, winStart);
+                    winEnd = Math.min(mrc.end, winEnd);
+                }
                 needs.push({
                     type: 'swim', event: swimLayer.event || 'Swim', layer: swimLayer,
                     dMin: c.dMin, dMax: c.dMax,
-                    windowStart: Math.max(swimLayer.startMin || 0, gradeStart),
-                    windowEnd: Math.min(swimLayer.endMin || 1440, gradeEnd),
+                    windowStart: winStart, windowEnd: winEnd,
                     _activityLocked: true, _source: 'layer'
                 });
             }
@@ -1380,13 +1414,14 @@
                 });
             }
 
-            // Draft specials
+            // Draft specials — full window, rotation band applied at scoring
             (draftResult.specials || []).forEach(special => {
                 const hasFixedDur = special.duration && special.duration > 0;
+                const sDMin = hasFixedDur ? special.duration : resolveConstraints(special.layer, 'special', special).dMin;
+                const sDMax = hasFixedDur ? special.duration : resolveConstraints(special.layer, 'special', special).dMax;
                 needs.push({
                     type: 'special', event: special.name, layer: special.layer,
-                    dMin: hasFixedDur ? special.duration : resolveConstraints(special.layer, 'special', special).dMin,
-                    dMax: hasFixedDur ? special.duration : resolveConstraints(special.layer, 'special', special).dMax,
+                    dMin: sDMin, dMax: sDMax,
                     windowStart: gradeStart, windowEnd: gradeEnd,
                     _activityLocked: true, _assignedSpecial: special.name,
                     _specialLocation: special.location, _specialDuration: special.duration,
@@ -1478,12 +1513,20 @@
                     for (let t = gap.start; t <= gap.end - need.dMin; t += step) candidates.push(t);
                     if (step > 5 && gap.end - need.dMin > gap.start) candidates.push(gap.end - need.dMin);
 
-                    // Sort by cross-grade conflicts, then stagger
+                    // Sort by weighted score: cross-grade conflicts + rotation band preference
+                    // Rotation band is a STRONG SUGGESTION, not a hard constraint.
+                    // In-band positions get a bonus; out-of-band get a mild penalty.
                     if (['swim', 'special', 'snacks', 'snack'].includes(need.type)) {
+                        const band = typeBands[need.type] || typeBands[need.type === 'snacks' ? 'snack' : need.type] || null;
                         candidates.sort((a, b) => {
-                            const ca = getCrossGradeConflicts(need.type, a, a + need.dMin, grade, need.event);
-                            const cb = getCrossGradeConflicts(need.type, b, b + need.dMin, grade, need.event);
-                            if (ca !== cb) return ca - cb;
+                            let scoreA = getCrossGradeConflicts(need.type, a, a + need.dMin, grade, need.event) * 100;
+                            let scoreB = getCrossGradeConflicts(need.type, b, b + need.dMin, grade, need.event) * 100;
+                            // Rotation band preference: -50 if inside, +20 if outside
+                            if (band) {
+                                scoreA += (a >= band.start && (a + need.dMin) <= band.end) ? -50 : 20;
+                                scoreB += (b >= band.start && (b + need.dMin) <= band.end) ? -50 : 20;
+                            }
+                            if (scoreA !== scoreB) return scoreA - scoreB;
                             return (staggerOffset % 2 === 0) ? (a - b) : (b - a);
                         });
                     }
@@ -1938,17 +1981,116 @@
 
 
         // =====================================================================
-        // STAGGER PLANNER
+        // CROSS-GRADE ROTATION MATRIX
+        // =====================================================================
+        // Creates a Latin-square rotation so at any time of day, each grade
+        // PREFERS to be doing a DIFFERENT activity type. This is a STRONG
+        // SUGGESTION to the scheduler — not a hard constraint. If the band
+        // doesn't work (walls, capacity, windows), the block can still go
+        // anywhere in the allowed window. The preference is applied via
+        // scoring bonuses at candidate evaluation time.
+        //
+        // Staggerable types (in priority order):
+        //   swim    — exclusive pool, off-field
+        //   league  — heavy field use, all bunks on fields
+        //   special — usually off-field (indoor/location-based)
+        //   sport   — fills remaining time, field-heavy
+        //
+        // The matrix divides each grade's day into bands and assigns a
+        // preferred type per band. Candidate positions that fall inside
+        // the assigned band get a scoring bonus; positions outside get
+        // a mild penalty. The iteration loop tries different shuffles
+        // to find the best rotation arrangement.
         // =====================================================================
 
-        function buildStaggerPlan(grades, seed) {
+        function buildRotationMatrix(grades, seed) {
+            // Identify which types each grade actually has
+            const typeSlots = ['swim', 'league', 'special', 'sport'];
+
+            // Seeded shuffle of grades
             const shuffled = [...grades];
             for (let i = shuffled.length - 1; i > 0; i--) {
                 const j = ((seed * 2654435761 + i * 1597) >>> 0) % (i + 1);
                 [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
             }
+
+            // For each grade, figure out its day span and which staggerable types it has
+            const gradeInfo = {};
+            shuffled.forEach(grade => {
+                const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                const layers = layersByGrade[grade] || [];
+                const hasSwim = layers.some(l => (l.type || '').toLowerCase() === 'swim');
+                const hasLeague = layers.some(l => {
+                    const t = (l.type || '').toLowerCase();
+                    return t === 'league' || t === 'specialty_league';
+                });
+                const hasSpecial = layers.some(l => (l.type || '').toLowerCase() === 'special');
+                gradeInfo[grade] = { start: gs, end: ge, duration: ge - gs, hasSwim, hasLeague, hasSpecial };
+            });
+
+            // Build the matrix: each grade gets a rotated sequence of types.
+            // Position in shuffled array determines the rotation offset.
+            // Types that a grade doesn't have get replaced with 'sport'.
             const plan = {};
-            shuffled.forEach((grade, idx) => { plan[grade] = { offset: idx, searchDirection: idx % 2 === 0 ? 'early' : 'late' }; });
+            const n = shuffled.length;
+
+            shuffled.forEach((grade, idx) => {
+                const info = gradeInfo[grade];
+                // Build this grade's type sequence by rotating the master list
+                const sequence = [];
+                for (let s = 0; s < typeSlots.length; s++) {
+                    const typeIdx = (s + idx) % typeSlots.length;
+                    let t = typeSlots[typeIdx];
+                    // If this grade doesn't have the type, substitute with sport
+                    if (t === 'swim' && !info.hasSwim) t = 'sport';
+                    if (t === 'league' && !info.hasLeague) t = 'sport';
+                    if (t === 'special' && !info.hasSpecial) t = 'sport';
+                    sequence.push(t);
+                }
+
+                // Divide the grade's day into bands (one per sequence slot)
+                // Pinned layers (lunch, dismissal) occupy fixed time — bands
+                // are for the FLEXIBLE portion only. We use the full day span
+                // and let the packer's gap logic handle walls.
+                const bandCount = sequence.length;
+                const bandDur = Math.floor(info.duration / bandCount);
+                const bands = {};
+                const typeBands = {};
+                sequence.forEach((type, i) => {
+                    const bandStart = info.start + i * bandDur;
+                    const bandEnd = (i === bandCount - 1) ? info.end : (bandStart + bandDur);
+                    if (!typeBands[type]) typeBands[type] = { start: bandStart, end: bandEnd };
+                    else {
+                        // Same type appears twice (e.g. sport replaces missing swim)
+                        // Merge: extend the band
+                        typeBands[type].start = Math.min(typeBands[type].start, bandStart);
+                        typeBands[type].end = Math.max(typeBands[type].end, bandEnd);
+                    }
+                });
+
+                plan[grade] = {
+                    offset: idx,
+                    searchDirection: idx % 2 === 0 ? 'early' : 'late',
+                    sequence,
+                    typeBands,   // { swim: {start, end}, league: {start, end}, special: {start, end}, sport: {start, end} }
+                    gradeStart: info.start,
+                    gradeEnd: info.end
+                };
+            });
+
+            // Log the matrix (first iteration only)
+            if (totalIters < 1) {
+                log('[ROTATION MATRIX] Grade activity bands:');
+                shuffled.forEach(grade => {
+                    const p = plan[grade];
+                    const bandStr = Object.entries(p.typeBands)
+                        .map(([t, b]) => t + '=' + minutesToTimeLabel(b.start) + '-' + minutesToTimeLabel(b.end))
+                        .join(', ');
+                    log('  ' + grade + ': [' + p.sequence.join('→') + '] ' + bandStr);
+                });
+            }
+
             return plan;
         }
 
@@ -1973,8 +2115,10 @@
         log('WHAT→WHEN→WHERE — cap: ' + MAX_ITERATIONS + ' | stale: ' + STALE_STOP);
         log('══════════════════════════════════════════════════════════');
 
+        let todaysSwimmers = {};
+
         do {
-            staggerPlan = buildStaggerPlan(allGrades, _iterSeed);
+            staggerPlan = buildRotationMatrix(allGrades, _iterSeed);
             allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = []; }));
 
             // Init field ledger for this iteration
@@ -2049,7 +2193,7 @@
             const allTemplates = {};
             const staggeredGrades = [...allGrades].sort((a, b) => ((staggerPlan[a] || {}).offset || 0) - ((staggerPlan[b] || {}).offset || 0));
 
-            const todaysSwimmers = {};
+            todaysSwimmers = {};
             staggeredGrades.forEach(grade => {
                 const swimLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'swim');
                 if (swimLayer) {
@@ -2217,7 +2361,14 @@
                         _autoSpecial: true, _autoMode: true, continuation: false
                     };
                     registerSpecialFieldUsage([idx], fn, String(bunk), block._assignedSpecial, grade, fieldUsageBySlot);
-                    if (fn && window.GlobalFieldLocks) window.GlobalFieldLocks.lockField(fn, [idx], { lockedBy: 'auto_special', division: grade, activity: block._assignedSpecial });
+                    // ★ v4.0: Write to BOTH lock systems — AutoFieldLocks for the solver,
+                    // GlobalFieldLocks for downstream code (fillers, post-edit, canBlockFit)
+                    if (fn && window.AutoFieldLocks) {
+                        window.AutoFieldLocks.lockField(fn, block.startMin, block.endMin, grade, block._assignedSpecial, 'auto_special');
+                    }
+                    if (fn && window.GlobalFieldLocks) {
+                        window.GlobalFieldLocks.lockField(fn, [idx], { lockedBy: 'auto_special', division: grade, activity: block._assignedSpecial, startMin: block.startMin, endMin: block.endMin });
+                    }
                     specialWriteCount++;
                 });
             });
@@ -2248,8 +2399,13 @@
                         };
                         if (isCustom) {
                             customWriteCount++;
-                            if (block._customField && window.GlobalFieldLocks) {
-                                window.GlobalFieldLocks.lockField(block._customField, [idx], { lockedBy: 'auto_custom', division: grade, activity: block._customActivity || 'Custom' });
+                            if (block._customField) {
+                                if (window.AutoFieldLocks) {
+                                    window.AutoFieldLocks.lockField(block._customField, block.startMin, block.endMin, grade, block._customActivity || 'Custom', 'auto_custom');
+                                }
+                                if (window.GlobalFieldLocks) {
+                                    window.GlobalFieldLocks.lockField(block._customField, [idx], { lockedBy: 'auto_custom', division: grade, activity: block._customActivity || 'Custom', startMin: block.startMin, endMin: block.endMin });
+                                }
                             }
                         } else pinnedWriteCount++;
                     }
@@ -2308,6 +2464,11 @@
         window._preGenClearActive = false;
 
         log('[2.7] ✅ ' + specialWriteCount + ' specials, ' + pinnedWriteCount + ' pinned, ' + sportWriteCount + ' sports, ' + anchorWriteCount + ' anchors, ' + customWriteCount + ' custom');
+
+        // ★ v4.0: Sync auto locks → GlobalFieldLocks so downstream code (fillers, post-edit, canBlockFit) sees them
+        if (window.AutoFieldLocks?.syncToGlobalFieldLocks) {
+            window.AutoFieldLocks.syncToGlobalFieldLocks();
+        }
 
         // Build schedulable blocks for solver
         const schedulableSlotBlocks = [];
@@ -2426,87 +2587,106 @@
 
 
         // =====================================================================
-        // STEP 4 — TOTAL SOLVER (clean integration, no monkey-patching)
+        // STEP 4 — AUTO SOLVER (sport slots only, no specials)
+        // ★ v4.0: Uses AutoSolverEngine (purpose-built for auto mode).
+        //   Falls back to TotalSolverEngine if AutoSolverEngine isn't loaded.
         // =====================================================================
-        log('\n[STEP 4] Total Solver...');
-        const Solver = window.TotalSolverEngine || window.TotalSolver || window.totalSolverEngine;
-        if (Solver && typeof Solver.solveSchedule === 'function') {
+        log('\n[STEP 4] Solving remaining sport slots...');
+
+        // Prepare config for the solver
+        const solverConfig = (() => {
+            const gs = getGlobalSettings();
+            const masterFields = gs.app1?.fields || gs.fields || window.fields || [];
+            const masterSpecials = gs.app1?.specialActivities || gs.specialActivities || [];
+
+            // Build fieldsBySport map
+            const fbs = {};
+            masterFields.forEach(f => { (f.activities || []).forEach(a => { if (!fbs[a]) fbs[a] = []; fbs[a].push(f.name); }); });
+            window.fieldsBySport = fbs;
+
+            return {
+                activityProperties: window.activityProperties || {},
+                masterFields,
+                masterSpecials,
+                divisions,
+                fieldsBySport: fbs,
+                disabledFields: gs.app1?.disabledFields || [],
+                dateStr: currentDate || '',
+                yesterdayHistory,
+                isRainy,
+                rotationHistory: (window.loadRotationHistory?.() || {}).bunks || window.loadRotationHistory?.() || {},
+                _autoMode: true
+            };
+        })();
+
+        // Clear non-fixed assignments before solving
+        Object.keys(window.scheduleAssignments).forEach(bk => {
+            (window.scheduleAssignments[bk] || []).forEach((s, i) => {
+                if (s && !s._fixed && !s._league && !s._autoSpecial) window.scheduleAssignments[bk][i] = null;
+            });
+        });
+        window.fieldUsageBySlot = window.buildFieldUsageBySlot ? window.buildFieldUsageBySlot() : {};
+
+        // Build solver input blocks
+        const solverInputBlocks = solverBlocks.map(b => ({
+            bunk: b.bunk, divName: b.divName, slots: b.slots,
+            startTime: b.startTime, endTime: b.endTime,
+            type: b.type || 'slot', event: b.event || 'General Activity Slot',
+            _autoGenerated: true, _autoMode: true,
+            _draftActivity: b._draftActivity, _draftField: b._draftField
+        }));
+
+        if (window.AutoSolverEngine && typeof window.AutoSolverEngine.solve === 'function') {
+            // ★ PRIMARY: Auto Solver Engine — purpose-built for auto mode
             try {
-                const gs = getGlobalSettings();
-                const masterFields = gs.app1?.fields || gs.fields || window.fields || [];
-                const masterSpecials = gs.app1?.specialActivities || gs.specialActivities || [];
+                const result = window.AutoSolverEngine.solve(solverInputBlocks, solverConfig);
+                log('[4] ✅ AutoSolver: ' + result.filled + ' filled, ' + result.free + ' Free');
 
-                // ★ v4.0: Build clean activityProperties WITHOUT specials
-                const builtAP = window.buildActivityProperties ? window.buildActivityProperties(masterSpecials, masterFields) : {};
-                masterFields.forEach(f => {
-                    (f.activities || []).forEach(a => {
-                        if (!builtAP[a]) builtAP[a] = { available: true, sharable: false, sharableWith: { type: 'not_sharable' }, _fromField: true };
-                        if (!builtAP[a]._fields) builtAP[a]._fields = [];
-                        builtAP[a]._fields.push(f.name);
-                    });
-                    if (f.name) {
-                        if (!builtAP[f.name]) builtAP[f.name] = {};
-                        if (f.sharableWith) builtAP[f.name].sharableWith = f.sharableWith;
-                        if (f.capacity) builtAP[f.name].capacity = parseInt(f.capacity) || 2;
-                        builtAP[f.name].type = 'field';
-                        builtAP[f.name].isField = true;
-                        builtAP[f.name].isIndoor = f.isIndoor || false;
-                    }
-                });
-
-                // Strip specials from AP so solver doesn't assign them
-                const strippedAP = {};
-                Object.entries(builtAP).forEach(([k, v]) => {
-                    if (!masterSpecials.some(s => s.name === k)) strippedAP[k] = v;
-                });
-
-                const fbs = {};
-                masterFields.forEach(f => { (f.activities || []).forEach(a => { if (!fbs[a]) fbs[a] = []; fbs[a].push(f.name); }); });
-                window.fieldsBySport = fbs;
-
-                const rh = (window.loadRotationHistory?.() || {}).bunks || window.loadRotationHistory?.() || {};
-                const ab = solverBlocks.map(b => ({
-                    bunk: b.bunk, divName: b.divName, slots: b.slots,
-                    startTime: b.startTime, endTime: b.endTime,
-                    type: b.type || 'slot', event: b.event || 'General Activity Slot',
-                    _autoGenerated: true, _autoMode: true,
-                    _startMin: (window.divisionTimes?.[b.divName]?._perBunkSlots?.[b.bunk] || [])[b.slots?.[0]]?.startMin,
-                    _draftActivity: b._draftActivity, _draftField: b._draftField
-                }));
-
-                // ★ v4.0: Clean solver call — swap AP, call, restore
-                const savedAP = window.activityProperties;
-                window.activityProperties = strippedAP;
-
-                // Clear non-fixed assignments before solver
-                Object.keys(window.scheduleAssignments).forEach(bk => {
-                    (window.scheduleAssignments[bk] || []).forEach((s, i) => {
-                        if (s && !s._fixed && !s._league && !s._autoSpecial) window.scheduleAssignments[bk][i] = null;
-                    });
-                });
-                window.fieldUsageBySlot = window.buildFieldUsageBySlot ? window.buildFieldUsageBySlot() : {};
-
-                Solver.solveSchedule(ab, {
-                    activityProperties: strippedAP, rotationHistory: rh, divisions,
-                    masterFields, masterSpecials: [], fieldsBySport: fbs,
-                    dateStr: currentDate || '',
-                    disabledFields: gs.app1?.disabledFields || [],
-                    yesterdayHistory, isRainy, _autoMode: true
-                });
-
-                // Restore
-                window.activityProperties = savedAP;
-
-                let filled = 0;
-                ab.forEach(b => { const s = (window.scheduleAssignments?.[b.bunk] || [])[b.slots?.[0]]; if (s && !s._league && !s._fixed) filled++; });
-                log('[4] ✅ Solver filled ~' + filled + ' slots');
-
+                // Run fallback sweep for remaining Free blocks
+                if (result.free > 0) {
+                    const fallbackFilled = window.AutoSolverEngine.fallbackSweep(solverConfig);
+                    if (fallbackFilled > 0) log('[4] Fallback sweep filled ' + fallbackFilled + ' more');
+                }
             } catch (e) {
-                err('[4] ' + e.message);
+                err('[4] AutoSolver error: ' + e.message);
                 console.error(e);
                 warnings.push({ type: 'solver_error', message: e.message });
             }
-        } else { warn('[4] Solver not loaded'); }
+        } else {
+            // ★ FALLBACK: TotalSolverEngine (manual solver with clean AP swap)
+            const Solver = window.TotalSolverEngine || window.TotalSolver || window.totalSolverEngine;
+            if (Solver && typeof Solver.solveSchedule === 'function') {
+                try {
+                    const masterSpecials = solverConfig.masterSpecials || [];
+                    // Strip specials from AP so manual solver doesn't assign them
+                    const strippedAP = {};
+                    Object.entries(window.activityProperties || {}).forEach(([k, v]) => {
+                        if (!masterSpecials.some(s => s.name === k)) strippedAP[k] = v;
+                    });
+                    const savedAP = window.activityProperties;
+                    window.activityProperties = strippedAP;
+
+                    Solver.solveSchedule(solverInputBlocks, {
+                        ...solverConfig,
+                        activityProperties: strippedAP,
+                        masterSpecials: []
+                    });
+
+                    window.activityProperties = savedAP;
+
+                    let filled = 0;
+                    solverInputBlocks.forEach(b => {
+                        const s = (window.scheduleAssignments?.[b.bunk] || [])[b.slots?.[0]];
+                        if (s && !s._league && !s._fixed) filled++;
+                    });
+                    log('[4] ✅ Fallback TotalSolver filled ~' + filled + ' slots');
+                } catch (e) {
+                    err('[4] TotalSolver fallback: ' + e.message);
+                    console.error(e);
+                    warnings.push({ type: 'solver_error', message: e.message });
+                }
+            } else { warn('[4] No solver loaded'); }
+        }
 
 
         // =====================================================================
@@ -2592,6 +2772,36 @@
                 const swimmers = todaysSwimmers?.[grade] || new Set();
                 console.log(grade + ': ' + swimmers.size + '/' + bunks.length + ' bunks swim today — ' + [...swimmers].join(', '));
             });
+        };
+
+        window._rotationReport = function() {
+            console.log('%c═══ ROTATION MATRIX REPORT ═══', 'color:#6A1B9A;font-weight:bold');
+            console.log('Shows which activity type each grade is doing at each time band.');
+            console.log('Goal: at any time, different grades do different types.\n');
+            allGrades.forEach(grade => {
+                const p = staggerPlan[grade] || {};
+                const seq = (p.sequence || []).join(' → ');
+                const bands = Object.entries(p.typeBands || {}).map(([t, b]) =>
+                    '  ' + t.padEnd(8) + ' ' + minutesToTimeLabel(b.start) + ' – ' + minutesToTimeLabel(b.end)
+                ).join('\n');
+                console.log(grade + ': [' + seq + ']');
+                if (bands) console.log(bands);
+            });
+            // Show overlap analysis
+            console.log('\n%cTime-slice analysis (who does what when):', 'font-weight:bold');
+            const campStart = Math.min(...allGrades.map(g => parseTimeToMinutes(divisions[g]?.startTime) || 540));
+            const campEnd = Math.max(...allGrades.map(g => parseTimeToMinutes(divisions[g]?.endTime) || 960));
+            for (let t = campStart; t < campEnd; t += 30) {
+                const doing = allGrades.map(grade => {
+                    const p = staggerPlan[grade] || {};
+                    const tb = p.typeBands || {};
+                    for (const [type, band] of Object.entries(tb)) {
+                        if (t >= band.start && t < band.end) return grade.replace(' Grade','') + '=' + type;
+                    }
+                    return grade.replace(' Grade','') + '=sport';
+                }).join(', ');
+                console.log('  ' + minutesToTimeLabel(t) + ': ' + doing);
+            }
         };
 
         return { success: true, warnings, elapsed, blocksScheduled: solverBlocks.length, specialBlocksLocked: specialWriteCount };
