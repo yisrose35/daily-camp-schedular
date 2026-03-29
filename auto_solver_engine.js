@@ -157,17 +157,30 @@
     }
 
     function isFieldAvailableByTime(fieldName, startMin, endMin, bunk, grade, fieldIndex, candidate) {
-        // Check AutoFieldLocks first (if available)
-        if (window.AutoFieldLocks?.isFieldAvailable) {
-            return window.AutoFieldLocks.isFieldAvailable(fieldName, startMin, endMin, bunk, grade);
+        // ★ v1.1 FIX: ALWAYS check the time index (built from scheduleAssignments)
+        // for capacity and cross-division sharing. Lock systems are checked
+        // ADDITIONALLY for exclusive locks — they never short-circuit past
+        // the capacity check, because they only contain explicit lock claims,
+        // not the sport capacity data from scheduleAssignments.
+
+        // 1. Exclusive lock checks (both systems)
+        if (window.AutoFieldLocks?.isFieldLockedByTime) {
+            if (window.AutoFieldLocks.isFieldLockedByTime(fieldName, startMin, endMin, grade)) return false;
+        }
+        if (window.GlobalFieldLocks?.isFieldLockedByTime) {
+            if (window.GlobalFieldLocks.isFieldLockedByTime(fieldName, startMin, endMin, grade)) return false;
         }
 
-        // Fallback: use the time index
+        // 2. Rainy day: no outdoor fields
+        if (window.isRainyDay && candidate && !candidate.isIndoor) return false;
+
+        // 3. Time index: capacity + cross-division sharing (THE critical check)
         const fn = normName(fieldName);
         const entries = fieldIndex.get(fn) || [];
         const overlapping = entries.filter(e => e.startMin < endMin && e.endMin > startMin && e.bunk !== bunk);
 
-        if (overlapping.length >= (candidate?.capacity || 2)) return false;
+        const cap = candidate?.capacity || 2;
+        if (overlapping.length >= cap) return false;
 
         const st = candidate?.shareType || 'same_division';
         if (st === 'not_sharable' && overlapping.length > 0) return false;
@@ -175,15 +188,13 @@
         if (st === 'custom') {
             const allowed = candidate?.allowedDivisions || [];
             if (overlapping.some(e => e.grade !== grade && !allowed.includes(e.grade))) return false;
+            if (overlapping.length > 0 && !allowed.includes(grade)) return false;
         }
 
-        // Rainy day: no outdoor fields
-        if (window.isRainyDay && candidate && !candidate.isIndoor) return false;
-
-        // GlobalFieldLocks check (manual-mode locks that may still apply)
-        if (window.GlobalFieldLocks?.isFieldLockedByTime) {
-            const lock = window.GlobalFieldLocks.isFieldLockedByTime(fieldName, startMin, endMin, grade);
-            if (lock) return false;
+        // 4. Combined field mutual exclusion
+        if (window.FieldCombos?.isBlockedByCombo) {
+            const combo = window.FieldCombos.isBlockedByCombo(fieldName, startMin, endMin, bunk);
+            if (combo?.blocked) return false;
         }
 
         return true;
