@@ -6,322 +6,531 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap" rel="stylesheet">
 <style>
-:root{--me:#D97706;--teal:#147D91;--ok:#10B981;--err:#EF4444;--s50:#F8FAFC;--s100:#F1F5F9;--s200:#E2E8F0;--s300:#CBD5E1;--s400:#94A3B8;--s500:#64748B;--s600:#475569;--s700:#334155;--s800:#1E293B;--s900:#0F172A;--r:8px;--font:'DM Sans',system-ui,sans-serif}
+:root{--me:#D97706;--me2:#B45309;--teal:#147D91;--ok:#10B981;--err:#EF4444;--s50:#F8FAFC;--s100:#F1F5F9;--s200:#E2E8F0;--s300:#CBD5E1;--s400:#94A3B8;--s500:#64748B;--s600:#475569;--s700:#334155;--s800:#1E293B;--s900:#0F172A;--r:8px;--font:'DM Sans',system-ui,sans-serif}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-font-smoothing:antialiased;min-height:100vh}
-.wrap{max-width:680px;margin:0 auto;padding:24px 20px 60px}
-.header{text-align:center;margin-bottom:28px;padding:24px 0}
-.header h1{font-size:1.6rem;font-weight:800;color:var(--s900);margin:0 0 4px}
-.header .camp-name{color:var(--me);font-size:1.3rem;font-weight:700}
-.header p{font-size:.9rem;color:var(--s500);margin:6px 0 0}
-.card{background:#fff;border-radius:12px;border:1px solid var(--s200);padding:24px;margin-bottom:16px}
-.card-title{font-size:.95rem;font-weight:700;color:var(--s800);margin:0 0 14px;display:flex;align-items:center;gap:8px}
-.card-title svg{width:18px;height:18px;fill:none;stroke:var(--me);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.fg{margin-bottom:12px}
-.fl{display:block;font-size:.8rem;font-weight:600;color:var(--s600);margin-bottom:4px}
-.fl .req{color:var(--err);margin-left:2px}
-.fi,.fs,.fta{width:100%;padding:10px 14px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:.9rem;color:var(--s800);outline:none;font-family:var(--font);background:#fff;transition:border .15s}
+body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-font-smoothing:antialiased}
+.wrap{max-width:700px;margin:0 auto;padding:24px 20px 60px}
+.hdr{text-align:center;margin-bottom:24px;padding:20px 0}
+.hdr h1{font-size:1.5rem;font-weight:800;color:var(--s900)}
+.hdr .cn{color:var(--me);font-size:1.2rem;font-weight:700}
+.hdr p{font-size:.88rem;color:var(--s500);margin:4px 0 0}
+.cd{background:#fff;border-radius:12px;border:1px solid var(--s200);padding:22px;margin-bottom:14px}
+.ct{font-size:.92rem;font-weight:700;color:var(--s800);margin:0 0 12px;display:flex;align-items:center;gap:8px}
+.ct svg{width:18px;height:18px;fill:none;stroke:var(--me);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.fg{margin-bottom:10px}
+.fl{display:block;font-size:.78rem;font-weight:600;color:var(--s600);margin-bottom:3px}
+.rq{color:var(--err);margin-left:2px}
+.fi,.fs,.fta{width:100%;padding:9px 12px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:.88rem;color:var(--s800);outline:none;font-family:var(--font);background:#fff;transition:border .15s}
 .fi:focus,.fs:focus,.fta:focus{border-color:var(--me);box-shadow:0 0 0 3px rgba(217,119,6,.08)}
-.fta{resize:vertical;min-height:70px}
-.fr{display:flex;gap:12px}.fr>*{flex:1;min-width:0}
-.session-card{border:1.5px solid var(--s200);border-radius:var(--r);padding:14px;cursor:pointer;transition:all .15s;position:relative}
-.session-card:hover{border-color:var(--me);background:rgba(217,119,6,.02)}
-.session-card.selected{border-color:var(--me);background:rgba(217,119,6,.04);box-shadow:0 0 0 3px rgba(217,119,6,.1)}
-.session-card.selected::after{content:'✓';position:absolute;top:10px;right:12px;width:22px;height:22px;border-radius:50%;background:var(--me);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center}
-.session-name{font-size:.9rem;font-weight:700;color:var(--s800)}
-.session-meta{font-size:.78rem;color:var(--s500);margin-top:2px}
-.session-price{font-size:1rem;font-weight:800;color:var(--me);margin-top:6px}
-.pay-opt{display:flex;align-items:center;gap:8px;padding:10px 14px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer;transition:all .15s;margin-bottom:6px}
-.pay-opt:hover{border-color:var(--s300)}
-.pay-opt.selected{border-color:var(--me);background:rgba(217,119,6,.04)}
-.pay-opt input[type=radio]{accent-color:var(--me)}
-.pay-label{font-size:.85rem;font-weight:600;color:var(--s700)}
-.pay-desc{font-size:.75rem;color:var(--s400)}
-.check-row{display:flex;align-items:flex-start;gap:8px;padding:8px 0}
-.check-row input[type=checkbox]{accent-color:var(--me);margin-top:3px;flex-shrink:0}
-.check-row label{font-size:.82rem;color:var(--s600);line-height:1.4;cursor:pointer}
-.submit-btn{width:100%;padding:14px;border:none;border-radius:var(--r);background:var(--me);color:#fff;font-size:1rem;font-weight:700;cursor:pointer;font-family:var(--font);transition:all .15s;margin-top:8px}
-.submit-btn:hover{background:#B45309;box-shadow:0 4px 12px rgba(217,119,6,.25)}
-.submit-btn:disabled{opacity:.5;cursor:not-allowed}
-.success-msg{text-align:center;padding:40px 20px;background:#fff;border-radius:12px;border:1px solid var(--s200)}
-.success-msg h2{font-size:1.3rem;font-weight:700;color:var(--ok);margin:12px 0 6px}
-.success-msg p{font-size:.9rem;color:var(--s500);line-height:1.5}
-.err-msg{font-size:.78rem;color:var(--err);margin-top:4px;display:none}
-.powered{text-align:center;margin-top:24px;font-size:.75rem;color:var(--s400)}
-.powered a{color:var(--me);text-decoration:none;font-weight:600}
-@media(max-width:600px){.wrap{padding:16px 12px 40px}.fr{flex-direction:column}.card{padding:18px 16px}}
+.fta{resize:vertical;min-height:60px}
+.fr{display:flex;gap:10px}.fr>*{flex:1;min-width:0}
+.fr3{display:flex;gap:10px}.fr3>*{flex:1;min-width:0}
+/* Session */
+.ss{border:1.5px solid var(--s200);border-radius:var(--r);padding:12px;cursor:pointer;transition:all .15s;position:relative;margin-bottom:6px}
+.ss:hover{border-color:var(--me);background:rgba(217,119,6,.02)}
+.ss.sel{border-color:var(--me);background:rgba(217,119,6,.04);box-shadow:0 0 0 3px rgba(217,119,6,.1)}
+.ss.sel::after{content:'✓';position:absolute;top:10px;right:12px;width:20px;height:20px;border-radius:50%;background:var(--me);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.ss-nm{font-size:.88rem;font-weight:700;color:var(--s800)}
+.ss-meta{font-size:.75rem;color:var(--s500);margin-top:2px}
+.ss-price{font-size:.95rem;font-weight:800;color:var(--me);margin-top:4px}
+.ss-eb{font-size:.72rem;color:var(--ok);font-weight:600;margin-top:2px}
+/* Pay */
+.po{display:flex;align-items:center;gap:8px;padding:9px 12px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer;transition:all .15s;margin-bottom:5px}
+.po:hover{border-color:var(--s300)}.po.sel{border-color:var(--me);background:rgba(217,119,6,.04)}
+.po input[type=radio]{accent-color:var(--me)}
+.po-l{font-size:.82rem;font-weight:600;color:var(--s700)}
+.po-d{font-size:.72rem;color:var(--s400)}
+/* Check */
+.ck{display:flex;align-items:flex-start;gap:8px;padding:6px 0}
+.ck input[type=checkbox]{accent-color:var(--me);margin-top:3px;flex-shrink:0}
+.ck label{font-size:.8rem;color:var(--s600);line-height:1.4;cursor:pointer}
+/* Sig */
+.sig-wrap{border:1.5px solid var(--s200);border-radius:var(--r);overflow:hidden;position:relative;background:#fff;touch-action:none}
+.sig-wrap canvas{display:block;width:100%;height:120px;cursor:crosshair}
+.sig-clear{position:absolute;top:6px;right:6px;font-size:.7rem;font-weight:600;color:var(--me);background:rgba(255,255,255,.9);border:1px solid var(--s200);border-radius:4px;padding:2px 8px;cursor:pointer}
+.sig-line{position:absolute;bottom:30px;left:20px;right:20px;border-bottom:1px solid var(--s300)}
+.sig-label{position:absolute;bottom:10px;left:20px;font-size:.65rem;color:var(--s400)}
+/* Upload */
+.up-zone{border:2px dashed var(--s200);border-radius:var(--r);padding:16px;text-align:center;cursor:pointer;transition:border .15s;background:var(--s50)}
+.up-zone:hover,.up-zone.dragover{border-color:var(--me);background:rgba(217,119,6,.03)}
+.up-zone p{font-size:.82rem;font-weight:600;color:var(--s700);margin:4px 0 0}
+.up-zone small{font-size:.72rem;color:var(--s400)}
+.up-file{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--s200);border-radius:6px;margin-top:6px;font-size:.78rem}
+.up-file .nm{flex:1;font-weight:600;color:var(--s700)}
+.up-file .rm{color:var(--err);cursor:pointer;font-weight:700;font-size:.7rem;border:none;background:none}
+/* Discount */
+.promo-row{display:flex;gap:6px;align-items:flex-end}
+.promo-row .fi{flex:1}
+.promo-btn{padding:9px 14px;border:none;border-radius:var(--r);background:var(--me);color:#fff;font-weight:700;font-size:.8rem;cursor:pointer;font-family:var(--font);white-space:nowrap}
+.promo-msg{font-size:.78rem;margin-top:4px;font-weight:600}
+.promo-ok{color:var(--ok)}.promo-err{color:var(--err)}
+/* Sibling */
+.sib-card{background:var(--s50);border:1px solid var(--s200);border-radius:var(--r);padding:16px;margin-bottom:10px;position:relative}
+.sib-card h4{font-size:.85rem;font-weight:700;color:var(--me);margin:0 0 10px}
+.sib-rm{position:absolute;top:10px;right:10px;font-size:.75rem;color:var(--err);cursor:pointer;background:none;border:none;font-weight:700}
+/* Submit */
+.sub-btn{width:100%;padding:14px;border:none;border-radius:var(--r);background:var(--me);color:#fff;font-size:1rem;font-weight:700;cursor:pointer;font-family:var(--font);transition:all .15s;margin-top:8px}
+.sub-btn:hover{background:var(--me2);box-shadow:0 4px 12px rgba(217,119,6,.25)}
+.sub-btn:disabled{opacity:.5;cursor:not-allowed}
+.err-msg{font-size:.78rem;color:var(--err);text-align:center;margin-bottom:6px;display:none}
+.success{text-align:center;padding:40px 20px;background:#fff;border-radius:12px;border:1px solid var(--s200)}
+.success h2{font-size:1.2rem;font-weight:700;color:var(--ok);margin:10px 0 6px}
+.success p{font-size:.88rem;color:var(--s500);line-height:1.5}
+.pwr{text-align:center;margin-top:20px;font-size:.72rem;color:var(--s400)}
+.pwr a{color:var(--me);text-decoration:none;font-weight:600}
+@media(max-width:600px){.wrap{padding:16px 12px 40px}.fr,.fr3{flex-direction:column}.cd{padding:16px}}
 </style>
 </head>
 <body>
 <div class="wrap" id="formWrap">
-    <div class="header">
-        <h1 id="campTitle">Camp Registration</h1>
-        <div class="camp-name" id="campNameDisplay"></div>
-        <p id="campSubtitle">Complete the form below to apply for enrollment</p>
-    </div>
+<div class="hdr"><h1 id="campTitle">Camp Registration</h1><div class="cn" id="campNm"></div><p>Complete the form below to apply for enrollment</p></div>
 
-    <!-- Session Selection -->
-    <div class="card" id="sessionCard">
-        <div class="card-title"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> Select Session</div>
-        <div id="sessionList" style="display:flex;flex-direction:column;gap:8px">
-            <p style="color:var(--s400);font-size:.85rem">Loading sessions...</p>
-        </div>
-    </div>
+<!-- Session -->
+<div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Select Session</div>
+<div id="sessList"></div></div>
 
-    <!-- Camper Info -->
-    <div class="card">
-        <div class="card-title"><svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> Camper Information</div>
-        <div class="fr"><div class="fg"><label class="fl">First Name <span class="req">*</span></label><input class="fi" id="rFirst" required></div><div class="fg"><label class="fl">Last Name <span class="req">*</span></label><input class="fi" id="rLast" required></div></div>
-        <div class="fr"><div class="fg"><label class="fl">Date of Birth <span class="req">*</span></label><input type="date" class="fi" id="rDob" required></div><div class="fg"><label class="fl">Gender</label><select class="fs" id="rGender"><option value="">—</option><option>Male</option><option>Female</option><option>Non-binary</option><option>Other</option></select></div></div>
-        <div class="fr"><div class="fg"><label class="fl">School Name</label><input class="fi" id="rSchool"></div><div class="fg"><label class="fl">School Grade</label><input class="fi" id="rSchoolGr"></div></div>
-        <div class="fg"><label class="fl">Teacher</label><input class="fi" id="rTeacher"></div>
-    </div>
-
-    <!-- Parent/Guardian -->
-    <div class="card">
-        <div class="card-title"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg> Parent / Guardian</div>
-        <div class="fr"><div class="fg"><label class="fl">Full Name <span class="req">*</span></label><input class="fi" id="rParent" required></div><div class="fg"><label class="fl">Relationship</label><select class="fs" id="rRelation"><option>Mother</option><option>Father</option><option>Guardian</option><option>Grandparent</option><option>Other</option></select></div></div>
-        <div class="fr"><div class="fg"><label class="fl">Phone <span class="req">*</span></label><input type="tel" class="fi" id="rPhone" required></div><div class="fg"><label class="fl">Email <span class="req">*</span></label><input type="email" class="fi" id="rEmail" required></div></div>
-        <p style="font-size:.78rem;color:var(--s400);margin-top:4px">Second parent/guardian (optional):</p>
-        <div class="fr" style="margin-top:6px"><div class="fg"><label class="fl">Name</label><input class="fi" id="rParent2"></div><div class="fg"><label class="fl">Phone</label><input type="tel" class="fi" id="rPhone2"></div></div>
-    </div>
-
-    <!-- Address -->
-    <div class="card">
-        <div class="card-title"><svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg> Home Address</div>
-        <div class="fg"><label class="fl">Street Address <span class="req">*</span></label><input class="fi" id="rStreet" required></div>
-        <div class="fr"><div class="fg"><label class="fl">City <span class="req">*</span></label><input class="fi" id="rCity" required></div><div class="fg"><label class="fl">State</label><input class="fi" id="rState" value="NY"></div><div class="fg"><label class="fl">ZIP <span class="req">*</span></label><input class="fi" id="rZip" required></div></div>
-    </div>
-
-    <!-- Emergency Contact -->
-    <div class="card">
-        <div class="card-title"><svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg> Emergency Contact</div>
-        <div class="fr"><div class="fg"><label class="fl">Name <span class="req">*</span></label><input class="fi" id="rEmName" required></div><div class="fg"><label class="fl">Relationship</label><input class="fi" id="rEmRel" placeholder="e.g., Uncle, Neighbor"></div></div>
-        <div class="fg"><label class="fl">Phone <span class="req">*</span></label><input type="tel" class="fi" id="rEmPhone" required></div>
-    </div>
-
-    <!-- Medical -->
-    <div class="card">
-        <div class="card-title"><svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg> Medical Information</div>
-        <div class="fg"><label class="fl">Allergies</label><input class="fi" id="rAllergy" placeholder="List all known allergies (food, medication, environmental)"></div>
-        <div class="fg"><label class="fl">Medications</label><input class="fi" id="rMeds" placeholder="Current medications and dosages"></div>
-        <div class="fg"><label class="fl">Dietary Restrictions</label><input class="fi" id="rDiet" placeholder="Kosher, vegetarian, gluten-free, etc."></div>
-        <div class="fg"><label class="fl">Additional Medical Notes</label><textarea class="fta" id="rMedNotes" placeholder="Asthma, ADHD, anxiety, physical limitations, etc."></textarea></div>
-    </div>
-
-    <!-- Bunkmate / Preferences -->
-    <div class="card">
-        <div class="card-title"><svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> Preferences</div>
-        <div class="fg"><label class="fl">Bunkmate Request</label><input class="fi" id="rBunkmate" placeholder="Name of camper your child wants to be with"></div>
-        <div class="fg"><label class="fl">Separation Request</label><input class="fi" id="rSeparate" placeholder="Name of camper to keep apart from (optional)"></div>
-        <div class="fg"><label class="fl">How did you hear about us?</label><select class="fs" id="rSource"><option value="">—</option><option>Returning family</option><option>Friend/referral</option><option>School</option><option>Social media</option><option>Website</option><option>Advertisement</option><option>Other</option></select></div>
-        <div class="fg"><label class="fl">Additional Notes</label><textarea class="fta" id="rNotes" placeholder="Anything else we should know about your camper"></textarea></div>
-    </div>
-
-    <!-- Payment Method -->
-    <div class="card">
-        <div class="card-title"><svg viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg> Payment Preference</div>
-        <p style="font-size:.82rem;color:var(--s500);margin-bottom:10px">Select how you'd like to pay. Payment details will be sent after your application is reviewed.</p>
-        <div id="payOpts">
-            <label class="pay-opt" onclick="selPay(this,'credit_card')"><input type="radio" name="payMethod" value="credit_card"><div><div class="pay-label">Credit / Debit Card</div><div class="pay-desc">Visa, Mastercard, Amex — processed securely</div></div></label>
-            <label class="pay-opt" onclick="selPay(this,'ach')"><input type="radio" name="payMethod" value="ach"><div><div class="pay-label">ACH / Bank Transfer</div><div class="pay-desc">Direct from your bank account</div></div></label>
-            <label class="pay-opt" onclick="selPay(this,'zelle')"><input type="radio" name="payMethod" value="zelle"><div><div class="pay-label">Zelle</div><div class="pay-desc">Send directly via Zelle</div></div></label>
-            <label class="pay-opt" onclick="selPay(this,'check')"><input type="radio" name="payMethod" value="check"><div><div class="pay-label">Check</div><div class="pay-desc">Mail or drop off a check</div></div></label>
-            <label class="pay-opt" onclick="selPay(this,'payment_plan')"><input type="radio" name="payMethod" value="payment_plan"><div><div class="pay-label">Payment Plan</div><div class="pay-desc">Split into monthly installments</div></div></label>
-        </div>
-    </div>
-
-    <!-- Agreement -->
-    <div class="card">
-        <div class="card-title"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Agreement</div>
-        <div class="check-row"><input type="checkbox" id="rAgree1"><label for="rAgree1">I certify that all information provided is accurate and complete to the best of my knowledge.</label></div>
-        <div class="check-row"><input type="checkbox" id="rAgree2"><label for="rAgree2">I understand that submitting this form is an application and does not guarantee enrollment.</label></div>
-        <div class="check-row"><input type="checkbox" id="rAgree3"><label for="rAgree3">I authorize the camp to obtain emergency medical treatment for my child if I cannot be reached.</label></div>
-    </div>
-
-    <div id="formError" class="err-msg" style="text-align:center;margin-bottom:8px"></div>
-    <button class="submit-btn" id="submitBtn" onclick="submitApplication()">Submit Application</button>
-    <div class="powered">Powered by <a href="index.html">Campistry</a></div>
+<!-- Primary Camper -->
+<div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Camper Information</div>
+<div class="fr"><div class="fg"><label class="fl">First Name<span class="rq">*</span></label><input class="fi" id="rF"></div><div class="fg"><label class="fl">Last Name<span class="rq">*</span></label><input class="fi" id="rL"></div></div>
+<div class="fr"><div class="fg"><label class="fl">Date of Birth<span class="rq">*</span></label><input type="date" class="fi" id="rDob"></div><div class="fg"><label class="fl">Gender</label><select class="fs" id="rGen"><option value="">—</option><option>Male</option><option>Female</option><option>Non-binary</option><option>Other</option></select></div></div>
+<div class="fr"><div class="fg"><label class="fl">School Name</label><input class="fi" id="rSch"></div><div class="fg"><label class="fl">School Grade</label><input class="fi" id="rSchGr"></div></div>
+<div class="fg"><label class="fl">Teacher</label><input class="fi" id="rTch"></div>
 </div>
 
-<!-- Success State (hidden initially) -->
+<!-- Siblings -->
+<div class="cd" id="sibCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>Additional Campers (Siblings)</div>
+<div id="sibList"></div>
+<button type="button" style="padding:8px 14px;border:1px dashed var(--s300);border-radius:var(--r);background:none;color:var(--me);font-weight:600;font-size:.82rem;cursor:pointer;font-family:var(--font);width:100%" onclick="addSibling()">+ Add Another Camper</button>
+</div>
+
+<!-- Parent -->
+<div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.79 19.79 0 012.12 2.18 2 2 0 014.11 2h3"/></svg>Parent / Guardian</div>
+<div class="fr"><div class="fg"><label class="fl">Full Name<span class="rq">*</span></label><input class="fi" id="rPar"></div><div class="fg"><label class="fl">Relationship</label><select class="fs" id="rRel"><option>Mother</option><option>Father</option><option>Guardian</option><option>Grandparent</option><option>Other</option></select></div></div>
+<div class="fr"><div class="fg"><label class="fl">Phone<span class="rq">*</span></label><input type="tel" class="fi" id="rPh"></div><div class="fg"><label class="fl">Email<span class="rq">*</span></label><input type="email" class="fi" id="rEm"></div></div>
+<p style="font-size:.75rem;color:var(--s400);margin:6px 0 4px">Second parent/guardian (optional):</p>
+<div class="fr"><div class="fg"><label class="fl">Name</label><input class="fi" id="rP2"></div><div class="fg"><label class="fl">Phone</label><input type="tel" class="fi" id="rP2Ph"></div></div>
+</div>
+
+<!-- Address -->
+<div class="cd" id="addrCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>Home Address</div>
+<div class="fg"><label class="fl">Street<span class="rq">*</span></label><input class="fi" id="rSt"></div>
+<div class="fr3"><div class="fg"><label class="fl">City<span class="rq">*</span></label><input class="fi" id="rCi"></div><div class="fg"><label class="fl">State</label><input class="fi" id="rSa" value="NY"></div><div class="fg"><label class="fl">ZIP<span class="rq">*</span></label><input class="fi" id="rZp"></div></div>
+</div>
+
+<!-- Emergency -->
+<div class="cd" id="emCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M15.05 5A5 5 0 0119 8.95M15.05 1A9 9 0 0123 8.94"/><path d="M22 16.92v3a2 2 0 01-2.18 2A19.79 19.79 0 012.12 2.18 2 2 0 014.11 2h3"/></svg>Emergency Contact</div>
+<div class="fr"><div class="fg"><label class="fl">Name<span class="rq">*</span></label><input class="fi" id="rEmN"></div><div class="fg"><label class="fl">Relationship</label><input class="fi" id="rEmR" placeholder="e.g. Uncle"></div></div>
+<div class="fg"><label class="fl">Phone<span class="rq">*</span></label><input type="tel" class="fi" id="rEmPh"></div>
+</div>
+
+<!-- Medical -->
+<div class="cd" id="medCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>Medical Information</div>
+<div class="fg"><label class="fl">Allergies</label><input class="fi" id="rAlg" placeholder="Food, medication, environmental"></div>
+<div class="fg"><label class="fl">Medications</label><input class="fi" id="rMed" placeholder="Current medications and dosages"></div>
+<div class="fg"><label class="fl">Dietary Restrictions</label><input class="fi" id="rDit" placeholder="Kosher, vegetarian, gluten-free, etc."></div>
+<div class="fg"><label class="fl">Additional Medical Notes</label><textarea class="fta" id="rMdN" placeholder="Asthma, ADHD, anxiety, physical limitations, etc."></textarea></div>
+</div>
+
+<!-- Preferences -->
+<div class="cd" id="prefCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>Preferences</div>
+<div class="fr"><div class="fg"><label class="fl">Bunkmate Request</label><input class="fi" id="rBnk" placeholder="Name of camper to be with"></div><div class="fg"><label class="fl">Separation Request</label><input class="fi" id="rSep" placeholder="Name to keep apart"></div></div>
+<div class="fr"><div class="fg"><label class="fl">T-Shirt Size</label><select class="fs" id="rShirt"><option value="">—</option><option>YS</option><option>YM</option><option>YL</option><option>AS</option><option>AM</option><option>AL</option><option>AXL</option></select></div><div class="fg"><label class="fl">How did you hear about us?</label><select class="fs" id="rSrc"><option value="">—</option><option>Returning family</option><option>Friend/referral</option><option>School</option><option>Social media</option><option>Website</option><option>Advertisement</option><option>Other</option></select></div></div>
+<div class="fg"><label class="fl">Additional Notes</label><textarea class="fta" id="rNotes" placeholder="Anything else we should know"></textarea></div>
+</div>
+
+<!-- Documents -->
+<div class="cd" id="docCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Document Uploads</div>
+<p style="font-size:.8rem;color:var(--s500);margin-bottom:10px">Upload any required documents (immunization records, health forms, insurance card, etc.)</p>
+<div class="up-zone" id="upZone"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--me)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 5 17 10"/><line x1="12" y1="5" x2="12" y2="15"/></svg><p>Drop files here or click to browse</p><small>PDF, JPG, PNG — max 5MB each</small></div>
+<input type="file" id="upInput" multiple accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" style="display:none">
+<div id="upFiles"></div>
+</div>
+
+<!-- Payment -->
+<div class="cd" id="payCard"><div class="ct"><svg viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>Payment</div>
+<div id="priceDisplay" style="margin-bottom:10px"></div>
+<!-- Promo -->
+<div class="fg"><label class="fl">Promo / Discount Code</label>
+<div class="promo-row"><input class="fi" id="promoIn" placeholder="Enter code"><button class="promo-btn" onclick="applyPromo()">Apply</button></div>
+<div id="promoMsg" class="promo-msg" style="display:none"></div></div>
+<p style="font-size:.8rem;color:var(--s500);margin-bottom:8px">Select how you'd like to pay:</p>
+<div id="payOpts">
+<label class="po" onclick="selPay(this,'credit_card')"><input type="radio" name="pm" value="credit_card"><div><div class="po-l">Credit / Debit Card</div><div class="po-d">Visa, Mastercard, Amex</div></div></label>
+<label class="po" onclick="selPay(this,'ach')"><input type="radio" name="pm" value="ach"><div><div class="po-l">ACH / Bank Transfer</div><div class="po-d">Direct from bank account</div></div></label>
+<label class="po" onclick="selPay(this,'zelle')"><input type="radio" name="pm" value="zelle"><div><div class="po-l">Zelle</div><div class="po-d">Send directly via Zelle</div></div></label>
+<label class="po" onclick="selPay(this,'check')"><input type="radio" name="pm" value="check"><div><div class="po-l">Check</div><div class="po-d">Mail or drop off</div></div></label>
+<label class="po" onclick="selPay(this,'payment_plan')"><input type="radio" name="pm" value="payment_plan"><div><div class="po-l">Payment Plan</div><div class="po-d">Monthly installments</div></div></label>
+</div></div>
+
+<!-- Custom Questions (hidden by default, shown when config has questions) -->
+<div class="cd" id="customQCard" style="display:none"><div class="ct"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Additional Information</div>
+<div id="cqContent"></div></div>
+
+<!-- Signature -->
+<div class="cd" id="sigCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>Agreement & Signature</div>
+<div class="ck"><input type="checkbox" id="ag1"><label for="ag1">I certify that all information provided is accurate and complete.</label></div>
+<div class="ck"><input type="checkbox" id="ag2"><label for="ag2">I understand this is an application and does not guarantee enrollment.</label></div>
+<div class="ck"><input type="checkbox" id="ag3"><label for="ag3">I authorize emergency medical treatment if I cannot be reached.</label></div>
+<div class="ck"><input type="checkbox" id="ag4"><label for="ag4">I have read and agree to the camp's policies, rules, and liability terms.</label></div>
+<div class="fg" style="margin-top:10px"><label class="fl">Parent/Guardian Signature<span class="rq">*</span></label>
+<div class="sig-wrap" id="sigWrap"><canvas id="sigCanvas"></canvas><div class="sig-line"></div><div class="sig-label">Sign above</div><button class="sig-clear" onclick="clearSig()">Clear</button></div>
+</div></div>
+
+<div id="formErr" class="err-msg"></div>
+<button class="sub-btn" onclick="submitApp()">Submit Application</button>
+<div class="pwr">Powered by <a href="index.html">Campistry</a></div>
+</div>
+
+<!-- Success -->
 <div class="wrap" id="successWrap" style="display:none">
-    <div class="success-msg">
-        <div style="font-size:48px;margin-bottom:8px">🎉</div>
-        <h2>Application Submitted!</h2>
-        <p id="successText">Thank you for registering. We'll review your application and be in touch shortly.</p>
-        <div style="margin-top:20px;padding:16px;background:var(--s50);border-radius:var(--r);text-align:left">
-            <div style="font-size:.8rem;font-weight:600;color:var(--s500);margin-bottom:6px">APPLICATION SUMMARY</div>
-            <div id="summaryContent" style="font-size:.85rem;color:var(--s700)"></div>
-        </div>
-    </div>
-    <div class="powered" style="margin-top:16px">Powered by <a href="index.html">Campistry</a></div>
+<div class="success">
+<div style="font-size:48px">🎉</div>
+<h2>Application Submitted!</h2>
+<p id="successTxt">Thank you for registering. We'll review your application and be in touch shortly.</p>
+<div style="margin-top:16px;padding:14px;background:var(--s50);border-radius:var(--r);text-align:left">
+<div style="font-size:.78rem;font-weight:600;color:var(--s500);margin-bottom:4px">SUMMARY</div>
+<div id="summaryOut" style="font-size:.82rem;color:var(--s700)"></div>
 </div>
+<div style="margin-top:14px"><p style="font-size:.82rem;color:var(--s500)">You can check your application status at any time:</p>
+<div id="statusLink" style="margin-top:6px;font-size:.85rem;font-weight:600"></div></div>
+</div>
+<div class="pwr" style="margin-top:16px">Powered by <a href="index.html">Campistry</a></div>
+</div>
+
+<!-- Status Tracker Page (shown via ?status=ID) -->
+<div class="wrap" id="statusWrap" style="display:none">
+<div class="success" id="statusContent"></div>
+<div class="pwr" style="margin-top:16px">Powered by <a href="index.html">Campistry</a></div>
+</div>
+
+<!-- Cloud sync (loads silently — if scripts not found, falls back to localStorage only) -->
+<script src="supabase-js@2.js" onerror="console.log('[Register] Supabase client not loaded — local only')"></script>
+<script src="supabase_client.js" onerror="console.log('[Register] Supabase config not loaded — local only')"></script>
+<script src="integration_hooks.js" onerror="console.log('[Register] Integration hooks not loaded — local only')"></script>
 
 <script>
 (function(){
-var selectedSession='',selectedPay='';
-var campData={},sessions=[];
+var selSess='',selPM='',siblings=[],uploads=[],discount={active:false,code:'',pct:0,amt:0,label:''};
+var sessions=[],promoCodes={};
+var sigCtx=null,sigDrawing=false,sigHasData=false;
 
-// Load camp data and sessions
-function loadCampData(){
+function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function v(id){return(document.getElementById(id)?.value||'').trim()}
+function fm(n){return'$'+Number(n||0).toLocaleString()}
+
+// ─── STATUS TRACKER ──────────────────────────────────────────
+var params=new URLSearchParams(window.location.search);
+if(params.get('status')){
+    document.getElementById('formWrap').style.display='none';
+    document.getElementById('statusWrap').style.display='block';
+    showStatus(params.get('status'));
+    return;
+}
+
+function showStatus(id){
+    try{
+        var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        var e=(g.campistryMe?.enrollments||{})[id];
+        if(!e){document.getElementById('statusContent').innerHTML='<h2 style="color:var(--err)">Application Not Found</h2><p>Please check the link and try again.</p>';return}
+        var sc=e.status==='enrolled'?'color:var(--ok)':e.status==='accepted'?'color:#3B82F6':e.status==='waitlisted'?'color:var(--me)':e.status==='declined'?'color:var(--err)':'color:var(--s500)';
+        var h='<div style="font-size:48px;margin-bottom:8px">'+(e.status==='enrolled'?'✅':e.status==='accepted'?'👍':e.status==='waitlisted'?'⏳':e.status==='declined'?'❌':'📋')+'</div>';
+        h+='<h2 style="'+sc+'">Application Status: '+e.status.charAt(0).toUpperCase()+e.status.slice(1)+'</h2>';
+        h+='<p style="font-size:.9rem;color:var(--s700);margin-top:8px"><strong>'+esc(e.camperName)+'</strong></p>';
+        h+='<div style="text-align:left;margin-top:14px;padding:12px;background:var(--s50);border-radius:var(--r);font-size:.82rem;color:var(--s600)">';
+        h+='<div>Session: <strong>'+esc(e.session||'—')+'</strong></div>';
+        h+='<div>Applied: '+esc(e.appliedDate)+'</div>';
+        h+='<div>Payment: '+esc(e.paymentStatus||'pending')+'</div>';
+        h+='<div>Forms: '+(e.formsCompleted||0)+'/'+(e.formsRequired||0)+' completed</div>';
+        h+='</div>';
+        document.getElementById('statusContent').innerHTML=h;
+    }catch(ex){document.getElementById('statusContent').innerHTML='<h2 style="color:var(--err)">Error</h2><p>Unable to load status.</p>'}
+}
+
+// ─── LOAD DATA ───────────────────────────────────────────────
+function load(){
     try{
         var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
         var me=g.campistryMe||{};
         sessions=me.sessions||[];
-        // Get camp name
-        var campName=g.campName||g.app1?.campName||'';
-        if(campName){
-            document.getElementById('campTitle').textContent=campName+' Registration';
-            document.getElementById('campNameDisplay').textContent=campName;
+        promoCodes=me.promoCodes||{EARLYBIRD:{pct:10,label:'Early Bird 10% Off'},SIBLING:{pct:5,label:'Sibling Discount 5%'},REFER:{amt:50,label:'Referral $50 Off'}};
+        var cn=g.campName||g.app1?.campName||'';
+        if(cn){document.getElementById('campTitle').textContent=cn+' Registration';document.getElementById('campNm').textContent=cn}
+
+        // Apply form config
+        var fc=me.formConfig;
+        if(fc){
+            if(fc.welcomeMessage){document.getElementById('campNm').textContent=fc.welcomeMessage}
+            if(fc.instructions){var instrEl=document.createElement('p');instrEl.style.cssText='font-size:.85rem;color:var(--s600);text-align:center;margin-top:6px;line-height:1.5';instrEl.textContent=fc.instructions;document.querySelector('.hdr').appendChild(instrEl)}
+            // Section toggles
+            var secMap={address:'addrCard',emergency:'emCard',medical:'medCard',preferences:'prefCard',documents:'docCard',payment:'payCard',siblings:'sibCard',signature:'sigCard'};
+            if(fc.sections){
+                Object.entries(fc.sections).forEach(function([key,cfg]){
+                    if(!cfg.enabled&&secMap[key]){var el=document.getElementById(secMap[key]);if(el)el.style.display='none'}
+                });
+            }
+            // Custom questions
+            if(fc.customQuestions&&fc.customQuestions.length){
+                var cqEl=document.getElementById('customQCard');
+                if(cqEl){
+                    var qh='';
+                    fc.customQuestions.forEach(function(q,i){
+                        qh+='<div class="fg">';
+                        qh+='<label class="fl">'+esc(q.label)+(q.required?'<span class="rq">*</span>':'')+'</label>';
+                        if(q.type==='text')qh+='<input class="fi cqInput" data-q="'+i+'">';
+                        else if(q.type==='textarea')qh+='<textarea class="fta cqInput" data-q="'+i+'"></textarea>';
+                        else if(q.type==='yesno')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option><option>Yes</option><option>No</option></select>';
+                        else if(q.type==='select')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option>'+(q.options||[]).map(function(o){return'<option>'+esc(o)+'</option>'}).join('')+'</select>';
+                        else if(q.type==='checkbox'){
+                            (q.options||[]).forEach(function(o,oi){
+                                qh+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.85rem;cursor:pointer"><input type="checkbox" class="cqCb" data-q="'+i+'" value="'+esc(o)+'" style="accent-color:var(--me)">'+esc(o)+'</label>';
+                            });
+                        }
+                        qh+='</div>';
+                    });
+                    document.getElementById('cqContent').innerHTML=qh;
+                    cqEl.style.display='block';
+                }
+            }
         }
         renderSessions();
-    }catch(e){console.warn('Load error:',e)}
+    }catch(e){console.warn(e)}
 }
 
 function renderSessions(){
-    var cont=document.getElementById('sessionList');
-    if(!sessions.length){
-        cont.innerHTML='<p style="color:var(--s400);font-size:.85rem;text-align:center;padding:12px">No sessions available. Please contact the camp office.</p>';
-        return;
-    }
-    var h='';
-    sessions.forEach(function(s,i){
-        h+='<div class="session-card" id="sess_'+i+'" onclick="selectSession('+i+')">';
-        h+='<div class="session-name">'+esc(s.name)+'</div>';
-        if(s.dates)h+='<div class="session-meta">'+esc(s.dates)+'</div>';
-        if(s.capacity)h+='<div class="session-meta">Capacity: '+s.capacity+' campers</div>';
-        if(s.tuition)h+='<div class="session-price">$'+Number(s.tuition).toLocaleString()+'</div>';
-        if(s.earlyBird&&s.earlyBirdDeadline){
-            var today=new Date().toISOString().split('T')[0];
-            if(today<=s.earlyBirdDeadline)h+='<div style="font-size:.75rem;color:var(--ok);font-weight:600;margin-top:2px">Early bird: $'+Number(s.earlyBird).toLocaleString()+' (until '+s.earlyBirdDeadline+')</div>';
-        }
-        h+='</div>';
-    });
-    cont.innerHTML=h;
+    var c=document.getElementById('sessList');
+    if(!sessions.length){c.innerHTML='<p style="color:var(--s400);font-size:.85rem;text-align:center;padding:10px">No sessions available.</p>';return}
+    c.innerHTML=sessions.filter(function(s){return s.registrationOpen!==false}).map(function(s,i){
+        var today=new Date().toISOString().split('T')[0];
+        var eb=s.earlyBird&&(!s.earlyBirdDeadline||today<=s.earlyBirdDeadline);
+        return'<div class="ss" id="ss_'+i+'" onclick="window._selSess('+i+')"><div class="ss-nm">'+esc(s.name)+'</div>'+(s.dates?'<div class="ss-meta">'+esc(s.dates)+'</div>':'')+(s.tuition?'<div class="ss-price">'+fm(s.tuition)+'</div>':'')+(eb?'<div class="ss-eb">Early bird: '+fm(s.earlyBird)+(s.earlyBirdDeadline?' until '+s.earlyBirdDeadline:'')+'</div>':'')+'</div>';
+    }).join('');
 }
 
-window.selectSession=function(i){
-    selectedSession=sessions[i].name;
-    document.querySelectorAll('.session-card').forEach(function(c,j){c.classList.toggle('selected',j===i)});
+window._selSess=function(i){
+    var openSessions=sessions.filter(function(s){return s.registrationOpen!==false});
+    selSess=openSessions[i].name;
+    document.querySelectorAll('.ss').forEach(function(c,j){c.classList.toggle('sel',j===i)});
+    updatePrice();
+};
+window.selPay=function(el,m){selPM=m;document.querySelectorAll('.po').forEach(function(o){o.classList.remove('sel')});el.classList.add('sel')};
+
+function updatePrice(){
+    var s=sessions.find(function(s){return s.name===selSess});
+    var el=document.getElementById('priceDisplay');
+    if(!s||!s.tuition){el.innerHTML='';return}
+    var base=s.tuition;var total=base;var lines=[];
+    var today=new Date().toISOString().split('T')[0];
+    if(s.earlyBird&&(!s.earlyBirdDeadline||today<=s.earlyBirdDeadline)){total=s.earlyBird;lines.push('<div style="color:var(--ok);font-size:.78rem">Early bird pricing applied</div>')}
+    if(siblings.length>0){var sibDiscount=siblings.length*0;/* sibling discount handled by promo */}
+    if(discount.active){
+        if(discount.pct){var d=Math.round(total*discount.pct/100);total-=d;lines.push('<div style="color:var(--ok);font-size:.78rem">'+esc(discount.label)+': -'+fm(d)+'</div>')}
+        if(discount.amt){total-=discount.amt;lines.push('<div style="color:var(--ok);font-size:.78rem">'+esc(discount.label)+': -'+fm(discount.amt)+'</div>')}
+    }
+    if(total<0)total=0;
+    var perCamper=1+siblings.length;
+    el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--s50);border-radius:var(--r);border:1px solid var(--s200)"><div><div style="font-size:.78rem;color:var(--s500)">'+perCamper+' camper'+(perCamper>1?'s':'')+'</div><div style="font-size:1.1rem;font-weight:800;color:var(--me)">'+fm(total*(perCamper))+'</div>'+lines.join('')+'</div><div style="text-align:right;font-size:.75rem;color:var(--s400)">'+fm(total)+' per camper</div></div>';
+}
+
+// ─── PROMO CODES ─────────────────────────────────────────────
+window.applyPromo=function(){
+    var code=v('promoIn').toUpperCase();
+    var msg=document.getElementById('promoMsg');
+    if(!code){msg.style.display='none';return}
+    var p=promoCodes[code];
+    if(!p){msg.textContent='Invalid promo code';msg.className='promo-msg promo-err';msg.style.display='block';discount={active:false};updatePrice();return}
+    discount={active:true,code:code,pct:p.pct||0,amt:p.amt||0,label:p.label||code};
+    msg.textContent='✓ '+discount.label+' applied!';msg.className='promo-msg promo-ok';msg.style.display='block';
+    updatePrice();
 };
 
-window.selPay=function(el,method){
-    selectedPay=method;
-    document.querySelectorAll('.pay-opt').forEach(function(o){o.classList.remove('selected')});
-    el.classList.add('selected');
+// ─── SIBLINGS ────────────────────────────────────────────────
+window.addSibling=function(){
+    var id=siblings.length;
+    siblings.push({first:'',last:'',dob:'',gender:'',school:'',schoolGrade:'',teacher:''});
+    renderSiblings();updatePrice();
 };
+window.removeSibling=function(i){siblings.splice(i,1);renderSiblings();updatePrice()};
+function renderSiblings(){
+    var c=document.getElementById('sibList');
+    c.innerHTML=siblings.map(function(s,i){
+        return'<div class="sib-card"><h4>Camper '+(i+2)+'</h4><button class="sib-rm" onclick="removeSibling('+i+')">Remove</button>'+
+        '<div class="fr"><div class="fg"><label class="fl">First Name<span class="rq">*</span></label><input class="fi sib-f" data-i="'+i+'" value="'+esc(s.first)+'"></div><div class="fg"><label class="fl">Last Name<span class="rq">*</span></label><input class="fi sib-l" data-i="'+i+'" value="'+esc(s.last)+'"></div></div>'+
+        '<div class="fr"><div class="fg"><label class="fl">DOB</label><input type="date" class="fi sib-dob" data-i="'+i+'" value="'+esc(s.dob)+'"></div><div class="fg"><label class="fl">Gender</label><select class="fs sib-gen" data-i="'+i+'"><option value="">—</option><option'+(s.gender==='Male'?' selected':'')+'>Male</option><option'+(s.gender==='Female'?' selected':'')+'>Female</option><option'+(s.gender==='Non-binary'?' selected':'')+'>Non-binary</option></select></div></div>'+
+        '<div class="fr"><div class="fg"><label class="fl">School</label><input class="fi sib-sch" data-i="'+i+'" value="'+esc(s.school)+'"></div><div class="fg"><label class="fl">Grade</label><input class="fi sib-gr" data-i="'+i+'" value="'+esc(s.schoolGrade)+'"></div></div>'+
+        '<div class="fg"><label class="fl">Teacher</label><input class="fi sib-tch" data-i="'+i+'" value="'+esc(s.teacher)+'"></div></div>';
+    }).join('');
+}
 
-function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
+// ─── UPLOADS ─────────────────────────────────────────────────
+var upZone=document.getElementById('upZone'),upIn=document.getElementById('upInput');
+upZone.onclick=function(){upIn.click()};
+upZone.ondragover=function(e){e.preventDefault();upZone.classList.add('dragover')};
+upZone.ondragleave=function(){upZone.classList.remove('dragover')};
+upZone.ondrop=function(e){e.preventDefault();upZone.classList.remove('dragover');handleFiles(e.dataTransfer.files)};
+upIn.onchange=function(){handleFiles(upIn.files);upIn.value=''};
+function handleFiles(files){
+    for(var i=0;i<files.length;i++){
+        var f=files[i];if(f.size>5*1024*1024){alert(f.name+' is over 5MB');continue}
+        var reader=new FileReader();
+        reader.onload=(function(name,size){return function(e){uploads.push({name:name,size:size,data:e.target.result});renderUploads()}})(f.name,f.size);
+        reader.readAsDataURL(f);
+    }
+}
+window.removeUpload=function(i){uploads.splice(i,1);renderUploads()};
+function renderUploads(){
+    document.getElementById('upFiles').innerHTML=uploads.map(function(u,i){
+        var sz=u.size<1024?u.size+'B':u.size<1048576?Math.round(u.size/1024)+'KB':Math.round(u.size/1048576*10)/10+'MB';
+        return'<div class="up-file"><span style="font-size:14px">📄</span><span class="nm">'+esc(u.name)+'</span><span style="color:var(--s400);font-size:.72rem">'+sz+'</span><button class="rm" onclick="removeUpload('+i+')">✕</button></div>';
+    }).join('');
+}
 
-window.submitApplication=function(){
-    var errEl=document.getElementById('formError');
-    errEl.style.display='none';
+// ─── SIGNATURE ───────────────────────────────────────────────
+function initSig(){
+    var canvas=document.getElementById('sigCanvas');
+    var wrap=document.getElementById('sigWrap');
+    sigCtx=canvas.getContext('2d');
+    function resize(){canvas.width=wrap.clientWidth;canvas.height=120;sigCtx.strokeStyle='#1E293B';sigCtx.lineWidth=2;sigCtx.lineCap='round'}
+    resize();window.addEventListener('resize',resize);
+    function getPos(e){var r=canvas.getBoundingClientRect();var t=e.touches?e.touches[0]:e;return{x:t.clientX-r.left,y:t.clientY-r.top}}
+    canvas.onmousedown=canvas.ontouchstart=function(e){e.preventDefault();sigDrawing=true;sigHasData=true;var p=getPos(e);sigCtx.beginPath();sigCtx.moveTo(p.x,p.y)};
+    canvas.onmousemove=canvas.ontouchmove=function(e){if(!sigDrawing)return;e.preventDefault();var p=getPos(e);sigCtx.lineTo(p.x,p.y);sigCtx.stroke()};
+    canvas.onmouseup=canvas.ontouchend=canvas.onmouseleave=function(){sigDrawing=false};
+}
+window.clearSig=function(){sigCtx.clearRect(0,0,sigCtx.canvas.width,sigCtx.canvas.height);sigHasData=false};
+initSig();
 
-    // Validate required fields
-    var first=(document.getElementById('rFirst').value||'').trim();
-    var last=(document.getElementById('rLast').value||'').trim();
-    var dob=document.getElementById('rDob').value||'';
-    var parent=(document.getElementById('rParent').value||'').trim();
-    var phone=(document.getElementById('rPhone').value||'').trim();
-    var email=(document.getElementById('rEmail').value||'').trim();
-    var street=(document.getElementById('rStreet').value||'').trim();
-    var city=(document.getElementById('rCity').value||'').trim();
-    var zip=(document.getElementById('rZip').value||'').trim();
-    var emName=(document.getElementById('rEmName').value||'').trim();
-    var emPhone=(document.getElementById('rEmPhone').value||'').trim();
+// ─── SUBMIT ──────────────────────────────────────────────────
+window.submitApp=function(){
+    var err=document.getElementById('formErr');err.style.display='none';
 
-    if(!first||!last){return showErr('Please enter the camper\'s first and last name.')}
-    if(!dob){return showErr('Please enter the camper\'s date of birth.')}
-    if(!parent){return showErr('Please enter a parent/guardian name.')}
-    if(!phone){return showErr('Please enter a phone number.')}
-    if(!email){return showErr('Please enter an email address.')}
-    if(!street||!city||!zip){return showErr('Please enter a complete address.')}
-    if(!emName||!emPhone){return showErr('Please enter an emergency contact.')}
-    if(!selectedSession&&sessions.length){return showErr('Please select a session.')}
-    if(!document.getElementById('rAgree1').checked||!document.getElementById('rAgree2').checked||!document.getElementById('rAgree3').checked){return showErr('Please agree to all terms before submitting.')}
+    // Read sibling data from DOM
+    document.querySelectorAll('.sib-f').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].first=el.value.trim()});
+    document.querySelectorAll('.sib-l').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].last=el.value.trim()});
+    document.querySelectorAll('.sib-dob').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].dob=el.value});
+    document.querySelectorAll('.sib-gen').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].gender=el.value});
+    document.querySelectorAll('.sib-sch').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].school=el.value.trim()});
+    document.querySelectorAll('.sib-gr').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].schoolGrade=el.value.trim()});
+    document.querySelectorAll('.sib-tch').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].teacher=el.value.trim()});
 
-    var fullName=first+' '+last;
-    var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,6);
-    var sessionObj=sessions.find(function(s){return s.name===selectedSession})||{};
+    // Validate
+    var first=v('rF'),last=v('rL'),dob=v('rDob'),par=v('rPar'),ph=v('rPh'),em=v('rEm'),st=v('rSt'),ci=v('rCi'),zp=v('rZp'),emN=v('rEmN'),emPh=v('rEmPh');
+    if(!first||!last)return showErr('Enter camper first and last name.');
+    if(!dob)return showErr('Enter date of birth.');
+    if(!par)return showErr('Enter parent/guardian name.');
+    if(!ph)return showErr('Enter phone number.');
+    if(!em)return showErr('Enter email address.');
+    if(!st||!ci||!zp)return showErr('Enter complete address.');
+    if(!emN||!emPh)return showErr('Enter emergency contact.');
+    if(!selSess&&sessions.filter(function(s){return s.registrationOpen!==false}).length)return showErr('Select a session.');
+    for(var si=0;si<siblings.length;si++){if(!siblings[si].first||!siblings[si].last)return showErr('Enter name for Camper '+(si+2)+'.')}
+    if(!document.getElementById('ag1').checked||!document.getElementById('ag2').checked||!document.getElementById('ag3').checked||!document.getElementById('ag4').checked)return showErr('Please agree to all terms.');
+    if(!sigHasData)return showErr('Please sign the form.');
 
-    var application={
-        camperName:fullName,
-        camperFirst:first,camperLast:last,
-        dob:dob,
-        gender:document.getElementById('rGender').value||'',
-        school:(document.getElementById('rSchool').value||'').trim(),
-        schoolGrade:(document.getElementById('rSchoolGr').value||'').trim(),
-        teacher:(document.getElementById('rTeacher').value||'').trim(),
-        parentName:parent,
-        parentRelation:document.getElementById('rRelation').value||'',
-        parentPhone:phone,parentEmail:email,
-        parent2Name:(document.getElementById('rParent2').value||'').trim(),
-        parent2Phone:(document.getElementById('rPhone2').value||'').trim(),
-        street:street,city:city,
-        state:(document.getElementById('rState').value||'').trim(),
-        zip:zip,
-        emergencyName:emName,
-        emergencyPhone:emPhone,
-        emergencyRel:(document.getElementById('rEmRel').value||'').trim(),
-        allergies:(document.getElementById('rAllergy').value||'').trim(),
-        medications:(document.getElementById('rMeds').value||'').trim(),
-        dietary:(document.getElementById('rDiet').value||'').trim(),
-        medicalNotes:(document.getElementById('rMedNotes').value||'').trim(),
-        bunkmate:(document.getElementById('rBunkmate').value||'').trim(),
-        separateFrom:(document.getElementById('rSeparate').value||'').trim(),
-        source:document.getElementById('rSource').value||'',
-        notes:(document.getElementById('rNotes').value||'').trim(),
-        session:selectedSession,
-        sessionTuition:sessionObj.tuition||0,
-        paymentMethod:selectedPay,
-        paymentStatus:'pending',
-        paymentAmount:0,
-        status:'applied',
-        appliedDate:new Date().toISOString().split('T')[0],
-        appliedTime:new Date().toISOString(),
-        formsRequired:3,formsCompleted:0
-    };
+    var sigData=document.getElementById('sigCanvas').toDataURL();
+    var sessObj=sessions.find(function(s){return s.name===selSess})||{};
 
-    // Save to localStorage (campistryMe.enrollments)
+    // Build applications (one per camper)
+    var appIds=[];
+    var allCampers=[{first:first,last:last,dob:dob,gender:v('rGen'),school:v('rSch'),schoolGrade:v('rSchGr'),teacher:v('rTch')}].concat(siblings);
+
     try{
         var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
         if(!g.campistryMe)g.campistryMe={};
         if(!g.campistryMe.enrollments)g.campistryMe.enrollments={};
-        g.campistryMe.enrollments[id]=application;
+
+        allCampers.forEach(function(cam){
+            var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,6);
+            appIds.push(id);
+            // Read custom question answers
+            var customAnswers={};
+            document.querySelectorAll('.cqInput').forEach(function(el){
+                var qi=el.dataset.q;if(qi!=null&&el.value)customAnswers['q'+qi]=el.value.trim();
+            });
+            document.querySelectorAll('.cqCb:checked').forEach(function(el){
+                var qi=el.dataset.q;
+                if(!customAnswers['q'+qi])customAnswers['q'+qi]=[];
+                if(Array.isArray(customAnswers['q'+qi]))customAnswers['q'+qi].push(el.value);
+            });
+            // Read formConfig custom question labels for the answers
+            var g2=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+            var cqLabels=(g2.campistryMe?.formConfig?.customQuestions||[]).map(function(q){return q.label});
+
+            g.campistryMe.enrollments[id]={
+                camperName:cam.first+' '+cam.last,camperFirst:cam.first,camperLast:cam.last,
+                dob:cam.dob,gender:cam.gender,school:cam.school,schoolGrade:cam.schoolGrade,teacher:cam.teacher,
+                parentName:par,parentRelation:v('rRel'),parentPhone:ph,parentEmail:em,
+                parent2Name:v('rP2'),parent2Phone:v('rP2Ph'),
+                street:st,city:ci,state:v('rSa'),zip:zp,
+                emergencyName:emN,emergencyPhone:emPh,emergencyRel:v('rEmR'),
+                allergies:v('rAlg'),medications:v('rMed'),dietary:v('rDit'),medicalNotes:v('rMdN'),
+                bunkmate:v('rBnk'),separateFrom:v('rSep'),tshirtSize:v('rShirt'),source:v('rSrc'),notes:v('rNotes'),
+                session:selSess,sessionTuition:sessObj.tuition||0,
+                paymentMethod:selPM,paymentStatus:'pending',paymentAmount:0,
+                discount:discount.active?{code:discount.code,label:discount.label,pct:discount.pct,amt:discount.amt}:null,
+                signature:sigData,
+                documents:uploads.map(function(u){return{name:u.name,size:u.size,data:u.data}}),
+                status:'applied',appliedDate:new Date().toISOString().split('T')[0],appliedTime:new Date().toISOString(),
+                formsRequired:3,formsCompleted:uploads.length>0?1:0,
+                siblingGroup:appIds.length>1?appIds[0]:null,
+                adminNotes:'',
+                customAnswers:customAnswers,
+                customQuestionLabels:cqLabels
+            };
+        });
         g.updated_at=new Date().toISOString();
-        localStorage.setItem('campGlobalSettings_v1',JSON.stringify(g));
-        localStorage.setItem('CAMPISTRY_LOCAL_CACHE',JSON.stringify(g));
-        // Try cloud sync
-        if(window.saveGlobalSettings)window.saveGlobalSettings('campistryMe',g.campistryMe);
-        else if(window.forceSyncToCloud)window.forceSyncToCloud();
+        var json=JSON.stringify(g);
+        localStorage.setItem('campGlobalSettings_v1',json);
+        localStorage.setItem('CAMPISTRY_LOCAL_CACHE',json);
+        // Also update unified state key if it exists
+        try{localStorage.setItem('CAMPISTRY_UNIFIED_STATE',json)}catch(ex){}
+
+        // Verify the write stuck after 500ms
+        var expectedCount=Object.keys(g.campistryMe.enrollments).length;
+        setTimeout(function(){
+            try{
+                var check=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+                var actualCount=Object.keys((check.campistryMe?.enrollments)||{}).length;
+                if(actualCount<expectedCount){
+                    console.warn('[Register] ⚠ Save was overwritten — re-saving');
+                    localStorage.setItem('campGlobalSettings_v1',json);
+                    localStorage.setItem('CAMPISTRY_LOCAL_CACHE',json);
+                }else{
+                    console.log('[Register] ✓ Save verified:',actualCount,'enrollments in storage');
+                }
+            }catch(ex){}
+        },500);
+
+        // Trigger cloud sync if available
+        // integration_hooks.js exposes saveGlobalSettings
+        if(window.saveGlobalSettings&&window.saveGlobalSettings._isAuthoritativeHandler){
+            console.log('[Register] Syncing to cloud via integration_hooks');
+            window.saveGlobalSettings('campistryMe',g.campistryMe);
+        }else if(typeof window.forceSyncToCloud==='function'){
+            console.log('[Register] Syncing to cloud via forceSyncToCloud');
+            window.forceSyncToCloud();
+        }else{
+            // If no cloud sync is available on this page, try loading Supabase directly
+            // The admin will pick up the data from localStorage when they open Me
+            console.log('[Register] No cloud sync available on this page — saved locally. Data will sync when admin opens Campistry Me.');
+        }
     }catch(e){
-        console.error('Save error:',e);
-        return showErr('There was an error submitting your application. Please try again.');
+        console.error('[Register] Save error:',e);
+        return showErr('Error submitting. Please try again.');
     }
 
     // Show success
     document.getElementById('formWrap').style.display='none';
     document.getElementById('successWrap').style.display='block';
-    document.getElementById('summaryContent').innerHTML=
-        '<strong>'+esc(fullName)+'</strong><br>'+
-        'Session: '+esc(selectedSession||'—')+'<br>'+
-        'Parent: '+esc(parent)+' ('+esc(phone)+')<br>'+
-        'Applied: '+application.appliedDate+'<br>'+
-        'Payment method: '+esc(selectedPay||'Not selected')+'<br>'+
-        '<br><em style="color:var(--s400)">Application ID: '+id+'</em>';
-
+    var names=allCampers.map(function(c){return c.first+' '+c.last});
+    document.getElementById('summaryOut').innerHTML='<strong>'+names.map(esc).join(', ')+'</strong><br>Session: '+esc(selSess||'—')+'<br>Parent: '+esc(par)+' ('+esc(ph)+')<br>Applied: '+new Date().toISOString().split('T')[0]+'<br>Payment: '+esc(selPM||'Not selected')+(discount.active?'<br>Discount: '+esc(discount.label):'')+(uploads.length?'<br>Documents: '+uploads.length+' uploaded':'');
+    var statusUrl=window.location.origin+window.location.pathname+'?status='+appIds[0];
+    document.getElementById('statusLink').innerHTML='<a href="'+statusUrl+'" style="color:var(--me);word-break:break-all">'+esc(statusUrl)+'</a>';
     window.scrollTo(0,0);
 };
 
-function showErr(msg){
-    var el=document.getElementById('formError');
-    el.textContent=msg;el.style.display='block';
-    el.scrollIntoView({behavior:'smooth',block:'center'});
-}
+function showErr(m){var el=document.getElementById('formErr');el.textContent=m;el.style.display='block';el.scrollIntoView({behavior:'smooth',block:'center'})}
 
-// Init
-loadCampData();
+load();
 })();
 </script>
 </body>
