@@ -1197,28 +1197,49 @@
             groups.splice(groups.indexOf(smallest), 1);
         }
 
-        // Also merge if a group needs more buses than available
-        // (e.g., 56 kids in one group but only 47-seat buses → needs 2 buses)
-        let needsMerge = true;
-        while (needsMerge) {
-            needsMerge = false;
-            const totalBusesNeeded = groups.reduce((s, g) => s + Math.ceil(g.kids / perBusCap), 0);
-            if (totalBusesNeeded > vehicles.length && groups.length > 1) {
-                groups.sort((a, b) => a.kids - b.kids);
-                const smallest = groups[0];
-                let nearestIdx = 1, nearestDist = Infinity;
-                for (let i = 1; i < groups.length; i++) {
-                    const d = haversineMi(smallest.centroidLat, smallest.centroidLng, groups[i].centroidLat, groups[i].centroidLng);
-                    if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
+        // Smart merge: find pairs of adjacent groups whose merge saves a bus
+        // H(61,needs 2) + W(79,needs 2) = HW(140,needs 3) → saves 1 bus
+        while (true) {
+            const totalNeeded = groups.reduce((s, g) => s + Math.ceil(g.kids / perBusCap), 0);
+            if (totalNeeded <= vehicles.length || groups.length <= 1) break;
+
+            // Find best merge pair (saves most buses, closest geographically)
+            let bestI = -1, bestJ = -1, bestSave = 0, bestDist = Infinity;
+            for (let i = 0; i < groups.length; i++) {
+                for (let j = i + 1; j < groups.length; j++) {
+                    const separate = Math.ceil(groups[i].kids / perBusCap) + Math.ceil(groups[j].kids / perBusCap);
+                    const merged = Math.ceil((groups[i].kids + groups[j].kids) / perBusCap);
+                    const save = separate - merged;
+                    const dist = haversineMi(groups[i].centroidLat, groups[i].centroidLng, groups[j].centroidLat, groups[j].centroidLng);
+                    if (save > bestSave || (save === bestSave && dist < bestDist)) {
+                        bestSave = save; bestDist = dist; bestI = i; bestJ = j;
+                    }
                 }
-                const target = groups[nearestIdx];
-                console.log('[Go]   Capacity merge: ' + smallest.name + ' → ' + target.name);
-                target.kids += smallest.kids;
-                target.regionIds.push(...smallest.regionIds);
-                stops.forEach((_, i) => { if (smallest.regionIds.includes(stopRegions[i])) stopRegions[i] = target.id; });
-                groups.splice(groups.indexOf(smallest), 1);
-                needsMerge = true;
             }
+            if (bestI < 0 || bestSave <= 0) {
+                // No merge saves buses — merge closest pair anyway
+                bestI = 0; bestJ = 1; bestDist = Infinity;
+                for (let i = 0; i < groups.length; i++) {
+                    for (let j = i + 1; j < groups.length; j++) {
+                        const d = haversineMi(groups[i].centroidLat, groups[i].centroidLng, groups[j].centroidLat, groups[j].centroidLng);
+                        if (d < bestDist) { bestDist = d; bestI = i; bestJ = j; }
+                    }
+                }
+            }
+            const a = groups[bestI], b = groups[bestJ];
+            console.log('[Go]   Merge: ' + a.name + '(' + a.kids + ') + ' + b.name + '(' + b.kids + ') → saves ' + bestSave + ' bus(es)');
+            a.kids += b.kids;
+            a.regionIds.push(...b.regionIds);
+            a.name = a.name.split(' +')[0] + ' + ' + b.name.split(' (')[0];
+            // Recalculate centroid
+            const allGroupStops = [];
+            stops.forEach((s, i) => { if (a.regionIds.includes(stopRegions[i]) || b.regionIds.includes(stopRegions[i])) allGroupStops.push(s); });
+            if (allGroupStops.length) {
+                a.centroidLat = allGroupStops.reduce((s, st) => s + st.lat, 0) / allGroupStops.length;
+                a.centroidLng = allGroupStops.reduce((s, st) => s + st.lng, 0) / allGroupStops.length;
+            }
+            stops.forEach((_, i) => { if (b.regionIds.includes(stopRegions[i])) stopRegions[i] = a.id; });
+            groups.splice(bestJ, 1);
         }
 
         // ── Step 3: Allocate buses to groups (capacity-aware) ──
@@ -1267,80 +1288,71 @@
             console.log('[Go]   ' + g.name + ': ' + g.kids + ' kids → ' + busIndices.length + ' bus(es) [' + busNames + '] (' + cap + ' seats)' + (g.kids > cap ? ' ⚠ OVER' : ''));
         });
 
-        // ── Step 4: Build VROOM request with skills ──
+        // ── Step 4: Per-group VROOM calls (parallel) ──
         showProgress('Optimizing routes (VROOM)...', 35);
 
-        // Map group IDs to skill numbers (VROOM uses integer skills)
-        const groupSkillMap = {};
-        groups.forEach((g, i) => { groupSkillMap[g.id] = i + 1; });
+        let allRoutes = [];
+        const groupPromises = groups.map(async (group) => {
+            const groupStops = [];
+            const groupStopMap = []; // maps local index → global stop
+            stops.forEach((stop, i) => {
+                if (group.regionIds.includes(stopRegions[i])) {
+                    groupStopMap.push(stop);
+                    groupStops.push(stop);
+                }
+            });
+            if (!groupStops.length) return [];
 
-        const vroomJobs = stops.map((stop, i) => {
-            const regId = stopRegions[i];
-            // Find which group this region belongs to
-            const group = groups.find(g => g.regionIds.includes(regId));
-            const skillId = group ? groupSkillMap[group.id] : 1;
-            return {
+            const busIndices = groupBuses[group.id] || [];
+            if (!busIndices.length) return [];
+
+            const jobs = groupStops.map((stop, i) => ({
                 id: i + 1,
                 location: [stop.lng, stop.lat],
                 service: serviceTime,
                 amount: [stop.campers.length],
-                skills: [skillId],
                 description: stop.address
-            };
-        });
+            }));
 
-        const vroomVehicles = [];
-        groups.forEach(g => {
-            const skillId = groupSkillMap[g.id];
-            groupBuses[g.id].forEach(vi => {
+            const groupVehicles = busIndices.map((vi, idx) => {
                 const v = vehicles[vi];
-                const veh = {
-                    id: vi + 1,
-                    profile: 'driving-car',
-                    capacity: [v.capacity],
-                    skills: [skillId],
-                    description: v.name
-                };
+                const veh = { id: idx + 1, profile: 'driving-car', capacity: [v.capacity], description: v.name };
                 if (isArrival) { veh.end = [campLng, campLat]; }
                 else { veh.start = [campLng, campLat]; if (hasShifts) veh.end = [campLng, campLat]; }
-                vroomVehicles.push(veh);
-            });
-        });
-
-        console.log('[Go] VROOM: ' + vroomJobs.length + ' jobs, ' + vroomVehicles.length + ' vehicles, ' + groups.length + ' skill groups');
-
-        // ── Step 5: Send to VROOM ──
-        let allRoutes = [];
-        let vroomSuccess = false;
-
-        try {
-            const resp = await fetch('https://api.openrouteservice.org/optimization', {
-                method: 'POST',
-                headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ jobs: vroomJobs, vehicles: vroomVehicles })
+                return veh;
             });
 
-            if (resp.ok) {
+            const groupName = group.name;
+            console.log('[Go] VROOM → ' + groupName + ': ' + jobs.length + ' jobs, ' + groupVehicles.length + ' vehicles');
+
+            try {
+                const resp = await fetch('https://api.openrouteservice.org/optimization', {
+                    method: 'POST',
+                    headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ jobs, vehicles: groupVehicles })
+                });
+
+                if (!resp.ok) {
+                    console.error('[Go] VROOM error for ' + groupName + ': HTTP ' + resp.status);
+                    return fallbackRegionRouting(groupStops, busIndices.map(vi => vehicles[vi]), campLat, campLng);
+                }
+
                 const result = await resp.json();
-                console.log('[Go] VROOM: ' + (result.routes?.length || 0) + ' routes, ' +
-                    (result.unassigned?.length || 0) + ' unassigned');
+                console.log('[Go] VROOM ← ' + groupName + ': ' + (result.routes?.length || 0) + ' routes, ' + (result.unassigned?.length || 0) + ' unassigned');
 
+                const routes = [];
                 (result.routes || []).forEach(vroomRoute => {
-                    const vehicleIdx = vroomRoute.vehicle - 1;
-                    const v = vehicles[vehicleIdx]; if (!v) return;
+                    const localVIdx = vroomRoute.vehicle - 1;
+                    const globalVIdx = busIndices[localVIdx];
+                    const v = vehicles[globalVIdx]; if (!v) return;
                     const routeStops = [];
                     vroomRoute.steps.forEach(step => {
                         if (step.type !== 'job') return;
-                        const stop = stops[step.id - 1]; if (!stop) return;
-                        routeStops.push({
-                            stopNum: routeStops.length + 1,
-                            campers: stop.campers,
-                            address: stop.address,
-                            lat: stop.lat, lng: stop.lng
-                        });
+                        const stop = groupStopMap[step.id - 1]; if (!stop) return;
+                        routeStops.push({ stopNum: routeStops.length + 1, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng });
                     });
                     if (routeStops.length > 0) {
-                        allRoutes.push({
+                        routes.push({
                             busId: v.busId, busName: v.name, busColor: v.color,
                             monitor: v.monitor, counselors: v.counselors || [],
                             stops: routeStops,
@@ -1353,19 +1365,17 @@
 
                 // Handle unassigned — force-insert into nearest bus (never drop kids)
                 if (result.unassigned?.length) {
-                    console.warn('[Go] VROOM: ' + result.unassigned.length + ' unassigned — force-inserting');
+                    console.warn('[Go]   ' + groupName + ': ' + result.unassigned.length + ' unassigned — force-inserting');
                     result.unassigned.forEach(ua => {
-                        const stop = stops[ua.id - 1]; if (!stop) return;
+                        const stop = groupStopMap[ua.id - 1]; if (!stop) return;
                         let bestRoute = null, bestDist = Infinity;
-                        // Prefer bus with capacity
-                        allRoutes.forEach(r => {
+                        routes.forEach(r => {
                             if (r.camperCount + stop.campers.length > r._cap) return;
                             const last = r.stops[r.stops.length - 1];
                             if (last?.lat) { const d = haversineMi(last.lat, last.lng, stop.lat, stop.lng); if (d < bestDist) { bestDist = d; bestRoute = r; } }
                         });
-                        // Fallback: nearest regardless of capacity
                         if (!bestRoute) {
-                            allRoutes.forEach(r => {
+                            routes.forEach(r => {
                                 const last = r.stops.length ? r.stops[r.stops.length - 1] : null;
                                 if (last?.lat) { const d = haversineMi(last.lat, last.lng, stop.lat, stop.lng); if (d < bestDist) { bestDist = d; bestRoute = r; } }
                             });
@@ -1377,19 +1387,16 @@
                     });
                 }
 
-                vroomSuccess = true;
-            } else {
-                console.error('[Go] VROOM HTTP ' + resp.status);
+                return routes;
+            } catch (e) {
+                console.error('[Go] VROOM failed for ' + groupName + ':', e.message);
+                return fallbackRegionRouting(groupStops, busIndices.map(vi => vehicles[vi]), campLat, campLng);
             }
-        } catch (e) {
-            console.error('[Go] VROOM failed:', e.message);
-        }
+        });
 
-        // Fallback
-        if (!vroomSuccess || allRoutes.length === 0) {
-            console.warn('[Go] Using fallback geographic routing');
-            allRoutes = fallbackRouting(stops, vehicles, campLat, campLng);
-        }
+        const groupResults = await Promise.all(groupPromises);
+        groupResults.forEach(routes => allRoutes.push(...routes));
+        console.log('[Go] All groups complete: ' + allRoutes.length + ' bus routes');
 
         // Ensure all buses have route entries
         vehicles.forEach(v => {
