@@ -2178,31 +2178,25 @@
                 blk.endMin = blk.startMin + cfgDur;
             }
 
-           // ★★★ FIX v3.4: Post-expand cross-division clamp for specials ★★★
-            // The expand phase may stretch specials beyond their registered time,
-            // causing cross-division overlaps. Re-check and clamp if needed.
+            // ★★★ FIX v3.4: Post-expand cross-division clamp for specials ★★★
             for (let i = 0; i < template.length; i++) {
                 const blk = template[i];
                 if ((blk.type || '').toLowerCase() !== 'special') continue;
                 const sName = blk.event || blk._assignedSpecial || blk.name;
                 if (!sName) continue;
                 if (!canUseSpecialAtTime(sName, grade, blk.startMin, blk.endMin)) {
-                    // Block was expanded into a cross-div conflict zone.
-                    // Try to find a valid sub-range within the current block.
                     const origStart = blk.startMin, origEnd = blk.endMin;
                     let found = false;
                     for (let t = origStart; t + blk.dMin <= origEnd; t += 5) {
                         if (canUseSpecialAtTime(sName, grade, t, t + blk.dMin)) {
                             blk.startMin = t;
                             blk.endMin = t + blk.dMin;
-                            // Re-register with corrected range
                             registerSpecialUsage(sName, grade, blk.startMin, blk.endMin);
                             found = true;
                             break;
                         }
                     }
                     if (!found) {
-                        // No valid sub-range — convert to sport slot
                         blk.type = 'slot';
                         blk.event = 'General Activity Slot';
                         blk._assignedSpecial = null;
@@ -2212,7 +2206,6 @@
             }
 
             return template.sort((a, b) => a.startMin - b.startMin);        }
-
 
         // =====================================================================
         // PHASE 4: EXECUTE TEMPLATES → bunkTimelines
