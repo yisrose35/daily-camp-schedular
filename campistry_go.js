@@ -123,7 +123,7 @@
         stops.forEach((s, i) => { s.stopNum = i + 1; });
     }
 
-    const MAX_STOP_CAPACITY = 15; // split clusters bigger than this
+    const MAX_STOP_CAPACITY = 8; // split clusters bigger than this — smaller = easier to rebalance
     let _majorRoadSegments = null; // [{lat1,lng1,lat2,lng2,name}] from Overpass
 
     /** Line segment intersection test (2D) */
@@ -1102,6 +1102,8 @@
         for (let i = 0; i < stops.length; i++) {
             for (let j = i + 1; j < stops.length; j++) {
                 if (haversineMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng) <= dedupDist) {
+                    // Don't merge if combined would be too large
+                    if (stops[i].campers.length + stops[j].campers.length > MAX_STOP_CAPACITY) continue;
                     stops[i].campers.push(...stops[j].campers);
                     if (stops[j].address.includes('&') && !stops[i].address.includes('&')) stops[i].address = stops[j].address;
                     stops.splice(j, 1);
@@ -1425,63 +1427,63 @@
             }
             if (!overBus) break;
 
-            const cLat = overBus.stops.reduce((s, st) => s + st.lat, 0) / overBus.stops.length;
-            const cLng = overBus.stops.reduce((s, st) => s + st.lng, 0) / overBus.stops.length;
-            let moveIdx = 0, moveDist = 0;
-            overBus.stops.forEach((st, i) => {
-                const d = haversineMi(cLat, cLng, st.lat, st.lng);
-                if (d > moveDist) { moveDist = d; moveIdx = i; }
-            });
-            const stopToMove = overBus.stops[moveIdx];
-
-            // Try whole-stop move
-            let bestBus = null, bestDist = Infinity;
-            for (const r of allRoutes) {
-                if (r === overBus) continue;
-                if (r.camperCount + stopToMove.campers.length > r._cap) continue;
-                const rLat = r.stops.length ? r.stops.reduce((s, st) => s + st.lat, 0) / r.stops.length : campLat;
-                const rLng = r.stops.length ? r.stops.reduce((s, st) => s + st.lng, 0) / r.stops.length : campLng;
-                const d = haversineMi(stopToMove.lat, stopToMove.lng, rLat, rLng);
-                if (d < bestDist) { bestDist = d; bestBus = r; }
+            // Find the best (stop, receiving bus) pair — the stop from overBus
+            // that is CLOSEST to a receiving bus. This naturally picks border
+            // stops between adjacent regions.
+            let bestStopIdx = -1, bestBus = null, bestDist = Infinity;
+            for (let si = 0; si < overBus.stops.length; si++) {
+                const st = overBus.stops[si];
+                if (!st.lat) continue;
+                for (const r of allRoutes) {
+                    if (r === overBus) continue;
+                    if (r.camperCount + st.campers.length > r._cap) continue;
+                    const rLat = r.stops.length ? r.stops.reduce((s, x) => s + x.lat, 0) / r.stops.length : campLat;
+                    const rLng = r.stops.length ? r.stops.reduce((s, x) => s + x.lng, 0) / r.stops.length : campLng;
+                    const d = haversineMi(st.lat, st.lng, rLat, rLng);
+                    if (d < bestDist) { bestDist = d; bestStopIdx = si; bestBus = r; }
+                }
             }
 
-            if (bestBus) {
-                overBus.stops.splice(moveIdx, 1);
+            if (bestBus && bestStopIdx >= 0) {
+                const stopToMove = overBus.stops[bestStopIdx];
+                overBus.stops.splice(bestStopIdx, 1);
                 overBus.camperCount -= stopToMove.campers.length;
                 overBus.stops.forEach((s, i) => { s.stopNum = i + 1; });
                 directionalInsert(bestBus.stops, stopToMove, campLat, campLng);
                 bestBus.camperCount += stopToMove.campers.length;
                 capMoves++;
             } else {
-                // Split stop — move campers individually
-                let movedAny = false;
-                while (overBus.camperCount > overBus._cap && stopToMove.campers.length > 1) {
-                    let splitBus = null, splitDist = Infinity;
+                // No whole-stop fits — split the largest stop's campers individually
+                // Pick the stop closest to any bus with room
+                let splitStopIdx = -1, splitBus = null, splitDist = Infinity;
+                for (let si = 0; si < overBus.stops.length; si++) {
+                    const st = overBus.stops[si];
+                    if (!st.lat || st.campers.length <= 1) continue;
                     for (const r of allRoutes) {
                         if (r === overBus || r.camperCount >= r._cap) continue;
-                        const rLat = r.stops.length ? r.stops.reduce((s, st) => s + st.lat, 0) / r.stops.length : campLat;
-                        const rLng = r.stops.length ? r.stops.reduce((s, st) => s + st.lng, 0) / r.stops.length : campLng;
-                        const d = haversineMi(stopToMove.lat, stopToMove.lng, rLat, rLng);
-                        if (d < splitDist) { splitDist = d; splitBus = r; }
+                        const rLat = r.stops.length ? r.stops.reduce((s, x) => s + x.lat, 0) / r.stops.length : campLat;
+                        const rLng = r.stops.length ? r.stops.reduce((s, x) => s + x.lng, 0) / r.stops.length : campLng;
+                        const d = haversineMi(st.lat, st.lng, rLat, rLng);
+                        if (d < splitDist) { splitDist = d; splitStopIdx = si; splitBus = r; }
                     }
-                    if (!splitBus) break;
-                    const room = splitBus._cap - splitBus.camperCount;
-                    const toMove = Math.min(room, overBus.camperCount - overBus._cap);
-                    if (toMove <= 0) break;
-                    const movedCampers = stopToMove.campers.splice(0, toMove);
-                    overBus.camperCount -= toMove;
-                    directionalInsert(splitBus.stops, { stopNum: 0, campers: movedCampers, address: stopToMove.address, lat: stopToMove.lat, lng: stopToMove.lng }, campLat, campLng);
-                    splitBus.camperCount += toMove;
-                    movedAny = true; capMoves++;
                 }
-                if (stopToMove.campers.length === 0) {
-                    overBus.stops.splice(moveIdx, 1);
-                    overBus.stops.forEach((s, i) => { s.stopNum = i + 1; });
-                }
-                if (!movedAny) {
+                if (!splitBus || splitStopIdx < 0) {
                     console.warn('[Go] ⚠ ' + overBus.busName + ': ' + overBus.camperCount + '/' + overBus._cap + ' — no room anywhere');
                     break;
                 }
+                const stopToSplit = overBus.stops[splitStopIdx];
+                const room = splitBus._cap - splitBus.camperCount;
+                const toMove = Math.min(room, overBus.camperCount - overBus._cap);
+                if (toMove <= 0) break;
+                const movedCampers = stopToSplit.campers.splice(0, toMove);
+                overBus.camperCount -= toMove;
+                directionalInsert(splitBus.stops, { stopNum: 0, campers: movedCampers, address: stopToSplit.address, lat: stopToSplit.lat, lng: stopToSplit.lng }, campLat, campLng);
+                splitBus.camperCount += toMove;
+                if (stopToSplit.campers.length === 0) {
+                    overBus.stops.splice(splitStopIdx, 1);
+                    overBus.stops.forEach((s, i) => { s.stopNum = i + 1; });
+                }
+                capMoves++;
             }
         }
         if (capMoves) console.log('[Go] Capacity enforcement: ' + capMoves + ' move(s)');
