@@ -411,23 +411,51 @@
                 specialUsageTracker[m][key].grades.add(grade);
             }
         }
-        function canUseSpecialAtTime(specialName, grade, startMin, endMin) {
+       function canUseSpecialAtTime(specialName, grade, startMin, endMin) {
             const key = (specialName || '').toLowerCase();
             if (!key) return true;
-            const props = activityProperties[specialName] || {};
-            const shareType = props.sharableWith?.type || 'not_sharable';
-            const cap = props.sharableWith?.capacity || 1;
+
+            // ★★★ FIX v3.2: Robust config lookup + enforce ALL sharing types ★★★
+            let sProps = activityProperties[specialName] || {};
+            let shareType = sProps.sharableWith?.type;
+            let cap = sProps.sharableWith?.capacity;
+
+            // Fallback: if activityProperties has empty/missing sharableWith, try globalSettings
+            if (!shareType) {
+                const cfg = getSpecialConfig(specialName, globalSettings);
+                if (cfg?.sharableWith?.type) {
+                    shareType = cfg.sharableWith.type;
+                    cap = parseInt(cfg.sharableWith.capacity) || (shareType === 'not_sharable' ? 1 : 2);
+                }
+            }
+            shareType = shareType || 'not_sharable';
+            cap = parseInt(cap) || 1;
 
             for (let m = startMin; m < endMin; m += 5) {
                 const bucket = specialUsageTracker[m]?.[key];
                 if (!bucket) continue;
 
-                // Capacity check
+                // Capacity check (all sharing types)
                 if (bucket.count >= cap) return false;
 
-                // Cross-division check for same_division specials
+                // Cross-division enforcement for not_sharable
+                if (shareType === 'not_sharable' && bucket.grades.size > 0) {
+                    if (!bucket.grades.has(grade)) return false;
+                }
+
+                // Cross-division enforcement for same_division
                 if (shareType === 'same_division' && bucket.grades.size > 0) {
-                    if (!bucket.grades.has(grade)) return false; // different division already using it
+                    if (!bucket.grades.has(grade)) return false;
+                }
+
+                // Cross-division enforcement for custom
+                if (shareType === 'custom' && bucket.grades.size > 0) {
+                    if (!bucket.grades.has(grade)) {
+                        const allowedDivs = sProps.sharableWith?.divisions || [];
+                        const existingGrades = [...bucket.grades];
+                        const allAllowed = existingGrades.every(g => allowedDivs.includes(g)) && allowedDivs.includes(grade);
+                        if (!allAllowed) return false;
+                    }
                 }
             }
             return true;
