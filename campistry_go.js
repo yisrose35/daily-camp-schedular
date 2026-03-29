@@ -1371,6 +1371,54 @@
         allRoutes.forEach(r => { delete r._regId; });
 
         // ══════════════════════════════════════════════════════════════
+        // HARD CAPACITY ENFORCEMENT
+        //
+        // No bus may have more kids than seats. Period.
+        // Moves stops from over-capacity buses to nearest bus with room,
+        // across regions if necessary. Runs after per-region rebalancing
+        // to handle single-bus regions (like Woodmere with 56 kids, 47 seats).
+        // ══════════════════════════════════════════════════════════════
+        let capMoves = 0;
+        for (let capPass = 0; capPass < 50; capPass++) {
+            // Find any bus over capacity
+            let overBus = null;
+            for (const r of allRoutes) {
+                if (r.stops.length > 0 && r.camperCount > r._cap) { overBus = r; break; }
+            }
+            if (!overBus) break; // all buses within capacity
+
+            // Find the stop with the fewest kids (least disruptive to move)
+            let moveIdx = 0, moveSize = Infinity;
+            overBus.stops.forEach((st, i) => {
+                if (st.campers.length < moveSize) { moveSize = st.campers.length; moveIdx = i; }
+            });
+            const stopToMove = overBus.stops[moveIdx];
+
+            // Find nearest bus with room (any region)
+            let bestBus = null, bestDist = Infinity;
+            for (const r of allRoutes) {
+                if (r === overBus) continue;
+                if (r.camperCount + stopToMove.campers.length > r._cap) continue;
+                const rLat = r.stops.length ? r.stops.reduce((s, st) => s + st.lat, 0) / r.stops.length : campLat;
+                const rLng = r.stops.length ? r.stops.reduce((s, st) => s + st.lng, 0) / r.stops.length : campLng;
+                const d = haversineMi(stopToMove.lat, stopToMove.lng, rLat, rLng);
+                if (d < bestDist) { bestDist = d; bestBus = r; }
+            }
+            if (!bestBus) {
+                console.warn('[Go] ⚠ Cannot offload ' + overBus.busName + ' — no bus has room for ' + moveSize + ' more kids');
+                break;
+            }
+
+            overBus.stops.splice(moveIdx, 1);
+            overBus.camperCount -= stopToMove.campers.length;
+            directionalInsert(bestBus.stops, stopToMove, campLat, campLng);
+            bestBus.camperCount += stopToMove.campers.length;
+            capMoves++;
+            console.log('[Go]   Capacity: moved ' + moveSize + ' kids from ' + overBus.busName + ' → ' + bestBus.busName);
+        }
+        if (capMoves) console.log('[Go] Capacity enforcement: ' + capMoves + ' stop(s) relocated');
+
+        // ══════════════════════════════════════════════════════════════
         // ROUTE OPTIMIZER v2
         //
         // Primary: Mapbox Optimization API (server-side TSP with real
@@ -1650,25 +1698,61 @@
                 r.stops = optimizedOrder.map(i => r.stops[i]);
             }
 
-            // ── FINAL DIRECTIONAL SORT ──
-            // After all optimization, enforce geographic directional order.
-            // Uses haversine (crow-flies), NOT road distance — road distance
-            // gets distorted by one-way streets and indirect routes, causing
-            // stop 4 to appear before stop 3 even when stop 3 is geographically
-            // farther. Crow-flies gives clean inward/outward geographic sweep.
+            // ── PIN ENDPOINTS ──
+            // The TSP handles 2D routing well — it knows that going
+            // east then north is better than bouncing between them.
+            // Hard-sorting by distance destroyed this because it can't
+            // handle stops at similar distances in different directions.
             //
-            // Arrival: stop 1 = farthest from camp, last stop = nearest
-            // Dismissal: stop 1 = nearest to camp, last stop = farthest
-            if (r.stops.length >= 2) {
-                r.stops.forEach(s => {
-                    s._campGeoDist = (s.lat && s.lng) ? haversineMi(campLat, campLng, s.lat, s.lng) : 0;
+            // Instead: just pin the first and last stop, let TSP own the middle.
+            // Arrival: first = farthest from camp, last = nearest
+            // Dismissal: first = nearest, last = farthest
+            if (r.stops.length >= 3) {
+                let farthestIdx = 0, nearestIdx = 0;
+                let farthestDist = 0, nearestDist = Infinity;
+                r.stops.forEach((s, i) => {
+                    if (!s.lat || !s.lng) return;
+                    const d = haversineMi(campLat, campLng, s.lat, s.lng);
+                    if (d > farthestDist) { farthestDist = d; farthestIdx = i; }
+                    if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
                 });
+
                 if (isArrival) {
-                    r.stops.sort((a, b) => b._campGeoDist - a._campGeoDist);
+                    // Farthest should be first
+                    if (farthestIdx !== 0) {
+                        const stop = r.stops.splice(farthestIdx, 1)[0];
+                        r.stops.unshift(stop);
+                    }
+                    // Nearest should be last (recalc index after splice)
+                    const updatedNearestIdx = r.stops.findIndex(s => {
+                        if (!s.lat || !s.lng) return false;
+                        return haversineMi(campLat, campLng, s.lat, s.lng) === nearestDist;
+                    });
+                    if (updatedNearestIdx >= 0 && updatedNearestIdx !== r.stops.length - 1) {
+                        const stop = r.stops.splice(updatedNearestIdx, 1)[0];
+                        r.stops.push(stop);
+                    }
                 } else {
-                    r.stops.sort((a, b) => a._campGeoDist - b._campGeoDist);
+                    // Nearest should be first
+                    if (nearestIdx !== 0) {
+                        const stop = r.stops.splice(nearestIdx, 1)[0];
+                        r.stops.unshift(stop);
+                    }
+                    // Farthest should be last
+                    const updatedFarthestIdx = r.stops.findIndex(s => {
+                        if (!s.lat || !s.lng) return false;
+                        return haversineMi(campLat, campLng, s.lat, s.lng) === farthestDist;
+                    });
+                    if (updatedFarthestIdx >= 0 && updatedFarthestIdx !== r.stops.length - 1) {
+                        const stop = r.stops.splice(updatedFarthestIdx, 1)[0];
+                        r.stops.push(stop);
+                    }
                 }
-                r.stops.forEach(s => { delete s._campGeoDist; });
+            } else if (r.stops.length === 2) {
+                const d0 = haversineMi(campLat, campLng, r.stops[0].lat, r.stops[0].lng);
+                const d1 = haversineMi(campLat, campLng, r.stops[1].lat, r.stops[1].lng);
+                if (isArrival && d0 < d1) r.stops.reverse();
+                if (!isArrival && d0 > d1) r.stops.reverse();
             }
 
             r.stops.forEach((s, i) => { s.stopNum = i + 1; });
@@ -1848,14 +1932,20 @@
         if (optimizedOrder && optimizedOrder.length === nn) {
             const newStops = optimizedOrder.map(i => stops[i]);
 
-            // Final directional sort — haversine for clean geographic sweep
-            if (newStops.length >= 2) {
-                newStops.forEach(s => {
-                    s._campGeoDist = (s.lat && s.lng) ? haversineMi(campLat, campLng, s.lat, s.lng) : 0;
-                });
-                if (isArrival) newStops.sort((a, b) => b._campGeoDist - a._campGeoDist);
-                else newStops.sort((a, b) => a._campGeoDist - b._campGeoDist);
-                newStops.forEach(s => { delete s._campGeoDist; });
+            // Pin endpoints: farthest first (arrival) or nearest first (dismissal)
+            if (newStops.length >= 3) {
+                let fI = 0, nI = 0, fD = 0, nD = Infinity;
+                newStops.forEach((s, i) => { if (!s.lat) return; const d = haversineMi(campLat, campLng, s.lat, s.lng); if (d > fD) { fD = d; fI = i; } if (d < nD) { nD = d; nI = i; } });
+                if (isArrival) {
+                    if (fI !== 0) { const s = newStops.splice(fI, 1)[0]; newStops.unshift(s); }
+                } else {
+                    if (nI !== 0) { const s = newStops.splice(nI, 1)[0]; newStops.unshift(s); }
+                }
+            } else if (newStops.length === 2) {
+                const d0 = haversineMi(campLat, campLng, newStops[0].lat, newStops[0].lng);
+                const d1 = haversineMi(campLat, campLng, newStops[1].lat, newStops[1].lng);
+                if (isArrival && d0 < d1) newStops.reverse();
+                if (!isArrival && d0 > d1) newStops.reverse();
             }
 
             route.stops = [...newStops, ...specialStops];
