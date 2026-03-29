@@ -1649,11 +1649,33 @@
                 r.stops = optimizedOrder.map(i => r.stops[i]);
             }
 
+            // ── FINAL DIRECTIONAL SORT ──
+            // After all optimization, enforce absolute directional order.
+            // Arrival: stop 1 = farthest from camp, last stop = nearest
+            // Dismissal: stop 1 = nearest to camp, last stop = farthest
+            // Uses road-distance from matrix when available, haversine fallback.
+            if (r.stops.length >= 2) {
+                r.stops.forEach(s => {
+                    if (matrix && s._matrixIdx != null) {
+                        const val = matrix[0]?.[s._matrixIdx];
+                        s._campRoadDist = (val != null && val >= 0) ? val : haversineMi(campLat, campLng, s.lat, s.lng);
+                    } else {
+                        s._campRoadDist = haversineMi(campLat, campLng, s.lat, s.lng);
+                    }
+                });
+                if (isArrival) {
+                    r.stops.sort((a, b) => b._campRoadDist - a._campRoadDist);
+                } else {
+                    r.stops.sort((a, b) => a._campRoadDist - b._campRoadDist);
+                }
+                r.stops.forEach(s => { delete s._campRoadDist; });
+            }
+
             r.stops.forEach((s, i) => { s.stopNum = i + 1; });
 
-            // Store matrix for ETA calculation
+            // Store matrix for ETA calculation (don't reassign _matrixIdx —
+            // localTSPOptimize already set them to match the matrix)
             if (matrix) {
-                r.stops.forEach((s, i) => { s._matrixIdx = i + 1; });
                 r._osrmMatrix = matrix;
             }
 
@@ -1825,6 +1847,22 @@
 
         if (optimizedOrder && optimizedOrder.length === nn) {
             const newStops = optimizedOrder.map(i => stops[i]);
+
+            // Final directional sort
+            if (newStops.length >= 2) {
+                newStops.forEach(s => {
+                    if (matrix && s._matrixIdx != null) {
+                        const val = matrix[0]?.[s._matrixIdx];
+                        s._campRoadDist = (val != null && val >= 0) ? val : haversineMi(campLat, campLng, s.lat, s.lng);
+                    } else {
+                        s._campRoadDist = haversineMi(campLat, campLng, s.lat, s.lng);
+                    }
+                });
+                if (isArrival) newStops.sort((a, b) => b._campRoadDist - a._campRoadDist);
+                else newStops.sort((a, b) => a._campRoadDist - b._campRoadDist);
+                newStops.forEach(s => { delete s._campRoadDist; });
+            }
+
             route.stops = [...newStops, ...specialStops];
         }
 
