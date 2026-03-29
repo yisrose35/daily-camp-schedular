@@ -1097,12 +1097,22 @@ else penalty += 200;
     // Without this, _todayCache returns stale "not done today" for this bunk,
     // allowing the same activity to be picked again for the same bunk.
     for (var [tKey] of _todayCache) { if (tKey.startsWith(bunk + ':')) _todayCache.delete(tKey); }
-    // Also update the time index
+    // Also update the time index — but ONLY if not already present (prevent double/triple-add)
     if (block.startTime !== undefined && block.endTime !== undefined) {
         var pickFieldNorm = normName(fName);
-        addToFieldTimeIndex(pickFieldNorm, block.startTime, block.endTime, bunk, block.divName || '', normName(pick._activity || fName));
+        var _existFI = _fieldTimeIndex.get(pickFieldNorm) || [];
+        var _alreadyInFI = _existFI.some(function(e) { return e.bunk === bunk && e.startMin === block.startTime && e.endMin === block.endTime; });
+        if (!_alreadyInFI) {
+            addToFieldTimeIndex(pickFieldNorm, block.startTime, block.endTime, bunk, block.divName || '', normName(pick._activity || fName));
+        }
         var pickActNorm = normName(pick._activity || fName);
-        if (pickActNorm && pickActNorm !== pickFieldNorm) addToFieldTimeIndex(pickActNorm, block.startTime, block.endTime, bunk, block.divName || '', pickActNorm);
+        if (pickActNorm && pickActNorm !== pickFieldNorm) {
+            var _existAI = _fieldTimeIndex.get(pickActNorm) || [];
+            var _alreadyInAI = _existAI.some(function(e) { return e.bunk === bunk && e.startMin === block.startTime && e.endMin === block.endTime; });
+            if (!_alreadyInAI) {
+                addToFieldTimeIndex(pickActNorm, block.startTime, block.endTime, bunk, block.divName || '', pickActNorm);
+            }
+        }
     }
 }
     function undoPickFromSchedule(block, pick) {
@@ -1326,7 +1336,7 @@ else penalty += 200;
                 S._assignedBlocks.add(ga2.blockIdx); S._assignments.set(ga2.blockIdx,{candIdx:ga2.candIdx,pick:ga2.pick,cost:ga2.cost});
                 S.applyPickToSchedule(blk,ga2.pick);
                 var fn = normName(ga2.pick.field);
-               if (blk.startTime!==undefined&&blk.endTime!==undefined) { var an = normName(ga2.pick._activity); var _existingEntries=S._fieldTimeIndex.get(fn)||[]; var _alreadyAdded=_existingEntries.some(function(e){return e.bunk===blk.bunk&&e.startMin===blk.startTime&&e.endMin===blk.endTime;}); if(!_alreadyAdded){S.addToFieldTimeIndex(fn,blk.startTime,blk.endTime,blk.bunk,blk.divName,an); if (an&&an!==fn) S.addToFieldTimeIndex(an,blk.startTime,blk.endTime,blk.bunk,blk.divName,an);} }                S.invalidateRotationCacheForBunk(blk.bunk);
+               if (blk.startTime!==undefined&&blk.endTime!==undefined) { var an = normName(ga2.pick._activity); var _existingEntries=S._fieldTimeIndex.get(fn)||[]; var _alreadyAdded=_existingEntries.some(function(e){return e.bunk===blk.bunk&&e.startMin===blk.startTime&&e.endMin===blk.endTime;}); if(!_alreadyAdded){S.addToFieldTimeIndex(fn,blk.startTime,blk.endTime,blk.bunk,blk.divName,an);} if (an&&an!==fn) { var _existAE=S._fieldTimeIndex.get(an)||[]; var _alreadyAE=_existAE.some(function(e){return e.bunk===blk.bunk&&e.startMin===blk.startTime&&e.endMin===blk.endTime;}); if(!_alreadyAE) S.addToFieldTimeIndex(an,blk.startTime,blk.endTime,blk.bunk,blk.divName,an);} }                S.invalidateRotationCacheForBunk(blk.bunk);
                 propagateAssignment(activityBlocks,ga2.blockIdx,ga2.pick);
                 var tracker = normName(ga2.pick._activity||ga2.pick.field);
                 if (tracker&&tracker!=='free'&&tracker!=='free play') { if (!globalBunkActs.has(blk.bunk)) globalBunkActs.set(blk.bunk,new Set()); globalBunkActs.get(blk.bunk).add(tracker); }
