@@ -1361,55 +1361,54 @@
         // This guarantees each bus serves a contiguous area — no interleaving.
         showProgress('Optimizing routes (VROOM)...', 35);
 
-        // K-means clustering helper
-        function kMeansGeo(points, k, maxIter) {
-            if (points.length <= k) return points.map((_, i) => [i]);
-            maxIter = maxIter || 30;
-            // Init centroids: spread by angle from mean (avoids bad random seeds)
-            const mLat = points.reduce((s, p) => s + p.lat, 0) / points.length;
-            const mLng = points.reduce((s, p) => s + p.lng, 0) / points.length;
-            const angles = points.map(p => Math.atan2(p.lng - mLng, p.lat - mLat));
-            const sorted = points.map((p, i) => ({ i, a: angles[i] })).sort((a, b) => a.a - b.a);
-            const step = points.length / k;
-            let centroids = [];
-            for (let c = 0; c < k; c++) {
-                const idx = sorted[Math.min(Math.floor(c * step), sorted.length - 1)].i;
-                centroids.push({ lat: points[idx].lat, lng: points[idx].lng });
+        // Recursive geographic bisection: split stops along the longest axis
+        // Produces contiguous zones (no interleaving) because each cut is
+        // a geographic line through the data.
+        function geoBisect(indices, points, k) {
+            if (k <= 1 || indices.length <= 1) return [indices];
+            if (indices.length <= k) return indices.map(i => [i]);
+
+            // Find longest axis (lat or lng spread)
+            let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+            indices.forEach(i => {
+                if (points[i].lat < minLat) minLat = points[i].lat;
+                if (points[i].lat > maxLat) maxLat = points[i].lat;
+                if (points[i].lng < minLng) minLng = points[i].lng;
+                if (points[i].lng > maxLng) maxLng = points[i].lng;
+            });
+            // Adjust for latitude: lng degrees are ~cos(lat) shorter than lat degrees
+            const latSpan = maxLat - minLat;
+            const lngSpan = (maxLng - minLng) * Math.cos((minLat + maxLat) / 2 * Math.PI / 180);
+            const useLatAxis = latSpan > lngSpan;
+
+            // Sort along longest axis
+            const sorted = [...indices].sort((a, b) =>
+                useLatAxis ? points[a].lat - points[b].lat : points[a].lng - points[b].lng
+            );
+
+            // Find split point that divides kid count for k1 vs k2 buses
+            const totalKids = sorted.reduce((s, i) => s + points[i].campers.length, 0);
+            const k1 = Math.floor(k / 2);
+            const k2 = k - k1;
+            const targetLeft = totalKids * (k1 / k);
+
+            let cumKids = 0, splitAt = Math.floor(sorted.length / 2);
+            for (let i = 0; i < sorted.length; i++) {
+                cumKids += points[sorted[i]].campers.length;
+                if (cumKids >= targetLeft) {
+                    // Split after this point (ensure at least 1 on each side)
+                    splitAt = Math.max(1, Math.min(sorted.length - 1, i + 1));
+                    break;
+                }
             }
 
-            let assignments = new Array(points.length).fill(0);
-            for (let iter = 0; iter < maxIter; iter++) {
-                // Assign each point to nearest centroid
-                let changed = false;
-                for (let i = 0; i < points.length; i++) {
-                    let best = 0, bestD = Infinity;
-                    for (let c = 0; c < k; c++) {
-                        const d = haversineMi(points[i].lat, points[i].lng, centroids[c].lat, centroids[c].lng);
-                        if (d < bestD) { bestD = d; best = c; }
-                    }
-                    if (assignments[i] !== best) { assignments[i] = best; changed = true; }
-                }
-                if (!changed) break;
-                // Recalculate centroids
-                for (let c = 0; c < k; c++) {
-                    const members = [];
-                    for (let i = 0; i < points.length; i++) { if (assignments[i] === c) members.push(i); }
-                    if (members.length) {
-                        centroids[c] = {
-                            lat: members.reduce((s, i) => s + points[i].lat, 0) / members.length,
-                            lng: members.reduce((s, i) => s + points[i].lng, 0) / members.length
-                        };
-                    }
-                }
-            }
-            // Build cluster arrays
-            const clusters = [];
-            for (let c = 0; c < k; c++) {
-                const members = [];
-                for (let i = 0; i < points.length; i++) { if (assignments[i] === c) members.push(i); }
-                clusters.push(members);
-            }
-            return clusters;
+            const left = sorted.slice(0, splitAt);
+            const right = sorted.slice(splitAt);
+
+            // Recurse
+            const leftClusters = geoBisect(left, points, k1);
+            const rightClusters = geoBisect(right, points, k2);
+            return [...leftClusters, ...rightClusters];
         }
 
         let allRoutes = [];
@@ -1430,7 +1429,8 @@
             if (numBusesInGroup === 1) {
                 subClusters = [groupStops.map((_, i) => i)];
             } else {
-                subClusters = kMeansGeo(groupStops, numBusesInGroup);
+                subClusters = geoBisect(groupStops.map((_, i) => i), groupStops, numBusesInGroup);
+
                 // Log sub-cluster sizes
                 const sizes = subClusters.map(sc => sc.reduce((s, i) => s + groupStops[i].campers.length, 0));
                 console.log('[Go] Pre-cluster ' + groupName + ': ' + numBusesInGroup + ' zones → [' + sizes.join(', ') + '] kids');
