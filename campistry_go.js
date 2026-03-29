@@ -1315,6 +1315,57 @@
         });
         if (totalMerged) console.log('[Go] Post-route merge: ' + totalMerged + ' stop(s) consolidated');
 
+        // ══════════════════════════════════════════════════════════════
+        // CAPACITY ENFORCEMENT
+        //
+        // VROOM respects capacity, but force-inserted unassigned stops
+        // can push buses over. Move the outlier stop (farthest from bus
+        // centroid) to the nearest under-capacity bus. Since all routes
+        // came from one VROOM call, they're already geographically
+        // coherent — border stops naturally belong to adjacent routes.
+        // ══════════════════════════════════════════════════════════════
+        let capMoves = 0;
+        for (let capPass = 0; capPass < 50; capPass++) {
+            let overBus = null;
+            for (const r of allRoutes) {
+                if (r.stops.length > 0 && r.camperCount > r._cap) { overBus = r; break; }
+            }
+            if (!overBus) break;
+
+            // Move the outlier stop (farthest from this bus's centroid)
+            const cLat = overBus.stops.reduce((s, st) => s + st.lat, 0) / overBus.stops.length;
+            const cLng = overBus.stops.reduce((s, st) => s + st.lng, 0) / overBus.stops.length;
+            let moveIdx = 0, moveDist = 0;
+            overBus.stops.forEach((st, i) => {
+                const d = haversineMi(cLat, cLng, st.lat, st.lng);
+                if (d > moveDist) { moveDist = d; moveIdx = i; }
+            });
+            const stopToMove = overBus.stops[moveIdx];
+
+            // Find nearest bus with room
+            let bestBus = null, bestDist = Infinity;
+            for (const r of allRoutes) {
+                if (r === overBus) continue;
+                if (r.camperCount + stopToMove.campers.length > r._cap) continue;
+                const rLat = r.stops.length ? r.stops.reduce((s, st) => s + st.lat, 0) / r.stops.length : campLat;
+                const rLng = r.stops.length ? r.stops.reduce((s, st) => s + st.lng, 0) / r.stops.length : campLng;
+                const d = haversineMi(stopToMove.lat, stopToMove.lng, rLat, rLng);
+                if (d < bestDist) { bestDist = d; bestBus = r; }
+            }
+            if (!bestBus) {
+                console.warn('[Go] ⚠ ' + overBus.busName + ': ' + overBus.camperCount + '/' + overBus._cap + ' — no bus has room');
+                break;
+            }
+
+            overBus.stops.splice(moveIdx, 1);
+            overBus.camperCount -= stopToMove.campers.length;
+            overBus.stops.forEach((s, i) => { s.stopNum = i + 1; });
+            directionalInsert(bestBus.stops, stopToMove, campLat, campLng);
+            bestBus.camperCount += stopToMove.campers.length;
+            capMoves++;
+        }
+        if (capMoves) console.log('[Go] Capacity enforcement: ' + capMoves + ' stop(s) moved');
+
         // Route quality summary
         const totalKids = allRoutes.reduce((s, r) => s + r.camperCount, 0);
         const totalStops = allRoutes.reduce((s, r) => s + r.stops.length, 0);
@@ -2458,4 +2509,4 @@
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();
-            
+                            
