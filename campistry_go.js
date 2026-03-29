@@ -1614,6 +1614,31 @@
                                 cheapestInsert(orderedStops, stop);
                             });
                         }
+                        // 2-opt improvement: fix local backtracking (e.g. 7→9→8)
+                        // VROOM optimizes road distance but can create small visual loops.
+                        // 2-opt reverses segments where it reduces total distance.
+                        if (orderedStops.length >= 3) {
+                            let improved = true;
+                            for (let pass = 0; pass < 5 && improved; pass++) {
+                                improved = false;
+                                for (let i = 0; i < orderedStops.length - 2; i++) {
+                                    for (let j = i + 2; j < orderedStops.length; j++) {
+                                        const a = orderedStops[i], b = orderedStops[i + 1];
+                                        const c = orderedStops[j], d = orderedStops[j + 1] || (isArrival ? { lat: campLat, lng: campLng } : null);
+                                        if (!a?.lat || !b?.lat || !c?.lat) continue;
+                                        const curDist = haversineMi(a.lat, a.lng, b.lat, b.lng) + (d ? haversineMi(c.lat, c.lng, d.lat, d.lng) : 0);
+                                        const newDist = haversineMi(a.lat, a.lng, c.lat, c.lng) + (d ? haversineMi(b.lat, b.lng, d.lat, d.lng) : 0);
+                                        if (newDist < curDist * 0.95) { // 5% threshold to avoid trivial swaps
+                                            // Reverse segment [i+1 ... j]
+                                            const seg = orderedStops.splice(i + 1, j - i);
+                                            seg.reverse();
+                                            orderedStops.splice(i + 1, 0, ...seg);
+                                            improved = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         return { busStops: orderedStops, v, duration: Math.round((vroomRoute.duration || 0) / 60) };
                     }
                     return { busStops, v, duration: 0 };
@@ -2765,7 +2790,7 @@
         renderMap();
     }
 
-    async function renderMap() {
+    async function renderMap(keepView) {
         if (!_map || !_generatedRoutes) return;
         const shiftIndices = [..._activeShifts].sort();
         const multiShift = shiftIndices.length > 1;
@@ -2862,7 +2887,7 @@
             });
         }
 
-        if (allLatLngs.length > 0) _map.fitBounds(L.latLngBounds(allLatLngs), { padding: [50, 50], maxZoom: 14 });
+        if (allLatLngs.length > 0 && !keepView) _map.fitBounds(L.latLngBounds(allLatLngs), { padding: [50, 50], maxZoom: 14 });
 
         const legendEl = document.getElementById('mapLegend');
         if (legendEl) {
@@ -2875,12 +2900,12 @@
     function selectMapBus(busId) {
         if (busId === 'all') { _activeMapBuses = new Set(); }
         else { _activeMapBuses = new Set([busId]); }
-        renderMap(); renderFilteredMasterList();
+        renderMap(true); renderFilteredMasterList();
     }
     function toggleMapBus(busId) {
         if (_activeMapBuses.has(busId)) { _activeMapBuses.delete(busId); }
         else { _activeMapBuses.add(busId); }
-        renderMap(); renderFilteredMasterList();
+        renderMap(true); renderFilteredMasterList();
     }
     async function setAddressPinMode(mode) {
         if (_showAddressPins && _addressPinMode === mode) {
@@ -2904,12 +2929,12 @@
             }
             renderAddressPins();
         }
-        if (_generatedRoutes) renderMap(); else if (_showAddressPins) renderAddressPinsAll();
+        if (_generatedRoutes) renderMap(true); else if (_showAddressPins) renderAddressPinsAll();
     }
-    function toggleHideRoutes() { _hideRoutes = !_hideRoutes; renderMap(); }
+    function toggleHideRoutes() { _hideRoutes = !_hideRoutes; renderMap(true); }
     function toggleAddressPins() { setAddressPinMode(_addressPinMode); }
-    function toggleMapShift(idx) { if (_activeShifts.has(idx)) { if (_activeShifts.size > 1) _activeShifts.delete(idx); } else _activeShifts.add(idx); renderMap(); renderFilteredMasterList(); }
-    function setMapShiftsAll() { _activeShifts = new Set(_generatedRoutes.map((_, i) => i)); renderMap(); renderFilteredMasterList(); }
+    function toggleMapShift(idx) { if (_activeShifts.has(idx)) { if (_activeShifts.size > 1) _activeShifts.delete(idx); } else _activeShifts.add(idx); renderMap(true); renderFilteredMasterList(); }
+    function setMapShiftsAll() { _activeShifts = new Set(_generatedRoutes.map((_, i) => i)); renderMap(true); renderFilteredMasterList(); }
     function toggleMapFullscreen() { const card = document.getElementById('routeMapCard'); if (!card) return; card.classList.toggle('map-fullscreen'); setTimeout(() => { if (_map) _map.invalidateSize(); }, 100); }
 
     // =========================================================================
