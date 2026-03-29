@@ -7,7 +7,7 @@ var COLORS=['#D97706','#147D91','#8B5CF6','#0EA5E9','#10B981','#F43F5E','#EC4899
 var AV_BG=['#147D91','#6366F1','#0EA5E9','#10B981','#F43F5E','#8B5CF6','#D97706'];
 
 var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={};
-var enrollments={}, sessions=[], enrollSettings={};
+var enrollments={}, sessions=[], enrollSettings={}, formConfig=null;
 var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
 var nextCamperId=1;
 var _saveLockUntil=0; // timestamp — block cloud overwrites for 5s after local save
@@ -51,6 +51,9 @@ function loadData(){
         families=me.families||{}; payments=me.payments||[];
         broadcasts=me.broadcasts||[]; bunkAsgn=me.bunkAssignments||{};
         enrollments=me.enrollments||{}; sessions=me.sessions||[]; enrollSettings=me.enrollSettings||{};
+        formConfig=me.formConfig||null;
+        // Ensure promoCodes live inside enrollSettings
+        if(me.promoCodes&&!enrollSettings.promoCodes)enrollSettings.promoCodes=me.promoCodes;
         nextCamperId=me.nextCamperId||1;
         // Backfill: assign IDs to any campers that don't have one
         var maxId=0;
@@ -70,12 +73,25 @@ function save(){
         Object.entries(structure).forEach(function([d,dd]){var b=[];Object.values(dd.grades||{}).forEach(function(gr){(gr.bunks||[]).forEach(function(bk){b.push(bk)})});m[d]=Object.assign({},ex[d]||{},{color:dd.color,bunks:b})});
         Object.keys(ex).forEach(function(d){if(!m[d])m[d]=ex[d]});
         g.app1.divisions=m;
-        g.campistryMe={families:families,payments:payments,broadcasts:broadcasts,bunkAssignments:bunkAsgn,nextCamperId:nextCamperId,enrollments:enrollments,sessions:sessions,enrollSettings:enrollSettings};
+        g.campistryMe={
+            families:families,
+            payments:payments,
+            broadcasts:broadcasts,
+            bunkAssignments:bunkAsgn,
+            nextCamperId:nextCamperId,
+            enrollments:enrollments,
+            sessions:sessions,
+            enrollSettings:enrollSettings,
+            formConfig:formConfig,
+            promoCodes:enrollSettings.promoCodes||(g.campistryMe?.promoCodes)||{}
+        };
         g.updated_at=new Date().toISOString();
         var json=JSON.stringify(g);
         localStorage.setItem('campGlobalSettings_v1',json);
-        // Also write to backup keys that other scripts may read
+        // Write to all known keys that other scripts may read
         localStorage.setItem('CAMPISTRY_LOCAL_CACHE',json);
+        try{localStorage.setItem('CAMPISTRY_UNIFIED_STATE',json)}catch(ex){}
+        console.log('[Me] Saved locally:',Object.keys(roster).length,'campers,',Object.keys(enrollments).length,'enrollments,',sessions.length,'sessions');
         // Verify write after a short delay (catch overwrites from cloud hydration)
         var rosterCount=Object.keys(roster).length;
         setTimeout(function(){
@@ -90,10 +106,16 @@ function save(){
             }catch(e){}
         },800);
         if(window.saveGlobalSettings&&window.saveGlobalSettings._isAuthoritativeHandler){
+            console.log('[Me] ☁️ Syncing to cloud: campStructure, app1, campistryMe');
             window.saveGlobalSettings('campStructure',structure);
             window.saveGlobalSettings('app1',g.app1);
             window.saveGlobalSettings('campistryMe',g.campistryMe);
-        }else if(typeof window.forceSyncToCloud==='function')window.forceSyncToCloud();
+        }else if(typeof window.forceSyncToCloud==='function'){
+            console.log('[Me] ☁️ Syncing to cloud via forceSyncToCloud');
+            window.forceSyncToCloud();
+        }else{
+            console.log('[Me] ⚠ No cloud sync available — saved to localStorage only');
+        }
     }catch(e){console.error('[Me] Save:',e)}
 }
 
@@ -600,7 +622,8 @@ function renderEnrollment(){
     h+='<div style="flex:1;min-width:200px"><div style="font-size:.8rem;font-weight:600;color:var(--s500)">PARENT REGISTRATION LINK</div>';
     h+='<div style="font-size:.85rem;color:var(--me);font-weight:600;word-break:break-all;margin-top:2px">'+esc(window.location.origin+'/campistry_register.html')+'</div></div>';
     h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.copyRegLink()">Copy Link</button>';
-    h+='<a href="campistry_register.html" target="_blank" class="me-btn me-btn--sec me-btn--sm" style="text-decoration:none">Preview Form</a></div>';
+    h+='<a href="campistry_register.html" target="_blank" class="me-btn me-btn--sec me-btn--sm" style="text-decoration:none">Preview Form</a>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openFormConfig()">⚙ Customize Form</button></div>';
 
     // Pipeline stats
     h+='<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">';
@@ -681,6 +704,150 @@ function renderEnrollment(){
     c.innerHTML=h;
 }
 
+// ── FORM CUSTOMIZER ───────────────────────────────────────────
+var FC_SECTIONS=[
+    {key:'camper',label:'Camper Information',desc:'Name, DOB, gender, school, grade, teacher',default:true,required:true},
+    {key:'parent',label:'Parent / Guardian',desc:'Name, phone, email, second parent',default:true,required:true},
+    {key:'address',label:'Home Address',desc:'Street, city, state, ZIP',default:true,required:false},
+    {key:'emergency',label:'Emergency Contact',desc:'Name, relationship, phone',default:true,required:false},
+    {key:'medical',label:'Medical Information',desc:'Allergies, medications, dietary, notes',default:true,required:false},
+    {key:'preferences',label:'Preferences',desc:'Bunkmate request, separation, t-shirt, referral source',default:true,required:false},
+    {key:'documents',label:'Document Uploads',desc:'Immunization records, health forms, insurance',default:true,required:false},
+    {key:'payment',label:'Payment Preference',desc:'Payment method selection and promo codes',default:true,required:false},
+    {key:'signature',label:'E-Signature & Agreement',desc:'Waivers, checkboxes, signature capture',default:true,required:true},
+    {key:'siblings',label:'Sibling Registration',desc:'Allow adding multiple campers in one form',default:true,required:false}
+];
+
+function getFormConfig(){
+    if(formConfig)return formConfig;
+    // Default config
+    var sections={};
+    FC_SECTIONS.forEach(function(s){sections[s.key]={enabled:s.default}});
+    return{sections:sections,customQuestions:[],welcomeMessage:'',instructions:''};
+}
+
+function openFormConfig(){
+    var fc=getFormConfig();
+    var h='';
+
+    h+='<div style="margin-bottom:16px"><div class="fsec" style="margin-bottom:6px">Form Branding</div>';
+    h+='<div class="fg"><label class="fl">Welcome Message</label><input class="fi" id="fcWelcome" value="'+esc(fc.welcomeMessage||'')+'" placeholder="e.g., Welcome to Camp Sunrise!"></div>';
+    h+='<div class="fg"><label class="fl">Instructions for Parents</label><textarea class="fi" id="fcInstructions" style="min-height:50px;resize:vertical" placeholder="Any special instructions shown at the top of the form">'+(fc.instructions||'')+'</textarea></div></div>';
+
+    h+='<div class="fsec" style="margin-bottom:6px">Sections</div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Toggle which sections appear on the parent registration form. Required sections cannot be disabled.</p>';
+    FC_SECTIONS.forEach(function(s){
+        var enabled=fc.sections&&fc.sections[s.key]?fc.sections[s.key].enabled:s.default;
+        var disabled=s.required?' disabled':'';
+        h+='<label style="display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--s200);border-radius:var(--r);margin-bottom:4px;cursor:'+(s.required?'default':'pointer')+';background:'+(enabled?'rgba(217,119,6,.03)':'var(--s50)')+'">';
+        h+='<input type="checkbox" class="fcSec" data-key="'+s.key+'" '+(enabled?'checked':'')+disabled+' style="accent-color:var(--me);flex-shrink:0">';
+        h+='<div style="flex:1"><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+esc(s.label)+(s.required?' <span style="font-size:.65rem;color:var(--s400)">(required)</span>':'')+'</div>';
+        h+='<div style="font-size:.72rem;color:var(--s400)">'+esc(s.desc)+'</div></div></label>';
+    });
+
+    h+='<div class="fsec" style="margin:16px 0 6px">Custom Questions</div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Add your own questions. These appear in a "Additional Information" section on the form.</p>';
+    h+='<div id="fcQList">';
+    (fc.customQuestions||[]).forEach(function(q,i){
+        h+=renderCustomQ(q,i);
+    });
+    h+='</div>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addCustomQ()">+ Add Question</button>';
+
+    // Promo codes
+    h+='<div class="fsec" style="margin:16px 0 6px">Promo / Discount Codes</div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Configure discount codes parents can use during registration.</p>';
+    h+='<div id="fcPromoList">';
+    var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    var promos=g.campistryMe?.promoCodes||{EARLYBIRD:{pct:10,label:'Early Bird 10% Off'},SIBLING:{pct:5,label:'Sibling Discount 5%'},REFER:{amt:50,label:'Referral $50 Off'}};
+    Object.entries(promos).forEach(function([code,p],i){
+        h+='<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;padding:6px 10px;border:1px solid var(--s200);border-radius:var(--r)">';
+        h+='<input class="fi fcPromoCode" style="flex:0 0 120px;font-size:.8rem;padding:5px 8px" value="'+esc(code)+'">';
+        h+='<input class="fi fcPromoLabel" style="flex:1;font-size:.8rem;padding:5px 8px" value="'+esc(p.label||'')+'" placeholder="Label">';
+        h+='<input class="fi fcPromoPct" style="flex:0 0 60px;font-size:.8rem;padding:5px 8px" value="'+(p.pct||'')+'" placeholder="% off">';
+        h+='<input class="fi fcPromoAmt" style="flex:0 0 60px;font-size:.8rem;padding:5px 8px" value="'+(p.amt||'')+'" placeholder="$ off">';
+        h+='<button class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem" onclick="this.closest(\'div\').remove()">✕</button></div>';
+    });
+    h+='</div>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addPromoRow()">+ Add Code</button>';
+
+    document.getElementById('fcBody').innerHTML=h;
+    openModal('formConfigModal');
+}
+
+function renderCustomQ(q,i){
+    var types={'text':'Short Text','textarea':'Long Text','select':'Dropdown','checkbox':'Checkboxes','yesno':'Yes/No'};
+    var needsOpts=q.type==='select'||q.type==='checkbox';
+    var h='<div class="fcQ" style="border:1px solid var(--s200);border-radius:var(--r);padding:10px 12px;margin-bottom:6px;background:var(--s50)">';
+    h+='<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">';
+    h+='<input class="fi fcQLabel" style="flex:1;font-size:.82rem;padding:5px 8px" value="'+esc(q.label||'')+'" placeholder="Question text">';
+    h+='<select class="fs fcQType" style="flex:0 0 110px;font-size:.78rem;padding:5px 6px" onchange="var o=this.closest(\'.fcQ\').querySelector(\'.fcQOpts\');o.style.display=(this.value===\'select\'||this.value===\'checkbox\')?\'block\':\'none\'">';
+    Object.entries(types).forEach(function([k,v]){h+='<option value="'+k+'"'+(q.type===k?' selected':'')+'>'+v+'</option>'});
+    h+='</select>';
+    h+='<label style="display:flex;align-items:center;gap:3px;font-size:.72rem;color:var(--s500);white-space:nowrap"><input type="checkbox" class="fcQReq"'+(q.required?' checked':'')+' style="accent-color:var(--me)">Req</label>';
+    h+='<button class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem" onclick="this.closest(\'.fcQ\').remove()">✕</button></div>';
+    h+='<input class="fi fcQOpts" style="font-size:.78rem;padding:4px 8px;'+(needsOpts?'':'display:none')+'" value="'+esc((q.options||[]).join(', '))+'" placeholder="Options (comma-separated, e.g. Option A, Option B, Option C)">';
+    h+='</div>';
+    return h;
+}
+
+function addCustomQ(){
+    var list=document.getElementById('fcQList');
+    var div=document.createElement('div');
+    div.innerHTML=renderCustomQ({label:'',type:'text',required:false,options:[]},-1);
+    list.appendChild(div.firstChild);
+}
+
+function addPromoRow(){
+    var list=document.getElementById('fcPromoList');
+    var div=document.createElement('div');
+    div.innerHTML='<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;padding:6px 10px;border:1px solid var(--s200);border-radius:var(--r)"><input class="fi fcPromoCode" style="flex:0 0 120px;font-size:.8rem;padding:5px 8px" placeholder="CODE"><input class="fi fcPromoLabel" style="flex:1;font-size:.8rem;padding:5px 8px" placeholder="Label"><input class="fi fcPromoPct" style="flex:0 0 60px;font-size:.8rem;padding:5px 8px" placeholder="% off"><input class="fi fcPromoAmt" style="flex:0 0 60px;font-size:.8rem;padding:5px 8px" placeholder="$ off"><button class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem" onclick="this.closest(\'div\').remove()">✕</button></div>';
+    list.appendChild(div.firstChild);
+}
+
+function saveFormConfig(){
+    // Read sections
+    var sections={};
+    document.querySelectorAll('.fcSec').forEach(function(cb){sections[cb.dataset.key]={enabled:cb.checked}});
+
+    // Read custom questions
+    var customQuestions=[];
+    document.querySelectorAll('.fcQ').forEach(function(el){
+        var label=el.querySelector('.fcQLabel')?.value?.trim();
+        var type=el.querySelector('.fcQType')?.value||'text';
+        var required=el.querySelector('.fcQReq')?.checked||false;
+        var optsRaw=el.querySelector('.fcQOpts')?.value||'';
+        var options=optsRaw?optsRaw.split(',').map(function(o){return o.trim()}).filter(Boolean):[];
+        if(label)customQuestions.push({label:label,type:type,required:required,options:options});
+    });
+
+    // Read promo codes
+    var promos={};
+    var codes=document.querySelectorAll('.fcPromoCode');
+    var labels=document.querySelectorAll('.fcPromoLabel');
+    var pcts=document.querySelectorAll('.fcPromoPct');
+    var amts=document.querySelectorAll('.fcPromoAmt');
+    for(var i=0;i<codes.length;i++){
+        var code=(codes[i].value||'').trim().toUpperCase();
+        if(!code)continue;
+        promos[code]={label:(labels[i]?.value||'').trim(),pct:parseFloat(pcts[i]?.value)||0,amt:parseFloat(amts[i]?.value)||0};
+    }
+
+    formConfig={
+        sections:sections,
+        customQuestions:customQuestions,
+        welcomeMessage:(document.getElementById('fcWelcome')?.value||'').trim(),
+        instructions:(document.getElementById('fcInstructions')?.value||'').trim()
+    };
+
+    // Store promoCodes in enrollSettings so it persists through the main save() path
+    enrollSettings.promoCodes=promos;
+
+    // Use the main save() which handles localStorage + cloud sync
+    save();
+    closeModal('formConfigModal');toast('Form configuration saved');
+}
+
 // View full application (review modal)
 function viewApplication(id){
     var e=enrollments[id];if(!e)return;
@@ -734,18 +901,65 @@ function viewApplication(id){
     b+=sec('Preferences');
     b+=row('Bunkmate Request',e.bunkmate);
     b+=row('Separation Request',e.separateFrom);
+    b+=row('T-Shirt Size',e.tshirtSize);
     b+=row('Additional Notes',e.notes);
+
+    // Custom question answers
+    if(e.customAnswers&&Object.keys(e.customAnswers).length){
+        b+=sec('Custom Responses');
+        var labels=e.customQuestionLabels||[];
+        Object.entries(e.customAnswers).forEach(function([key,val]){
+            var idx=parseInt(key.replace('q',''));
+            var label=labels[idx]||('Question '+(idx+1));
+            var display=Array.isArray(val)?val.join(', '):val;
+            b+=row(label,esc(display));
+        });
+    }
 
     b+=sec('Payment');
     b+=row('Session',e.session);
     b+=row('Tuition',e.sessionTuition?fm(e.sessionTuition):'—');
     b+=row('Payment Method',e.paymentMethod||'Not selected');
     b+=row('Payment Status',e.paymentStatus||'pending');
+    if(e.discount&&e.discount.active!==false&&e.discount.code)b+=row('Discount',esc(e.discount.label)+' ('+esc(e.discount.code)+')');
+
+    // Documents
+    if(e.documents&&e.documents.length){
+        b+=sec('Uploaded Documents');
+        e.documents.forEach(function(doc){
+            var sz=doc.size<1024?doc.size+'B':doc.size<1048576?Math.round(doc.size/1024)+'KB':Math.round(doc.size/1048576*10)/10+'MB';
+            b+='<div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:.8rem"><span>📄</span><strong style="color:var(--s700)">'+esc(doc.name)+'</strong><span style="color:var(--s400);font-size:.72rem">'+sz+'</span>';
+            if(doc.data)b+=' <a href="'+doc.data+'" download="'+esc(doc.name)+'" style="color:var(--me);font-size:.72rem;font-weight:600">Download</a>';
+            b+='</div>';
+        });
+    }
+
+    // Signature
+    if(e.signature){
+        b+=sec('Signature');
+        b+='<img src="'+e.signature+'" style="max-width:300px;height:80px;border:1px solid var(--s200);border-radius:var(--r);object-fit:contain;background:#fff">';
+    }
+
+    // Sibling group
+    if(e.siblingGroup){
+        b+=sec('Sibling Group');
+        var sibApps=Object.entries(enrollments).filter(function([,x]){return x.siblingGroup===e.siblingGroup||x.siblingGroup===id});
+        if(sibApps.length>1){
+            sibApps.forEach(function([sid,s]){
+                if(sid!==id)b+=row('Sibling',esc(s.camperName)+' — '+s.status);
+            });
+        }
+    }
+
+    // Admin Notes
+    b+=sec('Internal Notes');
+    b+='<textarea id="avNotes" style="width:100%;padding:8px 10px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:.82rem;font-family:var(--font);min-height:60px;resize:vertical;outline:none" placeholder="Add internal notes (only visible to admin)...">'+(e.adminNotes?esc(e.adminNotes):'')+'</textarea>';
+    b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.saveAppNote(\''+esc(id)+'\')">Save Notes</button>';
 
     document.getElementById('avBody').innerHTML=b;
 
     // Footer buttons
-    var f='';
+    var f='<button class="me-btn me-btn--sec" onclick="CampistryMe.printApplication(\''+esc(id)+'\')" style="margin-right:auto">🖨 Print</button>';
     if(e.status==='applied'){
         f+='<button class="me-btn me-btn--pri" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\');CampistryMe.closeModal(\'appViewModal\')">Accept</button>';
         f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'waitlisted\');CampistryMe.closeModal(\'appViewModal\')">Waitlist</button>';
@@ -763,6 +977,74 @@ function viewApplication(id){
     document.getElementById('avFooter').innerHTML=f;
 
     openModal('appViewModal');
+}
+
+function saveAppNote(id){
+    var note=(document.getElementById('avNotes')?.value||'').trim();
+    if(enrollments[id]){enrollments[id].adminNotes=note;save();toast('Notes saved')}
+}
+
+function printApplication(id){
+    var e=enrollments[id];if(!e)return;
+    var w=window.open('','_blank','width=800,height=900');
+    var h='<html><head><title>Application — '+e.camperName+'</title><style>body{font-family:Arial,sans-serif;padding:30px;font-size:13px;color:#1E293B}h1{font-size:18px;margin:0 0 4px}h2{font-size:13px;color:#D97706;text-transform:uppercase;margin:16px 0 6px;border-bottom:1px solid #E2E8F0;padding-bottom:3px}table{width:100%;border-collapse:collapse}td{padding:3px 0;vertical-align:top}td:first-child{width:120px;color:#64748B;font-weight:600}.med{color:#EF4444;font-weight:600}.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700}img{max-width:250px;height:70px;object-fit:contain;border:1px solid #E2E8F0;border-radius:4px}@media print{body{padding:15px}}</style></head><body>';
+    h+='<h1>'+esc(e.camperName)+'</h1>';
+    h+='<div style="color:#64748B;font-size:12px;margin-bottom:12px">Application ID: '+esc(id)+' · Status: '+e.status+' · Applied: '+e.appliedDate+'</div>';
+
+    function sec(t){return'<h2>'+t+'</h2><table>'}
+    function row(l,v){return v?'<tr><td>'+l+'</td><td>'+v+'</td></tr>':''}
+    function end(){return'</table>'}
+
+    h+=sec('Camper');
+    h+=row('Name',esc(e.camperName));h+=row('DOB',e.dob);h+=row('Gender',e.gender);
+    h+=row('School',e.school);h+=row('Grade',e.schoolGrade);h+=row('Teacher',e.teacher);h+=end();
+
+    h+=sec('Parent/Guardian');
+    h+=row('Name',esc(e.parentName)+(e.parentRelation?' ('+e.parentRelation+')':''));
+    h+=row('Phone',e.parentPhone);h+=row('Email',e.parentEmail);
+    if(e.parent2Name)h+=row('Parent 2',esc(e.parent2Name)+(e.parent2Phone?' — '+e.parent2Phone:''));h+=end();
+
+    h+=sec('Address');
+    h+=row('Street',e.street);h+=row('City',e.city);h+=row('State',e.state);h+=row('ZIP',e.zip);h+=end();
+
+    h+=sec('Emergency Contact');
+    h+=row('Name',esc(e.emergencyName)+(e.emergencyRel?' ('+e.emergencyRel+')':''));h+=row('Phone',e.emergencyPhone);h+=end();
+
+    h+=sec('Medical');
+    h+=row('Allergies',e.allergies?'<span class="med">'+esc(e.allergies)+'</span>':'None');
+    h+=row('Medications',e.medications?'<span class="med">'+esc(e.medications)+'</span>':'None');
+    h+=row('Dietary',e.dietary||'None');h+=row('Notes',e.medicalNotes);h+=end();
+
+    h+=sec('Preferences');
+    h+=row('Bunkmate',e.bunkmate);h+=row('Separation',e.separateFrom);h+=row('T-Shirt',e.tshirtSize);h+=row('Notes',e.notes);h+=end();
+
+    h+=sec('Payment');
+    h+=row('Session',e.session);h+=row('Tuition',e.sessionTuition?'$'+Number(e.sessionTuition).toLocaleString():'—');
+    h+=row('Method',e.paymentMethod);h+=row('Status',e.paymentStatus);
+    if(e.discount&&e.discount.code)h+=row('Discount',e.discount.label);h+=end();
+
+    if(e.customAnswers&&Object.keys(e.customAnswers).length){
+        h+=sec('Custom Responses');
+        var labels=e.customQuestionLabels||[];
+        Object.entries(e.customAnswers).forEach(function([key,val]){
+            var idx=parseInt(key.replace('q',''));var label=labels[idx]||('Question '+(idx+1));
+            h+=row(label,Array.isArray(val)?val.join(', '):esc(val));
+        });h+=end();
+    }
+
+    if(e.documents&&e.documents.length){
+        h+=sec('Documents');
+        e.documents.forEach(function(d){h+='<div style="padding:2px 0">📄 '+esc(d.name)+'</div>'});
+    }
+
+    if(e.signature){h+=sec('Signature');h+='<img src="'+e.signature+'">';}
+
+    if(e.adminNotes){h+=sec('Admin Notes');h+='<p>'+esc(e.adminNotes)+'</p>';}
+
+    h+='<div style="margin-top:30px;font-size:11px;color:#94A3B8;border-top:1px solid #E2E8F0;padding-top:10px">Printed from Campistry Me · '+new Date().toLocaleString()+'</div>';
+    h+='</body></html>';
+    w.document.write(h);w.document.close();
+    setTimeout(function(){w.print()},300);
 }
 
 function addSession(){
@@ -850,30 +1132,50 @@ function updateEnrollStatus(id,status){
 function enrollCamper(id){
     var e=enrollments[id];if(!e)return;
     e.status='enrolled';
-    // Auto-create camper in roster if not exists
+    // Auto-create camper in roster with ALL application data
     if(!roster[e.camperName]){
         var newId=nextCamperId;nextCamperId++;
         roster[e.camperName]={
-            camperId:newId,dob:'',gender:'',school:'',schoolGrade:'',teacher:'',
+            camperId:newId,
+            dob:e.dob||'',gender:e.gender||'',
+            school:e.school||'',schoolGrade:e.schoolGrade||'',teacher:e.teacher||'',
             division:'',grade:'',bunk:'',teams:{},team:'',
-            street:'',city:'',state:'',zip:'',
+            street:e.street||'',city:e.city||'',state:e.state||'',zip:e.zip||'',
             parent1Name:e.parentName||'',parent1Phone:e.parentPhone||'',parent1Email:e.parentEmail||'',
-            emergencyName:'',emergencyPhone:'',emergencyRel:'',
-            allergies:'',medications:'',dietary:''
+            emergencyName:e.emergencyName||'',emergencyPhone:e.emergencyPhone||'',emergencyRel:e.emergencyRel||'',
+            allergies:e.allergies||'',medications:e.medications||'',dietary:e.dietary||''
         };
-        toast('Enrolled — camper added to roster');
+        // Sync address to Go
+        if(e.street)syncAddressToGo(e.camperName,roster[e.camperName]);
+        toast('Enrolled — camper added to roster with all info');
     }else{
-        toast('Enrolled — camper already in roster');
+        // Update existing camper with any missing data from application
+        var c=roster[e.camperName];
+        if(!c.dob&&e.dob)c.dob=e.dob;
+        if(!c.gender&&e.gender)c.gender=e.gender;
+        if(!c.school&&e.school)c.school=e.school;
+        if(!c.schoolGrade&&e.schoolGrade)c.schoolGrade=e.schoolGrade;
+        if(!c.teacher&&e.teacher)c.teacher=e.teacher;
+        if(!c.street&&e.street){c.street=e.street;c.city=e.city;c.state=e.state;c.zip=e.zip;syncAddressToGo(e.camperName,c)}
+        if(!c.parent1Name&&e.parentName){c.parent1Name=e.parentName;c.parent1Phone=e.parentPhone;c.parent1Email=e.parentEmail}
+        if(!c.emergencyName&&e.emergencyName){c.emergencyName=e.emergencyName;c.emergencyPhone=e.emergencyPhone;c.emergencyRel=e.emergencyRel}
+        if(!c.allergies&&e.allergies)c.allergies=e.allergies;
+        if(!c.medications&&e.medications)c.medications=e.medications;
+        if(!c.dietary&&e.dietary)c.dietary=e.dietary;
+        toast('Enrolled — updated existing camper');
     }
-    // Auto-create family if not exists
+    // Auto-create family
     var lastName=e.camperName.split(' ').pop();
     var famKey='fam_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'');
+    var addr=[e.street,e.city,e.state,e.zip].filter(Boolean).join(', ');
     if(!families[famKey]&&e.parentName){
+        var parents=[{name:e.parentName,phone:e.parentPhone||'',email:e.parentEmail||'',relation:e.parentRelation||'Parent'}];
+        if(e.parent2Name)parents.push({name:e.parent2Name,phone:e.parent2Phone||'',relation:'Parent'});
         families[famKey]={
             name:lastName+' Family',
-            households:[{label:'Primary',parents:[{name:e.parentName,phone:e.parentPhone||'',email:e.parentEmail||'',relation:'Parent'}],address:'',billingContact:true}],
+            households:[{label:'Primary',parents:parents,address:addr,billingContact:true}],
             camperIds:[e.camperName],
-            balance:0,totalPaid:0,notes:'Enrolled via registration'
+            balance:e.sessionTuition||0,totalPaid:0,notes:'Enrolled via registration — '+e.session
         };
     }else if(families[famKey]&&families[famKey].camperIds.indexOf(e.camperName)<0){
         families[famKey].camperIds.push(e.camperName);
@@ -1123,6 +1425,8 @@ window.CampistryMe={
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,
     addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,
     viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,
+    saveAppNote:saveAppNote,printApplication:printApplication,
+    openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     _pickColor:_pickColor,_addGradeRow:_addGradeRow,
     uploadPhoto:uploadPhoto,
 };
