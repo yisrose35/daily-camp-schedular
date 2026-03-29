@@ -934,6 +934,12 @@
 
                 const eventName = (isCustom && layer.customActivity) ? layer.customActivity : (layer.event || layer.name || layer.type || 'Pinned');
 
+                // ★★★ FIX v3.3: Cross-division check for pinned specials ★★★
+                const isSpecialType = t === 'special';
+                if (isSpecialType && !canUseSpecialAtTime(eventName, grade, layer.startMin, layer.endMin)) {
+                    return; // Skip — another grade already has this special at overlapping time
+                }
+
                 targetBunks.forEach(bunk => {
                     bunkTimelines[bunk].push({
                         startMin: layer.startMin, endMin: layer.endMin,
@@ -948,6 +954,11 @@
                     });
                     count++;
                 });
+
+                // ★★★ FIX v3.3: Register special usage for cross-grade tracking ★★★
+                if (isSpecialType) {
+                    registerSpecialUsage(eventName, grade, layer.startMin, layer.endMin);
+                }
 
                 // ★ Register custom field as occupied so solver/fallback doesn't use it
                 if (isCustom && layer.customField) {
