@@ -1318,21 +1318,23 @@
         // ══════════════════════════════════════════════════════════════
         // CAPACITY ENFORCEMENT
         //
-        // VROOM respects capacity, but force-inserted unassigned stops
-        // can push buses over. Move the outlier stop (farthest from bus
-        // centroid) to the nearest under-capacity bus. Since all routes
-        // came from one VROOM call, they're already geographically
-        // coherent — border stops naturally belong to adjacent routes.
+        // Hard constraint: no bus exceeds its seat count.
+        // Strategy:
+        //   1. Try moving whole stops (farthest outlier first)
+        //   2. If no bus can fit the whole stop, split it — move
+        //      individual campers to the nearest bus with any room
         // ══════════════════════════════════════════════════════════════
         let capMoves = 0;
-        for (let capPass = 0; capPass < 50; capPass++) {
-            let overBus = null;
+        for (let capPass = 0; capPass < 100; capPass++) {
+            // Find any bus over capacity
+            let overBus = null, worstOver = 0;
             for (const r of allRoutes) {
-                if (r.stops.length > 0 && r.camperCount > r._cap) { overBus = r; break; }
+                const over = r.camperCount - r._cap;
+                if (over > worstOver && r.stops.length > 0) { worstOver = over; overBus = r; }
             }
-            if (!overBus) break;
+            if (!overBus) break; // all buses within capacity
 
-            // Move the outlier stop (farthest from this bus's centroid)
+            // Find the outlier stop (farthest from centroid)
             const cLat = overBus.stops.reduce((s, st) => s + st.lat, 0) / overBus.stops.length;
             const cLng = overBus.stops.reduce((s, st) => s + st.lng, 0) / overBus.stops.length;
             let moveIdx = 0, moveDist = 0;
@@ -1342,7 +1344,7 @@
             });
             const stopToMove = overBus.stops[moveIdx];
 
-            // Find nearest bus with room
+            // Try 1: move the whole stop to a bus with room
             let bestBus = null, bestDist = Infinity;
             for (const r of allRoutes) {
                 if (r === overBus) continue;
@@ -1352,19 +1354,60 @@
                 const d = haversineMi(stopToMove.lat, stopToMove.lng, rLat, rLng);
                 if (d < bestDist) { bestDist = d; bestBus = r; }
             }
-            if (!bestBus) {
-                console.warn('[Go] ⚠ ' + overBus.busName + ': ' + overBus.camperCount + '/' + overBus._cap + ' — no bus has room');
-                break;
-            }
 
-            overBus.stops.splice(moveIdx, 1);
-            overBus.camperCount -= stopToMove.campers.length;
-            overBus.stops.forEach((s, i) => { s.stopNum = i + 1; });
-            directionalInsert(bestBus.stops, stopToMove, campLat, campLng);
-            bestBus.camperCount += stopToMove.campers.length;
-            capMoves++;
+            if (bestBus) {
+                // Whole-stop move
+                overBus.stops.splice(moveIdx, 1);
+                overBus.camperCount -= stopToMove.campers.length;
+                overBus.stops.forEach((s, i) => { s.stopNum = i + 1; });
+                directionalInsert(bestBus.stops, stopToMove, campLat, campLng);
+                bestBus.camperCount += stopToMove.campers.length;
+                capMoves++;
+            } else {
+                // Try 2: split the stop — move campers one at a time to buses with room
+                let movedAny = false;
+                while (overBus.camperCount > overBus._cap && stopToMove.campers.length > 1) {
+                    // Find nearest bus with at least 1 seat
+                    let splitBus = null, splitDist = Infinity;
+                    for (const r of allRoutes) {
+                        if (r === overBus) continue;
+                        if (r.camperCount >= r._cap) continue;
+                        const rLat = r.stops.length ? r.stops.reduce((s, st) => s + st.lat, 0) / r.stops.length : campLat;
+                        const rLng = r.stops.length ? r.stops.reduce((s, st) => s + st.lng, 0) / r.stops.length : campLng;
+                        const d = haversineMi(stopToMove.lat, stopToMove.lng, rLat, rLng);
+                        if (d < splitDist) { splitDist = d; splitBus = r; }
+                    }
+                    if (!splitBus) break; // truly no room anywhere
+
+                    // How many can this bus take?
+                    const room = splitBus._cap - splitBus.camperCount;
+                    const toMove = Math.min(room, overBus.camperCount - overBus._cap);
+                    if (toMove <= 0) break;
+
+                    // Split: move campers to a new stop on the receiving bus
+                    const movedCampers = stopToMove.campers.splice(0, toMove);
+                    overBus.camperCount -= toMove;
+                    const newStop = {
+                        stopNum: 0, campers: movedCampers,
+                        address: stopToMove.address, lat: stopToMove.lat, lng: stopToMove.lng
+                    };
+                    directionalInsert(splitBus.stops, newStop, campLat, campLng);
+                    splitBus.camperCount += toMove;
+                    movedAny = true;
+                    capMoves++;
+                }
+                // Remove the stop if all campers were moved
+                if (stopToMove.campers.length === 0) {
+                    overBus.stops.splice(moveIdx, 1);
+                    overBus.stops.forEach((s, i) => { s.stopNum = i + 1; });
+                }
+                if (!movedAny) {
+                    console.warn('[Go] ⚠ ' + overBus.busName + ': ' + overBus.camperCount + '/' + overBus._cap + ' — no room anywhere');
+                    break;
+                }
+            }
         }
-        if (capMoves) console.log('[Go] Capacity enforcement: ' + capMoves + ' stop(s) moved');
+        if (capMoves) console.log('[Go] Capacity enforcement: ' + capMoves + ' move(s)');
 
         // Route quality summary
         const totalKids = allRoutes.reduce((s, r) => s + r.camperCount, 0);
@@ -2509,4 +2552,3 @@
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();
-                            
