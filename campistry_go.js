@@ -1180,7 +1180,11 @@
             }
         }
 
-        // Allocate vehicles to regions proportionally
+        // Allocate vehicles to regions — CAPACITY-AWARE
+        // Each region must have enough total bus seats for its kids.
+        // Phase 1: give each region 1 bus (minimum)
+        // Phase 2: give extra buses to regions that still lack capacity
+        // Phase 3: distribute any remaining buses by worst demand/cap ratio
         const regionDemandV = {};
         Object.entries(regionChunks).forEach(([regId, items]) => {
             regionDemandV[regId] = items.reduce((s, it) => s + it.stop.campers.length, 0);
@@ -1189,7 +1193,25 @@
         const regionVehiclesV = {};
         const sortedRegsV = Object.entries(regionDemandV).filter(([_, d]) => d > 0).sort((a, b) => b[1] - a[1]);
         sortedRegsV.forEach(([regId]) => { regionVehiclesV[regId] = []; });
+
+        // Phase 1: one bus per region
         sortedRegsV.forEach(([regId]) => { if (vehiclePoolV.length) regionVehiclesV[regId].push(vehiclePoolV.shift()); });
+
+        // Phase 2: ensure capacity — keep giving buses to under-capacity regions
+        let capPasses = 0;
+        while (vehiclePoolV.length && capPasses < 20) {
+            capPasses++;
+            let worstReg = null, worstDeficit = 0;
+            sortedRegsV.forEach(([regId, dem]) => {
+                const cap = regionVehiclesV[regId].reduce((s, v) => s + v.capacity, 0);
+                const deficit = dem - cap;
+                if (deficit > worstDeficit) { worstDeficit = deficit; worstReg = regId; }
+            });
+            if (!worstReg || worstDeficit <= 0) break; // all regions have enough capacity
+            regionVehiclesV[worstReg].push(vehiclePoolV.shift());
+        }
+
+        // Phase 3: remaining buses go to highest demand/capacity ratio
         while (vehiclePoolV.length) {
             let worstReg = sortedRegsV[0][0], worstRatio = 0;
             sortedRegsV.forEach(([regId, dem]) => {
@@ -1199,6 +1221,15 @@
             });
             regionVehiclesV[worstReg].push(vehiclePoolV.shift());
         }
+
+        // Log allocation
+        sortedRegsV.forEach(([regId, dem]) => {
+            const regName = _detectedRegions?.find(r => r.id === regId)?.name || regId;
+            const buses = regionVehiclesV[regId];
+            const cap = buses.reduce((s, v) => s + v.capacity, 0);
+            const status = dem > cap ? ' ⚠ OVER' : '';
+            console.log('[Go]   ' + regName + ': ' + dem + ' kids, ' + buses.length + ' bus(es), ' + cap + ' seats' + status);
+        });
 
         // Send VROOM requests for all regions in PARALLEL
         const allRoutes = [];
@@ -1374,27 +1405,31 @@
         // HARD CAPACITY ENFORCEMENT
         //
         // No bus may have more kids than seats. Period.
-        // Moves stops from over-capacity buses to nearest bus with room,
-        // across regions if necessary. Runs after per-region rebalancing
-        // to handle single-bus regions (like Woodmere with 56 kids, 47 seats).
+        // Moves stops from over-capacity buses to the nearest bus with
+        // room, but ONLY within 2 miles — never creates cross-map routes.
+        // With capacity-aware bus allocation, most cases are already handled;
+        // this is a safety net for edge cases.
         // ══════════════════════════════════════════════════════════════
+        const MAX_CAP_MOVE_DIST = 2.0; // miles — don't create spaghetti
         let capMoves = 0;
         for (let capPass = 0; capPass < 50; capPass++) {
-            // Find any bus over capacity
             let overBus = null;
             for (const r of allRoutes) {
                 if (r.stops.length > 0 && r.camperCount > r._cap) { overBus = r; break; }
             }
-            if (!overBus) break; // all buses within capacity
+            if (!overBus) break;
 
-            // Find the stop with the fewest kids (least disruptive to move)
-            let moveIdx = 0, moveSize = Infinity;
+            // Move the stop farthest from this bus's centroid (outlier)
+            const cLat = overBus.stops.reduce((s, st) => s + st.lat, 0) / overBus.stops.length;
+            const cLng = overBus.stops.reduce((s, st) => s + st.lng, 0) / overBus.stops.length;
+            let moveIdx = 0, moveDist = 0;
             overBus.stops.forEach((st, i) => {
-                if (st.campers.length < moveSize) { moveSize = st.campers.length; moveIdx = i; }
+                const d = haversineMi(cLat, cLng, st.lat, st.lng);
+                if (d > moveDist) { moveDist = d; moveIdx = i; }
             });
             const stopToMove = overBus.stops[moveIdx];
 
-            // Find nearest bus with room (any region)
+            // Find nearest bus with room WITHIN proximity limit
             let bestBus = null, bestDist = Infinity;
             for (const r of allRoutes) {
                 if (r === overBus) continue;
@@ -1402,10 +1437,10 @@
                 const rLat = r.stops.length ? r.stops.reduce((s, st) => s + st.lat, 0) / r.stops.length : campLat;
                 const rLng = r.stops.length ? r.stops.reduce((s, st) => s + st.lng, 0) / r.stops.length : campLng;
                 const d = haversineMi(stopToMove.lat, stopToMove.lng, rLat, rLng);
-                if (d < bestDist) { bestDist = d; bestBus = r; }
+                if (d < bestDist && d <= MAX_CAP_MOVE_DIST) { bestDist = d; bestBus = r; }
             }
             if (!bestBus) {
-                console.warn('[Go] ⚠ Cannot offload ' + overBus.busName + ' — no bus has room for ' + moveSize + ' more kids');
+                console.warn('[Go] ⚠ ' + overBus.busName + ': ' + overBus.camperCount + '/' + overBus._cap + ' kids — no nearby bus has room');
                 break;
             }
 
@@ -1414,9 +1449,8 @@
             directionalInsert(bestBus.stops, stopToMove, campLat, campLng);
             bestBus.camperCount += stopToMove.campers.length;
             capMoves++;
-            console.log('[Go]   Capacity: moved ' + moveSize + ' kids from ' + overBus.busName + ' → ' + bestBus.busName);
         }
-        if (capMoves) console.log('[Go] Capacity enforcement: ' + capMoves + ' stop(s) relocated');
+        if (capMoves) console.log('[Go] Capacity enforcement: ' + capMoves + ' stop(s) relocated (within ' + MAX_CAP_MOVE_DIST + 'mi)');
 
         // ══════════════════════════════════════════════════════════════
         // ROUTE OPTIMIZER v2
@@ -1698,61 +1732,16 @@
                 r.stops = optimizedOrder.map(i => r.stops[i]);
             }
 
-            // ── PIN ENDPOINTS ──
-            // The TSP handles 2D routing well — it knows that going
-            // east then north is better than bouncing between them.
-            // Hard-sorting by distance destroyed this because it can't
-            // handle stops at similar distances in different directions.
-            //
-            // Instead: just pin the first and last stop, let TSP own the middle.
-            // Arrival: first = farthest from camp, last = nearest
-            // Dismissal: first = nearest, last = farthest
-            if (r.stops.length >= 3) {
-                let farthestIdx = 0, nearestIdx = 0;
-                let farthestDist = 0, nearestDist = Infinity;
-                r.stops.forEach((s, i) => {
-                    if (!s.lat || !s.lng) return;
-                    const d = haversineMi(campLat, campLng, s.lat, s.lng);
-                    if (d > farthestDist) { farthestDist = d; farthestIdx = i; }
-                    if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
-                });
-
-                if (isArrival) {
-                    // Farthest should be first
-                    if (farthestIdx !== 0) {
-                        const stop = r.stops.splice(farthestIdx, 1)[0];
-                        r.stops.unshift(stop);
-                    }
-                    // Nearest should be last (recalc index after splice)
-                    const updatedNearestIdx = r.stops.findIndex(s => {
-                        if (!s.lat || !s.lng) return false;
-                        return haversineMi(campLat, campLng, s.lat, s.lng) === nearestDist;
-                    });
-                    if (updatedNearestIdx >= 0 && updatedNearestIdx !== r.stops.length - 1) {
-                        const stop = r.stops.splice(updatedNearestIdx, 1)[0];
-                        r.stops.push(stop);
-                    }
-                } else {
-                    // Nearest should be first
-                    if (nearestIdx !== 0) {
-                        const stop = r.stops.splice(nearestIdx, 1)[0];
-                        r.stops.unshift(stop);
-                    }
-                    // Farthest should be last
-                    const updatedFarthestIdx = r.stops.findIndex(s => {
-                        if (!s.lat || !s.lng) return false;
-                        return haversineMi(campLat, campLng, s.lat, s.lng) === farthestDist;
-                    });
-                    if (updatedFarthestIdx >= 0 && updatedFarthestIdx !== r.stops.length - 1) {
-                        const stop = r.stops.splice(updatedFarthestIdx, 1)[0];
-                        r.stops.push(stop);
-                    }
-                }
-            } else if (r.stops.length === 2) {
-                const d0 = haversineMi(campLat, campLng, r.stops[0].lat, r.stops[0].lng);
-                const d1 = haversineMi(campLat, campLng, r.stops[1].lat, r.stops[1].lng);
-                if (isArrival && d0 < d1) r.stops.reverse();
-                if (!isArrival && d0 > d1) r.stops.reverse();
+            // ── ORIENT ROUTE ──
+            // The TSP/Mapbox found the best ordering. Just check if the
+            // route is pointing the right direction and reverse if not.
+            // Arrival: first stop should be farther from camp than last
+            // Dismissal: first stop should be closer to camp than last
+            if (r.stops.length >= 2) {
+                const fd = haversineMi(campLat, campLng, r.stops[0].lat, r.stops[0].lng);
+                const ld = haversineMi(campLat, campLng, r.stops[r.stops.length - 1].lat, r.stops[r.stops.length - 1].lng);
+                if (isArrival && fd < ld) r.stops.reverse();
+                if (!isArrival && fd > ld) r.stops.reverse();
             }
 
             r.stops.forEach((s, i) => { s.stopNum = i + 1; });
@@ -1932,20 +1921,12 @@
         if (optimizedOrder && optimizedOrder.length === nn) {
             const newStops = optimizedOrder.map(i => stops[i]);
 
-            // Pin endpoints: farthest first (arrival) or nearest first (dismissal)
-            if (newStops.length >= 3) {
-                let fI = 0, nI = 0, fD = 0, nD = Infinity;
-                newStops.forEach((s, i) => { if (!s.lat) return; const d = haversineMi(campLat, campLng, s.lat, s.lng); if (d > fD) { fD = d; fI = i; } if (d < nD) { nD = d; nI = i; } });
-                if (isArrival) {
-                    if (fI !== 0) { const s = newStops.splice(fI, 1)[0]; newStops.unshift(s); }
-                } else {
-                    if (nI !== 0) { const s = newStops.splice(nI, 1)[0]; newStops.unshift(s); }
-                }
-            } else if (newStops.length === 2) {
-                const d0 = haversineMi(campLat, campLng, newStops[0].lat, newStops[0].lng);
-                const d1 = haversineMi(campLat, campLng, newStops[1].lat, newStops[1].lng);
-                if (isArrival && d0 < d1) newStops.reverse();
-                if (!isArrival && d0 > d1) newStops.reverse();
+            // Orient: reverse if pointing wrong direction
+            if (newStops.length >= 2) {
+                const fd = haversineMi(campLat, campLng, newStops[0].lat, newStops[0].lng);
+                const ld = haversineMi(campLat, campLng, newStops[newStops.length - 1].lat, newStops[newStops.length - 1].lng);
+                if (isArrival && fd < ld) newStops.reverse();
+                if (!isArrival && fd > ld) newStops.reverse();
             }
 
             route.stops = [...newStops, ...specialStops];
@@ -2957,3 +2938,4 @@
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();
+        
