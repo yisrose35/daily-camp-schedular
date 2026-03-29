@@ -1060,11 +1060,31 @@ else penalty += 200;
     // ========================================================================
     // SCHEDULE APPLY / UNDO
     // ========================================================================
-   function applyPickToSchedule(block, pick) {
+  function applyPickToSchedule(block, pick) {
     var bunk = block.bunk, slots = block.slots || [];
     if (!window.scheduleAssignments[bunk]) return;
     var fName = pick.field;
-    for (var i = 0; i < slots.length; i++) {
+
+    // ★★★ FIX v15.7: Hard capacity gate — last line of defense ★★★
+    // All code paths (solveSlotGroups, backjump, postSolve, deepFree, fullGrade bypass)
+    // funnel through here. Reject over-capacity picks by converting to Free.
+    if (fName && fName !== 'Free' && block.startTime !== undefined && block.endTime !== undefined && block.divName) {
+        var _capFp = _fieldPropertyMap.get(fName);
+        var _capCap = _capFp ? _capFp.capacity : getFieldCapacity(fName);
+        var _capSt = _capFp ? _capFp.sharingType : getSharingType(fName);
+        var _capUse;
+        if (_capSt === 'not_sharable') {
+            _capUse = getFieldUsageFromTimeIndex(normName(fName), block.startTime, block.endTime, bunk);
+        } else {
+            _capUse = countSameDivisionUsage(fName, block.divName, block.startTime, block.endTime, bunk);
+        }
+        if (_capUse >= _capCap) {
+            fName = 'Free';
+            pick.field = 'Free';
+            pick.sport = null;
+            pick._activity = 'Free';
+        }
+    }    for (var i = 0; i < slots.length; i++) {
         window.scheduleAssignments[bunk][slots[i]] = { field: fName, sport: pick.sport, continuation: i > 0, _fixed: false, _activity: pick._activity || fName, _fromSplitTile: block.fromSplitTile || false, _startMin: block.startTime, _endMin: block.endTime };
         if (window.fieldUsageBySlot && window.fieldUsageBySlot[slots[i]]) { if (!window.fieldUsageBySlot[slots[i]][fName]) window.fieldUsageBySlot[slots[i]][fName] = { count: 0, bunks: {} }; window.fieldUsageBySlot[slots[i]][fName].count++; window.fieldUsageBySlot[slots[i]][fName].bunks[bunk] = pick.sport || pick._activity; }
     }
