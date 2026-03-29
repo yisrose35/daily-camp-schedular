@@ -1416,19 +1416,13 @@ else penalty += 200;
                     var gd2 = globalBunkActs.get(b2.bunk); if (gd2&&gd2.has(cAn)) continue;
                     var ld = S.getActivitiesDoneToday(b2.bunk,b2.slots?.[0]??999); if (ld.has(cAn)) continue;
                 }
-                var fn2=c2._fieldNorm, fName=c2.field;
+               var fn2=c2._fieldNorm, fName=c2.field;
                 var fp=S._fieldPropertyMap.get(fName), cap=fp?fp.capacity:S.getFieldCapacity(fName), st=fp?fp.sharingType:S.getSharingType(fName);
-               var canFit=false;
-                if (b2.startTime!==undefined&&b2.endTime!==undefined) {
-                    var liveUse;
-                    if (st==='not_sharable') {
-                        liveUse=S.getFieldUsageFromTimeIndex(fn2,b2.startTime,b2.endTime,b2.bunk);
-                    } else {
-                        liveUse=S.countSameDivisionUsage(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk);
-                    }
-                    if (liveUse>=cap) { canFit=false; }
-                    else if (st==='not_sharable') { canFit=true; }                else if (st==='same_division'||st==='custom') {
-                    var xc=S.checkCrossDivisionTimeConflict(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk);
+               var liveUse=(b2.startTime!==undefined&&b2.endTime!==undefined)?(st==='not_sharable'?S.getFieldUsageFromTimeIndex(fn2,b2.startTime,b2.endTime,b2.bunk):S.countSameDivisionUsage(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk)):0;
+                var canFit=false;
+                if (liveUse>=cap) { canFit=false; }
+                else if (st==='not_sharable') { canFit=true; }
+                else if (st==='same_division'||st==='custom') {                    var xc=S.checkCrossDivisionTimeConflict(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk);
                     if (!xc&&b2.divName) { for (var ri=0;ri<results.length;ri++) { var r=results[ri]; if (r.candIdx===-1||normName(r.pick.field)!==fn2) continue; var rb=activityBlocks[r.blockIdx]; if (rb.divName&&rb.divName!==b2.divName&&rb.startTime<b2.endTime&&rb.endTime>b2.startTime) { xc=true; break; } } }
                     if (!xc) { var am=S.checkSameFieldActivityMismatch(fName,b2.startTime,b2.endTime,c2.activityName,b2.bunk); if (!am) { var cAn2=normName(c2.activityName); for (var ri2=0;ri2<results.length;ri2++) { var r2=results[ri2]; if (r2.candIdx===-1||normName(r2.pick.field)!==fn2) continue; var rb2=activityBlocks[r2.blockIdx]; if (rb2.startTime<b2.endTime&&rb2.endTime>b2.startTime) { var ra=normName(r2.pick._activity); if (ra&&cAn2&&ra!==cAn2) { am=ra; break; } } } }
                     if (!am) { var sdgu=0; if (b2.divName) { for (var ri3=0;ri3<results.length;ri3++) { var r3=results[ri3]; if (r3.candIdx===-1||normName(r3.pick.field)!==fn2) continue; var rb3=activityBlocks[r3.blockIdx]; if (rb3.divName===b2.divName&&rb3.startTime<b2.endTime&&rb3.endTime>b2.startTime) sdgu++; } } canFit=(S.countSameDivisionUsage(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk)+sdgu<cap); } }
@@ -1461,7 +1455,7 @@ else penalty += 200;
                 if (canFit) {
                     var newPk = S.clonePick(c2);
                     results.push({blockIdx:bo.bi,candIdx:opt.ci,pick:newPk,cost:opt.cost});
-                    fieldUsageGrp.set(fn2,grpUse+1);
+                  fieldUsageGrp.set(fn2,(fieldUsageGrp.get(fn2)||0)+1);
                     if (!fieldDivsGrp.has(fn2)) fieldDivsGrp.set(fn2,new Set()); fieldDivsGrp.get(fn2).add(b2.divName||'');
                     if (!bunkActsGrp.has(b2.bunk)) bunkActsGrp.set(b2.bunk,new Set());
                     var aAn=normName(c2.activityName); if (aAn&&aAn!=='free') bunkActsGrp.get(b2.bunk).add(aAn);
@@ -1475,7 +1469,7 @@ else penalty += 200;
                     assigned=true; break;
                 }
                 // Augmenting path
-                if (st==='not_sharable'&&grpUse>=cap) {
+                if (st==='not_sharable'&&(fieldUsageGrp.get(fn2)||0)>=cap) {
                     S._perfCounters.augmentingPathAttempts++;
                     var holder=null; for (var ri4=results.length-1;ri4>=0;ri4--) { if (normName(results[ri4].pick.field)===fn2&&results[ri4].candIdx!==-1) { holder=ri4; break; } }
                     if (holder!==null) {
