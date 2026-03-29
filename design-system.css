@@ -24,8 +24,8 @@
     /* Product Colors */
     --flow-color: #147D91;
     --flow-light: #1AACCA;
-    --go-color: #0EA5E9;
-    --go-light: #38BDF8;
+    --go-color: #059669;
+    --go-light: #34D399;
     --me-color: #F59E0B;
     --me-light: #FCD34D;
     
@@ -230,11 +230,11 @@ body {
 .btn-go {
     color: white;
     background: var(--go-color);
-    box-shadow: 0 1px 3px rgba(14, 165, 233, 0.2);
+    box-shadow: 0 1px 3px rgba(5, 150, 105, 0.2);
 }
 
 .btn-go:hover:not(:disabled) {
-    box-shadow: 0 2px 8px rgba(14, 165, 233, 0.3);
+    box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3);
 }
 
 .btn-me {

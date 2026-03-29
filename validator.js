@@ -46,6 +46,16 @@
     ];
 
     // =========================================================================
+    // ★★★ v3.1: PER-BUNK SLOT TIMING — auto mode has unique times per bunk ★★★
+    // =========================================================================
+    function getSlotTiming(divisionTimes, divName, bunk, slotIdx) {
+        const pbs = divisionTimes[divName]?._perBunkSlots?.[bunk];
+        if (pbs && pbs[slotIdx] && pbs[slotIdx].startMin !== undefined) return pbs[slotIdx];
+        const divSlots = divisionTimes[divName] || [];
+        return divSlots[slotIdx] || null;
+    }
+
+    // =========================================================================
     // MAIN VALIDATION FUNCTION
     // =========================================================================
 
@@ -122,7 +132,7 @@
                     exclusive.forEach(exField => {
                         const exLow = exField.toLowerCase().trim();
                         Object.entries(divisions).forEach(([od, odd]) => {
-                            const os = divisionTimes[od] || [];
+                           const oSlot = getSlotTiming(divisionTimes, od, ob, oi);
                             (odd.bunks || []).forEach(ob => {
                                 if (ob === bunk) return;
                                 const oba = assignments[ob] || [];
@@ -340,8 +350,6 @@
             const divName = bunkDivMap[String(bunk)];
             if (!divName) return;
             
-            const divSlots = divisionTimes[divName] || [];
-            
             (slots || []).forEach((entry, slotIdx) => {
                 if (!entry || entry.continuation) return;
                 if (isLeagueEntry(entry)) return;
@@ -350,7 +358,7 @@
                 const fieldName = normalizeFieldName(entry.field) || normalizeFieldName(entry._activity);
                 if (!fieldName || IGNORED_FIELDS.includes(fieldName)) return;
                 
-                const slotInfo = divSlots[slotIdx];
+                const slotInfo = getSlotTiming(divisionTimes, divName, bunk, slotIdx);
                 if (!slotInfo || slotInfo.startMin === undefined) return;
                 
                 if (!fieldUsageByTime[fieldName]) {
@@ -521,8 +529,7 @@
         const errors = [];
         
         Object.entries(assignments).forEach(([bunk, slots]) => {
-            const divName = bunkDivMap[String(bunk)];
-            const divSlots = divisionTimes[divName] || [];
+           const divName = bunkDivMap[String(bunk)];
             const activitySlots = {}; // { activityName: [{ slotIdx, timeLabel }] }
             
             (slots || []).forEach((entry, slotIdx) => {
@@ -534,12 +541,9 @@
                 if (!activity) return;
                 if (IGNORED_ACTIVITIES.some(ignored => activity.includes(ignored))) return;
                 
-                // ★★★ v3.0: For split tiles, use the sub-activity name if available ★★★
-                // Split tiles may have entry._fromSplitTile = true with different sub-activities
-                // that are intentionally different — those are OK
                 const activityKey = activity;
                 
-                const slotInfo = divSlots[slotIdx];
+                const slotInfo = getSlotTiming(divisionTimes, divName, bunk, slotIdx);
                 const timeLabel = slotInfo ? `${formatTime(slotInfo.startMin)}` : `slot ${slotIdx}`;
                 
                 if (!activitySlots[activityKey]) activitySlots[activityKey] = [];

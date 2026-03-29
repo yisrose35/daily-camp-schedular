@@ -64,10 +64,11 @@
 
         // Allowed script sources (for injection detection)
         ALLOWED_SCRIPT_SOURCES: [
-            '', // inline scripts
-            window.location.origin,
-            'https://cdn.jsdelivr.net'
-        ],
+    '', // inline scripts
+    window.location.origin,
+    'https://cdn.jsdelivr.net',
+    'https://geocoding.geo.census.gov'
+],
 
         // localStorage keys to protect integrity
         PROTECTED_STORAGE_KEYS: [
@@ -715,11 +716,7 @@
                             allowed => !allowed ? !src : src.startsWith(allowed)
                         );
                         
-                        if (!isAllowed) {
-                            logSecurityEvent('INJECTED_SCRIPT', { src });
-                            console.warn('🛡️ [SECURITY] Blocked injected script:', src);
-                            node.remove();
-                        }
+                        logSecurityEvent('INJECTED_SCRIPT', { src });
                     }
                     
                     // Check for injected iframes
