@@ -1271,6 +1271,32 @@
                 return updated.filter(w => w.duration > 0);
             }
 
+            // ★ v4.1: Track which specials are assigned to which grades during draft
+            // Prevents assigning the same special to incompatible grades
+            const draftSpecialGrades = {}; // { specialName: Set of grades }
+
+            function canDraftSpecialForGrade(specialName, grade) {
+                const existing = draftSpecialGrades[specialName];
+                if (!existing || existing.size === 0) return true;
+                if (existing.has(grade)) return true; // same grade = OK
+                // Check sharing rules
+                const info = getSpecialSharingInfo(specialName, activityProperties, globalSettings);
+                if (info.shareType === 'not_sharable') return false;
+                if (info.shareType === 'same_division') return false;
+                if (info.shareType === 'custom') {
+                    const allowed = info.allowedDivisions || [];
+                    const existingGrades = [...existing];
+                    return existingGrades.every(g => allowed.includes(g)) && allowed.includes(grade);
+                }
+                // 'all' sharing or unknown → allow
+                return true;
+            }
+
+            function registerDraftSpecial(specialName, grade) {
+                if (!draftSpecialGrades[specialName]) draftSpecialGrades[specialName] = new Set();
+                draftSpecialGrades[specialName].add(grade);
+            }
+
             // Round 1: Scarce specials
             for (const list of allBunkList) {
                 const bunk = list.bunk, grade = list.grade, result = draftResults[bunk];
@@ -1278,6 +1304,8 @@
                 for (const special of list.specials.priorityList) {
                     if (result.specials.length >= list.specials.required) break;
                     if (!special.isScarce || result.usedActivities.has(special.name)) continue;
+                    // ★ v4.1: Cross-division check
+                    if (!canDraftSpecialForGrade(special.name, grade)) continue;
                     const fw = getUpdatedFreeWindows(bunk);
                     const dur = special.totalDuration;
                     const time = special.location ? findTimeForField(special.location, bunk, grade, dur, fw) : findAnyWindow(fw, dur);
@@ -1285,6 +1313,7 @@
                     if (special.location) claimField(special.location, time.startMin, time.endMin, bunk, grade, special.name);
                     result.specials.push({ ...special, claimedTime: time, claimedField: special.location });
                     result.usedActivities.add(special.name);
+                    registerDraftSpecial(special.name, grade);
                 }
             }
 
@@ -1295,12 +1324,15 @@
                 for (const special of list.specials.priorityList) {
                     if (result.specials.length >= list.specials.required) break;
                     if (result.usedActivities.has(special.name) || special.isScarce) continue;
+                    // ★ v4.1: Cross-division check
+                    if (!canDraftSpecialForGrade(special.name, grade)) continue;
                     const fw = getUpdatedFreeWindows(bunk);
                     const time = special.location ? findTimeForField(special.location, bunk, grade, special.totalDuration, fw) : findAnyWindow(fw, special.totalDuration);
                     if (!time) continue;
                     if (special.location) claimField(special.location, time.startMin, time.endMin, bunk, grade, special.name);
                     result.specials.push({ ...special, claimedTime: time, claimedField: special.location });
                     result.usedActivities.add(special.name);
+                    registerDraftSpecial(special.name, grade);
                 }
             }
 
@@ -1804,17 +1836,22 @@
             }
 
             // ★ v4.0: Post-expand field validation — re-check all capacity_checked sport claims
+            // ★ v4.1 FIX: Re-sync field ledger FIRST so later grades see actual expanded times.
+            // 1. Unclaim all stale pre-expansion claims for this bunk
+            unclaimFieldsForBunk(bunk);
+            // 2. Re-claim at actual expanded times; demote blocks that can't re-claim
             for (const blk of template) {
-                if (blk._source !== 'capacity_checked' || !blk.field) continue;
-                if (!isFieldAvailable(blk.field, blk.startMin, blk.endMin, bunk, grade)) {
-                    // Field claim is no longer valid at expanded time — find alternative
+                if (!blk.field || blk._source === 'phase0') continue;
+                const canReclaim = claimField(blk.field, blk.startMin, blk.endMin, bunk, grade, blk.event || blk._assignedSport || 'sport');
+                if (!canReclaim) {
+                    // Field is no longer available at expanded time — find alternative
                     const alt = findSportWithField(blk.startMin, blk.endMin);
-                    if (alt) {
-                        claimField(alt.field, blk.startMin, blk.endMin, bunk, grade, alt.name);
+                    if (alt && claimField(alt.field, blk.startMin, blk.endMin, bunk, grade, alt.name)) {
                         blk.field = alt.field;
                         blk.event = alt.name;
                         blk._assignedSport = alt.name;
                     } else {
+                        // No alternative — demote to unassigned slot
                         blk.field = null;
                         blk.type = 'slot';
                         blk.event = 'General Activity Slot';
