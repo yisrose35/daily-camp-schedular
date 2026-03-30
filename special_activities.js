@@ -610,10 +610,20 @@ function summaryMultiPart(item) {
                     var display = container.querySelector('div[style*="font-weight:600"]');
                     if (display) display.textContent = v + ' minutes';
                     if (saveTimeout) clearTimeout(saveTimeout);
-                    saveTimeout = setTimeout(function() {
-                        // Re-get live item right before save in case array was rebuilt
+                   saveTimeout = setTimeout(function() {
                         var liveSave = getLiveItem();
                         liveSave.duration = v;
+                        // ★ Also write directly to globalSettings to survive sync races
+                        try {
+                            var gs = window.loadGlobalSettings?.() || {};
+                            var gsSpecials = gs.specialActivities || gs.app1?.specialActivities || [];
+                            var gsItem = gsSpecials.find(function(s) { return s.name === item.name; });
+                            if (gsItem) gsItem.duration = v;
+                            if (gs.app1?.specialActivities) {
+                                var gsApp1Item = gs.app1.specialActivities.find(function(s) { return s.name === item.name; });
+                                if (gsApp1Item) gsApp1Item.duration = v;
+                            }
+                        } catch(e) {}
                         saveData();
                         var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
                         if (s) s.textContent = summaryDuration(getLiveItem());
@@ -626,6 +636,17 @@ function summaryMultiPart(item) {
                 if (!isNaN(v) && v >= 5 && v <= 180) {
                     var live = getLiveItem();
                     live.duration = v;
+                    // ★ Also write directly to globalSettings
+                    try {
+                        var gs = window.loadGlobalSettings?.() || {};
+                        var gsSpecials = gs.specialActivities || gs.app1?.specialActivities || [];
+                        var gsItem = gsSpecials.find(function(s) { return s.name === item.name; });
+                        if (gsItem) gsItem.duration = v;
+                        if (gs.app1?.specialActivities) {
+                            var gsApp1Item = gs.app1.specialActivities.find(function(s) { return s.name === item.name; });
+                            if (gsApp1Item) gsApp1Item.duration = v;
+                        }
+                    } catch(e) {}
                     saveData();
                     var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
                     if (s) s.textContent = summaryDuration(getLiveItem());
