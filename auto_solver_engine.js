@@ -85,11 +85,17 @@
             if (disabled.has(f.name)) return;
             (f.activities || []).forEach(sportName => {
                 if (!fieldsBySport[sportName]) fieldsBySport[sportName] = [];
+                const rawType = f.sharableWith?.type || 'same_division';
+                const divs = f.sharableWith?.divisions || [];
+                // Normalize: custom with empty divisions = same_division
+                let shareType = rawType;
+                if (shareType === 'custom' && divs.length === 0) shareType = 'same_division';
+                if (shareType === 'all') shareType = 'same_division';
                 fieldsBySport[sportName].push({
                     name: f.name,
                     capacity: parseInt(f.sharableWith?.capacity) || parseInt(f.capacity) || 2,
-                    shareType: f.sharableWith?.type || 'same_division',
-                    allowedDivisions: f.sharableWith?.divisions || [],
+                    shareType,
+                    allowedDivisions: shareType === 'custom' ? divs : [],
                     isIndoor: !!f.isIndoor
                 });
             });
