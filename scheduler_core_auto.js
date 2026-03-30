@@ -725,9 +725,9 @@
                 const shareType = sharing.type || 'not_sharable';  // ★ v4.1: Default to NOT sharable
                 const capacity = parseInt(sharing.capacity) || (shareType === 'not_sharable' ? 1 : (shareType === 'all' ? 999 : 2));
 
-                fieldLedger[field.name] = {
+               fieldLedger[field.name] = {
                     name: field.name, capacity, shareType,
-                    allowedDivisions: sharing.divisions || [],
+                    allowedDivisions: props.sharableWith?.divisions || [],
                     isIndoor: field.isIndoor || false,
                     timeRules, activities: field.activities || [],
                     claims: []
@@ -770,7 +770,13 @@
             if (ledger.shareType === 'same_division' && ol.some(c => c.grade !== grade)) return false;
             if (ledger.shareType === 'custom') {
                 const allowedDivs = ledger.allowedDivisions || [];
-                if (ol.some(c => c.grade !== grade && !allowedDivs.includes(c.grade))) return false;
+                if (allowedDivs.length > 0) {
+                    if (ol.some(c => c.grade !== grade && !allowedDivs.includes(c.grade))) return false;
+                    if (ol.length > 0 && !allowedDivs.includes(grade)) return false;
+                } else {
+                    // Empty allowed list = treat as same_division
+                    if (ol.some(c => c.grade !== grade)) return false;
+                }
             }
             return true;
         }
