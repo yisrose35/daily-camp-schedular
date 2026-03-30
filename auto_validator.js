@@ -677,6 +677,38 @@
         buildFieldUsageIndex
     };
 
-    console.log('🛡️ Auto Validator v1.0 loaded — call validateAutoSchedule() or window.AutoValidator.validate()');
+    // =====================================================================
+    // AUTO-MODE ROUTING
+    // Override window.validateSchedule so that when in auto mode,
+    // the auto validator runs instead of the legacy validator.
+    // The legacy validator is preserved as window._legacyValidateSchedule.
+    // =====================================================================
+
+    if (typeof window.validateSchedule === 'function') {
+        window._legacyValidateSchedule = window.validateSchedule;
+    }
+
+    window.validateSchedule = function() {
+        const isAutoMode = window._daBuilderMode === 'auto';
+        if (isAutoMode) {
+            console.log('🛡️ Auto mode detected — routing to Auto Validator');
+            return validateAutoSchedule();
+        } else {
+            // Fall back to legacy validator for manual mode
+            if (typeof window._legacyValidateSchedule === 'function') {
+                return window._legacyValidateSchedule();
+            } else {
+                console.warn('🛡️ No legacy validator found');
+            }
+        }
+    };
+
+    // Also update ScheduleValidator.validate for any code that calls it
+    if (window.ScheduleValidator) {
+        window.ScheduleValidator._legacyValidate = window.ScheduleValidator.validate;
+        window.ScheduleValidator.validate = window.validateSchedule;
+    }
+
+    console.log('🛡️ Auto Validator v1.0 loaded — auto-routes validateSchedule() in auto mode');
 
 })();
