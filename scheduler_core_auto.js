@@ -2791,10 +2791,10 @@
             ['outdoor court', 'field e', 'field d'].forEach(fname => {
                 const entries = fieldMap.get(fname);
                 if (entries && entries.length > 0) {
-                    console.log('[4.5-DUMP] "' + fname + '": ' + entries.length + ' entries →');
-                    entries.forEach(e => console.log('  bunk ' + e.bunk + ' (' + e.grade + ') slot ' + e.idx + ' @ ' + e.startMin + '-' + e.endMin));
+                    const detail = entries.map(e => e.bunk + '(' + e.grade + ')s' + e.idx + '@' + e.startMin + '-' + e.endMin).join(' | ');
+                    console.log('[4.5-DUMP] "' + fname + '": ' + entries.length + ' entries → ' + detail);
                 } else {
-                    console.warn('[4.5-DUMP] "' + fname + '": NOT IN FIELDMAP (0 entries)');
+                    console.warn('[4.5-DUMP] "' + fname + '": NOT IN FIELDMAP');
                 }
             });
 
