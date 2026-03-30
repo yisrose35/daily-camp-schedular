@@ -1545,6 +1545,16 @@
                 }
             }
 
+           // ── TEMP DEBUG ───────────────────────────────────────────────
+            if (grade === '2nd Grade' && String(bunk) === String(getBunksForGrade(grade, divisions)[0])) {
+                console.log('[PACKER-DBG] 2nd Grade bunk ' + bunk + ': ' + needs.length + ' needs');
+                needs.forEach(function(n, i) { console.log('  need[' + i + ']: type=' + n.type + ' event=' + (n.event || n._assignedSpecial || '?') + ' dMin=' + n.dMin + ' dMax=' + n.dMax + ' win=' + n.windowStart + '-' + n.windowEnd); });
+                var dbgWalls = walls.map(function(w) { return w.startMin + '-' + w.endMin + '(' + w.event + ')'; });
+                console.log('  Walls: ' + dbgWalls.join(', '));
+                console.log('  draftResult.specials: ' + (draftResult.specials || []).length);
+                (draftResult.specials || []).forEach(function(s) { console.log('    draft special: ' + s.name + ' dur=' + s.totalDuration); });
+            }
+
             // ── Helpers ───────────────────────────────────────────────────
             function getGaps(blockList) {
                 const sorted = [...blockList].sort((a, b) => a.startMin - b.startMin);
