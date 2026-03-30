@@ -535,6 +535,13 @@ function summaryMultiPart(item) {
     if (!item.multiPart?.enabled) return 'Single session';
     return item.multiPart.totalParts + '-part activity';
 }
+    function summaryDuration(item) {
+    var d = parseInt(item.duration) || 0;
+    if (d <= 0) return 'Not set';
+    var total = d + (parseInt(item.prepDuration) || 0);
+    if (item.prepDuration > 0) return d + 'min (+' + item.prepDuration + 'min prep = ' + total + 'min total)';
+    return d + ' minutes';
+}
     function summaryPrepDuration(item) {
     return (item.prepDuration || 0) > 0 ? item.prepDuration + 'min prep' : 'None';
 }
