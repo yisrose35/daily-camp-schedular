@@ -2766,10 +2766,14 @@
 
             // ── Build time-keyed field usage map ──
             const fieldMap = new Map();
+            let totalIndexed = 0;
             Object.entries(postSolveSA).forEach(([bunk, slots]) => {
                 if (!Array.isArray(slots)) return;
                 const grade = csweepBunkGrade[bunk] || '';
                 const pbs = postSolveDT[grade]?._perBunkSlots?.[bunk] || [];
+                if (pbs.length === 0 && slots.some(e => e && e.field && e.field !== 'Free')) {
+                    console.warn('[4.5-DBG] Bunk ' + bunk + ' (' + grade + '): has assignments but 0 perBunkSlots — CANNOT CHECK');
+                }
                 slots.forEach((entry, idx) => {
                     if (!entry || !entry.field || entry.field === 'Free') return;
                     if (entry.continuation || entry._league) return;
@@ -2779,8 +2783,10 @@
                     if (!slot || slot.startMin == null || slot.endMin == null) return;
                     if (!fieldMap.has(fn)) fieldMap.set(fn, []);
                     fieldMap.get(fn).push({ startMin: slot.startMin, endMin: slot.endMin, bunk, grade, idx, field: entry.field });
+                    totalIndexed++;
                 });
             });
+            console.log('[4.5-DBG] Indexed ' + totalIndexed + ' entries across ' + fieldMap.size + ' fields');
 
             // ── A) Cross-division + capacity enforcement ──
             fieldMap.forEach((usages, fieldNorm) => {
@@ -2810,15 +2816,11 @@
                         if (overlapping.some(o => o.grade !== u.grade && !allowed.includes(o.grade))) violation = true;
                     }
 
-                    if (!violation) continue;
-
-                    // Count same-grade vs other-grade overlaps to decide who to demote
-                    const myGradeOverlaps = overlapping.filter(o => o.grade === u.grade).length;
-                    const otherGradeOverlaps = overlapping.filter(o => o.grade !== u.grade).length;
-
-                    // Demote if: this bunk's grade has fewer bunks on this field than the competing grade
-                    // OR pure capacity violation (too many same-grade bunks)
-                    if (otherGradeOverlaps > 0 || overlapping.length >= cap) {
+                    if (violation) {
+                        console.log('[4.5-VIOLATION] ' + fieldNorm + ': bunk ' + u.bunk + ' (' + u.grade + ') @ ' + u.startMin + '-' + u.endMin +
+                            ' | shareType=' + shareType + ' cap=' + cap +
+                            ' | overlaps=' + overlapping.map(o => o.bunk + '(' + o.grade + ')@' + o.startMin + '-' + o.endMin).join(', ') +
+                            ' | sa._fixed=' + !!sa._fixed + ' _pinned=' + !!sa._pinned + ' _league=' + !!sa._league + ' _autoSpecial=' + !!sa._autoSpecial);
                         postSolveSA[u.bunk][u.idx] = {
                             field: 'Free', sport: null, _activity: 'Free',
                             _autoMode: true, _constraintDemoted: true, continuation: false
