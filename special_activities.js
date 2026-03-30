@@ -539,14 +539,14 @@ function summaryMultiPart(item) {
     if (!item.multiPart?.enabled) return 'Single session';
     return item.multiPart.totalParts + '-part activity';
 }
-    function summaryDuration(item) {
+   function summaryDuration(item) {
     var d = parseInt(item.duration) || 0;
     if (d <= 0) return 'Not set';
     var total = d + (parseInt(item.prepDuration) || 0);
     if (item.prepDuration > 0) return d + 'min (+' + item.prepDuration + 'min prep = ' + total + 'min total)';
     return d + ' minutes';
 }
-  function renderDurationSettings(item) {
+function renderDurationSettings(item) {
     var container = document.createElement('div');
     var activityName = item.name;
     
@@ -557,7 +557,6 @@ function summaryMultiPart(item) {
     }
     
     function persistDuration(val) {
-        // Write to ALL sources to survive sync races
         var live = getLiveItem();
         live.duration = val;
         try {
@@ -632,109 +631,6 @@ function summaryMultiPart(item) {
                 var v = parseInt(this.value, 10);
                 if (!isNaN(v) && v >= 5 && v <= 180) {
                     persistDuration(v);
-                    var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
-                    if (s) s.textContent = summaryDuration(getLiveItem());
-                }
-            });
-        }
-    }
-    
-    buildUI();
-    return container;
-}
-    
-    function buildUI() {
-        var live = getLiveItem();
-        var hasDur = (parseInt(live.duration) || 0) > 0;
-        var currentDur = parseInt(live.duration) || 30;
-        container.innerHTML = '';
-        
-        container.innerHTML =
-            '<div style="margin-bottom:16px;">'
-            + '<p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Set a fixed duration for this activity. The auto-scheduler will use this instead of the layer\'s default block size.</p>'
-            + '<div style="background:' + (hasDur ? '#eff6ff' : '#f9fafb') + '; border:1px solid ' + (hasDur ? '#bfdbfe' : '#e5e7eb') + '; border-radius:10px; padding:14px;">'
-            + '<div style="display:flex; align-items:center; gap:12px; margin-bottom:' + (hasDur ? '12px' : '0') + ';">'
-            + '<div style="flex:1;">'
-            + '<div style="font-weight:600; color:' + (hasDur ? '#1e40af' : '#374151') + ';">' + (hasDur ? currentDur + ' minutes' : 'Not Set') + '</div>'
-            + '<div style="font-size:0.8rem; color:' + (hasDur ? '#3b82f6' : '#6b7280') + ';">' + (hasDur ? 'Scheduler will use this duration' : 'Uses skeleton block duration') + '</div>'
-            + '</div>'
-            + '<label class="switch"><input type="checkbox" id="duration-toggle" ' + (hasDur ? 'checked' : '') + '><span class="slider"></span></label>'
-            + '</div>'
-            + '<div id="duration-config" style="display:' + (hasDur ? 'block' : 'none') + ';">'
-            + '<div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #bfdbfe; margin-top:8px;">'
-            + '<label style="font-size:0.85rem;">Duration:</label>'
-            + '<input type="number" id="duration-input" min="5" max="180" step="5" value="' + currentDur + '" style="width:70px; padding:6px 10px; border:1px solid #bfdbfe; border-radius:6px; text-align:center;">'
-            + '<span style="font-size:0.85rem; color:#64748b;">minutes</span>'
-            + '</div></div></div></div>';
-        
-        var tog = container.querySelector('#duration-toggle');
-        if (tog) {
-            tog.addEventListener('change', function() {
-                var live = getLiveItem();
-                if (this.checked) {
-                    if (!live.duration || parseInt(live.duration) <= 0) {
-                        live.duration = 30;
-                    }
-                } else {
-                    live.duration = null;
-                }
-                saveData();
-                // Re-get live reference after save (array was rebuilt)
-                buildUI();
-                var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
-                if (s) s.textContent = summaryDuration(getLiveItem());
-            });
-        }
-        
-        var di = container.querySelector('#duration-input');
-        if (di) {
-            var saveTimeout = null;
-            di.addEventListener('input', function() {
-                var v = parseInt(this.value, 10);
-                if (!isNaN(v) && v >= 5 && v <= 180) {
-                    var live = getLiveItem();
-                    live.duration = v;
-                    var display = container.querySelector('div[style*="font-weight:600"]');
-                    if (display) display.textContent = v + ' minutes';
-                    if (saveTimeout) clearTimeout(saveTimeout);
-                   saveTimeout = setTimeout(function() {
-                        var liveSave = getLiveItem();
-                        liveSave.duration = v;
-                        // ★ Also write directly to globalSettings to survive sync races
-                        try {
-                            var gs = window.loadGlobalSettings?.() || {};
-                            var gsSpecials = gs.specialActivities || gs.app1?.specialActivities || [];
-                            var gsItem = gsSpecials.find(function(s) { return s.name === item.name; });
-                            if (gsItem) gsItem.duration = v;
-                            if (gs.app1?.specialActivities) {
-                                var gsApp1Item = gs.app1.specialActivities.find(function(s) { return s.name === item.name; });
-                                if (gsApp1Item) gsApp1Item.duration = v;
-                            }
-                        } catch(e) {}
-                        saveData();
-                        var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
-                        if (s) s.textContent = summaryDuration(getLiveItem());
-                    }, 500);
-                }
-            });
-            di.addEventListener('blur', function() {
-                if (saveTimeout) { clearTimeout(saveTimeout); saveTimeout = null; }
-                var v = parseInt(this.value, 10);
-                if (!isNaN(v) && v >= 5 && v <= 180) {
-                    var live = getLiveItem();
-                    live.duration = v;
-                    // ★ Also write directly to globalSettings
-                    try {
-                        var gs = window.loadGlobalSettings?.() || {};
-                        var gsSpecials = gs.specialActivities || gs.app1?.specialActivities || [];
-                        var gsItem = gsSpecials.find(function(s) { return s.name === item.name; });
-                        if (gsItem) gsItem.duration = v;
-                        if (gs.app1?.specialActivities) {
-                            var gsApp1Item = gs.app1.specialActivities.find(function(s) { return s.name === item.name; });
-                            if (gsApp1Item) gsApp1Item.duration = v;
-                        }
-                    } catch(e) {}
-                    saveData();
                     var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
                     if (s) s.textContent = summaryDuration(getLiveItem());
                 }
