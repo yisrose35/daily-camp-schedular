@@ -2649,7 +2649,26 @@
         // Prepare config for the solver
         const solverConfig = (() => {
             const gs = getGlobalSettings();
-            const masterFields = gs.app1?.fields || gs.fields || window.fields || [];
+           const masterFields = gs.app1?.fields || gs.fields || window.fields || [];
+                // ★ Normalize sharing types before passing to solver
+                masterFields.forEach(f => {
+                    if (!f.sharableWith) return;
+                    if (f.sharableWith.type === 'custom' && (!Array.isArray(f.sharableWith.divisions) || f.sharableWith.divisions.length === 0)) {
+                        f.sharableWith.type = 'same_division';
+                    }
+                    if (f.sharableWith.type === 'all') f.sharableWith.type = 'same_division';
+                    if (f.sharableWith.type === 'same_division' && (!f.sharableWith.capacity || parseInt(f.sharableWith.capacity) < 2)) {
+                        f.sharableWith.capacity = 2;
+                    }
+                });
+            masterFields.forEach(f => {
+    if (f.sharableWith) {
+        if (f.sharableWith.type === 'custom' && (!Array.isArray(f.sharableWith.divisions) || f.sharableWith.divisions.length === 0)) {
+            f.sharableWith.type = 'same_division';
+        }
+        if (f.sharableWith.type === 'all') f.sharableWith.type = 'same_division';
+    }
+});
             const masterSpecials = gs.app1?.specialActivities || gs.specialActivities || [];
 
             // Build fieldsBySport map
@@ -2754,9 +2773,23 @@
         // =====================================================================
         log('\n[STEP 4.5] Post-solve constraint enforcement...');
 
-        const postSolveAP = window.activityProperties || {};
+       const postSolveAP = window.activityProperties || {};
         const postSolveSA = window.scheduleAssignments || {};
         const postSolveDT = window.divisionTimes || {};
+
+        // ★ Normalize sharing types in activityProperties for constraint checks
+        // 'custom' with empty divisions and 'all' are orphaned states → treat as same_division
+        Object.values(postSolveAP).forEach(props => {
+            if (!props.sharableWith) return;
+            const sw = props.sharableWith;
+            if (sw.type === 'custom' && (!Array.isArray(sw.divisions) || sw.divisions.length === 0)) {
+                sw.type = 'same_division';
+            }
+            if (sw.type === 'all') sw.type = 'same_division';
+            if (sw.type === 'same_division' && (!sw.capacity || parseInt(sw.capacity) < 2)) {
+                sw.capacity = 2;
+            }
+        });
         const CSWEEP_IGNORE_FIELDS = new Set(['free', 'no field', 'lunch', 'snacks', 'dismissal', 'swim', 'pool', 'custom']);
         const isLeagueField = (fn) => /^game\s*\d+$/i.test(fn);
         const CSWEEP_IGNORE_ACTS = new Set(['free', 'lunch', 'snacks', 'dismissal', 'swim', 'pool', 'league game']);
