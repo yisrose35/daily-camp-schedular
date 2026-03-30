@@ -104,7 +104,7 @@ function validateSpecialActivity(activity, activityName) {
     let validDivisions = null;
     try { const settings = window.loadGlobalSettings?.() || {}; validDivisions = new Set(Object.keys(settings.divisions || {})); } catch (e) { validDivisions = null; }
 
-    let sharableWith = activity.sharableWith;
+   let sharableWith = activity.sharableWith;
     if (!sharableWith || typeof sharableWith !== 'object') { sharableWith = { type: 'not_sharable', divisions: [], capacity: 2 }; }
     else {
         if (!['not_sharable','same_division','custom','all'].includes(sharableWith.type)) sharableWith.type = 'not_sharable';
@@ -114,9 +114,11 @@ function validateSpecialActivity(activity, activityName) {
             sharableWith.divisions = sharableWith.divisions.filter(d => typeof d === 'string' && validDivisions.has(d));
             if (sharableWith.divisions.length < ol) console.warn(`[SPECIAL_ACTIVITIES] "${activity.name}": Removed ${ol - sharableWith.divisions.length} orphaned division(s) from sharableWith`);
         }
+        // Normalize: 'custom' with empty divisions = same_division
+        if (sharableWith.type === 'custom' && sharableWith.divisions.length === 0) sharableWith.type = 'same_division';
+        if (sharableWith.type === 'all') sharableWith.type = 'same_division';
         sharableWith.capacity = parseInt(sharableWith.capacity, 10) || 2;
     }
-
     let limitUsage = activity.limitUsage;
     if (!limitUsage || typeof limitUsage !== 'object') { limitUsage = { enabled: false, divisions: {}, priorityList: [] }; }
     else {
