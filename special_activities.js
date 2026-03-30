@@ -544,15 +544,21 @@ function summaryMultiPart(item) {
     if (item.prepDuration > 0) return d + 'min (+' + item.prepDuration + 'min prep = ' + total + 'min total)';
     return d + ' minutes';
 }
-   function renderDurationSettings(item) {
+  function renderDurationSettings(item) {
     var container = document.createElement('div');
-    var hasDur = (parseInt(item.duration) || 0) > 0;
-    var currentDur = parseInt(item.duration) || 30;
+    
+    // ★ Always get the LIVE item from the current array, not the stale closure
+    function getLiveItem() {
+        var found = specialActivities.find(function(s) { return s.name === item.name; });
+        if (!found) found = rainyDayActivities.find(function(s) { return s.name === item.name; });
+        return found || item;
+    }
     
     function buildUI() {
+        var live = getLiveItem();
+        var hasDur = (parseInt(live.duration) || 0) > 0;
+        var currentDur = parseInt(live.duration) || 30;
         container.innerHTML = '';
-        hasDur = (parseInt(item.duration) || 0) > 0;
-        currentDur = parseInt(item.duration) || 30;
         
         container.innerHTML =
             '<div style="margin-bottom:16px;">'
@@ -575,48 +581,52 @@ function summaryMultiPart(item) {
         var tog = container.querySelector('#duration-toggle');
         if (tog) {
             tog.addEventListener('change', function() {
+                var live = getLiveItem();
                 if (this.checked) {
-                    var inputEl = container.querySelector('#duration-input');
-                    item.duration = inputEl ? (parseInt(inputEl.value, 10) || 30) : 30;
+                    if (!live.duration || parseInt(live.duration) <= 0) {
+                        live.duration = 30;
+                    }
                 } else {
-                    item.duration = null;
+                    live.duration = null;
                 }
                 saveData();
+                // Re-get live reference after save (array was rebuilt)
                 buildUI();
                 var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
-                if (s) s.textContent = summaryDuration(item);
+                if (s) s.textContent = summaryDuration(getLiveItem());
             });
         }
         
         var di = container.querySelector('#duration-input');
         if (di) {
-            // Use 'input' event for immediate feedback, debounced save
             var saveTimeout = null;
             di.addEventListener('input', function() {
                 var v = parseInt(this.value, 10);
                 if (!isNaN(v) && v >= 5 && v <= 180) {
-                    item.duration = v;
-                    // Update the display text immediately
+                    var live = getLiveItem();
+                    live.duration = v;
                     var display = container.querySelector('div[style*="font-weight:600"]');
                     if (display) display.textContent = v + ' minutes';
-                    // Debounce the save
                     if (saveTimeout) clearTimeout(saveTimeout);
                     saveTimeout = setTimeout(function() {
+                        // Re-get live item right before save in case array was rebuilt
+                        var liveSave = getLiveItem();
+                        liveSave.duration = v;
                         saveData();
                         var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
-                        if (s) s.textContent = summaryDuration(item);
+                        if (s) s.textContent = summaryDuration(getLiveItem());
                     }, 500);
                 }
             });
-            // Also save on blur in case debounce hasn't fired
             di.addEventListener('blur', function() {
                 if (saveTimeout) { clearTimeout(saveTimeout); saveTimeout = null; }
                 var v = parseInt(this.value, 10);
                 if (!isNaN(v) && v >= 5 && v <= 180) {
-                    item.duration = v;
+                    var live = getLiveItem();
+                    live.duration = v;
                     saveData();
                     var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
-                    if (s) s.textContent = summaryDuration(item);
+                    if (s) s.textContent = summaryDuration(getLiveItem());
                 }
             });
         }
