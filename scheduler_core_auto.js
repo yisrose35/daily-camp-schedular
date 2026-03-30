@@ -2837,13 +2837,30 @@
                 }
             });
 
-            // ── A) Cross-division + capacity enforcement ──
-            fieldMap.forEach((usages, fieldNorm) => {
-                const fieldAP = postSolveAP[usages[0]?.field] || {};
-                const sharing = fieldAP.sharableWith || {};
-                const shareType = sharing.type || 'not_sharable';
-                const cap = parseInt(sharing.capacity) || (shareType === 'not_sharable' ? 1 : (shareType === 'all' ? 999 : 2));
+           // ── Build field sharing lookup from globalSettings (authoritative source) ──
+            const _csweepGS = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            const _csweepFields = _csweepGS.app1?.fields || _csweepGS.fields || [];
+            const _csweepFieldMap = new Map();
+            _csweepFields.forEach(f => {
+                if (!f.name) return;
+                const sw = f.sharableWith || {};
+                let type = sw.type || 'not_sharable';
+                const divs = Array.isArray(sw.divisions) ? sw.divisions : [];
+                // Normalize orphaned types
+                if (type === 'custom' && divs.length === 0) type = 'same_division';
+                if (type === 'all') type = 'same_division';
+                _csweepFieldMap.set(f.name.toLowerCase().trim(), {
+                    type,
+                    capacity: parseInt(sw.capacity) || (type === 'not_sharable' ? 1 : 2),
+                    divisions: divs
+                });
+            });
 
+        // ── A) Cross-division + capacity enforcement ──
+            fieldMap.forEach((usages, fieldNorm) => {
+                const fieldSharing = _csweepFieldMap.get(fieldNorm) || {};
+                const shareType = fieldSharing.type || 'not_sharable';
+                const cap = fieldSharing.capacity || (shareType === 'not_sharable' ? 1 : 2);
                 for (let i = 0; i < usages.length; i++) {
                     const u = usages[i];
                     const sa = postSolveSA[u.bunk]?.[u.idx];
@@ -2860,11 +2877,16 @@
                     if (overlapping.length >= cap) violation = true;
                     if (!violation && (shareType === 'not_sharable' || shareType === 'same_division') &&
                         overlapping.some(o => o.grade !== u.grade)) violation = true;
-                    if (!violation && shareType === 'custom') {
-                        const allowed = sharing.divisions || [];
-                        if (overlapping.some(o => o.grade !== u.grade && !allowed.includes(o.grade))) violation = true;
+                   if (!violation && shareType === 'custom') {
+                        const allowed = fieldSharing.divisions || [];
+                        if (allowed.length > 0) {
+                            if (overlapping.some(o => o.grade !== u.grade && !allowed.includes(o.grade))) violation = true;
+                            if (!violation && overlapping.length > 0 && !allowed.includes(u.grade)) violation = true;
+                        } else {
+                            // Empty allowed list = treat as same_division
+                            if (overlapping.some(o => o.grade !== u.grade)) violation = true;
+                        }
                     }
-
                     if (violation) {
                         console.log('[4.5-VIOLATION] ' + fieldNorm + ': bunk ' + u.bunk + ' (' + u.grade + ') @ ' + u.startMin + '-' + u.endMin +
                             ' | shareType=' + shareType + ' cap=' + cap +
