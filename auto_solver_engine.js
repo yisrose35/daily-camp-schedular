@@ -187,8 +187,13 @@
         if (st === 'same_division' && overlapping.some(e => e.grade !== grade)) return false;
         if (st === 'custom') {
             const allowed = candidate?.allowedDivisions || [];
-            if (overlapping.some(e => e.grade !== grade && !allowed.includes(e.grade))) return false;
-            if (overlapping.length > 0 && !allowed.includes(grade)) return false;
+            if (allowed.length > 0) {
+                if (overlapping.some(e => e.grade !== grade && !allowed.includes(e.grade))) return false;
+                if (overlapping.length > 0 && !allowed.includes(grade)) return false;
+            } else {
+                // Empty allowed list = treat as same_division
+                if (overlapping.some(e => e.grade !== grade)) return false;
+            }
         }
 
         // 4. Combined field mutual exclusion
