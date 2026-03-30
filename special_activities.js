@@ -151,21 +151,23 @@ function validateSpecialActivity(activity, activityName) {
         location: activity.location || null, isIndoor, rainyDayAvailable: isIndoor, availableOnRainyDay: isIndoor,
        ...(activity.rainyDayCapacity > 0 ? { rainyDayCapacity: parseInt(activity.rainyDayCapacity, 10) } : {}),
         ...(activity.rainyDayAvailableAllDay === true ? { rainyDayAvailableAllDay: true } : {}),
-       fullGradePerGrade: (activity.fullGradePerGrade && typeof activity.fullGradePerGrade === 'object') ? activity.fullGradePerGrade : undefined,
+       fullGrade: activity.fullGrade === true,
+        fullGradePerGrade: (activity.fullGradePerGrade && typeof activity.fullGradePerGrade === 'object') ? activity.fullGradePerGrade : undefined,
         // ★ v3.7: Multi-Part Special support (simple N parts)
-        multiPart: activity.multiPart&& typeof activity.multiPart === 'object' ? {
+
+
+        multiPart: activity.multiPart && typeof activity.multiPart === 'object' ? {
             enabled: activity.multiPart.enabled === true,
             totalParts: (function() { var tp = parseInt(activity.multiPart.totalParts, 10); return (!isNaN(tp) && tp >= 2 && tp <= 10) ? tp : 2; })(),
-            daysBetween: (function() { var db = parseInt(activity.multiPart.daysBetween, 10); return (!isNaN(db) && db >= 1 && db <= 14) ? db : 3; })(),
-            parts: Array.isArray(activity.multiPart.parts) ? activity.multiPart.parts.map(function(p) {
-                if (!p || typeof p !== 'object') return { location: null, duration: null };
-                return { location: p.location || null, duration: (parseInt(p.duration, 10) > 0) ? parseInt(p.duration, 10) : null };
-            }) : []
-        } : { enabled: false, totalParts: 2, daysBetween: 3, parts: [] },
-        fullGrade: activity.fullGrade === true,
-        duration: (activity.duration != null && parseInt(activity.duration, 10) > 0) ? parseInt(activity.duration, 10) : null,
-        availableDays: Array.isArray(activity.availableDays) ? activity.availableDays : null,
-        mustScheduleWhenAvailable: activity.mustScheduleWhenAvailable === true
+            daysBetween: (function() { var db = parseInt(activity.multiPart.daysBetween, 10); return (!isNaN(db) && db >= 1 && db <= 14) ? db : 3; })()
+         } : { enabled: false, totalParts: 2, daysBetween: 3 },
+        minFrequency: (activity.minFrequency != null && parseInt(activity.minFrequency, 10) > 0)
+            ? parseInt(activity.minFrequency, 10) : null,
+        minFrequencyPeriod: activity.minFrequencyPeriod || 'week',
+       maxUsagePerGrade: (activity.maxUsagePerGrade && typeof activity.maxUsagePerGrade === 'object')
+            ? activity.maxUsagePerGrade : {},
+        availableDays: Array.isArray(activity.availableDays) && activity.availableDays.length > 0
+            ? activity.availableDays : []
     };
 }
 
@@ -173,10 +175,10 @@ function createDefaultActivity(name) {
     return { name, type: 'Special', available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
         maxUsage: null, maxUsagePeriod: 'half', frequencyWeeks: 0, rainyDayExclusive: false, prepDuration: 0,
-        duration: null, availableDays: null, mustScheduleWhenAvailable: false,
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
         rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
-        multiPart: { enabled: false, totalParts: 2, daysBetween: 3, parts: [] } };
+        multiPart: { enabled: false, totalParts: 2, daysBetween: 3, parts: [] },
+        minFrequency: null, minFrequencyPeriod: 'week', maxUsagePerGrade: {}, availableDays: [] };
 }
 
 function validateAllActivities(activities) { if (!Array.isArray(activities)) return []; return activities.map(a => validateSpecialActivity(a, a?.name)); }
@@ -204,16 +206,14 @@ function initSpecialActivitiesTab() {
         #special_activities .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
         #special_activities .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
         #special_activities input:checked + .slider:before { transform: translateX(14px); }
-        #special_activities .outer-accordion { border:1px solid #E5E7EB; border-radius:10px; overflow:hidden; margin-bottom:12px; background:#fff; }
-        #special_activities .outer-accordion-header { display:flex; justify-content:space-between; align-items:center; padding:12px 14px; cursor:pointer; user-select:none; transition:background 0.15s; }
-        #special_activities .outer-accordion-header:hover { background:#F9FAFB; }
-        #special_activities .outer-accordion-header .oa-title { font-size:0.95rem; font-weight:600; color:#1F2937; }
-        #special_activities .outer-accordion-header .oa-hint { font-size:0.75rem; color:#9CA3AF; margin-top:1px; }
-        #special_activities .outer-accordion-body { display:none; border-top:1px solid #F3F4F6; }
-        #special_activities .outer-accordion-body .detail-section { border-bottom:1px solid #F3F4F6; }
-        #special_activities .outer-accordion-body .detail-section:last-child { border-bottom:none; }
-        #special_activities .outer-accordion-body .detail-section-header { padding-left:26px; }
-        .rainy-list { background: linear-gradient(to bottom, #f0f9ff, #fff) !important; border-color: #7dd3fc !important; }
+        #special_activities .sa-group { margin-bottom: 18px; }
+        #special_activities .sa-group-header { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #9CA3AF; padding: 0 2px 6px 2px; margin-bottom: 4px; border-bottom: 1px solid #F3F4F6; }
+        #special_activities .detail-section { border: 1px solid #E5E7EB; border-radius: 10px; overflow: hidden; margin-bottom: 6px; }
+        #special_activities .detail-section-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; cursor: pointer; background: #fff; transition: background 0.15s; user-select: none; }
+        #special_activities .detail-section-header:hover { background: #F9FAFB; }
+        #special_activities .detail-section-title { font-weight: 600; font-size: 0.88rem; color: #1F2937; }
+        #special_activities .detail-section-summary { font-size: 0.78rem; color: #9CA3AF; margin-top: 2px; }
+        #special_activities .detail-section-body { padding: 14px; border-top: 1px solid #F3F4F6; display: none; }        .rainy-list { background: linear-gradient(to bottom, #f0f9ff, #fff) !important; border-color: #7dd3fc !important; }
         .rainy-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 0.7rem; color: #0284c7; background: #e0f2fe; padding: 2px 8px; border-radius: 999px; margin-left: 8px; }
         .weather-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 0.65rem; padding: 2px 6px; border-radius: 999px; margin-left: 6px; }
         .weather-badge.indoor { color: #0A4A56; background: #e6f4f7; }
@@ -256,7 +256,7 @@ function initSpecialActivitiesTab() {
               </div>
               <div style="flex:1.4; min-width:340px;">
                 <div class="setup-subtitle">Special Configuration</div>
-                <div id="specials-detail-pane" style="margin-top:8px;"></div>
+               <div id="specials-detail-pane" style="margin-top:8px; max-height:calc(100vh - 220px); overflow-y:auto; padding-right:4px;"></div>
               </div>
             </div>
           </section>
@@ -295,7 +295,6 @@ function loadData() {
 }
 
 function refreshFromStorage() {
-    if (_isSaving) return;
     const pS = JSON.stringify(specialActivities), pR = JSON.stringify(rainyDayActivities), pSel = selectedItemId;
     loadData();
     if (selectedItemId) { const [, n] = selectedItemId.split(/-(.+)/); if (!specialActivities.some(s=>s.name===n) && !rainyDayActivities.some(s=>s.name===n)) selectedItemId = null; }
@@ -304,10 +303,8 @@ function refreshFromStorage() {
     }
 }
 
-let _isSaving = false;
 function saveData() {
     if (window.AccessControl?.canEditSetup && !window.AccessControl.canEditSetup()) return;
-    _isSaving = true;
     try {
         specialActivities = validateAllActivities(specialActivities);
         rainyDayActivities = validateAllActivities(rainyDayActivities);
@@ -317,7 +314,6 @@ function saveData() {
             window._specialActivitiesSyncTimeout = setTimeout(() => { window.forceSyncToCloud(); window._specialActivitiesSyncTimeout = null; }, 500);
         }
     } catch (e) { console.error("[SPECIAL_ACTIVITIES] Error saving data:", e); }
-    finally { setTimeout(function() { _isSaving = false; }, 300); }
 }
 
 function renderMasterList() {
@@ -377,24 +373,16 @@ function section(title, summary, builder) {
     wrap.appendChild(head); wrap.appendChild(body); return wrap;
 }
 
-// v3.4: Outer accordion — collapsible group that contains inner sub-accordions
-function sectionGroup(label, hint, sections) {
-    const group = document.createElement("div"); group.className = "outer-accordion";
-    const head = document.createElement("div"); head.className = "outer-accordion-header";
-    const textDiv = document.createElement("div");
-    textDiv.innerHTML = '<div class="oa-title">' + escapeHtml(label) + '</div>' + (hint ? '<div class="oa-hint">' + escapeHtml(hint) + '</div>' : '');
-    const caret = document.createElement("span");
-    caret.innerHTML = '<svg width="18" height="18" fill="none" stroke="#9CA3AF" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>';
-    caret.style.transition = "transform 0.2s";
-    head.appendChild(textDiv); head.appendChild(caret);
-    const body = document.createElement("div"); body.className = "outer-accordion-body";
-    sections.forEach(s => body.appendChild(s));
-    head.onclick = () => {
-        const open = body.style.display === "block";
-        body.style.display = open ? "none" : "block";
-        caret.style.transform = open ? "rotate(0deg)" : "rotate(-180deg)";
-    };
-    group.appendChild(head); group.appendChild(body); return group;
+// v5.0: flat labeled group — sections sit directly under the label, no outer click
+function sectionGroup(label, sections) {
+    const group = document.createElement('div');
+    group.className = 'sa-group';
+    const header = document.createElement('div');
+    header.className = 'sa-group-header';
+    header.textContent = label;
+    group.appendChild(header);
+    sections.forEach(s => group.appendChild(s));
+    return group;
 }
 
 function renderDetailPane() {
@@ -455,62 +443,61 @@ function renderDetailPane() {
     avail.innerHTML = '<span>Special is <strong>' + (item.available ? 'AVAILABLE' : 'UNAVAILABLE') + '</strong></span><span style="font-size:0.8rem; opacity:0.8;">Toggle in master list</span>';
     detailPaneEl.appendChild(avail);
 
-    // v4.0: REDESIGNED SECTION LAYOUT — clearer grouping
-    // Group 1: WHERE — physical location
-    detailPaneEl.appendChild(sectionGroup("Where", "Physical location for this activity", [
-        section("Field / Location", summaryLocation(item), () => renderLocationSettings(item))
+    // v5.0: WHO / WHERE / WHEN / HOW — flat labeled groups, single-level accordion
+
+    // ── WHO ───────────────────────────────────────────────────────────────────
+    detailPaneEl.appendChild(sectionGroup('Who', [
+        section('Grade Access', summaryAccess(item), () => renderAccess(item))
     ]));
 
-    // Group 2: WHO & HOW — scheduling mode (full grade vs individual) + grade access
-    detailPaneEl.appendChild(sectionGroup("Who & How", summarySchedulingMode(item), [
-        section("Scheduling Mode", summarySchedulingMode(item), () => renderSchedulingMode(item)),
-        section("Grade Access", summaryAccess(item), () => renderAccess(item))
+    // ── WHERE ─────────────────────────────────────────────────────────────────
+    detailPaneEl.appendChild(sectionGroup('Where', [
+        section('Field / Location', summaryLocation(item), () => renderLocationSettings(item))
     ]));
 
-    // Group 3: WHEN — time rules + weather
-    const whenSections = [section("Time Availability", summaryTime(item), () => renderTimeRules(item))];
-    if (!isRainyDayItem) whenSections.push(section("Weather & Rainy Day", summaryWeather(item), () => renderWeatherSettings(item)));
-    detailPaneEl.appendChild(sectionGroup("When", "Time rules & availability", whenSections));
+    // ── WHEN ──────────────────────────────────────────────────────────────────
+    const whenSections = [
+        section('Time Availability', summaryTime(item), () => renderTimeRules(item)),
+        section('Day Availability', summaryDays(item), () => renderDayAvailability(item))
+    ];
+    if (!isRainyDayItem) {
+        whenSections.push(section('Weather & Rainy Day', summaryWeather(item), () => renderWeatherSettings(item)));
+    }
+    detailPaneEl.appendChild(sectionGroup('When', whenSections));
 
-   // Group 4: ADVANCED — usage caps + duration + multi-part
-    detailPaneEl.appendChild(sectionGroup("Advanced", "Usage limits, prep time & multi-part", [
-        section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
-        section("Prep Duration", summaryPrepDuration(item), () => renderPrepDurationSettings(item)),
-        section("Multi-Parts", summaryMultiPart(item), () => renderMultiPartSettings(item))
-    ]));
-    // Group 2: Time & Weather — time rules + weather (weather only for non-rainy-day items)
-    const timeWeatherSections = [section("Time Availability", summaryTime(item), () => renderTimeRules(item))];
-    timeWeatherSections.push(section("Day Availability", summaryDays(item), () => renderDayAvailability(item)));
-    if (!isRainyDayItem) timeWeatherSections.push(section("Weather & Availability", summaryWeather(item), () => renderWeatherSettings(item)));
-    detailPaneEl.appendChild(sectionGroup("Time & Weather", "When this special can be scheduled", timeWeatherSections));
-
-    // Group 3: Rotation Rules — usage limit + full grade + prep duration
-   const rotationSections = [
-        section("Usage Limit", summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
-        section("Full Grade", summaryFullGrade(item), () => renderFullGradeSettings(item)),
+    // ── HOW ───────────────────────────────────────────────────────────────────
+    const howSections = [
+        section('Scheduling Mode', summarySchedulingMode(item), () => renderSchedulingMode(item)),
+        section('Usage & Frequency', summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
+        section('Prep Duration', summaryPrepDuration(item), () => renderPrepDurationSettings(item)),
+        section('Multi-Part Activity', summaryMultiPart(item), () => renderMultiPartSettings(item))
     ];
     if (window.getCampBuilderMode?.() === 'auto' || window._daBuilderMode === 'auto') {
-        rotationSections.push(section("Activity Duration", summaryDuration(item), () => renderDurationSettings(item)));
+        howSections.splice(1, 0, section('Activity Duration', summaryDuration(item), () => renderDurationSettings(item)));
     }
-    rotationSections.push(section("Prep Duration", (item.prepDuration > 0) ? item.prepDuration + 'min prep' : 'None', () => renderPrepDurationSettings(item)));
-   detailPaneEl.appendChild(sectionGroup("Rotation Rules", "Limits, timing & scheduling mode", rotationSections));
+    detailPaneEl.appendChild(sectionGroup('How', howSections));
 }
+   
+
 
 // =========================================================================
 // SUMMARY HELPERS
 // =========================================================================
-function summaryPrepDuration(item) {
-    if (!item.prepDuration || item.prepDuration <= 0) return 'None';
-    var txt = item.prepDuration + 'min prep';
-    if (item.prepLocation) txt += ' - ' + item.prepLocation;
-    return txt;
-}
 function summaryMaxUsage(item) {
+    var parts = [];
     var m = parseInt(item.maxUsage) || 0;
-    if (m <= 0) return 'No limit';
-    var period = item.maxUsagePeriod || 'half';
-    var periodLabels = { 'half': 'per half', '1week': 'per week', '2weeks': 'per 2 weeks', '3weeks': 'per 3 weeks', '4weeks': 'per 4 weeks' };
-    return 'Max ' + m + ' time' + (m > 1 ? 's' : '') + ' ' + (periodLabels[period] || 'per half');
+    if (m > 0) {
+        var period = item.maxUsagePeriod || 'half';
+        var periodLabels = { 'half': 'per half', '1week': 'per week', '2weeks': 'per 2 wks', '3weeks': 'per 3 wks', '4weeks': 'per 4 wks' };
+        parts.push('Max ' + m + ' ' + (periodLabels[period] || 'per half'));
+    }
+    var minF = parseInt(item.minFrequency) || 0;
+    if (minF > 0) {
+        parts.push('Min ' + minF + 'x ' + (item.minFrequencyPeriod === '2weeks' ? 'per 2 wks' : 'per week'));
+    }
+    var gradeCount = Object.keys(item.maxUsagePerGrade || {}).filter(function(k) { return (item.maxUsagePerGrade[k] || 0) > 0; }).length;
+    if (gradeCount > 0) parts.push(gradeCount + ' grade override' + (gradeCount > 1 ? 's' : ''));
+    return parts.length ? parts.join(' · ') : 'No limit';
 }
 function summaryFullGrade(item) { return item.fullGrade ? 'Full grade together' : 'Individual bunks'; }
 function summarySharing(item) { if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "1 bunk at a time"; return 'Up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks at once'; }
@@ -529,22 +516,6 @@ function summarySchedulingMode(item) {
     if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return 'Individual — 1 bunk at a time';
     return 'Individual — up to ' + (parseInt(item.sharableWith.capacity, 10) || 2) + ' bunks at once';
 }
-    function summaryDuration(item) {
-    var d = parseInt(item.duration) || 0;
-    if (d <= 0) return 'Not set';
-    var total = d + (parseInt(item.prepDuration) || 0);
-    if (item.prepDuration > 0) return d + 'min (+' + item.prepDuration + 'min prep = ' + total + 'min total)';
-    return d + ' minutes';
-}
-function summaryDuration(item) {
-    var d = parseInt(item.duration) || 0;
-    if (d <= 0) return 'Not set';
-    var total = d + (parseInt(item.prepDuration) || 0);
-    if (item.prepDuration > 0) return d + 'min (+' + item.prepDuration + 'min prep = ' + total + 'min total)';
-    return d + ' minutes';
-}
-function summaryFullGrade(item) { return item.fullGrade ? 'Entire grade does it together' : 'Off (normal rotation)'; }
-function summarySharing(item) { if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "No sharing (1 bunk only)"; return 'Up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks (same grade)'; }
 function summaryAccess(item) { if (!item.limitUsage?.enabled) return "Open to all grades"; const c = Object.keys(item.limitUsage.divisions||{}).length; if (c===0) return "\u26A0 Restricted (none selected)"; return c + ' grade' + (c!==1?'s':'') + ' allowed' + (item.limitUsage.usePriority?" \u00B7 prioritized":""); }
 function summaryTime(item) { const c = (item.timeRules||[]).length; return c ? c + ' rule(s) active' : "Available all day"; }
 function summaryWeather(item) {
@@ -556,19 +527,65 @@ function summaryWeather(item) {
     return s;
 }
 function summaryLocation(item) { return item.location || "No field assigned"; }
-function summaryDays(item) {
-    if (!Array.isArray(item.availableDays) || item.availableDays.length === 0) return 'Every day';
-    if (item.availableDays.length === 7) return 'Every day';
-    var dayMap = { 'Sunday':'Sun', 'Monday':'Mon', 'Tuesday':'Tue', 'Wednesday':'Wed', 'Thursday':'Thu', 'Friday':'Fri', 'Saturday':'Sat' };
-    return item.availableDays.map(function(d) { return dayMap[d] || d; }).join(', ');
-}
 
 // ★ v3.7: Multi-Part summary
 function summaryMultiPart(item) {
     if (!item.multiPart?.enabled) return 'Single session';
     return item.multiPart.totalParts + '-part activity';
 }
+    function summaryPrepDuration(item) {
+    return (item.prepDuration || 0) > 0 ? item.prepDuration + 'min prep' : 'None';
+}
+function summaryDays(item) {
+    const days = item.availableDays;
+    if (!days || !Array.isArray(days) || days.length === 0 || days.length === 7) return 'All days';
+    return days.join(', ');
+}
 
+function renderDayAvailability(item) {
+    const container = document.createElement('div');
+    const allDays = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    const updateSummary = () => {
+        const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (s) s.textContent = summaryDays(item);
+    };
+    if (!Array.isArray(item.availableDays) || item.availableDays.length === 0) {
+        item.availableDays = [...allDays];
+    }
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size:0.82rem; color:#6B7280; margin-bottom:12px;';
+    note.textContent = 'Restrict which days of the week this special can be scheduled.';
+    container.appendChild(note);
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:flex; flex-wrap:wrap; gap:6px;';
+    allDays.forEach(day => {
+        const active = item.availableDays.includes(day);
+        const chip = document.createElement('span');
+        chip.className = 'chip ' + (active ? 'active' : 'inactive');
+        chip.textContent = day.slice(0, 3);
+        chip.style.cssText = 'cursor:pointer; padding:5px 12px; border-radius:999px; font-size:0.82rem; border:1px solid ' + (active ? '#147D91' : '#E5E7EB') + '; background:' + (active ? '#e6f4f7' : '#fff') + '; color:' + (active ? '#0F5F6E' : '#6B7280') + '; font-weight:' + (active ? '600' : '400') + ';';
+        chip.onclick = () => {
+            if (item.availableDays.includes(day)) {
+                if (item.availableDays.length === 1) return; // keep at least one
+                item.availableDays = item.availableDays.filter(d => d !== day);
+            } else {
+                item.availableDays.push(day);
+            }
+            saveData();
+            container.innerHTML = '';
+            container.appendChild(note.cloneNode(true));
+            const newGrid = renderDayAvailability(item).querySelector('div') || container;
+            saveData();
+            // re-render cleanly
+            const p = container.parentElement;
+            if (p) { p.innerHTML = ''; p.appendChild(renderDayAvailability(item)); }
+            updateSummary();
+        };
+        grid.appendChild(chip);
+    });
+    container.appendChild(grid);
+    return container;
+}
 // =========================================================================
 // RENDER: Full Grade Settings
 // =========================================================================
@@ -833,131 +850,248 @@ function renderSchedulingMode(item) {
 }
 
 // =========================================================================
-// RENDER: Max Usage Settings — v3.3 rewrite with period dropdown
+// RENDER: Usage & Frequency — v5.0: ceiling + per-grade + floor
 // =========================================================================
 function renderMaxUsageSettings(item) {
-    const container = document.createElement("div");
+    const container = document.createElement('div');
     const updateSummary = () => {
         const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
         if (s) s.textContent = summaryMaxUsage(item);
     };
 
-    const currentVal = parseInt(item.maxUsage) || 0;
-    const isEnabled = currentVal > 0;
+    function rebuild() {
+        container.innerHTML = '';
 
-    // Toggle row
-    const toggleRow = document.createElement("div");
-    toggleRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:16px;";
-    const tog = document.createElement("label"); tog.className = "switch";
-    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = isEnabled;
-    const sl = document.createElement("span"); sl.className = "slider";
-    tog.appendChild(cb); tog.appendChild(sl);
-    const label = document.createElement("span");
-    label.style.cssText = "font-weight:500; font-size:0.9rem;";
-    label.textContent = "Limit how many times a bunk can do this";
-    toggleRow.appendChild(tog); toggleRow.appendChild(label);
-    container.appendChild(toggleRow);
+        // ── A: MAXIMUM (CEILING) ──────────────────────────────────────────
+        const ceilLabel = document.createElement('div');
+        ceilLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
+        ceilLabel.textContent = 'Maximum (ceiling)';
+        container.appendChild(ceilLabel);
 
-    const detailDiv = document.createElement("div");
-    detailDiv.style.cssText = "margin-top:4px; padding-left:12px; border-left:2px solid #147D91;";
+        const ceilEnabled = (parseInt(item.maxUsage) || 0) > 0;
 
-    const renderDetails = () => {
-        detailDiv.innerHTML = "";
-        if (!cb.checked) {
-            detailDiv.style.display = "none";
-            return;
-        }
-        detailDiv.style.display = "block";
+        const ceilTogRow = document.createElement('div');
+        ceilTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:' + (ceilEnabled ? '12px' : '4px') + ';';
+        const ceilTog = document.createElement('label'); ceilTog.className = 'switch';
+        const ceilCb = document.createElement('input'); ceilCb.type = 'checkbox'; ceilCb.checked = ceilEnabled;
+        const ceilSl = document.createElement('span'); ceilSl.className = 'slider';
+        ceilTog.appendChild(ceilCb); ceilTog.appendChild(ceilSl);
+        const ceilLbl = document.createElement('span');
+        ceilLbl.style.cssText = 'font-size:0.88rem; color:#374151;';
+        ceilLbl.textContent = 'Limit how many times a bunk can do this';
+        ceilTogRow.appendChild(ceilTog); ceilTogRow.appendChild(ceilLbl);
+        container.appendChild(ceilTogRow);
+        ceilCb.onchange = () => { item.maxUsage = ceilCb.checked ? 1 : null; saveData(); rebuild(); updateSummary(); };
 
-        // Max count row
-        const row = document.createElement("div");
-        row.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:12px;";
-        row.innerHTML = '<span style="font-size:0.85rem;">Max times per bunk:</span>';
-        const numIn = document.createElement("input");
-        numIn.type = "number"; numIn.min = "1"; numIn.max = "50";
-        numIn.value = parseInt(item.maxUsage) || 1;
-        numIn.style.cssText = "width:60px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;";
-        numIn.onchange = () => {
-            item.maxUsage = Math.min(50, Math.max(1, parseInt(numIn.value) || 1));
-            numIn.value = item.maxUsage;
-            saveData();
-            updateNote();
-            updateSummary();
-        };
-        row.appendChild(numIn);
-        detailDiv.appendChild(row);
+        if (ceilEnabled) {
+            const ceilDetail = document.createElement('div');
+            ceilDetail.style.cssText = 'padding-left:12px; border-left:2px solid #147D91; margin-bottom:14px;';
 
-        // Period dropdown row
-        const periodRow = document.createElement("div");
-        periodRow.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:12px;";
-        periodRow.innerHTML = '<span style="font-size:0.85rem;">Reset period:</span>';
-        const periodSel = document.createElement("select");
-        periodSel.style.cssText = "padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;";
-        const periods = [
-            { value: 'half', label: 'Entire half (no reset)' },
-            { value: '1week', label: 'Every week' },
-            { value: '2weeks', label: 'Every 2 weeks' },
-            { value: '3weeks', label: 'Every 3 weeks' },
-            { value: '4weeks', label: 'Every 4 weeks' }
-        ];
-        periods.forEach(p => {
-            const opt = document.createElement("option");
-            opt.value = p.value; opt.textContent = p.label;
-            if ((item.maxUsagePeriod || 'half') === p.value) opt.selected = true;
-            periodSel.appendChild(opt);
-        });
-        periodSel.onchange = () => {
-            item.maxUsagePeriod = periodSel.value;
-            saveData();
-            updateNote();
-            updateSummary();
-        };
-        periodRow.appendChild(periodSel);
-        detailDiv.appendChild(periodRow);
+            const countRow = document.createElement('div');
+            countRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap;';
+            countRow.innerHTML = '<span style="font-size:0.85rem; color:#374151;">Max:</span>';
+            const countIn = document.createElement('input');
+            countIn.type = 'number'; countIn.min = '1'; countIn.max = '99'; countIn.value = parseInt(item.maxUsage) || 1;
+            countIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+            countIn.onchange = () => { item.maxUsage = Math.max(1, parseInt(countIn.value) || 1); saveData(); updateSummary(); };
 
-        // Explanation note
-        const note = document.createElement("div");
-        note.id = "max-usage-note";
-        note.style.cssText = "color:#6B7280; font-size:0.8rem; padding:10px; background:#f0f9fb; border-radius:8px; line-height:1.5;";
-        detailDiv.appendChild(note);
+            const periodSel = document.createElement('select');
+            periodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
+            [{ value:'half', label:'per half' }, { value:'1week', label:'per week' },
+             { value:'2weeks', label:'per 2 weeks' }, { value:'3weeks', label:'per 3 weeks' },
+             { value:'4weeks', label:'per 4 weeks' }].forEach(function(p) {
+                const opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
+                if ((item.maxUsagePeriod || 'half') === p.value) opt.selected = true;
+                periodSel.appendChild(opt);
+            });
+            periodSel.onchange = () => { item.maxUsagePeriod = periodSel.value; saveData(); updateSummary(); };
+            countRow.appendChild(countIn); countRow.appendChild(periodSel);
+            ceilDetail.appendChild(countRow);
 
-        const updateNote = () => {
-            const count = parseInt(item.maxUsage) || 1;
-            const period = item.maxUsagePeriod || 'half';
-            const periodTexts = {
-                'half': 'across the entire half. Resets when you start a new half.',
-                '1week': 'per week. Counter resets every Monday.',
-                '2weeks': 'per 2-week period. Counter resets every other Monday.',
-                '3weeks': 'per 3-week period.',
-                '4weeks': 'per 4-week (monthly) period.'
+            // per-grade toggle
+            const ceilPerGradeTogRow = document.createElement('div');
+            ceilPerGradeTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin:10px 0 6px 0;';
+            const ceilPgTog = document.createElement('label'); ceilPgTog.className = 'switch';
+            const ceilPgCb = document.createElement('input'); ceilPgCb.type = 'checkbox';
+            const hasGradeOverrides = Object.keys(item.maxUsagePerGrade || {}).length > 0;
+            ceilPgCb.checked = hasGradeOverrides;
+            const ceilPgSl = document.createElement('span'); ceilPgSl.className = 'slider';
+            ceilPgTog.appendChild(ceilPgCb); ceilPgTog.appendChild(ceilPgSl);
+            const ceilPgLbl = document.createElement('span');
+            ceilPgLbl.style.cssText = 'font-size:0.82rem; color:#374151;';
+            ceilPgLbl.textContent = 'Different max per grade';
+            ceilPerGradeTogRow.appendChild(ceilPgTog); ceilPerGradeTogRow.appendChild(ceilPgLbl);
+            ceilDetail.appendChild(ceilPerGradeTogRow);
+
+            const ceilGradeGrid = document.createElement('div');
+            ceilGradeGrid.style.display = hasGradeOverrides ? 'flex' : 'none';
+            ceilGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
+            const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            if (!item.maxUsagePerGrade) item.maxUsagePerGrade = {};
+            allDivs.forEach(function(div) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                const lbl = document.createElement('span');
+                lbl.style.cssText = 'font-size:0.82rem; color:#374151; flex:1;';
+                lbl.textContent = div;
+                const inp = document.createElement('input');
+                inp.type = 'number'; inp.min = '0'; inp.max = '99';
+                inp.placeholder = String(parseInt(item.maxUsage) || '—');
+                const gv = item.maxUsagePerGrade[div];
+                if (gv > 0) inp.value = gv;
+                inp.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.85rem;';
+                inp.onchange = () => {
+                    const v = parseInt(inp.value);
+                    if (v > 0) item.maxUsagePerGrade[div] = v;
+                    else delete item.maxUsagePerGrade[div];
+                    saveData(); updateSummary();
+                };
+                const clrBtn = document.createElement('button');
+                clrBtn.textContent = '✕'; clrBtn.title = 'Clear override';
+                clrBtn.style.cssText = 'background:none; border:none; color:#D1D5DB; cursor:pointer; font-size:0.8rem; padding:2px 4px; line-height:1;';
+                clrBtn.onmouseover = () => clrBtn.style.color = '#9CA3AF';
+                clrBtn.onmouseout = () => clrBtn.style.color = '#D1D5DB';
+                clrBtn.onclick = () => { inp.value = ''; delete item.maxUsagePerGrade[div]; saveData(); updateSummary(); };
+                row.appendChild(lbl); row.appendChild(inp); row.appendChild(clrBtn);
+                ceilGradeGrid.appendChild(row);
+            });
+            ceilPgCb.onchange = () => {
+                if (!ceilPgCb.checked) {
+                    item.maxUsagePerGrade = {};
+                    saveData(); updateSummary();
+                }
+                ceilGradeGrid.style.display = ceilPgCb.checked ? 'flex' : 'none';
+                ceilGradeGrid.style.flexDirection = 'column';
+                ceilGradeGrid.style.gap = '5px';
+                ceilGradeGrid.style.marginTop = '6px';
             };
-            const noteEl = detailDiv.querySelector('#max-usage-note');
-            if (noteEl) {
-                noteEl.innerHTML = 'Each bunk can be scheduled for <strong>' + count +
-                    '</strong> time' + (count > 1 ? 's' : '') + ' max ' +
-                    (periodTexts[period] || periodTexts['half']) +
-                    '<br><span style="font-size:0.75rem; color:#9CA3AF;">Tracked via rotation history.</span>';
-            }
-        };
-        updateNote();
-    };
-
-    cb.onchange = () => {
-        if (cb.checked) {
-            item.maxUsage = parseInt(item.maxUsage) || 1;
-        } else {
-            item.maxUsage = null;
+            ceilDetail.appendChild(ceilGradeGrid);
+            container.appendChild(ceilDetail);
         }
-        saveData();
-        renderDetails();
-        updateSummary();
-    };
 
-    container.appendChild(detailDiv);
-    renderDetails();
+        // ── B: MINIMUM (FLOOR) ────────────────────────────────────────────
+        const divider = document.createElement('div');
+        divider.style.cssText = 'border-top:1px solid #F3F4F6; margin:16px 0 14px 0;';
+        container.appendChild(divider);
+
+        const floorLabel = document.createElement('div');
+        floorLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
+        floorLabel.textContent = 'Minimum (floor)';
+        container.appendChild(floorLabel);
+
+        const minF = parseInt(item.minFrequency) || 0;
+        const minEnabled = minF > 0;
+
+        const minTogRow = document.createElement('div');
+        minTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:' + (minEnabled ? '12px' : '4px') + ';';
+        const minTog = document.createElement('label'); minTog.className = 'switch';
+        const minCb = document.createElement('input'); minCb.type = 'checkbox'; minCb.checked = minEnabled;
+        const minSl = document.createElement('span'); minSl.className = 'slider';
+        minTog.appendChild(minCb); minTog.appendChild(minSl);
+        const minLbl = document.createElement('span');
+        minLbl.style.cssText = 'font-size:0.88rem; color:#374151;';
+        minLbl.textContent = 'Require a minimum frequency for every bunk';
+        minTogRow.appendChild(minTog); minTogRow.appendChild(minLbl);
+        container.appendChild(minTogRow);
+        minCb.onchange = () => { item.minFrequency = minCb.checked ? 1 : null; saveData(); rebuild(); updateSummary(); };
+
+        if (minEnabled) {
+            const minDetail = document.createElement('div');
+            minDetail.style.cssText = 'padding-left:12px; border-left:2px solid #0ea5e9; margin-bottom:4px;';
+
+            const minRow = document.createElement('div');
+            minRow.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px;';
+            minRow.innerHTML = '<span style="font-size:0.85rem; color:#374151;">At least:</span>';
+            const minIn = document.createElement('input');
+            minIn.type = 'number'; minIn.min = '1'; minIn.max = '14'; minIn.value = minF || 1;
+            minIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+            const minSuffix = document.createElement('span');
+            minSuffix.style.cssText = 'font-size:0.85rem; color:#374151;';
+            minSuffix.textContent = 'time(s) per';
+            const minPeriodSel = document.createElement('select');
+            minPeriodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
+            [{ value:'week', label:'week' }, { value:'2weeks', label:'2 weeks' }].forEach(function(p) {
+                const opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
+                if ((item.minFrequencyPeriod || 'week') === p.value) opt.selected = true;
+                minPeriodSel.appendChild(opt);
+            });
+            minIn.onchange = () => { item.minFrequency = Math.max(1, parseInt(minIn.value) || 1); saveData(); updateSummary(); };
+            minPeriodSel.onchange = () => { item.minFrequencyPeriod = minPeriodSel.value; saveData(); updateSummary(); };
+            minRow.appendChild(minIn); minRow.appendChild(minSuffix); minRow.appendChild(minPeriodSel);
+            minDetail.appendChild(minRow);
+
+            const minNote = document.createElement('div');
+            minNote.style.cssText = 'font-size:0.78rem; color:#0369a1; background:#e0f2fe; padding:8px 10px; border-radius:6px; line-height:1.5; margin-bottom:10px;';
+            minNote.innerHTML = 'The scheduler will actively push to get every bunk this activity at least <strong>' +
+                (item.minFrequency || 1) + 'x</strong> ' +
+                (item.minFrequencyPeriod === '2weeks' ? 'every 2 weeks' : 'per week') + '.';
+            minDetail.appendChild(minNote);
+
+            // per-grade min toggle
+            const minPerGradeTogRow = document.createElement('div');
+            minPerGradeTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin:4px 0 6px 0;';
+            const minPgTog = document.createElement('label'); minPgTog.className = 'switch';
+            const minPgCb = document.createElement('input'); minPgCb.type = 'checkbox';
+            const hasMinGradeOverrides = Object.keys(item.minFrequencyPerGrade || {}).length > 0;
+            minPgCb.checked = hasMinGradeOverrides;
+            const minPgSl = document.createElement('span'); minPgSl.className = 'slider';
+            minPgTog.appendChild(minPgCb); minPgTog.appendChild(minPgSl);
+            const minPgLbl = document.createElement('span');
+            minPgLbl.style.cssText = 'font-size:0.82rem; color:#374151;';
+            minPgLbl.textContent = 'Different minimum per grade';
+            minPerGradeTogRow.appendChild(minPgTog); minPerGradeTogRow.appendChild(minPgLbl);
+            minDetail.appendChild(minPerGradeTogRow);
+
+            const minGradeGrid = document.createElement('div');
+            minGradeGrid.style.display = hasMinGradeOverrides ? 'flex' : 'none';
+            minGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
+            const minAllDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            if (!item.minFrequencyPerGrade) item.minFrequencyPerGrade = {};
+            minAllDivs.forEach(function(div) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                const lbl = document.createElement('span');
+                lbl.style.cssText = 'font-size:0.82rem; color:#374151; flex:1;';
+                lbl.textContent = div;
+                const inp = document.createElement('input');
+                inp.type = 'number'; inp.min = '0'; inp.max = '99';
+                inp.placeholder = String(parseInt(item.minFrequency) || '—');
+                const gv = item.minFrequencyPerGrade[div];
+                if (gv > 0) inp.value = gv;
+                inp.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.85rem;';
+                inp.onchange = () => {
+                    const v = parseInt(inp.value);
+                    if (v > 0) item.minFrequencyPerGrade[div] = v;
+                    else delete item.minFrequencyPerGrade[div];
+                    saveData(); updateSummary();
+                };
+                const clrBtn = document.createElement('button');
+                clrBtn.textContent = '✕'; clrBtn.title = 'Clear override';
+                clrBtn.style.cssText = 'background:none; border:none; color:#D1D5DB; cursor:pointer; font-size:0.8rem; padding:2px 4px; line-height:1;';
+                clrBtn.onmouseover = () => clrBtn.style.color = '#9CA3AF';
+                clrBtn.onmouseout = () => clrBtn.style.color = '#D1D5DB';
+                clrBtn.onclick = () => { inp.value = ''; delete item.minFrequencyPerGrade[div]; saveData(); updateSummary(); };
+                row.appendChild(lbl); row.appendChild(inp); row.appendChild(clrBtn);
+                minGradeGrid.appendChild(row);
+            });
+            minPgCb.onchange = () => {
+                if (!minPgCb.checked) {
+                    item.minFrequencyPerGrade = {};
+                    saveData(); updateSummary();
+                }
+                minGradeGrid.style.display = minPgCb.checked ? 'flex' : 'none';
+                minGradeGrid.style.flexDirection = 'column';
+                minGradeGrid.style.gap = '5px';
+                minGradeGrid.style.marginTop = '6px';
+            };
+            minDetail.appendChild(minGradeGrid);
+            container.appendChild(minDetail);
+        }
+    }
+
+    rebuild();
     return container;
 }
-
 // =========================================================================
 // RENDER: Sharing — toggle pattern matching fields.js
 // =========================================================================
@@ -1256,114 +1390,16 @@ function renderWeatherSettings(item) {
     }
     return container;
 }
-function renderDurationSettings(item) {
-    const container = document.createElement("div");
-    const hasDur = (parseInt(item.duration) || 0) > 0;
-    
-    container.innerHTML = '<div style="margin-bottom:16px;">'
-        + '<p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Set how long this activity takes when scheduled. The scheduler will use this duration instead of the skeleton block\'s default time.</p>'
-        + '<div style="background:' + (hasDur ? '#eff6ff' : '#f9fafb') + '; border:1px solid ' + (hasDur ? '#bfdbfe' : '#e5e7eb') + '; border-radius:10px; padding:14px;">'
-        + '<div style="display:flex; align-items:center; gap:12px; margin-bottom:' + (hasDur ? '12px' : '0') + ';">'
-        + '<div style="flex:1;">'
-        + '<div style="font-weight:600; color:' + (hasDur ? '#1e40af' : '#374151') + ';">' + (hasDur ? item.duration + ' minutes' : 'Not Set') + '</div>'
-        + '<div style="font-size:0.8rem; color:' + (hasDur ? '#3b82f6' : '#6b7280') + ';">' + (hasDur ? 'Scheduler will use this duration' : 'Uses skeleton block duration') + '</div>'
-        + '</div>'
-        + '<label class="switch"><input type="checkbox" id="duration-toggle" ' + (hasDur ? 'checked' : '') + '><span class="slider"></span></label>'
-        + '</div>'
-        + '<div id="duration-config" style="display:' + (hasDur ? 'block' : 'none') + ';">'
-        + '<div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #bfdbfe; margin-top:8px;">'
-        + '<label style="font-size:0.85rem;">Duration:</label>'
-        + '<input type="number" id="duration-input" min="5" max="180" step="5" value="' + (item.duration || 30) + '" style="width:70px; padding:6px 10px; border:1px solid #bfdbfe; border-radius:6px; text-align:center;">'
-        + '<span style="font-size:0.85rem; color:#64748b;">minutes</span>'
-        + '</div></div></div></div>';
-    
-    const tog = container.querySelector("#duration-toggle");
-    if (tog) {
-        tog.addEventListener("change", function() {
-            const cfg = container.querySelector("#duration-config");
-            if (this.checked) {
-                cfg.style.display = "block";
-                item.duration = parseInt(container.querySelector("#duration-input").value, 10) || 30;
-            } else {
-                cfg.style.display = "none";
-                item.duration = null;
-            }
-            saveData();
-            const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
-            if (s) s.textContent = summaryDuration(item);
-        });
-    }
-    
-    const di = container.querySelector("#duration-input");
-    if (di) {
-        di.addEventListener("change", function() {
-            const v = parseInt(this.value, 10);
-            if (!isNaN(v) && v >= 5 && v <= 180) {
-                item.duration = v;
-                saveData();
-                const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
-                if (s) s.textContent = summaryDuration(item);
-            }
-        });
-    }
-    
-    return container;
-}
-   
 function renderPrepDurationSettings(item) {
     const container = document.createElement("div");
-    const hp = (item.prepDuration || 0) > 0;
-    container.innerHTML =
-        '<div style="margin-bottom:16px;">' +
-        '<p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Some activities need prep time. Example: <strong>Skits</strong> = 30 min practice in the Gym + 60 min performance in the Lunchroom.</p>' +
-        '<div style="background:' + (hp ? '#faf5ff' : '#f9fafb') + '; border:1px solid ' + (hp ? '#d8b4fe' : '#e5e7eb') + '; border-radius:10px; padding:14px;">' +
-        '<div style="display:flex; align-items:center; gap:12px; margin-bottom:' + (hp ? '12px' : '0') + ';">' +
-        '<div style="flex:1;"><div style="font-weight:600; color:' + (hp ? '#6b21a8' : '#374151') + ';">' + (hp ? 'Has Prep Phase' : 'Single Phase') + '</div>' +
-        '<div style="font-size:0.8rem; color:' + (hp ? '#7c3aed' : '#6b7280') + ';">' + (hp ? item.prepDuration + ' min prep + main' : 'No prep needed') + '</div></div>' +
-        '<label class="switch"><input type="checkbox" id="prep-duration-toggle" ' + (hp ? 'checked' : '') + '><span class="slider"></span></label></div>' +
-        '<div id="prep-duration-config" style="display:' + (hp ? 'block' : 'none') + ';">' +
-        '<div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #e9d5ff; margin-bottom:10px;">' +
-        '<label style="font-size:0.85rem;">Prep time:</label>' +
-        '<input type="number" id="prep-duration-input" min="5" max="120" step="5" value="' + (item.prepDuration || 30) + '" style="width:70px; padding:6px 10px; border:1px solid #d8b4fe; border-radius:6px; text-align:center;">' +
-        '<span style="font-size:0.85rem; color:#64748b;">minutes</span></div>' +
-        '<div style="padding:10px; background:white; border-radius:8px; border:1px solid #e9d5ff;">' +
-        '<div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><span style="font-size:1rem;">📍</span>' +
-        '<label style="font-size:0.85rem; font-weight:600; color:#6b21a8;">Prep Location</label></div>' +
-        '<p style="font-size:0.8rem; color:#7c3aed; margin:0 0 8px 0;">Where does the prep phase happen? If different from the main location (' + escapeHtml(item.location || 'none set') + '), select it here.</p>' +
-        '<select id="prep-location-select" style="width:100%; padding:8px 10px; border:1px solid #d8b4fe; border-radius:8px; font-size:0.9rem; background:white; cursor:pointer;"><option value="">-- Same as main location --</option></select>' +
-        (item.prepLocation ? '<div style="margin-top:8px; padding:8px 12px; background:#faf5ff; border:1px solid #d8b4fe; border-radius:8px; font-size:0.8rem; color:#6b21a8;">⚡ Prep in <strong>' + escapeHtml(item.prepLocation) + '</strong>, then main in <strong>' + escapeHtml(item.location || 'assigned field') + '</strong></div>' : '') +
-        '</div></div></div></div>';
-    // Populate prep location dropdown
-    const sel = container.querySelector("#prep-location-select");
-    if (sel) {
-        const sf = window.loadGlobalSettings?.() || {};
-        const allFields = sf.app1?.fields || sf.fields || window.getFields?.() || [];
-        if (allFields.length > 0) {
-            const fg = document.createElement("optgroup"); fg.label = "Fields";
-            allFields.sort((a, b) => (a.name || '').localeCompare(b.name || '')).forEach(f => {
-                if (!f.name) return;
-                const o = document.createElement("option"); o.value = f.name;
-                o.textContent = f.name + (f.rainyDayAvailable ? ' 🌧' : '');
-                if (item.prepLocation === f.name) o.selected = true;
-                fg.appendChild(o);
-            });
-            sel.appendChild(fg);
-        }
-        sel.addEventListener("change", function () {
-            item.prepLocation = this.value || null; saveData();
-            const parent = container.parentElement;
-            if (parent) { parent.innerHTML = ''; parent.appendChild(renderPrepDurationSettings(item)); }
-            updateSummary();
-        });
-    }
-    const updateSummary = () => { const s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if (s) s.textContent = summaryPrepDuration(item); };
+    const hp = (item.prepDuration||0) > 0;
+    container.innerHTML = '<div style="margin-bottom:16px;"><p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Some activities need prep time. Example: <strong>Skits</strong> = 30min practice + 60min performance.</p><div style="background:' + (hp?'#faf5ff':'#f9fafb') + '; border:1px solid ' + (hp?'#d8b4fe':'#e5e7eb') + '; border-radius:10px; padding:14px;"><div style="display:flex; align-items:center; gap:12px; margin-bottom:' + (hp?'12px':'0') + ';"><div style="flex:1;"><div style="font-weight:600; color:' + (hp?'#6b21a8':'#374151') + ';">' + (hp?'Has Prep Phase':'Single Phase') + '</div><div style="font-size:0.8rem; color:' + (hp?'#7c3aed':'#6b7280') + ';">' + (hp?item.prepDuration+' min prep + main':'No prep needed') + '</div></div><label class="switch"><input type="checkbox" id="prep-duration-toggle" ' + (hp?'checked':'') + '><span class="slider"></span></label></div><div id="prep-duration-config" style="display:' + (hp?'block':'none') + ';"><div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #e9d5ff;"><label style="font-size:0.85rem;">Prep time:</label><input type="number" id="prep-duration-input" min="5" max="120" step="5" value="' + (item.prepDuration||30) + '" style="width:70px; padding:6px 10px; border:1px solid #d8b4fe; border-radius:6px; text-align:center;"><span style="font-size:0.85rem; color:#64748b;">minutes</span></div></div></div></div>';
     const pt = container.querySelector("#prep-duration-toggle");
-    if (pt) { pt.addEventListener("change", function () { const c = container.querySelector("#prep-duration-config"); if (this.checked) { c.style.display = "block"; item.prepDuration = parseInt(container.querySelector("#prep-duration-input").value, 10) || 30; } else { c.style.display = "none"; item.prepDuration = 0; item.prepLocation = null; } saveData(); updateSummary(); }); }
+    if (pt) { pt.addEventListener("change", function() { const c = container.querySelector("#prep-duration-config"); if(this.checked){c.style.display="block";item.prepDuration=parseInt(container.querySelector("#prep-duration-input").value,10)||30;}else{c.style.display="none";item.prepDuration=0;} saveData(); const s=container.closest('.detail-section')?.querySelector('.detail-section-summary'); if(s)s.textContent=(item.prepDuration>0)?item.prepDuration+'min prep':'None'; }); }
     const di = container.querySelector("#prep-duration-input");
-    if (di) { di.addEventListener("change", function () { const v = parseInt(this.value, 10); if (!isNaN(v) && v >= 5 && v <= 120) { item.prepDuration = v; saveData(); updateSummary(); } }); }
+    if (di) { di.addEventListener("change", function() { const v=parseInt(this.value,10); if(!isNaN(v)&&v>=5&&v<=120){item.prepDuration=v;saveData();const s=container.closest('.detail-section')?.querySelector('.detail-section-summary');if(s)s.textContent=v+'min prep';} }); }
     return container;
 }
-
 
 // =========================================================================
 // ★ v3.5: RENDER Multi-Part Special Settings
@@ -1442,105 +1478,33 @@ function renderMultiPartSettings(item) {
         daysRow.lastElementChild.insertAdjacentHTML('afterend', '<span style="font-size:0.8rem; color:#6B7280;">days before the scheduler starts pushing the next part</span>');
         configPanel.appendChild(daysRow);
 
-        // Ensure parts array matches totalParts
-        if (!Array.isArray(mp.parts)) mp.parts = [];
-        while (mp.parts.length < mp.totalParts) mp.parts.push({ location: null, duration: null });
-        if (mp.parts.length > mp.totalParts) mp.parts.length = mp.totalParts;
-
-        // Per-part configuration
-        var partsSection = document.createElement("div");
-        partsSection.style.cssText = "border:1px solid #E5E7EB; border-radius:10px; padding:14px; background:#FAFAFA; margin-bottom:14px;";
-        partsSection.innerHTML = '<div style="font-weight:600; font-size:0.85rem; margin-bottom:4px;">Part Configuration</div><div style="font-size:0.75rem; color:#6B7280; margin-bottom:12px;">Set a different location or duration for each part. Leave blank to use the activity defaults.</div>';
-
-        var sf = window.loadGlobalSettings?.() || {};
-        var allFields = sf.app1?.fields || [];
-        var fieldOptions = '<option value="">-- Same as main --</option>';
-        allFields.sort(function(a, b) { return (a.name || '').localeCompare(b.name || ''); }).forEach(function(f) {
-            if (f.name) fieldOptions += '<option value="' + escapeHtml(f.name) + '">' + escapeHtml(f.name) + '</option>';
-        });
-
-        for (var i = 0; i < mp.totalParts; i++) {
-            (function(partIdx) {
-                var part = mp.parts[partIdx] || { location: null, duration: null };
-                var partRow = document.createElement("div");
-                partRow.style.cssText = "display:flex; align-items:center; gap:10px; padding:10px 12px; margin-bottom:" + (partIdx < mp.totalParts - 1 ? "6px" : "0") + "; border-radius:8px; background:#fff; border:1px solid #E5E7EB; flex-wrap:wrap;";
-
-                var badge = document.createElement("span");
-                badge.style.cssText = "width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.75rem; flex-shrink:0; color:#fff; background:#147D91;";
-                badge.textContent = partIdx + 1;
-                partRow.appendChild(badge);
-
-                var nameLabel = document.createElement("span");
-                nameLabel.style.cssText = "font-size:0.85rem; color:#374151; font-weight:500; min-width:80px;";
-                nameLabel.textContent = escapeHtml(item.name) + " " + (partIdx + 1) + "/" + mp.totalParts;
-                partRow.appendChild(nameLabel);
-
-                // Location dropdown
-                var locWrap = document.createElement("div");
-                locWrap.style.cssText = "display:flex; align-items:center; gap:4px;";
-                locWrap.innerHTML = '<span style="font-size:0.75rem; color:#6B7280;">📍</span>';
-                var locSel = document.createElement("select");
-                locSel.style.cssText = "padding:4px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.8rem; background:white; max-width:140px;";
-                locSel.innerHTML = fieldOptions;
-                if (part.location) locSel.value = part.location;
-                locSel.onchange = function() {
-                    mp.parts[partIdx].location = this.value || null;
-                    item.multiPart = mp;
-                    saveData();
-                    updateSummary();
-                };
-                locWrap.appendChild(locSel);
-                partRow.appendChild(locWrap);
-
-                // Duration input
-                var durWrap = document.createElement("div");
-                durWrap.style.cssText = "display:flex; align-items:center; gap:4px;";
-                durWrap.innerHTML = '<span style="font-size:0.75rem; color:#6B7280;">⏱</span>';
-                var durInp = document.createElement("input");
-                durInp.type = "number";
-                durInp.min = "5";
-                durInp.max = "240";
-                durInp.step = "5";
-                durInp.placeholder = "default";
-                durInp.value = part.duration || "";
-                durInp.style.cssText = "width:60px; padding:4px 6px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.8rem; text-align:center;";
-                durInp.onchange = function() {
-                    var v = parseInt(this.value, 10);
-                    if (this.value === "" || isNaN(v) || v <= 0) {
-                        mp.parts[partIdx].duration = null;
-                        this.value = "";
-                    } else {
-                        mp.parts[partIdx].duration = Math.min(240, Math.max(5, v));
-                        this.value = mp.parts[partIdx].duration;
-                    }
-                    item.multiPart = mp;
-                    saveData();
-                };
-                durWrap.appendChild(durInp);
-                var minLabel = document.createElement("span");
-                minLabel.style.cssText = "font-size:0.75rem; color:#6B7280;";
-                minLabel.textContent = "min";
-                durWrap.appendChild(minLabel);
-                partRow.appendChild(durWrap);
-
-                // Prerequisite hint
-                if (partIdx === 0) {
-                    partRow.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.65rem; color:#6B7280;">No prereq</span>');
-                } else {
-                    partRow.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.65rem; color:#92400e;">After part ' + partIdx + '</span>');
-                }
-
-                partsSection.appendChild(partRow);
-
-                if (partIdx < mp.totalParts - 1) {
-                    var arrow = document.createElement("div");
-                    arrow.style.cssText = "text-align:center; color:#9CA3AF; font-size:0.7rem; margin:2px 0;";
-                    arrow.textContent = "\u2193 " + (mp.daysBetween || 3) + " day" + ((mp.daysBetween || 3) > 1 ? "s" : "") + " gap";
-                    partsSection.appendChild(arrow);
-                }
-            })(i);
+        // Preview
+        var preview = document.createElement("div");
+        preview.style.cssText = "border:1px solid #E5E7EB; border-radius:10px; padding:14px; background:#FAFAFA; margin-bottom:14px;";
+        preview.innerHTML = '<div style="font-weight:600; font-size:0.85rem; margin-bottom:10px;">Schedule Preview</div>';
+        for (var i = 1; i <= mp.totalParts; i++) {
+            var step = document.createElement("div");
+            step.style.cssText = "display:flex; align-items:center; gap:10px; padding:8px 12px; margin-bottom:" + (i < mp.totalParts ? "4px" : "0") + "; border-radius:8px; background:#fff; border:1px solid #E5E7EB;";
+            var badge = document.createElement("span");
+            badge.style.cssText = "width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.75rem; flex-shrink:0; color:#fff; background:#147D91;";
+            badge.textContent = i;
+            step.appendChild(badge);
+            var label = document.createElement("span");
+            label.style.cssText = "font-size:0.85rem; color:#374151;";
+            label.textContent = escapeHtml(item.name) + " " + i + "/" + mp.totalParts;
+            step.appendChild(label);
+            if (i === 1) { step.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.7rem; color:#6B7280;">No prerequisite</span>'); }
+            else { step.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.7rem; color:#92400e;">Requires ' + (i-1) + '/' + mp.totalParts + ' done</span>'); }
+            preview.appendChild(step);
+            if (i < mp.totalParts) {
+                var arrow = document.createElement("div");
+                arrow.style.cssText = "text-align:center; color:#9CA3AF; font-size:0.75rem; margin:2px 0;";
+                arrow.textContent = "\u2193 " + (mp.daysBetween || 3) + " day" + ((mp.daysBetween || 3) > 1 ? "s" : "") + " gap";
+                preview.appendChild(arrow);
+            }
         }
-        configPanel.appendChild(partsSection);
+        configPanel.appendChild(preview);
+
         // Info box
         var info = document.createElement("div");
         info.style.cssText = "padding:10px 14px; border-radius:8px; font-size:0.8rem; line-height:1.5; background:#e6f4f7; border:1px solid #b2dce6; color:#0A4A56;";
@@ -1592,41 +1556,6 @@ function propagateMultiPartRename(oldName, newName) {
 // =========================================================================
 // Add/Delete, Cleanup, Helpers
 // =========================================================================
-function renderDayAvailability(item) {
-    var container = document.createElement("div");
-    var updateSummary = function() { var s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if (s) s.textContent = summaryDays(item); };
-    var desc = document.createElement("p"); desc.style.cssText = "font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;";
-    desc.textContent = "Select which days this activity is available. Leave all unchecked for every day. When specific days are set, the auto builder treats this as a scarce activity and prioritizes scheduling it.";
-    container.appendChild(desc);
-    var allDays = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-    var grid = document.createElement("div"); grid.style.cssText = "display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:8px; margin-bottom:12px;";
-    function renderChips() {
-        grid.innerHTML = "";
-        var sel = Array.isArray(item.availableDays) ? item.availableDays : [];
-        allDays.forEach(function(day) {
-            var active = sel.map(function(d){return d.toLowerCase();}).includes(day.toLowerCase());
-            var chip = document.createElement("button"); chip.type = "button"; chip.textContent = day;
-            chip.style.cssText = "padding:10px 14px; border-radius:10px; font-size:0.85rem; font-weight:500; cursor:pointer; transition:all 0.15s; text-align:center; border:1.5px solid " + (active ? "#0891b2" : "#E5E7EB") + "; background:" + (active ? "linear-gradient(135deg, #e0f7fa, #e6f4f7)" : "#fff") + "; color:" + (active ? "#0A4A56" : "#6b7280") + ";";
-            chip.onmouseenter = function() { chip.style.borderColor = '#0891b2'; chip.style.transform = 'translateY(-1px)'; };
-            chip.onmouseleave = function() { var a2 = Array.isArray(item.availableDays) && item.availableDays.map(function(d){return d.toLowerCase();}).includes(day.toLowerCase()); chip.style.borderColor = a2 ? '#0891b2' : '#E5E7EB'; chip.style.transform = 'translateY(0)'; };
-            chip.onclick = function() {
-                if (!item.availableDays) item.availableDays = [];
-                var idx = item.availableDays.findIndex(function(d){return d.toLowerCase() === day.toLowerCase();});
-                if (idx >= 0) item.availableDays.splice(idx, 1); else item.availableDays.push(day);
-                if (item.availableDays.length === 0 || item.availableDays.length === 7) item.availableDays = null;
-                saveData(); renderChips(); updateSummary();
-            };
-            grid.appendChild(chip);
-        });
-    }
-    renderChips();
-    container.appendChild(grid);
-    var info = document.createElement("div"); info.style.cssText = "padding:10px 14px; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; font-size:0.8rem; color:#92400e;";
-    info.innerHTML = '<strong>\uD83D\uDCA1 Tip:</strong> Activities with specific day restrictions are treated as <em>scarce</em> by the auto builder \u2014 they get priority scheduling with bunk rotation to ensure fair access.';
-    container.appendChild(info);
-    return container;
-}
-
 function addSpecial() { if(!window.AccessControl?.checkSetupAccess?.('add special activities'))return; if(!addSpecialInput)return; const n=addSpecialInput.value.trim(); if(!n)return; if(specialActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())||rainyDayActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())){alert("Already exists.");return;} specialActivities.push(createDefaultActivity(n)); addSpecialInput.value=""; saveData(); selectedItemId='special-'+n; renderMasterList(); renderRainyDayList(); renderDetailPane(); }
 function addRainyDayActivity() { if(!window.AccessControl?.checkSetupAccess?.('add rainy day activities'))return; if(!addRainyDayInput)return; const n=addRainyDayInput.value.trim(); if(!n)return; if(specialActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())||rainyDayActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())){alert("Already exists.");return;} const a=createDefaultActivity(n); a.rainyDayExclusive=true; a.rainyDayOnly=true; a.isIndoor=true; rainyDayActivities.push(a); addRainyDayInput.value=""; saveData(); selectedItemId='special-'+n; renderMasterList(); renderRainyDayList(); renderDetailPane(); }
 
@@ -1846,21 +1775,6 @@ window.getMultiPartDisplayLabel = function(bunkName, activityName) {
     var completed = window.getBunkCompletionCount(bunkName, activityName);
     var partInCycle = (completed % mp.totalParts) + 1;
     return activityName + ' ' + partInCycle + '/' + mp.totalParts;
-};
-
-window.getMultiPartPartConfig = function(bunkName, activityName) {
-    var mp = window.getMultiPartConfig?.(activityName);
-    if (!mp || !Array.isArray(mp.parts) || mp.parts.length === 0) return null;
-    var completed = window.getBunkCompletionCount(bunkName, activityName);
-    var partIdx = completed % mp.totalParts;
-    var partCfg = mp.parts[partIdx];
-    if (!partCfg) return null;
-    return {
-        partNumber: partIdx + 1,
-        totalParts: mp.totalParts,
-        location: partCfg.location || null,
-        duration: partCfg.duration || null
-    };
 };
 
 console.log("[SPECIAL_ACTIVITIES] Module v3.7 loaded (multi-part: single activity, N parts)");
