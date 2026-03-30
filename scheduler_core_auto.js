@@ -1637,18 +1637,52 @@
                     }
                 }
 
-                // Register in resource tracker
+                // ★ Swim fallback: if MRC-narrowed window failed, retry with full layer window.
+                // MRC is a preference for pool exclusivity staggering, not a hard constraint.
+                // Better to have swim at a non-ideal time than no swim at all.
+                if (!didPlace && need.type === 'swim' && need.layer) {
+                    const fullWinStart = Math.max(need.layer.startMin || 0, gradeStart);
+                    const fullWinEnd = Math.min(need.layer.endMin || 1440, gradeEnd);
+                    // Only retry if full window is actually wider than what we tried
+                    if (fullWinEnd - fullWinStart > need.windowEnd - need.windowStart) {
+                        const remaining = needs.slice(i + 1);
+                        const fullGaps = getGaps(placed)
+                            .map(g => ({ start: Math.max(g.start, fullWinStart), end: Math.min(g.end, fullWinEnd), origStart: g.start, origEnd: g.end }))
+                            .filter(g => g.end - g.start >= need.dMin)
+                            .sort((a, b) => (b.end - b.start) - (a.end - a.start));
+                        for (const gap of fullGaps) {
+                            for (let t = gap.start; t <= gap.end - need.dMin; t += 5) {
+                                if (!canUsePoolAtTime(grade, t, t + need.dMin)) continue;
+                                const beforeRes = t - gap.origStart;
+                                const afterRes = gap.origEnd - (t + need.dMin);
+                                // Relaxed residual: only reject truly tiny (1-5 min) gaps
+                                if (beforeRes > 0 && beforeRes <= 5) continue;
+                                if (afterRes > 0 && afterRes <= 5) continue;
+                                const tempBlock = { startMin: t, endMin: t + need.dMin, type: 'swim', event: need.event };
+                                if (canFitRemaining([...placed, tempBlock], remaining)) {
+                                    placed.push({ startMin: t, endMin: t + need.dMin, ...need, _final: true });
+                                    didPlace = true; break;
+                                }
+                            }
+                            if (didPlace) break;
+                        }
+                    }
+                }
+
+                // ★ Register in cross-grade tracker AND special capacity tracker
                 if (didPlace) {
-                    const last = placed[placed.length - 1];
-                    registerCrossGrade(grade, need.type, last.startMin, last.endMin, need.event);
+                    const lastPlaced = placed[placed.length - 1];
+                    registerCrossGrade(grade, need.type, lastPlaced.startMin, lastPlaced.endMin, need.event);
                     if (need.type === 'special' && need._assignedSpecial) {
-                        // ★ v4.0: Register with dMax (worst-case) so expand can't cause conflicts
-                        const worstEnd = last.startMin + (need.dMax || need.dMin);
-                        registerSpecialUsage(need._assignedSpecial, grade, last.startMin, worstEnd);
+                        // ★ Register with dMax as worst-case end — the expand phase may
+                        // stretch this block up to dMax, so reserve the full range now
+                        // to prevent other grades from placing overlapping specials.
+                        const worstCaseEnd = lastPlaced.startMin + (need.dMax || need.dMin || (lastPlaced.endMin - lastPlaced.startMin));
+                        registerSpecialUsage(need._assignedSpecial, grade, lastPlaced.startMin, worstCaseEnd);
                     }
                     if (need.type === 'swim') {
-                        const worstEnd = last.startMin + (need.dMax || need.dMin);
-                        registerPoolUsage(grade, last.startMin, worstEnd);
+                        const worstCaseEnd = lastPlaced.startMin + (need.dMax || need.dMin);
+                        registerPoolUsage(grade, lastPlaced.startMin, worstCaseEnd);
                     }
                 }
             }
