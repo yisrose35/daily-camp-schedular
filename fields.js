@@ -457,11 +457,19 @@ function saveData(){
             available: f.available !== false,
             
             // ★ Sharing rules - ensure complete structure
-            sharableWith: {
-                type: f.sharableWith?.type || 'not_sharable',
-                divisions: Array.isArray(f.sharableWith?.divisions) ? f.sharableWith.divisions : [],
-                capacity: parseInt(f.sharableWith?.capacity) || (f.sharableWith?.type === 'not_sharable' ? 1 : 2)
-            },
+            sharableWith: (() => {
+                const raw = f.sharableWith?.type || 'not_sharable';
+                const divs = Array.isArray(f.sharableWith?.divisions) ? f.sharableWith.divisions : [];
+                // Normalize: 'custom' with empty divisions = same_division
+                let type = raw;
+                if (type === 'custom' && divs.length === 0) type = 'same_division';
+                if (type === 'all') type = 'same_division';
+                return {
+                    type,
+                    divisions: type === 'custom' ? divs : [],
+                    capacity: parseInt(f.sharableWith?.capacity) || (type === 'not_sharable' ? 1 : 2)
+                };
+            })(),
             
             // ★ Access restrictions - ensure complete structure (v3.0: usePriority)
             // ★ v3.2 FIX: Auto-disable if enabled but no divisions selected (prevents silent blocking)
