@@ -755,8 +755,11 @@
         function isFieldAvailable(fieldName, startMin, endMin, bunk, grade) {
             const ledger = fieldLedger[fieldName];
             if (!ledger) return false;
+
+            // Rainy: no outdoor fields
             if (isRainy && !ledger.isIndoor) return false;
 
+            // Time rules
             const timeOk = ledger.timeRules.some(rule => {
                 if (rule.startMin > startMin || rule.endMin < endMin) return false;
                 if (rule.divisions && !rule.divisions.includes(grade)) return false;
@@ -764,20 +767,37 @@
             });
             if (!timeOk) return false;
 
-            const ol = ledger.claims.filter(c => c.startMin < endMin && c.endMin > startMin);
-            if (ol.length >= ledger.capacity) return false;
-            if (ledger.shareType === 'not_sharable' && ol.length > 0) return false;
-            if (ledger.shareType === 'same_division' && ol.some(c => c.grade !== grade)) return false;
+            // Capacity
+            const overlapping = ledger.claims.filter(c => c.startMin < endMin && c.endMin > startMin);
+            if (overlapping.length >= ledger.capacity) return false;
+
+            // Sharing rules
+            if (ledger.shareType === 'not_sharable' && overlapping.length > 0) return false;
+            if (ledger.shareType === 'same_division') {
+                if (overlapping.some(c => c.grade !== grade)) return false;
+            }
             if (ledger.shareType === 'custom') {
                 const allowedDivs = ledger.allowedDivisions || [];
                 if (allowedDivs.length > 0) {
-                    if (ol.some(c => c.grade !== grade && !allowedDivs.includes(c.grade))) return false;
-                    if (ol.length > 0 && !allowedDivs.includes(grade)) return false;
+                    if (overlapping.some(c => c.grade !== grade && !allowedDivs.includes(c.grade))) return false;
+                    if (overlapping.length > 0 && !allowedDivs.includes(grade)) return false;
                 } else {
-                    // Empty allowed list = treat as same_division
-                    if (ol.some(c => c.grade !== grade)) return false;
+                    if (overlapping.some(c => c.grade !== grade)) return false;
                 }
             }
+
+            // ★ EXACT TIME MATCH: Bunks sharing a field must start and end together.
+            // No mid-game joins or early departures. If any same-grade claim exists
+            // on this field with overlapping time, it must have identical start/end.
+            if (overlapping.length > 0 && ledger.capacity > 1) {
+                const sameGradeOverlaps = overlapping.filter(c => c.grade === grade);
+                if (sameGradeOverlaps.length > 0) {
+                    if (sameGradeOverlaps.some(c => c.startMin !== startMin || c.endMin !== endMin)) {
+                        return false;
+                    }
+                }
+            }
+
             return true;
         }
 
