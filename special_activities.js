@@ -548,13 +548,100 @@ function summaryMultiPart(item) {
 }
   function renderDurationSettings(item) {
     var container = document.createElement('div');
+    var activityName = item.name;
     
-    // ★ Always get the LIVE item from the current array, not the stale closure
     function getLiveItem() {
-        var found = specialActivities.find(function(s) { return s.name === item.name; });
-        if (!found) found = rainyDayActivities.find(function(s) { return s.name === item.name; });
+        var found = specialActivities.find(function(s) { return s.name === activityName; });
+        if (!found) found = rainyDayActivities.find(function(s) { return s.name === activityName; });
         return found || item;
     }
+    
+    function persistDuration(val) {
+        // Write to ALL sources to survive sync races
+        var live = getLiveItem();
+        live.duration = val;
+        try {
+            var gs = window.loadGlobalSettings?.() || {};
+            [gs.specialActivities, gs.app1?.specialActivities].forEach(function(arr) {
+                if (!Array.isArray(arr)) return;
+                var target = arr.find(function(s) { return s.name === activityName; });
+                if (target) target.duration = val;
+            });
+            window.saveGlobalSettings?.('app1', gs.app1);
+            window.saveGlobalSettings?.('specialActivities', gs.specialActivities || gs.app1?.specialActivities);
+        } catch(e) {}
+    }
+    
+    function buildUI() {
+        var live = getLiveItem();
+        var hasDur = (parseInt(live.duration) || 0) > 0;
+        var currentDur = parseInt(live.duration) || 30;
+        container.innerHTML = '';
+        
+        container.innerHTML =
+            '<div style="margin-bottom:16px;">'
+            + '<p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Set a fixed duration for this activity. The auto-scheduler will use this instead of the layer\'s default block size.</p>'
+            + '<div style="background:' + (hasDur ? '#eff6ff' : '#f9fafb') + '; border:1px solid ' + (hasDur ? '#bfdbfe' : '#e5e7eb') + '; border-radius:10px; padding:14px;">'
+            + '<div style="display:flex; align-items:center; gap:12px; margin-bottom:' + (hasDur ? '12px' : '0') + ';">'
+            + '<div style="flex:1;">'
+            + '<div style="font-weight:600; color:' + (hasDur ? '#1e40af' : '#374151') + ';">' + (hasDur ? currentDur + ' minutes' : 'Not Set') + '</div>'
+            + '<div style="font-size:0.8rem; color:' + (hasDur ? '#3b82f6' : '#6b7280') + ';">' + (hasDur ? 'Scheduler will use this duration' : 'Uses skeleton block duration') + '</div>'
+            + '</div>'
+            + '<label class="switch"><input type="checkbox" id="duration-toggle" ' + (hasDur ? 'checked' : '') + '><span class="slider"></span></label>'
+            + '</div>'
+            + '<div id="duration-config" style="display:' + (hasDur ? 'block' : 'none') + ';">'
+            + '<div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #bfdbfe; margin-top:8px;">'
+            + '<label style="font-size:0.85rem;">Duration:</label>'
+            + '<input type="number" id="duration-input" min="5" max="180" step="5" value="' + currentDur + '" style="width:70px; padding:6px 10px; border:1px solid #bfdbfe; border-radius:6px; text-align:center;">'
+            + '<span style="font-size:0.85rem; color:#64748b;">minutes</span>'
+            + '</div></div></div></div>';
+        
+        var tog = container.querySelector('#duration-toggle');
+        if (tog) {
+            tog.addEventListener('change', function() {
+                if (this.checked) {
+                    var live = getLiveItem();
+                    persistDuration(parseInt(live.duration) > 0 ? parseInt(live.duration) : 30);
+                } else {
+                    persistDuration(null);
+                }
+                buildUI();
+                var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+                if (s) s.textContent = summaryDuration(getLiveItem());
+            });
+        }
+        
+        var di = container.querySelector('#duration-input');
+        if (di) {
+            var saveTimeout = null;
+            di.addEventListener('input', function() {
+                var v = parseInt(this.value, 10);
+                if (!isNaN(v) && v >= 5 && v <= 180) {
+                    var display = container.querySelector('div[style*="font-weight:600"]');
+                    if (display) display.textContent = v + ' minutes';
+                    if (saveTimeout) clearTimeout(saveTimeout);
+                    saveTimeout = setTimeout(function() {
+                        persistDuration(v);
+                        var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+                        if (s) s.textContent = summaryDuration(getLiveItem());
+                    }, 500);
+                }
+            });
+            di.addEventListener('blur', function() {
+                if (saveTimeout) { clearTimeout(saveTimeout); saveTimeout = null; }
+                var v = parseInt(this.value, 10);
+                if (!isNaN(v) && v >= 5 && v <= 180) {
+                    persistDuration(v);
+                    var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+                    if (s) s.textContent = summaryDuration(getLiveItem());
+                }
+            });
+        }
+    }
+    
+    buildUI();
+    return container;
+}
     
     function buildUI() {
         var live = getLiveItem();
