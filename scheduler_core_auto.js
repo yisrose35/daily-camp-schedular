@@ -525,9 +525,28 @@
                         const allOk = existing.every(g => allowedDivisions.includes(g)) && allowedDivisions.includes(grade);
                         if (!allOk) return false;
                     }
-                    // shareType === 'all' → no cross-div restriction, only capacity
+                   // shareType === 'all' → no cross-div restriction, only capacity
                 }
             }
+
+            // ★ EXACT TIME MATCH: If same-grade bunks are already using this resource,
+            // the new bunk must start and end at exactly the same time.
+            // No mid-session joins or early departures.
+            if (capacity > 1) {
+                for (let m = startMin; m < endMin; m += 5) {
+                    const b = buckets[m];
+                    if (!b || !b.grades.has(grade)) continue;
+                    // Found same-grade usage overlapping our window — check boundaries match
+                    const beforeBucket = buckets[startMin - 5];
+                    if (beforeBucket && beforeBucket.grades.has(grade) && beforeBucket.count > 0) return false;
+                    const afterBucket = buckets[endMin];
+                    if (afterBucket && afterBucket.grades.has(grade) && afterBucket.count > 0) return false;
+                    const endCheckBucket = buckets[endMin - 5];
+                    if (!endCheckBucket || !endCheckBucket.grades.has(grade)) return false;
+                    break;
+                }
+            }
+
             return true;
         }
 
