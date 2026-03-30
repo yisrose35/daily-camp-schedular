@@ -542,6 +542,56 @@ function summaryMultiPart(item) {
     if (item.prepDuration > 0) return d + 'min (+' + item.prepDuration + 'min prep = ' + total + 'min total)';
     return d + ' minutes';
 }
+    function renderDurationSettings(item) {
+    var container = document.createElement('div');
+    var hasDur = (parseInt(item.duration) || 0) > 0;
+    container.innerHTML =
+        '<div style="margin-bottom:16px;">'
+        + '<p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Set a fixed duration for this activity. The auto-scheduler will use this instead of the layer\'s default block size.</p>'
+        + '<div style="background:' + (hasDur ? '#eff6ff' : '#f9fafb') + '; border:1px solid ' + (hasDur ? '#bfdbfe' : '#e5e7eb') + '; border-radius:10px; padding:14px;">'
+        + '<div style="display:flex; align-items:center; gap:12px; margin-bottom:' + (hasDur ? '12px' : '0') + ';">'
+        + '<div style="flex:1;">'
+        + '<div style="font-weight:600; color:' + (hasDur ? '#1e40af' : '#374151') + ';">' + (hasDur ? item.duration + ' minutes' : 'Not Set') + '</div>'
+        + '<div style="font-size:0.8rem; color:' + (hasDur ? '#3b82f6' : '#6b7280') + ';">' + (hasDur ? 'Scheduler will use this duration' : 'Uses skeleton block duration') + '</div>'
+        + '</div>'
+        + '<label class="switch"><input type="checkbox" id="duration-toggle" ' + (hasDur ? 'checked' : '') + '><span class="slider"></span></label>'
+        + '</div>'
+        + '<div id="duration-config" style="display:' + (hasDur ? 'block' : 'none') + ';">'
+        + '<div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #bfdbfe; margin-top:8px;">'
+        + '<label style="font-size:0.85rem;">Duration:</label>'
+        + '<input type="number" id="duration-input" min="5" max="180" step="5" value="' + (item.duration || 30) + '" style="width:70px; padding:6px 10px; border:1px solid #bfdbfe; border-radius:6px; text-align:center;">'
+        + '<span style="font-size:0.85rem; color:#64748b;">minutes</span>'
+        + '</div></div></div></div>';
+    var tog = container.querySelector('#duration-toggle');
+    if (tog) {
+        tog.addEventListener('change', function() {
+            var cfg = container.querySelector('#duration-config');
+            if (this.checked) {
+                cfg.style.display = 'block';
+                item.duration = parseInt(container.querySelector('#duration-input').value, 10) || 30;
+            } else {
+                cfg.style.display = 'none';
+                item.duration = null;
+            }
+            saveData();
+            var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+            if (s) s.textContent = summaryDuration(item);
+        });
+    }
+    var di = container.querySelector('#duration-input');
+    if (di) {
+        di.addEventListener('change', function() {
+            var v = parseInt(this.value, 10);
+            if (!isNaN(v) && v >= 5 && v <= 180) {
+                item.duration = v;
+                saveData();
+                var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+                if (s) s.textContent = summaryDuration(item);
+            }
+        });
+    }
+    return container;
+}
     function summaryPrepDuration(item) {
     return (item.prepDuration || 0) > 0 ? item.prepDuration + 'min prep' : 'None';
 }
