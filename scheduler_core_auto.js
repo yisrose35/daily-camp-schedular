@@ -2737,171 +2737,150 @@
 
 
         // =====================================================================
-        // STEP 4.5 — POST-SOLVE CONSTRAINT VALIDATION SWEEP
+
         // =====================================================================
-        // Safety net: scan the ENTIRE schedule for cross-division and capacity
-        // violations. Any assignment that violates gets demoted to Free.
-        // This catches bugs in the packer, solver, or fallback sweep.
+        // STEP 4.5 — POST-SOLVE CONSTRAINT ENFORCEMENT (LOOPED)
         // =====================================================================
-        log('\n[STEP 4.5] Post-solve constraint validation...');
+        // Repeatedly scans the schedule for violations and demotes offenders
+        // until clean. THEN runs fallback sweep, THEN validates once more.
+        // Catches: cross-division, capacity, same-day repeats.
+        // Ignores: custom, game X (league fields), immutable entries.
+        // =====================================================================
+        log('\n[STEP 4.5] Post-solve constraint enforcement...');
+
         const postSolveAP = window.activityProperties || {};
         const postSolveSA = window.scheduleAssignments || {};
         const postSolveDT = window.divisionTimes || {};
-        let constraintFixes = 0;
+        const CSWEEP_IGNORE_FIELDS = new Set(['free', 'no field', 'lunch', 'snacks', 'dismissal', 'swim', 'pool', 'custom']);
+        const isLeagueField = (fn) => /^game\s*\d+$/i.test(fn);
+        const CSWEEP_IGNORE_ACTS = new Set(['free', 'lunch', 'snacks', 'dismissal', 'swim', 'pool', 'league game']);
 
-        // Ignore list: leagues and custom are expected to share
-        const IGNORE_FIELDS = new Set(['free', 'no field', 'lunch', 'snacks', 'dismissal', 'swim', 'pool', 'custom']);
-        const isLeagueField = (fn) => /^game\s*\d+$/.test(fn); // "game 65", "game 109" etc.
+        // ── Bunk→grade lookup ──
+        const csweepBunkGrade = {};
+        Object.entries(divisions).forEach(([g, d]) => {
+            (d.bunks || []).forEach(b => { csweepBunkGrade[String(b)] = g; });
+        });
 
-        // Build time-keyed field usage map: { fieldNorm: [{ startMin, endMin, bunk, grade }] }
-        const postFieldMap = new Map();
-        Object.entries(postSolveSA).forEach(([bunk, slots]) => {
-            if (!Array.isArray(slots)) return;
-            let grade = '';
-            for (const [g, d] of Object.entries(divisions)) {
-                if ((d.bunks || []).map(String).includes(String(bunk))) { grade = g; break; }
-            }
-            const pbs = postSolveDT[grade]?._perBunkSlots?.[bunk] || [];
-            slots.forEach((entry, idx) => {
-                if (!entry || !entry.field || entry.field === 'Free') return;
-                if (entry.continuation || entry._league) return;
-                const fn = entry.field.toLowerCase().trim();
-                if (IGNORE_FIELDS.has(fn) || isLeagueField(fn)) return;
-                const slot = pbs[idx];
-                if (!slot || slot.startMin == null || slot.endMin == null) return;
-                if (!postFieldMap.has(fn)) postFieldMap.set(fn, []);
-                postFieldMap.get(fn).push({
-                    startMin: slot.startMin, endMin: slot.endMin,
-                    bunk, grade, idx, entry,
-                    isFixed: !!(entry._fixed || entry._pinned || entry._autoSpecial || entry._league)
+        function runConstraintSweep() {
+            let fixes = 0;
+
+            // ── Build time-keyed field usage map ──
+            const fieldMap = new Map();
+            Object.entries(postSolveSA).forEach(([bunk, slots]) => {
+                if (!Array.isArray(slots)) return;
+                const grade = csweepBunkGrade[bunk] || '';
+                const pbs = postSolveDT[grade]?._perBunkSlots?.[bunk] || [];
+                slots.forEach((entry, idx) => {
+                    if (!entry || !entry.field || entry.field === 'Free') return;
+                    if (entry.continuation || entry._league) return;
+                    const fn = entry.field.toLowerCase().trim();
+                    if (CSWEEP_IGNORE_FIELDS.has(fn) || isLeagueField(fn)) return;
+                    const slot = pbs[idx];
+                    if (!slot || slot.startMin == null || slot.endMin == null) return;
+                    if (!fieldMap.has(fn)) fieldMap.set(fn, []);
+                    fieldMap.get(fn).push({ startMin: slot.startMin, endMin: slot.endMin, bunk, grade, idx, field: entry.field });
                 });
             });
-        });
 
-        // Check each field for violations — cluster-based resolution
-        postFieldMap.forEach((usages, fieldNorm) => {
-            const firstEntry = usages[0]?.entry;
-            const fieldAP = postSolveAP[firstEntry?.field] || {};
-            const sharing = fieldAP.sharableWith || {};
-            const shareType = sharing.type || 'not_sharable';
-            const cap = parseInt(sharing.capacity) || (shareType === 'not_sharable' ? 1 : (shareType === 'all' ? 999 : 2));
+            // ── A) Cross-division + capacity enforcement ──
+            fieldMap.forEach((usages, fieldNorm) => {
+                const fieldAP = postSolveAP[usages[0]?.field] || {};
+                const sharing = fieldAP.sharableWith || {};
+                const shareType = sharing.type || 'not_sharable';
+                const cap = parseInt(sharing.capacity) || (shareType === 'not_sharable' ? 1 : (shareType === 'all' ? 999 : 2));
 
-            // Find overlapping clusters: groups of usages that overlap in time
-            const processed = new Set();
-            for (let i = 0; i < usages.length; i++) {
-                if (processed.has(i)) continue;
-                const u = usages[i];
-                const sa = postSolveSA[u.bunk]?.[u.idx];
-                if (!sa || sa.field === 'Free') continue;
+                for (let i = 0; i < usages.length; i++) {
+                    const u = usages[i];
+                    const sa = postSolveSA[u.bunk]?.[u.idx];
+                    if (!sa || sa.field === 'Free') continue;
+                    if (sa._pinned || sa._league || sa._autoSpecial) continue;
 
-                // Build cluster: all usages overlapping with u (and transitive)
-                const cluster = [i];
-                const clusterSet = new Set([i]);
-                let changed = true;
-                while (changed) {
-                    changed = false;
-                    for (let j = 0; j < usages.length; j++) {
-                        if (clusterSet.has(j)) continue;
-                        const oj = usages[j];
-                        if (postSolveSA[oj.bunk]?.[oj.idx]?.field === 'Free') continue;
-                        // Does j overlap with ANY member of the cluster?
-                        for (const ci of cluster) {
-                            const cu = usages[ci];
-                            if (cu.startMin < oj.endMin && cu.endMin > oj.startMin && cu.bunk !== oj.bunk) {
-                                cluster.push(j);
-                                clusterSet.add(j);
-                                changed = true;
-                                break;
-                            }
-                        }
+                    const overlapping = usages.filter((o, j) =>
+                        j !== i && o.bunk !== u.bunk &&
+                        o.startMin < u.endMin && o.endMin > u.startMin &&
+                        postSolveSA[o.bunk]?.[o.idx]?.field !== 'Free'
+                    );
+
+                    let violation = false;
+                    if (overlapping.length >= cap) violation = true;
+                    if (!violation && (shareType === 'not_sharable' || shareType === 'same_division') &&
+                        overlapping.some(o => o.grade !== u.grade)) violation = true;
+                    if (!violation && shareType === 'custom') {
+                        const allowed = sharing.divisions || [];
+                        if (overlapping.some(o => o.grade !== u.grade && !allowed.includes(o.grade))) violation = true;
+                    }
+
+                    if (!violation) continue;
+
+                    // Count same-grade vs other-grade overlaps to decide who to demote
+                    const myGradeOverlaps = overlapping.filter(o => o.grade === u.grade).length;
+                    const otherGradeOverlaps = overlapping.filter(o => o.grade !== u.grade).length;
+
+                    // Demote if: this bunk's grade has fewer bunks on this field than the competing grade
+                    // OR pure capacity violation (too many same-grade bunks)
+                    if (otherGradeOverlaps > 0 || overlapping.length >= cap) {
+                        postSolveSA[u.bunk][u.idx] = {
+                            field: 'Free', sport: null, _activity: 'Free',
+                            _autoMode: true, _constraintDemoted: true, continuation: false
+                        };
+                        fixes++;
                     }
                 }
+            });
 
-                if (cluster.length <= 1) { processed.add(i); continue; }
-                cluster.forEach(ci => processed.add(ci));
-
-                // Check if this cluster has violations
-                let hasCapViolation = false;
-                let hasCrossDiv = false;
-                const grades = new Set(cluster.map(ci => usages[ci].grade));
-
-                // Pairwise overlap count check
-                for (const ci of cluster) {
-                    const cu = usages[ci];
-                    const overlapping = cluster.filter(cj => cj !== ci && usages[cj].bunk !== cu.bunk &&
-                        usages[cj].startMin < cu.endMin && usages[cj].endMin > cu.startMin);
-                    if (overlapping.length >= cap) hasCapViolation = true;
-                }
-
-                if (shareType === 'not_sharable' && grades.size > 1) hasCrossDiv = true;
-                if (shareType === 'same_division' && grades.size > 1) hasCrossDiv = true;
-                if (shareType === 'custom') {
-                    const allowed = new Set(sharing.divisions || []);
-                    for (const g of grades) { if (!allowed.has(g)) { hasCrossDiv = true; break; } }
-                }
-
-                if (!hasCapViolation && !hasCrossDiv) continue;
-
-                // ── Resolve: decide which entries to KEEP ──
-                // Group by division, sort by cluster size (most bunks wins)
-                const byDiv = {};
-                cluster.forEach(ci => {
-                    const g = usages[ci].grade;
-                    if (!byDiv[g]) byDiv[g] = [];
-                    byDiv[g].push(ci);
+            // ── B) Same-day repetition enforcement ──
+            Object.entries(postSolveSA).forEach(([bunk, slots]) => {
+                if (!Array.isArray(slots)) return;
+                const seenActs = new Map();
+                slots.forEach((entry, idx) => {
+                    if (!entry || entry.field === 'Free' || entry.continuation) return;
+                    if (entry._pinned || entry._league || entry._autoSpecial) return;
+                    const act = (entry._activity || entry.sport || entry.field || '').toLowerCase().trim();
+                    if (!act || CSWEEP_IGNORE_ACTS.has(act)) return;
+                    if (seenActs.has(act)) {
+                        postSolveSA[bunk][idx] = {
+                            field: 'Free', sport: null, _activity: 'Free',
+                            _autoMode: true, _constraintDemoted: true,
+                            _demotedReason: 'same_day_repeat', continuation: false
+                        };
+                        fixes++;
+                    } else {
+                        seenActs.set(act, idx);
+                    }
                 });
-                const divsSorted = Object.entries(byDiv).sort((a, b) => b[1].length - a[1].length);
+            });
 
-                const keepSet = new Set();
-
-                if (hasCrossDiv) {
-                    // Keep the division with the most bunks, demote others
-                    // For same_division: keep up to cap from the winning division
-                    const winDiv = divsSorted[0][0];
-                    let kept = 0;
-                    for (const ci of byDiv[winDiv]) {
-                        if (kept < cap) { keepSet.add(ci); kept++; }
-                    }
-                } else {
-                    // Pure capacity violation within same division — keep first cap entries
-                    let kept = 0;
-                    for (const ci of cluster) {
-                        if (kept < cap) { keepSet.add(ci); kept++; }
-                    }
-                }
-
-                // Demote everything not in keepSet
-                for (const ci of cluster) {
-                    if (keepSet.has(ci)) continue;
-                    const cu = usages[ci];
-                    const cSa = postSolveSA[cu.bunk]?.[cu.idx];
-                    if (!cSa || cSa.field === 'Free') continue;
-                    // Only demote if not truly immutable
-                    if (cSa._pinned || cSa._league || cSa._autoSpecial) continue;
-                    postSolveSA[cu.bunk][cu.idx] = {
-                        field: 'Free', sport: null, _activity: 'Free',
-                        _autoMode: true, _constraintDemoted: true,
-                        _demotedFrom: cu.entry.field, continuation: false
-                    };
-                    constraintFixes++;
-                }
-            }
-        });
-
-        if (constraintFixes > 0) {
-            log('[4.5] ⚠️ Demoted ' + constraintFixes + ' assignments that violated field constraints');
-            warnings.push({ type: 'constraint_demotions', count: constraintFixes });
-
-            // Try to re-fill demoted slots with valid alternatives
-            if (window.AutoSolverEngine?.fallbackSweep) {
-                const refilled = window.AutoSolverEngine.fallbackSweep(solverConfig);
-                if (refilled > 0) log('[4.5] Re-filled ' + refilled + ' demoted slots');
-            }
-        } else {
-            log('[4.5] ✅ No constraint violations found');
+            return fixes;
         }
 
-        // =====================================================================
+        // ── Loop until clean ──
+        let totalConstraintFixes = 0;
+        let sweepPass = 0;
+        while (sweepPass < 5) {
+            sweepPass++;
+            const fixes = runConstraintSweep();
+            totalConstraintFixes += fixes;
+            if (fixes === 0) break;
+            log('[4.5] Pass ' + sweepPass + ': demoted ' + fixes);
+        }
+
+        // ── Re-fill demoted slots ──
+        if (totalConstraintFixes > 0 && window.AutoSolverEngine?.fallbackSweep) {
+            const refilled = window.AutoSolverEngine.fallbackSweep(solverConfig);
+            if (refilled > 0) log('[4.5] Re-filled ' + refilled + ' demoted slots');
+            // Final validation after fallback
+            const postFallbackFixes = runConstraintSweep();
+            totalConstraintFixes += postFallbackFixes;
+            if (postFallbackFixes > 0) log('[4.5] Post-fallback: demoted ' + postFallbackFixes + ' more');
+        }
+
+        if (totalConstraintFixes > 0) {
+            log('[4.5] Total constraint fixes: ' + totalConstraintFixes);
+            warnings.push({ type: 'constraint_demotions', count: totalConstraintFixes });
+        } else {
+            log('[4.5] ✅ No violations');
+        }
+
         // STEP 5 — SAVE
         // =====================================================================
         saveSwimHistory();
