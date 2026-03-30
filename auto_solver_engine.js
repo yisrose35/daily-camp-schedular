@@ -202,12 +202,20 @@
             }
         }
 
-        // 4. Combined field mutual exclusion
+        // 4. Exact time match: bunks sharing a field must start and end together
+        if (overlapping.length > 0 && cap > 1) {
+            const sameGradeOverlaps = overlapping.filter(e => e.grade === grade);
+            if (sameGradeOverlaps.length > 0) {
+                if (sameGradeOverlaps.some(e => e.startMin !== startMin || e.endMin !== endMin)) {
+                    return false;
+                }
+            }
+        }
+        // 5. Combined field mutual exclusion
         if (window.FieldCombos?.isBlockedByCombo) {
             const combo = window.FieldCombos.isBlockedByCombo(fieldName, startMin, endMin, bunk);
             if (combo?.blocked) return false;
         }
-
         return true;
     }
 
