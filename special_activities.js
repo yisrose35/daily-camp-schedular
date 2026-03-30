@@ -298,7 +298,9 @@ function loadData() {
     } catch (e) { console.error("[SPECIAL_ACTIVITIES] Error loading data:", e); specialActivities = []; rainyDayActivities = []; }
 }
 
+let _isSaving = false;
 function refreshFromStorage() {
+    if (_isSaving) return;
     const pS = JSON.stringify(specialActivities), pR = JSON.stringify(rainyDayActivities), pSel = selectedItemId;
     loadData();
     if (selectedItemId) { const [, n] = selectedItemId.split(/-(.+)/); if (!specialActivities.some(s=>s.name===n) && !rainyDayActivities.some(s=>s.name===n)) selectedItemId = null; }
@@ -306,9 +308,9 @@ function refreshFromStorage() {
         if (specialsListEl) renderMasterList(); if (rainyDayListEl) renderRainyDayList(); if (detailPaneEl) renderDetailPane();
     }
 }
-
 function saveData() {
     if (window.AccessControl?.canEditSetup && !window.AccessControl.canEditSetup()) return;
+    _isSaving = true;
     try {
         specialActivities = validateAllActivities(specialActivities);
         rainyDayActivities = validateAllActivities(rainyDayActivities);
@@ -318,8 +320,8 @@ function saveData() {
             window._specialActivitiesSyncTimeout = setTimeout(() => { window.forceSyncToCloud(); window._specialActivitiesSyncTimeout = null; }, 500);
         }
     } catch (e) { console.error("[SPECIAL_ACTIVITIES] Error saving data:", e); }
+    setTimeout(() => { _isSaving = false; }, 3000);
 }
-
 function renderMasterList() {
     if (!specialsListEl) return; specialsListEl.innerHTML = "";
     if (specialActivities.length === 0) { specialsListEl.innerHTML = '<div style="padding:20px; text-align:center; color:#9CA3AF;">No special activities yet.</div>'; return; }
