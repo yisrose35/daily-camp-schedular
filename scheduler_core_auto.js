@@ -1552,6 +1552,9 @@
                 var dbgWalls = walls.map(function(w) { return w.startMin + '-' + w.endMin + '(' + w.event + ')'; });
                 console.log('  Walls: ' + dbgWalls.join(', '));
                 console.log('  draftResult.specials: ' + (draftResult.specials || []).length);
+                console.log('  shoppingList.specials.required: ' + (shoppingList.specials?.required || 0));
+                console.log('  shoppingList.specials.priorityList: ' + (shoppingList.specials?.priorityList?.length || 0));
+                (shoppingList.specials?.priorityList || []).forEach(function(s) { console.log('    priority: ' + s.name + ' dur=' + s.totalDuration + ' scarce=' + s.isScarce); });
                 (draftResult.specials || []).forEach(function(s) { console.log('    draft special: ' + s.name + ' dur=' + s.totalDuration); });
             }
 
