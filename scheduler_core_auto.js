@@ -1329,7 +1329,11 @@
                 // Check sharing rules
                 const info = getSpecialSharingInfo(specialName, activityProperties, globalSettings);
                 if (info.shareType === 'not_sharable') return false;
-                if (info.shareType === 'same_division') return false;
+                // ★ FIX: same_division means "only same-grade bunks can share AT THE SAME TIME"
+                // It does NOT mean the special is exclusive to one grade all day.
+                // Different grades use specials at different times (staggered by the packer).
+                // The RT (Resource Tracker) enforces same-division at placement time.
+                if (info.shareType === 'same_division') return true;
                 if (info.shareType === 'custom') {
                     const allowed = info.allowedDivisions || [];
                     const existingGrades = [...existing];
