@@ -447,58 +447,49 @@ function bkOpts(div,gr){var o=[''];if(div&&gr&&structure[div]&&structure[div].gr
 // Sync camper address to Campistry Go's address store
 function syncAddressToGo(camperName,camperData){
     if(!camperData.street)return;
+    // Single-camper sync (used after editing one camper)
     try{
-        // Write to Go's direct localStorage store
         var goRaw=localStorage.getItem('campistry_go_data');
         var goData=goRaw?JSON.parse(goRaw):{};
         if(!goData.addresses)goData.addresses={};
         var existing=goData.addresses[camperName]||{};
-        var newAddr={
-            street:camperData.street||'',
-            city:camperData.city||'',
-            state:camperData.state||'NY',
-            zip:camperData.zip||'',
-            lat:existing.lat||null,
-            lng:existing.lng||null,
-            geocoded:false,
-            transport:existing.transport||'bus',
-            rideWith:existing.rideWith||''
-        };
-        // Preserve geocode if address unchanged
-        if(existing.street===camperData.street&&existing.city===camperData.city&&existing.geocoded){
-            newAddr.lat=existing.lat;newAddr.lng=existing.lng;newAddr.geocoded=true;
-        }
-        goData.addresses[camperName]=newAddr;
-        localStorage.setItem('campistry_go_data',JSON.stringify(goData));
-
-        // Also write into the cloud-synced global settings path (Go checks this first)
-        var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
-        if(!g.campistryGo)g.campistryGo={};
-        if(!g.campistryGo.addresses)g.campistryGo.addresses={};
-        var existingCloud=g.campistryGo.addresses[camperName]||{};
-        g.campistryGo.addresses[camperName]={
+        var unchanged=existing.street===camperData.street&&existing.city===camperData.city;
+        if(unchanged)return; // Skip if nothing changed
+        goData.addresses[camperName]={
             street:camperData.street||'',city:camperData.city||'',
             state:camperData.state||'NY',zip:camperData.zip||'',
-            lat:existingCloud.lat||null,lng:existingCloud.lng||null,
-            geocoded:existingCloud.geocoded||false,
-            transport:existingCloud.transport||'bus',rideWith:existingCloud.rideWith||''
+            lat:null,lng:null,geocoded:false,
+            transport:existing.transport||'bus',rideWith:existing.rideWith||''
         };
-        if(existingCloud.street===camperData.street&&existingCloud.city===camperData.city&&existingCloud.geocoded){
-            g.campistryGo.addresses[camperName].lat=existingCloud.lat;
-            g.campistryGo.addresses[camperName].lng=existingCloud.lng;
-            g.campistryGo.addresses[camperName].geocoded=true;
-        }
-        localStorage.setItem('campGlobalSettings_v1',JSON.stringify(g));
-
-        console.log('[Me→Go] Address synced for',camperName,':',camperData.street,camperData.city);
+        localStorage.setItem('campistry_go_data',JSON.stringify(goData));
     }catch(e){console.warn('[Me] Go sync error:',e)}
 }
 
-// Bulk sync all addresses to Go on load
+// Bulk sync — ONE read, ONE diff, ONE write. Runs on load.
 function syncAllAddressesToGo(){
-    Object.entries(roster).forEach(function([name,data]){
-        if(data.street)syncAddressToGo(name,data);
-    });
+    try{
+        var goRaw=localStorage.getItem('campistry_go_data');
+        var goData=goRaw?JSON.parse(goRaw):{};
+        if(!goData.addresses)goData.addresses={};
+        var changed=0;
+        Object.entries(roster).forEach(function([name,data]){
+            if(!data.street)return;
+            var existing=goData.addresses[name]||{};
+            // Skip if address hasn't changed
+            if(existing.street===data.street&&existing.city===data.city)return;
+            goData.addresses[name]={
+                street:data.street||'',city:data.city||'',
+                state:data.state||'NY',zip:data.zip||'',
+                lat:null,lng:null,geocoded:false,
+                transport:existing.transport||'bus',rideWith:existing.rideWith||''
+            };
+            changed++;
+        });
+        if(changed>0){
+            localStorage.setItem('campistry_go_data',JSON.stringify(goData));
+            console.log('[Me→Go] Bulk synced '+changed+' new/changed addresses');
+        }
+    }catch(e){console.warn('[Me] Bulk Go sync error:',e)}
 }
 
 // ── STRUCTURE ────────────────────────────────────────────────────
