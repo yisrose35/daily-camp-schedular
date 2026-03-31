@@ -1,106 +1,421 @@
 // =============================================================================
 // campistry_snacks.js — Campistry Snacks Manager Dashboard Logic
 // Handles: Accounts, Deposits, Inventory, Restock, Limits, Analytics
+//
+// DATA SOURCES:
+//   Campers: campGlobalSettings_v1 → app1.camperRoster (from Campistry Me)
+//   Structure: campGlobalSettings_v1 → campStructure (from Campistry Me)
+//   Snacks data: campGlobalSettings_v1 → campistrySnacks (own data)
+//     - accounts: { [camperName]: { balance, dailyLimit, spentToday } }
+//     - inventory: [ { id, name, cat, emoji, price, stock, soldToday, totalSold } ]
+//     - transactions: [ { time, camper, items, amount, date } ]
+//     - hourlyActivity: { [hour]: count }
+//     - weeklyRevenue: [ { day, amount } ]
 // =============================================================================
 
-(function(){
+(function() {
 'use strict';
-const C=[
-{id:1,name:'Ethan Goldberg',div:'Senior',bunk:'Bunk 18',bal:45,limit:10,spent:3.5},
-{id:2,name:'Maya Rosenberg',div:'Senior',bunk:'Bunk 19',bal:32.5,limit:8,spent:8},
-{id:3,name:'Jake Cohen',div:'Junior',bunk:'Bunk 7',bal:60,limit:12,spent:0},
-{id:4,name:'Lily Schwartz',div:'Junior',bunk:'Bunk 8',bal:5.25,limit:8,spent:6.5},
-{id:5,name:'Noah Friedman',div:'Middler',bunk:'Bunk 12',bal:28,limit:10,spent:2},
-{id:6,name:'Ava Klein',div:'Middler',bunk:'Bunk 13',bal:0,limit:8,spent:0},
-{id:7,name:'Sam Levine',div:'Senior',bunk:'Bunk 20',bal:15.75,limit:10,spent:4.5},
-{id:8,name:'Zoe Katz',div:'Junior',bunk:'Bunk 9',bal:42,limit:10,spent:1.5},
-{id:9,name:'Ben Rosen',div:'Senior',bunk:'Bunk 21',bal:20,limit:10,spent:0},
-{id:10,name:'Sophie Weiss',div:'Middler',bunk:'Bunk 14',bal:35,limit:10,spent:5}
-];
-const I=[
-{id:1,name:'Water Bottle',cat:'drink',emoji:'💧',price:1.5,stock:120,sold:18,total:312},
-{id:2,name:'Gatorade',cat:'drink',emoji:'🥤',price:2.5,stock:64,sold:12,total:248},
-{id:3,name:'Chips',cat:'snack',emoji:'🍿',price:2,stock:45,sold:22,total:445},
-{id:4,name:'Granola Bar',cat:'snack',emoji:'🥜',price:1.75,stock:80,sold:8,total:89},
-{id:5,name:'Ice Pop',cat:'treat',emoji:'🧊',price:1,stock:200,sold:35,total:780},
-{id:6,name:'Candy Bar',cat:'treat',emoji:'🍫',price:2,stock:8,sold:14,total:220},
-{id:7,name:'Pretzel',cat:'snack',emoji:'🥨',price:1.5,stock:55,sold:10,total:155},
-{id:8,name:'Juice Box',cat:'drink',emoji:'🧃',price:1.75,stock:0,sold:30,total:410},
-{id:9,name:'Cookie',cat:'treat',emoji:'🍪',price:1.5,stock:32,sold:16,total:290},
-{id:10,name:'Fruit Cup',cat:'snack',emoji:'🍇',price:3,stock:40,sold:5,total:62}
-];
-const TX=[
-{time:'2:45 PM',camper:'Ethan Goldberg',items:'Ice Pop, Water Bottle',amount:2.5},
-{time:'2:38 PM',camper:'Maya Rosenberg',items:'Gatorade, Chips',amount:4.5},
-{time:'2:30 PM',camper:'Sam Levine',items:'Candy Bar, Cookie',amount:3.5},
-{time:'2:22 PM',camper:'Zoe Katz',items:'Water Bottle',amount:1.5},
-{time:'2:15 PM',camper:'Noah Friedman',items:'Chips',amount:2},
-{time:'1:50 PM',camper:'Lily Schwartz',items:'Ice Pop ×2, Gatorade',amount:4.5},
-{time:'1:32 PM',camper:'Jake Cohen',items:'Fruit Cup',amount:3}
-];
-const WK=[{day:'Mon',v:142},{day:'Tue',v:198},{day:'Wed',v:165},{day:'Thu',v:210},{day:'Fri',v:0}];
-const HR={9:4,10:12,11:8,12:28,13:15,14:22,15:18,16:6};
 
-function init(){rStats();rAccounts();rInventory();rAnalytics();initTabs();popSelects()}
-function initTabs(){document.querySelectorAll('.tab-btn').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.tab-btn').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-content').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.getElementById('tab-'+b.dataset.tab).classList.add('active')}))}
+console.log('[Snacks Manager] Loading...');
 
-function rStats(){document.getElementById('sA').textContent=C.length;document.getElementById('sB').textContent='$'+C.reduce((s,c)=>s+c.bal,0).toFixed(0);document.getElementById('sI').textContent=I.filter(i=>i.stock>0).length;document.getElementById('sS').textContent='$'+TX.reduce((s,t)=>s+t.amount,0).toFixed(0)}
+const STORE_KEY = 'campGlobalSettings_v1';
+const SNACKS_LOCAL_KEY = 'campistry_snacks_data'; // fallback
 
-window.rAccounts=function(f){
-const q=f||(document.getElementById('aSearch')?.value||'');
-document.getElementById('aBody').innerHTML=C.filter(c=>c.name.toLowerCase().includes(q.toLowerCase())).map(c=>{
-const rem=c.limit-c.spent;let st;if(c.bal<=0)st='<span class="badge badge-red">No Funds</span>';else if(rem<=0)st='<span class="badge badge-amber">Limit Hit</span>';else st='<span class="badge badge-green">Active</span>';
-return '<tr><td style="font-weight:600">'+esc(c.name)+'</td><td>'+c.div+'</td><td>'+c.bunk+'</td><td style="font-weight:700;color:'+(c.bal<=5?'var(--red-600)':'var(--text-primary)')+'">$'+c.bal.toFixed(2)+'</td><td>$'+c.limit.toFixed(2)+'</td><td>$'+c.spent.toFixed(2)+'</td><td>'+st+'</td><td><button class="btn btn-sm btn-primary" onclick="openM(\'dep\');document.getElementById(\'depCamper\').value=\''+c.id+'\'">+ Deposit</button></td></tr>'
-}).join('')};
+// ==========================================================================
+// DATA LAYER — Read from Campistry Me, persist Snacks-specific data
+// ==========================================================================
 
-function rInventory(){
-document.getElementById('iCount').textContent=I.length+' items';
-document.getElementById('iBody').innerHTML=I.map(i=>{
-let st;if(i.stock===0)st='<span class="badge badge-red">Out</span>';else if(i.stock<=10)st='<span class="badge badge-amber">Low</span>';else st='<span class="badge badge-green">OK</span>';
-return '<tr><td style="font-size:1.2rem;text-align:center;width:36px">'+i.emoji+'</td><td style="font-weight:600">'+esc(i.name)+'</td><td><span class="badge badge-neutral">'+i.cat+'</span></td><td style="font-weight:600">$'+i.price.toFixed(2)+'</td><td style="font-weight:600;color:'+(i.stock===0?'var(--red-600)':i.stock<=10?'var(--amber-600)':'var(--text-primary)')+'">'+i.stock+'</td><td>'+i.sold+'</td><td>'+i.total+'</td><td>'+st+'</td><td><button class="btn btn-sm btn-secondary">Edit</button></td></tr>'
-}).join('')}
-
-function rAnalytics(){
-const sal=TX.reduce((s,t)=>s+t.amount,0),tc=TX.length,units=I.reduce((s,i)=>s+i.sold,0),openStock=I.reduce((s,i)=>s+i.stock+i.sold,0);
-document.getElementById('mRev').textContent='$'+sal.toFixed(2);document.getElementById('mTxn').textContent=tc+' txns';
-document.getElementById('mAvg').textContent=tc?'$'+(sal/tc).toFixed(2):'$0';document.getElementById('mUnits').textContent=units;
-document.getElementById('mLow').textContent=I.filter(i=>i.stock<=10).length;document.getElementById('mST').textContent=(openStock?Math.round(units/openStock*100):0)+'%';
-const top=[...I].sort((a,b)=>b.sold-a.sold)[0];document.getElementById('mTop').textContent=top?top.emoji+' '+top.name:'—';document.getElementById('mTopN').textContent=top?top.sold+' today · '+top.total+' all-time':'';
-
-const ranked=[...I].sort((a,b)=>b.total-a.total),maxT=ranked[0]?.total||1;
-document.getElementById('popList').innerHTML=ranked.map((i,x)=>'<div class="rank-item"><div class="rank-pos">'+(x+1)+'</div><div class="rank-emoji">'+i.emoji+'</div><div class="rank-info"><div class="rank-name">'+esc(i.name)+'</div><div class="rank-bar-track"><div class="rank-bar-fill" style="width:'+Math.round(i.total/maxT*100)+'%"></div></div></div><div style="text-align:right"><div class="rank-count">'+i.total+'</div><div class="rank-revenue">$'+(i.total*i.price).toFixed(0)+'</div></div></div>').join('');
-
-const cats={};I.forEach(i=>{if(!cats[i.cat])cats[i.cat]={u:0,r:0};cats[i.cat].u+=i.sold;cats[i.cat].r+=i.sold*i.price});
-const cc={drink:'var(--blue-500)',snack:'var(--amber-500)',treat:'var(--purple-500)'};const tr=Object.values(cats).reduce((s,c)=>s+c.r,0)||1;
-document.getElementById('catBrk').innerHTML=Object.entries(cats).sort((a,b)=>b[1].r-a[1].r).map(([k,d])=>'<div class="cat-row"><div class="cat-dot" style="background:'+(cc[k]||'gray')+'"></div><div class="cat-name">'+k.charAt(0).toUpperCase()+k.slice(1)+'s</div><div class="cat-value">$'+d.r.toFixed(2)+'</div><div class="cat-pct">'+Math.round(d.r/tr*100)+'%</div></div>').join('')+'<div style="display:flex;gap:3px;margin-top:1rem;height:8px;border-radius:4px;overflow:hidden">'+Object.entries(cats).sort((a,b)=>b[1].r-a[1].r).map(([k,d])=>'<div style="flex:'+Math.round(d.r/tr*100)+';background:'+(cc[k]||'gray')+'"></div>').join('')+'</div>';
-
-const sp=[...C].sort((a,b)=>b.spent-a.spent).filter(c=>c.spent>0);
-document.getElementById('spList').innerHTML=sp.map(c=>'<div class="spend-row"><div class="spend-avatar">'+c.name.split(' ').map(w=>w[0]).join('')+'</div><div class="spend-name">'+esc(c.name)+'<div style="font-size:.7rem;color:var(--text-muted)">'+c.div+'</div></div><div class="spend-amount">$'+c.spent.toFixed(2)+'</div></div>').join('')||'<div style="text-align:center;padding:1rem;color:var(--text-muted);font-size:.8rem">No purchases yet</div>';
-
-const hrs=Object.keys(HR).map(Number).sort((a,b)=>a-b),maxH=Math.max(...Object.values(HR),1);
-document.getElementById('heatmap').innerHTML='<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:.5rem">Darker = busier</div><div style="display:flex;gap:3px;flex-wrap:wrap">'+hrs.map(h=>{const v=HR[h]||0,p=v/maxH;const bg=p>.7?'var(--snacks)':p>.4?'var(--snacks-100)':p>0?'var(--green-50)':'var(--bg-tertiary)';const clr=p>.7?'white':'var(--text-muted)';return '<div style="text-align:center"><div class="heat-cell" style="background:'+bg+';color:'+clr+'">'+v+'</div><div class="heat-label">'+(h>12?h-12+'p':h+'a')+'</div></div>'}).join('')+'</div>';
-
-WK[3].v=Math.round(sal);const mx=Math.max(...WK.map(d=>d.v),1);
-document.getElementById('wChart').innerHTML=WK.map(d=>'<div class="bar-col"><div class="bar-value">$'+d.v+'</div><div class="bar" style="height:'+Math.max(d.v/mx*100,2)+'%;background:'+(d.day==='Thu'?'var(--snacks)':'var(--snacks-100)')+'"></div><div class="bar-label">'+d.day+'</div></div>').join('');
-document.getElementById('txC').textContent=TX.length;
-document.getElementById('txBody').innerHTML=TX.slice(0,10).map(t=>'<tr><td style="white-space:nowrap">'+esc(t.time)+'</td><td style="font-weight:600">'+esc(t.camper)+'</td><td>'+esc(t.items)+'</td><td style="font-weight:700">$'+t.amount.toFixed(2)+'</td></tr>').join('');
+function readGlobal() {
+    const keys = ['CAMPISTRY_UNIFIED_STATE', STORE_KEY, 'CAMPISTRY_LOCAL_CACHE'];
+    for (const key of keys) {
+        try { const raw = localStorage.getItem(key); if (raw) return JSON.parse(raw) || {}; } catch (_) {}
+    }
+    return {};
 }
 
-window.openM=function(n){document.getElementById('m-'+n).classList.add('open');if(n==='dep'||n==='limit')popSelects()};
-window.closeM=function(n){document.getElementById('m-'+n).classList.remove('open')};
-function popSelects(){
-const s1=document.getElementById('depCamper'),s2=document.getElementById('limCamper'),s3=document.getElementById('rItem');
-const opts='<option value="">— Select —</option>'+C.map(c=>'<option value="'+c.id+'">'+esc(c.name)+' ('+c.div+')</option>').join('');
-if(s1)s1.innerHTML=opts;if(s2)s2.innerHTML=opts;
-if(s3)s3.innerHTML='<option value="">— Select —</option>'+I.map(i=>'<option value="'+i.id+'">'+i.emoji+' '+esc(i.name)+' ('+i.stock+' in stock)</option>').join('');
+function getRoster() {
+    const g = readGlobal();
+    return g?.app1?.camperRoster || {};
 }
 
-window.addDep=function(){const cid=+document.getElementById('depCamper').value,amt=parseFloat(document.getElementById('depAmt').value);if(!cid||!amt||amt<=0){toast('Enter valid info',1);return}const c=C.find(x=>x.id===cid);c.bal+=amt;closeM('dep');rStats();rAccounts();toast('Added $'+amt.toFixed(2)+' to '+c.name);document.getElementById('depAmt').value='';document.getElementById('depNote').value=''};
-window.setLimit=function(){const cid=+document.getElementById('limCamper').value,amt=parseFloat(document.getElementById('limAmt').value);if(!cid||!amt){toast('Enter valid info',1);return}const c=C.find(x=>x.id===cid);c.limit=amt;closeM('limit');rAccounts();toast('Limit set to $'+amt.toFixed(2)+' for '+c.name)};
-window.addItem=function(){const name=document.getElementById('niName').value.trim(),cat=document.getElementById('niCat').value,emoji=document.getElementById('niEmoji').value.trim()||'📦',price=parseFloat(document.getElementById('niPrice').value),stock=parseInt(document.getElementById('niStock').value)||0;if(!name||!price){toast('Fill required fields',1);return}I.push({id:I.length+1,name,cat,emoji,price,stock,sold:0,total:0});closeM('item');rInventory();rStats();rAnalytics();toast('Added '+emoji+' '+name);['niName','niEmoji','niPrice','niStock'].forEach(x=>document.getElementById(x).value='')};
-window.restock=function(){const iid=+document.getElementById('rItem').value,qty=parseInt(document.getElementById('rQty').value);if(!iid||!qty){toast('Select item and quantity',1);return}const i=I.find(x=>x.id===iid);i.stock+=qty;closeM('restock');rInventory();rStats();rAnalytics();toast('Restocked '+i.emoji+' '+i.name+' +'+qty)};
+function getStructure() {
+    const g = readGlobal();
+    return g?.campStructure || {};
+}
 
-function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
-function toast(m,e){const el=document.getElementById('toast');el.textContent=m;el.className='toast show'+(e?' err':'');setTimeout(()=>el.className='toast',2500)}
-document.addEventListener('DOMContentLoaded',init);
+// Build flat camper list from roster: [ { name, division, bunk } ]
+function getCamperList() {
+    const roster = getRoster();
+    const structure = getStructure();
+    const campers = [];
+
+    Object.entries(roster).forEach(([name, data]) => {
+        // Resolve division name from structure if needed
+        let div = data.division || '';
+        let bunk = data.bunk || '';
+
+        // If bunk is set but division isn't, find it from structure
+        if (bunk && !div) {
+            Object.entries(structure).forEach(([divName, divData]) => {
+                Object.values(divData.grades || {}).forEach(grade => {
+                    if ((grade.bunks || []).includes(bunk)) div = divName;
+                });
+            });
+        }
+
+        campers.push({ name, division: div, bunk });
+    });
+
+    return campers.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// === SNACKS-SPECIFIC DATA ===
+
+function loadSnacksData() {
+    // Priority 1: from global settings (cloud-synced)
+    const g = readGlobal();
+    if (g.campistrySnacks && Object.keys(g.campistrySnacks).length > 0) {
+        return g.campistrySnacks;
+    }
+    // Priority 2: local fallback
+    try {
+        const raw = localStorage.getItem(SNACKS_LOCAL_KEY);
+        if (raw) return JSON.parse(raw);
+    } catch (_) {}
+    // Default empty
+    return { accounts: {}, inventory: [], transactions: [], hourlyActivity: {}, weeklyRevenue: [] };
+}
+
+function saveSnacksData(data) {
+    // Write to global settings (for cloud sync)
+    try {
+        const g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
+        g.campistrySnacks = data;
+        g.updated_at = new Date().toISOString();
+        localStorage.setItem(STORE_KEY, JSON.stringify(g));
+        localStorage.setItem('CAMPISTRY_LOCAL_CACHE', JSON.stringify(g));
+    } catch (e) {
+        console.warn('[Snacks] Global save failed, using local fallback:', e);
+    }
+    // Also write local fallback
+    try { localStorage.setItem(SNACKS_LOCAL_KEY, JSON.stringify(data)); } catch (_) {}
+
+    // Cloud sync if bridge available
+    if (window.saveGlobalSettings && window.saveGlobalSettings._isAuthoritativeHandler) {
+        window.saveGlobalSettings('campistrySnacks', data);
+    }
+}
+
+// ==========================================================================
+// STATE
+// ==========================================================================
+
+let snacks = loadSnacksData();
+let camperList = [];
+
+function ensureAccountsForRoster() {
+    // Create snacks accounts for any campers in the roster that don't have one
+    camperList = getCamperList();
+    if (!snacks.accounts) snacks.accounts = {};
+    let changed = false;
+    camperList.forEach(c => {
+        if (!snacks.accounts[c.name]) {
+            snacks.accounts[c.name] = { balance: 0, dailyLimit: 10, spentToday: 0 };
+            changed = true;
+        }
+    });
+    // Remove accounts for campers no longer in roster
+    const rosterNames = new Set(camperList.map(c => c.name));
+    Object.keys(snacks.accounts).forEach(name => {
+        if (!rosterNames.has(name)) { delete snacks.accounts[name]; changed = true; }
+    });
+    if (changed) saveSnacksData(snacks);
+}
+
+function getAccount(name) {
+    return snacks.accounts[name] || { balance: 0, dailyLimit: 10, spentToday: 0 };
+}
+
+// ==========================================================================
+// INIT
+// ==========================================================================
+
+function init() {
+    ensureAccountsForRoster();
+    if (!snacks.inventory) snacks.inventory = [];
+    if (!snacks.transactions) snacks.transactions = [];
+    if (!snacks.hourlyActivity) snacks.hourlyActivity = {};
+    if (!snacks.weeklyRevenue) snacks.weeklyRevenue = [];
+
+    renderStats();
+    rAccounts();
+    rInventory();
+    rAnalytics();
+    initTabs();
+    popSelects();
+    console.log('[Snacks Manager] Ready —', camperList.length, 'campers,', snacks.inventory.length, 'items');
+}
+
+function initTabs() {
+    document.querySelectorAll('.tab-btn').forEach(b => b.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(x => x.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        document.getElementById('tab-' + b.dataset.tab).classList.add('active');
+    }));
+}
+
+// ==========================================================================
+// STATS
+// ==========================================================================
+
+function renderStats() {
+    document.getElementById('sA').textContent = camperList.length;
+    const totalBal = Object.values(snacks.accounts).reduce((s, a) => s + (a.balance || 0), 0);
+    document.getElementById('sB').textContent = '$' + totalBal.toFixed(0);
+    document.getElementById('sI').textContent = snacks.inventory.filter(i => i.stock > 0).length;
+    const salesToday = (snacks.transactions || []).filter(t => t.date === todayStr()).reduce((s, t) => s + t.amount, 0);
+    document.getElementById('sS').textContent = '$' + salesToday.toFixed(0);
+}
+
+function todayStr() {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+// ==========================================================================
+// ACCOUNTS TAB
+// ==========================================================================
+
+window.rAccounts = function(filter) {
+    const q = filter || (document.getElementById('aSearch')?.value || '');
+    const items = camperList.filter(c => c.name.toLowerCase().includes(q.toLowerCase()));
+    document.getElementById('aBody').innerHTML = items.map(c => {
+        const a = getAccount(c.name);
+        const rem = a.dailyLimit - a.spentToday;
+        let st;
+        if (a.balance <= 0) st = '<span class="badge badge-red">No Funds</span>';
+        else if (rem <= 0) st = '<span class="badge badge-amber">Limit Hit</span>';
+        else st = '<span class="badge badge-green">Active</span>';
+        return '<tr><td style="font-weight:600">' + esc(c.name) + '</td><td>' + esc(c.division) + '</td><td>' + esc(c.bunk) +
+            '</td><td style="font-weight:700;color:' + (a.balance <= 5 ? 'var(--red-600)' : 'var(--text-primary)') + '">$' + a.balance.toFixed(2) +
+            '</td><td>$' + a.dailyLimit.toFixed(2) + '</td><td>$' + a.spentToday.toFixed(2) +
+            '</td><td>' + st + '</td><td><button class="btn btn-sm btn-primary" onclick="openM(\'dep\');document.getElementById(\'depCamper\').value=\'' +
+            esc(c.name) + '\'">+ Deposit</button></td></tr>';
+    }).join('');
+};
+
+// ==========================================================================
+// INVENTORY TAB
+// ==========================================================================
+
+function rInventory() {
+    const I = snacks.inventory;
+    document.getElementById('iCount').textContent = I.length + ' items';
+    document.getElementById('iBody').innerHTML = I.map(i => {
+        let st;
+        if (i.stock === 0) st = '<span class="badge badge-red">Out</span>';
+        else if (i.stock <= 10) st = '<span class="badge badge-amber">Low</span>';
+        else st = '<span class="badge badge-green">OK</span>';
+        return '<tr><td style="font-size:1.2rem;text-align:center;width:36px">' + i.emoji + '</td><td style="font-weight:600">' + esc(i.name) +
+            '</td><td><span class="badge badge-neutral">' + i.cat + '</span></td><td style="font-weight:600">$' + i.price.toFixed(2) +
+            '</td><td style="font-weight:600;color:' + (i.stock === 0 ? 'var(--red-600)' : i.stock <= 10 ? 'var(--amber-600)' : 'var(--text-primary)') +
+            '">' + i.stock + '</td><td>' + (i.soldToday || 0) + '</td><td>' + (i.totalSold || 0) + '</td><td>' + st +
+            '</td><td><button class="btn btn-sm btn-secondary">Edit</button></td></tr>';
+    }).join('');
+}
+
+// ==========================================================================
+// ANALYTICS TAB
+// ==========================================================================
+
+function rAnalytics() {
+    const todayTx = (snacks.transactions || []).filter(t => t.date === todayStr());
+    const sal = todayTx.reduce((s, t) => s + t.amount, 0);
+    const tc = todayTx.length;
+    const I = snacks.inventory;
+    const units = I.reduce((s, i) => s + (i.soldToday || 0), 0);
+    const openStock = I.reduce((s, i) => s + i.stock + (i.soldToday || 0), 0);
+
+    document.getElementById('mRev').textContent = '$' + sal.toFixed(2);
+    document.getElementById('mTxn').textContent = tc + ' txns';
+    document.getElementById('mAvg').textContent = tc ? '$' + (sal / tc).toFixed(2) : '$0';
+    document.getElementById('mUnits').textContent = units;
+    document.getElementById('mLow').textContent = I.filter(i => i.stock <= 10).length;
+    document.getElementById('mST').textContent = (openStock ? Math.round(units / openStock * 100) : 0) + '%';
+
+    const top = [...I].sort((a, b) => (b.soldToday || 0) - (a.soldToday || 0))[0];
+    document.getElementById('mTop').textContent = top ? top.emoji + ' ' + top.name : '—';
+    document.getElementById('mTopN').textContent = top ? (top.soldToday || 0) + ' today · ' + (top.totalSold || 0) + ' all-time' : '';
+
+    // Popularity
+    const ranked = [...I].sort((a, b) => (b.totalSold || 0) - (a.totalSold || 0));
+    const maxT = ranked[0]?.totalSold || 1;
+    document.getElementById('popList').innerHTML = ranked.length ? ranked.map((i, x) =>
+        '<div class="rank-item"><div class="rank-pos">' + (x + 1) + '</div><div class="rank-emoji">' + i.emoji +
+        '</div><div class="rank-info"><div class="rank-name">' + esc(i.name) +
+        '</div><div class="rank-bar-track"><div class="rank-bar-fill" style="width:' + Math.round((i.totalSold || 0) / maxT * 100) +
+        '%"></div></div></div><div style="text-align:right"><div class="rank-count">' + (i.totalSold || 0) +
+        '</div><div class="rank-revenue">$' + ((i.totalSold || 0) * i.price).toFixed(0) + '</div></div></div>'
+    ).join('') : '<div style="text-align:center;padding:2rem;color:var(--text-muted)">Add inventory items to see popularity data</div>';
+
+    // Category breakdown
+    const cats = {};
+    I.forEach(i => { if (!cats[i.cat]) cats[i.cat] = { u: 0, r: 0 }; cats[i.cat].u += (i.soldToday || 0); cats[i.cat].r += (i.soldToday || 0) * i.price; });
+    const cc = { drink: 'var(--blue-500)', snack: 'var(--amber-500)', treat: 'var(--purple-500)' };
+    const tr = Object.values(cats).reduce((s, c) => s + c.r, 0) || 1;
+    const catHTML = Object.entries(cats).sort((a, b) => b[1].r - a[1].r).map(([k, d]) =>
+        '<div class="cat-row"><div class="cat-dot" style="background:' + (cc[k] || 'gray') + '"></div><div class="cat-name">' +
+        k.charAt(0).toUpperCase() + k.slice(1) + 's</div><div class="cat-value">$' + d.r.toFixed(2) +
+        '</div><div class="cat-pct">' + Math.round(d.r / tr * 100) + '%</div></div>'
+    ).join('');
+    const barHTML = '<div style="display:flex;gap:3px;margin-top:1rem;height:8px;border-radius:4px;overflow:hidden">' +
+        Object.entries(cats).sort((a, b) => b[1].r - a[1].r).map(([k, d]) =>
+            '<div style="flex:' + Math.max(Math.round(d.r / tr * 100), 1) + ';background:' + (cc[k] || 'gray') + '"></div>'
+        ).join('') + '</div>';
+    document.getElementById('catBrk').innerHTML = catHTML ? catHTML + barHTML : '<div style="text-align:center;padding:2rem;color:var(--text-muted)">No sales data yet</div>';
+
+    // Top spenders
+    const spenders = camperList.map(c => ({ ...c, spent: getAccount(c.name).spentToday })).filter(c => c.spent > 0).sort((a, b) => b.spent - a.spent);
+    document.getElementById('spList').innerHTML = spenders.length ? spenders.map(c =>
+        '<div class="spend-row"><div class="spend-avatar">' + c.name.split(' ').map(w => w[0]).join('') +
+        '</div><div class="spend-name">' + esc(c.name) + '<div style="font-size:.7rem;color:var(--text-muted)">' + esc(c.division) +
+        '</div></div><div class="spend-amount">$' + c.spent.toFixed(2) + '</div></div>'
+    ).join('') : '<div style="text-align:center;padding:1rem;color:var(--text-muted);font-size:.8rem">No purchases yet today</div>';
+
+    // Hourly heatmap
+    const HR = snacks.hourlyActivity || {};
+    const hrs = Object.keys(HR).map(Number).sort((a, b) => a - b);
+    const maxH = Math.max(...Object.values(HR), 1);
+    document.getElementById('heatmap').innerHTML = hrs.length ?
+        '<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:.5rem">Darker = busier</div><div style="display:flex;gap:3px;flex-wrap:wrap">' +
+        hrs.map(h => {
+            const v = HR[h] || 0, p = v / maxH;
+            const bg = p > .7 ? 'var(--snacks)' : p > .4 ? 'var(--snacks-100)' : p > 0 ? 'var(--green-50)' : 'var(--bg-tertiary)';
+            const clr = p > .7 ? 'white' : 'var(--text-muted)';
+            return '<div style="text-align:center"><div class="heat-cell" style="background:' + bg + ';color:' + clr + '">' + v + '</div><div class="heat-label">' + (h > 12 ? h - 12 + 'p' : h + 'a') + '</div></div>';
+        }).join('') + '</div>' :
+        '<div style="text-align:center;padding:1rem;color:var(--text-muted);font-size:.8rem">Process sales to see hourly patterns</div>';
+
+    // Weekly chart
+    const WK = snacks.weeklyRevenue || [];
+    if (WK.length) {
+        const mx = Math.max(...WK.map(d => d.amount), 1);
+        document.getElementById('wChart').innerHTML = WK.map(d =>
+            '<div class="bar-col"><div class="bar-value">$' + d.amount + '</div><div class="bar" style="height:' +
+            Math.max(d.amount / mx * 100, 2) + '%;background:var(--snacks)"></div><div class="bar-label">' + d.day + '</div></div>'
+        ).join('');
+    } else {
+        document.getElementById('wChart').innerHTML = '<div style="text-align:center;padding:2rem;color:var(--text-muted)">Weekly data will appear after the first sales</div>';
+    }
+
+    // Transactions
+    document.getElementById('txC').textContent = todayTx.length;
+    document.getElementById('txBody').innerHTML = todayTx.length ? todayTx.slice(0, 15).map(t =>
+        '<tr><td style="white-space:nowrap">' + esc(t.time) + '</td><td style="font-weight:600">' + esc(t.camper) +
+        '</td><td>' + esc(t.items) + '</td><td style="font-weight:700">$' + t.amount.toFixed(2) + '</td></tr>'
+    ).join('') : '<tr><td colspan="4" style="text-align:center;padding:2rem;color:var(--text-muted)">No transactions today</td></tr>';
+}
+
+// ==========================================================================
+// MODALS & ACTIONS
+// ==========================================================================
+
+window.openM = function(n) { document.getElementById('m-' + n).classList.add('open'); if (n === 'dep' || n === 'limit') popSelects(); };
+window.closeM = function(n) { document.getElementById('m-' + n).classList.remove('open'); };
+
+function popSelects() {
+    const opts = '<option value="">— Select —</option>' + camperList.map(c =>
+        '<option value="' + esc(c.name) + '">' + esc(c.name) + ' (' + esc(c.division) + ')</option>'
+    ).join('');
+    const s1 = document.getElementById('depCamper');
+    const s2 = document.getElementById('limCamper');
+    if (s1) s1.innerHTML = opts;
+    if (s2) s2.innerHTML = opts;
+
+    const s3 = document.getElementById('rItem');
+    if (s3) s3.innerHTML = '<option value="">— Select —</option>' + snacks.inventory.map(i =>
+        '<option value="' + i.id + '">' + i.emoji + ' ' + esc(i.name) + ' (' + i.stock + ' in stock)</option>'
+    ).join('');
+}
+
+window.addDep = function() {
+    const name = document.getElementById('depCamper').value;
+    const amt = parseFloat(document.getElementById('depAmt').value);
+    if (!name || !amt || amt <= 0) { toast('Enter valid camper and amount', 1); return; }
+    if (!snacks.accounts[name]) snacks.accounts[name] = { balance: 0, dailyLimit: 10, spentToday: 0 };
+    snacks.accounts[name].balance += amt;
+    saveSnacksData(snacks);
+    closeM('dep');
+    renderStats(); rAccounts();
+    toast('Added $' + amt.toFixed(2) + ' to ' + name);
+    document.getElementById('depAmt').value = '';
+    document.getElementById('depNote').value = '';
+};
+
+window.setLimit = function() {
+    const name = document.getElementById('limCamper').value;
+    const amt = parseFloat(document.getElementById('limAmt').value);
+    if (!name || !amt) { toast('Enter valid info', 1); return; }
+    if (!snacks.accounts[name]) snacks.accounts[name] = { balance: 0, dailyLimit: 10, spentToday: 0 };
+    snacks.accounts[name].dailyLimit = amt;
+    saveSnacksData(snacks);
+    closeM('limit');
+    rAccounts();
+    toast('Limit set to $' + amt.toFixed(2) + ' for ' + name);
+};
+
+window.addItem = function() {
+    const name = document.getElementById('niName').value.trim();
+    const cat = document.getElementById('niCat').value;
+    const emoji = document.getElementById('niEmoji').value.trim() || '📦';
+    const price = parseFloat(document.getElementById('niPrice').value);
+    const stock = parseInt(document.getElementById('niStock').value) || 0;
+    if (!name || !price) { toast('Fill required fields', 1); return; }
+    const maxId = snacks.inventory.reduce((m, i) => Math.max(m, i.id || 0), 0);
+    snacks.inventory.push({ id: maxId + 1, name, cat, emoji, price, stock, soldToday: 0, totalSold: 0 });
+    saveSnacksData(snacks);
+    closeM('item');
+    rInventory(); renderStats(); rAnalytics();
+    toast('Added ' + emoji + ' ' + name);
+    ['niName', 'niEmoji', 'niPrice', 'niStock'].forEach(id => document.getElementById(id).value = '');
+};
+
+window.restock = function() {
+    const iid = +document.getElementById('rItem').value;
+    const qty = parseInt(document.getElementById('rQty').value);
+    if (!iid || !qty) { toast('Select item and quantity', 1); return; }
+    const item = snacks.inventory.find(i => i.id === iid);
+    if (!item) return;
+    item.stock += qty;
+    saveSnacksData(snacks);
+    closeM('restock');
+    rInventory(); renderStats(); rAnalytics();
+    toast('Restocked ' + item.emoji + ' ' + item.name + ' +' + qty);
+};
+
+// ==========================================================================
+// UTILS
+// ==========================================================================
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function toast(m, e) {
+    const el = document.getElementById('toast');
+    el.textContent = m;
+    el.className = 'toast show' + (e ? ' err' : '');
+    setTimeout(() => el.className = 'toast', 2500);
+}
+
+// Expose for POS cross-reference
+window.CampistrySnacks = {
+    getSnacksData: () => snacks,
+    saveSnacksData,
+    getRoster,
+    getCamperList,
+    getAccount,
+    loadSnacksData,
+    refresh: () => { snacks = loadSnacksData(); ensureAccountsForRoster(); }
+};
+
+document.addEventListener('DOMContentLoaded', init);
 })();
