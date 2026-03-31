@@ -1807,6 +1807,15 @@ function parseCsvLine(line){
 function importRows(rows){
     var added=0,updated=0,newDivisions=0,newGrades=0,newBunks=0,newFamilies=0;
 
+    // ═══ WIPE EXISTING DATA — CSV is the new source of truth ═══
+    roster={};
+    structure={};
+    families={};
+    bunkAsgn={};
+    nextCamperId=1;
+    // Clear Go addresses too
+    try{var goRaw=localStorage.getItem('campistry_go_data');var goData=goRaw?JSON.parse(goRaw):{};goData.addresses={};localStorage.setItem('campistry_go_data',JSON.stringify(goData))}catch(e){}
+
     // ═══ PASS 1: Build camp structure from CSV data ═══
     rows.forEach(function(r){
         if(r.division){
@@ -1825,39 +1834,36 @@ function importRows(rows){
         }
     });
 
-    // ═══ PASS 2: Create/update campers ═══
+    // ═══ PASS 2: Create campers ═══
     rows.forEach(function(r){
-        var isNew=!roster[r.name];
-        if(isNew)added++;else updated++;
-        var existingId=roster[r.name]?roster[r.name].camperId:null;
-        if(!existingId){existingId=nextCamperId;nextCamperId++}
+        added++;
+        var existingId=nextCamperId;nextCamperId++;
 
-        var existing=roster[r.name]||{};
         roster[r.name]={
             camperId:existingId,
-            dob:r.dob||existing.dob||'',
-            gender:r.gender||existing.gender||'',
-            school:r.school||existing.school||'',
-            schoolGrade:r.schoolGrade||existing.schoolGrade||'',
-            teacher:r.teacher||existing.teacher||'',
-            division:r.division||existing.division||'',
-            grade:r.grade||existing.grade||'',
-            bunk:r.bunk||existing.bunk||'',
-            street:r.street||existing.street||'',
-            city:r.city||existing.city||'',
-            state:r.state||existing.state||'',
-            zip:r.zip||existing.zip||'',
-            parent1Name:r.parent1Name||existing.parent1Name||'',
-            parent1Phone:r.parent1Phone||existing.parent1Phone||'',
-            parent1Email:r.parent1Email||existing.parent1Email||'',
-            emergencyName:r.emergencyName||existing.emergencyName||'',
-            emergencyPhone:r.emergencyPhone||existing.emergencyPhone||'',
-            emergencyRel:r.emergencyRel||existing.emergencyRel||'',
-            allergies:r.allergies||existing.allergies||'',
-            medications:r.medications||existing.medications||'',
-            dietary:r.dietary||existing.dietary||'',
-            teams:Object.keys(r.teams).length?r.teams:(existing.teams||{}),
-            team:Object.values(r.teams)[0]||existing.team||''
+            dob:r.dob||'',
+            gender:r.gender||'',
+            school:r.school||'',
+            schoolGrade:r.schoolGrade||'',
+            teacher:r.teacher||'',
+            division:r.division||'',
+            grade:r.grade||'',
+            bunk:r.bunk||'',
+            street:r.street||'',
+            city:r.city||'',
+            state:r.state||'',
+            zip:r.zip||'',
+            parent1Name:r.parent1Name||'',
+            parent1Phone:r.parent1Phone||'',
+            parent1Email:r.parent1Email||'',
+            emergencyName:r.emergencyName||'',
+            emergencyPhone:r.emergencyPhone||'',
+            emergencyRel:r.emergencyRel||'',
+            allergies:r.allergies||'',
+            medications:r.medications||'',
+            dietary:r.dietary||'',
+            teams:r.teams||{},
+            team:Object.values(r.teams)[0]||''
         };
 
         // Sync address to Go
@@ -1923,14 +1929,14 @@ function importRows(rows){
     save();closeModal('csvModal');render(curPage);
 
     // Build summary
-    var summary=added+' campers added';
-    if(updated>0)summary+=', '+updated+' updated';
+    var summary=added+' campers imported';
     if(newDivisions>0)summary+=', '+newDivisions+' division'+(newDivisions>1?'s':'');
     if(newGrades>0)summary+=', '+newGrades+' grade'+(newGrades>1?'s':'');
     if(newBunks>0)summary+=', '+newBunks+' bunk'+(newBunks>1?'s':'');
     if(newFamilies>0)summary+=', '+newFamilies+' famil'+(newFamilies>1?'ies':'y');
+    summary+=' — previous data replaced';
     toast(summary);
-    console.log('[Me] CSV import complete:',summary);
+    console.log('[Me] CSV import (full overwrite):',summary);
 }
 
 function exportCsv(){
