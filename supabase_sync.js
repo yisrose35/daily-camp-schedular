@@ -701,10 +701,18 @@
 
         showSyncToast(`📥 Update from ${payload.new?.scheduler_name || 'another scheduler'}`);
         
-        // Auto-refresh after remote change
-        setTimeout(() => {
-            refreshMultiSchedulerView(_currentDateKey, true);
-        }, 500);
+        // ★★★ AUTO MODE GUARD: Don't refresh from cloud if _perBunkSlots are live ★★★
+        var _isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
+        var _hasLivePerBunk = window.divisionTimes && Object.values(window.divisionTimes).some(function(dt) { return dt && dt._isPerBunk; });
+        
+        if (_isAutoMode && _hasLivePerBunk) {
+            log('Skipping remote refresh — auto mode _perBunkSlots active in memory');
+        } else {
+            // Auto-refresh after remote change (safe — no per-bunk data to lose)
+            setTimeout(() => {
+                refreshMultiSchedulerView(_currentDateKey, true);
+            }, 500);
+        }
     }
 
     // =========================================================================
