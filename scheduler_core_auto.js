@@ -1265,13 +1265,597 @@
                 bunk, grade, bunkSize, freeWindows, totalFree: freeWindows.reduce((s, w) => s + w.duration, 0),
                 sports: { required: sportCount, priorityList: sportPriorityList, layer: sportLayer, constraints: sportConstraints },
                 specials: { required: specialCount, priorityList: specialPriorityList, layer: specialLayer, constraints: specialConstraints },
-                snack: snackOptions, elective: electiveInfo, genericNeeds, adjacentBunk
+               snack: snackOptions, elective: electiveInfo, genericNeeds, adjacentBunk
             };
         }
 
 
         // =====================================================================
-        // PHASE 2: DRAFT-STYLE ASSIGNMENT
+        // GFD — GLOBAL FIELD DEMAND TRACKER
+        // =====================================================================
+        const GFD_SLICE = 5;
+        let _gfdDemand = new Map();
+        let _gfdTotalSeats = 0;
+        let _gfdCampStart = 540;
+        let _gfdCampEnd = 960;
+
+        function gfdInit() {
+            _gfdDemand.clear();
+            _gfdCampStart = Math.min(...Object.values(divisions).map(d => parseTimeToMinutes(d.startTime) || 540));
+            _gfdCampEnd = Math.max(...Object.values(divisions).map(d => parseTimeToMinutes(d.endTime) || 960));
+            _gfdTotalSeats = 0;
+            Object.values(fieldLedger).forEach(f => {
+                if (f._isSpecialLocation) return;
+                _gfdTotalSeats += (f.capacity || 1);
+            });
+            for (let t = _gfdCampStart; t < _gfdCampEnd; t += GFD_SLICE) {
+                _gfdDemand.set(t, new Set());
+            }
+        }
+
+        function gfdAddConsumer(startMin, endMin, bunk) {
+            const b = String(bunk);
+            for (let t = startMin; t < endMin; t += GFD_SLICE) {
+                const s = _gfdDemand.get(t - (t % GFD_SLICE));
+                if (s) s.add(b);
+            }
+        }
+
+        function gfdRemoveConsumer(startMin, endMin, bunk) {
+            const b = String(bunk);
+            for (let t = startMin; t < endMin; t += GFD_SLICE) {
+                const s = _gfdDemand.get(t - (t % GFD_SLICE));
+                if (s) s.delete(b);
+            }
+        }
+
+        function gfdGetDemandAt(t) {
+            const s = _gfdDemand.get(t - (t % GFD_SLICE));
+            return s ? s.size : 0;
+        }
+
+        function gfdCongestionScore(startMin, endMin) {
+            let total = 0;
+            for (let t = startMin; t < endMin; t += GFD_SLICE) total += gfdGetDemandAt(t);
+            return total;
+        }
+
+        function gfdCanFitSport(startMin, endMin) {
+            for (let t = startMin; t < endMin; t += GFD_SLICE) {
+                if (gfdGetDemandAt(t) >= _gfdTotalSeats) return false;
+            }
+            return true;
+        }
+
+        function gfdGetRemainingSeats(startMin, endMin) {
+            let min = _gfdTotalSeats;
+            for (let t = startMin; t < endMin; t += GFD_SLICE) {
+                const rem = _gfdTotalSeats - gfdGetDemandAt(t);
+                if (rem < min) min = rem;
+            }
+            return min;
+        }
+
+        window._gfdReport = function() {
+            console.log('%c\u2550\u2550\u2550 FIELD DEMAND REPORT \u2550\u2550\u2550', 'color:#D84315;font-weight:bold');
+            console.log('Total field seats: ' + _gfdTotalSeats);
+            for (let t = _gfdCampStart; t < _gfdCampEnd; t += 15) {
+                let maxD = 0;
+                for (let s = t; s < Math.min(t + 15, _gfdCampEnd); s += GFD_SLICE) {
+                    const d = gfdGetDemandAt(s); if (d > maxD) maxD = d;
+                }
+                const rem = _gfdTotalSeats - maxD;
+                console.log('  ' + minutesToTimeLabel(t) + ': ' + maxD + '/' + _gfdTotalSeats + (rem <= 0 ? ' FULL' : rem <= 3 ? ' TIGHT' : ''));
+            }
+        };
+
+
+        // =====================================================================
+        // TIMELINE HELPERS
+        // =====================================================================
+
+        function gapGetBunkFreeWindows(bunk, grade) {
+            const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+            const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+            const tl = (bunkTimelines[bunk] || []).sort((a, b) => a.startMin - b.startMin);
+            const wins = [];
+            let cur = gs;
+            tl.forEach(b => {
+                if (b.startMin > cur) wins.push({ start: cur, end: b.startMin, duration: b.startMin - cur });
+                cur = Math.max(cur, b.endMin);
+            });
+            if (cur < ge) wins.push({ start: cur, end: ge, duration: ge - cur });
+            return wins;
+        }
+
+        function gapCanFitInWindows(bunk, grade, startMin, endMin) {
+            return gapGetBunkFreeWindows(bunk, grade).some(w => startMin >= w.start && endMin <= w.end);
+        }
+
+        function gapInsertBlock(bunk, block) {
+            bunkTimelines[bunk].push(block);
+            bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
+        }
+
+        function gapGetCandidateStarts(bunk, grade, duration, layerStart, layerEnd, step) {
+            step = step || 5;
+            const wins = gapGetBunkFreeWindows(bunk, grade);
+            const cands = [];
+            for (const w of wins) {
+                const es = Math.max(w.start, layerStart || 0);
+                const ee = Math.min(w.end, layerEnd || 1440);
+                if (ee - es < duration) continue;
+                for (let t = es; t + duration <= ee; t += step) cands.push(t);
+                const endAligned = ee - duration;
+                if (endAligned > es && !cands.includes(endAligned)) cands.push(endAligned);
+            }
+            return cands;
+        }
+
+
+        // =====================================================================
+        // GLOBAL ACTIVITY PACKER v5.0
+        // =====================================================================
+        // Replaces Phase 2 (runDraft) + Phase 3 (greedyPackBunk) + Phase 4
+        // (executeTemplates) + Step 4 (AutoSolverEngine).
+        //
+        // Places ALL activities across ALL bunks simultaneously, in order of
+        // constraint tightness: swim -> specials -> snack -> sport+field.
+        // =====================================================================
+
+        function globalActivityPacker(allGrades, shoppingLists, todaysSwimmers) {
+
+            gfdInit();
+            // Register Phase 0 field consumers in GFD
+            allGrades.forEach(grade => {
+                getBunksForGrade(grade, divisions).forEach(bunk => {
+                    (bunkTimelines[bunk] || []).forEach(block => {
+                        const bt = (block.type || '').toLowerCase();
+                        if (bt === 'league' || bt === 'specialty_league' || bt === 'sport' || bt === 'sports') {
+                            gfdAddConsumer(block.startMin, block.endMin, bunk);
+                        }
+                    });
+                });
+            });
+            log('[GAP] GFD: ' + _gfdTotalSeats + ' seats');
+
+            // Track per-bunk assignments for same-day repeat prevention
+            const bunkDoneActs = new Map();
+            const bunkDoneFields = new Map();
+            allGrades.forEach(grade => {
+                getBunksForGrade(grade, divisions).forEach(bunk => {
+                    const acts = new Set(), flds = new Set();
+                    (bunkTimelines[bunk] || []).forEach(b => {
+                        const a = (b.event || b._assignedSpecial || '').toLowerCase().trim();
+                        if (a && a !== 'free') acts.add(a);
+                        if (b.field) flds.add(b.field.toLowerCase().trim());
+                    });
+                    bunkDoneActs.set(String(bunk), acts);
+                    bunkDoneFields.set(String(bunk), flds);
+                });
+            });
+
+            // ═══════════════════════════════════════════════════════════
+            // STEP A: PLACE ALL SWIM
+            // ═══════════════════════════════════════════════════════════
+            log('[GAP-A] Placing swim...');
+            let swimPlaced = 0;
+
+            const swimGrades = allGrades
+                .filter(g => {
+                    const sl = (layersByGrade[g] || []).find(l => (l.type || '').toLowerCase() === 'swim');
+                    return sl && todaysSwimmers[g] && todaysSwimmers[g].size > 0;
+                })
+                .sort((a, b) => ((staggerPlan[a] || {}).offset || 0) - ((staggerPlan[b] || {}).offset || 0));
+
+            for (const grade of swimGrades) {
+                const swimLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'swim');
+                const c = resolveConstraints(swimLayer, 'swim');
+                const swimmers = [...todaysSwimmers[grade]].map(String);
+                const mrc = getSwimWindow(grade);
+                const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                let winS = Math.max(swimLayer.startMin || 0, gs);
+                let winE = Math.min(swimLayer.endMin || 1440, ge);
+                if (mrc) { winS = Math.max(mrc.start, winS); winE = Math.min(mrc.end, winE); }
+                const dur = c.dIdeal || c.dMin;
+                const rotBand = (staggerPlan[grade] || {}).typeBands?.swim || null;
+
+                let bestStart = null, bestScore = -Infinity;
+                for (let t = winS; t + dur <= winE; t += 5) {
+                    if (!canUsePoolAtTime(grade, t, t + dur)) continue;
+                    if (!swimmers.every(bk => gapCanFitInWindows(bk, grade, t, t + dur))) continue;
+                    let score = gfdCongestionScore(t, t + dur) * 3;
+                    if (rotBand && t >= rotBand.start && t + dur <= rotBand.end) score += 200;
+                    else if (rotBand) score -= 50;
+                    score -= getCrossGradeConflicts('swim', t, t + dur, grade) * 5000;
+                    if (score > bestScore) { bestScore = score; bestStart = t; }
+                }
+
+                if (bestStart === null) { warn('[GAP-A] No swim slot for ' + grade); continue; }
+
+                swimmers.forEach(bk => {
+                    gapInsertBlock(bk, {
+                        startMin: bestStart, endMin: bestStart + dur,
+                        type: 'swim', event: swimLayer.event || 'Swim',
+                        layer: swimLayer, _classification: 'windowed', _committed: true,
+                        _activityLocked: true, _source: 'gap_swim'
+                    });
+                    bunkDoneActs.get(bk)?.add('swim');
+                });
+                registerPoolUsage(grade, bestStart, bestStart + dur);
+                registerCrossGrade(grade, 'swim', bestStart, bestStart + dur);
+                swimPlaced += swimmers.length;
+            }
+            log('[GAP-A] Swim: ' + swimPlaced + ' bunks');
+
+
+            // ═══════════════════════════════════════════════════════════
+            // STEP B: PLACE ALL SPECIALS
+            // ═══════════════════════════════════════════════════════════
+            log('[GAP-B] Placing specials...');
+            let specialsPlaced = 0;
+
+            const specNeeds = [];
+            allGrades.forEach(grade => {
+                getBunksForGrade(grade, divisions).forEach(bunk => {
+                    const list = shoppingLists[String(bunk)];
+                    if (!list?.specials?.priorityList) return;
+                    let alreadyPlaced = (bunkTimelines[bunk] || []).filter(b => (b.type || '').toLowerCase() === 'special').length;
+                    const remaining = Math.max(0, (list.specials.required || 0) - alreadyPlaced);
+                    if (remaining <= 0) return;
+                    let count = 0;
+                    for (const sp of list.specials.priorityList) {
+                        if (count >= remaining) break;
+                        let dur = getSpecialDuration(sp.name, activityProperties, globalSettings);
+                        if (!dur || dur <= 0) dur = sp.totalDuration || sp.duration || 30;
+                        const loc = sp.location || getLocationForSpecial(sp.name, activityProperties, globalSettings);
+                        const si = getSpecialSharingInfo(sp.name, activityProperties, globalSettings);
+                        const specLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'special');
+                        specNeeds.push({
+                            bunk: String(bunk), grade, special: sp, duration: dur, location: loc,
+                            sharingInfo: si, capacity: si.capacity || getSpecialCapacity(sp.name, activityProperties, globalSettings),
+                            layerStart: specLayer?.startMin || parseTimeToMinutes(divisions[grade]?.startTime) || 540,
+                            layerEnd: specLayer?.endMin || parseTimeToMinutes(divisions[grade]?.endTime) || 960,
+                            isScarce: sp.isScarce || false,
+                            tightness: (si.capacity || 1) * 100 + dur + (sp.isScarce ? -5000 : 0)
+                        });
+                        count++;
+                    }
+                });
+            });
+
+            specNeeds.sort((a, b) => a.tightness - b.tightness);
+
+            for (const need of specNeeds) {
+                const { bunk, grade, special, duration, location } = need;
+                const assigned = bunkDoneActs.get(bunk);
+                if (assigned?.has(special.name.toLowerCase().trim())) continue;
+
+                const cands = gapGetCandidateStarts(bunk, grade, duration, need.layerStart, need.layerEnd, 5);
+                if (cands.length === 0) continue;
+
+                const rotBand = (staggerPlan[grade] || {}).typeBands?.special || null;
+                let bestStart = null, bestScore = -Infinity;
+                const isOnField = isSpecialOnField(special.name, activityProperties, globalSettings);
+
+                for (const t of cands) {
+                    if (!canUseSpecialAtTime(special.name, grade, t, t + duration)) continue;
+                    if (location && !isFieldAvailable(location, t, t + duration, bunk, grade)) continue;
+                    let score = 0;
+                    if (!isOnField) score += gfdCongestionScore(t, t + duration) * 3;
+                    else score -= gfdCongestionScore(t, t + duration) * 2;
+                    if (rotBand && t >= rotBand.start && t + duration <= rotBand.end) score += 200;
+                    else if (rotBand) score -= 50;
+                    score -= getCrossGradeConflicts('special', t, t + duration, grade, special.name) * 3000;
+                    if (score > bestScore) { bestScore = score; bestStart = t; }
+                }
+
+                if (bestStart === null) continue;
+
+                gapInsertBlock(bunk, {
+                    startMin: bestStart, endMin: bestStart + duration,
+                    type: 'special', event: special.name, layer: null,
+                    _classification: 'windowed', _committed: true, _activityLocked: true,
+                    _assignedSpecial: special.name, _specialDuration: duration,
+                    _specialLocation: location || null, _source: 'gap_special'
+                });
+                registerSpecialUsage(special.name, grade, bestStart, bestStart + duration);
+                if (location) claimField(location, bestStart, bestStart + duration, bunk, grade, special.name);
+                if (isOnField) gfdAddConsumer(bestStart, bestStart + duration, bunk);
+                registerCrossGrade(grade, 'special', bestStart, bestStart + duration, special.name);
+                assigned?.add(special.name.toLowerCase().trim());
+                if (location) bunkDoneFields.get(bunk)?.add(location.toLowerCase().trim());
+                specialsPlaced++;
+            }
+            log('[GAP-B] Specials: ' + specialsPlaced);
+
+
+            // ═══════════════════════════════════════════════════════════
+            // STEP C: PLACE ALL SNACKS
+            // ═══════════════════════════════════════════════════════════
+            log('[GAP-C] Placing snacks...');
+            let snacksPlaced = 0;
+
+            allGrades.forEach(grade => {
+                const snL = (layersByGrade[grade] || []).find(l => ['snacks', 'snack'].includes((l.type || '').toLowerCase()));
+                if (!snL) return;
+                const c = resolveConstraints(snL, 'snacks');
+                const dur = c.dIdeal || c.dMin;
+                const lS = snL.startMin || parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                const lE = snL.endMin || parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                const rotBand = (staggerPlan[grade] || {}).typeBands?.snack || null;
+
+                getBunksForGrade(grade, divisions).forEach(bunk => {
+                    const bk = String(bunk);
+                    if ((bunkTimelines[bk] || []).some(b => ['snacks', 'snack'].includes((b.type || '').toLowerCase()))) return;
+                    const cands = gapGetCandidateStarts(bk, grade, dur, lS, lE, 5);
+                    if (cands.length === 0) return;
+                    let bestStart = null, bestScore = -Infinity;
+                    for (const t of cands) {
+                        let score = gfdCongestionScore(t, t + dur) * 3;
+                        if (rotBand && t >= rotBand.start && t + dur <= rotBand.end) score += 200;
+                        else if (rotBand) score -= 50;
+                        if (score > bestScore) { bestScore = score; bestStart = t; }
+                    }
+                    if (bestStart === null) return;
+                    gapInsertBlock(bk, {
+                        startMin: bestStart, endMin: bestStart + dur,
+                        type: 'snacks', event: snL.event || 'Snacks', layer: snL,
+                        _classification: 'windowed', _committed: true,
+                        _activityLocked: true, _source: 'gap_snack'
+                    });
+                    bunkDoneActs.get(bk)?.add('snacks');
+                    snacksPlaced++;
+                });
+            });
+            log('[GAP-C] Snacks: ' + snacksPlaced);
+
+
+            // ═══════════════════════════════════════════════════════════
+            // STEP D: ASSIGN SPORT + FIELD TO ALL REMAINING GAPS
+            // ═══════════════════════════════════════════════════════════
+            log('[GAP-D] Assigning sport + fields...');
+            let sportPlaced = 0, sportFree = 0;
+
+            const sportBlocks = [];
+            allGrades.forEach(grade => {
+                const sL = (layersByGrade[grade] || []).find(l => ['sport', 'sports'].includes((l.type || '').toLowerCase()));
+                const sC = sL ? resolveConstraints(sL, 'sport') : resolveConstraints(null, 'sport');
+                getBunksForGrade(grade, divisions).forEach(bunk => {
+                    const bk = String(bunk);
+                    const wins = gapGetBunkFreeWindows(bk, grade);
+                    for (const w of wins) {
+                        if (w.duration < sC.dMin) continue;
+                        let n = Math.ceil(w.duration / sC.dMax);
+                        while (n > 1 && n * sC.dMin > w.duration) n--;
+                        if (n === 0) n = 1;
+                        const bd = Math.floor(w.duration / n);
+                        let rem = w.duration - bd * n, cur = w.start;
+                        for (let i = 0; i < n; i++) {
+                            let d = bd + (rem > 0 ? 1 : 0); if (rem > 0) rem--;
+                            d = Math.max(sC.dMin, Math.min(sC.dMax, Math.floor(d / 5) * 5));
+                            if (d < sC.dMin) d = sC.dMin;
+                            const end = Math.min(cur + d, w.end);
+                            if (end - cur < sC.dMin) break;
+                            sportBlocks.push({ bunk: bk, grade, startMin: cur, endMin: end, duration: end - cur, sportC: sC, sportLayer: sL });
+                            cur = end;
+                        }
+                    }
+                });
+            });
+
+            sportBlocks.sort((a, b) => a.startMin - b.startMin || a.bunk.localeCompare(b.bunk));
+            log('[GAP-D] ' + sportBlocks.length + ' sport blocks to fill');
+
+            // Group overlapping blocks for simultaneous assignment
+            const groups = [];
+            if (sportBlocks.length > 0) {
+                let cur = { s: sportBlocks[0].startMin, e: sportBlocks[0].endMin, blocks: [sportBlocks[0]] };
+                for (let i = 1; i < sportBlocks.length; i++) {
+                    const b = sportBlocks[i];
+                    if (b.startMin < cur.e) { cur.e = Math.max(cur.e, b.endMin); cur.blocks.push(b); }
+                    else { groups.push(cur); cur = { s: b.startMin, e: b.endMin, blocks: [b] }; }
+                }
+                groups.push(cur);
+            }
+
+            for (const group of groups) {
+                // Nudge if demand > supply
+                const rem = gfdGetRemainingSeats(group.s, group.e);
+                if (group.blocks.length > rem) {
+                    const excess = group.blocks.length - Math.max(rem, 0);
+                    let nudged = 0;
+                    for (let ei = group.blocks.length - 1; ei >= 0 && nudged < excess; ei--) {
+                        const eb = group.blocks[ei];
+                        const tl = bunkTimelines[eb.bunk] || [];
+                        for (const pl of tl) {
+                            if (pl._fixed || pl._source === 'phase0') continue;
+                            const pt = (pl.type || '').toLowerCase();
+                            if (!['swim', 'snack', 'snacks'].includes(pt)) continue;
+                            const plDur = pl.endMin - pl.startMin;
+                            if (plDur > eb.duration + 10) continue;
+                            if (gfdCongestionScore(pl.startMin, pl.endMin) >= gfdCongestionScore(eb.startMin, eb.endMin)) continue;
+                            if (pt === 'swim' && !canUsePoolAtTime(eb.grade, eb.startMin, eb.startMin + plDur)) continue;
+                            const oldS = pl.startMin, oldE = pl.endMin;
+                            pl.startMin = eb.startMin; pl.endMin = eb.startMin + plDur;
+                            eb.startMin = oldS; eb.endMin = oldE; eb.duration = oldE - oldS;
+                            nudged++;
+                            bunkTimelines[eb.bunk].sort((a, b) => a.startMin - b.startMin);
+                            break;
+                        }
+                    }
+                    if (nudged > 0) log('[GAP-D] Nudged ' + nudged + ' blocks at ' + minutesToTimeLabel(group.s));
+                }
+
+                // Assign sport+field to each block
+                for (const blk of group.blocks) {
+                    const { bunk, grade, startMin, endMin } = blk;
+                    const acts = bunkDoneActs.get(bunk) || new Set();
+                    const flds = bunkDoneFields.get(bunk) || new Set();
+                    const pl = shoppingLists[bunk]?.sports?.priorityList || [];
+
+                    let bestPick = null, bestScore = Infinity;
+
+                    for (const sport of pl) {
+                        if (acts.has(sport.name.toLowerCase().trim())) continue;
+                        for (const fn of (sport.fields || [])) {
+                            if (flds.has(fn.toLowerCase().trim())) continue;
+                            if (!isFieldAvailable(fn, startMin, endMin, bunk, grade)) continue;
+                            const fl = fieldLedger[fn];
+                            if (isRainy && fl && !fl.isIndoor) continue;
+                            const fp = activityProperties[fn] || {};
+                            if (fp.limitUsage?.enabled && !(grade in (fp.limitUsage.divisions || {}))) continue;
+                            if (fp.preferences?.enabled && fp.preferences?.exclusive) {
+                                const pfl = fp.preferences.list || [];
+                                if (pfl.length > 0 && !pfl.includes(grade)) continue;
+                            }
+                            const ap = activityProperties[sport.name] || {};
+                            if (ap.limitUsage?.enabled && !(grade in (ap.limitUsage.divisions || {}))) continue;
+                            if (ap.preferences?.enabled && ap.preferences?.exclusive) {
+                                const apl = ap.preferences.list || [];
+                                if (apl.length > 0 && !apl.includes(grade)) continue;
+                            }
+                            if (Array.isArray(fp.timeRules) && fp.timeRules.length > 0) {
+                                const avail = fp.timeRules.filter(r => r.type === 'Available' || !r.type);
+                                if (avail.length > 0 && !avail.some(r => {
+                                    const rs = r.startMin ?? parseTimeToMinutes(r.start);
+                                    const re = r.endMin ?? parseTimeToMinutes(r.end);
+                                    if (rs == null || re == null) return true;
+                                    if (r.divisions?.length > 0 && !r.divisions.includes(grade)) return true;
+                                    return startMin >= rs && endMin <= re;
+                                })) continue;
+                                let blocked = false;
+                                for (const r of fp.timeRules.filter(r => r.type === 'Unavailable')) {
+                                    const rs = r.startMin ?? parseTimeToMinutes(r.start);
+                                    const re = r.endMin ?? parseTimeToMinutes(r.end);
+                                    if (rs == null || re == null) continue;
+                                    if (r.divisions?.length > 0 && !r.divisions.includes(grade)) continue;
+                                    if (!(endMin <= rs || startMin >= re)) { blocked = true; break; }
+                                }
+                                if (blocked) continue;
+                            }
+                            if (window.SchedulerCoreUtils?.checkPlayerCountForSport) {
+                                const bm = (window.getBunkMetaData?.() || window.bunkMetaData || {});
+                                const sz = bm[bunk]?.size || 0;
+                                if (sz > 0) {
+                                    const pc = window.SchedulerCoreUtils.checkPlayerCountForSport(sport.name, sz, false);
+                                    if (pc && !pc.valid && pc.severity === 'hard') continue;
+                                }
+                            }
+                            let rotScore = 0;
+                            if (window.RotationEngine?.calculateRotationScore) {
+                                rotScore = window.RotationEngine.calculateRotationScore({
+                                    bunkName: bunk, activityName: sport.name, divisionName: grade,
+                                    beforeSlotIndex: 0, allActivities: null, activityProperties
+                                });
+                            }
+                            const claims = fieldLedger[fn]?.claims || [];
+                            const overlap = claims.filter(c => c.startMin < endMin && c.endMin > startMin && c.bunk !== bunk);
+                            let coloc = 0;
+                            if (overlap.length > 0) {
+                                coloc = overlap.some(c => (c.activity || '').toLowerCase() === sport.name.toLowerCase()) ? -1500 : 300;
+                            }
+                            const bNum = parseInt(String(bunk).replace(/\D/g, '')) || 0;
+                            const adj = overlap.some(c => Math.abs((parseInt(String(c.bunk).replace(/\D/g, '')) || 0) - bNum) <= 1) ? -500 : 0;
+                            const total = rotScore + coloc + adj;
+                            if (total < bestScore) { bestScore = total; bestPick = { name: sport.name, field: fn }; }
+                        }
+                    }
+
+                    // Last resort: allow repeats
+                    if (!bestPick) {
+                        for (const sport of pl) {
+                            for (const fn of (sport.fields || [])) {
+                                if (!isFieldAvailable(fn, startMin, endMin, bunk, grade)) continue;
+                                if (isRainy && fieldLedger[fn] && !fieldLedger[fn].isIndoor) continue;
+                                bestPick = { name: sport.name, field: fn };
+                                break;
+                            }
+                            if (bestPick) break;
+                        }
+                    }
+
+                    if (bestPick) {
+                        gapInsertBlock(bunk, {
+                            startMin, endMin, type: 'sport', event: bestPick.name,
+                            layer: blk.sportLayer || null,
+                            _classification: 'gap', _committed: true, _activityLocked: false,
+                            _assignedSport: bestPick.name, field: bestPick.field,
+                            _draftActivity: bestPick.name, _draftField: bestPick.field,
+                            _source: 'gap_sport'
+                        });
+                        claimField(bestPick.field, startMin, endMin, bunk, grade, bestPick.name);
+                        gfdAddConsumer(startMin, endMin, bunk);
+                        acts.add(bestPick.name.toLowerCase().trim());
+                        flds.add(bestPick.field.toLowerCase().trim());
+                        sportPlaced++;
+                    } else {
+                        gapInsertBlock(bunk, {
+                            startMin, endMin, type: 'slot', event: 'General Activity Slot',
+                            layer: blk.sportLayer || null,
+                            _classification: 'gap', _committed: true, _activityLocked: false,
+                            _source: 'gap_unfilled'
+                        });
+                        gfdAddConsumer(startMin, endMin, bunk);
+                        sportFree++;
+                    }
+                }
+            }
+            log('[GAP-D] Sport: ' + sportPlaced + ' filled, ' + sportFree + ' unfilled');
+
+
+            // ═══════════════════════════════════════════════════════════
+            // STEP E: EXPANSION — FILL MICRO-GAPS
+            // ═══════════════════════════════════════════════════════════
+            log('[GAP-E] Expanding...');
+            let absorbed = 0;
+
+            allGrades.forEach(grade => {
+                const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                getBunksForGrade(grade, divisions).forEach(bunk => {
+                    const bk = String(bunk);
+                    const tl = bunkTimelines[bk];
+                    if (!tl || tl.length === 0) return;
+                    tl.sort((a, b) => a.startMin - b.startMin);
+                    const gaps = [];
+                    if (tl[0].startMin > gs) gaps.push({ start: gs, end: tl[0].startMin, idx: -1 });
+                    for (let i = 0; i < tl.length - 1; i++) {
+                        if (tl[i].endMin < tl[i + 1].startMin) gaps.push({ start: tl[i].endMin, end: tl[i + 1].startMin, idx: i });
+                    }
+                    if (tl[tl.length - 1].endMin < ge) gaps.push({ start: tl[tl.length - 1].endMin, end: ge, idx: tl.length - 1 });
+
+                    for (const gap of gaps) {
+                        const gd = gap.end - gap.start;
+                        if (gd <= 0) continue;
+                        const prev = gap.idx >= 0 ? tl[gap.idx] : null;
+                        const next = gap.idx + 1 < tl.length ? tl[gap.idx + 1] : null;
+                        let done = false;
+                        if (prev && !prev._fixed) {
+                            const pc = resolveConstraints(prev.layer, (prev.type || 'slot').toLowerCase(), prev);
+                            if ((prev.endMin - prev.startMin) + gd <= pc.dMax) { prev.endMin += gd; absorbed++; done = true; }
+                        }
+                        if (!done && next && !next._fixed) {
+                            const nc = resolveConstraints(next.layer, (next.type || 'slot').toLowerCase(), next);
+                            if ((next.endMin - next.startMin) + gd <= nc.dMax) { next.startMin -= gd; absorbed++; done = true; }
+                        }
+                        if (!done && gd <= 10) {
+                            if (prev && !prev._fixed) { prev.endMin += gd; absorbed++; }
+                            else if (next && !next._fixed) { next.startMin -= gd; absorbed++; }
+                        }
+                    }
+                    tl.sort((a, b) => a.startMin - b.startMin);
+                });
+            });
+            log('[GAP-E] Absorbed ' + absorbed + ' micro-gaps');
+
+            return { swimPlaced, specialsPlaced, snacksPlaced, sportPlaced, sportFree, absorbed };
+        }
+
+
+        // =====================================================================
+        // PHASE 2: DRAFT-STYLE ASSIGNMENT (kept for manual mode fallback)
         // =====================================================================
 
         function runDraft(shoppingLists) {
@@ -2404,13 +2988,15 @@
         // =====================================================================
         // RESET STATE (for iteration loop)
         // =====================================================================
-        function resetIterState() {
+       function resetIterState() {
             allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = []; }));
             Object.keys(sharedLeagueTime).forEach(k => delete sharedLeagueTime[k]);
             resourceCalendar.swim = {};
             // ★ v4.0: Reset resource tracker + field ledger between iterations
             rtReset();
             initFieldLedger();
+            // ★ v5.0: Reset GFD
+            gfdInit();
         }
 
 
@@ -2482,44 +3068,25 @@
             const shoppingLists = {};
             allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { shoppingLists[bunk] = buildBunkShoppingList(bunk, grade); }));
 
-            // Phase 2: Draft
-            const draftResults = runDraft(shoppingLists);
-
-            // ★ v4.0: Clear ONLY DRAFT field claims — keep pinned/phase0 claims
-            // The draft used temporary times. The packer will re-claim at actual times.
-            Object.values(fieldLedger).forEach(ledger => {
-                ledger.claims = ledger.claims.filter(c => {
-                    // Keep claims from Phase 0 blocks (walls)
-                    const bunkTl = bunkTimelines[c.bunk] || [];
-                    return bunkTl.some(b => b._fixed && overlaps(b.startMin, b.endMin, c.startMin, c.endMin));
-                });
-            });
-
-            // Phase 3: Greedy pack in stagger order
-            const allTemplates = {};
-            const staggeredGrades = [...allGrades].sort((a, b) => ((staggerPlan[a] || {}).offset || 0) - ((staggerPlan[b] || {}).offset || 0));
-
+            // ★ v5.0: Select today's swimmers
             todaysSwimmers = {};
+            const staggeredGrades = [...allGrades].sort((a, b) =>
+                ((staggerPlan[a] || {}).offset || 0) - ((staggerPlan[b] || {}).offset || 0)
+            );
             staggeredGrades.forEach(grade => {
                 const swimLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'swim');
                 if (swimLayer) {
-                    todaysSwimmers[grade] = new Set(getSwimmersForToday(grade, getBunksForGrade(grade, divisions), swimLayer, _iterSeed).map(String));
+                    todaysSwimmers[grade] = new Set(
+                        getSwimmersForToday(grade, getBunksForGrade(grade, divisions), swimLayer, _iterSeed).map(String)
+                    );
                 }
             });
 
-            staggeredGrades.forEach(grade => {
-                getBunksForGrade(grade, divisions).forEach(bunk => {
-                    const swimsToday = todaysSwimmers[grade] ? todaysSwimmers[grade].has(String(bunk)) : true;
-                    allTemplates[bunk] = greedyPackBunk(
-                        bunk, grade,
-                        draftResults[bunk] || { sports: [], specials: [], elective: [], generic: [], usedActivities: new Set() },
-                        shoppingLists[bunk], (staggerPlan[grade] || { offset: 0 }).offset, swimsToday
-                    );
-                });
-            });
-
-            // Phase 4: Execute
-            executeTemplates(allTemplates);
+            // ★ v5.0: GLOBAL ACTIVITY PACKER (replaces Phase 2 + 3 + 4 + Solver)
+            const gapResult = globalActivityPacker(allGrades, shoppingLists, todaysSwimmers);
+            log('[ITER] GAP: swim=' + gapResult.swimPlaced + ' spec=' + gapResult.specialsPlaced +
+                ' snack=' + gapResult.snacksPlaced + ' sport=' + gapResult.sportPlaced +
+                ' unfilled=' + gapResult.sportFree + ' gaps=' + gapResult.absorbed);
 
             // Propagate sport fallbacks
             allGrades.forEach(grade => {
@@ -2978,16 +3545,23 @@
             _draftActivity: b._draftActivity, _draftField: b._draftField
         }));
 
-        if (window.AutoSolverEngine && typeof window.AutoSolverEngine.solve === 'function') {
-            // ★ PRIMARY: Auto Solver Engine — purpose-built for auto mode
+       if (window.AutoSolverEngine && typeof window.AutoSolverEngine.solve === 'function') {
+            // ★ v5.0: Safety net — only process blocks the GAP didn't fill
+            const unfilledBlocks = solverInputBlocks.filter(b => {
+                const sa = window.scheduleAssignments?.[b.bunk]?.[b.slots?.[0]];
+                return !sa || sa.field === 'Free' || (!sa._fixed && !sa.field);
+            });
+            if (unfilledBlocks.length > 0) {
+                log('[4] Safety net: ' + unfilledBlocks.length + ' unfilled of ' + solverInputBlocks.length);
+            }
+            if (unfilledBlocks.length > 0) {
             try {
-                const result = window.AutoSolverEngine.solve(solverInputBlocks, solverConfig);
-                log('[4] ✅ AutoSolver: ' + result.filled + ' filled, ' + result.free + ' Free');
+                const result = window.AutoSolverEngine.solve(unfilledBlocks, solverConfig);
+                log('[4] AutoSolver: ' + result.filled + ' filled, ' + result.free + ' Free');
 
-                // Run fallback sweep for remaining Free blocks
                 if (result.free > 0) {
                     const fallbackFilled = window.AutoSolverEngine.fallbackSweep(solverConfig);
-                    if (fallbackFilled > 0) log('[4] Fallback sweep filled ' + fallbackFilled + ' more');
+                    if (fallbackFilled > 0) log('[4] Fallback filled ' + fallbackFilled + ' more');
                 }
             } catch (e) {
                 err('[4] AutoSolver error: ' + e.message);
@@ -3028,6 +3602,7 @@
                     warnings.push({ type: 'solver_error', message: e.message });
                 }
             } else { warn('[4] No solver loaded'); }
+            } // close unfilledBlocks.length > 0
         }
 
 
