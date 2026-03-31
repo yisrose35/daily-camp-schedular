@@ -88,11 +88,23 @@
     // =========================================================================
     var data = {};
 
-    /** Get unified state from campGlobalSettings_v1 */
+    /** Get unified state from campGlobalSettings_v1 with fallbacks */
     data.getGlobalState = function() {
-        try {
-            return JSON.parse(localStorage.getItem(GLOBAL_STORE) || '{}');
-        } catch(e) { return {}; }
+        // Try all known keys that Me writes to
+        var keys = [GLOBAL_STORE, 'CAMPISTRY_LOCAL_CACHE', 'CAMPISTRY_UNIFIED_STATE'];
+        for (var i = 0; i < keys.length; i++) {
+            try {
+                var raw = localStorage.getItem(keys[i]);
+                if (raw) {
+                    var parsed = JSON.parse(raw);
+                    // Validate it has real data (not empty shell)
+                    if (parsed.app1 || parsed.campStructure || parsed.campistryMe) {
+                        return parsed;
+                    }
+                }
+            } catch(e) {}
+        }
+        return {};
     };
 
     /** Get Me sub-state */
@@ -101,19 +113,37 @@
         return g.campistryMe || {};
     };
 
-    /** Get camper roster: { "Full Name": { camperId, division, grade, bunk, parent1Name, parent1Email, ... } } */
+    /** 
+     * Get camper roster: { "Full Name": { camperId, division, grade, bunk, parent1Name, ... } }
+     * Me stores this at g.app1.camperRoster (NOT inside campistryMe)
+     */
     data.getRoster = function() {
-        return data.getMe().roster || data.getMe().camperRoster || {};
+        var g = data.getGlobalState();
+        // Primary path: app1.camperRoster (where Me actually stores it)
+        var roster = (g.app1 && g.app1.camperRoster) ? g.app1.camperRoster : {};
+        // Fallback: campistryMe.roster (shouldn't happen but just in case)
+        if (!Object.keys(roster).length) {
+            var me = g.campistryMe || {};
+            roster = me.roster || me.camperRoster || {};
+        }
+        return roster;
     };
 
-    /** Get families: { famId: { name, households, camperIds, ... } } */
+    /** 
+     * Get families: { famId: { name, households: [{parents:[{name,phone,email}], address}], camperIds } }
+     * Me stores this at g.campistryMe.families
+     */
     data.getFamilies = function() {
         return data.getMe().families || {};
     };
 
-    /** Get camp structure: { "Juniors": { color, grades: { "1st Grade": { bunks: [...] } } } } */
+    /** 
+     * Get camp structure: { "Juniors": { color, grades: { "1st Grade": { bunks: [...] } } } }
+     * Me stores this at g.campStructure (top level, NOT inside campistryMe)
+     */
     data.getStructure = function() {
-        return data.getGlobalState().campStructure || data.getMe().structure || {};
+        var g = data.getGlobalState();
+        return g.campStructure || {};
     };
 
     /** Get enrollments */
@@ -134,9 +164,16 @@
         return go.savedRoutes || go.dismissal || go.arrival || null;
     };
 
-    /** Get Go addresses: { "Camper Name": { address, lat, lng } } */
+    /** Get Go addresses — check both Go's own store and global state */
     data.getGoAddresses = function() {
-        return data.getGoState().addresses || {};
+        var go = data.getGoState();
+        var addrs = go.addresses || {};
+        // Also check campGlobalSettings_v1.campistryGo.addresses (Me syncs here)
+        if (!Object.keys(addrs).length) {
+            var g = data.getGlobalState();
+            addrs = (g.campistryGo && g.campistryGo.addresses) ? g.campistryGo.addresses : {};
+        }
+        return addrs;
     };
 
     /** Get Go buses */
@@ -888,6 +925,20 @@
     // INIT & PUBLIC API
     // =========================================================================
     loadStore();
+
+    // Debug: log what we actually found
+    var _roster = data.getRoster();
+    var _families = data.getFamilies();
+    var _struct = data.getStructure();
+    console.log('[Link] Data Bridge ready.');
+    console.log('[Link]   Roster:', Object.keys(_roster).length, 'campers (from app1.camperRoster)');
+    console.log('[Link]   Families:', Object.keys(_families).length, '(from campistryMe.families)');
+    console.log('[Link]   Structure:', Object.keys(_struct).length, 'divisions (from campStructure)');
+    console.log('[Link]   Parents:', data.getParentDirectory().length, '(derived)');
+    if (!Object.keys(_roster).length) {
+        console.warn('[Link]   ⚠ No roster data found. Make sure Campistry Me has been loaded at least once.');
+        console.log('[Link]   Checked keys:', ['campGlobalSettings_v1', 'CAMPISTRY_LOCAL_CACHE', 'CAMPISTRY_UNIFIED_STATE'].join(', '));
+    }
 
     window.CampistryLink = {
         data: data,
