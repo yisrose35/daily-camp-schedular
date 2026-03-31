@@ -1636,7 +1636,7 @@
                         return ratioA - ratioB;
                     });
 
-                const bunkDoneToday = {};
+               
                 const bunkDoneToday = {};
                 const bunkAssignedWindows = {};
                 bunks.forEach(bunk => {
