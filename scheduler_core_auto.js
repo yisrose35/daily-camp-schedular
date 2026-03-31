@@ -3333,27 +3333,7 @@
                 });
             });
         });
-// ★ v5.0: Write GAP sport blocks
-        let gapSportWriteCount = 0;
-        allGrades.forEach(grade => {
-            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
-            if (!pbs) return;
-            getBunksForGrade(grade, divisions).forEach(bunk => {
-                const arr = pbs[String(bunk)] || [];
-                (bunkTimelines[bunk] || []).filter(b =>
-                    b.type === 'sport' && b._assignedSport && b.field
-                ).forEach(block => {
-                    const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
-                    if (idx === -1 || !window.scheduleAssignments[String(bunk)] || window.scheduleAssignments[String(bunk)][idx]) return;
-                    window.scheduleAssignments[String(bunk)][idx] = {
-                        field: block.field, sport: block._assignedSport,
-                        _activity: block._assignedSport, _fixed: true, _bunkOverride: true,
-                        _activityLocked: false, _autoMode: true, _capacityChecked: true, continuation: false
-                    };
-                    gapSportWriteCount++;
-                });
-            });
-        });
+
         // Write anchor blocks (swim, snacks, etc.)
         let anchorWriteCount = 0;
         allGrades.forEach(grade => {
