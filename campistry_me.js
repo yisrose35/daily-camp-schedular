@@ -74,9 +74,9 @@ function save(){
         g.campStructure=structure;
         if(!g.app1)g.app1={};
         g.app1.camperRoster=roster;
-        var ex=(g.app1.divisions)||{},m={};
-        Object.entries(structure).forEach(function([d,dd]){var b=[];Object.values(dd.grades||{}).forEach(function(gr){(gr.bunks||[]).forEach(function(bk){b.push(bk)})});m[d]=Object.assign({},ex[d]||{},{color:dd.color,bunks:b})});
-        Object.keys(ex).forEach(function(d){if(!m[d])m[d]=ex[d]});
+        // Build divisions from structure — full replacement, no merge with old
+        var m={};
+        Object.entries(structure).forEach(function([d,dd]){var b=[];Object.values(dd.grades||{}).forEach(function(gr){(gr.bunks||[]).forEach(function(bk){b.push(bk)})});var ex=(g.app1.divisions&&g.app1.divisions[d])||{};m[d]=Object.assign({},ex,{color:dd.color,bunks:b})});
         g.app1.divisions=m;
         g.campistryMe={
             families:families,
@@ -1815,6 +1815,19 @@ function importRows(rows){
     nextCamperId=1;
     // Clear Go addresses too
     try{var goRaw=localStorage.getItem('campistry_go_data');var goData=goRaw?JSON.parse(goRaw):{};goData.addresses={};localStorage.setItem('campistry_go_data',JSON.stringify(goData))}catch(e){}
+    // Also wipe the cloud settings so stale data doesn't survive
+    try{
+        var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        g.campStructure={};
+        if(!g.app1)g.app1={};
+        g.app1.camperRoster={};
+        g.app1.divisions={};
+        if(!g.campistryMe)g.campistryMe={};
+        g.campistryMe.families={};
+        g.campistryMe.bunkAssignments={};
+        g.campistryMe.nextCamperId=1;
+        localStorage.setItem('campGlobalSettings_v1',JSON.stringify(g));
+    }catch(e){}
 
     // ═══ PASS 1: Build camp structure from CSV data ═══
     rows.forEach(function(r){
