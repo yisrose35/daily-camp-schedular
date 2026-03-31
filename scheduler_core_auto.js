@@ -1752,7 +1752,86 @@
                         if (isFieldAvailable(fn, startMin, endMin, bunk, grade)) return { name: sport.name, field: fn };
                     }
                 }
-                return null;
+               return null;
+            }
+
+            // ── Special fallback: when no sport+field is available ────────
+            // Tries to find a special activity that fits the gap duration,
+            // has capacity at this time, and hasn't been done by this bunk today.
+            function findSpecialForGap(startMin, endMin) {
+                const gapDuration = endMin - startMin;
+                const masterSpecials = globalSettings?.app1?.specialActivities || [];
+                const bunkAssignments = window.scheduleAssignments?.[bunk] || [];
+                
+                // Build set of specials this bunk already has today
+                const bunkSpecialsToday = new Set();
+                bunkAssignments.forEach(e => {
+                    if (!e || e.continuation) return;
+                    const act = (e._activity || e.field || '').toLowerCase().trim();
+                    if (act) bunkSpecialsToday.add(act);
+                });
+                // Also check what's already in the template being built
+                placed.forEach(p => {
+                    if (p._assignedSpecial) bunkSpecialsToday.add(p._assignedSpecial.toLowerCase().trim());
+                    const evt = (p.event || '').toLowerCase().trim();
+                    if (evt) bunkSpecialsToday.add(evt);
+                });
+                
+                // Score and filter specials
+                const candidates = [];
+                for (const special of masterSpecials) {
+                    if (!special.name) continue;
+                    const sName = special.name.toLowerCase().trim();
+                    
+                    // Already done today?
+                    if (bunkSpecialsToday.has(sName)) continue;
+                    
+                    // Duration check — special must fit in the gap
+                    const specDuration = special.duration || special.totalDuration || 30;
+                    if (specDuration > gapDuration + 5) continue; // allow 5 min tolerance
+                    
+                    // Rainy day check
+                    const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
+                    if (!isRainyMode && (special.rainyDayOnly || special.rainyDayExclusive)) continue;
+                    if (isRainyMode && special.rainyDayAvailable === false) continue;
+                    
+                    // Capacity + cross-division check via resource calendar
+                    if (typeof canUseSpecialAtTime === 'function') {
+                        if (!canUseSpecialAtTime(special.name, grade, startMin, startMin + specDuration)) continue;
+                    }
+                    
+                    // Rotation score — prefer specials this bunk hasn't done recently
+                    let score = 0;
+                    if (window.RotationEngine?.calculateRotationScore) {
+                        score = window.RotationEngine.calculateRotationScore({
+                            bunkName: bunk, activityName: special.name,
+                            divisionName: grade, beforeSlotIndex: 0,
+                            allActivities: null,
+                            activityProperties: activityProperties || window.activityProperties || {}
+                        });
+                        if (score === Infinity) continue; // rotation says skip
+                    }
+                    
+                    candidates.push({
+                        name: special.name,
+                        location: special.location || special.name,
+                        duration: specDuration,
+                        score: score
+                    });
+                }
+                
+                if (candidates.length === 0) return null;
+                
+                // Pick the best by rotation score
+                candidates.sort((a, b) => a.score - b.score);
+                const pick = candidates[0];
+                
+                // Register usage
+                if (typeof registerSpecialUsage === 'function') {
+                    registerSpecialUsage(pick.name, grade, startMin, startMin + pick.duration);
+                }
+                
+                return pick;
             }
 
             const afterGaps = getGaps(placed);
@@ -1767,10 +1846,39 @@
                         claimField(sportPick.field, cursor, cursor + sportC.dMax, bunk, grade, sportPick.name);
                         usedSportsForBunk.add(sportPick.name);
                     }
-                    placed.push({
-                        startMin: cursor, endMin: cursor + sportC.dMin,
-                        type: sportPick ? 'sport' : 'slot',
-                        event: sportPick ? sportPick.name : 'General Activity Slot',
+                   if (!sportPick) {
+                        // No field available — try placing a special instead
+                        const specialPick = findSpecialForGap(cursor, cursor + sportC.dMax);
+                        if (specialPick) {
+                            placed.push({
+                                startMin: cursor, endMin: cursor + specialPick.duration,
+                                type: 'special', event: specialPick.name,
+                                layer: null, dMin: specialPick.duration, dMax: specialPick.duration,
+                                _activityLocked: false, _assignedSpecial: specialPick.name,
+                                _specialLocation: specialPick.location,
+                                field: specialPick.location,
+                                _source: 'special_fallback', _final: true
+                            });
+                            usedSportsForBunk.add(specialPick.name);
+                        } else {
+                            placed.push({
+                                startMin: cursor, endMin: cursor + sportC.dMin,
+                                type: 'slot', event: 'General Activity Slot',
+                                layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax,
+                                _activityLocked: false, _assignedSport: null, field: null,
+                                _source: 'filler', _final: true
+                            });
+                        }
+                    } else {
+                        placed.push({
+                            startMin: cursor, endMin: cursor + sportC.dMin,
+                            type: 'sport', event: sportPick.name,
+                            layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax,
+                            _activityLocked: false, _assignedSport: sportPick.name,
+                            field: sportPick.field,
+                            _source: 'capacity_checked', _final: true
+                        });
+                    }
                         layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax,
                         _activityLocked: false,
                         _assignedSport: sportPick ? sportPick.name : null,
