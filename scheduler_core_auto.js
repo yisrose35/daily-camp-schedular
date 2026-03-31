@@ -1982,7 +1982,6 @@
                             }
                         }
                     }
-                    }
                 }
                 while (descs.length > 1 && descs.reduce((s, d) => s + d.dMin, 0) > rSize) descs.pop();
 
