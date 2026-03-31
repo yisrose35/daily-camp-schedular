@@ -9,34 +9,57 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="campistry_link.css">
+    <!-- Suite shared styles for header/sidebar pattern -->
+    <link rel="stylesheet" href="design-system.css">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="mobile-responsive.css">
+    <style>
+        /* Link-specific overrides for suite header */
+        .app-header { background: #fff; border-bottom: 1px solid var(--slate-200, #E2E8F0); }
+        .hamburger-btn:hover { border-color: #2A7A35; background: #F0FDF4; }
+        .sidebar-item.active { background: rgba(42,122,53,0.1); border-color: rgba(42,122,53,0.2); color: #2A7A35; }
+        .sidebar-item.active .sidebar-dot { background: #2A7A35; }
+        .sidebar-item:hover { background: rgba(42,122,53,0.05); color: #F0FDF4; }
+        /* Override lk-main to not use fixed left margin when sidebar is off-canvas */
+        .lk-main { margin-left: 0; }
+        .app-logo-link-img { height: 43px; max-height: 45px; width: auto; position: relative; top: 2px; }
+        .sync-badge { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; color: var(--slate-500, #64748B); background: var(--slate-100, #F1F5F9); }
+        .sync-dot { width: 7px; height: 7px; border-radius: 50%; background: #22C55E; }
+    </style>
 </head>
 <body>
-<header class="lk-header">
-    <div class="lk-header-left">
-        <a href="dashboard.html" class="lk-logo"><div class="lk-logo-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></div> Campistry Link</a>
-        <span class="lk-role-tag admin">Camp Admin</span>
-        <span class="lk-camp-name" id="campNameDisplay"></span>
+
+<!-- HEADER (matches Me / Flow / Health pattern) -->
+<header class="app-header">
+    <div class="header-left">
+        <a href="dashboard.html" class="header-back">&larr; Dashboard</a>
+        <button id="hamburgerBtn" class="hamburger-btn" aria-label="Menu"><span></span><span></span><span></span></button>
+        <div class="app-title"><img src="Link_clean.png" alt="Campistry Link" class="app-logo-full app-logo-link-img"></div>
+        <a href="campistry_me.html" class="header-app-switch" title="Campistry Me"><img src="Me_clean.png" alt="Me" class="app-logo-full app-logo-me-img"></a>
+        <a href="flow.html" class="header-app-switch" title="Campistry Flow"><img src="Flow_clean.png" alt="Flow" class="app-logo-full app-logo-flow-img"></a>
+        <a href="campistry_go.html" class="header-app-switch" title="Campistry Go"><img src="Go_clean.png" alt="Go" class="app-logo-full" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;"></a>
     </div>
-    <div class="lk-header-right">
-        <a href="campistry_me.html" class="btn btn-secondary btn-sm"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> Me</a>
-        <a href="dashboard.html" class="btn btn-secondary btn-sm">&larr; Dashboard</a>
+    <div class="header-right">
+        <div class="sync-badge"><span class="sync-dot"></span> <span id="campNameDisplay">Synced</span></div>
     </div>
 </header>
-<nav class="lk-sidebar"><div class="lk-sidebar-nav">
-    <div class="lk-nav-label">Overview</div>
-    <button class="lk-nav-item active" data-page="dashboard" onclick="nav('dashboard')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> Dashboard</button>
-    <div class="lk-nav-divider"></div>
-    <div class="lk-nav-label">Communication</div>
-    <button class="lk-nav-item" data-page="compose" onclick="nav('compose')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Compose</button>
-    <button class="lk-nav-item" data-page="sent" onclick="nav('sent')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Sent</button>
-    <div class="lk-nav-divider"></div>
-    <div class="lk-nav-label">Families</div>
-    <button class="lk-nav-item" data-page="directory" onclick="nav('directory')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Parents</button>
-    <button class="lk-nav-item" data-page="campers" onclick="nav('campers')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> Campers</button>
-    <div class="lk-nav-divider"></div>
-    <div class="lk-nav-label">Content</div>
-    <button class="lk-nav-item" data-page="photos" onclick="nav('photos')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg> Photos</button>
-</div></nav>
+
+<!-- SIDEBAR (off-canvas hamburger — matches suite pattern) -->
+<div id="sidebarBackdrop" class="sidebar-backdrop"></div>
+<aside id="sidebar" class="sidebar">
+    <nav class="sidebar-nav">
+        <div class="sidebar-label">Overview</div>
+        <button class="sidebar-item active" data-page="dashboard" onclick="nav('dashboard')"><span class="sidebar-dot"></span> Dashboard</button>
+        <div class="sidebar-label" style="margin-top:10px;">Communication</div>
+        <button class="sidebar-item" data-page="compose" onclick="nav('compose')"><span class="sidebar-dot"></span> Compose Message</button>
+        <button class="sidebar-item" data-page="sent" onclick="nav('sent')"><span class="sidebar-dot"></span> Sent &amp; Broadcasts</button>
+        <div class="sidebar-label" style="margin-top:10px;">Families</div>
+        <button class="sidebar-item" data-page="directory" onclick="nav('directory')"><span class="sidebar-dot"></span> Parent Directory</button>
+        <button class="sidebar-item" data-page="campers" onclick="nav('campers')"><span class="sidebar-dot"></span> Camper Lookup</button>
+        <div class="sidebar-label" style="margin-top:10px;">Content</div>
+        <button class="sidebar-item" data-page="photos" onclick="nav('photos')"><span class="sidebar-dot"></span> Photos</button>
+    </nav>
+</aside>
 <div class="lk-main">
 
 <div class="lk-page active" id="page-dashboard">
@@ -88,8 +111,19 @@ var CL=function(){return window.CampistryLink||null};
 var CP=function(){return window.CampistryPhotos||null};
 var channels=['app'];
 
-function nav(p){document.querySelectorAll('.lk-page').forEach(function(e){e.classList.remove('active')});document.querySelectorAll('.lk-nav-item').forEach(function(e){e.classList.remove('active')});var el=document.getElementById('page-'+p);if(el)el.classList.add('active');var si=document.querySelector('.lk-nav-item[data-page="'+p+'"]');if(si)si.classList.add('active');window.scrollTo(0,0);if(p==='dashboard')renderDash();if(p==='directory')renderDir('');if(p==='campers')renderCampers('');if(p==='sent')renderSent();if(p==='photos'){refreshPhotos();updatePhotoStats();}}
+function nav(p){document.querySelectorAll('.lk-page').forEach(function(e){e.classList.remove('active')});document.querySelectorAll('.sidebar-item').forEach(function(e){e.classList.remove('active')});var el=document.getElementById('page-'+p);if(el)el.classList.add('active');var si=document.querySelector('.sidebar-item[data-page="'+p+'"]');if(si)si.classList.add('active');window.scrollTo(0,0);
+    // Close sidebar on nav
+    document.body.classList.remove('sidebar-open');
+    if(p==='dashboard')renderDash();if(p==='directory')renderDir('');if(p==='campers')renderCampers('');if(p==='sent')renderSent();if(p==='photos'){refreshPhotos();updatePhotoStats();}}
 function toast(m){var t=document.createElement('div');t.textContent=m;t.style.cssText='background:#0F172A;color:#fff;padding:11px 22px;border-radius:12px;font-size:.83rem;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.15);pointer-events:auto;animation:fadeUp .3s ease;';document.getElementById('toastBox').appendChild(t);setTimeout(function(){t.style.opacity='0';t.style.transition='opacity .3s'},2500);setTimeout(function(){t.remove()},2800);}
+
+// ── HAMBURGER SIDEBAR TOGGLE (matches Me/Flow/Health) ──
+(function(){
+    var btn=document.getElementById('hamburgerBtn');
+    var backdrop=document.getElementById('sidebarBackdrop');
+    if(btn){btn.addEventListener('click',function(){document.body.classList.toggle('sidebar-open');});}
+    if(backdrop){backdrop.addEventListener('click',function(){document.body.classList.remove('sidebar-open');});}
+})();
 function stat(color,icon,val,label){return'<div class="lk-stat"><div class="lk-stat-icon '+color+'" style="font-size:1.1rem;">'+icon+'</div><div><div class="lk-stat-val">'+val+'</div><div class="lk-stat-lbl">'+esc(label)+'</div></div></div>';}
 
 function renderDash(){
