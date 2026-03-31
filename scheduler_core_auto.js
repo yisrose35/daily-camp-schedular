@@ -2747,6 +2747,12 @@
         // =====================================================================
         log('\n[STEP 4] Solving remaining sport slots...');
 
+        // ★ FIX: Ensure activityProperties is populated from stored fields before solving
+        if (window.refreshActivityPropertiesFromFields && (!window.activityProperties || Object.keys(window.activityProperties).length === 0)) {
+            window.refreshActivityPropertiesFromFields();
+            log('[4] Refreshed activityProperties: ' + Object.keys(window.activityProperties).length + ' entries');
+        }
+
         // Prepare config for the solver
         const solverConfig = (() => {
             const gs = getGlobalSettings();
