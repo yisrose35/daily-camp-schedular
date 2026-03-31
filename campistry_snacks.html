@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Campistry Snacks — Manager Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="campistry_snacks.css">
+</head>
+</head>
+<body>
+<nav class="nav"><div class="nav-inner"><div class="nav-left">
+<a href="dashboard.html" class="nav-back"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg> Dashboard</a>
+<div class="nav-logo"><div class="nav-logo-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/><line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/></svg></div> Campistry <span>Snacks</span></div>
+</div><div class="nav-right">
+<a href="campistry_snacks_pos.html" class="pos-launch"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> Open Selling Console</a>
+<div class="sync-badge"><div class="sync-dot"></div><span>Synced</span></div>
+</div></div></nav>
+
+<main class="main">
+<header class="page-header"><h1 class="page-title">Canteen Manager</h1><p class="page-subtitle">Accounts, inventory, and analytics</p></header>
+
+<div class="stats-grid">
+<div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></div><div><div class="stat-value" id="sA">0</div><div class="stat-label">Accounts</div></div></div>
+<div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg></div><div><div class="stat-value" id="sB">$0</div><div class="stat-label">Total Balance</div></div></div>
+<div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></div><div><div class="stat-value" id="sI">0</div><div class="stat-label">Items in Stock</div></div></div>
+<div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div><div><div class="stat-value" id="sS">$0</div><div class="stat-label">Sales Today</div></div></div>
+</div>
+
+<div class="tabs"><button class="tab-btn active" data-tab="accounts">Accounts</button><button class="tab-btn" data-tab="inventory">Inventory</button><button class="tab-btn" data-tab="analytics">Analytics</button></div>
+
+<!-- ACCOUNTS -->
+<div id="tab-accounts" class="tab-content active">
+<div class="card"><div class="card-header"><h2>Camper Accounts</h2><div style="display:flex;gap:.5rem;align-items:center"><div class="search-bar" style="width:220px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" placeholder="Search…" id="aSearch" oninput="rAccounts()"></div><button class="btn btn-primary btn-sm" onclick="openM('dep')">+ Add Deposit</button><button class="btn btn-secondary btn-sm" onclick="openM('limit')">Set Limits</button></div></div>
+<div class="table-wrapper"><table class="data-table"><thead><tr><th>Camper</th><th>Division</th><th>Bunk</th><th>Balance</th><th>Daily Limit</th><th>Spent Today</th><th>Status</th><th></th></tr></thead><tbody id="aBody"></tbody></table></div></div></div>
+
+<!-- INVENTORY -->
+<div id="tab-inventory" class="tab-content">
+<div class="card"><div class="card-header"><h2>Canteen Items</h2><div style="display:flex;gap:.5rem;align-items:center"><span class="card-count" id="iCount">0</span><button class="btn btn-primary btn-sm" onclick="openM('item')">+ Add Item</button><button class="btn btn-secondary btn-sm" onclick="openM('restock')">Restock</button></div></div>
+<div class="table-wrapper"><table class="data-table"><thead><tr><th></th><th>Item</th><th>Category</th><th>Price</th><th>Stock</th><th>Sold Today</th><th>All-Time</th><th>Status</th><th></th></tr></thead><tbody id="iBody"></tbody></table></div></div></div>
+
+<!-- ANALYTICS -->
+<div id="tab-analytics" class="tab-content">
+<div class="metric-row">
+<div class="metric-card"><div class="metric-card-label">Revenue Today</div><div class="metric-card-value" id="mRev">$0</div><div class="metric-card-sub" id="mTxn">0 txns</div></div>
+<div class="metric-card"><div class="metric-card-label">Top Seller</div><div class="metric-card-value" id="mTop">—</div><div class="metric-card-sub" id="mTopN"></div></div>
+<div class="metric-card"><div class="metric-card-label">Avg Transaction</div><div class="metric-card-value" id="mAvg">$0</div></div>
+<div class="metric-card"><div class="metric-card-label">Units Sold</div><div class="metric-card-value" id="mUnits">0</div></div>
+<div class="metric-card"><div class="metric-card-label">Low Stock</div><div class="metric-card-value" id="mLow" style="color:var(--amber-600)">0</div></div>
+<div class="metric-card"><div class="metric-card-label">Sell-Through</div><div class="metric-card-value" id="mST">0%</div></div>
+</div>
+<div class="analytics-grid">
+<div class="card"><div class="card-header"><h2>Item Popularity</h2></div><div class="card-body" id="popList"></div></div>
+<div class="card"><div class="card-header"><h2>Revenue by Category</h2></div><div class="card-body" id="catBrk"></div></div>
+</div>
+<div class="analytics-grid">
+<div class="card"><div class="card-header"><h2>Top Spenders</h2></div><div class="card-body" id="spList"></div></div>
+<div class="card"><div class="card-header"><h2>Hourly Heatmap</h2></div><div class="card-body" id="heatmap"></div></div>
+</div>
+<div class="analytics-grid">
+<div class="card"><div class="card-header"><h2>Sales This Week</h2></div><div class="card-body"><div class="bar-chart" id="wChart"></div></div></div>
+<div class="card"><div class="card-header"><h2>Recent Transactions</h2><span class="card-count" id="txC">0</span></div><div class="table-wrapper"><table class="data-table"><thead><tr><th>Time</th><th>Camper</th><th>Items</th><th>Amount</th></tr></thead><tbody id="txBody"></tbody></table></div></div>
+</div></div>
+</main>
+
+<!-- Modals -->
+<div class="modal-overlay" id="m-dep"><div class="modal"><div class="modal-header"><h2>Add Deposit</h2><button class="modal-close" onclick="closeM('dep')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="depCamper"></select></div><div class="form-group"><label class="form-label">Amount ($)</label><input type="number" class="form-input" id="depAmt" min="1" step="0.01" placeholder="25.00"></div><div class="form-group"><label class="form-label">Note</label><input type="text" class="form-input" id="depNote" placeholder="e.g. Week 3 deposit"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('dep')">Cancel</button><button class="btn btn-primary" onclick="addDep()">Add Deposit</button></div></div></div>
+<div class="modal-overlay" id="m-item"><div class="modal"><div class="modal-header"><h2>Add Item</h2><button class="modal-close" onclick="closeM('item')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr 1fr"><div class="form-group" style="grid-column:1/-1"><label class="form-label">Name</label><input type="text" class="form-input" id="niName" placeholder="e.g. Gatorade"></div><div class="form-group"><label class="form-label">Category</label><select class="form-select" id="niCat"><option value="drink">Drink</option><option value="snack">Snack</option><option value="treat">Treat</option></select></div><div class="form-group"><label class="form-label">Emoji</label><input type="text" class="form-input" id="niEmoji" placeholder="🥤" maxlength="4" style="font-size:1.5rem;text-align:center"></div><div class="form-group"><label class="form-label">Price ($)</label><input type="number" class="form-input" id="niPrice" min=".25" step=".25" placeholder="2.00"></div><div class="form-group"><label class="form-label">Stock</label><input type="number" class="form-input" id="niStock" min="0" placeholder="100"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('item')">Cancel</button><button class="btn btn-primary" onclick="addItem()">Add Item</button></div></div></div>
+<div class="modal-overlay" id="m-limit"><div class="modal"><div class="modal-header"><h2>Set Daily Limits</h2><button class="modal-close" onclick="closeM('limit')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="limCamper"></select></div><div class="form-group"><label class="form-label">New Daily Limit ($)</label><input type="number" class="form-input" id="limAmt" min="1" step="1" placeholder="10"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('limit')">Cancel</button><button class="btn btn-primary" onclick="setLimit()">Save</button></div></div></div>
+<div class="modal-overlay" id="m-restock"><div class="modal"><div class="modal-header"><h2>Restock Item</h2><button class="modal-close" onclick="closeM('restock')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Item</label><select class="form-select" id="rItem"></select></div><div class="form-group"><label class="form-label">Add Quantity</label><input type="number" class="form-input" id="rQty" min="1" placeholder="50"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('restock')">Cancel</button><button class="btn btn-primary" onclick="restock()">Restock</button></div></div></div>
+<div class="toast" id="toast"></div>
+
+<script src="campistry_snacks.js"></script>
+</body>
+</html>
