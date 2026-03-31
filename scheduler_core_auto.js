@@ -1493,6 +1493,27 @@
                 const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
 
                 // ── Step A: Build per-bunk gap map ───────────────────
+               const plannerFieldClaims = [];
+
+                function isFieldStillAvailable(fieldName, startMin, endMin, bunk) {
+                    if (!isFieldAvailable(fieldName, startMin, endMin, bunk, grade)) return false;
+                    const ledger = fieldLedger[fieldName];
+                    if (!ledger) return false;
+                    const plannerOverlap = plannerFieldClaims.filter(c =>
+                        c.field === fieldName && c.startMin < endMin && c.endMin > startMin && c.bunk !== bunk
+                    );
+                    const ledgerOverlap = ledger.claims.filter(c =>
+                        c.startMin < endMin && c.endMin > startMin && c.bunk !== bunk
+                    );
+                    const totalOverlap = ledgerOverlap.length + plannerOverlap.length;
+                    return totalOverlap < ledger.capacity;
+                }
+
+                function claimFieldForPlanner(fieldName, startMin, endMin, bunk, activity) {
+                    claimField(fieldName, startMin, endMin, bunk, grade, activity);
+                    plannerFieldClaims.push({ field: fieldName, startMin, endMin, bunk, grade, activity });
+                }
+
                 const bunkGaps = {};
                 const sportMinDur = {};
 
@@ -1616,32 +1637,12 @@
                     });
 
                 const bunkDoneToday = {};
+                const bunkDoneToday = {};
                 const bunkAssignedWindows = {};
                 bunks.forEach(bunk => {
                     bunkDoneToday[bunk] = new Set();
                     bunkAssignedWindows[bunk] = [];
                 });
-
-                const plannerFieldClaims = [];
-
-                function isFieldStillAvailable(fieldName, startMin, endMin, bunk) {
-                    if (!isFieldAvailable(fieldName, startMin, endMin, bunk, grade)) return false;
-                    const ledger = fieldLedger[fieldName];
-                    if (!ledger) return false;
-                    const plannerOverlap = plannerFieldClaims.filter(c =>
-                        c.field === fieldName && c.startMin < endMin && c.endMin > startMin && c.bunk !== bunk
-                    );
-                    const ledgerOverlap = ledger.claims.filter(c =>
-                        c.startMin < endMin && c.endMin > startMin && c.bunk !== bunk
-                    );
-                    const totalOverlap = ledgerOverlap.length + plannerOverlap.length;
-                    return totalOverlap < ledger.capacity;
-                }
-
-                function claimFieldForPlanner(fieldName, startMin, endMin, bunk, activity) {
-                    claimField(fieldName, startMin, endMin, bunk, grade, activity);
-                    plannerFieldClaims.push({ field: fieldName, startMin, endMin, bunk, grade, activity });
-                }
 
                 for (const win of windowsToProcess) {
                     const unassignedBunks = win.bunks.filter(bunk => {
