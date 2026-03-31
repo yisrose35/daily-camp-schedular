@@ -180,7 +180,7 @@
         // 2. Rainy day: no outdoor fields
         if (window.isRainyDay && candidate && !candidate.isIndoor) return false;
 
-        // 3. Time index: capacity + cross-division sharing (THE critical check)
+       // 3. Time index: capacity + cross-division sharing (THE critical check)
         const fn = normName(fieldName);
         const entries = fieldIndex.get(fn) || [];
         const overlapping = entries.filter(e => e.startMin < endMin && e.endMin > startMin && e.bunk !== bunk);
