@@ -1805,19 +1805,33 @@ function parseCsvLine(line){
 }
 
 function importRows(rows){
-    var added=0;
-    rows.forEach(function(r){
-        // Create structure if needed
-        if(r.division&&!structure[r.division])structure[r.division]={color:COLORS[Object.keys(structure).length%COLORS.length],grades:{}};
-        if(r.division&&r.grade&&structure[r.division]&&!structure[r.division].grades[r.grade])structure[r.division].grades[r.grade]={bunks:[]};
-        if(r.division&&r.grade&&r.bunk&&structure[r.division]&&structure[r.division].grades[r.grade]&&structure[r.division].grades[r.grade].bunks.indexOf(r.bunk)===-1)structure[r.division].grades[r.grade].bunks.push(r.bunk);
+    var added=0,updated=0,newDivisions=0,newGrades=0,newBunks=0,newFamilies=0;
 
+    // ═══ PASS 1: Build camp structure from CSV data ═══
+    rows.forEach(function(r){
+        if(r.division){
+            if(!structure[r.division]){
+                structure[r.division]={color:COLORS[Object.keys(structure).length%COLORS.length],grades:{}};
+                newDivisions++;
+            }
+            if(r.grade&&!structure[r.division].grades[r.grade]){
+                structure[r.division].grades[r.grade]={bunks:[]};
+                newGrades++;
+            }
+            if(r.grade&&r.bunk&&structure[r.division].grades[r.grade]&&structure[r.division].grades[r.grade].bunks.indexOf(r.bunk)===-1){
+                structure[r.division].grades[r.grade].bunks.push(r.bunk);
+                newBunks++;
+            }
+        }
+    });
+
+    // ═══ PASS 2: Create/update campers ═══
+    rows.forEach(function(r){
         var isNew=!roster[r.name];
-        if(isNew)added++;
+        if(isNew)added++;else updated++;
         var existingId=roster[r.name]?roster[r.name].camperId:null;
         if(!existingId){existingId=nextCamperId;nextCamperId++}
 
-        // Merge: preserve existing data, overwrite with non-empty imported fields
         var existing=roster[r.name]||{};
         roster[r.name]={
             camperId:existingId,
@@ -1845,11 +1859,78 @@ function importRows(rows){
             teams:Object.keys(r.teams).length?r.teams:(existing.teams||{}),
             team:Object.values(r.teams)[0]||existing.team||''
         };
+
         // Sync address to Go
         if(roster[r.name].street)syncAddressToGo(r.name,roster[r.name]);
     });
+
+    // ═══ PASS 3: Auto-generate families from parent data ═══
+    // Group campers by last name + parent name to create family units
+    var familyMap={};
+    rows.forEach(function(r){
+        if(!r.parent1Name)return;
+        var lastName=r.name.split(' ').pop();
+        // Key by last name + parent name to handle split households
+        var famKey='fam_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'');
+        if(!familyMap[famKey]){
+            familyMap[famKey]={
+                lastName:lastName,
+                parentName:r.parent1Name,
+                parentPhone:r.parent1Phone||'',
+                parentEmail:r.parent1Email||'',
+                address:[r.street,r.city,r.state,r.zip].filter(Boolean).join(', '),
+                campers:[]
+            };
+        }
+        if(familyMap[famKey].campers.indexOf(r.name)===-1){
+            familyMap[famKey].campers.push(r.name);
+        }
+    });
+
+    Object.entries(familyMap).forEach(function([famKey,fam]){
+        if(families[famKey]){
+            // Update existing family — add any new campers
+            fam.campers.forEach(function(cn){
+                if(families[famKey].camperIds.indexOf(cn)===-1)families[famKey].camperIds.push(cn);
+            });
+        }else{
+            // Create new family
+            families[famKey]={
+                name:fam.lastName+' Family',
+                households:[{
+                    label:'Primary',
+                    parents:[{name:fam.parentName,phone:fam.parentPhone,email:fam.parentEmail,relation:'Parent'}],
+                    address:fam.address,
+                    billingContact:true
+                }],
+                camperIds:fam.campers,
+                balance:0,totalPaid:0,
+                notes:'Auto-created from CSV import'
+            };
+            newFamilies++;
+        }
+    });
+
+    // ═══ PASS 4: Auto-populate bunk assignments ═══
+    rows.forEach(function(r){
+        if(r.bunk&&r.name){
+            if(!bunkAsgn[r.bunk])bunkAsgn[r.bunk]=[];
+            if(bunkAsgn[r.bunk].indexOf(r.name)===-1)bunkAsgn[r.bunk].push(r.name);
+        }
+    });
+
+    // ═══ SAVE & REPORT ═══
     save();closeModal('csvModal');render(curPage);
-    toast(added+' added, '+(rows.length-added)+' updated');
+
+    // Build summary
+    var summary=added+' campers added';
+    if(updated>0)summary+=', '+updated+' updated';
+    if(newDivisions>0)summary+=', '+newDivisions+' division'+(newDivisions>1?'s':'');
+    if(newGrades>0)summary+=', '+newGrades+' grade'+(newGrades>1?'s':'');
+    if(newBunks>0)summary+=', '+newBunks+' bunk'+(newBunks>1?'s':'');
+    if(newFamilies>0)summary+=', '+newFamilies+' famil'+(newFamilies>1?'ies':'y');
+    toast(summary);
+    console.log('[Me] CSV import complete:',summary);
 }
 
 function exportCsv(){
