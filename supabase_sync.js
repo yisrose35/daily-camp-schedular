@@ -646,11 +646,21 @@
                 // Process any queued saves
                 await processOfflineQueue();
                 
-                // Refresh data from cloud
-                if (window.ScheduleDB?.loadSchedule) {
-                    const result = await window.ScheduleDB.loadSchedule(dateKey);
-                    if (result?.success && result.data) {
-                        refreshMultiSchedulerView(dateKey, true);
+                // ★★★ AUTO MODE GUARD: Skip cloud refresh if _perBunkSlots are live in memory ★★★
+                // Cloud data goes through JSON round-trip which strips custom array properties
+                // (_perBunkSlots, _isPerBunk). Overwriting from cloud destroys the schedule geometry.
+                var _isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
+                var _hasLivePerBunk = window.divisionTimes && Object.values(window.divisionTimes).some(function(dt) { return dt && dt._isPerBunk; });
+                
+                if (_isAutoMode && _hasLivePerBunk) {
+                    log('Skipping cloud refresh on reconnect — auto mode _perBunkSlots active in memory');
+                } else {
+                    // Refresh data from cloud (safe — no per-bunk data to lose)
+                    if (window.ScheduleDB?.loadSchedule) {
+                        const result = await window.ScheduleDB.loadSchedule(dateKey);
+                        if (result?.success && result.data) {
+                            refreshMultiSchedulerView(dateKey, true);
+                        }
                     }
                 }
             } else if (_reconnectAttempts < CONFIG.MAX_RETRY_ATTEMPTS) {
