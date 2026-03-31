@@ -3224,7 +3224,9 @@
             if (!pbs) return;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = pbs[String(bunk)] || [];
-                (bunkTimelines[bunk] || []).filter(b => b.type === 'special' && b._assignedSpecial).forEach(block => {
+                (bunkTimelines[bunk] || []).filter(b =>
+                    (b.type === 'sport' || b.type === 'slot') && (b._source === 'capacity_checked' || b._source === 'gap_sport') && b._assignedSport && b.field
+                ).forEach(block => {
                     const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     if (idx === -1) return;
                     const fn = block._specialLocation || block._assignedSpecial;
