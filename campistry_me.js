@@ -8,6 +8,7 @@ var AV_BG=['#147D91','#6366F1','#0EA5E9','#10B981','#F43F5E','#8B5CF6','#D97706'
 
 var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={};
 var enrollments={}, sessions=[], enrollSettings={}, formConfig=null;
+var finStaff=[], finExpenses=[], finPayments=[], finBudget={revenue:0,payroll:0,expenses:0}, finIntegrations={};
 var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
 var nextCamperId=1;
 var _saveLockUntil=0; // timestamp — block cloud overwrites for 5s after local save
@@ -54,6 +55,10 @@ function loadData(){
         formConfig=me.formConfig||null;
         // Ensure promoCodes live inside enrollSettings
         if(me.promoCodes&&!enrollSettings.promoCodes)enrollSettings.promoCodes=me.promoCodes;
+        // Analytics & Finance
+        var fin=me.finance||{};
+        finStaff=fin.staff||[];finExpenses=fin.expenses||[];finPayments=fin.payments||[];
+        finBudget=fin.budget||{revenue:0,payroll:0,expenses:0};finIntegrations=fin.integrations||{};
         nextCamperId=me.nextCamperId||1;
         // Backfill: assign IDs to any campers that don't have one
         var maxId=0;
@@ -83,7 +88,8 @@ function save(){
             sessions:sessions,
             enrollSettings:enrollSettings,
             formConfig:formConfig,
-            promoCodes:enrollSettings.promoCodes||(g.campistryMe?.promoCodes)||{}
+            promoCodes:enrollSettings.promoCodes||(g.campistryMe?.promoCodes)||{},
+            finance:{staff:finStaff,expenses:finExpenses,payments:finPayments,budget:finBudget,integrations:finIntegrations}
         };
         g.updated_at=new Date().toISOString();
         var json=JSON.stringify(g);
@@ -181,7 +187,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={families:renderFamilies,campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,enrollment:renderEnrollment,billing:renderBilling,broadcasts:renderBroadcasts};
+    var m={families:renderFamilies,campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,enrollment:renderEnrollment,billing:renderBilling,broadcasts:renderBroadcasts,analytics:renderAnalytics};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -1183,6 +1189,484 @@ function enrollCamper(id){
     save();renderEnrollment();
 }
 
+// ── ANALYTICS & FINANCE ──────────────────────────────────────
+var _finTab='overview';
+var FIN_CATS=['Food & Catering','Supplies & Equipment','Facilities & Rent','Insurance','Transportation','Activities & Trips','Marketing','Utilities','Miscellaneous'];
+var FIN_ROLES=['Head Counselor','Counselor','Junior Counselor','Specialist','Nurse','Kitchen Staff','Bus Driver','Office Staff','Director','Maintenance'];
+var BAR_COLORS=['#D97706','#3B82F6','#10B981','#8B5CF6','#EF4444','#0EA5E9','#F59E0B','#EC4899','#6366F1','#14B8A6'];
+
+function renderAnalytics(){
+    var c=document.getElementById('page-analytics');
+
+    // ═══ AUTO-GENERATE INVOICES FROM ENROLLMENTS ═══
+    // Every enrolled camper = an invoice. No manual entry needed.
+    var autoInvoices=[];
+    var overdueDays=finBudget.overdueDays||30; // configurable threshold
+    var todayStr=new Date().toISOString().split('T')[0];
+    var todayMs=new Date().getTime();
+
+    Object.entries(enrollments).forEach(function([id,e]){
+        if(e.status!=='enrolled'&&e.status!=='accepted')return;
+        var tuition=e.sessionTuition||0;
+        if(!tuition)return;
+        // Check if manual payment exists for this camper
+        var manualPay=finPayments.filter(function(p){return p.family===e.camperName||p.family===(e.camperLast||'')+' Family'||p.enrollmentId===id});
+        var paidAmount=manualPay.reduce(function(s,p){return s+p.amount},0);
+        var payStatus='pending';
+        if(paidAmount>=tuition)payStatus='paid';
+        else if(paidAmount>0)payStatus='partial';
+        else{
+            // Check if overdue based on enrollment date
+            var enrollDate=new Date(e.appliedDate||todayStr);
+            var daysSince=Math.floor((todayMs-enrollDate.getTime())/(1000*60*60*24));
+            if(daysSince>overdueDays)payStatus='overdue';
+        }
+        // Discount applied?
+        var discountAmt=0;
+        if(e.discount){
+            if(e.discount.pct)discountAmt=Math.round(tuition*e.discount.pct/100);
+            if(e.discount.amt)discountAmt+=e.discount.amt;
+        }
+        var netTuition=tuition-discountAmt;
+        // Get Camper ID from roster
+        var camperData=roster[e.camperName]||{};
+        var camperId=camperData.camperId||0;
+        var camperIdStr=camperId?String(camperId).padStart(4,'0'):'—';
+        autoInvoices.push({
+            id:id,camperId:camperId,camperIdStr:camperIdStr,
+            camper:e.camperName,family:e.parentName,session:e.session||'',
+            tuition:tuition,discount:discountAmt,netTuition:netTuition,
+            paid:paidAmount,balance:Math.max(netTuition-paidAmount,0),
+            status:payStatus,method:e.paymentMethod||'',
+            enrollDate:e.appliedDate||'',dueDate:'',
+            isOverdue:payStatus==='overdue'
+        });
+    });
+
+    // ═══ AUTO-COMPUTE ALL TOTALS ═══
+    var totalPayroll=finStaff.reduce(function(s,x){return s+(x.salary||0)},0);
+    var totalExp=finExpenses.reduce(function(s,x){return s+(x.amount||0)},0);
+    var projected=autoInvoices.reduce(function(s,inv){return s+inv.netTuition},0);
+    var totalCollected=autoInvoices.reduce(function(s,inv){return s+inv.paid},0);
+    var totalOutstanding=autoInvoices.reduce(function(s,inv){return s+inv.balance},0);
+    var paidCount=autoInvoices.filter(function(inv){return inv.status==='paid'}).length;
+    var partialCount=autoInvoices.filter(function(inv){return inv.status==='partial'}).length;
+    var overdueCount=autoInvoices.filter(function(inv){return inv.status==='overdue'}).length;
+    var pendingCount=autoInvoices.filter(function(inv){return inv.status==='pending'}).length;
+    var netIncome=totalCollected-totalPayroll-totalExp;
+    var enrolledCount=autoInvoices.length;
+
+    var tabs=[{k:'overview',l:'Overview'},{k:'revenue',l:'Revenue'},{k:'payroll',l:'Payroll'},{k:'expenses',l:'Expenses'},{k:'budget',l:'Budget'},{k:'integrations',l:'Integrations'}];
+
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Analytics & Finance</h2><p class="sec-desc">Financial command center</p></div>';
+    h+='<div class="sec-actions">';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.finExportCSV()">↓ Export CSV</button>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.finExportQB()">↓ QuickBooks</button>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.finSetBudget()">Set Budget</button>';
+    h+='</div></div>';
+
+    // Sub-tabs
+    h+='<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px">';
+    tabs.forEach(function(t){
+        h+='<button class="me-btn me-btn--ghost" style="padding:8px 16px;font-size:.8rem;font-weight:600;border-bottom:2px solid '+(_finTab===t.k?'var(--me)':'transparent')+';color:'+(_finTab===t.k?'var(--me)':'var(--s400)')+';border-radius:0" onclick="CampistryMe.finSetTab(\''+t.k+'\')">'+t.l+'</button>';
+    });
+    h+='</div>';
+
+    function stat(label,value,sub,color){return'<div style="flex:1;min-width:140px;background:#fff;border-radius:var(--r);padding:12px 14px;border:1px solid var(--s200);border-left:3px solid '+color+'"><div style="font-size:.65rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.04em">'+label+'</div><div style="font-size:1.2rem;font-weight:800;color:var(--s800);margin-top:2px">'+value+'</div>'+(sub?'<div style="font-size:.72rem;color:var(--s400);margin-top:1px">'+sub+'</div>':'')+'</div>'}
+    function bar(items,maxVal){var bh='';items.forEach(function(item,i){var pct=maxVal>0?Math.round(item.value/maxVal*100):0;var color=BAR_COLORS[i%BAR_COLORS.length];bh+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><div style="width:90px;font-size:.75rem;font-weight:600;color:var(--s500);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(item.name)+'</div><div style="flex:1;height:20px;background:var(--s100);border-radius:4px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+color+';border-radius:4px;transition:width .3s"></div></div><div style="width:60px;font-size:.75rem;font-weight:700;color:var(--s700);text-align:right">'+fm(item.value)+'</div></div>'});return bh}
+
+    if(_finTab==='overview'){
+        // Overdue alert banner
+        if(overdueCount>0){
+            h+='<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:var(--r);padding:10px 14px;margin-bottom:10px;display:flex;align-items:center;gap:8px"><span style="font-size:18px">⚠️</span><div><div style="font-size:.85rem;font-weight:700;color:var(--err)">'+overdueCount+' overdue account'+(overdueCount>1?'s':'')+'</div><div style="font-size:.75rem;color:#991B1B">'+fm(autoInvoices.filter(function(i){return i.isOverdue}).reduce(function(s,i){return s+i.balance},0))+' outstanding past '+overdueDays+' days</div></div></div>';
+        }
+        h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">';
+        h+=stat('Projected Revenue',fm(projected),enrolledCount+' enrolled campers','var(--me)');
+        h+=stat('Collected',fm(totalCollected),projected>0?Math.round(totalCollected/projected*100)+'% of projected':'','var(--ok)');
+        h+=stat('Outstanding',fm(totalOutstanding),overdueCount+' overdue, '+pendingCount+' pending','var(--err)');
+        h+=stat('Net Income',fm(netIncome),netIncome>=0?'Positive':'Deficit',netIncome>=0?'var(--ok)':'var(--err)');
+        h+='</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">';
+        h+=stat('Total Payroll',fm(totalPayroll),finStaff.length+' staff','#3B82F6');
+        h+=stat('Total Expenses',fm(totalExp),finExpenses.length+' items','#8B5CF6');
+        h+=stat('Total Costs',fm(totalPayroll+totalExp),'Payroll + Expenses','var(--s600)');
+        h+=stat('Profit Margin',projected>0?Math.round(netIncome/projected*100)+'%':'—','Net / Revenue','#0EA5E9');
+        h+='</div>';
+
+        // Enrollment funnel
+        var eArr=Object.entries(enrollments);
+        var funnel=[{name:'Applied',count:eArr.length,color:'var(--s400)'},{name:'Accepted',count:eArr.filter(function([,e]){return e.status==='accepted'||e.status==='enrolled'}).length,color:'#3B82F6'},{name:'Enrolled',count:eArr.filter(function([,e]){return e.status==='enrolled'}).length,color:'var(--ok)'},{name:'Waitlisted',count:eArr.filter(function([,e]){return e.status==='waitlisted'}).length,color:'var(--me)'},{name:'Declined',count:eArr.filter(function([,e]){return e.status==='declined'}).length,color:'var(--err)'}];
+        var maxFunnel=funnel[0].count||1;
+        h+='<div style="display:flex;gap:14px;flex-wrap:wrap">';
+        h+='<div class="me-card" style="flex:1;min-width:280px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Enrollment Funnel</h4>';
+        funnel.forEach(function(f){var pct=Math.round(f.count/maxFunnel*100);h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><div style="width:70px;font-size:.75rem;font-weight:600;color:var(--s500);text-align:right">'+f.name+'</div><div style="flex:1;height:22px;background:var(--s100);border-radius:4px;overflow:hidden;position:relative"><div style="width:'+pct+'%;height:100%;background:'+f.color+';border-radius:4px"></div><span style="position:absolute;right:6px;top:3px;font-size:.7rem;font-weight:700;color:var(--s600)">'+f.count+'</span></div></div>'});
+        h+='</div>';
+
+        // Payment status
+        h+='<div class="me-card" style="flex:1;min-width:200px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Payment Status</h4>';
+        var payStats=[{name:'Paid',count:paidCount,color:'var(--ok)'},{name:'Partial',count:partialCount,color:'var(--me)'},{name:'Overdue',count:overdueCount,color:'var(--err)'},{name:'Pending',count:pendingCount,color:'var(--s400)'}];
+        var totalPayCount=autoInvoices.length||1;
+        payStats.forEach(function(p){var pct=Math.round(p.count/totalPayCount*100);h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><div style="width:10px;height:10px;border-radius:3px;background:'+p.color+';flex-shrink:0"></div><div style="flex:1;font-size:.82rem;font-weight:600;color:var(--s700)">'+p.name+'</div><div style="font-size:.82rem;font-weight:700;color:var(--s800)">'+p.count+'</div><div style="font-size:.72rem;color:var(--s400);width:35px;text-align:right">'+pct+'%</div></div>'});
+        h+='</div></div>';
+
+        // Expense breakdown
+        var expByCat={};finExpenses.forEach(function(e){expByCat[e.cat]=(expByCat[e.cat]||0)+e.amount});
+        var expItems=Object.entries(expByCat).map(function([name,value]){return{name:name,value:value}}).sort(function(a,b){return b.value-a.value});
+        var maxExp=expItems.length?expItems[0].value:1;
+        if(expItems.length){
+            h+='<div class="me-card" style="margin-top:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Expense Categories</h4>';
+            h+=bar(expItems,maxExp);
+            h+='</div>';
+        }
+    }
+
+    else if(_finTab==='revenue'){
+        h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">';
+        h+=stat('Total Invoiced',fm(projected),'','var(--me)');
+        h+=stat('Collected',fm(totalCollected),'','var(--ok)');
+        h+=stat('Outstanding',fm(totalOutstanding),'','var(--err)');
+        h+=stat('Collection Rate',projected>0?Math.round(totalCollected/projected*100)+'%':'—','','#3B82F6');
+        h+='</div>';
+
+        // Auto-invoice explanation
+        h+='<div style="background:#FFF7ED;border:1px solid #FDBA74;border-radius:var(--r);padding:10px 14px;margin-bottom:10px;font-size:.78rem;color:var(--s600)"><strong style="color:var(--me)">Auto-Generated Invoices</strong> — Each enrolled camper automatically creates an invoice based on their session tuition. Record payments below to update balances.</div>';
+
+        // Overdue threshold setting
+        h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px">';
+        h+='<div style="font-size:.78rem;color:var(--s400)">Accounts are marked overdue after <strong>'+overdueDays+'</strong> days. <button class="me-btn me-btn--ghost me-btn--sm" style="font-size:.72rem" onclick="CampistryMe.finSetOverdue()">Change</button></div>';
+        h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.finAddPayment()">+ Record Payment</button>';
+        h+='</div>';
+
+        // Invoices table (auto-generated)
+        h+='<div class="me-card"><div class="me-card-head"><h3>Tuition Invoices ('+autoInvoices.length+' accounts)</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th style="width:70px">Invoice #</th><th>Camper</th><th>Parent</th><th>Session</th><th>Tuition</th><th>Discount</th><th>Paid</th><th>Balance</th><th>Status</th></tr></thead><tbody>';
+        autoInvoices.sort(function(a,b){return a.status==='overdue'?-1:b.status==='overdue'?1:a.camper.localeCompare(b.camper)}).forEach(function(inv){
+            var sc=inv.status==='paid'?'ok':inv.status==='partial'?'warn':inv.status==='overdue'?'err':'gray';
+            var rowStyle=inv.isOverdue?'background:rgba(239,68,68,.03)':'';
+            h+='<tr style="'+rowStyle+'">';
+            h+='<td style="font-family:monospace;font-size:.78rem;color:var(--s500)">#'+esc(inv.camperIdStr)+'</td>';
+            h+='<td class="bold">'+(inv.isOverdue?'⚠ ':'')+esc(inv.camper)+'</td>';
+            h+='<td>'+esc(inv.family||'—')+'</td>';
+            h+='<td style="font-size:.78rem">'+esc(inv.session||'—')+'</td>';
+            h+='<td>'+fm(inv.tuition)+'</td>';
+            h+='<td>'+(inv.discount?'<span style="color:var(--ok)">-'+fm(inv.discount)+'</span>':'—')+'</td>';
+            h+='<td style="color:var(--ok);font-weight:600">'+fm(inv.paid)+'</td>';
+            h+='<td style="font-weight:700;color:'+(inv.balance>0?'var(--err)':'var(--ok)')+'">'+fm(inv.balance)+'</td>';
+            h+='<td>'+bdg(inv.status,sc)+'</td>';
+            h+='</tr>';
+        });
+        h+='</tbody></table></div></div>';
+
+        // Manual payment log (supplementary)
+        if(finPayments.length){
+            h+='<div class="me-card" style="margin-top:14px"><div class="me-card-head"><h3>Payment Log</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Family/Camper</th><th>Amount</th><th>Method</th><th></th></tr></thead><tbody>';
+            finPayments.sort(function(a,b){return(b.date||'').localeCompare(a.date||'')}).forEach(function(p,i){
+                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+'</td><td style="font-weight:700;color:var(--ok)">'+fm(p.amount)+'</td><td>'+esc(p.method||'—')+'</td><td style="text-align:right"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment('+i+')">✕</button></td></tr>';
+            });
+            h+='</tbody></table></div></div>';
+        }
+    }
+
+    else if(_finTab==='payroll'){
+        h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">';
+        h+=stat('Total Payroll',fm(totalPayroll),'','#3B82F6');
+        h+=stat('Staff Count',finStaff.length+'','','#8B5CF6');
+        h+=stat('Avg Salary',fm(finStaff.length?totalPayroll/finStaff.length:0),'','#0EA5E9');
+        h+=stat('% of Revenue',projected>0?Math.round(totalPayroll/projected*100)+'%':'—','','var(--me)');
+        h+='</div>';
+        // Cost by role
+        var roleCost={};finStaff.forEach(function(s){roleCost[s.role]=(roleCost[s.role]||0)+s.salary});
+        var roleItems=Object.entries(roleCost).map(function([name,value]){return{name:name,value:value}}).sort(function(a,b){return b.value-a.value});
+        if(roleItems.length){
+            h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Cost by Role</h4>';
+            h+=bar(roleItems,roleItems[0].value);
+            h+='</div>';
+        }
+        h+='<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.finAddStaff()">+ Add Staff</button></div>';
+        h+='<div class="me-card"><div class="me-card-head"><h3>Staff Directory</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Name</th><th>Role</th><th>Type</th><th>Salary</th><th></th></tr></thead><tbody>';
+        finStaff.forEach(function(s,i){
+            h+='<tr><td class="bold">'+esc(s.name)+'</td><td>'+esc(s.role)+'</td><td>'+bdg(s.type||'seasonal',s.type==='annual'?'ok':'gray')+'</td><td style="font-weight:700">'+fm(s.salary)+'</td><td style="text-align:right"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemoveStaff('+i+')">✕</button></td></tr>';
+        });
+        h+='</tbody></table></div></div>';
+    }
+
+    else if(_finTab==='expenses'){
+        h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">';
+        h+=stat('Total Expenses',fm(totalExp),'','var(--err)');
+        h+=stat('Line Items',finExpenses.length+'','','#8B5CF6');
+        h+=stat('Avg Item',fm(finExpenses.length?totalExp/finExpenses.length:0),'','#0EA5E9');
+        h+=stat('% of Revenue',projected>0?Math.round(totalExp/projected*100)+'%':'—','','var(--me)');
+        h+='</div>';
+        var expByCat2={};finExpenses.forEach(function(e){expByCat2[e.cat]=(expByCat2[e.cat]||0)+e.amount});
+        var expItems2=Object.entries(expByCat2).map(function([name,value]){return{name:name,value:value}}).sort(function(a,b){return b.value-a.value});
+        if(expItems2.length){
+            h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Expenses by Category</h4>';
+            h+=bar(expItems2,expItems2[0].value);
+            h+='</div>';
+        }
+        h+='<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.finAddExpense()">+ Add Expense</button></div>';
+        h+='<div class="me-card"><div class="me-card-head"><h3>Expense Ledger</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Amount</th><th></th></tr></thead><tbody>';
+        finExpenses.sort(function(a,b){return(b.date||'').localeCompare(a.date||'')}).forEach(function(e,i){
+            h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(e.date||'—')+'</td><td class="bold">'+esc(e.desc)+'</td><td>'+bdg(e.cat,'gray')+'</td><td style="font-weight:700;color:var(--err)">'+fm(e.amount)+'</td><td style="text-align:right"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemoveExpense('+i+')">✕</button></td></tr>';
+        });
+        h+='</tbody></table></div></div>';
+    }
+
+    else if(_finTab==='budget'){
+        var budgetItems=[
+            {name:'Revenue',budget:finBudget.revenue||0,actual:totalCollected,good:true},
+            {name:'Payroll',budget:finBudget.payroll||0,actual:totalPayroll,good:false},
+            {name:'Expenses',budget:finBudget.expenses||0,actual:totalExp,good:false}
+        ];
+        h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">';
+        budgetItems.forEach(function(b){
+            var diff=b.actual-b.budget;var isOver=b.good?diff<0:diff>0;
+            var sub=b.good?(diff>=0?'✓ On track':'⚠ '+fm(Math.abs(diff))+' below'):(diff<=0?'✓ Under budget':'⚠ '+fm(diff)+' over');
+            h+=stat(b.name,fm(b.actual)+' / '+fm(b.budget),sub,isOver?'var(--err)':'var(--ok)');
+        });
+        h+='</div>';
+        // Visual comparison
+        h+='<div class="me-card" style="padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 14px">Budget vs Actual</h4>';
+        var maxBudget=Math.max.apply(null,budgetItems.map(function(b){return Math.max(b.budget,b.actual)}))||1;
+        budgetItems.forEach(function(b){
+            var bPct=Math.round(b.budget/maxBudget*100);
+            var aPct=Math.round(b.actual/maxBudget*100);
+            var isOver=b.good?b.actual<b.budget:b.actual>b.budget;
+            h+='<div style="margin-bottom:12px"><div style="font-size:.8rem;font-weight:600;color:var(--s700);margin-bottom:4px">'+b.name+'</div>';
+            h+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px"><div style="width:50px;font-size:.7rem;color:var(--s400)">Budget</div><div style="flex:1;height:16px;background:var(--s100);border-radius:4px;overflow:hidden"><div style="width:'+bPct+'%;height:100%;background:var(--s300);border-radius:4px"></div></div><div style="width:65px;font-size:.75rem;font-weight:600;color:var(--s500);text-align:right">'+fm(b.budget)+'</div></div>';
+            h+='<div style="display:flex;align-items:center;gap:6px"><div style="width:50px;font-size:.7rem;color:var(--s400)">Actual</div><div style="flex:1;height:16px;background:var(--s100);border-radius:4px;overflow:hidden"><div style="width:'+aPct+'%;height:100%;background:'+(isOver?'var(--err)':'var(--ok)')+';border-radius:4px"></div></div><div style="width:65px;font-size:.75rem;font-weight:700;color:'+(isOver?'var(--err)':'var(--ok)')+';text-align:right">'+fm(b.actual)+'</div></div></div>';
+        });
+        h+='</div>';
+        h+='<div style="display:flex;justify-content:flex-end;margin-top:10px"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.finSetBudget()">Edit Budget Targets</button></div>';
+    }
+
+    else if(_finTab==='integrations'){
+        h+='<div class="me-card" style="padding:20px;margin-bottom:14px">';
+        h+='<h4 style="font-size:.9rem;font-weight:700;color:var(--s800);margin:0 0 6px">Accounting Software Integration</h4>';
+        h+='<p style="font-size:.82rem;color:var(--s500);margin-bottom:14px">Export your financial data in formats compatible with popular accounting software. Import transactions from your existing books.</p>';
+
+        h+='<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">';
+        var integrations=[
+            {name:'QuickBooks Online',icon:'📗',desc:'Export as CSV for QBO import',action:'finExportQB'},
+            {name:'QuickBooks Desktop',icon:'📘',desc:'Export as IIF file',action:'finExportIIF'},
+            {name:'Xero',icon:'📙',desc:'Export as Xero-compatible CSV',action:'finExportXero'},
+            {name:'General CSV',icon:'📊',desc:'Universal CSV format',action:'finExportCSV'},
+            {name:'Journal Entries',icon:'📒',desc:'Double-entry journal format',action:'finExportJournal'}
+        ];
+        integrations.forEach(function(ig){
+            h+='<div style="flex:1;min-width:180px;padding:14px;border:1px solid var(--s200);border-radius:var(--r);background:var(--s50)">';
+            h+='<div style="font-size:24px;margin-bottom:6px">'+ig.icon+'</div>';
+            h+='<div style="font-size:.85rem;font-weight:700;color:var(--s800)">'+ig.name+'</div>';
+            h+='<div style="font-size:.72rem;color:var(--s400);margin:3px 0 8px">'+ig.desc+'</div>';
+            h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.'+ig.action+'()">↓ Export</button>';
+            h+='</div>';
+        });
+        h+='</div>';
+
+        h+='<div style="border-top:1px solid var(--s200);padding-top:14px">';
+        h+='<h4 style="font-size:.85rem;font-weight:700;color:var(--s800);margin:0 0 6px">Import Transactions</h4>';
+        h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:8px">Upload a CSV export from your accounting software to sync transactions into Campistry.</p>';
+        h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.finImportCSV()">↑ Import CSV</button>';
+        h+='<input type="file" id="finImportInput" accept=".csv,.txt" style="display:none">';
+        h+='</div>';
+
+        h+='<div style="border-top:1px solid var(--s200);padding-top:14px;margin-top:14px">';
+        h+='<h4 style="font-size:.85rem;font-weight:700;color:var(--s800);margin:0 0 4px">API Integration (Coming Soon)</h4>';
+        h+='<p style="font-size:.78rem;color:var(--s400)">Direct QuickBooks Online / Xero API sync will be available soon. Contact <a href="mailto:campistryoffice@gmail.com" style="color:var(--me)">campistryoffice@gmail.com</a> to get early access.</p>';
+        h+='</div></div>';
+    }
+
+    c.innerHTML=h;
+}
+
+// Finance actions
+function finSetTab(t){_finTab=t;renderAnalytics()}
+function finAddStaff(){
+    var name=prompt('Staff name:');if(!name)return;
+    var role=prompt('Role ('+FIN_ROLES.join(', ')+'):','Counselor');
+    var salary=prompt('Salary ($):','');if(!salary)return;
+    var type=prompt('Type (seasonal or annual):','seasonal');
+    finStaff.push({id:Date.now(),name:name.trim(),role:(role||'Counselor').trim(),salary:parseFloat(salary)||0,type:(type||'seasonal').trim()});
+    save();renderAnalytics();toast('Staff added');
+}
+function finRemoveStaff(i){finStaff.splice(i,1);save();renderAnalytics();toast('Removed')}
+function finAddExpense(){
+    var desc=prompt('Description:');if(!desc)return;
+    var cat=prompt('Category ('+FIN_CATS.join(', ')+'):','Miscellaneous');
+    var amount=prompt('Amount ($):','');if(!amount)return;
+    var date=prompt('Date (YYYY-MM-DD):',new Date().toISOString().split('T')[0]);
+    finExpenses.push({id:Date.now(),desc:desc.trim(),cat:(cat||'Miscellaneous').trim(),amount:parseFloat(amount)||0,date:(date||'').trim()});
+    save();renderAnalytics();toast('Expense added');
+}
+function finRemoveExpense(i){finExpenses.splice(i,1);save();renderAnalytics();toast('Removed')}
+function finAddPayment(){
+    var family=prompt('Family name:');if(!family)return;
+    var amount=prompt('Amount ($):','');if(!amount)return;
+    var method=prompt('Method (Credit Card, ACH, Zelle, Check, Payment Plan):','Credit Card');
+    var date=prompt('Date (YYYY-MM-DD):',new Date().toISOString().split('T')[0]);
+    finPayments.push({id:Date.now(),family:family.trim(),amount:parseFloat(amount)||0,method:(method||'Credit Card').trim(),date:(date||'').trim(),status:'paid'});
+    save();renderAnalytics();toast('Payment recorded');
+}
+function finRemovePayment(i){finPayments.splice(i,1);save();renderAnalytics();toast('Removed')}
+function finSetBudget(){
+    var rev=prompt('Revenue target ($):',finBudget.revenue||'');
+    var pay=prompt('Payroll budget ($):',finBudget.payroll||'');
+    var exp=prompt('Expense budget ($):',finBudget.expenses||'');
+    finBudget={revenue:parseFloat(rev)||0,payroll:parseFloat(pay)||0,expenses:parseFloat(exp)||0,overdueDays:finBudget.overdueDays||30};
+    save();renderAnalytics();toast('Budget targets saved');
+}
+function finSetOverdue(){
+    var days=prompt('Mark accounts overdue after how many days?',finBudget.overdueDays||30);
+    if(days===null)return;
+    finBudget.overdueDays=parseInt(days)||30;
+    save();renderAnalytics();toast('Overdue threshold set to '+finBudget.overdueDays+' days');
+}
+
+// ── EXPORT FUNCTIONS ─────────────────────────────────────────
+function finExportCSV(){
+    var csv='\uFEFFType,Date,Description,Category,Amount,Status,Method\n';
+    finPayments.forEach(function(p){csv+='"Payment","'+p.date+'","'+p.family+'","Tuition","'+p.amount+'","'+p.status+'","'+(p.method||'')+'"\n'});
+    finStaff.forEach(function(s){csv+='"Staff","","'+s.name+'","'+s.role+'","'+s.salary+'","'+(s.type||'seasonal')+'",""\n'});
+    finExpenses.forEach(function(e){csv+='"Expense","'+e.date+'","'+e.desc+'","'+e.cat+'","'+e.amount+'","",""\n'});
+    dlFile(csv,'campistry_financials_'+today()+'.csv','text/csv');
+    toast('CSV exported');
+}
+
+function finExportQB(){
+    // QuickBooks Online compatible CSV — includes auto-invoices from enrollments
+    var csv='\uFEFFDate,Transaction Type,Num,Name,Account,Amount,Memo,Status\n';
+    // Auto-invoices from enrolled campers — uses Camper ID as invoice number
+    Object.entries(enrollments).forEach(function([id,e]){
+        if(e.status!=='enrolled')return;
+        var tuition=e.sessionTuition||0;if(!tuition)return;
+        var camperData=roster[e.camperName]||{};
+        var camperId=camperData.camperId?String(camperData.camperId).padStart(4,'0'):'0000';
+        csv+='"'+esc(e.appliedDate||'')+'","Invoice","INV-'+camperId+'","'+esc(e.camperName)+'","Tuition Income","'+tuition+'","'+esc(e.session||'')+' tuition","'+esc(e.paymentStatus||'pending')+'"\n';
+    });
+    // Manual payments
+    finPayments.forEach(function(p){
+        csv+='"'+p.date+'","Payment","","'+esc(p.family)+'","Tuition Income","'+p.amount+'","'+esc(p.method)+' payment","paid"\n';
+    });
+    // Expenses
+    finExpenses.forEach(function(e){
+        csv+='"'+e.date+'","Expense","","'+esc(e.desc)+'","'+esc(e.cat)+'","-'+e.amount+'","",""\n';
+    });
+    // Payroll
+    finStaff.forEach(function(s){
+        csv+='","Payroll","","'+esc(s.name)+'","Payroll Expense","-'+s.salary+'","'+esc(s.role)+' ('+esc(s.type||'seasonal')+')",""\n';
+    });
+    dlFile(csv,'campistry_quickbooks_'+today()+'.csv','text/csv');
+    toast('QuickBooks CSV exported');
+}
+
+function finExportIIF(){
+    // QuickBooks Desktop IIF format — uses Camper ID as reference
+    var iif='!TRNS\tTRNSTYPE\tDATE\tACCNT\tNAME\tAMOUNT\tMEMO\tNUM\n!SPL\tTRNSTYPE\tDATE\tACCNT\tNAME\tAMOUNT\tMEMO\tNUM\n!ENDTRNS\n';
+    // Auto-invoices
+    Object.entries(enrollments).forEach(function([id,e]){
+        if(e.status!=='enrolled')return;
+        var tuition=e.sessionTuition||0;if(!tuition)return;
+        var camperData=roster[e.camperName]||{};
+        var camperId=camperData.camperId?String(camperData.camperId).padStart(4,'0'):'0000';
+        iif+='TRNS\tINVOICE\t'+fmtIIFDate(e.appliedDate)+'\tAccounts Receivable\t'+e.camperName+'\t'+tuition+'\t'+esc(e.session||'')+' tuition\tINV-'+camperId+'\n';
+        iif+='SPL\tINVOICE\t'+fmtIIFDate(e.appliedDate)+'\tTuition Income\t'+e.camperName+'\t-'+tuition+'\t\t\n';
+        iif+='ENDTRNS\n';
+    });
+    finPayments.forEach(function(p){
+        iif+='TRNS\tDEPOSIT\t'+fmtIIFDate(p.date)+'\tChecking\t'+p.family+'\t'+p.amount+'\tTuition payment\t\n';
+        iif+='SPL\tDEPOSIT\t'+fmtIIFDate(p.date)+'\tAccounts Receivable\t'+p.family+'\t-'+p.amount+'\t\t\n';
+        iif+='ENDTRNS\n';
+    });
+    finExpenses.forEach(function(e){
+        iif+='TRNS\tCHECK\t'+fmtIIFDate(e.date)+'\tChecking\t'+e.desc+'\t-'+e.amount+'\t'+e.cat+'\n';
+        iif+='SPL\tCHECK\t'+fmtIIFDate(e.date)+'\t'+e.cat+'\t'+e.desc+'\t'+e.amount+'\t\n';
+        iif+='ENDTRNS\n';
+    });
+    dlFile(iif,'campistry_quickbooks_desktop_'+today()+'.iif','text/plain');
+    toast('IIF file exported for QuickBooks Desktop');
+}
+
+function finExportXero(){
+    // Xero-compatible CSV
+    var csv='\uFEFF*ContactName,EmailAddress,InvoiceNumber,InvoiceDate,DueDate,Total,Description,AccountCode\n';
+    Object.entries(enrollments).forEach(function([id,e]){
+        if(e.status!=='enrolled')return;
+        var tuition=e.sessionTuition||0;if(!tuition)return;
+        var camperData=roster[e.camperName]||{};
+        var camperId=camperData.camperId?String(camperData.camperId).padStart(4,'0'):'0000';
+        csv+='"'+esc(e.parentName||e.camperName)+'","'+esc(e.parentEmail||'')+'","INV-'+camperId+'","'+esc(e.appliedDate||'')+'","'+esc(e.appliedDate||'')+'","'+tuition+'","'+esc(e.session||'')+' tuition — '+esc(e.camperName)+'","200"\n';
+    });
+    finPayments.forEach(function(p,i){
+        csv+='"'+esc(p.family)+'","","PMT-'+String(i+1).padStart(4,'0')+'","'+p.date+'","'+p.date+'","'+p.amount+'","Payment received via '+esc(p.method)+'","200"\n';
+    });
+    finExpenses.forEach(function(e,i){
+        var camperId2=String(i+1).padStart(4,'0');
+        csv+='"'+esc(e.desc)+'","","EXP-'+camperId2+'","'+e.date+'","'+e.date+'","'+e.amount+'","'+esc(e.cat)+'","400"\n';
+    });
+    dlFile(csv,'campistry_xero_'+today()+'.csv','text/csv');
+    toast('Xero CSV exported');
+}
+
+function finExportJournal(){
+    var csv='\uFEFFDate,Invoice #,Account,Debit,Credit,Description,Reference\n';
+    // Auto-invoices
+    Object.entries(enrollments).forEach(function([id,e]){
+        if(e.status!=='enrolled')return;
+        var tuition=e.sessionTuition||0;if(!tuition)return;
+        var camperData=roster[e.camperName]||{};
+        var camperId=camperData.camperId?String(camperData.camperId).padStart(4,'0'):'0000';
+        csv+='"'+esc(e.appliedDate||'')+'","INV-'+camperId+'","Accounts Receivable","'+tuition+'","","Tuition: '+esc(e.camperName)+'","'+esc(e.session||'')+'"\n';
+        csv+='"'+esc(e.appliedDate||'')+'","INV-'+camperId+'","Tuition Revenue","","'+tuition+'","Tuition: '+esc(e.camperName)+'",""\n';
+    });
+    finPayments.forEach(function(p){
+        csv+='"'+p.date+'","","Cash/Bank","'+p.amount+'","","Payment: '+esc(p.family)+'","'+esc(p.method)+'"\n';
+        csv+='"'+p.date+'","","Accounts Receivable","","'+p.amount+'","Payment: '+esc(p.family)+'",""\n';
+    });
+    finExpenses.forEach(function(e){
+        csv+='"'+e.date+'","","'+esc(e.cat)+'","'+e.amount+'","","'+esc(e.desc)+'",""\n';
+        csv+='"'+e.date+'","","Cash/Bank","","'+e.amount+'","'+esc(e.desc)+'",""\n';
+    });
+    finStaff.forEach(function(s){
+        csv+='","","Payroll Expense","'+s.salary+'","","'+esc(s.name)+' ('+esc(s.role)+')","'+esc(s.type||'seasonal')+'"\n';
+        csv+='","","Cash/Bank","","'+s.salary+'","'+esc(s.name)+' salary",""\n';
+    });
+    dlFile(csv,'campistry_journal_entries_'+today()+'.csv','text/csv');
+    toast('Journal entries exported');
+}
+
+function finImportCSV(){
+    var inp=document.getElementById('finImportInput');
+    inp.onchange=function(){
+        var file=inp.files[0];if(!file)return;
+        var reader=new FileReader();
+        reader.onload=function(e){
+            var text=e.target.result;
+            if(text.charCodeAt(0)===0xFEFF)text=text.slice(1);
+            var lines=text.split(/\r?\n/).filter(function(l){return l.trim()});
+            if(lines.length<2){toast('Empty file','error');return}
+            var hdr=lines[0].toLowerCase();
+            var imported=0;
+            for(var i=1;i<lines.length;i++){
+                var cols=lines[i].split(',').map(function(s){return s.trim().replace(/^"|"$/g,'')});
+                if(!cols[0])continue;
+                // Try to auto-detect: if it has "payment" or positive amount with a name
+                var amount=0;
+                for(var c=0;c<cols.length;c++){var n=parseFloat(cols[c]);if(!isNaN(n)&&n>0){amount=n;break}}
+                if(amount>0){
+                    finPayments.push({id:Date.now()+i,family:cols[0]||'Imported',amount:amount,date:cols[1]||today(),method:'Imported',status:'paid'});
+                    imported++;
+                }
+            }
+            save();renderAnalytics();toast(imported+' transactions imported');
+            inp.value='';
+        };
+        reader.readAsText(file);
+    };
+    inp.click();
+}
+
+function dlFile(content,filename,type){var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type:type}));a.download=filename;a.click()}
+function today(){return new Date().toISOString().split('T')[0]}
+function fmtIIFDate(d){if(!d)return'';var p=d.split('-');return p[1]+'/'+p[2]+'/'+p[0]}
+
 function renderBilling(){var c=document.getElementById('page-billing');var tp=0,td=0;Object.values(families).forEach(function(f){tp+=f.totalPaid||0;td+=f.balance||0});c.innerHTML='<div class="sec-hd"><div><h2 class="sec-title">Billing</h2></div></div><div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px"><div style="flex:1;min-width:120px;background:#fff;border-radius:var(--r);padding:12px;border:1px solid var(--s200)"><div style="font-size:1.1rem;font-weight:700;color:var(--s800)">'+fm(tp)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Collected</div></div><div style="flex:1;min-width:120px;background:#fff;border-radius:var(--r);padding:12px;border:1px solid var(--s200)"><div style="font-size:1.1rem;font-weight:700;color:var(--s800)">'+fm(td)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Outstanding</div></div></div>'+(payments.length?'<div class="me-card"><div class="me-card-head"><h3>Payments</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Family</th><th>Amount</th><th>Status</th></tr></thead><tbody>'+payments.map(function(p){var f=families[p.familyId];return'<tr><td>'+(p.date||'')+'</td><td class="bold">'+(f?esc(f.name):'')+'</td><td style="font-weight:600">'+fm(p.amount)+'</td><td>'+bdg(p.status||'',p.status==='Paid'?'ok':'warn')+'</td></tr>'}).join('')+'</tbody></table></div></div>':'<div class="me-empty"><h3>No payments</h3></div>')}
 function renderBroadcasts(){var c=document.getElementById('page-broadcasts');c.innerHTML='<div class="sec-hd"><div><h2 class="sec-title">Broadcasts</h2></div><div class="sec-actions"><button class="me-btn me-btn--pri">+ New</button></div></div>'+(broadcasts.length?broadcasts.map(function(b){return'<div class="me-card" style="margin-bottom:8px;padding:14px"><div style="font-size:.85rem;font-weight:600">'+esc(b.subject)+'</div><div style="font-size:.7rem;color:var(--s400);margin-top:2px">'+esc(b.to||'')+' · '+esc(b.method||'')+'</div></div>'}).join(''):'<div class="me-empty"><h3>No broadcasts</h3></div>')}
 function renderSoon(p){var t={forms:'Forms & Docs',reports:'Reports',settings:'Settings'};document.getElementById('page-'+p).innerHTML='<div class="me-soon"><h2>'+(t[p]||p)+'</h2><p>Coming soon.</p></div>'}
@@ -1427,6 +1911,12 @@ window.CampistryMe={
     viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
+    finSetTab:finSetTab,finAddStaff:finAddStaff,finRemoveStaff:finRemoveStaff,
+    finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
+    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,
+    finSetBudget:finSetBudget,finSetOverdue:finSetOverdue,
+    finExportCSV:finExportCSV,finExportQB:finExportQB,finExportIIF:finExportIIF,
+    finExportXero:finExportXero,finExportJournal:finExportJournal,finImportCSV:finImportCSV,
     _pickColor:_pickColor,_addGradeRow:_addGradeRow,
     uploadPhoto:uploadPhoto,
 };
