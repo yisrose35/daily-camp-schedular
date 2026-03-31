@@ -335,31 +335,7 @@
             return score;
         }
 
-      // ── Sort blocks: most constrained first ──────────────────────
-        // Grades with fewer field options at their time window solve first
-        blocks.sort((a, b) => {
-            // Blocks with draft hints get slight priority (we want to honor them)
-            const aHint = a._draftActivity ? -1 : 0;
-            const bHint = b._draftActivity ? -1 : 0;
-            if (aHint !== bHint) return aHint - bHint;
-
-            // ★ Scarcity-first: grades with fewer reachable fields solve first
-            const aGrade = a.divName || '';
-            const bGrade = b.divName || '';
-            const aSM = parseTime(a.startTime), aEM = parseTime(a.endTime);
-            const bSM = parseTime(b.startTime), bEM = parseTime(b.endTime);
-            const aOptions = gradeFieldOptions.get(aGrade + '|' + aSM + '-' + aEM) || 999;
-            const bOptions = gradeFieldOptions.get(bGrade + '|' + bSM + '-' + bEM) || 999;
-            if (aOptions !== bOptions) return aOptions - bOptions;
-
-            // Shorter blocks are harder (less time = fewer fields available)
-            const aDur = (aSM != null && aEM != null) ? aEM - aSM : 0;
-            const bDur = (bSM != null && bEM != null) ? bEM - bSM : 0;
-            return aDur - bDur;
-        });
-
-        // ── Build cross-grade scarcity map ───────────────────────────
-        // For each time window, compute how "scarce" fields are per grade.
+      // ── Build cross-grade scarcity map ───────────────────────────        // For each time window, compute how "scarce" fields are per grade.
         // scarcityMap: fieldNorm → Map<timeKey, { grades: Set, demandByGrade: Map }>
         const scarcityMap = new Map();
         const gradeFieldOptions = new Map(); // grade|startMin-endMin → count of available fields
@@ -443,7 +419,27 @@
             return penalty;
         }
 
-        log('Scarcity map: ' + scarcityMap.size + ' fields, ' + windowBlocks.size + ' time windows');
+      log('Scarcity map: ' + scarcityMap.size + ' fields, ' + windowBlocks.size + ' time windows');
+
+        // ── Sort blocks: most constrained first ──────────────────────
+        // Grades with fewer field options at their time window solve first
+        blocks.sort((a, b) => {
+            const aHint = a._draftActivity ? -1 : 0;
+            const bHint = b._draftActivity ? -1 : 0;
+            if (aHint !== bHint) return aHint - bHint;
+
+            const aGrade = a.divName || '';
+            const bGrade = b.divName || '';
+            const aSM = parseTime(a.startTime), aEM = parseTime(a.endTime);
+            const bSM = parseTime(b.startTime), bEM = parseTime(b.endTime);
+            const aOptions = gradeFieldOptions.get(aGrade + '|' + aSM + '-' + aEM) || 999;
+            const bOptions = gradeFieldOptions.get(bGrade + '|' + bSM + '-' + bEM) || 999;
+            if (aOptions !== bOptions) return aOptions - bOptions;
+
+            const aDur = (aSM != null && aEM != null) ? aEM - aSM : 0;
+            const bDur = (bSM != null && bEM != null) ? bEM - bSM : 0;
+            return aDur - bDur;
+        });
 
         // ── Solve each block ─────────────────────────────────────────
         let filled = 0, free = 0;
