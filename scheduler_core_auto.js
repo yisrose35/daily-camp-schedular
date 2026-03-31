@@ -3216,7 +3216,27 @@
                 window.scheduleAssignments[String(bunk)] = new Array(arr.length).fill(null);
             });
         });
-
+// ★ v5.0: Write GAP sport blocks FIRST (before specials/anchors claim slots)
+        let gapSportWriteCount = 0;
+        allGrades.forEach(grade => {
+            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+            if (!pbs) return;
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                const arr = pbs[String(bunk)] || [];
+                (bunkTimelines[bunk] || []).filter(b => b.type === 'sport' && b._assignedSport && b.field).forEach(block => {
+                    const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
+                    if (idx === -1 || !window.scheduleAssignments[String(bunk)]) return;
+                    if (window.scheduleAssignments[String(bunk)][idx]) return;
+                    window.scheduleAssignments[String(bunk)][idx] = {
+                        field: block.field, sport: block._assignedSport,
+                        _activity: block._assignedSport, _fixed: true, _bunkOverride: true,
+                        _activityLocked: false, _autoMode: true, continuation: false
+                    };
+                    gapSportWriteCount++;
+                });
+            });
+        });
+        log('[2.7] GAP sport writes: ' + gapSportWriteCount);
         // Write special blocks
         let specialWriteCount = 0;
         allGrades.forEach(grade => {
