@@ -1,98 +1,34 @@
+// campistry_me.js — Campistry Me Engine (Premium Rebuild)
+(function(){
+'use strict';
+console.log('📋 Campistry Me loading...');
 
-// =============================================================================
-// campistry_me.js — Campistry Me v7.1
-// Professional UI, Cloud Sync, Fast inline inputs
-// =============================================================================
-// v7.1 — Critical cross-page compatibility fixes:
-// ★ convertToOldFormat MERGES into existing app1.divisions instead of
-//   overwriting — preserves Flow's start/stop/increments/lunchAfter data
-// ★ Color picker always visible in division modal (was hidden on add)
-// ★ Division color swatch in hierarchy is clickable to edit
-// ★ All v7.0 fixes retained
-// =============================================================================
+var COLORS=['#D97706','#147D91','#8B5CF6','#0EA5E9','#10B981','#F43F5E','#EC4899','#84CC16','#6366F1','#14B8A6'];
+var AV_BG=['#147D91','#6366F1','#0EA5E9','#10B981','#F43F5E','#8B5CF6','#D97706'];
 
-(function() {
-    'use strict';
-    console.log('[Me] Campistry Me v7.1 loading...');
+var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={};
+var enrollments={}, sessions=[], enrollSettings={}, formConfig=null;
+var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
+var nextCamperId=1;
+var _saveLockUntil=0; // timestamp — block cloud overwrites for 5s after local save
 
-    let structure = {};
-    let camperRoster = {};
-    let leagueTeams = [];
-    let _leagueData = [];
-    let expandedDivisions = new Set();
-    let expandedGrades = new Set();
-    let currentEditDivision = null;
-    let currentEditCamper = null;
-    let sortColumn = 'name';
-    let sortDirection = 'asc';
-    let pendingCsvData = [];
+// ═══ INIT ════════════════════════════════════════════════════════
+function init(){
+    loadData(); setupSidebar(); setupSearch(); setupModals();
+    syncAllAddressesToGo();
+    nav('campers');
+    console.log('📋 Me ready:',Object.keys(roster).length,'campers');
 
-    // ★ Cloud sync state
-    let _cloudSaveTimeout = null;
-    let _cloudVersion = null;
-    let _pendingMergeData = null;
-    let _searchDebounceTimeout = null;
-    let _toastTimeout = null;
-    let _lastCloudFetchTime = 0;
-    const CLOUD_SAVE_DEBOUNCE_MS = 800;
-    const CLOUD_FETCH_COOLDOWN_MS = 10000;
-    const MAX_NAME_LENGTH = 100;
-    const MAX_CSV_FILE_SIZE = 5 * 1024 * 1024;
-    const MAX_CSV_ROWS = 10000;
-    const MAX_CLOUD_RETRIES = 3;
-
-    const COLOR_PRESETS = ['#00C896','#6366F1','#F59E0B','#EF4444','#8B5CF6','#3B82F6','#10B981','#EC4899','#F97316','#14B8A6','#84CC16','#A855F7','#06B6D4','#F43F5E','#22C55E','#FBBF24'];
-
-    // =========================================================================
-    // ★ CLOUD SYNC HELPERS (direct Supabase access)
-    // =========================================================================
-
-    function getSupabaseClient() {
-        return window.CampistryDB?.getClient?.() || window.supabase || null;
-    }
-
-    let _cachedCampId = null;
-
-    // ★ v7.1: UUID validation — prevents type mismatch errors with Supabase RPC
-    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    function isValidUuid(s) { return s && typeof s === 'string' && UUID_REGEX.test(s); }
-
-    function getCampId() {
-        if (_cachedCampId) return _cachedCampId;
-        
-        // Only return values that are valid UUIDs
-        const candidates = [
-            window.CampistryDB?.getCampId?.(),
-            localStorage.getItem('campistry_camp_id'),
-            localStorage.getItem('campistry_user_id')
-        ];
-        for (const c of candidates) {
-            if (isValidUuid(c)) return c;
-        }
-        return null;
-    }
-
-    async function ensureCampId() {
-        if (_cachedCampId) return _cachedCampId;
-        try {
-            const client = getSupabaseClient();
-            if (client) {
-                const { data } = await client.auth.getSession();
-                if (data?.session?.user?.id) {
-                    _cachedCampId = data.session.user.id;
-                    return _cachedCampId;
-                }
-            }
-        } catch (_) { /* fall through */ }
-        return getCampId();
-    }
-
-    async function loadFromCloud() {
-        const client = getSupabaseClient();
-        const campId = await ensureCampId();
-        if (!client || !campId) {
-            console.log('[Me] No client/campId for cloud load');
-            return null;
+    // Block cloud hydration from overwriting recent saves
+    window.addEventListener('campistry-cloud-hydrated',function(){
+        if(Date.now()<_saveLockUntil){
+            console.log('[Me] Blocked cloud hydration overwrite (save lock active)');
+            // Re-write our data back
+            setTimeout(function(){save()},200);
+        }else{
+            // Cloud data is newer — reload
+            console.log('[Me] Cloud hydration — reloading data');
+            loadData();render(curPage);
         }
     });
 
