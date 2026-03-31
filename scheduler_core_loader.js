@@ -226,10 +226,21 @@
         }
 
         masterActivities.forEach(a => {
+            // ★★★ FIX v2.4: Normalize sharableWith for specials (not just fields) ★★★
+            // Empty {} from special_activities.js overwrites base default without this.
+            const rawSW = a.sharableWith;
+            const normalizedActivitySW = (rawSW && typeof rawSW === 'object' && rawSW.type)
+                ? {
+                    type: rawSW.type,
+                    divisions: Array.isArray(rawSW.divisions) ? rawSW.divisions : [],
+                    capacity: parseInt(rawSW.capacity) || (rawSW.type === 'all' ? 999 : (rawSW.type === 'not_sharable' ? 1 : 2))
+                }
+                : null; // null lets base() default take over
+
             props[a.name] = base({
                 available: a.available !== false,
                 sharable: a.sharable || false,
-                sharableWith: a.sharableWith || null,
+                sharableWith: normalizedActivitySW,
                 preferredDivisions: a.divisions || [],
                 allowedDivisions: a.divisions || [],
                 allowedFields: a.allowedFields || null,

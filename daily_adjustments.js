@@ -2911,17 +2911,41 @@ async function runOptimizer() {
 
         if (!window.runAutoScheduler) { await daShowAlert("Error: scheduler_core_auto.js not loaded."); return; }
 
-        // Reload daAutoLayers from localStorage if empty
+       // Reload daAutoLayers if empty — mirror loadDAAutoLayers() fallback chain
         if (!daAutoLayers || Object.keys(daAutoLayers).length === 0) {
             try {
                 const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-                const stored = localStorage.getItem('campAutoLayers_' + dateKey)
-                    || localStorage.getItem('daAutoLayers_' + dateKey)
-                    || localStorage.getItem('daAutoLayers')
-                    || localStorage.getItem('campAutoLayers');
+                // Priority 1: date-specific localStorage
+                const stored = localStorage.getItem('campAutoLayers_' + dateKey);
                 if (stored) {
                     daAutoLayers = JSON.parse(stored);
                     console.log('[Optimizer] Loaded daAutoLayers from localStorage:', Object.keys(daAutoLayers));
+                }
+                // Priority 2: date-specific cloud
+                if (!daAutoLayers || Object.keys(daAutoLayers).length === 0) {
+                    const g = window.loadGlobalSettings?.() || {};
+                    const cloudLayers = g.app1?.dailyAutoLayers?.[dateKey];
+                    if (cloudLayers && Object.keys(cloudLayers).length > 0) {
+                        daAutoLayers = JSON.parse(JSON.stringify(cloudLayers));
+                        console.log('[Optimizer] Loaded daAutoLayers from cloud:', Object.keys(daAutoLayers));
+                    }
+                }
+                // Priority 3: template fallback (skeletonAssignments → autoLayerTemplates)
+                if (!daAutoLayers || Object.keys(daAutoLayers).length === 0) {
+                    const g = window.loadGlobalSettings?.() || {};
+                    const autoTemplates = g.app1?.autoLayerTemplates || {};
+                    const assignments = g.app1?.skeletonAssignments || {};
+                    const [Y, M, D] = dateKey.split('-').map(Number);
+                    const dow = (Y && M && D) ? new Date(Y, M - 1, D).getDay() : 0;
+                    const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+                    const tmpl = assignments[dayNames[dow]] || assignments['Default'];
+                    if (tmpl && autoTemplates[tmpl]) {
+                        daAutoLayers = JSON.parse(JSON.stringify(autoTemplates[tmpl]));
+                        console.log('[Optimizer] Loaded daAutoLayers from template:', tmpl);
+                    } else if (autoTemplates['_current']) {
+                        daAutoLayers = JSON.parse(JSON.stringify(autoTemplates['_current']));
+                        console.log('[Optimizer] Loaded daAutoLayers from _current template');
+                    }
                 }
             } catch(e) {
                 console.warn('[Optimizer] Failed to load daAutoLayers:', e);

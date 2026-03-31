@@ -1,41 +1,49 @@
 // =============================================================================
-// scheduler_core_auto.js — CAMPISTRY AUTO SCHEDULER CORE v3.0
+// scheduler_core_auto.js — CAMPISTRY AUTO SCHEDULER CORE v4.0
 // =============================================================================
 // WHAT → WHEN → WHERE Architecture
 //
-// Phase 0: Place all PINNED layers (whatever the user pinned — any type)
+// Phase 0: Place PINNED layers + trips + grade-wide anchors (leagues)
 // Phase 1: Build exhaustive ranked activity lists per bunk (the WHAT)
 // Phase 2: Draft-style assignment with live field ledger (the WHERE)
-// Phase 3: DAP per-bunk day partition with zero dead space (the WHEN)
+// Phase 3: Greedy pack per-bunk with constraint enforcement (the WHEN)
 // Phase 4: Execute templates into bunkTimelines
 //
-// INTELLIGENCE SYSTEMS:
+// SUBSYSTEMS:
 //   CEL  — Constraint Enforcement Layer (duration validation)
-//   MRC  — Multi-Bunk Resource Coordination (shared resource staggering)
+//   MRC  — Multi-Bunk Resource Coordination (swim pool staggering)
 //   CIL  — Cross-Iteration Learning (remembers what worked)
+//   RT   — Resource Tracker (unified: specials, swim, fields)
 //
-// KEY PRINCIPLES:
-//   - NOTHING is hardcoded by type. Layer CLASSIFICATION (pinned/windowed/open)
-//     drives behavior. Lunch can be windowed. Sport can be pinned. 
-//   - Specials with configured durations override layer dMin/dMax.
-//     Specials WITHOUT configured durations use layer dMin/dMax as a range.
-//   - Every sport/special priority list is EXHAUSTIVE — never runs dry.
-//   - Leagues + full-grade activities are always grade-wide (inherent to type).
-//   - Field capacity is resolved BEFORE time placement, not after.
+// v4.0 KEY FIXES:
+//   1. Cross-division special conflicts fixed AT PLACEMENT — specials
+//      register worst-case (dMax) range; expand phase NEVER stretches
+//      specials past their registered time; canUseSpecialAtTime handles
+//      all sharing types (not_sharable, same_division, custom, all).
+//   2. Field capacity violations fixed — field ledger persists across
+//      grades during packing; post-expand validation sweep re-checks
+//      every field claim at actual times and swaps violations.
+//   3. Swim pool capacity enforcement — pool treated as exclusive
+//      resource; one grade at a time gated by canUsePoolAtTime.
+//   4. Clean solver integration — no monkey-patching of internal
+//      solver functions; stripped activityProperties passed cleanly.
+//   5. Diagnostics moved to post-gen callables on window.
+//   6. Iteration cap reduced (30 max, 8 stale) with smarter scoring.
 //
 // PIPELINE (external interface unchanged):
 //   Step 0    — Wipe clean
 //   Step 1    — Load data + classify layers
-//   Step 2    — Phase 0→1→2→3→4 + safety nets + validate + formalize
+//   Step 2    — Phase 0→1→2→3→4 + validate + formalize
 //   Step 3    — League engines
-//   Step 4    — Total Solver (mostly rubber-stamping draft results)
-//   Step 5    — Save + fire campistry-generation-complete
+//   Step 4    — Total Solver (sport slots only, no specials)
+//   Step 5    — Fallback sweep for remaining Free blocks
+//   Step 6    — Save + fire campistry-generation-complete
 // =============================================================================
 
 (function () {
     'use strict';
 
-    const VERSION = '3.0.0';
+    const VERSION = '4.0.0';
     const TAG = '[AutoCore]';
 
     function log(msg, ...args) { console.log(TAG + ' ' + msg, ...args); }
@@ -86,10 +94,8 @@
     }
 
     function clone(obj) { return JSON.parse(JSON.stringify(obj)); }
-    function overlaps(aStart, aEnd, bStart, bEnd) { return aStart < bEnd && aEnd > bStart; }
+    function overlaps(aS, aE, bS, bE) { return aS < bE && aE > bS; }
     function snapTo5(val) { return Math.round(val / 5) * 5; }
-    // Grace: fixed-duration blocks (dMin===dMax) get 0 grace. Flex blocks get +5.
-    function dMaxWithGrace(constraints) { return constraints.dMax + (constraints.dMin === constraints.dMax ? 0 : 5); }
 
     // =========================================================================
     // DATA ACCESS HELPERS
@@ -124,7 +130,10 @@
         const start = cfg.availableFrom || cfg.windowStart || cfg.startTime;
         const end = cfg.availableTo || cfg.windowEnd || cfg.endTime;
         if (start && end) {
-            return { startMin: typeof start === 'number' ? start : parseTimeToMinutes(start), endMin: typeof end === 'number' ? end : parseTimeToMinutes(end) };
+            return {
+                startMin: typeof start === 'number' ? start : parseTimeToMinutes(start),
+                endMin: typeof end === 'number' ? end : parseTimeToMinutes(end)
+            };
         }
         if (Array.isArray(cfg.timeRules) && cfg.timeRules.length > 0) {
             const available = cfg.timeRules.filter(r => r.type === 'Available' || !r.type);
@@ -142,28 +151,66 @@
         return null;
     }
 
-    function getSpecialDuration(specialName, activityProperties, gs, layer) {
+    function getSpecialDuration(specialName, activityProperties, gs) {
         const props = activityProperties && activityProperties[specialName];
-        if (props) { const d = props.defaultDuration || props.duration || props.durationMin || props.periodMin; if (d && parseInt(d, 10) > 0) return parseInt(d, 10); }
+        if (props) {
+            const d = props.defaultDuration || props.duration || props.durationMin || props.periodMin;
+            if (d && parseInt(d, 10) > 0) return parseInt(d, 10);
+        }
         const cfg = getSpecialConfig(specialName, gs);
-        if (cfg) { const d = cfg.defaultDuration || cfg.duration || cfg.durationMin || cfg.periodMin; if (d && parseInt(d, 10) > 0) return parseInt(d, 10); }
-        if (window.getSpecialActivityByName) { const live = window.getSpecialActivityByName(specialName); if (live) { const d = live.defaultDuration || live.duration || live.durationMin; if (d && parseInt(d, 10) > 0) return parseInt(d, 10); } }
-        // ★ Return null if no specific duration — caller uses layer dMin/dMax
-        return null;
+        if (cfg) {
+            const d = cfg.defaultDuration || cfg.duration || cfg.durationMin || cfg.periodMin;
+            if (d && parseInt(d, 10) > 0) return parseInt(d, 10);
+        }
+        if (window.getSpecialActivityByName) {
+            const live = window.getSpecialActivityByName(specialName);
+            if (live) {
+                const d = live.defaultDuration || live.duration || live.durationMin;
+                if (d && parseInt(d, 10) > 0) return parseInt(d, 10);
+            }
+        }
+        return null; // null = use layer dMin/dMax range
     }
 
     function getSpecialCapacity(specialName, activityProperties, gs) {
         const cfg = getSpecialConfig(specialName, gs);
         if (cfg) {
-            if (cfg.sharableWith) { if (cfg.sharableWith.type === 'not_sharable') return 1; const c = parseInt(cfg.sharableWith.capacity); if (!isNaN(c) && c > 0) return c; }
-            const c = parseInt(cfg.capacity) || parseInt(cfg.maxBunks); if (!isNaN(c) && c > 0) return c;
+            if (cfg.sharableWith) {
+                if (cfg.sharableWith.type === 'not_sharable') return 1;
+                const c = parseInt(cfg.sharableWith.capacity);
+                if (!isNaN(c) && c > 0) return c;
+            }
+            const c = parseInt(cfg.capacity) || parseInt(cfg.maxBunks);
+            if (!isNaN(c) && c > 0) return c;
         }
         const props = activityProperties && activityProperties[specialName];
         if (props) {
-            if (props.sharableWith) { if (props.sharableWith.type === 'not_sharable') return 1; if (props.sharableWith.capacity) return parseInt(props.sharableWith.capacity) || 1; }
-            if (props.capacity) return parseInt(props.capacity); if (props.maxBunks) return parseInt(props.maxBunks);
+            if (props.sharableWith) {
+                if (props.sharableWith.type === 'not_sharable') return 1;
+                if (props.sharableWith.capacity) return parseInt(props.sharableWith.capacity) || 1;
+            }
+            if (props.capacity) return parseInt(props.capacity);
+            if (props.maxBunks) return parseInt(props.maxBunks);
         }
         return 2;
+    }
+
+    function getSpecialSharingInfo(specialName, activityProperties, gs) {
+        let shareType = 'not_sharable', cap = 1, allowedDivs = [];
+        const props = activityProperties && activityProperties[specialName];
+        if (props && props.sharableWith && props.sharableWith.type) {
+            shareType = props.sharableWith.type;
+            cap = parseInt(props.sharableWith.capacity) || (shareType === 'not_sharable' ? 1 : 2);
+            allowedDivs = props.sharableWith.divisions || [];
+        } else {
+            const cfg = getSpecialConfig(specialName, gs);
+            if (cfg && cfg.sharableWith && cfg.sharableWith.type) {
+                shareType = cfg.sharableWith.type;
+                cap = parseInt(cfg.sharableWith.capacity) || (shareType === 'not_sharable' ? 1 : 2);
+                allowedDivs = cfg.sharableWith.divisions || [];
+            }
+        }
+        return { shareType, capacity: cap, allowedDivisions: allowedDivs };
     }
 
     function isScarce(specialName, dayName, gs) {
@@ -178,7 +225,8 @@
         if (!cfg) return true;
         if (!isRainy && cfg.rainyDayOnly) return false;
         if (isRainy && cfg.availableOnRainyDay === false) return false;
-        if (Array.isArray(cfg.availableDays) && cfg.availableDays.length > 0) return cfg.availableDays.map(d => d.toLowerCase()).includes(dayName.toLowerCase());
+        if (Array.isArray(cfg.availableDays) && cfg.availableDays.length > 0)
+            return cfg.availableDays.map(d => d.toLowerCase()).includes(dayName.toLowerCase());
         if (cfg.dayAvailability) {
             const da = cfg.dayAvailability;
             if (typeof da === 'object' && !Array.isArray(da)) return da[dayName] !== false;
@@ -205,24 +253,26 @@
         return (cfg && cfg.location) ? cfg.location : null;
     }
 
+    function isSpecialOnField(blockOrName, activityProperties, gs) {
+        const loc = typeof blockOrName === 'string'
+            ? getLocationForSpecial(blockOrName, activityProperties, gs)
+            : (blockOrName._specialLocation || null);
+        if (!loc) return false;
+        const props = activityProperties && activityProperties[loc];
+        if (props && props.type === 'field') return true;
+        return (gs?.app1?.fields || []).some(f => f.name === loc);
+    }
+
     function registerSpecialFieldUsage(slotIndices, fieldName, bunkName, activityName, divName, fieldUsageBySlot) {
         for (const slotIdx of slotIndices) {
             if (!fieldUsageBySlot[slotIdx]) fieldUsageBySlot[slotIdx] = {};
-            if (!fieldUsageBySlot[slotIdx][fieldName]) fieldUsageBySlot[slotIdx][fieldName] = { count: 0, divisions: [], bunks: {}, _locked: false };
+            if (!fieldUsageBySlot[slotIdx][fieldName])
+                fieldUsageBySlot[slotIdx][fieldName] = { count: 0, divisions: [], bunks: {}, _locked: false };
             fieldUsageBySlot[slotIdx][fieldName].count++;
             fieldUsageBySlot[slotIdx][fieldName].bunks[bunkName] = activityName;
-            if (divName && !fieldUsageBySlot[slotIdx][fieldName].divisions.includes(divName)) fieldUsageBySlot[slotIdx][fieldName].divisions.push(divName);
+            if (divName && !fieldUsageBySlot[slotIdx][fieldName].divisions.includes(divName))
+                fieldUsageBySlot[slotIdx][fieldName].divisions.push(divName);
         }
-    }
-
-    function sortGradesByConstraint(grades, layersByGrade, specialRanking) {
-        return [...grades].sort((a, b) => {
-            const aSpecial = (layersByGrade[a] || []).filter(l => l.type === 'special').length;
-            const bSpecial = (layersByGrade[b] || []).filter(l => l.type === 'special').length;
-            const aOptions = (specialRanking[a] || []).length;
-            const bOptions = (specialRanking[b] || []).length;
-            return (bSpecial - aSpecial) || (aOptions - bOptions);
-        });
     }
 
 
@@ -249,34 +299,49 @@
         window.fieldUsageBySlot = {};
         window.locationUsageBySlot = {};
         if (window.GlobalFieldLocks) window.GlobalFieldLocks.reset();
-        if (window.RotationEngine && window.RotationEngine.rebuildAllHistory) window.RotationEngine.rebuildAllHistory();
+        if (window.AutoFieldLocks) {
+            window.AutoFieldLocks.reset();
+            window.AutoFieldLocks.buildFieldPropertyCache();
+        }
+        if (window.RotationEngine && window.RotationEngine.rebuildAllHistory)
+            window.RotationEngine.rebuildAllHistory();
         log('[STEP 0] ✅ Wiped');
 
         // =====================================================================
         // STEP 1 — LOAD DATA
         // =====================================================================
         log('\n[STEP 1] Loading...');
-        if (!layers || layers.length === 0) { err('No layers'); window._preGenClearActive = false; return false; }
+        if (!layers || layers.length === 0) {
+            err('No layers');
+            window._preGenClearActive = false;
+            return false;
+        }
 
-        const globalSettings = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+        const globalSettings = getGlobalSettings();
         const divisions = window.divisions || (globalSettings.app1 && globalSettings.app1.divisions) || {};
         const activityProperties = window.activityProperties || {};
         const dailyData = window.loadCurrentDailyData ? window.loadCurrentDailyData() : {};
-        if (window.isRainyDay === undefined) window.isRainyDay = dailyData.rainyDayMode === true || dailyData.isRainyDay === true;
+        if (window.isRainyDay === undefined)
+            window.isRainyDay = dailyData.rainyDayMode === true || dailyData.isRainyDay === true;
         const isRainy = !!window.isRainyDay;
 
         const currentDate = window.currentScheduleDate || window.currentDate || '';
         let dayName = 'Monday';
-        if (currentDate) { const parts = currentDate.split('-').map(Number); const dow = new Date(parts[0], parts[1] - 1, parts[2]).getDay(); dayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][dow]; }
+        if (currentDate) {
+            const parts = currentDate.split('-').map(Number);
+            const dow = new Date(parts[0], parts[1] - 1, parts[2]).getDay();
+            dayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][dow];
+        }
 
         const allDailyData = window.loadAllDailyData ? window.loadAllDailyData() : {};
 
-        // Period helpers (unchanged from v2)
+        // ── Period helpers ────────────────────────────────────────────
         function getMondayOfWeek(dateStr, weeksBack) {
             if (!dateStr) return null;
             const parts = dateStr.split('-').map(Number);
             const d = new Date(parts[0], parts[1] - 1, parts[2]);
-            const dow = d.getDay(); const daysToMon = dow === 0 ? 6 : dow - 1;
+            const dow = d.getDay();
+            const daysToMon = dow === 0 ? 6 : dow - 1;
             d.setDate(d.getDate() - daysToMon - (weeksBack * 7));
             return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
         }
@@ -285,14 +350,22 @@
             return s.halfStartDate || s.currentHalfStart || s.sessionHalfStart || (Object.keys(allDailyData).sort()[0] || null);
         }
         function getPeriodStartDate(period) {
-            switch (period) { case '1week': return getMondayOfWeek(currentDate, 0); case '2weeks': return getMondayOfWeek(currentDate, 1); case '3weeks': return getMondayOfWeek(currentDate, 2); case '4weeks': return getMondayOfWeek(currentDate, 3); default: return getHalfStartDate(); }
+            switch (period) {
+                case '1week': return getMondayOfWeek(currentDate, 0);
+                case '2weeks': return getMondayOfWeek(currentDate, 1);
+                case '3weeks': return getMondayOfWeek(currentDate, 2);
+                case '4weeks': return getMondayOfWeek(currentDate, 3);
+                default: return getHalfStartDate();
+            }
         }
         function getPeriodCount(bunk, specialName, maxUsagePeriod) {
             const periodStart = getPeriodStartDate(maxUsagePeriod || 'half');
             let count = 0;
             Object.entries(allDailyData).forEach(([dateKey, dayData]) => {
-                if (dateKey >= currentDate) return; if (periodStart && dateKey < periodStart) return;
-                const slots = dayData?.scheduleAssignments?.[bunk]; if (!Array.isArray(slots)) return;
+                if (dateKey >= currentDate) return;
+                if (periodStart && dateKey < periodStart) return;
+                const slots = dayData?.scheduleAssignments?.[bunk];
+                if (!Array.isArray(slots)) return;
                 if (slots.some(e => e && !e.continuation && (e._activity === specialName || e.field === specialName))) count++;
             });
             return count;
@@ -311,10 +384,6 @@
 
         // =====================================================================
         // STEP 1.5 — CLASSIFY LAYERS
-        // =====================================================================
-        // ★ Classification drives ALL behavior. Type does NOT determine
-        //   whether something is pinned/windowed/open. The user's layer
-        //   definition determines that via the ratio.
         // =====================================================================
         log('\n[STEP 1.5] Classifying layers...');
 
@@ -349,101 +418,32 @@
 
         const allGrades = Object.keys(divisions).filter(g => !allowedSet || allowedSet.has(String(g)));
 
+
         // =====================================================================
         // MUTABLE STATE
         // =====================================================================
         const bunkTimelines = {};
-        const bunkSpecialQueues = {};
-        const bunkSpecialAssigned = {};
-        const specialCapacityTracker = {};
         const sharedLeagueTime = {};
         let staggerPlan = {};
 
-        // ── Cross-grade activity tracker ─────────────────────────────
-        // Tracks what each grade is doing at each time to prevent contention.
-        // Key: time bucket (5-min rounded). Value: { league: [grades], swim: [grades], special: [grades], snack: [grades], 'special:Name': [grades] }
-        const crossGradeTracker = {};
-        function registerCrossGrade(grade, type, startMin, endMin, eventName) {
-            const t = (type || '').toLowerCase();
-            const trackTypes = ['league', 'swim', 'special', 'snacks', 'snack'];
-            if (!trackTypes.includes(t)) return;
-            const key = t === 'snack' ? 'snacks' : t;
-            for (let m = startMin; m < endMin; m += 5) {
-                if (!crossGradeTracker[m]) crossGradeTracker[m] = {};
-                if (!crossGradeTracker[m][key]) crossGradeTracker[m][key] = [];
-                if (!crossGradeTracker[m][key].includes(grade)) crossGradeTracker[m][key].push(grade);
-                // Also track by specific event name for specials
-                if (t === 'special' && eventName) {
-                    const nameKey = 'special:' + eventName.toLowerCase();
-                    if (!crossGradeTracker[m][nameKey]) crossGradeTracker[m][nameKey] = [];
-                    if (!crossGradeTracker[m][nameKey].includes(grade)) crossGradeTracker[m][nameKey].push(grade);
-                }
-            }
-        }
-        function getCrossGradeConflicts(type, startMin, endMin, excludeGrade, eventName) {
-            const t = (type || '').toLowerCase();
-            // For specials: check the specific name if provided
-            const key = (t === 'special' && eventName) ? 'special:' + eventName.toLowerCase() : (t === 'snack' ? 'snacks' : t);
-            let conflicts = 0;
-            for (let m = startMin; m < endMin; m += 5) {
-                const bucket = crossGradeTracker[m];
-                if (!bucket || !bucket[key]) continue;
-                conflicts += bucket[key].filter(g => g !== excludeGrade).length;
-            }
-            return conflicts;
-        }
-        function resetCrossGradeTracker() {
-            Object.keys(crossGradeTracker).forEach(k => delete crossGradeTracker[k]);
-            Object.keys(specialUsageTracker).forEach(k => delete specialUsageTracker[k]);
-        }
-
-        // ── Special capacity tracker ─────────────────────────────────
-        // Tracks per-special, per-5min-bucket: { count, grades: Set }
-        // Used by greedyPackBunk to enforce capacity + cross-division rules.
-        const specialUsageTracker = {};
-        function registerSpecialUsage(specialName, grade, startMin, endMin) {
-            const key = (specialName || '').toLowerCase();
-            if (!key) return;
-            for (let m = startMin; m < endMin; m += 5) {
-                if (!specialUsageTracker[m]) specialUsageTracker[m] = {};
-                if (!specialUsageTracker[m][key]) specialUsageTracker[m][key] = { count: 0, grades: new Set() };
-                specialUsageTracker[m][key].count++;
-                specialUsageTracker[m][key].grades.add(grade);
-            }
-        }
-        function canUseSpecialAtTime(specialName, grade, startMin, endMin) {
-            const key = (specialName || '').toLowerCase();
-            if (!key) return true;
-            const props = activityProperties[specialName] || {};
-            const shareType = props.sharableWith?.type || 'not_sharable';
-            const cap = props.sharableWith?.capacity || 1;
-
-            for (let m = startMin; m < endMin; m += 5) {
-                const bucket = specialUsageTracker[m]?.[key];
-                if (!bucket) continue;
-
-                // Capacity check
-                if (bucket.count >= cap) return false;
-
-                // Cross-division check for same_division specials
-                if (shareType === 'same_division' && bucket.grades.size > 0) {
-                    if (!bucket.grades.has(grade)) return false; // different division already using it
-                }
-            }
-            return true;
-        }
 
         // =====================================================================
         // CEL — CONSTRAINT ENFORCEMENT LAYER
-        // Single source of truth for dMin/dMax/dIdeal.
         // =====================================================================
         const GAP_MIN_DUR = 20;
         const GAP_MAX_DUR = 60;
-        const FIELD_CAPACITY = 26;
         const CONTENTION_SLICE = 10;
 
-        const TYPE_FLOORS = { swim: 30, league: 30, specialty_league: 30, special: 20, sport: 25, sports: 25, lunch: 20, snack: 15, snacks: 15, dismissal: 10, slot: GAP_MIN_DUR, activity: GAP_MIN_DUR, elective: 20 };
-        const TYPE_CEILINGS = { swim: 60, league: 60, specialty_league: 60, special: 60, sport: GAP_MAX_DUR, sports: GAP_MAX_DUR, lunch: 45, snack: 30, snacks: 30, dismissal: 30, slot: GAP_MAX_DUR, activity: GAP_MAX_DUR, elective: 60 };
+        const TYPE_FLOORS = {
+            swim: 30, league: 30, specialty_league: 30, special: 20,
+            sport: 25, sports: 25, lunch: 20, snack: 15, snacks: 15,
+            dismissal: 10, slot: GAP_MIN_DUR, activity: GAP_MIN_DUR, elective: 20
+        };
+        const TYPE_CEILINGS = {
+            swim: 60, league: 60, specialty_league: 60, special: 60,
+            sport: GAP_MAX_DUR, sports: GAP_MAX_DUR, lunch: 45, snack: 30,
+            snacks: 30, dismissal: 30, slot: GAP_MAX_DUR, activity: GAP_MAX_DUR, elective: 60
+        };
 
         function resolveConstraints(layer, type, block) {
             const t = (type || layer?.type || 'slot').toLowerCase();
@@ -453,68 +453,178 @@
 
             const rawMin = layer.durationMin || layer.periodMin || layer.duration || 0;
             const rawMax = layer.durationMax || layer.periodMin || layer.duration || 0;
-            // ★ User's explicit layer value WINS over type floor.
-            // Type floor is only a fallback when the user didn't set anything.
-            // Absolute floor of 5min prevents truly insane values.
             const ABSOLUTE_FLOOR = 5;
             let dMin = rawMin > 0 ? Math.max(ABSOLUTE_FLOOR, rawMin) : typeFloor;
             let dMax = Math.max(dMin, rawMax > 0 ? Math.max(ABSOLUTE_FLOOR, rawMax) : typeCeiling);
 
-           // ★ Special override: if a SPECIFIC special has its own duration, use that
-            // If not, the layer dMin/dMax range applies (flexible special)
+            // Special override: configured duration locks dMin=dMax
             if (t === 'special') {
                 let specDur = null;
                 if (layer) {
                     const specName = layer._assignedSpecial || layer._resolvedSpecial || layer.event || layer.name;
-                    if (specName) specDur = getSpecialDuration(specName, activityProperties, globalSettings, null);
+                    if (specName) specDur = getSpecialDuration(specName, activityProperties, globalSettings);
                 }
-               // Fallback: block-level _specialDuration (covers layer-null blocks from draft/fallback)
                 if (!specDur && block && block._specialDuration) specDur = block._specialDuration;
-                // Final fallback: look up by event name directly (covers needs/draft objects)
                 if (!specDur && block) {
                     const eName = block.event || block._assignedSpecial || block._draftActivity || block.name;
-                    if (eName) specDur = getSpecialDuration(eName, activityProperties, globalSettings, null);
+                    if (eName) specDur = getSpecialDuration(eName, activityProperties, globalSettings);
                 }
-                if (specDur && specDur > 0) {
-                    dMin = specDur;
-                    dMax = specDur;
-                }
+                if (specDur && specDur > 0) { dMin = specDur; dMax = specDur; }
             }
 
             return { dMin, dMax, dIdeal: snapTo5(Math.round((dMin + dMax) / 2)) };
         }
 
-        function validateTimelineIntegrity(bunk) {
-            const timeline = bunkTimelines[bunk] || [];
-            const violations = [];
-            timeline.forEach((block, i) => {
-                if (block._fromGapDetection && !block.layer) return;
-                if (block._microGap) return;
-                const { dMin } = resolveConstraints(block.layer, (block.type || 'slot').toLowerCase(), block);
-                const dur = block.endMin - block.startMin;
-                if (dur < dMin) violations.push({ block, bunk, type: 'undersized', actual: dur, required: dMin, msg: (block.event || block.type) + ' at ' + block.startMin + ': ' + dur + 'min < min=' + dMin });
-                if (i < timeline.length - 1 && block.endMin > timeline[i + 1].startMin) violations.push({ block, bunk, type: 'overlap', msg: block.event + ' overlaps ' + timeline[i + 1].event });
-            });
-            return violations;
-        }
-
-        log('[CEL] Initialized');
 
         // =====================================================================
-        // MRC — MULTI-BUNK RESOURCE COORDINATION
-        // Staggers shared resources (swim pool) across grades.
-        // Only applies to layers classified as requiring shared resources.
+        // RT — RESOURCE TRACKER (Unified: Specials, Swim Pool, Fields)
+        // ★ Single source of truth for all shared-resource capacity.
+        // Uses 5-min time buckets. Tracks count + grades per bucket.
+        // =====================================================================
+
+        const _resourceBuckets = {};   // { "special:painting": { [minute]: { count, grades: Set } }, ... }
+
+        function _rtKey(type, name) {
+            return (type + ':' + (name || '')).toLowerCase();
+        }
+
+        function _rtGetBucket(key, minute) {
+            if (!_resourceBuckets[key]) _resourceBuckets[key] = {};
+            if (!_resourceBuckets[key][minute])
+                _resourceBuckets[key][minute] = { count: 0, grades: new Set() };
+            return _resourceBuckets[key][minute];
+        }
+
+        function rtRegister(type, name, grade, startMin, endMin) {
+            const key = _rtKey(type, name);
+            for (let m = startMin; m < endMin; m += 5) {
+                const b = _rtGetBucket(key, m);
+                b.count++;
+                if (grade) b.grades.add(grade);
+            }
+        }
+
+        function rtCanUse(type, name, grade, startMin, endMin, shareType, capacity, allowedDivisions) {
+            const key = _rtKey(type, name);
+            const buckets = _resourceBuckets[key];
+            if (!buckets) return true;
+
+            for (let m = startMin; m < endMin; m += 5) {
+                const b = buckets[m];
+                if (!b) continue;
+
+                // Capacity check — universal
+                if (b.count >= capacity) return false;
+
+                // Cross-division enforcement
+                if (b.grades.size > 0 && !b.grades.has(grade)) {
+                    if (shareType === 'not_sharable') return false;
+                    if (shareType === 'same_division') return false;
+                    if (shareType === 'custom') {
+                        const existing = [...b.grades];
+                        const allOk = existing.every(g => allowedDivisions.includes(g)) && allowedDivisions.includes(grade);
+                        if (!allOk) return false;
+                    }
+                   // shareType === 'all' → no cross-div restriction, only capacity
+                }
+            }
+
+            // ★ EXACT TIME MATCH: If same-grade bunks are already using this resource,
+            // the new bunk must start and end at exactly the same time.
+            // No mid-session joins or early departures.
+            if (capacity > 1) {
+                for (let m = startMin; m < endMin; m += 5) {
+                    const b = buckets[m];
+                    if (!b || !b.grades.has(grade)) continue;
+                    // Found same-grade usage overlapping our window — check boundaries match
+                    const beforeBucket = buckets[startMin - 5];
+                    if (beforeBucket && beforeBucket.grades.has(grade) && beforeBucket.count > 0) return false;
+                    const afterBucket = buckets[endMin];
+                    if (afterBucket && afterBucket.grades.has(grade) && afterBucket.count > 0) return false;
+                    const endCheckBucket = buckets[endMin - 5];
+                    if (!endCheckBucket || !endCheckBucket.grades.has(grade)) return false;
+                    break;
+                }
+            }
+
+            return true;
+        }
+
+        function rtReset() {
+            Object.keys(_resourceBuckets).forEach(k => delete _resourceBuckets[k]);
+        }
+
+        // ── Convenience wrappers ─────────────────────────────────────
+
+        function registerSpecialUsage(specialName, grade, startMin, endMin) {
+            rtRegister('special', specialName, grade, startMin, endMin);
+        }
+
+        function canUseSpecialAtTime(specialName, grade, startMin, endMin) {
+            const info = getSpecialSharingInfo(specialName, activityProperties, globalSettings);
+            return rtCanUse('special', specialName, grade, startMin, endMin,
+                info.shareType, info.capacity, info.allowedDivisions);
+        }
+
+        function registerPoolUsage(grade, startMin, endMin) {
+            rtRegister('pool', '_pool', grade, startMin, endMin);
+        }
+
+        function canUsePoolAtTime(grade, startMin, endMin) {
+            // Pool is exclusive PER GRADE — unlimited bunks within same grade,
+            // but zero bunks from any other grade at the same time.
+            // We DON'T use rtCanUse here because its capacity check (count >= cap)
+            // would block the 2nd bunk of the same grade. Instead we only check
+            // whether a DIFFERENT grade has registered in any overlapping bucket.
+            const key = _rtKey('pool', '_pool');
+            const buckets = _resourceBuckets[key];
+            if (!buckets) return true;
+            for (let m = startMin; m < endMin; m += 5) {
+                const b = buckets[m];
+                if (!b) continue;
+                // Same grade already registered → fine, any number of bunks OK
+                if (b.grades.has(grade)) continue;
+                // A DIFFERENT grade is on the pool → blocked
+                if (b.grades.size > 0) return false;
+            }
+            return true;
+        }
+
+        // Cross-grade tracker for stagger scoring
+        function registerCrossGrade(grade, type, startMin, endMin, eventName) {
+            rtRegister('xgrade', type, grade, startMin, endMin);
+            if (type === 'special' && eventName) {
+                rtRegister('xgrade', 'special:' + eventName, grade, startMin, endMin);
+            }
+        }
+
+        function getCrossGradeConflicts(type, startMin, endMin, excludeGrade, eventName) {
+            const key = (type === 'special' && eventName)
+                ? _rtKey('xgrade', 'special:' + eventName)
+                : _rtKey('xgrade', type);
+            const buckets = _resourceBuckets[key];
+            if (!buckets) return 0;
+            let conflicts = 0;
+            for (let m = startMin; m < endMin; m += 5) {
+                const b = buckets[m];
+                if (!b) continue;
+                conflicts += [...b.grades].filter(g => g !== excludeGrade).length;
+            }
+            return conflicts;
+        }
+
+
+        // =====================================================================
+        // MRC — MULTI-BUNK RESOURCE COORDINATION (Swim staggering)
         // =====================================================================
         const resourceCalendar = { swim: {} };
 
         function buildResourceCalendar(seed) {
             resourceCalendar.swim = {};
-            // Find all grades that have a swim-type layer (regardless of classification)
             const swimGrades = [];
             allGrades.forEach(grade => {
                 const swimLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'swim');
                 if (!swimLayer) return;
-                // Only stagger non-pinned swim. Pinned swim is placed at exact time.
                 if (computeRatio(swimLayer) >= 1) return;
                 const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
                 const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
@@ -534,8 +644,10 @@
 
                 const poolStart = Math.min(...swimGrades.map(g => g.winStart));
                 const poolEnd = Math.max(...swimGrades.map(g => g.winEnd));
-                const bandDur = Math.max(Math.min(...swimGrades.map(g => g.dMax)), snapTo5(Math.floor((poolEnd - poolStart) / swimGrades.length)));
-
+                const bandDur = Math.max(
+                    Math.min(...swimGrades.map(g => g.dMax)),
+                    snapTo5(Math.floor((poolEnd - poolStart) / swimGrades.length))
+                );
                 let cursor = poolStart;
                 swimGrades.forEach(g => {
                     const bStart = Math.max(g.winStart, cursor);
@@ -547,14 +659,14 @@
         }
 
         function getSwimWindow(grade) { return resourceCalendar.swim[grade] || null; }
-        log('[MRC] Initialized');
+
 
         // =====================================================================
         // CIL — CROSS-ITERATION LEARNING
         // =====================================================================
         const iterationMemory = { bestPerGrade: {} };
 
-        function extractFragments(timelines, iterScore) {
+        function extractFragments(timelines) {
             allGrades.forEach(grade => {
                 const bunks = getBunksForGrade(grade, divisions);
                 let gradeScore = 0;
@@ -564,7 +676,10 @@
                     const sorted = [...tl].sort((a, b) => a.startMin - b.startMin);
                     const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
                     if (sorted.length > 0 && sorted[0].startMin > gs) gradeScore += (sorted[0].startMin - gs) * 15;
-                    for (let i = 0; i < sorted.length - 1; i++) { const gap = sorted[i + 1].startMin - sorted[i].endMin; if (gap > 0) gradeScore += gap * 15; }
+                    for (let i = 0; i < sorted.length - 1; i++) {
+                        const gap = sorted[i + 1].startMin - sorted[i].endMin;
+                        if (gap > 0) gradeScore += gap * 15;
+                    }
                     tl.forEach(block => {
                         if (!block.layer) return;
                         const { dMin } = resolveConstraints(block.layer, block.type, block);
@@ -575,7 +690,8 @@
                     });
                 });
                 const prev = iterationMemory.bestPerGrade[grade];
-                if (!prev || gradeScore < prev.score) iterationMemory.bestPerGrade[grade] = { score: gradeScore, types: typeTimings, iteration: totalIters };
+                if (!prev || gradeScore < prev.score)
+                    iterationMemory.bestPerGrade[grade] = { score: gradeScore, types: typeTimings, iteration: totalIters };
             });
         }
 
@@ -584,27 +700,23 @@
             if (!best || !best.types[type]) return 0;
             let bestOverlap = 0;
             for (const frag of best.types[type]) {
-                const overlap = Math.max(0, Math.min(frag.end, endMin) - Math.max(frag.start, startMin));
+                const o = Math.max(0, Math.min(frag.end, endMin) - Math.max(frag.start, startMin));
                 const dur = endMin - startMin;
-                bestOverlap = Math.max(bestOverlap, dur > 0 ? overlap / dur : 0);
+                bestOverlap = Math.max(bestOverlap, dur > 0 ? o / dur : 0);
             }
             return -Math.round(bestOverlap * 50);
         }
 
-        log('[CIL] Initialized');
-
 
         // =====================================================================
-        // FIELD LEDGER — Tracks every resource's real-time availability
-        // Used by the Draft (Phase 2) to prevent field conflicts.
+        // FIELD LEDGER — Tracks field availability in real time.
+        // ★ v4.0: Persists across grades during packing (NOT cleared).
         // =====================================================================
 
         const fieldLedger = {};
 
         function initFieldLedger() {
-            // Clear previous
             Object.keys(fieldLedger).forEach(k => delete fieldLedger[k]);
-
             const fields = getFields(globalSettings);
             const disabled = globalSettings.app1?.disabledFields || globalSettings.disabledFields || [];
 
@@ -612,7 +724,6 @@
                 if (disabled.includes(field.name)) return;
                 const props = activityProperties[field.name] || {};
                 const timeRules = [];
-
                 if (props.timeRules && Array.isArray(props.timeRules)) {
                     props.timeRules.forEach(rule => {
                         if (rule.type === 'Available' || !rule.type) {
@@ -624,26 +735,25 @@
                         }
                     });
                 }
-
-                // Default: available all day
                 if (timeRules.length === 0) {
                     const campStart = Math.min(...Object.values(divisions).map(d => parseTimeToMinutes(d.startTime) || 540));
                     const campEnd = Math.max(...Object.values(divisions).map(d => parseTimeToMinutes(d.endTime) || 990));
                     timeRules.push({ startMin: campStart, endMin: campEnd, divisions: null });
                 }
+                const sharing = props.sharableWith || {};
+                const shareType = sharing.type || 'not_sharable';  // ★ v4.1: Default to NOT sharable
+                const capacity = parseInt(sharing.capacity) || (shareType === 'not_sharable' ? 1 : (shareType === 'all' ? 999 : 2));
 
-                const capacity = props.capacity || props.sharableWith?.capacity || 2;
-                const shareType = props.sharableWith?.type || 'same_division';
-
-                fieldLedger[field.name] = {
+               fieldLedger[field.name] = {
                     name: field.name, capacity, shareType,
+                    allowedDivisions: props.sharableWith?.divisions || [],
                     isIndoor: field.isIndoor || false,
                     timeRules, activities: field.activities || [],
                     claims: []
                 };
             });
 
-            // Add special activity locations that aren't already fields
+            // Add special activity locations
             todaysSpecials.forEach(special => {
                 const location = getLocationForSpecial(special.name, activityProperties, globalSettings);
                 if (location && !fieldLedger[location]) {
@@ -652,7 +762,7 @@
                     fieldLedger[location] = {
                         name: location, capacity: cap,
                         shareType: cfg?.sharableWith?.type || 'not_sharable',
-                        isIndoor: true, // assume indoor for special locations
+                        isIndoor: true,
                         timeRules: [{ startMin: 540, endMin: 990, divisions: null }],
                         activities: [special.name], claims: [],
                         _isSpecialLocation: true
@@ -685,6 +795,27 @@
             if (ledger.shareType === 'same_division') {
                 if (overlapping.some(c => c.grade !== grade)) return false;
             }
+            if (ledger.shareType === 'custom') {
+                const allowedDivs = ledger.allowedDivisions || [];
+                if (allowedDivs.length > 0) {
+                    if (overlapping.some(c => c.grade !== grade && !allowedDivs.includes(c.grade))) return false;
+                    if (overlapping.length > 0 && !allowedDivs.includes(grade)) return false;
+                } else {
+                    if (overlapping.some(c => c.grade !== grade)) return false;
+                }
+            }
+
+            // ★ EXACT TIME MATCH: Bunks sharing a field must start and end together.
+            // No mid-game joins or early departures. If any same-grade claim exists
+            // on this field with overlapping time, it must have identical start/end.
+            if (overlapping.length > 0 && ledger.capacity > 1) {
+                const sameGradeOverlaps = overlapping.filter(c => c.grade === grade);
+                if (sameGradeOverlaps.length > 0) {
+                    if (sameGradeOverlaps.some(c => c.startMin !== startMin || c.endMin !== endMin)) {
+                        return false;
+                    }
+                }
+            }
 
             return true;
         }
@@ -695,32 +826,22 @@
             return true;
         }
 
-        function unclaimField(fieldName, bunk, startMin) {
-            const ledger = fieldLedger[fieldName];
-            if (!ledger) return;
-            const idx = ledger.claims.findIndex(c => c.bunk === bunk && c.startMin === startMin);
-            if (idx !== -1) ledger.claims.splice(idx, 1);
+        function unclaimFieldsForBunk(bunk) {
+            Object.values(fieldLedger).forEach(ledger => {
+                ledger.claims = ledger.claims.filter(c => c.bunk !== bunk);
+            });
         }
 
-        // =====================================================================
-        // HELPER: CONTENTION SCORING (for Phase 0 league/swim placement)
-        // =====================================================================
 
-        function isSpecialOnField(blockOrName) {
-            const loc = typeof blockOrName === 'string'
-                ? getLocationForSpecial(blockOrName, activityProperties, globalSettings)
-                : (blockOrName._specialLocation || null);
-            if (!loc) return false;
-            const props = activityProperties[loc];
-            if (props && props.type === 'field') return true;
-            return (globalSettings?.app1?.fields || []).some(f => f.name === loc);
-        }
+        // =====================================================================
+        // CONTENTION SCORING
+        // =====================================================================
 
         function getFieldImpact(block) {
             const t = (block.type || '').toLowerCase();
             if (['sport', 'sports', 'slot', 'league', 'specialty_league'].includes(t)) return 'consumer';
             if (t === 'swim') return 'reliever';
-            if (t === 'special') return isSpecialOnField(block) ? 'consumer' : 'reliever';
+            if (t === 'special') return isSpecialOnField(block, activityProperties, globalSettings) ? 'consumer' : 'reliever';
             return 'neutral';
         }
 
@@ -738,7 +859,11 @@
                         const tl = bunkTimelines[bk] || [];
                         let hasBlock = false, isCons = false;
                         for (const block of tl) {
-                            if (block.startMin < sliceEnd && block.endMin > t) { hasBlock = true; if (getFieldImpact(block) === 'consumer') isCons = true; break; }
+                            if (block.startMin < sliceEnd && block.endMin > t) {
+                                hasBlock = true;
+                                if (getFieldImpact(block) === 'consumer') isCons = true;
+                                break;
+                            }
                         }
                         if (isCons) demand++;
                         else if (!hasBlock) demand++;
@@ -754,13 +879,12 @@
             let impact = 'neutral';
             if (['sport', 'sports', 'slot', 'league', 'specialty_league'].includes(t)) impact = 'consumer';
             else if (t === 'swim') impact = 'reliever';
-            else if (t === 'special') impact = (specialName && isSpecialOnField(specialName)) ? 'consumer' : 'reliever';
+            else if (t === 'special') impact = (specialName && isSpecialOnField(specialName, activityProperties, globalSettings)) ? 'consumer' : 'reliever';
 
             if (impact === 'neutral') return 0;
             const demand = getFieldDemand(startMin, endMin, excludeBunk);
             let score = impact === 'reliever' ? -demand : demand;
 
-            // CIL: learned preference
             if (totalIters >= 2 && excludeBunk) {
                 const bunkGrade = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(excludeBunk)))?.[0];
                 if (bunkGrade) score += getLearnedPreference(bunkGrade, blockType, startMin, endMin);
@@ -768,34 +892,32 @@
             return score;
         }
 
+
         // =====================================================================
-        // HELPER: FREE GAP / PLACEMENT FUNCTIONS (used by Phase 0 + DAP)
+        // GAP / PLACEMENT HELPERS
         // =====================================================================
 
         function getFreeGaps(bunk, windowStart, windowEnd) {
             const timeline = bunkTimelines[bunk] || [];
-            const occupied = timeline.filter(b => overlaps(b.startMin, b.endMin, windowStart, windowEnd))
+            const occupied = timeline
+                .filter(b => overlaps(b.startMin, b.endMin, windowStart, windowEnd))
                 .map(b => ({ start: Math.max(b.startMin, windowStart), end: Math.min(b.endMin, windowEnd) }))
                 .sort((a, b) => a.start - b.start);
             const gaps = [];
             let cursor = windowStart;
-            for (const occ of occupied) { if (occ.start > cursor) gaps.push({ start: cursor, end: occ.start }); cursor = Math.max(cursor, occ.end); }
+            for (const occ of occupied) {
+                if (occ.start > cursor) gaps.push({ start: cursor, end: occ.start });
+                cursor = Math.max(cursor, occ.end);
+            }
             if (cursor < windowEnd) gaps.push({ start: cursor, end: windowEnd });
             return gaps.filter(g => g.end - g.start >= 5);
         }
 
-        // ── Can a residual gap be filled by any block? ─────────────────
-        // A residual (leftover space after placing a block) is viable ONLY if:
-        //   - It's zero (no gap), OR
-        //   - It's large enough for at least one type of block to fit
-        // This is the fundamental rule that prevents unfillable gaps.
         const _minFillableByGrade = {};
         function getMinFillable(grade) {
             if (_minFillableByGrade[grade]) return _minFillableByGrade[grade];
             const gradeLayers = layersByGrade[grade] || [];
             let minD = Infinity;
-            // Only consider types that actually fill open regions in DAP.
-            // Swim, snacks, lunch, dismissal, league are anchors — they don't fill gaps.
             const fillerTypes = ['sport', 'sports', 'special', 'elective', 'activity', 'slot'];
             gradeLayers.forEach(l => {
                 const t = (l.type || '').toLowerCase();
@@ -808,82 +930,71 @@
             return minD;
         }
 
-        function isResidualViable(gapStart, gapEnd, blockStart, blockEnd, grade) {
-            const before = blockStart - gapStart;
-            const after = gapEnd - blockEnd;
-            const minFill = grade ? getMinFillable(grade) : GAP_MIN_DUR;
-            // Three zones for each residual:
-            //   0          → perfect, no gap
-            //   1 to 10    → absorbable (neighbors can stretch by this much)
-            //   11 to minFill-1 → DEAD ZONE (too big to absorb, too small to fill)
-            //   >= minFill  → fillable (a real block fits)
-            const ABSORB_MAX = 10; // max minutes a neighbor can absorb
-            if (before > ABSORB_MAX && before < minFill) return false;
-            if (after > ABSORB_MAX && after < minFill) return false;
-            return true;
-        }
-
         function findBestGapPosition(bunk, windowStart, windowEnd, duration, blockType, specialName, grade) {
             const gaps = getFreeGaps(bunk, windowStart, windowEnd);
             const minFill = grade ? getMinFillable(grade) : GAP_MIN_DUR;
+            const ABSORB = 10;
             let bestPos = null, bestScore = Infinity;
             for (const gap of gaps) {
                 if (gap.end - gap.start < duration) continue;
                 for (let cs = gap.start; cs <= gap.end - duration; cs += 5) {
-                    if (!isResidualViable(gap.start, gap.end, cs, cs + duration, grade)) continue;
+                    const before = cs - gap.start, after = gap.end - (cs + duration);
+                    if (before > ABSORB && before < minFill) continue;
+                    if (after > ABSORB && after < minFill) continue;
                     const score = scorePositionByContention(cs, cs + duration, blockType, bunk, specialName);
-                    if (score < bestScore) { bestScore = score; bestPos = { start: cs, end: cs + duration }; }
+                    if (score < bestScore) { bestScore = score; bestPos = { start: cs, end: cs + duration, gapStart: gap.start, gapEnd: gap.end }; }
                 }
             }
-            // Snap to gap edges only if residual would be unfillable
+            // Snap to gap edges
             if (bestPos) {
-                const bestGap = gaps.find(g => g.start <= bestPos.start && g.end >= bestPos.end);
-                if (bestGap) {
-                    const beforeRes = bestPos.start - bestGap.start;
-                    const afterRes = bestGap.end - bestPos.end;
-                    if (beforeRes > 0 && beforeRes < minFill) bestPos.start = bestGap.start;
-                    if (afterRes > 0 && afterRes < minFill) bestPos.end = bestGap.end;
-                }
+                const beforeRes = bestPos.start - bestPos.gapStart;
+                const afterRes = bestPos.gapEnd - bestPos.end;
+                if (beforeRes > 0 && beforeRes < minFill) bestPos.start = bestPos.gapStart;
+                if (afterRes > 0 && afterRes < minFill) bestPos.end = bestPos.gapEnd;
             }
-            if (bestPos && (bestPos.start < windowStart || bestPos.end > windowEnd)) bestPos = null;
             return bestPos;
         }
 
         function placeTentativeBlock(bunk, block) {
-            const grade = block.layer?.grade || block.layer?.division;
-            if (grade && divisions[grade]) {
-                const ds = parseTimeToMinutes(divisions[grade].startTime) || 540;
-                const de = parseTimeToMinutes(divisions[grade].endTime) || 960;
-                if (block.endMin <= ds || block.startMin >= de) return;
-                if (block.startMin < ds) block.startMin = ds;
-                if (block.endMin > de) block.endMin = de;
-            }
             bunkTimelines[bunk].push(block);
             bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
         }
 
-        function removeTentativeBlock(bunk, block) {
-            const idx = (bunkTimelines[bunk] || []).indexOf(block);
-            if (idx !== -1) bunkTimelines[bunk].splice(idx, 1);
+
+        // =====================================================================
+        // PERFECT-FIT DISTRIBUTION
+        // =====================================================================
+
+        function perfectFitDistribute(blockDescs, target) {
+            const n = blockDescs.length;
+            if (n === 0) return [];
+            if (n === 1) return [Math.max(blockDescs[0].dMin, Math.min(blockDescs[0].dMax, target))];
+            const durations = blockDescs.map(b => b.dMin);
+            let excess = target - durations.reduce((s, d) => s + d, 0);
+            if (excess <= 0) return durations;
+            // Maximize each block to dMax before creating additional
+            for (let i = 0; i < n && excess > 0; i++) {
+                const maxGrow = blockDescs[i].dMax - durations[i];
+                if (maxGrow <= 0) continue;
+                const give = Math.min(maxGrow, excess);
+                durations[i] += give;
+                excess -= give;
+            }
+            if (excess > 0) { for (let i = 0; i < n && excess > 0; i++) { durations[i]++; excess--; } }
+            // Snap to 5
+            let total = 0;
+            for (let i = 0; i < n - 1; i++) {
+                durations[i] = snapTo5(durations[i]);
+                durations[i] = Math.max(blockDescs[i].dMin, Math.min(blockDescs[i].dMax, durations[i]));
+                total += durations[i];
+            }
+            durations[n - 1] = Math.max(blockDescs[n - 1].dMin, Math.min(blockDescs[n - 1].dMax, target - total));
+            return durations;
         }
 
-        // =====================================================================
-        // TRANSITION TIME
-        // =====================================================================
-
-        function getTransitionTime(fromEvent, toEvent) {
-            if (!window.getZoneForField) return 0;
-            const fromZone = window.getZoneForField(fromEvent);
-            const toZone = window.getZoneForField(toEvent);
-            if (!fromZone || !toZone || fromZone.name === toZone.name) return 0;
-            return (fromZone.transition?.postMin || 0) + (toZone.transition?.preMin || 0);
-        }
-
 
         // =====================================================================
-        // PHASE 0: PLACE ALL PINNED LAYERS
-        // ★ "Pinned" means classification=pinned (ratio≥1), NOT a specific type.
-        //   Any type can be pinned if the user defined it that way.
+        // PHASE 0: PLACE PINNED LAYERS
         // =====================================================================
 
         function executePinnedLayers() {
@@ -897,23 +1008,26 @@
                 const t = (layer.type || '').toLowerCase();
                 const isGradeWide = t === 'league' || t === 'specialty_league' ||
                     (activityProperties[layer.event]?.fullGrade) || (activityProperties[layer.name]?.fullGrade);
-
-                // ★ Custom layers: only place for selected bunks
                 const isCustom = t === 'custom';
                 const targetBunks = (isCustom && layer.customBunks && layer.customBunks.length > 0)
                     ? allBunks.filter(b => layer.customBunks.includes(String(b)))
                     : allBunks;
-
                 const eventName = (isCustom && layer.customActivity) ? layer.customActivity : (layer.event || layer.name || layer.type || 'Pinned');
+
+                // ★ v4.0: Cross-division check for pinned specials
+                if (t === 'special' && !canUseSpecialAtTime(eventName, grade, layer.startMin, layer.endMin)) return;
+
+                // ★ v4.0: Pool exclusivity for pinned swim
+                if (t === 'swim' && !canUsePoolAtTime(grade, layer.startMin, layer.endMin)) return;
 
                 targetBunks.forEach(bunk => {
                     bunkTimelines[bunk].push({
                         startMin: layer.startMin, endMin: layer.endMin,
                         type: isCustom ? 'custom' : (layer.type || 'pinned'),
-                        event: eventName,
-                        layer, _classification: 'pinned', _committed: true, _fixed: true,
-                        _gradeWide: isGradeWide && !isCustom,
-                        _activityLocked: true, _noBacktrack: isGradeWide,
+                        event: eventName, layer,
+                        _classification: 'pinned', _committed: true, _fixed: true,
+                        _gradeWide: isGradeWide && !isCustom, _activityLocked: true,
+                        _noBacktrack: isGradeWide,
                         _customActivity: isCustom ? layer.customActivity : null,
                         _customField: isCustom ? layer.customField : null,
                         _customBunks: isCustom ? layer.customBunks : null
@@ -921,27 +1035,25 @@
                     count++;
                 });
 
-                // ★ Register custom field as occupied so solver/fallback doesn't use it
-                if (isCustom && layer.customField) {
-                    registerCrossGrade(grade, 'custom', layer.startMin, layer.endMin, layer.customActivity);
-                }
+                if (t === 'special') registerSpecialUsage(eventName, grade, layer.startMin, layer.endMin);
+                if (t === 'swim') registerPoolUsage(grade, layer.startMin, layer.endMin);
+                if (isCustom && layer.customField) registerCrossGrade(grade, 'custom', layer.startMin, layer.endMin, layer.customActivity);
             });
-            allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin)));
+            allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk =>
+                bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin)));
             return count;
         }
 
-        // ── League placement (for non-pinned leagues — they're always grade-wide) ──
+        // ── League placement ──────────────────────────────────────────
         function placeLeagueForGrade(grade, layer) {
             const bunks = getBunksForGrade(grade, divisions);
             const { dMin, dMax } = resolveConstraints(layer, 'league');
-            let dur = dMin; // start at minimum, expanded below if gap allows
             const leagueName = (() => {
                 const league = (Array.isArray(window.masterLeagues) ? window.masterLeagues : Object.values(window.masterLeagues || {}))
                     .find(l => (l.divisions || []).includes(grade));
                 return league ? league.name : null;
             })();
 
-           // ★ Helper: expand league duration to fill gap up to dMax
             function expandLeagueDur(start, bunkList) {
                 let nextWall = start + dMax;
                 bunkList.forEach(bk => {
@@ -952,8 +1064,7 @@
                 const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
                 if (ge < nextWall) nextWall = ge;
                 let d = Math.max(dMin, Math.min(dMax, nextWall - start));
-                d = snapTo5(d);
-                return d < dMin ? dMin : d;
+                return snapTo5(d) < dMin ? dMin : snapTo5(d);
             }
 
             if (leagueName && sharedLeagueTime[leagueName] != null) {
@@ -971,19 +1082,21 @@
                 return ss;
             }
 
-            let bestStart = null, bestScore = Infinity;
             const gradeStagger = staggerPlan[grade] || { offset: 0, searchDirection: 'early' };
-            const searchReverse = gradeStagger.searchDirection === 'late';
+            const leagueBand = gradeStagger.typeBands?.league || null;
             const times = [];
-            for (let ts = layer.startMin; ts + dur <= layer.endMin; ts += 5) times.push(ts);
-            if (searchReverse) times.reverse();
+            for (let ts = layer.startMin; ts + dMin <= layer.endMin; ts += 5) times.push(ts);
+            if (gradeStagger.searchDirection === 'late') times.reverse();
 
+            let bestStart = null, bestScore = Infinity;
             for (const ts of times) {
-                const te = ts + dur;
+                const te = ts + dMin;
                 if (!bunks.every(bk => !(bunkTimelines[bk] || []).some(b => b.startMin < te && b.endMin > ts))) continue;
                 let score = scorePositionByContention(ts, te, 'league', null, null);
-                const crossConflicts = getCrossGradeConflicts('league', ts, te, grade);
-                score += crossConflicts * 10000;
+                score += getCrossGradeConflicts('league', ts, te, grade) * 10000;
+                // ★ v4.0: Prefer the rotation matrix's league band (strong suggestion)
+                if (leagueBand && ts >= leagueBand.start && te <= leagueBand.end) score -= 500;
+                else if (leagueBand) score += 200;
                 if (score < bestScore) { bestScore = score; bestStart = ts; }
             }
             if (bestStart === null) { warn('[P0] No free league gap for ' + grade); return null; }
@@ -1000,52 +1113,12 @@
             });
             if (leagueName) sharedLeagueTime[leagueName] = bestStart;
             registerCrossGrade(grade, 'league', bestStart, bestStart + expandedDur);
-            log('[P0] ' + grade + ' league at ' + minutesToTimeLabel(bestStart) + ' (' + expandedDur + 'min)');
             return bestStart;
         }
 
-        // ── Swim placement (MRC-staggered, per-bunk within grade) ──
-        function placeSwimForGrade(grade, layer) {
-            const bunks = getBunksForGrade(grade, divisions);
-            const { dMin, dMax } = resolveConstraints(layer, 'swim');
-            const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-            const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
-            const mrc = getSwimWindow(grade);
-            const winStart = mrc ? Math.max(mrc.start, gs) : Math.max(layer.startMin || 0, gs);
-            const winEnd = mrc ? Math.min(mrc.end, ge) : Math.min(layer.endMin || 1440, ge);
-
-            const sortedBunks = [...bunks].sort((a, b) =>
-                (parseInt(String(a).replace(/\D/g, '')) || 0) - (parseInt(String(b).replace(/\D/g, '')) || 0));
-
-            let placedCount = 0;
-            for (const bunk of sortedBunks) {
-                // ★ findBestGapPosition + isResidualViable will automatically reject
-                // any gap where placing swim would leave an unfillable residual.
-                // No need to hardcode "prefer post-lunch" — the math handles it.
-                const pos = findBestGapPosition(bunk, winStart, winEnd, dMin, 'swim', null, grade);
-                if (!pos) continue;
-                const bunkIdx = sortedBunks.indexOf(bunk);
-                let start = pos.start + bunkIdx * 5;
-                if (start + dMin > pos.end) start = pos.start;
-                const dur = Math.max(dMin, Math.min(dMax, pos.end - start));
-
-                placeTentativeBlock(bunk, {
-                    startMin: start, endMin: start + dur,
-                    type: 'swim', event: layer.event || 'Swim',
-                    layer, _classification: 'windowed',
-                    _activityLocked: true, _fixed: false, _committed: true,
-                    _softAnchor: true,
-                    _softWindow: { start: winStart, end: winEnd },
-                    _softDuration: dur
-                });
-                placedCount++;
-            }
-            return placedCount;
-        }
 
         // =====================================================================
-        // PHASE 1: BUILD SHOPPING LISTS (the WHAT)
-        // For each bunk, compile everything it needs with full priority lists.
+        // PHASE 1: BUILD SHOPPING LISTS
         // =====================================================================
 
         function buildBunkShoppingList(bunk, grade) {
@@ -1053,22 +1126,17 @@
             const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
             const bunkSize = (window.getBunkMetaData?.() || window.bunkMetaData || {})[bunk]?.size || 20;
 
-            // ── Determine what's already placed (Phase 0) ────────────────
             const timeline = (bunkTimelines[bunk] || []).sort((a, b) => a.startMin - b.startMin);
             const freeWindows = [];
             let cursor = gradeStart;
-            timeline.forEach(b => { if (b.startMin > cursor) freeWindows.push({ start: cursor, end: b.startMin, duration: b.startMin - cursor }); cursor = Math.max(cursor, b.endMin); });
+            timeline.forEach(b => {
+                if (b.startMin > cursor) freeWindows.push({ start: cursor, end: b.startMin, duration: b.startMin - cursor });
+                cursor = Math.max(cursor, b.endMin);
+            });
             if (cursor < gradeEnd) freeWindows.push({ start: cursor, end: gradeEnd, duration: gradeEnd - cursor });
 
-            const totalFree = freeWindows.reduce((s, w) => s + w.duration, 0);
-
-            // ── Determine which layers still need placement ──────────────
-            // Layers whose type was already fully placed in Phase 0 are excluded.
             const placedTypes = {};
-            timeline.forEach(b => {
-                const t = (b.type || '').toLowerCase();
-                placedTypes[t] = (placedTypes[t] || 0) + 1;
-            });
+            timeline.forEach(b => { const t = (b.type || '').toLowerCase(); placedTypes[t] = (placedTypes[t] || 0) + 1; });
 
             const remainingNeeds = [];
             nonPinnedLayers.forEach(layer => {
@@ -1076,23 +1144,17 @@
                 const t = (layer.type || '').toLowerCase();
                 const required = layer.qty || layer.quantity || 1;
                 const op = layer.op || layer.operator || '>=';
-                const alreadyPlaced = placedTypes[t] || 0;
-
-                // For grade-wide types that were placed in Phase 0, count once (not per-bunk)
-                // Leagues: check if this grade has a league in the timeline
                 if (t === 'league' || t === 'specialty_league') {
-                    const hasLeague = timeline.some(b => (b.type || '').toLowerCase() === t);
-                    if (hasLeague) return; // already placed
+                    if (timeline.some(b => (b.type || '').toLowerCase() === t)) return;
                 }
-
+                const alreadyPlaced = placedTypes[t] || 0;
                 const stillNeeded = Math.max(0, required - alreadyPlaced);
                 if (stillNeeded <= 0 && op !== '<=' && op !== '≤') return;
-                if (op === '<=' || op === '≤') return; // max-only layers, skip
-
+                if (op === '<=' || op === '≤') return;
                 remainingNeeds.push({ layer, type: t, count: stillNeeded, op });
             });
 
-            // ── Build SPORT priority list ─────────────────────────────────
+            // Sport priority list
             const sportNeeds = remainingNeeds.filter(n => n.type === 'sport' || n.type === 'sports');
             const sportCount = sportNeeds.reduce((s, n) => s + n.count, 0);
             const sportLayer = sportNeeds[0]?.layer || null;
@@ -1102,7 +1164,6 @@
             const allFieldsArr = getFields(globalSettings);
             const disabledFields = globalSettings.app1?.disabledFields || [];
             const sportMap = new Map();
-
             allFieldsArr.forEach(field => {
                 if (disabledFields.includes(field.name)) return;
                 (field.activities || []).forEach(actName => {
@@ -1111,7 +1172,6 @@
                     if (field.isIndoor) sportMap.get(actName).isIndoor = true;
                 });
             });
-
             sportMap.forEach((sport, name) => {
                 let score = 0;
                 if (window.RotationEngine?.calculateRotationScore) {
@@ -1120,7 +1180,6 @@
                 if (score === Infinity) score = 99999;
                 const playerReqs = window.SchedulerCoreUtils?.getSportPlayerRequirements?.(name);
                 const needsPairing = playerReqs?.minPlayers && bunkSize < playerReqs.minPlayers;
-
                 sportPriorityList.push({
                     name, type: 'sport', rotationScore: score,
                     dMin: sportConstraints.dMin, dMax: sportConstraints.dMax, dIdeal: sportConstraints.dIdeal,
@@ -1130,7 +1189,7 @@
             });
             sportPriorityList.sort((a, b) => a.rotationScore - b.rotationScore);
 
-            // ── Build SPECIAL priority list ───────────────────────────────
+            // Special priority list
             const specialNeeds = remainingNeeds.filter(n => n.type === 'special');
             const specialCount = specialNeeds.reduce((s, n) => s + n.count, 0);
             const specialLayer = specialNeeds[0]?.layer || null;
@@ -1139,40 +1198,34 @@
             const specialPriorityList = [];
             todaysSpecials.forEach(s => {
                 if (!isSpecialAvailableForDivision(s.name, grade, globalSettings)) return;
-
                 let score = 0;
                 if (window.RotationEngine?.calculateRotationScore) {
                     score = window.RotationEngine.calculateRotationScore({ bunkName: bunk, activityName: s.name, divisionName: grade, beforeSlotIndex: 0, allActivities: null, activityProperties });
                 }
                 if (score === Infinity) score = 99999;
-
                 const props = activityProperties[s.name] || s;
                 const maxUsage = parseInt(props.maxUsage) || 0;
                 const maxUsagePeriod = props.maxUsagePeriod || 'half';
                 if (maxUsage > 0 && getPeriodCount(bunk, s.name, maxUsagePeriod) >= maxUsage) return;
 
-                // ★ KEY: Get the special's own duration. NULL means "use layer range"
-                const specificDuration = getSpecialDuration(s.name, activityProperties, globalSettings, null);
+                const specificDuration = getSpecialDuration(s.name, activityProperties, globalSettings);
                 const cfg = getSpecialConfig(s.name, globalSettings);
-                const prepDuration = cfg?.prepDuration || 0;
-                const prepLocation = cfg?.prepLocation || null;
                 const location = getLocationForSpecial(s.name, activityProperties, globalSettings);
                 const scarce = isScarce(s.name, dayName, globalSettings);
                 const timeWindow = getSpecialTimeWindow(cfg);
+                const prepDuration = cfg?.prepDuration || 0;
 
                 specialPriorityList.push({
                     name: s.name, type: 'special', rotationScore: score,
-                    // ★ duration = null means "flexible, use layer range"
                     duration: specificDuration,
-                    // If no specific duration, use layer constraints
                     dMin: specificDuration || specialConstraints.dMin,
                     dMax: specificDuration || specialConstraints.dMax,
                     dIdeal: specificDuration || specialConstraints.dIdeal,
-                    isFlexDuration: !specificDuration, // true = uses layer range
+                    isFlexDuration: !specificDuration,
                     capacity: getSpecialCapacity(s.name, activityProperties, globalSettings),
                     location, isScarce: scarce,
-                    isIndoor: !isSpecialOnField(s.name),
-                    prepDuration, prepLocation,
+                    isIndoor: !isSpecialOnField(s.name, activityProperties, globalSettings),
+                    prepDuration,
                     totalDuration: (specificDuration || specialConstraints.dIdeal) + prepDuration,
                     timeWindow, _linkedPair: prepDuration > 0,
                     _layer: specialLayer
@@ -1180,32 +1233,25 @@
             });
             specialPriorityList.sort((a, b) => { if (a.isScarce !== b.isScarce) return a.isScarce ? -1 : 1; return a.rotationScore - b.rotationScore; });
 
-            // ── Build OTHER needs (snack, elective, etc.) ────────────────
+            // Snack / elective / other needs
             const otherNeeds = remainingNeeds.filter(n => n.type !== 'sport' && n.type !== 'sports' && n.type !== 'special' && n.type !== 'league' && n.type !== 'specialty_league');
-
-            // Snack candidates (floating anchor positions)
             const snackNeed = otherNeeds.find(n => n.type === 'snack' || n.type === 'snacks');
             let snackOptions = null;
             if (snackNeed) {
                 const sc = resolveConstraints(snackNeed.layer, snackNeed.type);
                 snackOptions = [];
-                for (let t = snackNeed.layer.startMin; t + sc.dMin <= snackNeed.layer.endMin; t += 10) {
+                for (let t = snackNeed.layer.startMin; t + sc.dMin <= snackNeed.layer.endMin; t += 10)
                     snackOptions.push({ startMin: t, endMin: t + sc.dMin, duration: sc.dMin, type: snackNeed.type, event: snackNeed.layer.event || 'Snacks', layer: snackNeed.layer });
-                }
             }
-
-            // Elective info
             const electiveNeed = otherNeeds.find(n => n.type === 'elective');
             let electiveInfo = null;
             if (electiveNeed) {
                 const ec = resolveConstraints(electiveNeed.layer, 'elective');
                 electiveInfo = { type: 'elective', dMin: ec.dMin, dMax: ec.dMax, dIdeal: ec.dIdeal, count: electiveNeed.count, window: { start: electiveNeed.layer.startMin, end: electiveNeed.layer.endMin }, layer: electiveNeed.layer };
             }
-
-            // Other block types (anything the user defined that isn't sport/special/snack/elective/league)
             const genericNeeds = otherNeeds.filter(n => n.type !== 'snack' && n.type !== 'snacks' && n.type !== 'elective');
 
-            // ── Find adjacent bunk for pairing ───────────────────────────
+            // Adjacent bunk for pairing
             const allBunks = getBunksForGrade(grade, divisions);
             const myNum = parseInt(String(bunk).replace(/\D/g, '')) || 0;
             let adjacentBunk = null, closestDist = Infinity;
@@ -1216,43 +1262,32 @@
             });
 
             return {
-                bunk, grade, bunkSize,
-                freeWindows, totalFree,
+                bunk, grade, bunkSize, freeWindows, totalFree: freeWindows.reduce((s, w) => s + w.duration, 0),
                 sports: { required: sportCount, priorityList: sportPriorityList, layer: sportLayer, constraints: sportConstraints },
                 specials: { required: specialCount, priorityList: specialPriorityList, layer: specialLayer, constraints: specialConstraints },
-                snack: snackOptions,
-                elective: electiveInfo,
-                genericNeeds,
-                adjacentBunk
+                snack: snackOptions, elective: electiveInfo, genericNeeds, adjacentBunk
             };
         }
 
 
         // =====================================================================
-        // PHASE 2: DRAFT-STYLE ASSIGNMENT (the WHERE)
-        // Bunks take turns claiming activities from priority lists.
-        // Live field ledger prevents conflicts.
+        // PHASE 2: DRAFT-STYLE ASSIGNMENT
         // =====================================================================
 
         function runDraft(shoppingLists) {
-            initFieldLedger();
-
+            // ★ v4.0: DO NOT re-init field ledger — keep claims from Phase 0
             const draftResults = {};
             const allBunkList = Object.values(shoppingLists);
-
-            // Sort: most constrained first
             allBunkList.sort((a, b) => {
                 const ac = a.sports.required + a.specials.required * 2 + (a.bunkSize < 12 ? 3 : 0) - a.sports.priorityList.length * 0.1;
                 const bc = b.sports.required + b.specials.required * 2 + (b.bunkSize < 12 ? 3 : 0) - b.sports.priorityList.length * 0.1;
                 return bc - ac;
             });
 
-            // Initialize results
             allBunkList.forEach(list => {
                 draftResults[list.bunk] = { sports: [], specials: [], elective: [], generic: [], usedActivities: new Set(), grade: list.grade };
             });
 
-            // Helper: find time for a field within free windows
             function findTimeForField(fieldName, bunk, grade, duration, freeWindows) {
                 for (const win of freeWindows) {
                     if (win.duration < duration) continue;
@@ -1263,139 +1298,104 @@
                 return null;
             }
 
-            // Helper: find any free window
             function findAnyWindow(freeWindows, duration) {
                 for (const win of freeWindows) { if (win.duration >= duration) return { startMin: win.start, endMin: win.start + duration }; }
                 return null;
             }
 
-            // Helper: recompute free windows after claims
-            function getUpdatedFreeWindows(bunk, grade) {
+            function getUpdatedFreeWindows(bunk) {
                 const result = draftResults[bunk];
                 const claimed = [...result.sports, ...result.specials, ...result.elective, ...result.generic]
                     .map(c => c.claimedTime).filter(Boolean).sort((a, b) => a.startMin - b.startMin);
-
                 const original = shoppingLists[bunk]?.freeWindows || [];
                 const updated = [];
                 for (const win of original) {
-                    let cursor = win.start;
-                    const overlapping = claimed.filter(c => c.startMin < win.end && c.endMin > win.start).sort((a, b) => a.startMin - b.startMin);
-                    for (const cl of overlapping) {
-                        if (cl.startMin > cursor) updated.push({ start: cursor, end: cl.startMin, duration: cl.startMin - cursor });
-                        cursor = Math.max(cursor, cl.endMin);
-                    }
-                    if (cursor < win.end) updated.push({ start: cursor, end: win.end, duration: win.end - cursor });
+                    let cur = win.start;
+                    const ol = claimed.filter(c => c.startMin < win.end && c.endMin > win.start).sort((a, b) => a.startMin - b.startMin);
+                    for (const cl of ol) { if (cl.startMin > cur) updated.push({ start: cur, end: cl.startMin, duration: cl.startMin - cur }); cur = Math.max(cur, cl.endMin); }
+                    if (cur < win.end) updated.push({ start: cur, end: win.end, duration: win.end - cur });
                 }
                 return updated.filter(w => w.duration > 0);
             }
 
-            // Helper: find paired time for two bunks
-            function findPairedTime(fieldName, bunk1, bunk2, grade, duration, fw1, fw2) {
-                for (const w1 of fw1) {
-                    for (const w2 of fw2) {
-                        const os = Math.max(w1.start, w2.start), oe = Math.min(w1.end, w2.end);
-                        if (oe - os < duration) continue;
-                        for (let t = os; t + duration <= oe; t += 5) {
-                            if (isFieldAvailable(fieldName, t, t + duration, bunk1, grade)) return { startMin: t, endMin: t + duration };
-                        }
-                    }
+            // ★ v4.1: Track which specials are assigned to which grades during draft
+            // Prevents assigning the same special to incompatible grades
+            const draftSpecialGrades = {}; // { specialName: Set of grades }
+
+            function canDraftSpecialForGrade(specialName, grade) {
+                const existing = draftSpecialGrades[specialName];
+                if (!existing || existing.size === 0) return true;
+                if (existing.has(grade)) return true; // same grade = OK
+                // Check sharing rules
+                const info = getSpecialSharingInfo(specialName, activityProperties, globalSettings);
+                if (info.shareType === 'not_sharable') return false;
+                // ★ FIX: same_division means "only same-grade bunks can share AT THE SAME TIME"
+                // It does NOT mean the special is exclusive to one grade all day.
+                // Different grades use specials at different times (staggered by the packer).
+                // The RT (Resource Tracker) enforces same-division at placement time.
+                if (info.shareType === 'same_division') return true;
+                if (info.shareType === 'custom') {
+                    const allowed = info.allowedDivisions || [];
+                    const existingGrades = [...existing];
+                    return existingGrades.every(g => allowed.includes(g)) && allowed.includes(grade);
                 }
-                return null;
+                // 'all' sharing or unknown → allow
+                return true;
             }
 
-            // ── ROUND 1: Scarce specials ─────────────────────────────────
+            function registerDraftSpecial(specialName, grade) {
+                if (!draftSpecialGrades[specialName]) draftSpecialGrades[specialName] = new Set();
+                draftSpecialGrades[specialName].add(grade);
+            }
+
+            // Round 1: Scarce specials
             for (const list of allBunkList) {
                 const bunk = list.bunk, grade = list.grade, result = draftResults[bunk];
                 if (list.specials.required <= 0) continue;
-
                 for (const special of list.specials.priorityList) {
                     if (result.specials.length >= list.specials.required) break;
-                    if (!special.isScarce) continue;
-                    if (result.usedActivities.has(special.name)) continue;
-
-                    const fw = getUpdatedFreeWindows(bunk, grade);
+                    if (!special.isScarce || result.usedActivities.has(special.name)) continue;
+                    // ★ v4.1: Cross-division check
+                    if (!canDraftSpecialForGrade(special.name, grade)) continue;
+                    const fw = getUpdatedFreeWindows(bunk);
                     const dur = special.totalDuration;
                     const time = special.location ? findTimeForField(special.location, bunk, grade, dur, fw) : findAnyWindow(fw, dur);
                     if (!time) continue;
-
                     if (special.location) claimField(special.location, time.startMin, time.endMin, bunk, grade, special.name);
-                    if (special._linkedPair && special.prepLocation) {
-                        claimField(special.prepLocation, time.startMin, time.startMin + special.prepDuration, bunk, grade, special.name + ' (Prep)');
-                    }
-
                     result.specials.push({ ...special, claimedTime: time, claimedField: special.location });
                     result.usedActivities.add(special.name);
+                    registerDraftSpecial(special.name, grade);
                 }
             }
 
-            // ── ROUND 2: Regular specials ────────────────────────────────
+            // Round 2: Regular specials
             for (const list of allBunkList) {
                 const bunk = list.bunk, grade = list.grade, result = draftResults[bunk];
                 if (result.specials.length >= list.specials.required) continue;
-
                 for (const special of list.specials.priorityList) {
                     if (result.specials.length >= list.specials.required) break;
-                    if (result.usedActivities.has(special.name)) continue;
-                    if (special.isScarce) continue;
-
-                    const fw = getUpdatedFreeWindows(bunk, grade);
-                    const dur = special.totalDuration;
-                    const time = special.location ? findTimeForField(special.location, bunk, grade, dur, fw) : findAnyWindow(fw, dur);
+                    if (result.usedActivities.has(special.name) || special.isScarce) continue;
+                    // ★ v4.1: Cross-division check
+                    if (!canDraftSpecialForGrade(special.name, grade)) continue;
+                    const fw = getUpdatedFreeWindows(bunk);
+                    const time = special.location ? findTimeForField(special.location, bunk, grade, special.totalDuration, fw) : findAnyWindow(fw, special.totalDuration);
                     if (!time) continue;
-
                     if (special.location) claimField(special.location, time.startMin, time.endMin, bunk, grade, special.name);
-                    if (special._linkedPair && special.prepLocation) {
-                        claimField(special.prepLocation, time.startMin, time.startMin + special.prepDuration, bunk, grade, special.name + ' (Prep)');
-                    }
-
                     result.specials.push({ ...special, claimedTime: time, claimedField: special.location });
                     result.usedActivities.add(special.name);
-                }
-
-                if (result.specials.length < list.specials.required) {
-                    warn('[DRAFT] ' + bunk + ': only ' + result.specials.length + '/' + list.specials.required + ' specials');
+                    registerDraftSpecial(special.name, grade);
                 }
             }
 
-            // ── ROUND 3: Sports (with pairing awareness) ─────────────────
+            // Round 3: Sports
             for (const list of allBunkList) {
                 const bunk = list.bunk, grade = list.grade, result = draftResults[bunk];
-                const sportsNeeded = list.sports.required;
-                if (sportsNeeded <= 0) continue;
-
+                if (list.sports.required <= 0) continue;
                 for (const sport of list.sports.priorityList) {
-                    if (result.sports.length >= sportsNeeded) break;
-                    if (result.usedActivities.has(sport.name)) continue; // no repeat
-
-                    const fw = getUpdatedFreeWindows(bunk, grade);
-
-                    // Pairing check
-                    if (sport.needsPairing && list.adjacentBunk) {
-                        const partner = list.adjacentBunk;
-                        const partnerList = shoppingLists[partner];
-                        if (partnerList?.sports.priorityList.some(s => s.name === sport.name)) {
-                            const pfw = getUpdatedFreeWindows(partner, partnerList.grade);
-                            let paired = false;
-                            for (const field of sport.fields) {
-                                const time = findPairedTime(field, bunk, partner, grade, sport.dIdeal, fw, pfw);
-                                if (time) {
-                                    claimField(field, time.startMin, time.endMin, bunk, grade, sport.name);
-                                    claimField(field, time.startMin, time.endMin, partner, grade, sport.name);
-                                    result.sports.push({ ...sport, claimedTime: time, claimedField: field, pairedWith: partner });
-                                    result.usedActivities.add(sport.name);
-                                    // Record for partner too
-                                    if (!draftResults[partner]) draftResults[partner] = { sports: [], specials: [], elective: [], generic: [], usedActivities: new Set(), grade };
-                                    draftResults[partner].sports.push({ ...sport, claimedTime: time, claimedField: field, pairedWith: bunk });
-                                    draftResults[partner].usedActivities.add(sport.name);
-                                    paired = true; break;
-                                }
-                            }
-                            if (paired) continue;
-                        }
-                        continue; // skip to next sport if pairing failed
-                    }
-
-                    // Normal assignment
+                    if (result.sports.length >= list.sports.required) break;
+                    if (result.usedActivities.has(sport.name)) continue;
+                    if (sport.needsPairing && list.adjacentBunk) continue; // defer pairing
+                    const fw = getUpdatedFreeWindows(bunk);
                     let claimed = false;
                     for (const field of sport.fields) {
                         const time = findTimeForField(field, bunk, grade, sport.dIdeal, fw);
@@ -1403,39 +1403,22 @@
                             claimField(field, time.startMin, time.endMin, bunk, grade, sport.name);
                             result.sports.push({ ...sport, claimedTime: time, claimedField: field });
                             result.usedActivities.add(sport.name);
-                            claimed = true; break;
+                            claimed = true;
+                            break;
                         }
                     }
                 }
-
-                if (result.sports.length < sportsNeeded) {
-                    warn('[DRAFT] ' + bunk + ': only ' + result.sports.length + '/' + sportsNeeded + ' sports');
-                }
             }
 
-            // ── ROUND 4: Electives ───────────────────────────────────────
+            // Round 4: Electives + generic
             for (const list of allBunkList) {
                 if (!list.elective) continue;
                 const bunk = list.bunk, result = draftResults[bunk];
-                const fw = getUpdatedFreeWindows(bunk, list.grade);
+                const fw = getUpdatedFreeWindows(bunk);
                 for (let i = 0; i < list.elective.count; i++) {
                     const time = findAnyWindow(fw, list.elective.dIdeal);
                     if (time) result.elective.push({ type: 'elective', duration: list.elective.dIdeal, claimedTime: time, layer: list.elective.layer });
                 }
-            }
-
-            // ── ROUND 5: Generic needs (user-defined types) ──────────────
-            for (const list of allBunkList) {
-                if (!list.genericNeeds || list.genericNeeds.length === 0) continue;
-                const bunk = list.bunk, result = draftResults[bunk];
-                list.genericNeeds.forEach(need => {
-                    const fw = getUpdatedFreeWindows(bunk, list.grade);
-                    const c = resolveConstraints(need.layer, need.type);
-                    for (let i = 0; i < need.count; i++) {
-                        const time = findAnyWindow(fw, c.dIdeal);
-                        if (time) result.generic.push({ type: need.type, event: need.layer.event || need.type, duration: c.dIdeal, claimedTime: time, layer: need.layer, dMin: c.dMin, dMax: c.dMax });
-                    }
-                });
             }
 
             return draftResults;
@@ -1443,62 +1426,13 @@
 
 
         // =====================================================================
-        // PHASE 3: DAP — PER-BUNK DAY PARTITION (the WHEN, precise)
-        // Takes draft results + shopping list and designs minute-by-minute
-        // layout with zero dead space.
-        // =====================================================================
-
-        // ── Perfect-fit distribution: size N blocks to sum exactly to target ──
-        // Each block has [dMin, dMax]. Returns array of durations.
-        // Algorithm: start all at dMin, distribute excess proportionally to headroom.
-        function perfectFitDistribute(blockDescs, target) {
-            const n = blockDescs.length;
-            if (n === 0) return [];
-            if (n === 1) return [Math.max(blockDescs[0].dMin, Math.min(blockDescs[0].dMax, target))];
-
-            // Start all at dMin
-            const durations = blockDescs.map(b => b.dMin);
-            let excess = target - durations.reduce((s, d) => s + d, 0);
-
-            if (excess <= 0) return durations; // already at or over target
-
-            // ★ MAXIMIZE: fill each block to dMax before moving to the next.
-            // Produces fewer, longer activities instead of many short ones.
-            for (let i = 0; i < n && excess > 0; i++) {
-                const maxGrow = blockDescs[i].dMax - durations[i];
-                if (maxGrow <= 0) continue;
-                const give = Math.min(maxGrow, excess);
-                durations[i] += give;
-                excess -= give;
-            }
-
-            // If still excess after all blocks maxed, spread remainder
-            if (excess > 0) {
-                for (let i = 0; i < n && excess > 0; i++) {
-                    durations[i]++;
-                    excess--;
-                }
-            }
-            // Snap to 5 while preserving total
-            let total = 0;
-            for (let i = 0; i < n - 1; i++) {
-                durations[i] = snapTo5(durations[i]);
-                durations[i] = Math.max(blockDescs[i].dMin, Math.min(blockDescs[i].dMax, durations[i]));
-                total += durations[i];
-            }
-            // Last block gets whatever's left
-            durations[n - 1] = target - total;
-            durations[n - 1] = Math.max(blockDescs[n - 1].dMin, durations[n - 1]);
-
-            return durations;
-        }
-
-        // =====================================================================
-        // PHASE 3: GREEDY CONSTRAINT PACKER
-        // For each bunk: list what needs placing, get the gaps between walls,
-        // pack blocks into gaps one at a time — most constrained first.
-        // Every placement checks: "can the remaining blocks still fit?"
-        // After packing, expand all flex blocks to fill regions exactly.
+        // PHASE 3: GREEDY CONSTRAINT PACKER (per-bunk)
+        // ★ v4.0 KEY FIXES:
+        //   - Specials register worst-case (dMax) in RT at placement
+        //   - Swim gated by canUsePoolAtTime
+        //   - Field claims persist — no clearing between grades
+        //   - Post-expand validation sweep for fields
+        //   - Expand phase NEVER stretches specials past dMax
         // =====================================================================
 
         function greedyPackBunk(bunk, grade, draftResult, shoppingList, staggerOffset, swimsToday) {
@@ -1507,9 +1441,11 @@
             const sportC = shoppingList.sports?.constraints || resolveConstraints(null, 'sport');
             const minFill = getMinFillable(grade);
             const ABSORB_MAX = 10;
+            // ★ v4.0: Rotation matrix — preferred time bands per activity type
+            const rotation = staggerPlan[grade] || {};
+            const typeBands = rotation.typeBands || {};
 
-            // ── Step 1: Walls — blocks already placed by Phase 0 ──────────
-            // These are lunch, dismissal, league — they CANNOT move.
+            // ── Step 1: Walls (Phase 0 blocks) ───────────────────────────
             const walls = (bunkTimelines[bunk] || []).map(b => {
                 const t = (b.type || '').toLowerCase();
                 const isLeague = t === 'league' || t === 'specialty_league';
@@ -1517,36 +1453,39 @@
                 return {
                     startMin: b.startMin, endMin: b.endMin, type: b.type, event: b.event,
                     layer: b.layer, _fixed: true, _source: 'phase0',
-                    // Leagues can flex — carry their real constraints
                     dMin: c ? c.dMin : (b.endMin - b.startMin),
                     dMax: c ? c.dMax : (b.endMin - b.startMin),
                     _gradeWide: b._gradeWide || false, _activityLocked: true,
-                    _classification: b._classification || 'pinned',
-                    _noBacktrack: b._noBacktrack || false
+                    _classification: b._classification || 'pinned', _noBacktrack: b._noBacktrack || false
                 };
             });
 
-            // ── Step 2: Build needs list — everything else ────────────────
-            // Sorted most-constrained first: fixed-dur → tight-window → flex
+            // ── Step 2: Build needs ──────────────────────────────────────
             const needs = [];
 
-            // Swim (fixed duration, wide window) — only if this bunk swims today
+            // Swim — MRC band narrows the window (hard constraint for pool exclusivity),
+            // but rotation band is only a scoring preference (applied at candidate sort)
             const swimLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'swim');
             if (swimLayer && swimsToday !== false && !walls.some(w => (w.type || '').toLowerCase() === 'swim')) {
                 const c = resolveConstraints(swimLayer, 'swim');
+                const mrc = getSwimWindow(grade);
+                let winStart = Math.max(swimLayer.startMin || 0, gradeStart);
+                let winEnd = Math.min(swimLayer.endMin || 1440, gradeEnd);
+                // MRC narrows (pool exclusivity is a real constraint)
+                if (mrc && (Math.min(mrc.end, winEnd) - Math.max(mrc.start, winStart)) >= c.dMin) {
+                    winStart = Math.max(mrc.start, winStart);
+                    winEnd = Math.min(mrc.end, winEnd);
+                }
                 needs.push({
                     type: 'swim', event: swimLayer.event || 'Swim', layer: swimLayer,
                     dMin: c.dMin, dMax: c.dMax,
-                    windowStart: Math.max(swimLayer.startMin || 0, gradeStart),
-                    windowEnd: Math.min(swimLayer.endMin || 1440, gradeEnd),
+                    windowStart: winStart, windowEnd: winEnd,
                     _activityLocked: true, _source: 'layer'
                 });
             }
 
-            // Snack (fixed duration, tight window)
-            const snackLayer = (layersByGrade[grade] || []).find(l =>
-                ['snacks', 'snack'].includes((l.type || '').toLowerCase())
-            );
+            // Snack
+            const snackLayer = (layersByGrade[grade] || []).find(l => ['snacks', 'snack'].includes((l.type || '').toLowerCase()));
             if (snackLayer && !walls.some(w => ['snacks', 'snack'].includes((w.type || '').toLowerCase()))) {
                 const c = resolveConstraints(snackLayer, 'snacks');
                 needs.push({
@@ -1558,62 +1497,47 @@
                 });
             }
 
-            // Draft specials (flex duration, full window, assigned activity)
+            // Draft specials — full window, rotation band applied at scoring
             (draftResult.specials || []).forEach(special => {
-                const c = resolveConstraints(special.layer, 'special', special);
-                // If the special has a configured duration, it's FIXED — no flex.
-                // If no duration, use layer dMin/dMax range (flexible).
                 const hasFixedDur = special.duration && special.duration > 0;
-                const sDMin = hasFixedDur ? special.duration : c.dMin;
-                const sDMax = hasFixedDur ? special.duration : c.dMax;
+                const sDMin = hasFixedDur ? special.duration : resolveConstraints(special.layer, 'special', special).dMin;
+                const sDMax = hasFixedDur ? special.duration : resolveConstraints(special.layer, 'special', special).dMax;
                 needs.push({
                     type: 'special', event: special.name, layer: special.layer,
-                    dMin: sDMin, dMax: sDMax,                    windowStart: gradeStart, windowEnd: gradeEnd,
+                    dMin: sDMin, dMax: sDMax,
+                    windowStart: gradeStart, windowEnd: gradeEnd,
                     _activityLocked: true, _assignedSpecial: special.name,
                     _specialLocation: special.location, _specialDuration: special.duration,
                     _source: 'draft'
                 });
             });
 
-            // ★ Custom layers (windowed, not pinned) — pre-assigned activity + field
+            // Custom windowed layers
             (layersByGrade[grade] || []).filter(l =>
                 (l.type || '').toLowerCase() === 'custom' && l._classification !== 'pinned'
-            ).forEach(customLayer => {
-                // Only add for this bunk if it's in the selected bunks list
-                if (customLayer.customBunks && customLayer.customBunks.length > 0) {
-                    if (!customLayer.customBunks.includes(String(bunk))) return;
-                }
-                const dur = customLayer.durationMin || customLayer.periodMin || 30;
-                const durMax = customLayer.durationMax || dur;
+            ).forEach(cl => {
+                if (cl.customBunks && cl.customBunks.length > 0 && !cl.customBunks.includes(String(bunk))) return;
+                const dur = cl.durationMin || cl.periodMin || 30;
                 needs.push({
-                    type: 'custom',
-                    event: customLayer.customActivity || customLayer.event || 'Custom',
-                    layer: customLayer,
-                    dMin: dur, dMax: durMax,
-                    windowStart: Math.max(customLayer.startMin || 0, gradeStart),
-                    windowEnd: Math.min(customLayer.endMin || 1440, gradeEnd),
+                    type: 'custom', event: cl.customActivity || cl.event || 'Custom', layer: cl,
+                    dMin: dur, dMax: cl.durationMax || dur,
+                    windowStart: Math.max(cl.startMin || 0, gradeStart),
+                    windowEnd: Math.min(cl.endMin || 1440, gradeEnd),
                     _activityLocked: true,
-                    _customActivity: customLayer.customActivity || null,
-                    _customField: customLayer.customField || null,
-                    _customBunks: customLayer.customBunks || null,
-                    _source: 'custom-layer'
+                    _customActivity: cl.customActivity || null, _customField: cl.customField || null,
+                    _customBunks: cl.customBunks || null, _source: 'custom-layer'
                 });
             });
 
-            // Sort: fixed-duration first, then tighter flexibility ratio
+            // Sort: fixed-duration first, then tighter flexibility
             needs.sort((a, b) => {
                 const aFixed = a.dMin === a.dMax ? 0 : 1;
                 const bFixed = b.dMin === b.dMax ? 0 : 1;
                 if (aFixed !== bFixed) return aFixed - bFixed;
-                // Among same fixedness: tighter (less flexibility) first
-                const aFlex = (a.windowEnd - a.windowStart) / Math.max(1, a.dMin);
-                const bFlex = (b.windowEnd - b.windowStart) / Math.max(1, b.dMin);
-                return aFlex - bFlex;
+                return ((a.windowEnd - a.windowStart) / Math.max(1, a.dMin)) - ((b.windowEnd - b.windowStart) / Math.max(1, b.dMin));
             });
 
-            // ★ STAGGER: Rotate flex needs by grade offset so different grades
-            // place swim/special/snack at different positions in the day.
-            // Fixed-duration blocks stay first (they're most constrained).
+            // Stagger rotation for flex needs
             if (staggerOffset > 0 && needs.length > 1) {
                 const fixedPart = needs.filter(n => n.dMin === n.dMax);
                 const flexPart = needs.filter(n => n.dMin !== n.dMax);
@@ -1625,23 +1549,32 @@
                 }
             }
 
+           // ── TEMP DEBUG ───────────────────────────────────────────────
+            if (grade === '2nd Grade' && String(bunk) === String(getBunksForGrade(grade, divisions)[0])) {
+                console.log('[PACKER-DBG] 2nd Grade bunk ' + bunk + ': ' + needs.length + ' needs');
+                needs.forEach(function(n, i) { console.log('  need[' + i + ']: type=' + n.type + ' event=' + (n.event || n._assignedSpecial || '?') + ' dMin=' + n.dMin + ' dMax=' + n.dMax + ' win=' + n.windowStart + '-' + n.windowEnd); });
+                var dbgWalls = walls.map(function(w) { return w.startMin + '-' + w.endMin + '(' + w.event + ')'; });
+                console.log('  Walls: ' + dbgWalls.join(', '));
+                console.log('  draftResult.specials: ' + (draftResult.specials || []).length);
+                console.log('  shoppingList.specials.required: ' + (shoppingList.specials?.required || 0));
+                console.log('  shoppingList.specials.priorityList: ' + (shoppingList.specials?.priorityList?.length || 0));
+                (shoppingList.specials?.priorityList || []).forEach(function(s) { console.log('    priority: ' + s.name + ' dur=' + s.totalDuration + ' scarce=' + s.isScarce); });
+                (draftResult.specials || []).forEach(function(s) { console.log('    draft special: ' + s.name + ' dur=' + s.totalDuration); });
+            }
+
             // ── Helpers ───────────────────────────────────────────────────
             function getGaps(blockList) {
                 const sorted = [...blockList].sort((a, b) => a.startMin - b.startMin);
                 const gaps = [];
-                let cursor = gradeStart;
-                sorted.forEach(b => {
-                    if (b.startMin > cursor) gaps.push({ start: cursor, end: b.startMin, size: b.startMin - cursor });
-                    cursor = Math.max(cursor, b.endMin);
-                });
-                if (cursor < gradeEnd) gaps.push({ start: cursor, end: gradeEnd, size: gradeEnd - cursor });
+                let cur = gradeStart;
+                sorted.forEach(b => { if (b.startMin > cur) gaps.push({ start: cur, end: b.startMin, size: b.startMin - cur }); cur = Math.max(cur, b.endMin); });
+                if (cur < gradeEnd) gaps.push({ start: cur, end: gradeEnd, size: gradeEnd - cur });
                 return gaps;
             }
 
             function canFitRemaining(currentPlaced, remainingNeeds) {
                 if (remainingNeeds.length === 0) return true;
                 const gaps = getGaps(currentPlaced);
-                // Each remaining need must have at least one gap in its window
                 for (const need of remainingNeeds) {
                     const ok = gaps.some(g => {
                         const es = Math.max(g.start, need.windowStart);
@@ -1650,82 +1583,54 @@
                     });
                     if (!ok) return false;
                 }
-                // Total dMin must fit in total gap space
                 const totalNeed = remainingNeeds.reduce((s, n) => s + n.dMin, 0);
                 const totalGap = gaps.reduce((s, g) => s + g.size, 0);
-                if (totalNeed > totalGap) return false;
-                return true;
+                return totalNeed <= totalGap;
             }
 
-            // ── Step 3: Pack required needs into gaps ─────────────────────
-            // For each need (most constrained first):
-            //   Try every valid gap. In each gap, try start and end positions.
-            //   Accept the first position where residuals are viable AND
-            //   all remaining needs can still fit somewhere.
+            // ── Step 3: Pack needs into gaps ──────────────────────────────
             const placed = [...walls];
 
             for (let i = 0; i < needs.length; i++) {
                 const need = needs[i];
                 const remaining = needs.slice(i + 1);
                 const gaps = getGaps(placed);
-
-                // Gaps that overlap this need's window
-                // ★ CROSS-GRADE: sort by fewest conflicts, then by size
-                const trackableType = ['swim', 'special', 'snacks', 'snack'].includes(need.type);
                 const validGaps = gaps
-                    .map(g => ({
-                        start: Math.max(g.start, need.windowStart),
-                        end: Math.min(g.end, need.windowEnd),
-                        origStart: g.start, origEnd: g.end
-                    }))
+                    .map(g => ({ start: Math.max(g.start, need.windowStart), end: Math.min(g.end, need.windowEnd), origStart: g.start, origEnd: g.end }))
                     .filter(g => g.end - g.start >= need.dMin)
-                    // Sort by size only — conflict avoidance happens at position level
                     .sort((a, b) => (b.end - b.start) - (a.end - a.start));
 
                 let didPlace = false;
                 for (const gap of validGaps) {
-                    const endPos = gap.end - need.dMin;
-                    if (endPos < gap.start) continue;
+                    const isSwim = need.type === 'swim';
+                    const isSpecial = need.type === 'special' && need._assignedSpecial;
+                    const step = (isSwim || isSpecial) ? 5 : 15;
+                    const candidates = [];
+                    for (let t = gap.start; t <= gap.end - need.dMin; t += step) candidates.push(t);
+                    if (step > 5 && gap.end - need.dMin > gap.start) candidates.push(gap.end - need.dMin);
 
-                    const trackableType = ['swim', 'special', 'snacks', 'snack'].includes(need.type);
-                    const isExclusive = need.type === 'swim'; // pool = one grade at a time
-                    // Specials with same_division sharing are also exclusive across different divisions
-                    const isSpecialExclusive = need.type === 'special' && need._assignedSpecial;
-
-                    // ★ For exclusive types (swim) or specials: scan EVERY 5-min position
-                    // For others: sparse scan (start, end, every 15min)
-                    const candidateSet = new Set();
-                    if (isExclusive || isSpecialExclusive) {
-                        for (let t = gap.start; t <= endPos; t += 5) candidateSet.add(t);
-                    } else {
-                        candidateSet.add(gap.start);
-                        if (endPos > gap.start) candidateSet.add(endPos);
-                        for (let t = gap.start; t <= endPos; t += 15) candidateSet.add(t);
-                    }
-
-                    // Sort: least cross-grade conflicts first, then stagger preference
-                    let candidates = [...candidateSet];
-                    if (trackableType) {
-                        // Pre-compute conflict scores for all candidates
-                        candidates = candidates.map(t => ({
-                            pos: t,
-                            conflicts: getCrossGradeConflicts(need.type, t, t + need.dMin, grade, need.event)
-                        }));
+                    // Sort by weighted score: cross-grade conflicts + rotation band preference
+                    // Rotation band is a STRONG SUGGESTION, not a hard constraint.
+                    // In-band positions get a bonus; out-of-band get a mild penalty.
+                    if (['swim', 'special', 'snacks', 'snack'].includes(need.type)) {
+                        const band = typeBands[need.type] || typeBands[need.type === 'snacks' ? 'snack' : need.type] || null;
                         candidates.sort((a, b) => {
-                            if (a.conflicts !== b.conflicts) return a.conflicts - b.conflicts;
-                            return (staggerOffset % 2 === 0) ? (a.pos - b.pos) : (b.pos - a.pos);
+                            let scoreA = getCrossGradeConflicts(need.type, a, a + need.dMin, grade, need.event) * 100;
+                            let scoreB = getCrossGradeConflicts(need.type, b, b + need.dMin, grade, need.event) * 100;
+                            // Rotation band preference: -50 if inside, +20 if outside
+                            if (band) {
+                                scoreA += (a >= band.start && (a + need.dMin) <= band.end) ? -50 : 20;
+                                scoreB += (b >= band.start && (b + need.dMin) <= band.end) ? -50 : 20;
+                            }
+                            if (scoreA !== scoreB) return scoreA - scoreB;
+                            return (staggerOffset % 2 === 0) ? (a - b) : (b - a);
                         });
-                        candidates = candidates.map(c => c.pos);
-                    } else {
-                        candidates.sort((a, b) => (staggerOffset % 2 === 0) ? (a - b) : (b - a));
                     }
 
                     for (const pos of candidates) {
-                       // Residual check: before and after must be viable
                         const beforeRes = pos - gap.origStart;
                         const afterRes = gap.origEnd - (pos + need.dMin);
                         if (need.dMin === need.dMax) {
-                            // Fixed-duration: residuals must be 0 or fillable (no absorption — it would stretch a fixed block)
                             if (beforeRes > 0 && beforeRes < minFill) continue;
                             if (afterRes > 0 && afterRes < minFill) continue;
                         } else {
@@ -1733,21 +1638,15 @@
                             if (afterRes > ABSORB_MAX && afterRes < minFill) continue;
                         }
 
-                        // ★ Special capacity + cross-division check
-                        if (need.type === 'special' && need._assignedSpecial) {
-                            if (!canUseSpecialAtTime(need._assignedSpecial, grade, pos, pos + need.dMin)) continue;
-                        }
+                        // ★ v4.0: Special cross-division check
+                        if (isSpecial && !canUseSpecialAtTime(need._assignedSpecial, grade, pos, pos + need.dMin)) continue;
 
-                        // Future viability: can remaining needs still fit?
-                        const tempBlock = {
-                            startMin: pos, endMin: pos + need.dMin,
-                            type: need.type, event: need.event
-                        };
+                        // ★ v4.0: Pool exclusivity check for swim
+                        if (isSwim && !canUsePoolAtTime(grade, pos, pos + need.dMin)) continue;
+
+                        const tempBlock = { startMin: pos, endMin: pos + need.dMin, type: need.type, event: need.event };
                         if (canFitRemaining([...placed, tempBlock], remaining)) {
-                            placed.push({
-                                startMin: pos, endMin: pos + need.dMin,
-                                ...need, _final: true
-                            });
+                            placed.push({ startMin: pos, endMin: pos + need.dMin, ...need, _final: true });
                             didPlace = true;
                             break;
                         }
@@ -1755,29 +1654,53 @@
                     if (didPlace) break;
                 }
 
-                // Fallback: place at best available position even without perfect viability
+                // Fallback
                 if (!didPlace) {
                     for (const gap of validGaps) {
-                        const endPos2 = gap.end - need.dMin;
-                        // For specials, still try to respect capacity even in fallback
-                        if (need.type === 'special' && need._assignedSpecial) {
-                            let foundFallback = false;
-                            for (let t = gap.start; t <= endPos2; t += 5) {
-                                // ★ Fixed-duration specials: reject positions that create dead-zone residuals
-                                if (need.dMin === need.dMax) {
-                                    const beforeRes = t - gap.origStart;
-                                    const afterRes = gap.origEnd - (t + need.dMin);
-                                    if (beforeRes > 0 && beforeRes < minFill) continue;
-                                    if (afterRes > 0 && afterRes < minFill) continue;
-                                }
-                                if (!canUseSpecialAtTime(need._assignedSpecial, grade, t, t + need.dMin)) continue;
-                                placed.push({ startMin: t, endMin: t + need.dMin, ...need, _final: true });
-                                didPlace = true; foundFallback = true; break;
+                        for (let t = gap.start; t <= gap.end - need.dMin; t += 5) {
+                            if (need.type === 'special' && need._assignedSpecial && !canUseSpecialAtTime(need._assignedSpecial, grade, t, t + need.dMin)) continue;
+                            if (need.type === 'swim' && !canUsePoolAtTime(grade, t, t + need.dMin)) continue;
+                            if (need.dMin === need.dMax) {
+                                const br = t - gap.origStart, ar = gap.origEnd - (t + need.dMin);
+                                if (br > 0 && br < minFill) continue;
+                                if (ar > 0 && ar < minFill) continue;
                             }
-                            if (foundFallback) break;
-                        } else {
-                            placed.push({ startMin: gap.start, endMin: gap.start + need.dMin, ...need, _final: true });
-                            didPlace = true; break;
+                            placed.push({ startMin: t, endMin: t + need.dMin, ...need, _final: true });
+                            didPlace = true;
+                            break;
+                        }
+                        if (didPlace) break;
+                    }
+                }
+
+                // ★ Swim fallback: if MRC-narrowed window failed, retry with full layer window.
+                // MRC is a preference for pool exclusivity staggering, not a hard constraint.
+                // Better to have swim at a non-ideal time than no swim at all.
+                if (!didPlace && need.type === 'swim' && need.layer) {
+                    const fullWinStart = Math.max(need.layer.startMin || 0, gradeStart);
+                    const fullWinEnd = Math.min(need.layer.endMin || 1440, gradeEnd);
+                    // Only retry if full window is actually wider than what we tried
+                    if (fullWinEnd - fullWinStart > need.windowEnd - need.windowStart) {
+                        const remaining = needs.slice(i + 1);
+                        const fullGaps = getGaps(placed)
+                            .map(g => ({ start: Math.max(g.start, fullWinStart), end: Math.min(g.end, fullWinEnd), origStart: g.start, origEnd: g.end }))
+                            .filter(g => g.end - g.start >= need.dMin)
+                            .sort((a, b) => (b.end - b.start) - (a.end - a.start));
+                        for (const gap of fullGaps) {
+                            for (let t = gap.start; t <= gap.end - need.dMin; t += 5) {
+                                if (!canUsePoolAtTime(grade, t, t + need.dMin)) continue;
+                                const beforeRes = t - gap.origStart;
+                                const afterRes = gap.origEnd - (t + need.dMin);
+                                // Relaxed residual: only reject truly tiny (1-5 min) gaps
+                                if (beforeRes > 0 && beforeRes <= 5) continue;
+                                if (afterRes > 0 && afterRes <= 5) continue;
+                                const tempBlock = { startMin: t, endMin: t + need.dMin, type: 'swim', event: need.event };
+                                if (canFitRemaining([...placed, tempBlock], remaining)) {
+                                    placed.push({ startMin: t, endMin: t + need.dMin, ...need, _final: true });
+                                    didPlace = true; break;
+                                }
+                            }
+                            if (didPlace) break;
                         }
                     }
                 }
@@ -1787,346 +1710,257 @@
                     const lastPlaced = placed[placed.length - 1];
                     registerCrossGrade(grade, need.type, lastPlaced.startMin, lastPlaced.endMin, need.event);
                     if (need.type === 'special' && need._assignedSpecial) {
-                        registerSpecialUsage(need._assignedSpecial, grade, lastPlaced.startMin, lastPlaced.endMin);
+                        // ★ Register with dMax as worst-case end — the expand phase may
+                        // stretch this block up to dMax, so reserve the full range now
+                        // to prevent other grades from placing overlapping specials.
+                        const worstCaseEnd = lastPlaced.startMin + (need.dMax || need.dMin || (lastPlaced.endMin - lastPlaced.startMin));
+                        registerSpecialUsage(need._assignedSpecial, grade, lastPlaced.startMin, worstCaseEnd);
+                    }
+                    if (need.type === 'swim') {
+                        const worstCaseEnd = lastPlaced.startMin + (need.dMax || need.dMin);
+                        registerPoolUsage(grade, lastPlaced.startMin, worstCaseEnd);
                     }
                 }
             }
 
             // ── Step 4: Fill remaining gaps with sport slots ──────────────
-            // Draft assigned specific sport activities. Use them in order.
-            // When drafted sports run out, pull from the priority list (rotation-scored).
-            const sportQueue = [...(draftResult.sports || [])];
-
-            // ★ Extend queue with additional sports from the priority list
-            // ONLY use common sports (3+ fields) for extra slots.
-            // Scarce sports (Trench, Jump Rope, etc.) only come from the draft
-            // which already verified field availability via the field ledger.
-            const usedSports = new Set(sportQueue.map(s => s.name));
+            const usedSportsForBunk = new Set();
+            (draftResult.sports || []).forEach(s => usedSportsForBunk.add(s.name));
             const priorityList = shoppingList.sports?.priorityList || [];
 
-            // Determine which sports are "common" (many fields available)
-            const MIN_FIELDS_FOR_FILL = 3;
-            const commonSports = priorityList.filter(sport => {
-                const fieldCount = (sport.fields || []).length;
-                return fieldCount >= MIN_FIELDS_FOR_FILL;
-            });
-
-            // First pass: unused common sports
-            for (const sport of commonSports) {
-                if (!usedSports.has(sport.name)) {
-                    sportQueue.push({ name: sport.name, field: null });
-                    usedSports.add(sport.name);
+            function findSportWithField(startMin, endMin) {
+                // Unused draft sports first
+                for (const ds of (draftResult.sports || [])) {
+                    if (usedSportsForBunk.has(ds.name)) continue;
+                    const sportInfo = priorityList.find(s => s.name === ds.name);
+                    if (sportInfo) {
+                        for (const fn of (sportInfo.fields || [])) {
+                            if (isFieldAvailable(fn, startMin, endMin, bunk, grade)) return { name: ds.name, field: fn };
+                        }
+                    }
                 }
+                // Unused from rotation list
+                for (const sport of priorityList) {
+                    if (usedSportsForBunk.has(sport.name)) continue;
+                    for (const fn of (sport.fields || [])) {
+                        if (isFieldAvailable(fn, startMin, endMin, bunk, grade)) return { name: sport.name, field: fn };
+                    }
+                }
+                // Allow repeats
+                for (const sport of priorityList) {
+                    for (const fn of (sport.fields || [])) {
+                        if (isFieldAvailable(fn, startMin, endMin, bunk, grade)) return { name: sport.name, field: fn };
+                    }
+                }
+                return null;
             }
-            // Second pass: cycle common sports if still not enough
-            let cycleIdx = 0;
-            const cycleSource = commonSports.length > 0 ? commonSports : priorityList;
-            while (sportQueue.length < 10 && cycleSource.length > 0) {
-                const sport = cycleSource[cycleIdx % cycleSource.length];
-                sportQueue.push({ name: sport.name, field: null });
-                cycleIdx++;
-                if (cycleIdx > 20) break;
-            }
-
-            let sportIdx = 0;
 
             const afterGaps = getGaps(placed);
             for (const gap of afterGaps) {
-                if (gap.size < sportC.dMin) continue; // absorbed in expand phase
-
-                // Minimum number of blocks needed to fill this gap
-                // (each block can be up to dMax, so ceil(gap/dMax) gives the fewest blocks)
+                if (gap.size < sportC.dMin) continue;
                 let numSlots = Math.ceil(gap.size / sportC.dMax);
-                // Verify all blocks can be at least dMin
                 if (numSlots * sportC.dMin > gap.size) numSlots = Math.max(1, numSlots - 1);
-
                 let cursor = gap.start;
                 for (let s = 0; s < numSlots; s++) {
-                    const sport = sportQueue[sportIdx] || null;
-                    if (sport) sportIdx++;
-
+                    const sportPick = findSportWithField(cursor, cursor + sportC.dMax);
+                    if (sportPick) {
+                        claimField(sportPick.field, cursor, cursor + sportC.dMax, bunk, grade, sportPick.name);
+                        usedSportsForBunk.add(sportPick.name);
+                    }
                     placed.push({
                         startMin: cursor, endMin: cursor + sportC.dMin,
-                        type: sport ? 'sport' : 'slot',
-                        event: sport ? sport.name : 'General Activity Slot',
-                        layer: shoppingList.sports?.layer || null,
-                        dMin: sportC.dMin, dMax: sportC.dMax,
+                        type: sportPick ? 'sport' : 'slot',
+                        event: sportPick ? sportPick.name : 'General Activity Slot',
+                        layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax,
                         _activityLocked: false,
-                        _assignedSport: sport ? sport.name : null,
-                        field: sport ? sport.field : null,
-                        _source: sport ? 'draft' : 'filler',
-                        _sportFallbacks: priorityList.map(s => s.name),
-                        _final: true
+                        _assignedSport: sportPick ? sportPick.name : null,
+                        field: sportPick ? sportPick.field : null,
+                        _source: sportPick ? 'capacity_checked' : 'filler',
+                        _sportFallbacks: priorityList.map(s => s.name), _final: true
                     });
                     cursor += sportC.dMin;
                 }
             }
 
             // ── Step 5: Expand — size all blocks to fill regions exactly ──
-            // Regions are spans between wall boundaries.
-            // Within each region, use perfectFitDistribute to size flex blocks.
             placed.sort((a, b) => a.startMin - b.startMin);
-
             const template = [];
-            // Walk through the day: alternate between walls and flex regions
-            let dayCursor = gradeStart;
-
-            // Collect walls in order
-            const sortedWalls = walls.sort((a, b) => a.startMin - b.startMin);
-
-            // Build ordered list of ALL boundary points
             const boundaryTimes = new Set([gradeStart, gradeEnd]);
-            sortedWalls.forEach(w => { boundaryTimes.add(w.startMin); boundaryTimes.add(w.endMin); });
-            // Fixed-duration placed blocks are also boundaries
-            placed.filter(b => b.dMin === b.dMax && b._source !== 'phase0').forEach(b => {
-                boundaryTimes.add(b.startMin); boundaryTimes.add(b.endMin);
-            });
+            walls.forEach(w => { boundaryTimes.add(w.startMin); boundaryTimes.add(w.endMin); });
+            placed.filter(b => b.dMin === b.dMax && b._source !== 'phase0').forEach(b => { boundaryTimes.add(b.startMin); boundaryTimes.add(b.endMin); });
             const boundaries = [...boundaryTimes].sort((a, b) => a - b);
 
             for (let r = 0; r < boundaries.length - 1; r++) {
-                const rStart = boundaries[r];
-                const rEnd = boundaries[r + 1];
-                const rSize = rEnd - rStart;
+                const rStart = boundaries[r], rEnd = boundaries[r + 1], rSize = rEnd - rStart;
                 if (rSize <= 0) continue;
 
-                // Is this region a wall?
-                const wallHere = placed.find(b =>
-                    b._source === 'phase0' && b.startMin <= rStart && b.endMin >= rEnd
-                );
-                if (wallHere) {
-                    // Only add once (first time we encounter this wall)
-                    if (!template.some(t => t.startMin === wallHere.startMin && t.endMin === wallHere.endMin)) {
-                        template.push({ ...wallHere, _final: true });
-                    }
-                    continue;
-                }
+                const wallHere = placed.find(b => b._source === 'phase0' && b.startMin <= rStart && b.endMin >= rEnd);
+                if (wallHere) { if (!template.some(t => t.startMin === wallHere.startMin && t.endMin === wallHere.endMin)) template.push({ ...wallHere, _final: true }); continue; }
 
-                // Is this a fixed-duration block (swim, snack)?
-                const fixedHere = placed.find(b =>
-                    b.dMin === b.dMax && b._source !== 'phase0' &&
-                    b.startMin <= rStart && b.endMin >= rEnd
-                );
-                if (fixedHere) {
-                    if (!template.some(t => t.startMin === fixedHere.startMin && t.endMin === fixedHere.endMin)) {
-                        template.push({ ...fixedHere, _final: true });
-                    }
-                    continue;
-                }
+                const fixedHere = placed.find(b => b.dMin === b.dMax && b._source !== 'phase0' && b.startMin <= rStart && b.endMin >= rEnd);
+                if (fixedHere) { if (!template.some(t => t.startMin === fixedHere.startMin && t.endMin === fixedHere.endMin)) template.push({ ...fixedHere, _final: true }); continue; }
 
-                // Flex region: collect all flex blocks that were placed here
-                const flexBlocks = placed.filter(b =>
-                    b.startMin >= rStart && b.startMin < rEnd &&
-                    b._source !== 'phase0' && !(b.dMin === b.dMax)
-                );
-
+                const flexBlocks = placed.filter(b => b.startMin >= rStart && b.startMin < rEnd && b._source !== 'phase0' && !(b.dMin === b.dMax));
                 if (flexBlocks.length === 0) {
-                    // Empty flex region — create sport fillers
                     if (rSize >= sportC.dMin) {
                         let numF = Math.max(1, Math.ceil(rSize / sportC.dMax));
                         while (numF > 0 && numF * sportC.dMin > rSize) numF--;
                         if (numF === 0 && rSize >= sportC.dMin) numF = 1;
-
                         const descs = [];
                         for (let f = 0; f < numF; f++) descs.push({ dMin: sportC.dMin, dMax: sportC.dMax });
                         const durs = perfectFitDistribute(descs, rSize);
-
                         let cur = rStart;
                         for (let f = 0; f < numF; f++) {
-                            const sp = sportQueue[sportIdx] || null;
-                            if (sp) sportIdx++;
+                            const sp = findSportWithField(cur, cur + durs[f]);
+                            if (sp) { claimField(sp.field, cur, cur + durs[f], bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
                             template.push({
-                                startMin: cur, endMin: cur + durs[f],
-                                type: sp ? 'sport' : 'slot',
-                                event: sp ? sp.name : 'General Activity Slot',
-                                layer: shoppingList.sports?.layer,
-                                dMin: sportC.dMin, dMax: sportC.dMax,
-                                _activityLocked: false,
-                                _assignedSport: sp ? sp.name : null,
-                                field: sp ? sp.field : null,
-                                _source: sp ? 'draft' : 'filler', _final: true
+                                startMin: cur, endMin: cur + durs[f], type: sp ? 'sport' : 'slot',
+                                event: sp ? sp.name : 'General Activity Slot', layer: shoppingList.sports?.layer,
+                                dMin: sportC.dMin, dMax: sportC.dMax, _activityLocked: false,
+                                _assignedSport: sp ? sp.name : null, field: sp ? sp.field : null,
+                                _source: sp ? 'capacity_checked' : 'filler', _final: true
                             });
                             cur += durs[f];
                         }
                     }
-                    // else: tiny region absorbed by adjacent blocks
                     continue;
                 }
 
-                // Have flex blocks — perfectFitDistribute to fill region exactly
-                const descs = flexBlocks.map(b => ({
-                    block: b, dMin: b.dMin, dMax: b.dMax
-                }));
-
-                // Check if we need MORE sport fillers to fill this region
+                const descs = flexBlocks.map(b => {
+                    // ★ v4.0: Specials NEVER expand beyond dMax — prevents cross-div conflict
+                    const isSpec = (b.type || '').toLowerCase() === 'special';
+                    return { block: b, dMin: b.dMin, dMax: isSpec ? b.dMax : b.dMax };
+                });
                 const totalDMax = descs.reduce((s, d) => s + d.dMax, 0);
                 if (totalDMax < rSize) {
                     const extraSpace = rSize - totalDMax;
                     let extraCount = Math.ceil(extraSpace / sportC.dMax);
                     for (let e = 0; e < extraCount; e++) {
-                        const sp = sportQueue[sportIdx] || null;
-                        if (sp) sportIdx++;
+                        const sp = findSportWithField(rStart, rStart + sportC.dMax);
+                        if (sp) { claimField(sp.field, rStart, rStart + sportC.dMax, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
                         descs.push({
-                            block: {
-                                type: sp ? 'sport' : 'slot',
-                                event: sp ? sp.name : 'General Activity Slot',
-                                layer: shoppingList.sports?.layer,
-                                _activityLocked: false,
-                                _assignedSport: sp ? sp.name : null,
-                                field: sp ? sp.field : null,
-                                _source: sp ? 'draft' : 'filler'
-                            },
+                            block: { type: sp ? 'sport' : 'slot', event: sp ? sp.name : 'General Activity Slot', layer: shoppingList.sports?.layer, _activityLocked: false, _assignedSport: sp ? sp.name : null, field: sp ? sp.field : null, _source: sp ? 'capacity_checked' : 'filler' },
                             dMin: sportC.dMin, dMax: sportC.dMax
                         });
                     }
                 }
+                while (descs.length > 1 && descs.reduce((s, d) => s + d.dMin, 0) > rSize) descs.pop();
 
-                // Also check if we have TOO MANY blocks (total dMin > region)
-                while (descs.length > 1 && descs.reduce((s, d) => s + d.dMin, 0) > rSize) {
-                    descs.pop(); // remove last (least important) filler
-                }
-
-                const durs = perfectFitDistribute(
-                    descs.map(d => ({ dMin: d.dMin, dMax: d.dMax })),
-                    rSize
-                );
-
+                const durs = perfectFitDistribute(descs.map(d => ({ dMin: d.dMin, dMax: d.dMax })), rSize);
                 let cur = rStart;
                 for (let d = 0; d < descs.length; d++) {
                     const dur = durs[d] || descs[d].dMin;
                     if (dur <= 0) continue;
                     const b = descs[d].block;
                     template.push({
-                        startMin: cur, endMin: cur + dur,
-                        type: b.type, event: b.event,
-                        layer: b.layer, field: b.field,
-                        dMin: descs[d].dMin, dMax: descs[d].dMax,
-                        _source: b._source || 'draft',
-                        _activityLocked: b._activityLocked || false,
-                        _assignedSpecial: b._assignedSpecial || null,
-                        _specialLocation: b._specialLocation || null,
-                        _specialDuration: b._specialDuration || null,
-                        _assignedSport: b._assignedSport || null,
+                        startMin: cur, endMin: cur + dur, type: b.type, event: b.event,
+                        layer: b.layer, field: b.field, dMin: descs[d].dMin, dMax: descs[d].dMax,
+                        _source: b._source || 'draft', _activityLocked: b._activityLocked || false,
+                        _assignedSpecial: b._assignedSpecial || null, _specialLocation: b._specialLocation || null,
+                        _specialDuration: b._specialDuration || null, _assignedSport: b._assignedSport || null,
                         _final: true
                     });
                     cur += dur;
                 }
             }
 
-            // ── Step 6: Final gap sweep — absorb any tiny residuals ─────
-            // Walk through the sorted template and find gaps between blocks.
-            // Tiny gaps (≤ ABSORB_MAX) get absorbed by expanding a neighbor.
-            // Gaps ≥ minFill get a sport filler. Dead-zone gaps are logged.
+            // ── Step 6: Gap sweep — absorb residuals ─────────────────────
             template.sort((a, b) => a.startMin - b.startMin);
-
             for (let pass = 0; pass < 3; pass++) {
                 let changed = false;
                 for (let i = 0; i < template.length - 1; i++) {
                     const gap = template[i + 1].startMin - template[i].endMin;
                     if (gap <= 0) continue;
                     if (gap <= ABSORB_MAX) {
-                        // Absorb into whichever neighbor is flex (not fixed-duration, not a wall)
-                        const prev = template[i];
-                        const next = template[i + 1];
+                        const prev = template[i], next = template[i + 1];
                         const prevFlex = prev.dMin !== prev.dMax && prev._source !== 'phase0';
                         const nextFlex = next.dMin !== next.dMax && next._source !== 'phase0';
-                        const prevC = prevFlex ? resolveConstraints(prev.layer, prev.type, prev) : null;
-                const nextC = nextFlex ? resolveConstraints(next.layer, next.type, next) : null;
-
-                        if (prevFlex && prevC && (prev.endMin - prev.startMin + gap) <= prevC.dMax) {
-                            prev.endMin += gap; changed = true;
-                        } else if (nextFlex && nextC && (next.endMin - next.startMin + gap) <= nextC.dMax) {
-                            next.startMin -= gap; changed = true;
-                        } else {
-                            // Neither can absorb within dMax — extend prev anyway (visual cleanliness)
-                            if (prevFlex) { prev.endMin += gap; changed = true; }
-                            else if (nextFlex) { next.startMin -= gap; changed = true; }
-                        }
+                        // ★ v4.0: Don't absorb into specials (would violate dMax constraint)
+                        const prevIsSpecial = (prev.type || '').toLowerCase() === 'special';
+                        const nextIsSpecial = (next.type || '').toLowerCase() === 'special';
+                        if (prevFlex && !prevIsSpecial) { prev.endMin += gap; changed = true; }
+                        else if (nextFlex && !nextIsSpecial) { next.startMin -= gap; changed = true; }
+                        else if (prevFlex) { prev.endMin += gap; changed = true; }
+                        else if (nextFlex) { next.startMin -= gap; changed = true; }
                     } else if (gap >= sportC.dMin) {
-                        // Big enough for a sport slot
-                        const sp = sportQueue[sportIdx] || null;
-                        if (sp) sportIdx++;
+                        const sp = findSportWithField(template[i].endMin, template[i + 1].startMin);
+                        if (sp) { claimField(sp.field, template[i].endMin, template[i + 1].startMin, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
                         template.push({
                             startMin: template[i].endMin, endMin: template[i + 1].startMin,
-                            type: sp ? 'sport' : 'slot',
-                            event: sp ? sp.name : 'General Activity Slot',
-                            layer: shoppingList.sports?.layer,
-                            dMin: sportC.dMin, dMax: sportC.dMax,
-                            _activityLocked: false,
-                            _assignedSport: sp ? sp.name : null,
-                            _source: sp ? 'draft' : 'filler', _final: true
+                            type: sp ? 'sport' : 'slot', event: sp ? sp.name : 'General Activity Slot',
+                            layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax,
+                            _activityLocked: false, _assignedSport: sp ? sp.name : null,
+                            field: sp ? sp.field : null, _source: sp ? 'capacity_checked' : 'filler', _final: true
                         });
                         template.sort((a, b) => a.startMin - b.startMin);
                         changed = true;
-                    }
-                    // Dead-zone gaps (ABSORB_MAX < gap < sportC.dMin) — forced absorption
-                    else {
-                        const prev = template[i];
-                        const next = template[i + 1];
-                        if (prev._source !== 'phase0') { prev.endMin += gap; changed = true; }
+                    } else {
+                        // Dead zone — forced absorption into non-special neighbor
+                        const prev = template[i], next = template[i + 1];
+                        const prevIsSpec = (prev.type || '').toLowerCase() === 'special';
+                        const nextIsSpec = (next.type || '').toLowerCase() === 'special';
+                        if (prev._source !== 'phase0' && !prevIsSpec) { prev.endMin += gap; changed = true; }
+                        else if (next._source !== 'phase0' && !nextIsSpec) { next.startMin -= gap; changed = true; }
+                        else if (prev._source !== 'phase0') { prev.endMin += gap; changed = true; }
                         else if (next._source !== 'phase0') { next.startMin -= gap; changed = true; }
                     }
                 }
-                // Also check gap at start and end of day
+                // Day edges
                 if (template.length > 0) {
                     const firstGap = template[0].startMin - gradeStart;
-                    if (firstGap > 0 && firstGap <= ABSORB_MAX && template[0]._source !== 'phase0') {
-                        template[0].startMin = gradeStart; changed = true;
-                    } else if (firstGap >= sportC.dMin) {
-                        template.unshift({
-                            startMin: gradeStart, endMin: template[0].startMin,
-                            type: 'slot', event: 'General Activity Slot',
-                            layer: shoppingList.sports?.layer,
-                            dMin: sportC.dMin, dMax: sportC.dMax,
-                            _source: 'filler', _final: true
-                        });
-                        changed = true;
-                    } else if (firstGap > 0) {
-                        template[0].startMin = gradeStart; changed = true;
-                    }
+                    if (firstGap > 0 && firstGap <= ABSORB_MAX && template[0]._source !== 'phase0') { template[0].startMin = gradeStart; changed = true; }
+                    else if (firstGap >= sportC.dMin) { template.unshift({ startMin: gradeStart, endMin: template[0].startMin, type: 'slot', event: 'General Activity Slot', layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax, _source: 'filler', _final: true }); changed = true; }
+                    else if (firstGap > 0) { template[0].startMin = gradeStart; changed = true; }
 
                     const lastGap = gradeEnd - template[template.length - 1].endMin;
-                    if (lastGap > 0 && lastGap <= ABSORB_MAX && template[template.length - 1]._source !== 'phase0') {
-                        template[template.length - 1].endMin = gradeEnd; changed = true;
-                    } else if (lastGap >= sportC.dMin) {
-                        template.push({
-                            startMin: template[template.length - 1].endMin, endMin: gradeEnd,
-                            type: 'slot', event: 'General Activity Slot',
-                            layer: shoppingList.sports?.layer,
-                            dMin: sportC.dMin, dMax: sportC.dMax,
-                            _source: 'filler', _final: true
-                        });
-                        changed = true;
-                    } else if (lastGap > 0) {
-                        template[template.length - 1].endMin = gradeEnd; changed = true;
-                    }
+                    if (lastGap > 0 && lastGap <= ABSORB_MAX && template[template.length - 1]._source !== 'phase0') { template[template.length - 1].endMin = gradeEnd; changed = true; }
+                    else if (lastGap >= sportC.dMin) { template.push({ startMin: template[template.length - 1].endMin, endMin: gradeEnd, type: 'slot', event: 'General Activity Slot', layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax, _source: 'filler', _final: true }); changed = true; }
+                    else if (lastGap > 0) { template[template.length - 1].endMin = gradeEnd; changed = true; }
                 }
                 template.sort((a, b) => a.startMin - b.startMin);
                 if (!changed) break;
             }
 
-            if (totalIters < 2) {
-                const dead = template.reduce((s, b) => {
-                    const dur = b.endMin - b.startMin;
-                    if (dur < minFill && b._source === 'filler') return s + dur;
-                    return s;
-                }, 0);
-                log('[PACK] ' + bunk + ': ' + template.length + ' blocks, dead=' + dead);
-            }
-
-            // ── Post-pack enforcement: clamp configured specials to exact duration ──
-            for (let i = 0; i < template.length; i++) {
-                const blk = template[i];
+            // ── Step 7: Post-expand enforcement ──────────────────────────
+            // Clamp configured specials to exact duration
+            for (const blk of template) {
                 if ((blk.type || '').toLowerCase() !== 'special') continue;
-                const eName = blk.event || blk._assignedSpecial || blk._draftActivity || blk.name;
+                const eName = blk.event || blk._assignedSpecial;
                 if (!eName) continue;
-                const cfgDur = getSpecialDuration(eName, activityProperties, globalSettings, null);
-                if (!cfgDur || cfgDur <= 0) continue;
-                const actualDur = blk.endMin - blk.startMin;
-                if (actualDur === cfgDur) continue;
-                blk.endMin = blk.startMin + cfgDur;
+                const cfgDur = getSpecialDuration(eName, activityProperties, globalSettings);
+                if (cfgDur && cfgDur > 0 && (blk.endMin - blk.startMin) !== cfgDur) {
+                    blk.endMin = blk.startMin + cfgDur;
+                }
             }
 
-            return template.sort((a, b) => a.startMin - b.startMin);        }
+            // ★ v4.0: Post-expand field validation — re-check all capacity_checked sport claims
+            // ★ v4.1 FIX: Re-sync field ledger FIRST so later grades see actual expanded times.
+            // 1. Unclaim all stale pre-expansion claims for this bunk
+            unclaimFieldsForBunk(bunk);
+            // 2. Re-claim at actual expanded times; demote blocks that can't re-claim
+            for (const blk of template) {
+                if (!blk.field || blk._source === 'phase0') continue;
+                const canReclaim = claimField(blk.field, blk.startMin, blk.endMin, bunk, grade, blk.event || blk._assignedSport || 'sport');
+                if (!canReclaim) {
+                    // Field is no longer available at expanded time — find alternative
+                    const alt = findSportWithField(blk.startMin, blk.endMin);
+                    if (alt && claimField(alt.field, blk.startMin, blk.endMin, bunk, grade, alt.name)) {
+                        blk.field = alt.field;
+                        blk.event = alt.name;
+                        blk._assignedSport = alt.name;
+                    } else {
+                        // No alternative — demote to unassigned slot
+                        blk.field = null;
+                        blk.type = 'slot';
+                        blk.event = 'General Activity Slot';
+                        blk._assignedSport = null;
+                        blk._source = 'filler';
+                    }
+                }
+            }
+
+            return template.sort((a, b) => a.startMin - b.startMin);
+        }
 
 
         // =====================================================================
@@ -2138,7 +1972,6 @@
                 if (!template) return;
                 const grade = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(bunk)))?.[0];
                 if (!grade) return;
-
                 bunkTimelines[bunk] = [];
                 template.forEach(block => {
                     bunkTimelines[bunk].push({
@@ -2151,23 +1984,18 @@
                         _specialDuration: block._specialDuration || null,
                         _specialLocation: block._specialLocation || null,
                         _assignedSport: block._assignedSport || null,
-                        _activityLocked: block._activityLocked || block._fixed || block._source === 'soft_anchor' || false,
-                        _fixed: block._fixed || false,
-                        _gradeWide: block._gradeWide || false,
+                        _activityLocked: block._activityLocked || block._fixed || false,
+                        _fixed: block._fixed || false, _gradeWide: block._gradeWide || false,
                         _noBacktrack: block._noBacktrack || false,
-                        _pairedWith: block._pairedWith || null,
-                        _isPrepBlock: block._isPrepBlock || false,
-                        _isMainBlock: block._isMainBlock || false,
-                        _linkedTo: block._linkedTo || null,
                         _fromGapDetection: block._source === 'filler',
-                        _microGap: block._microGap || false,
                         _bunkOverride: true,
                         _draftActivity: block._customActivity || block._assignedSport || block._assignedSpecial || null,
                         _draftField: block._customField || block.field || null,
                         _sportFallbacks: block._sportFallbacks || null,
                         _customActivity: block._customActivity || null,
                         _customField: block._customField || null,
-                        _customBunks: block._customBunks || null
+                        _customBunks: block._customBunks || null,
+                        _source: block._source || null
                     });
                 });
                 bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
@@ -2179,64 +2007,249 @@
         // SCORING ENGINE
         // =====================================================================
 
-        const MAX_ITERATIONS = 60;
-        const PERFECT_SCORE = 0;
-        const STALE_STOP = 12;
+        const MAX_ITERATIONS = 30;
+        const STALE_STOP = 8;
         let _iterSeed = 0, bestScore = Infinity, bestTimelines = null;
         let bestWarnings = [], staleCount = 0, totalIters = 0;
 
         function scoreTimelines(timelines, iterWarnings) {
             let score = 0;
+            const campStart = Math.min(...Object.values(divisions).map(d => parseTimeToMinutes(d.startTime) || 660));
+            const campEnd = Math.max(...Object.values(divisions).map(d => parseTimeToMinutes(d.endTime) || 990));
+
             Object.entries(timelines).forEach(([bunk, timeline]) => {
-                // CEL duration violations
+                const gradeKey = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(bunk)))?.[0];
+                const dayStart = gradeKey ? (parseTimeToMinutes(divisions[gradeKey]?.startTime) || 540) : 540;
+                const dayEnd = gradeKey ? (parseTimeToMinutes(divisions[gradeKey]?.endTime) || 960) : 960;
+                const sorted = [...timeline].sort((a, b) => a.startMin - b.startMin);
+
+                // Gaps
+                if (sorted.length > 0 && sorted[0].startMin > dayStart) score += (sorted[0].startMin - dayStart) * 15;
+                for (let i = 0; i < sorted.length - 1; i++) { const gap = sorted[i + 1].startMin - sorted[i].endMin; if (gap > 0) score += gap * 15; }
+                if (sorted.length > 0 && sorted[sorted.length - 1].endMin < dayEnd) score += (dayEnd - sorted[sorted.length - 1].endMin) * 15;
+
+                // Duration violations
                 timeline.forEach(block => {
-                    if (block._microGap || (block._fromGapDetection && !block.layer)) return;
+                    if (block._fromGapDetection && !block.layer) return;
                     const { dMin } = resolveConstraints(block.layer, (block.type || 'slot').toLowerCase(), block);
                     const dur = block.endMin - block.startMin;
                     if (dur < dMin) score += (dMin - dur) * 200;
                 });
 
-                // Gaps
-                const gradeKey = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(bunk)))?.[0];
-                const dayStart = gradeKey ? (parseTimeToMinutes(divisions[gradeKey]?.startTime) || 540) : 540;
-                const dayEnd = gradeKey ? (parseTimeToMinutes(divisions[gradeKey]?.endTime) || 960) : 960;
-                const sorted = [...timeline].sort((a, b) => a.startMin - b.startMin);
-                if (sorted.length > 0 && sorted[0].startMin > dayStart) score += (sorted[0].startMin - dayStart) * 15;
-                for (let i = 0; i < sorted.length - 1; i++) { const gap = sorted[i + 1].startMin - sorted[i].endMin; if (gap > 0) score += gap * 15; }
-                if (sorted.length > 0 && sorted[sorted.length - 1].endMin < dayEnd) score += (dayEnd - sorted[sorted.length - 1].endMin) * 15;
-
                 // Out of bounds
                 if (gradeKey) timeline.forEach(b => { if (b.endMin <= dayStart || b.startMin >= dayEnd) score += 10000; });
-
-                // Undersized filler
-                timeline.forEach(b => { if (b._fromGapDetection) { const dur = b.endMin - b.startMin; if (dur < GAP_MIN_DUR) score += (GAP_MIN_DUR - dur) * 50; } });
             });
 
             iterWarnings.forEach(w => { if (w.type === 'placement_failure') score += 500; if (w.type === 'overlap') score += 1000; });
 
             // Field contention
-            const campStart = Math.min(...Object.values(divisions).map(d => parseTimeToMinutes(d.startTime) || 660));
-            const campEnd = Math.max(...Object.values(divisions).map(d => parseTimeToMinutes(d.endTime) || 990));
             for (let t = campStart; t < campEnd; t += CONTENTION_SLICE) {
                 const se = Math.min(t + CONTENTION_SLICE, campEnd);
                 let cnt = 0;
-                Object.entries(timelines).forEach(([bk, tl]) => { for (const b of tl) { if (getFieldImpact(b) === 'consumer' && b.startMin < se && b.endMin > t) { cnt++; break; } } });
-                if (cnt > FIELD_CAPACITY) score += (cnt - FIELD_CAPACITY) * 200;
+                Object.entries(timelines).forEach(([bk, tl]) => {
+                    for (const b of tl) { if (getFieldImpact(b) === 'consumer' && b.startMin < se && b.endMin > t) { cnt++; break; } }
+                });
+                if (cnt > 26) score += (cnt - 26) * 200;
             }
             return score;
         }
 
+
         // =====================================================================
-        // RESET STATE
+        // SWIM ROTATION
+        // =====================================================================
+
+        const swimHistory = {};
+        function loadSwimHistory() {
+            try {
+                const gs = getGlobalSettings();
+                const stored = gs.swimRotationHistory || gs.app1?.swimRotationHistory;
+                if (stored) Object.assign(swimHistory, stored);
+                const ls = localStorage.getItem('campistry_swimRotationHistory');
+                if (ls && !stored) Object.assign(swimHistory, JSON.parse(ls));
+            } catch (e) { /* ignore */ }
+        }
+        function saveSwimHistory() {
+            try {
+                const gs = getGlobalSettings();
+                if (gs.app1) gs.app1.swimRotationHistory = swimHistory;
+                localStorage.setItem('campistry_swimRotationHistory', JSON.stringify(swimHistory));
+                if (window.IntegrationHooks?.queueChange) window.IntegrationHooks.queueChange('swimRotationHistory', swimHistory);
+            } catch (e) { /* ignore */ }
+        }
+
+        function getSwimmersForToday(grade, allBunks, swimLayer, seed) {
+            const gs = getGlobalSettings();
+            const dedicatedConfig = gs.swimRotationConfig?.[grade] || JSON.parse(localStorage.getItem('campistry_swimRotationConfig') || '{}')?.[grade];
+            const bunksPerDay = dedicatedConfig?.bunksPerDay || swimLayer.bunksPerDay || swimLayer._bunksPerDay || allBunks.length;
+            const timesPerWeek = dedicatedConfig?.timesPerWeek || swimLayer.timesPerWeek || swimLayer._timesPerWeek || 5;
+            if (bunksPerDay >= allBunks.length) return allBunks;
+
+            const weekStart = getMondayOfWeek(currentDate, 0);
+            const weekCounts = {};
+            allBunks.forEach(b => { weekCounts[String(b)] = 0; });
+            const gradeHistory = swimHistory[grade] || {};
+            Object.entries(gradeHistory).forEach(([dateStr, bunksArr]) => {
+                if (dateStr >= weekStart && dateStr < currentDate) {
+                    (bunksArr || []).forEach(b => { if (weekCounts[String(b)] !== undefined) weekCounts[String(b)]++; });
+                }
+            });
+
+            const sorted = [...allBunks].map(b => ({
+                bunk: b, count: weekCounts[String(b)] || 0,
+                rand: ((seed * 2654435761 + parseInt(String(b).replace(/\D/g, '')) * 1597) >>> 0) % 10000
+            }));
+            sorted.sort((a, b) => a.count !== b.count ? a.count - b.count : a.rand - b.rand);
+            const needsSwim = sorted.filter(s => s.count < timesPerWeek);
+            if (needsSwim.length === 0) {
+                if (!swimHistory[grade]) swimHistory[grade] = {};
+                swimHistory[grade][currentDate] = [];
+                return [];
+            }
+            const selected = needsSwim.slice(0, bunksPerDay).map(s => s.bunk);
+            if (!swimHistory[grade]) swimHistory[grade] = {};
+            swimHistory[grade][currentDate] = selected.map(String);
+            return selected;
+        }
+
+        loadSwimHistory();
+
+
+        // =====================================================================
+        // CROSS-GRADE ROTATION MATRIX
+        // =====================================================================
+        // Creates a Latin-square rotation so at any time of day, each grade
+        // PREFERS to be doing a DIFFERENT activity type. This is a STRONG
+        // SUGGESTION to the scheduler — not a hard constraint. If the band
+        // doesn't work (walls, capacity, windows), the block can still go
+        // anywhere in the allowed window. The preference is applied via
+        // scoring bonuses at candidate evaluation time.
+        //
+        // Staggerable types (in priority order):
+        //   swim    — exclusive pool, off-field
+        //   league  — heavy field use, all bunks on fields
+        //   special — usually off-field (indoor/location-based)
+        //   sport   — fills remaining time, field-heavy
+        //
+        // The matrix divides each grade's day into bands and assigns a
+        // preferred type per band. Candidate positions that fall inside
+        // the assigned band get a scoring bonus; positions outside get
+        // a mild penalty. The iteration loop tries different shuffles
+        // to find the best rotation arrangement.
+        // =====================================================================
+
+        function buildRotationMatrix(grades, seed) {
+            // ★ v4.2: Only stagger OFF-FIELD types. Sport is never in the matrix.
+            // The matrix answers: "When should this grade do its off-field activities?"
+            // Sport fills whatever time remains — no band needed.
+            //
+            // Off-field types (take bunks OFF fields, relieving contention):
+            //   swim    — exclusive pool
+            //   league  — on fields BUT all bunks together (concentrated, not spread)
+            //   special — usually indoor/location-based
+            //   snack   — off-field break
+            //
+            // Each grade gets a rotated subset of these based on what layers it has.
+            // The day is divided into bands equal to the MAXIMUM off-field count
+            // across all grades. Grades with fewer off-field types leave some bands
+            // empty (no preference = sport fills naturally).
+
+            // Seeded shuffle
+            const shuffled = [...grades];
+            for (let i = shuffled.length - 1; i > 0; i--) {
+                const j = ((seed * 2654435761 + i * 1597) >>> 0) % (i + 1);
+                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+            }
+
+            // Determine which off-field types each grade has
+            const gradeInfo = {};
+            let maxOffField = 0;
+            shuffled.forEach(grade => {
+                const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                const layers = layersByGrade[grade] || [];
+                const offField = [];
+                if (layers.some(l => (l.type || '').toLowerCase() === 'swim')) offField.push('swim');
+                if (layers.some(l => { const t = (l.type || '').toLowerCase(); return t === 'league' || t === 'specialty_league'; })) offField.push('league');
+                if (layers.some(l => (l.type || '').toLowerCase() === 'special')) offField.push('special');
+                if (layers.some(l => ['snack', 'snacks'].includes((l.type || '').toLowerCase()))) offField.push('snack');
+                gradeInfo[grade] = { start: gs, end: ge, duration: ge - gs, offField };
+                if (offField.length > maxOffField) maxOffField = offField.length;
+            });
+
+            // If no grade has any off-field types, skip rotation entirely
+            if (maxOffField === 0) {
+                const plan = {};
+                shuffled.forEach((grade, idx) => {
+                    plan[grade] = { offset: idx, searchDirection: idx % 2 === 0 ? 'early' : 'late', sequence: [], typeBands: {}, gradeStart: gradeInfo[grade].start, gradeEnd: gradeInfo[grade].end };
+                });
+                return plan;
+            }
+
+            // Divide the day into bands — one per off-field slot (max across grades)
+            // Minimum 3 bands so off-field activities spread across early/mid/late
+            const bandCount = Math.max(3, maxOffField);
+
+            const plan = {};
+            shuffled.forEach((grade, idx) => {
+                const info = gradeInfo[grade];
+                const bandDur = Math.floor(info.duration / bandCount);
+
+                // Assign this grade's off-field types to rotated band positions
+                // Band position = (original_position + grade_offset) % bandCount
+                const typeBands = {};
+                const sequence = [];
+                info.offField.forEach((type, typeIdx) => {
+                    const bandPos = (typeIdx + idx) % bandCount;
+                    const bandStart = info.start + bandPos * bandDur;
+                    const bandEnd = (bandPos === bandCount - 1) ? info.end : (bandStart + bandDur);
+                    typeBands[type] = { start: bandStart, end: bandEnd };
+                    sequence.push(type);
+                });
+
+                plan[grade] = {
+                    offset: idx,
+                    searchDirection: idx % 2 === 0 ? 'early' : 'late',
+                    sequence,
+                    typeBands,   // ONLY contains off-field types, never sport
+                    gradeStart: info.start,
+                    gradeEnd: info.end
+                };
+            });
+
+            // Log the matrix
+            if (totalIters < 1) {
+                log('[ROTATION MATRIX] Off-field activity bands (sport fills remaining time):');
+                shuffled.forEach(grade => {
+                    const p = plan[grade];
+                    if (p.sequence.length === 0) {
+                        log('  ' + grade + ': no off-field types — all sport');
+                        return;
+                    }
+                    const bandStr = Object.entries(p.typeBands)
+                        .sort((a, b) => a[1].start - b[1].start)
+                        .map(([t, b]) => t + '=' + minutesToTimeLabel(b.start) + '-' + minutesToTimeLabel(b.end))
+                        .join(', ');
+                    log('  ' + grade + ': [' + p.sequence.join(', ') + '] ' + bandStr);
+                });
+            }
+
+            return plan;
+        }
+
+
+        // =====================================================================
+        // RESET STATE (for iteration loop)
         // =====================================================================
         function resetIterState() {
-            allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = []; bunkSpecialAssigned[bunk] = {}; }));
-            todaysSpecials.forEach(s => { if (specialCapacityTracker[s.name]) specialCapacityTracker[s.name].assignments = []; });
+            allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = []; }));
             Object.keys(sharedLeagueTime).forEach(k => delete sharedLeagueTime[k]);
             resourceCalendar.swim = {};
-            Object.keys(fieldLedger).forEach(k => { if (fieldLedger[k]) fieldLedger[k].claims = []; });
-            resetCrossGradeTracker();
+            // ★ v4.0: Reset resource tracker + field ledger between iterations
+            rtReset();
+            initFieldLedger();
         }
+
 
         // =====================================================================
         // ITERATION LOOP
@@ -2245,361 +2258,152 @@
         log('WHAT→WHEN→WHERE — cap: ' + MAX_ITERATIONS + ' | stale: ' + STALE_STOP);
         log('══════════════════════════════════════════════════════════');
 
-        // Initialize special capacity trackers
-        todaysSpecials.forEach(s => {
-            specialCapacityTracker[s.name] = { total: getSpecialCapacity(s.name, activityProperties, globalSettings), assignments: [] };
-        });
+        let todaysSwimmers = {};
 
-        // =====================================================================
-        // SWIM ROTATION SYSTEM
-        // Not every bunk swims every day. The swim layer config has:
-        //   bunksPerDay: how many bunks swim each day (default: all)
-        //   timesPerWeek: target swims per bunk per week (default: 5)
-        // History tracks which bunks swam which days, persisted via cloud sync.
-        // =====================================================================
+        do {
+            staggerPlan = buildRotationMatrix(allGrades, _iterSeed);
+            allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = []; }));
 
-        const swimHistory = {};
-        function loadSwimHistory() {
-            try {
-                const gs = window.loadGlobalSettings?.() || {};
-                const stored = gs.swimRotationHistory || gs.app1?.swimRotationHistory;
-                if (stored) Object.assign(swimHistory, stored);
-                // Also try localStorage
-                const ls = localStorage.getItem('campistry_swimRotationHistory');
-                if (ls && !stored) Object.assign(swimHistory, JSON.parse(ls));
-            } catch (e) { /* ignore */ }
-        }
-        function saveSwimHistory() {
-            try {
-                const gs = window.loadGlobalSettings?.() || {};
-                if (gs.app1) gs.app1.swimRotationHistory = swimHistory;
-                else if (gs) gs.swimRotationHistory = swimHistory;
-                localStorage.setItem('campistry_swimRotationHistory', JSON.stringify(swimHistory));
-                if (window.IntegrationHooks?.queueChange) {
-                    window.IntegrationHooks.queueChange('swimRotationHistory', swimHistory);
-                }
-            } catch (e) { /* ignore */ }
-        }
+            // Init field ledger for this iteration
+            initFieldLedger();
 
-        function getSwimmersForToday(grade, allBunks, swimLayer, seed) {
-            // Read config from: dedicated config → layer properties → defaults
-            const gs = window.loadGlobalSettings?.() || {};
-            const dedicatedConfig = gs.swimRotationConfig?.[grade] ||
-                JSON.parse(localStorage.getItem('campistry_swimRotationConfig') || '{}')?.[grade];
-            
-            const bunksPerDay = dedicatedConfig?.bunksPerDay || swimLayer.bunksPerDay || swimLayer._bunksPerDay || allBunks.length;
-            const timesPerWeek = dedicatedConfig?.timesPerWeek || swimLayer.timesPerWeek || swimLayer._timesPerWeek || 5;
+            // Phase 0: Pinned + trips + leagues
+            const pinnedCount = executePinnedLayers();
 
-            // If bunksPerDay >= total bunks, everyone swims
-            if (bunksPerDay >= allBunks.length) return allBunks;
-
-            // Get this week's Monday
-            const weekStart = getMondayOfWeek(currentDate, 0);
-
-            // Count swims this week per bunk
-            const weekCounts = {};
-            allBunks.forEach(b => { weekCounts[String(b)] = 0; });
-
-            const gradeHistory = swimHistory[grade] || {};
-            Object.entries(gradeHistory).forEach(([dateStr, bunksArr]) => {
-                if (dateStr >= weekStart && dateStr < currentDate) {
-                    (bunksArr || []).forEach(b => {
-                        if (weekCounts[String(b)] !== undefined) weekCounts[String(b)]++;
+            // Inject daily trips
+            let tripBlockCount = 0;
+            let dailyTrips = [];
+            try { const stored = localStorage.getItem('campDailyTrips_' + (window.currentScheduleDate || '')); if (stored) dailyTrips = JSON.parse(stored); } catch(e) {}
+            if (!dailyTrips.length) dailyTrips = dailyData?.dailyTrips || [];
+            dailyTrips.forEach(trip => {
+                const grade = trip.division;
+                if (!grade || !divisions[grade]) return;
+                if (allowedSet && !allowedSet.has(String(grade))) return;
+                const tStart = trip.startMin ?? parseTimeToMinutes(trip.startTime);
+                const tEnd = trip.endMin ?? parseTimeToMinutes(trip.endTime);
+                if (tStart == null || tEnd == null) return;
+                getBunksForGrade(grade, divisions).forEach(bunk => {
+                    bunkTimelines[bunk].push({
+                        startMin: tStart, endMin: tEnd, type: 'trip', event: trip.event || 'Trip',
+                        layer: null, _classification: 'pinned', _committed: true, _fixed: true,
+                        _isTrip: true, _activityLocked: true, _noBacktrack: true
                     });
+                    tripBlockCount++;
+                });
+            });
+            if (tripBlockCount > 0) allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin)));
+
+            buildResourceCalendar(_iterSeed);
+
+            // Leagues in stagger order
+            const leagueLayers = nonPinnedLayers.filter(l => {
+                const grade = l.grade || l.division;
+                if (!grade || (allowedSet && !allowedSet.has(String(grade)))) return false;
+                const t = (l.type || '').toLowerCase();
+                return (t === 'league' || t === 'specialty_league') && l._classification !== 'pinned';
+            });
+            leagueLayers.sort((a, b) => ((staggerPlan[a.grade || a.division] || {}).offset || 0) - ((staggerPlan[b.grade || b.division] || {}).offset || 0));
+            leagueLayers.forEach(layer => placeLeagueForGrade(layer.grade || layer.division, layer));
+
+            // Full-grade non-pinned
+            nonPinnedLayers.forEach(layer => {
+                const grade = layer.grade || layer.division;
+                if (!grade) return;
+                const t = (layer.type || '').toLowerCase();
+                if (t === 'league' || t === 'specialty_league' || t === 'swim' || t === 'custom') return;
+                const isFullGrade = activityProperties[layer.event]?.fullGrade || activityProperties[layer.name]?.fullGrade;
+                if (isFullGrade && layer._classification !== 'pinned') placeLeagueForGrade(grade, layer);
+            });
+
+            // Phase 1: Shopping lists
+            const shoppingLists = {};
+            allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { shoppingLists[bunk] = buildBunkShoppingList(bunk, grade); }));
+
+            // Phase 2: Draft
+            const draftResults = runDraft(shoppingLists);
+
+            // ★ v4.0: Clear ONLY DRAFT field claims — keep pinned/phase0 claims
+            // The draft used temporary times. The packer will re-claim at actual times.
+            Object.values(fieldLedger).forEach(ledger => {
+                ledger.claims = ledger.claims.filter(c => {
+                    // Keep claims from Phase 0 blocks (walls)
+                    const bunkTl = bunkTimelines[c.bunk] || [];
+                    return bunkTl.some(b => b._fixed && overlaps(b.startMin, b.endMin, c.startMin, c.endMin));
+                });
+            });
+
+            // Phase 3: Greedy pack in stagger order
+            const allTemplates = {};
+            const staggeredGrades = [...allGrades].sort((a, b) => ((staggerPlan[a] || {}).offset || 0) - ((staggerPlan[b] || {}).offset || 0));
+
+            todaysSwimmers = {};
+            staggeredGrades.forEach(grade => {
+                const swimLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'swim');
+                if (swimLayer) {
+                    todaysSwimmers[grade] = new Set(getSwimmersForToday(grade, getBunksForGrade(grade, divisions), swimLayer, _iterSeed).map(String));
                 }
             });
 
-            // Sort bunks: fewest swims first, break ties with seeded shuffle
-            const sorted = [...allBunks].map(b => ({
-                bunk: b,
-                count: weekCounts[String(b)] || 0,
-                rand: ((seed * 2654435761 + parseInt(String(b).replace(/\D/g, '')) * 1597) >>> 0) % 10000
-            }));
-            sorted.sort((a, b) => {
-                if (a.count !== b.count) return a.count - b.count; // fewest swims first
-                return a.rand - b.rand; // random among ties
-            });
-
-            // ★ Only pick bunks that haven't hit their weekly target yet
-            const needsSwim = sorted.filter(s => s.count < timesPerWeek);
-
-            // If no one needs swim, skip entirely — everyone met target
-            if (needsSwim.length === 0) {
-                if (totalIters < 1) {
-                    log('[SWIM-ROT] ' + grade + ': all bunks met ' + timesPerWeek + 'x/week target — no swim today');
-                }
-                if (!swimHistory[grade]) swimHistory[grade] = {};
-                swimHistory[grade][currentDate] = [];
-                return [];
-            }
-
-            // Pick up to bunksPerDay from those who still need it
-            const selected = needsSwim.slice(0, bunksPerDay).map(s => s.bunk);
-
-            // Record today's swimmers in history
-            if (!swimHistory[grade]) swimHistory[grade] = {};
-            swimHistory[grade][currentDate] = selected.map(String);
-
-            if (totalIters < 1) {
-                log('[SWIM-ROT] ' + grade + ': ' + selected.length + '/' + allBunks.length +
-                    ' bunks swim today (target: ' + timesPerWeek + 'x/week)' +
-                    ' — bunks: ' + selected.join(','));
-            }
-
-            return selected;
-        }
-
-        // Load swim history at startup
-        loadSwimHistory();
-
-        // =====================================================================
-        // STAGGER PLANNER — ensures different grades do different things
-        // at the same time. Prevents field/pool/location contention.
-        // =====================================================================
-        function buildStaggerPlan(grades, seed) {
-            // Shuffle grades into a random order using seed
-            const shuffled = [...grades];
-            for (let i = shuffled.length - 1; i > 0; i--) {
-                const j = ((seed * 2654435761 + i * 1597) >>> 0) % (i + 1);
-                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-            }
-            // Assign each grade a stagger offset (0, 1, 2, ...)
-            const plan = {};
-            shuffled.forEach((grade, idx) => {
-                plan[grade] = {
-                    offset: idx,
-                    // Which fraction of the day this grade prefers for each type
-                    // Offset 0 → leagues early, swim mid, special late
-                    // Offset 1 → swim early, special mid, leagues late
-                    // etc. — rotated by offset
-                    searchDirection: idx % 2 === 0 ? 'early' : 'late'
-                };
-            });
-            return plan;
-        }
-
-        do { // ← ITERATION LOOP
-
-        // Build stagger plan for this iteration
-        staggerPlan = buildStaggerPlan(allGrades, _iterSeed);
-        if (totalIters < 1) {
-            const order = allGrades.map(g => g.replace(' Grade', '') + '=' + (staggerPlan[g] || {}).offset).join(', ');
-            log('[STAGGER] ' + order);
-        }
-
-        // ── Phase 0: Place all pinned + grade-wide + swim ────────────
-        allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = []; bunkSpecialAssigned[bunk] = {}; }));
-
-        // 0a. Pinned (any type)
-        const pinnedCount = executePinnedLayers();
-
-        // ★ INJECT DAILY TRIPS — block out time for entire divisions
-       const dateKey = window.currentScheduleDate || window.currentDate || '';
-        let dailyTrips = [];
-        try { const stored = localStorage.getItem('campDailyTrips_' + dateKey); if (stored) dailyTrips = JSON.parse(stored); } catch(e) {}
-        if (!dailyTrips.length) dailyTrips = window.loadCurrentDailyData?.()?.dailyTrips || [];
-        let tripBlockCount = 0;
-        dailyTrips.forEach(trip => {
-            const grade = trip.division;
-            if (!grade || !divisions[grade]) return;
-            if (allowedSet && !allowedSet.has(String(grade))) return;
-            const tStart = trip.startMin ?? parseTimeToMinutes(trip.startTime);
-            const tEnd = trip.endMin ?? parseTimeToMinutes(trip.endTime);
-            if (tStart == null || tEnd == null) return;
-            getBunksForGrade(grade, divisions).forEach(bunk => {
-                bunkTimelines[bunk].push({
-                    startMin: tStart, endMin: tEnd,
-                    type: 'trip', event: trip.event || 'Trip',
-                    layer: null, _classification: 'pinned',
-                    _committed: true, _fixed: true, _isTrip: true,
-                    _activityLocked: true, _noBacktrack: true
-                });
-                tripBlockCount++;
-            });
-        });
-        if (tripBlockCount > 0) {
-            allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin)));
-            log('[0.1] Injected ' + tripBlockCount + ' trip blocks from daily trips');
-        }
-
-        // 0b. MRC for swim
-        buildResourceCalendar(_iterSeed);
-
-        // 0c. Non-pinned layers that need early placement
-        // ★ STAGGERED: Leagues placed in stagger order so different grades
-        //   get different time slots. Other layers go to greedy packer.
-
-        // Collect and sort league layers by stagger offset
-        const leagueLayers = [];
-        const otherNonPinned = [];
-        nonPinnedLayers.forEach(layer => {
-            const grade = layer.grade || layer.division;
-            if (!grade || (allowedSet && !allowedSet.has(String(grade)))) return;
-            const t = (layer.type || '').toLowerCase();
-            if (t === 'league' || t === 'specialty_league') {
-                if (layer._classification !== 'pinned') leagueLayers.push(layer);
-            } else {
-                otherNonPinned.push(layer);
-            }
-        });
-
-        // Sort leagues by stagger offset — different order each iteration
-        leagueLayers.sort((a, b) => {
-            const aOff = (staggerPlan[a.grade || a.division] || { offset: 0 }).offset;
-            const bOff = (staggerPlan[b.grade || b.division] || { offset: 0 }).offset;
-            return aOff - bOff;
-        });
-
-        // Place leagues in staggered order
-        leagueLayers.forEach(layer => {
-            const grade = layer.grade || layer.division;
-            placeLeagueForGrade(grade, layer);
-        });
-
-        // Process other non-pinned layers
-        otherNonPinned.forEach(layer => {
-            const grade = layer.grade || layer.division;
-            if (!grade) return;
-            const t = (layer.type || '').toLowerCase();
-            const bunks = getBunksForGrade(grade, divisions);
-            if (!bunks.length) return;
-
-            // Full-grade activities — truly fixed, not soft
-            const isFullGrade = activityProperties[layer.event]?.fullGrade || activityProperties[layer.name]?.fullGrade;
-            if (isFullGrade && layer._classification !== 'pinned') {
-                placeLeagueForGrade(grade, layer);
-                return;
-            }
-
-            // ★ Swim: handled by greedy packer per-bunk (not pre-placed)
-            if (t === 'swim') return;
-
-            // ★ Custom: handled by greedy packer per-bunk (not pre-placed)
-            if (t === 'custom') return;
-
-            // ★ All other non-pinned layers (snack, sport, special, etc.)
-            // handled by the greedy packer per-bunk — not pre-placed.
-        });
-
-        if (totalIters < 2) log('[P0] ' + pinnedCount + ' pinned blocks placed');
-
-        // ── Phase 1: Build shopping lists ────────────────────────────
-        const shoppingLists = {};
-        allGrades.forEach(grade => {
-            getBunksForGrade(grade, divisions).forEach(bunk => {
-                shoppingLists[bunk] = buildBunkShoppingList(bunk, grade);
-            });
-        });
-
-        if (totalIters < 2) {
-            const totalSports = Object.values(shoppingLists).reduce((s, l) => s + l.sports.required, 0);
-            const totalSpecials = Object.values(shoppingLists).reduce((s, l) => s + l.specials.required, 0);
-            log('[P1] Shopping lists: ' + totalSports + ' sport needs, ' + totalSpecials + ' special needs across ' + Object.keys(shoppingLists).length + ' bunks');
-        }
-
-        // ── Phase 2: Draft ───────────────────────────────────────────
-        const draftResults = runDraft(shoppingLists);
-
-        if (totalIters < 2) {
-            const drafted = Object.values(draftResults);
-            const dSports = drafted.reduce((s, d) => s + d.sports.length, 0);
-            const dSpecials = drafted.reduce((s, d) => s + d.specials.length, 0);
-            log('[P2] Draft assigned: ' + dSports + ' sports, ' + dSpecials + ' specials');
-        }
-
-        // ── Phase 3: Greedy pack per-bunk ──────────────────────────
-        // ★ Process grades in STAGGER ORDER so early grades' placements
-        //   influence later grades via cross-grade tracker
-        const allTemplates = {};
-        const staggeredGrades = [...allGrades].sort((a, b) =>
-            ((staggerPlan[a] || {}).offset || 0) - ((staggerPlan[b] || {}).offset || 0)
-        );
-
-        // ★ Compute which bunks swim today per grade (swim rotation)
-        const todaysSwimmers = {};
-        staggeredGrades.forEach(grade => {
-            const swimLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'swim');
-            if (swimLayer) {
-                const allBunks = getBunksForGrade(grade, divisions);
-                todaysSwimmers[grade] = new Set(
-                    getSwimmersForToday(grade, allBunks, swimLayer, _iterSeed).map(String)
-                );
-            }
-        });
-
-        staggeredGrades.forEach(grade => {
-            getBunksForGrade(grade, divisions).forEach(bunk => {
-                const swimsToday = todaysSwimmers[grade] ? todaysSwimmers[grade].has(String(bunk)) : true;
-                allTemplates[bunk] = greedyPackBunk(
-                    bunk, grade,
-                    draftResults[bunk] || { sports: [], specials: [], elective: [], generic: [], usedActivities: new Set() },
-                    shoppingLists[bunk],
-                    (staggerPlan[grade] || { offset: 0 }).offset,
-                    swimsToday
-                );
-            });
-        });
-
-        // ── Phase 4: Execute templates ───────────────────────────────
-        executeTemplates(allTemplates);
-
-        // ── Propagate sport fallbacks to ALL sport/slot blocks ──────
-        // Ensures every sport slot has a fallback list for the post-solver sweep,
-        // even if created by Step 5/6 (expand/gap sweep) which may not carry them.
-        allGrades.forEach(grade => {
-            const pl = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'sport');
-            if (!pl) return;
-            const priorityList = shoppingLists[getBunksForGrade(grade, divisions)[0]]?.sports?.priorityList || [];
-            const fallbackNames = priorityList.map(s => s.name);
-            if (!fallbackNames.length) return;
-            getBunksForGrade(grade, divisions).forEach(bunk => {
-                (bunkTimelines[bunk] || []).forEach(b => {
-                    const t = (b.type || '').toLowerCase();
-                    if ((t === 'sport' || t === 'slot') && !b._sportFallbacks) {
-                        b._sportFallbacks = fallbackNames;
-                    }
+            staggeredGrades.forEach(grade => {
+                getBunksForGrade(grade, divisions).forEach(bunk => {
+                    const swimsToday = todaysSwimmers[grade] ? todaysSwimmers[grade].has(String(bunk)) : true;
+                    allTemplates[bunk] = greedyPackBunk(
+                        bunk, grade,
+                        draftResults[bunk] || { sports: [], specials: [], elective: [], generic: [], usedActivities: new Set() },
+                        shoppingLists[bunk], (staggerPlan[grade] || { offset: 0 }).offset, swimsToday
+                    );
                 });
             });
-        });
 
+            // Phase 4: Execute
+            executeTemplates(allTemplates);
 
-        // ── (Safety nets removed — greedy packer produces zero-gap schedules) ──
+            // Propagate sport fallbacks
+            allGrades.forEach(grade => {
+                const pl = shoppingLists[getBunksForGrade(grade, divisions)[0]]?.sports?.priorityList || [];
+                const fallbackNames = pl.map(s => s.name);
+                if (!fallbackNames.length) return;
+                getBunksForGrade(grade, divisions).forEach(bunk => {
+                    (bunkTimelines[bunk] || []).forEach(b => {
+                        const t = (b.type || '').toLowerCase();
+                        if ((t === 'sport' || t === 'slot') && !b._sportFallbacks) b._sportFallbacks = fallbackNames;
+                    });
+                });
+            });
 
-        // ── Score ────────────────────────────────────────────────────
-        const iterWarnings = [];
-        const iterScore = scoreTimelines(bunkTimelines, iterWarnings);
-        totalIters++;
+            // Score
+            const iterWarnings = [];
+            const iterScore = scoreTimelines(bunkTimelines, iterWarnings);
+            totalIters++;
+            extractFragments(bunkTimelines);
 
-        // CIL
-        extractFragments(bunkTimelines, iterScore);
+            const improved = iterScore < bestScore;
+            if (improved) {
+                bestScore = iterScore;
+                bestTimelines = {};
+                allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bestTimelines[bunk] = bunkTimelines[bunk].map(b => ({ ...b })); }));
+                bestWarnings = [...warnings];
+                staleCount = 0;
+            } else staleCount++;
 
-        const improved = iterScore < bestScore;
-        if (improved) {
-            bestScore = iterScore;
-            bestTimelines = {};
-            allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bestTimelines[bunk] = bunkTimelines[bunk].map(b => ({ ...b })); }));
-            bestWarnings = [...warnings]; staleCount = 0;
-        } else staleCount++;
+            if (improved || totalIters <= 3 || totalIters % 10 === 0) {
+                log('[ITER ' + totalIters + '] score=' + iterScore + (improved ? ' ★ BEST' : '') + ' | best=' + bestScore + ' | stale=' + staleCount);
+            }
 
-        if (improved || totalIters <= 3 || totalIters % 10 === 0) {
-            log('[ITER ' + totalIters + '] score=' + iterScore + (improved ? ' ★ BEST' : '') + ' | best=' + bestScore + ' | stale=' + staleCount);
-        }
+            if (bestScore > 0 && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS) { _iterSeed++; warnings.length = 0; resetIterState(); }
 
-        if (bestScore > PERFECT_SCORE && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS) { _iterSeed++; warnings.length = 0; resetIterState(); }
+        } while (bestScore > 0 && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS);
 
-        } while (bestScore > PERFECT_SCORE && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS);
-
-        // ═══════════════════════════════════════════════════════════════
         log('══════════════════════════════════════════════════════════');
         log('BEST: ' + bestScore + ' after ' + totalIters + ' iterations');
         log('══════════════════════════════════════════════════════════');
 
         // Restore best
         allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = bestTimelines[bunk] || []; }));
-        warnings.length = 0; bestWarnings.forEach(w => warnings.push(w));
+        warnings.length = 0;
+        bestWarnings.forEach(w => warnings.push(w));
 
         // Debug exports
-        window._bunkNeeds = {};
         window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
         window._autoBuildTimelines = JSON.parse(JSON.stringify(bunkTimelines));
 
@@ -2614,13 +2418,19 @@
             const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const tl = bunkTimelines[bunk] || [];
-                for (let i = 0; i < tl.length - 1; i++) { if (tl[i].endMin > tl[i + 1].startMin) { err('[2.6] OVERLAP ' + bunk); validationPassed = false; warnings.push({ type: 'overlap', bunk, grade }); } }
-                validateTimelineIntegrity(bunk).forEach(v => { if (v.type === 'undersized') { warn('[2.6] [CEL] ' + v.msg); validationPassed = false; warnings.push({ type: 'duration_violation', bunk, grade, detail: v.msg }); } });
-                tl.forEach(b => { if (b.startMin == null || b.endMin == null || b.endMin <= b.startMin) { validationPassed = false; } });
+                for (let i = 0; i < tl.length - 1; i++) {
+                    if (tl[i].endMin > tl[i + 1].startMin) {
+                        err('[2.6] OVERLAP ' + bunk);
+                        validationPassed = false;
+                        warnings.push({ type: 'overlap', bunk, grade });
+                    }
+                }
+                tl.forEach(b => { if (b.startMin == null || b.endMin == null || b.endMin <= b.startMin) validationPassed = false; });
                 if (getFreeGaps(bunk, gs, ge).length > 0) warnings.push({ type: 'remaining_gap', bunk, grade });
             });
         });
         log('[2.6] ' + (validationPassed ? '✅ Passed' : '⚠️ Errors'));
+
 
         // =====================================================================
         // STEP 2.7 — FORMALIZE
@@ -2640,7 +2450,7 @@
                         _activityLocked: block._activityLocked || false,
                         _durationStrict: block._activityLocked || false,
                         _fixed: block._fixed || false, _pinned: block._classification === 'pinned',
-                        _isScarce: block._isScarce || false, _specialLocation: block._specialLocation || null,
+                        _specialLocation: block._specialLocation || null,
                         _draftActivity: block._draftActivity || null, _draftField: block._draftField || null
                     });
                 });
@@ -2650,10 +2460,12 @@
         window.manualSkeleton = autoSkeleton;
         window._autoSkeleton = autoSkeleton;
 
+        // Build divisionTimes
         if (window.DivisionTimesSystem) {
             window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(autoSkeleton, divisions);
             allGrades.forEach(grade => {
-                const ds = window.divisionTimes[grade]; if (!ds) return;
+                const ds = window.divisionTimes[grade];
+                if (!ds) return;
                 const pbs = {};
                 getBunksForGrade(grade, divisions).forEach(bunk => {
                     pbs[String(bunk)] = autoSkeleton.filter(b => b.division === grade && String(b._bunk) === String(bunk))
@@ -2668,7 +2480,7 @@
 
         // Initialize scheduleAssignments
         allGrades.forEach(grade => {
-            const pbs = window.divisionTimes?.[grade]?._perBunkSlots || window._perBunkSlots?.[grade];
+            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = (pbs && pbs[String(bunk)]) || [];
                 window.scheduleAssignments[String(bunk)] = new Array(arr.length).fill(null);
@@ -2678,85 +2490,103 @@
         // Write special blocks
         let specialWriteCount = 0;
         allGrades.forEach(grade => {
-            const pbs = window.divisionTimes?.[grade]?._perBunkSlots || window._perBunkSlots?.[grade]; if (!pbs) return;
+            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+            if (!pbs) return;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = pbs[String(bunk)] || [];
                 (bunkTimelines[bunk] || []).filter(b => b.type === 'special' && b._assignedSpecial).forEach(block => {
-                    const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin); if (idx === -1) return;
+                    const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
+                    if (idx === -1) return;
                     const fn = block._specialLocation || block._assignedSpecial;
-                    window.scheduleAssignments[String(bunk)][idx] = { field: fn, sport: null, _activity: block._assignedSpecial, _fixed: true, _bunkOverride: true, _activityLocked: true, _isScarce: block._isScarce || false, _autoSpecial: true, _autoMode: true, continuation: false };
+                    window.scheduleAssignments[String(bunk)][idx] = {
+                        field: fn, sport: null, _activity: block._assignedSpecial,
+                        _fixed: true, _bunkOverride: true, _activityLocked: true,
+                        _autoSpecial: true, _autoMode: true, continuation: false
+                    };
                     registerSpecialFieldUsage([idx], fn, String(bunk), block._assignedSpecial, grade, fieldUsageBySlot);
-                    if (fn && window.GlobalFieldLocks) window.GlobalFieldLocks.lockField(fn, [idx], { lockedBy: 'auto_special', division: grade, activity: block._assignedSpecial });
+                    // ★ v4.0: Write to BOTH lock systems — AutoFieldLocks for the solver,
+                    // GlobalFieldLocks for downstream code (fillers, post-edit, canBlockFit)
+                    if (fn && window.AutoFieldLocks) {
+                        window.AutoFieldLocks.lockField(fn, block.startMin, block.endMin, grade, block._assignedSpecial, 'auto_special');
+                    }
+                    if (fn && window.GlobalFieldLocks) {
+                        window.GlobalFieldLocks.lockField(fn, [idx], { lockedBy: 'auto_special', division: grade, activity: block._assignedSpecial, startMin: block.startMin, endMin: block.endMin });
+                    }
                     specialWriteCount++;
                 });
             });
         });
 
-        // Write pinned + fixed-type blocks
-        let pinnedWriteCount = 0;
+        // Write pinned + custom blocks
+        let pinnedWriteCount = 0, customWriteCount = 0;
         allGrades.forEach(grade => {
-            const pbs = window.divisionTimes?.[grade]?._perBunkSlots || window._perBunkSlots?.[grade]; if (!pbs) return;
+            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+            if (!pbs) return;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = pbs[String(bunk)] || [];
-                (bunkTimelines[bunk] || []).filter(b => (b._fixed || b._classification === 'pinned') && b._committed).forEach(block => {
+                (bunkTimelines[bunk] || []).forEach(block => {
                     const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     if (idx === -1 || window.scheduleAssignments[String(bunk)][idx]) return;
-                    // ★ Custom blocks: use customField and customActivity
+
                     const isCustom = (block.type || '').toLowerCase() === 'custom' && block._customField;
-                    window.scheduleAssignments[String(bunk)][idx] = {
-                        field: isCustom ? block._customField : block.event,
-                        sport: null,
-                        _activity: isCustom ? (block._customActivity || block.event) : block.event,
-                        _fixed: true, _pinned: true, _bunkOverride: true,
-                        _customActivity: block._customActivity || null,
-                        _customField: block._customField || null,
-                        continuation: false
-                    };
-                    pinnedWriteCount++;
+                    if (block._fixed || block._classification === 'pinned' || isCustom) {
+                        window.scheduleAssignments[String(bunk)][idx] = {
+                            field: isCustom ? block._customField : block.event,
+                            sport: null,
+                            _activity: isCustom ? (block._customActivity || block.event) : block.event,
+                            _fixed: true, _pinned: block._classification === 'pinned',
+                            _bunkOverride: true, _activityLocked: isCustom || false,
+                            _customActivity: block._customActivity || null,
+                            _customField: block._customField || null,
+                            _autoMode: true, continuation: false
+                        };
+                        if (isCustom) {
+                            customWriteCount++;
+                            if (block._customField) {
+                                if (window.AutoFieldLocks) {
+                                    window.AutoFieldLocks.lockField(block._customField, block.startMin, block.endMin, grade, block._customActivity || 'Custom', 'auto_custom');
+                                }
+                                if (window.GlobalFieldLocks) {
+                                    window.GlobalFieldLocks.lockField(block._customField, [idx], { lockedBy: 'auto_custom', division: grade, activity: block._customActivity || 'Custom', startMin: block.startMin, endMin: block.endMin });
+                                }
+                            }
+                        } else pinnedWriteCount++;
+                    }
                 });
             });
         });
 
-        // ★ Write custom (non-pinned) blocks — they have pre-assigned fields
-        let customWriteCount = 0;
+        // Write capacity-checked sport blocks
+        let sportWriteCount = 0;
         allGrades.forEach(grade => {
-            const pbs = window.divisionTimes?.[grade]?._perBunkSlots || window._perBunkSlots?.[grade]; if (!pbs) return;
+            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+            if (!pbs) return;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = pbs[String(bunk)] || [];
-                (bunkTimelines[bunk] || []).filter(b => (b.type || '').toLowerCase() === 'custom' && b._customField && !b._fixed).forEach(block => {
+                (bunkTimelines[bunk] || []).filter(b =>
+                    (b.type === 'sport' || b.type === 'slot') && b._source === 'capacity_checked' && b._assignedSport && b.field
+                ).forEach(block => {
                     const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
-                    if (idx === -1 || window.scheduleAssignments[String(bunk)][idx]) return;
+                    if (idx === -1 || !window.scheduleAssignments[String(bunk)] || window.scheduleAssignments[String(bunk)][idx]) return;
                     window.scheduleAssignments[String(bunk)][idx] = {
-                        field: block._customField,
-                        sport: null,
-                        _activity: block._customActivity || block.event || 'Custom',
-                        _fixed: true, _bunkOverride: true, _activityLocked: true,
-                        _customActivity: block._customActivity || null,
-                        _customField: block._customField || null,
-                        _autoMode: true, continuation: false
+                        field: block.field, sport: block._assignedSport,
+                        _activity: block._assignedSport, _fixed: true, _bunkOverride: true,
+                        _activityLocked: false, _autoMode: true, _capacityChecked: true, continuation: false
                     };
-                    // Lock the field so solver/fallback doesn't assign it to others
-                    if (block._customField && window.GlobalFieldLocks) {
-                        window.GlobalFieldLocks.lockField(block._customField, [idx], {
-                            lockedBy: 'auto_custom', division: grade,
-                            activity: block._customActivity || 'Custom'
-                        });
-                    }
-                    customWriteCount++;
+                    if (!fieldUsageBySlot[idx]) fieldUsageBySlot[idx] = {};
+                    if (!fieldUsageBySlot[idx][block.field]) fieldUsageBySlot[idx][block.field] = { count: 0, bunks: {} };
+                    fieldUsageBySlot[idx][block.field].count++;
+                    fieldUsageBySlot[idx][block.field].bunks[String(bunk)] = block._assignedSport;
+                    sportWriteCount++;
                 });
             });
         });
-        if (customWriteCount > 0) log('[2.7] Wrote ' + customWriteCount + ' custom activity blocks');
 
-        window._divisionTimesLocked = true;
-        window._autoDivisionTimesBuilt = true;
-        window._preGenClearActive = false;
-
-        // Write activity-locked anchor blocks (swim, soft-anchored snacks, etc.)
-        // These aren't specials or pinned but have a fixed activity that the solver shouldn't change.
+        // Write anchor blocks (swim, snacks, etc.)
         let anchorWriteCount = 0;
         allGrades.forEach(grade => {
-            const pbs = window.divisionTimes?.[grade]?._perBunkSlots || window._perBunkSlots?.[grade]; if (!pbs) return;
+            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+            if (!pbs) return;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = pbs[String(bunk)] || [];
                 (bunkTimelines[bunk] || []).filter(b => b._activityLocked && b._committed && !b._assignedSpecial && !(b._fixed || b._classification === 'pinned')).forEach(block => {
@@ -2772,12 +2602,22 @@
             });
         });
 
-        log('[2.7] ✅ ' + specialWriteCount + ' specials, ' + pinnedWriteCount + ' pinned, ' + anchorWriteCount + ' anchors written');
+        window._divisionTimesLocked = true;
+        window._autoDivisionTimesBuilt = true;
+        window._preGenClearActive = false;
+
+        log('[2.7] ✅ ' + specialWriteCount + ' specials, ' + pinnedWriteCount + ' pinned, ' + sportWriteCount + ' sports, ' + anchorWriteCount + ' anchors, ' + customWriteCount + ' custom');
+
+        // ★ v4.0: Sync auto locks → GlobalFieldLocks so downstream code (fillers, post-edit, canBlockFit) sees them
+        if (window.AutoFieldLocks?.syncToGlobalFieldLocks) {
+            window.AutoFieldLocks.syncToGlobalFieldLocks();
+        }
 
         // Build schedulable blocks for solver
         const schedulableSlotBlocks = [];
         allGrades.forEach(grade => {
-            const pbs = window.divisionTimes?.[grade]?._perBunkSlots || window._perBunkSlots?.[grade]; if (!pbs) return;
+            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+            if (!pbs) return;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = pbs[String(bunk)] || [];
                 arr.forEach((block, idx) => {
@@ -2785,53 +2625,67 @@
                     if ((block.type || '') === 'special') return;
                     if (block._activityLocked) return;
                     const ex = window.scheduleAssignments[String(bunk)][idx];
-                    if (ex && ex.field !== 'Free') return;
+                    if (ex && ex._fixed) return;
                     if (ex && ex.field === 'Free' && !ex._fixed) window.scheduleAssignments[String(bunk)][idx] = null;
                     const skipTypes = ['swim', 'snacks', 'lunch', 'dismissal', 'pinned', 'league', 'specialty_league'];
                     if (skipTypes.includes((block.type || '').toLowerCase())) return;
 
-                    // ★ Find the draft-assigned activity for this slot (by matching time)
                     const timelineBlock = (bunkTimelines[bunk] || []).find(b => b.startMin === block.startMin && b.endMin === block.endMin);
-
                     schedulableSlotBlocks.push({
                         divName: grade, bunk: String(bunk),
-                        event: (() => {
-                            const t = (block.type || '').toLowerCase();
-                            if (t === 'sport' || t === 'sports') return 'Sports Slot';
-                            const _dal = window.loadGlobalSettings?.()?.app1?.dailyAutoLayers || {};
-                            const gl = (_dal[currentDate] || {})[grade] || [];
-                            if (gl.some(l => l.type === 'sport' && block.startMin >= l.startMin && block.endMin <= l.endMin)) return 'Sports Slot';
-                            return 'General Activity Slot';
-                        })(),
-                        type: 'slot', startTime: minutesToTimeLabel(block.startMin), endTime: minutesToTimeLabel(block.endMin),
+                        event: 'General Activity Slot', type: 'slot',
+                        startTime: minutesToTimeLabel(block.startMin), endTime: minutesToTimeLabel(block.endMin),
                         slots: [idx], _durationStrict: false, _autoGenerated: true,
-                        _suggestedActivity: timelineBlock?._draftActivity || null,
                         _draftActivity: timelineBlock?._draftActivity || null,
                         _draftField: timelineBlock?._draftField || null,
                         _fromGapDetection: block._fromGapDetection || false,
-                        _perBunkSlot: true, _originalType: block.type
+                        _perBunkSlot: true
                     });
                 });
             });
         });
-        log('[2.7] ' + schedulableSlotBlocks.length + ' schedulable blocks for solver');
 
 
         // =====================================================================
-        // STEP 3 — LEAGUE ENGINES (unchanged from v2)
+        // STEP 3 — LEAGUE ENGINES
         // =====================================================================
+        log('\n[STEP 3] League engines...');
         const yesterdayHistory = (() => {
-            const parts = (currentDate || '').split('-').map(Number); if (!parts[0]) return {};
-            const d = new Date(parts[0], parts[1] - 1, parts[2]); d.setDate(d.getDate() - 1);
+            const parts = (currentDate || '').split('-').map(Number);
+            if (!parts[0]) return {};
+            const d = new Date(parts[0], parts[1] - 1, parts[2]);
+            d.setDate(d.getDate() - 1);
             const yk = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
             return allDailyData[yk]?.scheduleAssignments || {};
         })();
 
-        log('\n[STEP 3] League engines...');
         const leagueBlocks = (() => {
             const seen = new Set();
-            return autoSkeleton.filter(b => { if (b.type !== 'league' && b.type !== 'specialty_league') return false; const k = b.division + '_' + b.startMin; if (seen.has(k)) return false; seen.add(k); return true; })
-                .map(b => ({ divName: b.division, bunk: String(b._bunk || ''), event: b.type === 'league' ? 'League Game' : 'Specialty League', type: b.type, startTime: b.startTime || minutesToTimeLabel(b.startMin), endTime: b.endTime || minutesToTimeLabel(b.endMin), startMin: b.startMin, endMin: b.endMin, slots: (() => { const ds = window.divisionTimes?.[b.division]; if (!Array.isArray(ds)) return []; const idx = ds.findIndex(s => s.startMin === b.startMin); return idx >= 0 ? [idx] : []; })(), _autoGenerated: true }));
+            return autoSkeleton.filter(b => {
+                if (b.type !== 'league' && b.type !== 'specialty_league') return false;
+                const k = b.division + '_' + b.startMin;
+                if (seen.has(k)) return false;
+                seen.add(k);
+                return true;
+            }).map(b => ({
+                divName: b.division, bunk: String(b._bunk || ''),
+                event: b.type === 'league' ? 'League Game' : 'Specialty League',
+                type: b.type, startTime: b.startTime, endTime: b.endTime,
+                startMin: b.startMin, endMin: b.endMin,
+               slots: (() => {
+                    const dt = window.divisionTimes?.[b.division];
+                    // ★ FIX: Use per-bunk slots in auto mode — division-level slots don't cover all times
+                    if (dt?._perBunkSlots) {
+                        const anyBunk = Object.keys(dt._perBunkSlots)[0];
+                        const bunkSlots = dt._perBunkSlots[anyBunk] || [];
+                        const idx = bunkSlots.findIndex(s => s.startMin === b.startMin);
+                        if (idx >= 0) return [idx];
+                    }
+                    if (!Array.isArray(dt)) return [];
+                    const idx = dt.findIndex(s => s.startMin === b.startMin);
+                    return idx >= 0 ? [idx] : [];
+                })(),                _autoGenerated: true
+            }));
         })();
 
         if (leagueBlocks.length > 0) {
@@ -2843,13 +2697,14 @@
                 rotationHistory: window.rotationHistory || {}, yesterdayHistory, divisions,
                 fieldsBySport: window.fieldsBySport || {}, dailyLeagueSportsUsage: {},
                 fillBlock: window.fillBlock || function() {}, fields: getFields(globalSettings),
-                disabledFields: globalSettings.app1?.disabledFields || globalSettings.disabledFields || [],
+                disabledFields: globalSettings.app1?.disabledFields || [],
                 leagueAssignments: window.leagueAssignments,
                 storeLeagueMatchups: function(divName, slots, matchups, gameLabel, sport, leagueName) {
                     const league = mla.find(l => l.name === leagueName);
                     const covDivs = (league?.divisions || [leagueName]).filter(d => autoSkeleton.some(b => b.division === d && b.type === 'league'));
                     (covDivs.length > 0 ? covDivs : [divName]).forEach(div => {
-                        const lb = autoSkeleton.find(b => b.division === div && b.type === 'league'); if (!lb) return;
+                        const lb = autoSkeleton.find(b => b.division === div && b.type === 'league');
+                        if (!lb) return;
                         if (!window.leagueAssignments[div]) window.leagueAssignments[div] = {};
                         window.leagueAssignments[div][lb.startMin] = { matchups: matchups || [], gameLabel: gameLabel || '', sport: sport || '', leagueName: leagueName || '' };
                     });
@@ -2860,296 +2715,424 @@
 
             let leagueWriteCount = 0;
             Object.entries(window.leagueAssignments || {}).forEach(([gn, gs]) => {
-                const lsb = autoSkeleton.find(b => b.division === gn && b.type === 'league'); if (!lsb) return;
-                const asgn = Object.values(gs)[0]; if (!asgn) return;
-                const pbs = window.divisionTimes?.[gn]?._perBunkSlots; if (!pbs) return;
+                const lsb = autoSkeleton.find(b => b.division === gn && b.type === 'league');
+                if (!lsb) return;
+                const asgn = Object.values(gs)[0];
+                if (!asgn) return;
+                const pbs = window.divisionTimes?.[gn]?._perBunkSlots;
+                if (!pbs) return;
                 Object.entries(pbs).forEach(([bk, bs]) => {
-                    const fi = bs.findIndex(s => s.startMin === lsb.startMin); if (fi === -1 || !window.scheduleAssignments[bk]) return;
-                    window.scheduleAssignments[bk][fi] = { field: asgn.sport || 'League Game', sport: asgn.sport || null, _activity: 'League Game', _league: true, _leagueName: asgn.leagueName || '', _gameLabel: asgn.gameLabel || '', matchups: asgn.matchups || [], _fixed: true, continuation: false };
+                    const fi = bs.findIndex(s => s.startMin === lsb.startMin);
+                    if (fi === -1 || !window.scheduleAssignments[bk]) return;
+                    window.scheduleAssignments[bk][fi] = {
+                        field: asgn.sport || 'League Game', sport: asgn.sport || null,
+                        _activity: 'League Game', _league: true, _leagueName: asgn.leagueName || '',
+                        _gameLabel: asgn.gameLabel || '', matchups: asgn.matchups || [],
+                        _fixed: true, continuation: false
+                    };
                     leagueWriteCount++;
                 });
             });
             log('[3] Wrote ' + leagueWriteCount + ' league slots');
-        } else { log('[3] No leagues'); }
+        }
 
         const solverBlocks = schedulableSlotBlocks.filter(b => b.type !== 'league' && b.type !== 'specialty_league');
         log('[3] ✅ ' + solverBlocks.length + ' blocks for solver');
 
+
         // =====================================================================
-        // STEP 4 — TOTAL SOLVER
-        // ★ Solver receives blocks with _draftActivity hints from the draft.
+        // STEP 4 — AUTO SOLVER (sport slots only, no specials)
+        // ★ v4.0: Uses AutoSolverEngine (purpose-built for auto mode).
+        //   Falls back to TotalSolverEngine if AutoSolverEngine isn't loaded.
         // =====================================================================
-        log('\n[STEP 4] Total Solver...');
-        const Solver = window.TotalSolverEngine || window.TotalSolver || window.totalSolverEngine;
-        if (Solver && typeof Solver.solveSchedule === 'function') {
+        log('\n[STEP 4] Solving remaining sport slots...');
+
+        // Prepare config for the solver
+        const solverConfig = (() => {
+            const gs = getGlobalSettings();
+           const masterFields = gs.app1?.fields || gs.fields || window.fields || [];
+                // ★ Normalize sharing types before passing to solver
+                masterFields.forEach(f => {
+                    if (!f.sharableWith) return;
+                    if (f.sharableWith.type === 'custom' && (!Array.isArray(f.sharableWith.divisions) || f.sharableWith.divisions.length === 0)) {
+                        f.sharableWith.type = 'same_division';
+                    }
+                    if (f.sharableWith.type === 'all') f.sharableWith.type = 'same_division';
+                    if (f.sharableWith.type === 'same_division' && (!f.sharableWith.capacity || parseInt(f.sharableWith.capacity) < 2)) {
+                        f.sharableWith.capacity = 2;
+                    }
+                });
+            masterFields.forEach(f => {
+    if (f.sharableWith) {
+        if (f.sharableWith.type === 'custom' && (!Array.isArray(f.sharableWith.divisions) || f.sharableWith.divisions.length === 0)) {
+            f.sharableWith.type = 'same_division';
+        }
+        if (f.sharableWith.type === 'all') f.sharableWith.type = 'same_division';
+    }
+});
+            const masterSpecials = gs.app1?.specialActivities || gs.specialActivities || [];
+
+            // Build fieldsBySport map
+            const fbs = {};
+            masterFields.forEach(f => { (f.activities || []).forEach(a => { if (!fbs[a]) fbs[a] = []; fbs[a].push(f.name); }); });
+            window.fieldsBySport = fbs;
+
+            return {
+                activityProperties: window.activityProperties || {},
+                masterFields,
+                masterSpecials,
+                divisions,
+                fieldsBySport: fbs,
+                disabledFields: gs.app1?.disabledFields || [],
+                dateStr: currentDate || '',
+                yesterdayHistory,
+                isRainy,
+                rotationHistory: (window.loadRotationHistory?.() || {}).bunks || window.loadRotationHistory?.() || {},
+                _autoMode: true
+            };
+        })();
+
+        // Clear non-fixed assignments before solving
+        Object.keys(window.scheduleAssignments).forEach(bk => {
+            (window.scheduleAssignments[bk] || []).forEach((s, i) => {
+                if (s && !s._fixed && !s._league && !s._autoSpecial) window.scheduleAssignments[bk][i] = null;
+            });
+        });
+        window.fieldUsageBySlot = window.buildFieldUsageBySlot ? window.buildFieldUsageBySlot() : {};
+
+        // Build solver input blocks
+        const solverInputBlocks = solverBlocks.map(b => ({
+            bunk: b.bunk, divName: b.divName, slots: b.slots,
+            startTime: b.startTime, endTime: b.endTime,
+            type: b.type || 'slot', event: b.event || 'General Activity Slot',
+            _autoGenerated: true, _autoMode: true,
+            _draftActivity: b._draftActivity, _draftField: b._draftField
+        }));
+
+        if (window.AutoSolverEngine && typeof window.AutoSolverEngine.solve === 'function') {
+            // ★ PRIMARY: Auto Solver Engine — purpose-built for auto mode
             try {
-                const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
-                const masterFields = gs.app1?.fields || gs.fields || window.fields || [];
-                const masterSpecials = gs.app1?.specialActivities || gs.specialActivities || [];
-                const builtAP = window.buildActivityProperties ? window.buildActivityProperties(masterSpecials, masterFields) : {};
-                masterFields.forEach(f => { (f.activities || []).forEach(a => { if (!builtAP[a]) builtAP[a] = { available: true, sharable: false, sharableWith: { type: 'not_sharable' }, _fromField: true }; if (!builtAP[a]._fields) builtAP[a]._fields = []; builtAP[a]._fields.push(f.name); }); });
-                window.activityProperties = builtAP;
-                const fbs = {}; masterFields.forEach(f => { (f.activities || []).forEach(a => { if (!fbs[a]) fbs[a] = []; fbs[a].push(f.name); }); }); window.fieldsBySport = fbs;
-                const rh = (window.loadRotationHistory?.() || {}).bunks || window.loadRotationHistory?.() || {};
-                const ab = solverBlocks.map(b => ({ bunk: b.bunk, divName: b.divName, slots: b.slots, startTime: b.startTime, endTime: b.endTime, type: b.type || 'slot', event: b.event || 'General Activity Slot', _autoGenerated: true, _startMin: (window.divisionTimes?.[b.divName]?._perBunkSlots?.[b.bunk] || [])[b.slots?.[0]]?.startMin, _autoMode: true, _draftActivity: b._draftActivity, _draftField: b._draftField }));
+                const result = window.AutoSolverEngine.solve(solverInputBlocks, solverConfig);
+                log('[4] ✅ AutoSolver: ' + result.filled + ' filled, ' + result.free + ' Free');
 
-                const _origLAF = window.SchedulerCoreUtils.loadAndFilterData;
-                window.SchedulerCoreUtils.loadAndFilterData = function() { const r = _origLAF.apply(this, arguments); r.fieldsBySport = fbs; r.masterSpecials = []; r.specialActivityNames = []; r.activities = (r.activities || []).filter(a => (a.type || '').toLowerCase() !== 'special'); r.allActivities = (r.allActivities || []).filter(a => (a.type || '').toLowerCase() !== 'special'); return r; };
-                const _origPR = window._SolverInternals.precomputeResourceMaps;
-                window._SolverInternals.precomputeResourceMaps = function() { _origPR.apply(this, arguments); if (window._SolverInternals.allCandidateOptions) { const a = window._SolverInternals.allCandidateOptions; for (let i = a.length - 1; i >= 0; i--) if (a[i].type === 'special') a.splice(i, 1); } };
-
-                Object.keys(window.scheduleAssignments).forEach(bk => { (window.scheduleAssignments[bk] || []).forEach((s, i) => { if (s && !s._fixed && !s._league && !s._autoSpecial) window.scheduleAssignments[bk][i] = null; }); });
-                window.fieldUsageBySlot = window.buildFieldUsageBySlot ? window.buildFieldUsageBySlot() : {};
-
-                const _origAP = window.activityProperties;
-                const stripped = {}; Object.entries(window.activityProperties || {}).forEach(([k, v]) => { if (!masterSpecials.some(s => s.name === k)) stripped[k] = v; }); window.activityProperties = stripped;
-                Solver.solveSchedule(ab, { activityProperties: builtAP, rotationHistory: rh, divisions, masterFields, masterSpecials: [], fieldsBySport: fbs, dateStr: currentDate || '', disabledFields: gs.app1?.disabledFields || [], yesterdayHistory, isRainy, _autoMode: true });
-                window.activityProperties = _origAP;
-                window.SchedulerCoreUtils.loadAndFilterData = _origLAF;
-                window._SolverInternals.precomputeResourceMaps = _origPR;
-
-                let filled = 0; ab.forEach(b => { const s = (window.scheduleAssignments?.[b.bunk] || [])[b.slots?.[0]]; if (s && !s._league && !s._fixed) filled++; });
-                log('[4] ✅ Solver filled ~' + filled + ' slots');
-
-                // ── Post-solver fallback sweep ──────────────────────────
-                // For each Free block that has _sportFallbacks, try each
-                // sport in order until one gets an available field.
-                let fallbackFixed = 0;
-                const fbs2 = window.fieldsBySport || fbs;
-
-                // Build capacity lookup from activityProperties
-                // Fields have sharableWith.capacity (default 1 if not sharable)
-                const fieldCapacity = {};
-                Object.entries(builtAP).forEach(([name, props]) => {
-                    if (props.sharableWith && props.sharableWith.capacity) {
-                        fieldCapacity[name] = props.sharableWith.capacity;
-                    }
-                });
-
-                // Build time-based field usage COUNTS from ALL scheduleAssignments
-                // timeKey → { fieldName: count }
-                const timeFieldCount = {};
-                Object.entries(window.scheduleAssignments).forEach(([bk, slots]) => {
-                    const g = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(bk)))?.[0];
-                    const pbsArr = g ? (window.divisionTimes?.[g]?._perBunkSlots?.[bk] || []) : [];
-                    (slots || []).forEach((s, i) => {
-                        if (!s || s.field === 'Free' || !s.field) return;
-                        const pbSlot = pbsArr[i];
-                        if (!pbSlot) return;
-                        for (let t = pbSlot.startMin; t < pbSlot.endMin; t += 5) {
-                            if (!timeFieldCount[t]) timeFieldCount[t] = {};
-                            timeFieldCount[t][s.field] = (timeFieldCount[t][s.field] || 0) + 1;
-                        }
-                    });
-                });
-
-                function isFieldFreeAtTime(fieldName, startMin, endMin) {
-                    const cap = fieldCapacity[fieldName] || 1;
-                    for (let t = startMin; t < endMin; t += 5) {
-                        const count = timeFieldCount[t]?.[fieldName] || 0;
-                        if (count >= cap) return false;
-                    }
-                    return true;
+                // Run fallback sweep for remaining Free blocks
+                if (result.free > 0) {
+                    const fallbackFilled = window.AutoSolverEngine.fallbackSweep(solverConfig);
+                    if (fallbackFilled > 0) log('[4] Fallback sweep filled ' + fallbackFilled + ' more');
                 }
+            } catch (e) {
+                err('[4] AutoSolver error: ' + e.message);
+                console.error(e);
+                warnings.push({ type: 'solver_error', message: e.message });
+            }
+        } else {
+            // ★ FALLBACK: TotalSolverEngine (manual solver with clean AP swap)
+            const Solver = window.TotalSolverEngine || window.TotalSolver || window.totalSolverEngine;
+            if (Solver && typeof Solver.solveSchedule === 'function') {
+                try {
+                    const masterSpecials = solverConfig.masterSpecials || [];
+                    // Strip specials from AP so manual solver doesn't assign them
+                    const strippedAP = {};
+                    Object.entries(window.activityProperties || {}).forEach(([k, v]) => {
+                        if (!masterSpecials.some(s => s.name === k)) strippedAP[k] = v;
+                    });
+                    const savedAP = window.activityProperties;
+                    window.activityProperties = strippedAP;
 
-                function markFieldUsed(fieldName, startMin, endMin) {
-                    for (let t = startMin; t < endMin; t += 5) {
-                        if (!timeFieldCount[t]) timeFieldCount[t] = {};
-                        timeFieldCount[t][fieldName] = (timeFieldCount[t][fieldName] || 0) + 1;
-                    }
+                    Solver.solveSchedule(solverInputBlocks, {
+                        ...solverConfig,
+                        activityProperties: strippedAP,
+                        masterSpecials: []
+                    });
+
+                    window.activityProperties = savedAP;
+
+                    let filled = 0;
+                    solverInputBlocks.forEach(b => {
+                        const s = (window.scheduleAssignments?.[b.bunk] || [])[b.slots?.[0]];
+                        if (s && !s._league && !s._fixed) filled++;
+                    });
+                    log('[4] ✅ Fallback TotalSolver filled ~' + filled + ' slots');
+                } catch (e) {
+                    err('[4] TotalSolver fallback: ' + e.message);
+                    console.error(e);
+                    warnings.push({ type: 'solver_error', message: e.message });
                 }
+            } else { warn('[4] No solver loaded'); }
+        }
 
-                Object.keys(window.scheduleAssignments).forEach(bk => {
-                    const slots = window.scheduleAssignments[bk] || [];
-                    const g = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(bk)))?.[0];
-                    const pbsArr = g ? (window.divisionTimes?.[g]?._perBunkSlots?.[bk] || []) : [];
-
-                    // ★ Collect sports already assigned to this bunk today
-                    const bunkSportsUsed = new Set();
-                    slots.forEach(s => {
-                        if (s && s.field && s.field !== 'Free') {
-                            if (s.sport) bunkSportsUsed.add(s.sport.toLowerCase());
-                            if (s._activity) bunkSportsUsed.add(s._activity.toLowerCase());
-                        }
-                    });
-
-                    slots.forEach((s, idx) => {
-                        if (!s || s.field !== 'Free') return;
-                        const pbSlot = pbsArr[idx];
-                        if (!pbSlot) return;
-
-                        const tlBlock = (bunkTimelines[bk] || []).find(b =>
-                            b.startMin === pbSlot.startMin && b.endMin === pbSlot.endMin
-                        );
-                        const fallbacks = tlBlock?._sportFallbacks;
-                        if (!fallbacks || !fallbacks.length) return;
-
-                        // Try each sport in fallback order — skip if already used today
-                        for (const sportName of fallbacks) {
-                            if (bunkSportsUsed.has(sportName.toLowerCase())) continue;
-
-                            const fields = fbs2[sportName] || [];
-                            for (const fieldName of fields) {
-                                if (!isFieldFreeAtTime(fieldName, pbSlot.startMin, pbSlot.endMin)) continue;
-
-                                // Field is available — assign it
-                                window.scheduleAssignments[bk][idx] = {
-                                    field: fieldName, sport: sportName,
-                                    _activity: sportName, _fixed: false,
-                                    _bunkOverride: true, _autoMode: true,
-                                    _fallbackResolved: true, continuation: false
-                                };
-                                markFieldUsed(fieldName, pbSlot.startMin, pbSlot.endMin);
-                                bunkSportsUsed.add(sportName.toLowerCase());
-                                fallbackFixed++;
-                                break;
-                            }
-                            if (window.scheduleAssignments[bk][idx]?._fallbackResolved) break;
-                        }
-                    });
-                });
-                if (fallbackFixed > 0) log('[4] ✅ Fallback resolved ' + fallbackFixed + ' Free blocks');
-
-                // ── Post-solver pass 2: Fix capacity + cross-division violations ──
-                let violationsFix = 0;
-
-                // Rebuild time-field counts after fallback sweep
-                const tfCount2 = {};
-                const tfBunks = {}; // time → field → [{bunk, idx, grade}]
-                Object.entries(window.scheduleAssignments).forEach(([bk, slots]) => {
-                    const g2 = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(bk)))?.[0];
-                    const pbs2 = g2 ? (window.divisionTimes?.[g2]?._perBunkSlots?.[bk] || []) : [];
-                    (slots || []).forEach((s2, i2) => {
-                        if (!s2 || !s2.field || s2.field === 'Free') return;
-                        const pb2 = pbs2[i2];
-                        if (!pb2) return;
-                        for (let t = pb2.startMin; t < pb2.endMin; t += 5) {
-                            if (!tfCount2[t]) { tfCount2[t] = {}; tfBunks[t] = {}; }
-                            tfCount2[t][s2.field] = (tfCount2[t][s2.field] || 0) + 1;
-                            if (!tfBunks[t][s2.field]) tfBunks[t][s2.field] = [];
-                            tfBunks[t][s2.field].push({ bunk: bk, idx: i2, grade: g2 });
-                        }
-                    });
-                });
-
-                // Find violations and fix them
-                const processedViolations = new Set(); // "bunk-idx" keys already reassigned
-                Object.entries(tfCount2).forEach(([timeStr, fieldCounts]) => {
-                    Object.entries(fieldCounts).forEach(([fieldName, count]) => {
-                        const cap = fieldCapacity[fieldName] || 1;
-                        if (count <= cap) return;
-
-                        // Get bunks using this field at this time
-                        const users = tfBunks[timeStr]?.[fieldName] || [];
-                        if (users.length <= cap) return;
-
-                        // Check cross-division sharing rules
-                        const fieldProps = builtAP[fieldName] || {};
-                        const shareType = fieldProps.sharableWith?.type || 'not_sharable';
-                        const grades = [...new Set(users.map(u => u.grade))];
-
-                        let toReassign = [];
-                        if (shareType === 'same_division' && grades.length > 1) {
-                            // Cross-division violation: keep the majority grade, reassign others
-                            const gradeCounts = {};
-                            users.forEach(u => { gradeCounts[u.grade] = (gradeCounts[u.grade] || 0) + 1; });
-                            const majorityGrade = Object.entries(gradeCounts).sort((a, b) => b[1] - a[1])[0][0];
-                            toReassign = users.filter(u => u.grade !== majorityGrade);
-                        }
-
-                        if (count > cap) {
-                            // Capacity violation: keep first `cap` users, reassign the rest
-                            const excess = users.slice(cap);
-                            excess.forEach(u => {
-                                if (!toReassign.some(r => r.bunk === u.bunk && r.idx === u.idx)) {
-                                    toReassign.push(u);
-                                }
-                            });
-                        }
-
-                        // Reassign each violator using fallback list
-                        toReassign.forEach(v => {
-                            const key = v.bunk + '-' + v.idx;
-                            if (processedViolations.has(key)) return;
-                            processedViolations.add(key);
-
-                            const pbSlot2 = (window.divisionTimes?.[v.grade]?._perBunkSlots?.[v.bunk] || [])[v.idx];
-                            if (!pbSlot2) return;
-
-                            const tlBlock2 = (bunkTimelines[v.bunk] || []).find(b =>
-                                b.startMin === pbSlot2.startMin && b.endMin === pbSlot2.endMin
-                            );
-                            const fallbacks2 = tlBlock2?._sportFallbacks || [];
-
-                            // Collect what this bunk already has today
-                            const bunkUsed2 = new Set();
-                            (window.scheduleAssignments[v.bunk] || []).forEach(s3 => {
-                                if (s3 && s3.sport) bunkUsed2.add(s3.sport.toLowerCase());
-                                if (s3 && s3._activity) bunkUsed2.add(s3._activity.toLowerCase());
-                            });
-
-                            let fixed = false;
-                            for (const sportName2 of fallbacks2) {
-                                if (bunkUsed2.has(sportName2.toLowerCase())) continue;
-                                const fields2 = fbs2[sportName2] || [];
-                                for (const fn2 of fields2) {
-                                    if (fn2 === fieldName) continue; // don't assign back to same field
-                                    if (!isFieldFreeAtTime(fn2, pbSlot2.startMin, pbSlot2.endMin)) continue;
-
-                                    window.scheduleAssignments[v.bunk][v.idx] = {
-                                        field: fn2, sport: sportName2,
-                                        _activity: sportName2, _fixed: false,
-                                        _bunkOverride: true, _autoMode: true,
-                                        _violationFixed: true, continuation: false
-                                    };
-                                    markFieldUsed(fn2, pbSlot2.startMin, pbSlot2.endMin);
-                                    bunkUsed2.add(sportName2.toLowerCase());
-                                    violationsFix++;
-                                    fixed = true;
-                                    break;
-                                }
-                                if (fixed) break;
-                            }
-                        });
-                    });
-                });
-                if (violationsFix > 0) log('[4] ✅ Violation fixer resolved ' + violationsFix + ' conflicts');
-            } catch (e) { err('[4] ' + e.message); console.error(e); warnings.push({ type: 'solver_error', message: e.message }); }
-        } else { warn('[4] Solver not loaded'); }
 
         // =====================================================================
+
+        // =====================================================================
+        // STEP 4.5 — POST-SOLVE CONSTRAINT ENFORCEMENT (LOOPED)
+        // =====================================================================
+        // Repeatedly scans the schedule for violations and demotes offenders
+        // until clean. THEN runs fallback sweep, THEN validates once more.
+        // Catches: cross-division, capacity, same-day repeats.
+        // Ignores: custom, game X (league fields), immutable entries.
+        // =====================================================================
+        log('\n[STEP 4.5] Post-solve constraint enforcement...');
+
+       const postSolveAP = window.activityProperties || {};
+        const postSolveSA = window.scheduleAssignments || {};
+        const postSolveDT = window.divisionTimes || {};
+
+        // ★ Normalize sharing types in activityProperties for constraint checks
+        // 'custom' with empty divisions and 'all' are orphaned states → treat as same_division
+        Object.values(postSolveAP).forEach(props => {
+            if (!props.sharableWith) return;
+            const sw = props.sharableWith;
+            if (sw.type === 'custom' && (!Array.isArray(sw.divisions) || sw.divisions.length === 0)) {
+                sw.type = 'same_division';
+            }
+            if (sw.type === 'all') sw.type = 'same_division';
+            if (sw.type === 'same_division' && (!sw.capacity || parseInt(sw.capacity) < 2)) {
+                sw.capacity = 2;
+            }
+        });
+        const CSWEEP_IGNORE_FIELDS = new Set(['free', 'no field', 'lunch', 'snacks', 'dismissal', 'swim', 'pool', 'custom']);
+        const isLeagueField = (fn) => /^game\s*\d+$/i.test(fn);
+        const CSWEEP_IGNORE_ACTS = new Set(['free', 'lunch', 'snacks', 'dismissal', 'swim', 'pool', 'league game']);
+
+        // ── Bunk→grade lookup ──
+        const csweepBunkGrade = {};
+        Object.entries(divisions).forEach(([g, d]) => {
+            (d.bunks || []).forEach(b => { csweepBunkGrade[String(b)] = g; });
+        });
+
+        function runConstraintSweep() {
+            let fixes = 0;
+
+            // ── Build time-keyed field usage map ──
+            const fieldMap = new Map();
+            let totalIndexed = 0;
+            Object.entries(postSolveSA).forEach(([bunk, slots]) => {
+                if (!Array.isArray(slots)) return;
+                const grade = csweepBunkGrade[bunk] || '';
+                const pbs = postSolveDT[grade]?._perBunkSlots?.[bunk] || [];
+                if (pbs.length === 0 && slots.some(e => e && e.field && e.field !== 'Free')) {
+                    console.warn('[4.5-DBG] Bunk ' + bunk + ' (' + grade + '): has assignments but 0 perBunkSlots — CANNOT CHECK');
+                }
+                slots.forEach((entry, idx) => {
+                    if (!entry || !entry.field || entry.field === 'Free') return;
+                    if (entry.continuation || entry._league) return;
+                    const fn = entry.field.toLowerCase().trim();
+                    if (CSWEEP_IGNORE_FIELDS.has(fn) || isLeagueField(fn)) return;
+                    const slot = pbs[idx];
+                    if (!slot || slot.startMin == null || slot.endMin == null) return;
+                    if (!fieldMap.has(fn)) fieldMap.set(fn, []);
+                    fieldMap.get(fn).push({ startMin: slot.startMin, endMin: slot.endMin, bunk, grade, idx, field: entry.field });
+                    totalIndexed++;
+                });
+            });
+            console.log('[4.5-DBG] Indexed ' + totalIndexed + ' entries across ' + fieldMap.size + ' fields');
+            // Targeted dump for fields the validator flags but sweep misses
+            ['outdoor court', 'field e', 'field d'].forEach(fname => {
+                const entries = fieldMap.get(fname);
+                if (entries && entries.length > 0) {
+                    const detail = entries.map(e => e.bunk + '(' + e.grade + ')s' + e.idx + '@' + e.startMin + '-' + e.endMin).join(' | ');
+                    console.log('[4.5-DUMP] "' + fname + '": ' + entries.length + ' entries → ' + detail);
+                } else {
+                    console.warn('[4.5-DUMP] "' + fname + '": NOT IN FIELDMAP');
+                }
+            });
+
+           // ── Build field sharing lookup from globalSettings (authoritative source) ──
+            const _csweepGS = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            const _csweepFields = _csweepGS.app1?.fields || _csweepGS.fields || [];
+            const _csweepFieldMap = new Map();
+            _csweepFields.forEach(f => {
+                if (!f.name) return;
+                const sw = f.sharableWith || {};
+                let type = sw.type || 'not_sharable';
+                const divs = Array.isArray(sw.divisions) ? sw.divisions : [];
+                // Normalize orphaned types
+                if (type === 'custom' && divs.length === 0) type = 'same_division';
+                if (type === 'all') type = 'same_division';
+                _csweepFieldMap.set(f.name.toLowerCase().trim(), {
+                    type,
+                    capacity: parseInt(sw.capacity) || (type === 'not_sharable' ? 1 : 2),
+                    divisions: divs
+                });
+            });
+
+        // ── A) Cross-division + capacity enforcement ──
+            fieldMap.forEach((usages, fieldNorm) => {
+                const fieldSharing = _csweepFieldMap.get(fieldNorm) || {};
+                const shareType = fieldSharing.type || 'not_sharable';
+                const cap = fieldSharing.capacity || (shareType === 'not_sharable' ? 1 : 2);
+                for (let i = 0; i < usages.length; i++) {
+                    const u = usages[i];
+                    const sa = postSolveSA[u.bunk]?.[u.idx];
+                    if (!sa || sa.field === 'Free') continue;
+                    if (sa._pinned || sa._league || sa._autoSpecial) continue;
+
+                    const overlapping = usages.filter((o, j) =>
+                        j !== i && o.bunk !== u.bunk &&
+                        o.startMin < u.endMin && o.endMin > u.startMin &&
+                        postSolveSA[o.bunk]?.[o.idx]?.field !== 'Free'
+                    );
+
+                    let violation = false;
+                    if (overlapping.length >= cap) violation = true;
+                    if (!violation && (shareType === 'not_sharable' || shareType === 'same_division') &&
+                        overlapping.some(o => o.grade !== u.grade)) violation = true;
+                   if (!violation && shareType === 'custom') {
+                        const allowed = fieldSharing.divisions || [];
+                        if (allowed.length > 0) {
+                            if (overlapping.some(o => o.grade !== u.grade && !allowed.includes(o.grade))) violation = true;
+                            if (!violation && overlapping.length > 0 && !allowed.includes(u.grade)) violation = true;
+                        } else {
+                            // Empty allowed list = treat as same_division
+                            if (overlapping.some(o => o.grade !== u.grade)) violation = true;
+                        }
+                    }
+                    if (violation) {
+                        console.log('[4.5-VIOLATION] ' + fieldNorm + ': bunk ' + u.bunk + ' (' + u.grade + ') @ ' + u.startMin + '-' + u.endMin +
+                            ' | shareType=' + shareType + ' cap=' + cap +
+                            ' | overlaps=' + overlapping.map(o => o.bunk + '(' + o.grade + ')@' + o.startMin + '-' + o.endMin).join(', ') +
+                            ' | sa._fixed=' + !!sa._fixed + ' _pinned=' + !!sa._pinned + ' _league=' + !!sa._league + ' _autoSpecial=' + !!sa._autoSpecial);
+                        postSolveSA[u.bunk][u.idx] = {
+                            field: 'Free', sport: null, _activity: 'Free',
+                            _autoMode: true, _constraintDemoted: true, continuation: false
+                        };
+                        fixes++;
+                    }
+                }
+            });
+
+            // ── B) Same-day repetition enforcement ──
+            Object.entries(postSolveSA).forEach(([bunk, slots]) => {
+                if (!Array.isArray(slots)) return;
+                const seenActs = new Map();
+                slots.forEach((entry, idx) => {
+                    if (!entry || entry.field === 'Free' || entry.continuation) return;
+                    if (entry._pinned || entry._league || entry._autoSpecial) return;
+                    const act = (entry._activity || entry.sport || entry.field || '').toLowerCase().trim();
+                    if (!act || CSWEEP_IGNORE_ACTS.has(act)) return;
+                    if (seenActs.has(act)) {
+                        postSolveSA[bunk][idx] = {
+                            field: 'Free', sport: null, _activity: 'Free',
+                            _autoMode: true, _constraintDemoted: true,
+                            _demotedReason: 'same_day_repeat', continuation: false
+                        };
+                        fixes++;
+                    } else {
+                        seenActs.set(act, idx);
+                    }
+                });
+            });
+
+            return fixes;
+        }
+
+        // ── Loop until clean ──
+        let totalConstraintFixes = 0;
+        let sweepPass = 0;
+        while (sweepPass < 5) {
+            sweepPass++;
+            const fixes = runConstraintSweep();
+            totalConstraintFixes += fixes;
+            if (fixes === 0) break;
+            log('[4.5] Pass ' + sweepPass + ': demoted ' + fixes);
+        }
+
+        // ── Re-fill demoted slots ──
+        if (totalConstraintFixes > 0 && window.AutoSolverEngine?.fallbackSweep) {
+            const refilled = window.AutoSolverEngine.fallbackSweep(solverConfig);
+            if (refilled > 0) log('[4.5] Re-filled ' + refilled + ' demoted slots');
+            // Final validation after fallback
+            const postFallbackFixes = runConstraintSweep();
+            totalConstraintFixes += postFallbackFixes;
+            if (postFallbackFixes > 0) log('[4.5] Post-fallback: demoted ' + postFallbackFixes + ' more');
+        }
+
+        if (totalConstraintFixes > 0) {
+            log('[4.5] Total constraint fixes: ' + totalConstraintFixes);
+            warnings.push({ type: 'constraint_demotions', count: totalConstraintFixes });
+        } else {
+            log('[4.5] ✅ No violations');
+        }
+
         // STEP 5 — SAVE
         // =====================================================================
         saveSwimHistory();
         log('\n[STEP 5] Saving...');
         if (window.saveCurrentDailyData) {
             try {
-                const clean = {}; Object.entries(window.scheduleAssignments || {}).forEach(([b, s]) => { clean[b] = (s || []).map(x => (x && x.field === 'Free' && !x._fixed) ? null : x); });
-                const spbs = {}; Object.keys(window.divisionTimes || {}).forEach(g => { if (window.divisionTimes[g]?._perBunkSlots) spbs[g] = window.divisionTimes[g]._perBunkSlots; });
-              // ★★★ SINGLE WRITE: Avoid 8x localStorage churn that causes quota eviction ★★★
+                // ★ v4.0: Strip Free entries and internal flags to reduce size
+                const clean = {};
+                Object.entries(window.scheduleAssignments || {}).forEach(([b, s]) => {
+                    clean[b] = (s || []).map(x => {
+                        if (!x || (x.field === 'Free' && !x._fixed)) return null;
+                        // Strip internal flags that aren't needed for reload
+                        const { _autoSolved, _capacityChecked, _source, _sportFallbacks, ...keep } = x;
+                        return keep;
+                    });
+                });
+
                 const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
                 const DAILY_KEY = 'campDailyData_v1';
                 const allDaily = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
                 if (!allDaily[dateKey]) allDaily[dateKey] = {};
+
+                // ★ v4.0: DON'T write _perBunkSlotsData or full divisionTimes to localStorage
+                // They're huge (37 bunks × N slots) and can be rebuilt from manualSkeleton.
+                // The load path in division_times_integration.js already handles this rebuild.
                 Object.assign(allDaily[dateKey], {
                     scheduleAssignments: clean,
                     leagueAssignments: window.leagueAssignments || {},
                     manualSkeleton: autoSkeleton,
-                    _perBunkSlotsData: spbs,
-                    _autoGenerated: true,
-                    _autoVersion: VERSION,
+                    _autoGenerated: true, _autoVersion: VERSION,
                     _generatedAt: new Date().toISOString(),
-                    _warnings: warnings,
-                    divisionTimes: window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes || {}
+                    _rebuildPerBunkSlots: true  // flag tells load path to rebuild from skeleton
                 });
-                localStorage.setItem(DAILY_KEY, JSON.stringify(allDaily));
-                // Also trigger cloud save via the bridge
+
+                // ★ v4.0: Progressive save — try full, then trim old dates on quota error
+                try {
+                    localStorage.setItem(DAILY_KEY, JSON.stringify(allDaily));
+                } catch (quotaErr) {
+                    if (quotaErr.name === 'QuotaExceededError') {
+                        warn('[5] localStorage quota hit — trimming old dates...');
+                        // Remove dates older than 2 weeks
+                        const twoWeeksAgo = new Date();
+                        twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
+                        const cutoff = twoWeeksAgo.toISOString().split('T')[0];
+                        let trimmed = 0;
+                        Object.keys(allDaily).forEach(dk => {
+                            if (dk < cutoff) { delete allDaily[dk]; trimmed++; }
+                        });
+                        if (trimmed > 0) log('[5] Trimmed ' + trimmed + ' old date(s)');
+                        try {
+                            localStorage.setItem(DAILY_KEY, JSON.stringify(allDaily));
+                        } catch (e2) {
+                            // Still too big — save ONLY today's data
+                            warn('[5] Still over quota — saving only today');
+                            const todayOnly = { [dateKey]: allDaily[dateKey] };
+                            try { localStorage.setItem(DAILY_KEY, JSON.stringify(todayOnly)); }
+                            catch (e3) { err('[5] Cannot save to localStorage at all: ' + e3.message); }
+                        }
+                    } else throw quotaErr;
+                }
+
+                // Cloud save gets the FULL data including _perBunkSlotsData (no quota limit)
                 if (typeof window.saveGlobalSettings === 'function') {
+                    const spbs = {};
+                    Object.keys(window.divisionTimes || {}).forEach(g => {
+                        if (window.divisionTimes[g]?._perBunkSlots) spbs[g] = window.divisionTimes[g]._perBunkSlots;
+                    });
+                    allDaily[dateKey]._perBunkSlotsData = spbs;
+                    allDaily[dateKey].divisionTimes = window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes || {};
                     window.saveGlobalSettings('daily_schedules', allDaily);
-                }               log('[5] Saved');
+                }
+                log('[5] Saved');
             } catch (e) { warn('[5] Save error: ' + e.message); }
         }
-        if (window.SupabaseSyncEngine?.pushSchedule) { try { await window.SupabaseSyncEngine.pushSchedule(window.scheduleAssignments, window.currentScheduleDate || window.currentDate); log('[5] Synced'); } catch (e) { warn('[5] Sync: ' + e.message); } }
+        if (window.SupabaseSyncEngine?.pushSchedule) {
+            try { await window.SupabaseSyncEngine.pushSchedule(window.scheduleAssignments, window.currentScheduleDate || window.currentDate); log('[5] Synced'); }
+            catch (e) { warn('[5] Sync: ' + e.message); }
+        }
 
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
         log('\n═══════════════════════════════════════════════════════════');
@@ -3158,6 +3141,83 @@
         log('═══════════════════════════════════════════════════════════');
 
         window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed, warnings } }));
+
+
+        // =====================================================================
+        // POST-GEN DIAGNOSTICS (callable, not inline)
+        // =====================================================================
+
+        window._freeBlockReport = function() {
+            const sa = window.scheduleAssignments || {};
+            const dt = window.divisionTimes || {};
+            let freeCount = 0;
+            const freeByGrade = {};
+            Object.entries(sa).forEach(([bunk, slots]) => {
+                const grade = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(bunk)))?.[0];
+                (slots || []).forEach((s, i) => {
+                    if (s && s.field === 'Free') {
+                        freeCount++;
+                        if (!freeByGrade[grade]) freeByGrade[grade] = [];
+                        const pbs = dt[grade]?._perBunkSlots?.[bunk]?.[i];
+                        freeByGrade[grade].push({ bunk, idx: i, time: pbs ? pbs.startMin + '-' + pbs.endMin : '?' });
+                    }
+                });
+            });
+            console.log('%c═══ FREE BLOCK REPORT ═══', 'color:#C62828;font-weight:bold');
+            console.log('Total Free: ' + freeCount);
+            Object.entries(freeByGrade).forEach(([g, blocks]) => {
+                console.log('\n' + g + ': ' + blocks.length + ' Free');
+                blocks.forEach(b => console.log('  Bunk ' + b.bunk + ' slot ' + b.idx + ' @ ' + b.time));
+            });
+        };
+
+        window._swimReport = function() {
+            console.log('%c═══ SWIM REPORT ═══', 'color:#1565C0;font-weight:bold');
+            allGrades.forEach(grade => {
+                const bunks = getBunksForGrade(grade, divisions);
+                const swimmers = todaysSwimmers?.[grade] || new Set();
+                console.log(grade + ': ' + swimmers.size + '/' + bunks.length + ' bunks swim today — ' + [...swimmers].join(', '));
+            });
+        };
+
+        window._rotationReport = function() {
+            console.log('%c═══ ROTATION MATRIX REPORT ═══', 'color:#6A1B9A;font-weight:bold');
+            console.log('Off-field types are staggered. Sport fills remaining time (not in matrix).');
+            console.log('Goal: minimize grades competing for fields simultaneously.\n');
+            allGrades.forEach(grade => {
+                const p = staggerPlan[grade] || {};
+                const seq = (p.sequence || []).join(', ') || '(none)';
+                const bands = Object.entries(p.typeBands || {})
+                    .sort((a, b) => a[1].start - b[1].start)
+                    .map(([t, b]) => '  ' + t.padEnd(8) + ' ' + minutesToTimeLabel(b.start) + ' – ' + minutesToTimeLabel(b.end))
+                    .join('\n');
+                console.log(grade + ': off-field=[' + seq + ']');
+                if (bands) console.log(bands);
+                else console.log('  (all sport — no off-field types)');
+            });
+            // Time-slice analysis with field contention count
+            console.log('\n%cTime-slice analysis (⚽=on fields, 🏊=off-field):', 'font-weight:bold');
+            const campStart = Math.min(...allGrades.map(g => parseTimeToMinutes(divisions[g]?.startTime) || 540));
+            const campEnd = Math.max(...allGrades.map(g => parseTimeToMinutes(divisions[g]?.endTime) || 960));
+            for (let t = campStart; t < campEnd; t += 30) {
+                let onFields = 0;
+                const doing = allGrades.map(grade => {
+                    const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                    const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                    if (t < gs || t >= ge) return null;
+                    const p = staggerPlan[grade] || {};
+                    const tb = p.typeBands || {};
+                    for (const [type, band] of Object.entries(tb)) {
+                        if (t >= band.start && t < band.end) return grade.replace(' Grade','') + '=' + type;
+                    }
+                    onFields++;
+                    return grade.replace(' Grade','') + '=⚽';
+                }).filter(Boolean).join(', ');
+                const total = allGrades.filter(g => { const gs = parseTimeToMinutes(divisions[g]?.startTime) || 540; const ge = parseTimeToMinutes(divisions[g]?.endTime) || 960; return t >= gs && t < ge; }).length;
+                console.log('  ' + minutesToTimeLabel(t) + ': ' + doing + '  [' + onFields + '/' + total + ' on fields]');
+            }
+        };
+
         return { success: true, warnings, elapsed, blocksScheduled: solverBlocks.length, specialBlocksLocked: specialWriteCount };
     };
 
