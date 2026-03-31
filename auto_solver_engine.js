@@ -184,24 +184,27 @@
         const fn = normName(fieldName);
         const entries = fieldIndex.get(fn) || [];
         const overlapping = entries.filter(e => e.startMin < endMin && e.endMin > startMin && e.bunk !== bunk);
-
-        const cap = candidate?.capacity || 2;
-        if (overlapping.length >= cap) return false;
-
         const st = candidate?.shareType || 'same_division';
-        if (st === 'not_sharable' && overlapping.length > 0) return false;
-        if (st === 'same_division' && overlapping.some(e => e.grade !== grade)) return false;
-        if (st === 'custom') {
+        const cap = candidate?.capacity || 2;
+        // ★ FIX: Sharing-type-aware capacity check — only count relevant bunks
+        if (st === 'not_sharable') {
+            if (overlapping.length > 0) return false;
+        } else if (st === 'same_division') {
+            if (overlapping.some(e => e.grade !== grade)) return false;
+            const sameGrade = overlapping.filter(e => e.grade === grade);
+            if (sameGrade.length >= cap) return false;
+        } else if (st === 'custom') {
             const allowed = candidate?.allowedDivisions || [];
             if (allowed.length > 0) {
                 if (overlapping.some(e => e.grade !== grade && !allowed.includes(e.grade))) return false;
                 if (overlapping.length > 0 && !allowed.includes(grade)) return false;
             } else {
-                // Empty allowed list = treat as same_division
                 if (overlapping.some(e => e.grade !== grade)) return false;
             }
+            if (overlapping.length >= cap) return false;
+        } else {
+            if (overlapping.length >= cap) return false;
         }
-
         // 4. Exact time match: bunks sharing a field must start and end together
         if (overlapping.length > 0 && cap > 1) {
             const sameGradeOverlaps = overlapping.filter(e => e.grade === grade);
