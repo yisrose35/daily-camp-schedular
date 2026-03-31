@@ -3227,6 +3227,7 @@
                     const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     if (idx === -1 || !window.scheduleAssignments[String(bunk)]) return;
                     if (window.scheduleAssignments[String(bunk)][idx]) return;
+                    if (window.scheduleAssignments[String(bunk)][idx]) { continue; }
                     window.scheduleAssignments[String(bunk)][idx] = {
                         field: block.field, sport: block._assignedSport,
                         _activity: block._assignedSport, _fixed: true, _bunkOverride: true,
