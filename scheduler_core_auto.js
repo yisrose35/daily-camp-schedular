@@ -1879,15 +1879,7 @@
                             _source: 'capacity_checked', _final: true
                         });
                     }
-                        layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax,
-                        _activityLocked: false,
-                        _assignedSport: sportPick ? sportPick.name : null,
-                        field: sportPick ? sportPick.field : null,
-                        _source: sportPick ? 'capacity_checked' : 'filler',
-                        _sportFallbacks: priorityList.map(s => s.name), _final: true
-                    });
-                    cursor += sportC.dMin;
-                }
+                    cursor += sportC.dMin;                }
             }
 
             // ── Step 5: Expand — size all blocks to fill regions exactly ──
@@ -1916,18 +1908,41 @@
                         if (numF === 0 && rSize >= sportC.dMin) numF = 1;
                         const descs = [];
                         for (let f = 0; f < numF; f++) descs.push({ dMin: sportC.dMin, dMax: sportC.dMax });
-                        const durs = perfectFitDistribute(descs, rSize);
+                       const durs = perfectFitDistribute(descs, rSize);
                         let cur = rStart;
                         for (let f = 0; f < numF; f++) {
                             const sp = findSportWithField(cur, cur + durs[f]);
-                            if (sp) { claimField(sp.field, cur, cur + durs[f], bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
-                            template.push({
-                                startMin: cur, endMin: cur + durs[f], type: sp ? 'sport' : 'slot',
-                                event: sp ? sp.name : 'General Activity Slot', layer: shoppingList.sports?.layer,
-                                dMin: sportC.dMin, dMax: sportC.dMax, _activityLocked: false,
-                                _assignedSport: sp ? sp.name : null, field: sp ? sp.field : null,
-                                _source: sp ? 'capacity_checked' : 'filler', _final: true
-                            });
+                            if (sp) {
+                                claimField(sp.field, cur, cur + durs[f], bunk, grade, sp.name);
+                                usedSportsForBunk.add(sp.name);
+                                template.push({
+                                    startMin: cur, endMin: cur + durs[f], type: 'sport',
+                                    event: sp.name, layer: shoppingList.sports?.layer,
+                                    dMin: sportC.dMin, dMax: sportC.dMax, _activityLocked: false,
+                                    _assignedSport: sp.name, field: sp.field,
+                                    _source: 'capacity_checked', _final: true
+                                });
+                            } else {
+                                const specFb = findSpecialForGap(cur, cur + durs[f]);
+                                if (specFb) {
+                                    template.push({
+                                        startMin: cur, endMin: cur + specFb.duration,
+                                        type: 'special', event: specFb.name,
+                                        layer: null, dMin: specFb.duration, dMax: specFb.duration,
+                                        _activityLocked: false, _assignedSpecial: specFb.name,
+                                        _specialLocation: specFb.location, field: specFb.location,
+                                        _source: 'special_fallback', _final: true
+                                    });
+                                } else {
+                                    template.push({
+                                        startMin: cur, endMin: cur + durs[f], type: 'slot',
+                                        event: 'General Activity Slot', layer: shoppingList.sports?.layer,
+                                        dMin: sportC.dMin, dMax: sportC.dMax, _activityLocked: false,
+                                        _assignedSport: null, field: null,
+                                        _source: 'filler', _final: true
+                                    });
+                                }
+                            }
                             cur += durs[f];
                         }
                     }
@@ -1943,13 +1958,30 @@
                 if (totalDMax < rSize) {
                     const extraSpace = rSize - totalDMax;
                     let extraCount = Math.ceil(extraSpace / sportC.dMax);
-                    for (let e = 0; e < extraCount; e++) {
+                   for (let e = 0; e < extraCount; e++) {
                         const sp = findSportWithField(rStart, rStart + sportC.dMax);
-                        if (sp) { claimField(sp.field, rStart, rStart + sportC.dMax, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
-                        descs.push({
-                            block: { type: sp ? 'sport' : 'slot', event: sp ? sp.name : 'General Activity Slot', layer: shoppingList.sports?.layer, _activityLocked: false, _assignedSport: sp ? sp.name : null, field: sp ? sp.field : null, _source: sp ? 'capacity_checked' : 'filler' },
-                            dMin: sportC.dMin, dMax: sportC.dMax
-                        });
+                        if (sp) {
+                            claimField(sp.field, rStart, rStart + sportC.dMax, bunk, grade, sp.name);
+                            usedSportsForBunk.add(sp.name);
+                            descs.push({
+                                block: { type: 'sport', event: sp.name, layer: shoppingList.sports?.layer, _activityLocked: false, _assignedSport: sp.name, field: sp.field, _source: 'capacity_checked' },
+                                dMin: sportC.dMin, dMax: sportC.dMax
+                            });
+                        } else {
+                            const specFb = findSpecialForGap(rStart, rStart + sportC.dMax);
+                            if (specFb) {
+                                descs.push({
+                                    block: { type: 'special', event: specFb.name, layer: null, _activityLocked: false, _assignedSpecial: specFb.name, _specialLocation: specFb.location, field: specFb.location, _source: 'special_fallback' },
+                                    dMin: specFb.duration, dMax: specFb.duration
+                                });
+                            } else {
+                                descs.push({
+                                    block: { type: 'slot', event: 'General Activity Slot', layer: shoppingList.sports?.layer, _activityLocked: false, _assignedSport: null, field: null, _source: 'filler' },
+                                    dMin: sportC.dMin, dMax: sportC.dMax
+                                });
+                            }
+                        }
+                    }
                     }
                 }
                 while (descs.length > 1 && descs.reduce((s, d) => s + d.dMin, 0) > rSize) descs.pop();
@@ -1990,16 +2022,40 @@
                         else if (nextFlex && !nextIsSpecial) { next.startMin -= gap; changed = true; }
                         else if (prevFlex) { prev.endMin += gap; changed = true; }
                         else if (nextFlex) { next.startMin -= gap; changed = true; }
-                    } else if (gap >= sportC.dMin) {
-                        const sp = findSportWithField(template[i].endMin, template[i + 1].startMin);
-                        if (sp) { claimField(sp.field, template[i].endMin, template[i + 1].startMin, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
-                        template.push({
-                            startMin: template[i].endMin, endMin: template[i + 1].startMin,
-                            type: sp ? 'sport' : 'slot', event: sp ? sp.name : 'General Activity Slot',
-                            layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax,
-                            _activityLocked: false, _assignedSport: sp ? sp.name : null,
-                            field: sp ? sp.field : null, _source: sp ? 'capacity_checked' : 'filler', _final: true
-                        });
+                   } else if (gap >= sportC.dMin) {
+                        const gapStart = template[i].endMin, gapEnd = template[i + 1].startMin;
+                        const sp = findSportWithField(gapStart, gapEnd);
+                        if (sp) {
+                            claimField(sp.field, gapStart, gapEnd, bunk, grade, sp.name);
+                            usedSportsForBunk.add(sp.name);
+                            template.push({
+                                startMin: gapStart, endMin: gapEnd,
+                                type: 'sport', event: sp.name,
+                                layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax,
+                                _activityLocked: false, _assignedSport: sp.name,
+                                field: sp.field, _source: 'capacity_checked', _final: true
+                            });
+                        } else {
+                            const specFb = findSpecialForGap(gapStart, gapEnd);
+                            if (specFb) {
+                                template.push({
+                                    startMin: gapStart, endMin: gapStart + specFb.duration,
+                                    type: 'special', event: specFb.name,
+                                    layer: null, dMin: specFb.duration, dMax: specFb.duration,
+                                    _activityLocked: false, _assignedSpecial: specFb.name,
+                                    _specialLocation: specFb.location, field: specFb.location,
+                                    _source: 'special_fallback', _final: true
+                                });
+                            } else {
+                                template.push({
+                                    startMin: gapStart, endMin: gapEnd,
+                                    type: 'slot', event: 'General Activity Slot',
+                                    layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax,
+                                    _activityLocked: false, _assignedSport: null,
+                                    field: null, _source: 'filler', _final: true
+                                });
+                            }
+                        }
                         template.sort((a, b) => a.startMin - b.startMin);
                         changed = true;
                     } else {
