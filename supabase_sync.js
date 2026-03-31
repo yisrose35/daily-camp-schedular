@@ -263,10 +263,20 @@
     // MULTI-SCHEDULER SYNC: REFRESH VIEW
     // =========================================================================
 
-   async function refreshMultiSchedulerView(dateKey, forceOverwrite = false) {
+   aasync function refreshMultiSchedulerView(dateKey, forceOverwrite = false) {
         if (!dateKey) dateKey = getCurrentDateKey();
         
         log('Refreshing Multi-Scheduler view for:', dateKey);
+        
+        // ★★★ AUTO MODE GUARD: Skip cloud refresh if _perBunkSlots are live in memory ★★★
+        // Cloud data goes through JSON round-trip which strips custom array properties
+        // (_perBunkSlots, _isPerBunk). Overwriting from cloud destroys schedule geometry.
+        var _isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
+        var _hasLivePerBunk = window.divisionTimes && Object.values(window.divisionTimes).some(function(dt) { return dt && dt._isPerBunk; });
+        if (_isAutoMode && _hasLivePerBunk) {
+            log('⚠️ Skipping refreshMultiSchedulerView — auto mode _perBunkSlots active in memory');
+            return;
+        }
         
         // ★★★ v6.2 FIX: Load from CLOUD first so we get all schedulers' data ★★★
         try {
