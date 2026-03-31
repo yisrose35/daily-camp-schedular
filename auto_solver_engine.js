@@ -335,18 +335,115 @@
             return score;
         }
 
-        // ── Sort blocks: most constrained first ──────────────────────
-        // Fewer candidate options → harder to fill → solve first
+      // ── Sort blocks: most constrained first ──────────────────────
+        // Grades with fewer field options at their time window solve first
         blocks.sort((a, b) => {
             // Blocks with draft hints get slight priority (we want to honor them)
             const aHint = a._draftActivity ? -1 : 0;
             const bHint = b._draftActivity ? -1 : 0;
             if (aHint !== bHint) return aHint - bHint;
+
+            // ★ Scarcity-first: grades with fewer reachable fields solve first
+            const aGrade = a.divName || '';
+            const bGrade = b.divName || '';
+            const aSM = parseTime(a.startTime), aEM = parseTime(a.endTime);
+            const bSM = parseTime(b.startTime), bEM = parseTime(b.endTime);
+            const aOptions = gradeFieldOptions.get(aGrade + '|' + aSM + '-' + aEM) || 999;
+            const bOptions = gradeFieldOptions.get(bGrade + '|' + bSM + '-' + bEM) || 999;
+            if (aOptions !== bOptions) return aOptions - bOptions;
+
             // Shorter blocks are harder (less time = fewer fields available)
-            const aDur = (parseTime(a.endTime) || 0) - (parseTime(a.startTime) || 0);
-            const bDur = (parseTime(b.endTime) || 0) - (parseTime(b.startTime) || 0);
+            const aDur = (aSM != null && aEM != null) ? aEM - aSM : 0;
+            const bDur = (bSM != null && bEM != null) ? bEM - bSM : 0;
             return aDur - bDur;
         });
+
+        // ── Build cross-grade scarcity map ───────────────────────────
+        // For each time window, compute how "scarce" fields are per grade.
+        // scarcityMap: fieldNorm → Map<timeKey, { grades: Set, demandByGrade: Map }>
+        const scarcityMap = new Map();
+        const gradeFieldOptions = new Map(); // grade|startMin-endMin → count of available fields
+
+        // Group blocks by time window
+        const windowBlocks = new Map(); // "startMin-endMin" → [{ block, grade }]
+        for (const block of blocks) {
+            const sM = parseTime(block.startTime), eM = parseTime(block.endTime);
+            if (sM == null || eM == null) continue;
+            const wKey = sM + '-' + eM;
+            if (!windowBlocks.has(wKey)) windowBlocks.set(wKey, []);
+            windowBlocks.get(wKey).push({ block, grade: block.divName || '' });
+        }
+
+        // For each time window, count how many fields each grade can reach
+        for (const [wKey, wBlocks] of windowBlocks) {
+            const [sM, eM] = wKey.split('-').map(Number);
+            const gradesInWindow = new Map(); // grade → block count
+            for (const { grade } of wBlocks) {
+                gradesInWindow.set(grade, (gradesInWindow.get(grade) || 0) + 1);
+            }
+
+            // For each grade in this window, count reachable fields
+            for (const [grade, blockCount] of gradesInWindow) {
+                let reachableFields = 0;
+                for (const cand of candidates) {
+                    // Would this field be available for this grade? (simplified check)
+                    const st = cand.shareType || 'same_division';
+                    // Check if any other grade already occupies it (from fieldIndex)
+                    const fn = cand.fieldNorm;
+                    const entries = fieldIndex.get(fn) || [];
+                    const overlapping = entries.filter(e => e.startMin < eM && e.endMin > sM);
+                    const crossGrade = overlapping.filter(e => e.grade !== grade);
+                    if (st === 'same_division' && crossGrade.length > 0) continue;
+                    if (st === 'not_sharable' && overlapping.length > 0) continue;
+                    reachableFields++;
+                }
+                const gfKey = grade + '|' + wKey;
+                gradeFieldOptions.set(gfKey, reachableFields);
+
+                // Build per-field scarcity: which grades compete for this field at this window?
+                for (const cand of candidates) {
+                    const fn = cand.fieldNorm;
+                    if (!scarcityMap.has(fn)) scarcityMap.set(fn, new Map());
+                    const fieldWindows = scarcityMap.get(fn);
+                    if (!fieldWindows.has(wKey)) fieldWindows.set(wKey, { grades: new Set(), demandByGrade: new Map() });
+                    const entry = fieldWindows.get(wKey);
+                    entry.grades.add(grade);
+                    entry.demandByGrade.set(grade, blockCount);
+                }
+            }
+        }
+
+        // Scarcity scoring function: how much should we penalize using this field?
+        function getScarcityPenalty(fieldNorm, startMin, endMin, myGrade) {
+            const wKey = startMin + '-' + endMin;
+            const fieldWindows = scarcityMap.get(fieldNorm);
+            if (!fieldWindows) return 0;
+            const entry = fieldWindows.get(wKey);
+            if (!entry) return 0;
+
+            let penalty = 0;
+            for (const [otherGrade, otherDemand] of entry.demandByGrade) {
+                if (otherGrade === myGrade) continue;
+                // How scarce are fields for this other grade at this window?
+                const gfKey = otherGrade + '|' + wKey;
+                const otherOptions = gradeFieldOptions.get(gfKey) || 999;
+                // If the other grade has very few options, penalize heavily
+                if (otherOptions <= 2) penalty += 8000;       // Critical scarcity
+                else if (otherOptions <= 5) penalty += 4000;  // Moderate scarcity
+                else if (otherOptions <= 10) penalty += 1500; // Mild scarcity
+                // Scale by demand: more bunks needing fields = more important to preserve
+                penalty += otherDemand * 200;
+            }
+
+            // Also check: does MY grade have plenty of alternatives?
+            const myKey = myGrade + '|' + wKey;
+            const myOptions = gradeFieldOptions.get(myKey) || 0;
+            if (myOptions > 15) penalty += 1000; // I have lots of options, let others have this one
+
+            return penalty;
+        }
+
+        log('Scarcity map: ' + scarcityMap.size + ' fields, ' + windowBlocks.size + ' time windows');
 
         // ── Solve each block ─────────────────────────────────────────
         let filled = 0, free = 0;
@@ -397,6 +494,9 @@
                     if (sameAct.length > 0) score -= 1500; // Co-locate same activity
                     else score += 300; // Mixed activities on same field = mild penalty
                 }
+
+               // Scarcity penalty: avoid using fields that other grades desperately need
+                score += getScarcityPenalty(cand.fieldNorm, startMin, endMin, grade);
 
                 // Adjacent bunk bonus (sports that need pairing)
                 const bunkNum = parseInt(String(bunk).replace(/\D/g, '')) || 0;
