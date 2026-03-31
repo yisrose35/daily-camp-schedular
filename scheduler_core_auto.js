@@ -1289,27 +1289,7 @@
             });
 
    
-    // ─── Helper: Find time in a field's free windows ─────────────
-    function findTimeForFieldGP(fieldName, bunk, grade, duration, freeWindows) {
-        for (const win of freeWindows) {
-            if (win.duration < duration) continue;
-            for (let t = win.start; t + duration <= win.end; t += 5) {
-                if (isFieldAvailable(fieldName, t, t + duration, bunk, grade))
-                    return { startMin: t, endMin: t + duration };
-            }
-        }
-        return null;
-    }
-
-    // ─── Helper: Find any free window ────────────────────────────
-    function findAnyWindowGP(freeWindows, duration) {
-        for (const win of freeWindows) {
-            if (win.duration >= duration)
-                return { startMin: win.start, endMin: win.start + duration };
-        }
-        return null;
-    }
-}
+  
             function findTimeForField(fieldName, bunk, grade, duration, freeWindows) {
                 for (const win of freeWindows) {
                     if (win.duration < duration) continue;
