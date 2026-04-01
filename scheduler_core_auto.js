@@ -3065,95 +3065,131 @@
                 });
             });
 
-            // ── Quick-solve simulation: count slots that can't find any field ──
+           // ── Quick-solve simulation: count slots that can't find any field ──
+            // Mirrors auto_solver_engine logic exactly: sharing rules, capacity,
+            // cross-division, exact time match, same-day repeat
             let iterFreeEstimate = 0;
-            allGrades.forEach(grade => {
-                const pbs_sim = {};
-                getBunksForGrade(grade, divisions).forEach(bunk => {
-                    const tl = bunkTimelines[bunk] || [];
-                    pbs_sim[bunk] = tl.map((b, i) => ({ ...b, idx: i }));
-                });
-
-                // Track simulated claims per field: { fieldName: [{ startMin, endMin, bunk, grade }] }
-                const simClaims = {};
-                // Copy existing ledger claims (from packer)
-                Object.entries(fieldLedger).forEach(([fn, ledger]) => {
-                    simClaims[fn] = ledger.claims.map(c => ({ ...c }));
-                });
-
-                getBunksForGrade(grade, divisions).forEach(bunk => {
-                    const tl = bunkTimelines[bunk] || [];
-                    // Collect already-used activities for same-day repeat check
-                    const usedActivities = new Set();
-                    tl.forEach(b => {
-                        const act = (b._assignedSport || b._assignedSpecial || b.event || '').toLowerCase().trim();
-                        if (act && b._source === 'capacity_checked') usedActivities.add(act);
-                        if (act && (b._activityLocked || b._fixed)) usedActivities.add(act);
+            {
+                // Build time-based field index from all packer claims
+                const simFieldIndex = new Map();
+                Object.values(fieldLedger).forEach(ledger => {
+                    const fn = ledger.name.toLowerCase().trim();
+                    if (!simFieldIndex.has(fn)) simFieldIndex.set(fn, []);
+                    ledger.claims.forEach(c => {
+                        simFieldIndex.get(fn).push({ ...c, fieldNorm: fn });
                     });
+                });
 
-                    tl.forEach(block => {
-                        // Only check sport/slot blocks that need field assignment
-                        const t = (block.type || '').toLowerCase();
-                        if (t !== 'sport' && t !== 'slot') return;
-                        if (block._activityLocked || block._fixed) return;
-                        if (block._source === 'capacity_checked' && block.field) return;
+                // Build per-bunk activity sets (all committed activities)
+                const simBunkDone = {};
+                allGrades.forEach(grade => {
+                    getBunksForGrade(grade, divisions).forEach(bunk => {
+                        const done = new Set();
+                        (bunkTimelines[bunk] || []).forEach(b => {
+                            const act = (b._assignedSport || b._assignedSpecial || b.event || '').toLowerCase().trim();
+                            if (act && act !== 'general activity slot') done.add(act);
+                        });
+                        simBunkDone[String(bunk)] = done;
+                    });
+                });
 
-                        // Try to find ANY field+sport combo
-                        const sportList = block._sportFallbacks || [];
-                        let found = false;
+                // Simulate solving each unassigned sport/slot block
+                allGrades.forEach(grade => {
+                    getBunksForGrade(grade, divisions).forEach(bunk => {
+                        const bunkStr = String(bunk);
+                        const done = simBunkDone[bunkStr];
 
-                        for (const sportName of sportList) {
-                            if (usedActivities.has(sportName.toLowerCase().trim())) continue;
-                            const sportFields = [];
-                            Object.entries(fieldLedger).forEach(([fn, ledger]) => {
-                                if (ledger._isSpecialLocation) return;
-                                if (!ledger.activities.includes(sportName)) return;
-                                if (isRainy && !ledger.isIndoor) return;
-                                sportFields.push(fn);
-                            });
+                        (bunkTimelines[bunk] || []).forEach(block => {
+                            const t = (block.type || '').toLowerCase();
+                            if (t !== 'sport' && t !== 'slot') return;
+                            if (block._activityLocked || block._fixed) return;
+                            if (block._source === 'capacity_checked' && block.field) return;
 
-                            for (const fn of sportFields) {
-                                const ledger = fieldLedger[fn];
-                                if (!ledger) continue;
+                            const startMin = block.startMin;
+                            const endMin = block.endMin;
+                            const sportList = block._sportFallbacks || [];
+                            let found = false;
 
-                                const timeOk = ledger.timeRules.some(rule => {
-                                    if (rule.startMin > block.startMin || rule.endMin < block.endMin) return false;
-                                    if (rule.divisions && !rule.divisions.includes(grade)) return false;
-                                    return true;
-                                });
-                                if (!timeOk) continue;
+                            for (const sportName of sportList) {
+                                const sportNorm = sportName.toLowerCase().trim();
+                                // Same-day repeat check
+                                if (done.has(sportNorm)) continue;
 
-                                const claims = (simClaims[fn] || []).filter(c =>
-                                    c.startMin < block.endMin && c.endMin > block.startMin
-                                );
+                                // Find fields for this sport
+                                for (const fn of Object.keys(fieldLedger)) {
+                                    const ledger = fieldLedger[fn];
+                                    if (ledger._isSpecialLocation) continue;
+                                    if (!ledger.activities.includes(sportName)) continue;
+                                    if (isRainy && !ledger.isIndoor) continue;
 
-                                if (claims.length >= ledger.capacity) continue;
-                                if (ledger.shareType === 'not_sharable' && claims.length > 0) continue;
-                                if (ledger.shareType === 'same_division' && claims.some(c => c.grade !== grade)) continue;
+                                    // Time rules
+                                    const timeOk = ledger.timeRules.some(rule => {
+                                        if (rule.startMin > startMin || rule.endMin < endMin) return false;
+                                        if (rule.divisions && !rule.divisions.includes(grade)) return false;
+                                        return true;
+                                    });
+                                    if (!timeOk) continue;
 
-                                // Can place here
-                                if (!simClaims[fn]) simClaims[fn] = [];
-                                simClaims[fn].push({ startMin: block.startMin, endMin: block.endMin, bunk, grade, activity: sportName });
-                                usedActivities.add(sportName.toLowerCase().trim());
-                                found = true;
-                                break;
+                                    const fnNorm = fn.toLowerCase().trim();
+                                    const entries = simFieldIndex.get(fnNorm) || [];
+                                    const overlapping = entries.filter(e =>
+                                        e.startMin < endMin && e.endMin > startMin && e.bunk !== bunkStr
+                                    );
+
+                                    // Sharing rules (mirrors isFieldAvailableByTime exactly)
+                                    const st = ledger.shareType || 'same_division';
+                                    const cap = ledger.capacity || 2;
+                                    let blocked = false;
+
+                                    if (st === 'not_sharable') {
+                                        if (overlapping.length > 0) blocked = true;
+                                    } else if (st === 'same_division') {
+                                        if (overlapping.some(e => e.grade !== grade)) blocked = true;
+                                        if (!blocked && overlapping.filter(e => e.grade === grade).length >= cap) blocked = true;
+                                    } else if (st === 'custom') {
+                                        const allowed = ledger.allowedDivisions || [];
+                                        if (allowed.length > 0) {
+                                            if (overlapping.some(e => e.grade !== grade && !allowed.includes(e.grade))) blocked = true;
+                                            if (!blocked && overlapping.length > 0 && !allowed.includes(grade)) blocked = true;
+                                        } else {
+                                            if (overlapping.some(e => e.grade !== grade)) blocked = true;
+                                        }
+                                        if (!blocked && overlapping.length >= cap) blocked = true;
+                                    } else {
+                                        if (overlapping.length >= cap) blocked = true;
+                                    }
+                                    if (blocked) continue;
+
+                                    // Exact time match
+                                    if (overlapping.length > 0 && cap > 1) {
+                                        const sameGrade = overlapping.filter(e => e.grade === grade);
+                                        if (sameGrade.length > 0 && sameGrade.some(e => e.startMin !== startMin || e.endMin !== endMin)) continue;
+                                    }
+
+                                    // ✅ Can place — record simulated claim
+                                    if (!simFieldIndex.has(fnNorm)) simFieldIndex.set(fnNorm, []);
+                                    simFieldIndex.get(fnNorm).push({
+                                        startMin, endMin, bunk: bunkStr, grade,
+                                        activity: sportName, fieldNorm: fnNorm
+                                    });
+                                    done.add(sportNorm);
+                                    found = true;
+                                    break;
+                                }
+                                if (found) break;
                             }
-                            if (found) break;
-                        }
 
-                        if (!found) iterFreeEstimate++;
+                            if (!found) iterFreeEstimate++;
+                        });
                     });
                 });
-            });
+            }
 
             // Score
             const iterWarnings = [];
             let iterScore = scoreTimelines(bunkTimelines, iterWarnings);
-            // ★ Massive penalty for estimated Frees — this is the #1 thing to minimize
+            // ★ Massive penalty for estimated Frees — #1 priority to minimize
             iterScore += iterFreeEstimate * 50000;
-            if (iterFreeEstimate > 0) {
-                log('[ITER-SIM] seed=' + _iterSeed + ' estimatedFrees=' + iterFreeEstimate);
-            }
             totalIters++;
             extractFragments(bunkTimelines);
 
