@@ -2646,13 +2646,17 @@
             return a;
         }
 
-        function scoreTimelines(timelines, iterWarnings) {
+       function scoreTimelines(timelines, iterWarnings) {
             let score = 0;
             const campStart = Math.min(...Object.values(divisions).map(d => parseTimeToMinutes(d.startTime) || 660));
             const campEnd = Math.max(...Object.values(divisions).map(d => parseTimeToMinutes(d.endTime) || 990));
 
+            // ── Bunk→grade lookup ──
+            const _bunkGradeCache = {};
+            allGrades.forEach(g => getBunksForGrade(g, divisions).forEach(b => { _bunkGradeCache[String(b)] = g; }));
+
             Object.entries(timelines).forEach(([bunk, timeline]) => {
-                const gradeKey = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(bunk)))?.[0];
+                const gradeKey = _bunkGradeCache[String(bunk)] || '';
                 const dayStart = gradeKey ? (parseTimeToMinutes(divisions[gradeKey]?.startTime) || 540) : 540;
                 const dayEnd = gradeKey ? (parseTimeToMinutes(divisions[gradeKey]?.endTime) || 960) : 960;
                 const sorted = [...timeline].sort((a, b) => a.startMin - b.startMin);
@@ -2676,19 +2680,75 @@
 
             iterWarnings.forEach(w => { if (w.type === 'placement_failure') score += 500; if (w.type === 'overlap') score += 1000; });
 
-            // Field contention
-            for (let t = campStart; t < campEnd; t += CONTENTION_SLICE) {
-                const se = Math.min(t + CONTENTION_SLICE, campEnd);
-                let cnt = 0;
+            // ── Per-grade field saturation scoring ──
+            // For each time slice, count how many bunks per grade need a field
+            // vs how many field slots that grade can actually use.
+            // Heavily penalize any slice where demand > supply (causes Frees).
+            for (let t = campStart; t < campEnd; t += 5) {
+                const se = t + 5;
+
+                // Count field consumers per grade at this time
+                const gradeConsumers = {};
                 Object.entries(timelines).forEach(([bk, tl]) => {
-                    for (const b of tl) { if (getFieldImpact(b) === 'consumer' && b.startMin < se && b.endMin > t) { cnt++; break; } }
+                    const g = _bunkGradeCache[String(bk)];
+                    if (!g) return;
+                    for (const b of tl) {
+                        if (b.startMin < se && b.endMin > t && getFieldImpact(b) === 'consumer') {
+                            gradeConsumers[g] = (gradeConsumers[g] || 0) + 1;
+                            break;
+                        }
+                    }
                 });
-                if (cnt > 26) score += (cnt - 26) * 200;
+
+                // Count available field capacity per grade at this time
+                // using the field ledger (already initialized for this iteration)
+                Object.entries(gradeConsumers).forEach(([grade, demand]) => {
+                    let supply = 0;
+                    Object.values(fieldLedger).forEach(ledger => {
+                        if (isRainy && !ledger.isIndoor) return;
+                        if (ledger._isSpecialLocation) return;
+                        if (ledger.activities.length === 0) return;
+
+                        const timeOk = ledger.timeRules.some(rule => {
+                            if (rule.startMin > t || rule.endMin < se) return false;
+                            if (rule.divisions && !rule.divisions.includes(grade)) return false;
+                            return true;
+                        });
+                        if (!timeOk) return;
+
+                        // Check cross-grade blocking
+                        const claims = ledger.claims.filter(c => c.startMin < se && c.endMin > t);
+                        const crossGrade = claims.some(c => c.grade !== grade);
+
+                        if (ledger.shareType === 'not_sharable') {
+                            if (claims.length === 0) supply += 1;
+                        } else if (ledger.shareType === 'same_division') {
+                            if (!crossGrade) supply += Math.max(0, ledger.capacity - claims.filter(c => c.grade === grade).length);
+                        } else {
+                            supply += Math.max(0, ledger.capacity - claims.length);
+                        }
+                    });
+
+                    // Penalize saturation: the more demand exceeds supply, the worse
+                    const deficit = demand - supply;
+                    if (deficit > 0) {
+                        // Each over-capacity bunk is very likely to become a Free
+                        score += deficit * 5000;
+                    } else if (supply > 0 && demand > 0) {
+                        // Mild penalty for tight margins (supply barely >= demand)
+                        const ratio = demand / supply;
+                        if (ratio > 0.8) score += Math.round((ratio - 0.8) * 500);
+                    }
+                });
+
+                // Also penalize total cross-camp contention (original check, relaxed threshold)
+                let totalCnt = 0;
+                Object.values(gradeConsumers).forEach(c => { totalCnt += c; });
+                if (totalCnt > 20) score += (totalCnt - 20) * 100;
             }
+
             return score;
         }
-
-
         // =====================================================================
         // SWIM ROTATION
         // =====================================================================
