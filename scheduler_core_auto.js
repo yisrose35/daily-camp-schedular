@@ -2219,11 +2219,6 @@
                     .sort((a, b) => (b.end - b.start) - (a.end - a.start));
 
                let didPlace = false;
-                // ★ v4.3: Flex-duration specials place at dMax to conserve activity slots.
-                // Fixed-duration blocks (dMin===dMax) place at their exact size.
-                // Sports place at dMin (expand phase distributes evenly later).
-                const isFlexSpecial = need.type === 'special' && need._assignedSpecial && need.dMin !== need.dMax;
-                const placeDur = isFlexSpecial ? need.dMax : need.dMin;
                 for (const gap of validGaps) {
                     const isSwim = need.type === 'swim';
                     const isSpecial = need.type === 'special' && need._assignedSpecial;
@@ -2253,22 +2248,78 @@
                     }
 
                     for (const pos of candidates) {
+                        // ★ v4.3: Find the largest duration that fits at this position.
+                        // Fewer larger blocks = fewer unique activities burned.
+                        const isFlexDur = need.dMin !== need.dMax;
+                        let bestDur = 0;
+                        if (!isFlexDur) {
+                            bestDur = need.dMin;
+                        } else {
+                            const maxAvail = Math.min(need.dMax, gap.origEnd - pos);
+                            for (let tryDur = snapTo5(maxAvail); tryDur >= need.dMin; tryDur -= 5) {
+                                const beforeGap = pos - gap.origStart;
+                                const afterGap = gap.origEnd - (pos + tryDur);
+                                if (beforeGap > ABSORB_MAX && beforeGap < minFill) continue;
+                                if (afterGap > ABSORB_MAX && afterGap < minFill) continue;
+                                if (afterGap > 0 && afterGap < sportC.dMin && afterGap > ABSORB_MAX) continue;
+                                const tempCheck = { startMin: pos, endMin: pos + tryDur, type: need.type, event: need.event };
+                                if (canFitRemaining([...placed, tempCheck], remaining)) {
+                                    bestDur = tryDur;
+                                    break;
+                                }
+                            }
+                            if (bestDur === 0) continue;
+                        }
+
+                        const beforeRes = pos - gap.origStart;
+                        const afterRes = gap.origEnd - (pos + bestDur);
+                        if (!isFlexDur) {
+                            if (beforeRes > 0 && beforeRes < minFill) continue;
+                            if (afterRes > 0 && afterRes < minFill) continue;
+                        }
+
+                        // ★ v4.0: Special cross-division check
+                        const isSpecial = need.type === 'special' && need._assignedSpecial;
+                        if (isSpecial && !canUseSpecialAtTime(need._assignedSpecial, grade, pos, pos + bestDur)) continue;
+
+                        // ★ v4.0: Pool exclusivity check for swim
+                        const isSwim = need.type === 'swim';
+                        if (isSwim && !canUsePoolAtTime(grade, pos, pos + bestDur)) continue;
+
+                        const tempBlock = { startMin: pos, endMin: pos + bestDur, type: need.type, event: need.event };
+                        if (canFitRemaining([...placed, tempBlock], remaining)) {
+                            placed.push({ startMin: pos, endMin: pos + bestDur, ...need, _final: true });
+                            didPlace = true;
+                            break;
+                        }
                     }
                     if (didPlace) break;
                 }
 
                // Fallback
                 if (!didPlace) {
+                    const isFlex = need.dMin !== need.dMax;
                     for (const gap of validGaps) {
-                        for (let t = gap.start; t <= gap.end - placeDur; t += 5) {
-                            if (need.type === 'special' && need._assignedSpecial && !canUseSpecialAtTime(need._assignedSpecial, grade, t, t + placeDur)) continue;
-                            if (need.type === 'swim' && !canUsePoolAtTime(grade, t, t + placeDur)) continue;
-                            if (need.dMin === need.dMax) {
-                                const br = t - gap.origStart, ar = gap.origEnd - (t + placeDur);
+                        for (let t = gap.start; t <= gap.end - need.dMin; t += 5) {
+                            const maxHere = Math.min(need.dMax, gap.end - t);
+                            let fallDur = isFlex ? snapTo5(maxHere) : need.dMin;
+                            // Step down if leftover is a dead zone
+                            if (isFlex) {
+                                while (fallDur >= need.dMin) {
+                                    const after = gap.origEnd - (t + fallDur);
+                                    if (after === 0 || after >= sportC.dMin || after <= ABSORB_MAX) break;
+                                    fallDur -= 5;
+                                }
+                            }
+                            if (fallDur < need.dMin) continue;
+                            if (need.type === 'special' && need._assignedSpecial && !canUseSpecialAtTime(need._assignedSpecial, grade, t, t + fallDur)) continue;
+                            if (need.type === 'swim' && !canUsePoolAtTime(grade, t, t + fallDur)) continue;
+                            if (!isFlex) {
+                                const br = t - gap.origStart, ar = gap.origEnd - (t + fallDur);
                                 if (br > 0 && br < minFill) continue;
                                 if (ar > 0 && ar < minFill) continue;
                             }
-                            placed.push({ startMin: t, endMin: t + placeDur, ...need, _final: true });
+                            placed.push({ startMin: t, endMin: t + fallDur, ...need, _final: true });
                             didPlace = true;
                             break;
                         }
