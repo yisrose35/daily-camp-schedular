@@ -1648,6 +1648,36 @@
                     win.deficit = Math.max(0, win.demand - fieldSupply);
                 });
 
+                // ── Step D0: Guarantee required specials per bunk ─────
+                // Before allocating sports in windows, assign specials for
+                // every bunk that needs them. This ensures specials aren't
+                // squeezed out when field supply >= demand (no deficit).
+                bunks.forEach(bunk => {
+                    const sl = shoppingLists[bunk];
+                    if (!sl) return;
+                    const result = draftResults[bunk];
+                    const needed = (sl.specials?.required || 0) - result.specials.length;
+                    if (needed <= 0) return;
+
+                    for (const special of (sl.specials?.priorityList || [])) {
+                        if (result.specials.length >= sl.specials.required) break;
+                        if (result.usedActivities.has(special.name)) continue;
+                        if (!canAssignSpecialToGrade(special.name, grade, gradeStart, gradeEnd)) continue;
+
+                        const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
+                        const dur = special.totalDuration || special.dMin || 30;
+                        const time = special.location
+                            ? findTimeForFieldGP(special.location, bunk, grade, dur, fw)
+                            : findAnyWindowGP(fw, dur);
+                        if (!time) continue;
+
+                        if (special.location) claimFieldForPlanner(special.location, time.startMin, time.endMin, bunk, special.name);
+                        registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
+                        result.specials.push({ ...special, claimedTime: time, claimedField: special.location });
+                        result.usedActivities.add(special.name);
+                    }
+                });
+
                 // ── Step D: Allocate (tightest first) ────────────────
                 const windowsToProcess = mergedWindows
                     .filter(w => w.demand > 0 && w.duration >= 20)
