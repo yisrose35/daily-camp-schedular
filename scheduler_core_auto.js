@@ -2207,18 +2207,19 @@
             }
 
             // ══════════════════════════════════════════════════════════
-            // Steps 3-6: GAP BUDGETING (v4.5)
+            // Steps 3-6: GAP BUDGETING (v4.5.1)
             // ══════════════════════════════════════════════════════════
-            // Instead of placing at dMin then expanding, we:
-            //   1. Find gaps between walls
-            //   2. Assign each need to a gap (tightest window first)
-            //   3. Budget each gap: start at dMax, compress if over
-            //   4. Fill leftover space with sport slots
-            //   5. Lay out sequentially, all snapped to 5-min
+            // 1. Find gaps between walls
+            // 2. Assign each need to a gap (respecting time windows)
+            // 3. Budget each gap: start at dMax, compress if over
+            // 4. Add sport fillers for remaining space
+            // 5. Sort by windowStart, lay out CONTIGUOUSLY — math
+            //    guarantees sum(durations) === gap size → zero holes
+            // 6. Validate resource constraints, swap if needed
             //
             // Compression order (most compressible first):
             //   1. Sports        (if dMin != dMax)
-            //   2. Specials      (if dMin != dMax, i.e. no fixed duration)
+            //   2. Specials      (if dMin != dMax, no fixed duration)
             //   3. Snack         (if dMin != dMax)
             //   4. Swim          (if dMin != dMax)
             //   5. Leagues       (if dMin != dMax)
@@ -2231,7 +2232,6 @@
             const priorityList = shoppingList.sports?.priorityList || [];
 
             function findSportWithField(startMin, endMin) {
-                // Unused draft sports first
                 for (const ds of (draftResult.sports || [])) {
                     if (usedSportsForBunk.has(ds.name)) continue;
                     const sportInfo = priorityList.find(s => s.name === ds.name);
@@ -2241,14 +2241,12 @@
                         }
                     }
                 }
-                // Unused from rotation list
                 for (const sport of priorityList) {
                     if (usedSportsForBunk.has(sport.name)) continue;
                     for (const fn of (sport.fields || [])) {
                         if (isFieldAvailable(fn, startMin, endMin, bunk, grade)) return { name: sport.name, field: fn };
                     }
                 }
-                // Allow repeats as last resort
                 for (const sport of priorityList) {
                     for (const fn of (sport.fields || [])) {
                         if (isFieldAvailable(fn, startMin, endMin, bunk, grade)) return { name: sport.name, field: fn };
@@ -2257,37 +2255,31 @@
                 return null;
             }
 
-            // Compression priority: lower = compressed first
             function getCompressionPriority(block) {
-                if (block.dMin === block.dMax) return 99; // fixed — NEVER compress
+                if (block.dMin === block.dMax) return 99;
                 const t = (block.type || '').toLowerCase();
                 if (t === 'sport' || t === 'sports' || t === 'slot') return 1;
                 if (t === 'special') return 2;
                 if (t === 'snacks' || t === 'snack') return 3;
                 if (t === 'swim') return 4;
                 if (t === 'league' || t === 'specialty_league') return 5;
-                return 6; // custom, elective, etc.
+                return 6;
             }
 
             // ── Step 3: Assign needs to gaps ──────────────────────────────
             const allGaps = getGaps(walls);
             const gapAssignments = allGaps.map(g => ({ start: g.start, end: g.end, size: g.size, needs: [] }));
 
-            // Assign needs in order (already sorted: fixed-duration first, then tightest)
             for (const need of needs) {
                 let bestGapIdx = -1, bestRemaining = -1;
 
                 for (let gi = 0; gi < gapAssignments.length; gi++) {
                     const gap = gapAssignments[gi];
-
-                    // Time window must overlap this gap
                     const overlapStart = Math.max(gap.start, need.windowStart);
                     const overlapEnd = Math.min(gap.end, need.windowEnd);
                     if (overlapEnd - overlapStart < need.dMin) continue;
 
-                    // Resource checks at gap-level
                     if (need.type === 'swim') {
-                        // Check if pool is free anywhere in this gap's overlap window
                         let poolOk = false;
                         for (let t = overlapStart; t + need.dMin <= overlapEnd; t += 5) {
                             if (canUsePoolAtTime(grade, t, t + need.dMin)) { poolOk = true; break; }
@@ -2302,12 +2294,10 @@
                         if (!specOk) continue;
                     }
 
-                    // Remaining space after already-assigned needs
                     const assignedTotal = gap.needs.reduce((s, n) => s + n.dMin, 0);
                     const remainingSpace = gap.size - assignedTotal;
                     if (remainingSpace < need.dMin) continue;
 
-                    // Prefer gap with most remaining space
                     if (remainingSpace > bestRemaining) {
                         bestRemaining = remainingSpace;
                         bestGapIdx = gi;
@@ -2316,113 +2306,67 @@
 
                 if (bestGapIdx >= 0) {
                     gapAssignments[bestGapIdx].needs.push(need);
-                } else {
-                    // Swim fallback: retry with full layer window (MRC is a preference, not hard)
-                    if (need.type === 'swim' && need.layer) {
-                        const fullWinStart = Math.max(need.layer.startMin || 0, gradeStart);
-                        const fullWinEnd = Math.min(need.layer.endMin || 1440, gradeEnd);
-                        for (let gi = 0; gi < gapAssignments.length; gi++) {
-                            const gap = gapAssignments[gi];
-                            const os = Math.max(gap.start, fullWinStart);
-                            const oe = Math.min(gap.end, fullWinEnd);
-                            if (oe - os < need.dMin) continue;
-                            let poolOk = false;
-                            for (let t = os; t + need.dMin <= oe; t += 5) {
-                                if (canUsePoolAtTime(grade, t, t + need.dMin)) { poolOk = true; break; }
-                            }
-                            if (!poolOk) continue;
-                            const assignedTotal = gap.needs.reduce((s, n) => s + n.dMin, 0);
-                            if (gap.size - assignedTotal < need.dMin) continue;
-                            gapAssignments[gi].needs.push(need);
-                            break;
+                } else if (need.type === 'swim' && need.layer) {
+                    const fullWinStart = Math.max(need.layer.startMin || 0, gradeStart);
+                    const fullWinEnd = Math.min(need.layer.endMin || 1440, gradeEnd);
+                    for (let gi = 0; gi < gapAssignments.length; gi++) {
+                        const gap = gapAssignments[gi];
+                        const os = Math.max(gap.start, fullWinStart);
+                        const oe = Math.min(gap.end, fullWinEnd);
+                        if (oe - os < need.dMin) continue;
+                        let poolOk = false;
+                        for (let t = os; t + need.dMin <= oe; t += 5) {
+                            if (canUsePoolAtTime(grade, t, t + need.dMin)) { poolOk = true; break; }
                         }
+                        if (!poolOk) continue;
+                        const assignedTotal = gap.needs.reduce((s, n) => s + n.dMin, 0);
+                        if (gap.size - assignedTotal < need.dMin) continue;
+                        gapAssignments[gi].needs.push(need);
+                        break;
                     }
-                    // Other unplaceable needs are silently skipped — scored by iteration loop
                 }
             }
 
             // ── Step 4: Budget each gap & build template ──────────────────
             const template = [];
-
-            // Walls go straight into template
             walls.forEach(w => template.push({ ...w, _final: true }));
-
-            // Helper: fill a gap region entirely with sport slots
-            function fillGapWithSports(gapStart, gapSize) {
-                if (gapSize < sportC.dMin) return; // too small for any sport
-                let numSlots = Math.ceil(gapSize / sportC.dMax);
-                while (numSlots > 1 && numSlots * sportC.dMin > gapSize) numSlots--;
-                if (numSlots < 1) numSlots = 1;
-                const baseDur = snapTo5(Math.floor(gapSize / numSlots));
-                let leftover = gapSize;
-                let cursor = gapStart;
-                for (let s = 0; s < numSlots; s++) {
-                    let dur = (s === numSlots - 1) ? leftover : baseDur;
-                    dur = Math.max(sportC.dMin, Math.min(sportC.dMax, dur));
-                    // Last slot absorbs any remainder
-                    if (s === numSlots - 1) dur = Math.max(sportC.dMin, leftover);
-                    const sp = findSportWithField(cursor, cursor + dur);
-                    if (sp) { claimField(sp.field, cursor, cursor + dur, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
-                    template.push({
-                        startMin: cursor, endMin: cursor + dur,
-                        type: sp ? 'sport' : 'slot',
-                        event: sp ? sp.name : 'General Activity Slot',
-                        layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax,
-                        _activityLocked: false,
-                        _assignedSport: sp ? sp.name : null, field: sp ? sp.field : null,
-                        _source: sp ? 'capacity_checked' : 'filler',
-                        _sportFallbacks: priorityList.map(s => s.name), _final: true
-                    });
-                    leftover -= dur;
-                    cursor += dur;
-                }
-            }
 
             for (const gap of gapAssignments) {
                 if (gap.size <= 0) continue;
 
-                // No needs assigned to this gap — fill entirely with sports
-                if (gap.needs.length === 0) {
-                    fillGapWithSports(gap.start, gap.size);
-                    continue;
-                }
-
-                // ── Budget: start everyone at dMax ──
-                const blocks = gap.needs.map(n => ({
+                // ── 4a: Budget needs at dMax ──────────────────────────
+                const items = gap.needs.map(n => ({
                     ...n,
-                    budgeted: snapTo5(n.dMax)
+                    budgeted: snapTo5(n.dMax),
+                    _isFiller: false,
+                    _winStart: Math.max(gap.start, n.windowStart || gap.start),
+                    _winEnd: Math.min(gap.end, n.windowEnd || gap.end)
                 }));
 
-                let totalBudgeted = blocks.reduce((s, b) => s + b.budgeted, 0);
+                let totalBudgeted = items.reduce((s, b) => s + b.budgeted, 0);
 
-                // ── Over budget? Compress (sports → specials → snack → swim → leagues) ──
+                // ── 4b: Over budget → compress ────────────────────────
                 if (totalBudgeted > gap.size) {
-                    // Sort compressible blocks by priority
-                    const compressOrder = [...blocks]
+                    const compressOrder = [...items]
                         .map((b, i) => ({ idx: i, priority: getCompressionPriority(b), flex: b.budgeted - b.dMin }))
                         .filter(c => c.flex > 0)
                         .sort((a, b) => a.priority - b.priority);
 
                     let toSave = totalBudgeted - gap.size;
-
                     for (const c of compressOrder) {
                         if (toSave <= 0) break;
-                        const blk = blocks[c.idx];
+                        const blk = items[c.idx];
                         const canShrink = blk.budgeted - blk.dMin;
                         if (canShrink <= 0) continue;
-                        const shrink = Math.min(canShrink, toSave);
-                        blk.budgeted = snapTo5(blk.budgeted - shrink);
-                        // Ensure snap didn't push below dMin
+                        const shrink = snapTo5(Math.min(canShrink, toSave));
+                        blk.budgeted -= shrink;
                         if (blk.budgeted < blk.dMin) blk.budgeted = blk.dMin;
-                        // Recalculate excess after snap
-                        toSave = blocks.reduce((s, b) => s + b.budgeted, 0) - gap.size;
+                        toSave = items.reduce((s, b) => s + b.budgeted, 0) - gap.size;
                     }
-
-                    // Safety: if still over after snapping, force to dMin
                     if (toSave > 0) {
                         for (const c of compressOrder) {
                             if (toSave <= 0) break;
-                            const blk = blocks[c.idx];
+                            const blk = items[c.idx];
                             if (blk.budgeted > blk.dMin) {
                                 const shrink = Math.min(blk.budgeted - blk.dMin, toSave);
                                 blk.budgeted -= shrink;
@@ -2432,183 +2376,180 @@
                     }
                 }
 
-                totalBudgeted = blocks.reduce((s, b) => s + b.budgeted, 0);
+                totalBudgeted = items.reduce((s, b) => s + b.budgeted, 0);
 
-                // ── Under budget? Add sport fillers for remaining space ──
+                // ── 4c: Under budget → add sport fillers ──────────────
                 let remaining = gap.size - totalBudgeted;
-                const sportFillers = [];
 
                 if (remaining >= sportC.dMin) {
                     let numFillers = Math.ceil(remaining / sportC.dMax);
                     while (numFillers > 1 && numFillers * sportC.dMin > remaining) numFillers--;
                     if (numFillers < 1) numFillers = 1;
                     const baseDur = snapTo5(Math.floor(remaining / numFillers));
-                    let fillerLeftover = remaining;
+                    let fillerLeft = remaining;
                     for (let f = 0; f < numFillers; f++) {
-                        let dur = (f === numFillers - 1) ? fillerLeftover : baseDur;
-                        dur = snapTo5(Math.max(sportC.dMin, Math.min(sportC.dMax, dur)));
-                        if (f === numFillers - 1) dur = Math.max(sportC.dMin, fillerLeftover);
-                        sportFillers.push({ budgeted: dur });
-                        fillerLeftover -= dur;
+                        let dur = (f === numFillers - 1) ? fillerLeft : baseDur;
+                        dur = Math.max(sportC.dMin, Math.min(sportC.dMax, dur));
+                        if (f === numFillers - 1) dur = Math.max(sportC.dMin, fillerLeft);
+                        items.push({
+                            type: 'sport', event: null, layer: shoppingList.sports?.layer,
+                            dMin: sportC.dMin, dMax: sportC.dMax,
+                            budgeted: dur, _isFiller: true,
+                            _winStart: gap.start, _winEnd: gap.end,
+                            _activityLocked: false, _source: 'filler'
+                        });
+                        fillerLeft -= dur;
                     }
-                    remaining = fillerLeftover;
+                    remaining = fillerLeft;
                 }
 
-                // Tiny residual (< sportC.dMin) — absorb into most flexible block
+                // Tiny residual → absorb into most flexible
                 if (remaining > 0) {
-                    // Try sport fillers first (most flexible)
-                    for (const filler of sportFillers) {
+                    for (const it of items) {
                         if (remaining <= 0) break;
-                        const canGrow = sportC.dMax - filler.budgeted;
-                        if (canGrow <= 0) continue;
-                        const grow = Math.min(canGrow, remaining);
-                        filler.budgeted += grow;
-                        remaining -= grow;
+                        if (!it._isFiller) continue;
+                        const canGrow = sportC.dMax - it.budgeted;
+                        if (canGrow > 0) { const g = Math.min(canGrow, remaining); it.budgeted += g; remaining -= g; }
                     }
-                    // Then try assigned blocks, sports first
                     if (remaining > 0) {
-                        const growable = [...blocks]
-                            .map((b, i) => ({ idx: i, priority: getCompressionPriority(b), canGrow: b.dMax - b.budgeted }))
-                            .filter(c => c.canGrow > 0)
-                            .sort((a, b) => a.priority - b.priority);
+                        const growable = [...items]
+                            .map((b, i) => ({ idx: i, pri: getCompressionPriority(b), room: b.dMax - b.budgeted }))
+                            .filter(c => c.room > 0 && !items[c.idx]._isFiller)
+                            .sort((a, b) => a.pri - b.pri);
                         for (const g of growable) {
                             if (remaining <= 0) break;
-                            const blk = blocks[g.idx];
-                            const grow = Math.min(blk.dMax - blk.budgeted, remaining);
-                            blk.budgeted += grow;
-                            remaining -= grow;
+                            items[g.idx].budgeted += Math.min(items[g.idx].dMax - items[g.idx].budgeted, remaining);
+                            remaining = gap.size - items.reduce((s, b) => s + b.budgeted, 0);
                         }
                     }
-                    // Last resort: force into last sport filler or last block
-                    if (remaining > 0) {
-                        const target = sportFillers.length > 0
-                            ? sportFillers[sportFillers.length - 1]
-                            : blocks[blocks.length - 1];
-                        if (target) { target.budgeted += remaining; remaining = 0; }
+                    if (remaining > 0 && items.length > 0) {
+                        items[items.length - 1].budgeted += remaining;
+                        remaining = 0;
                     }
                 }
 
-                // ── Lay out blocks sequentially in the gap ────────────────
-                let cursor = gap.start;
+                // No items at all (gap too small for anything) → skip
+                if (items.length === 0) continue;
 
-                // Within the gap, place resource-constrained needs first so they
-                // get first pick of position (swim needs pool check, specials need
-                // capacity check). Sports/fillers are unconstrained — they go after.
-                const constrained = [];
-                const unconstrained = [];
-                blocks.forEach((b, i) => {
-                    const t = (b.type || '').toLowerCase();
-                    if (t === 'swim' || t === 'special' || t === 'snacks' || t === 'snack' || t === 'custom') {
-                        constrained.push({ ...b, _origIdx: i });
-                    } else {
-                        unconstrained.push({ ...b, _origIdx: i });
-                    }
-                });
-
-                // Sort constrained by tightness (fixed duration first, then narrowest window)
-                constrained.sort((a, b) => {
+                // ════════════════════════════════════════════════════════
+                // 4d: ORDER + CONTIGUOUS LAYOUT
+                // ════════════════════════════════════════════════════════
+                // Sort by windowStart so windowed items land in valid
+                // positions. Ties: fixed-duration first, then tighter.
+                items.sort((a, b) => {
+                    if (a._winStart !== b._winStart) return a._winStart - b._winStart;
                     const aFixed = a.dMin === a.dMax ? 0 : 1;
                     const bFixed = b.dMin === b.dMax ? 0 : 1;
                     if (aFixed !== bFixed) return aFixed - bFixed;
-                    return (a.windowEnd - a.windowStart) - (b.windowEnd - b.windowStart);
+                    return (a._winEnd - a._winStart) - (b._winEnd - b._winStart);
                 });
 
-                const orderedBlocks = [...constrained, ...unconstrained];
+                // ── Window compliance pass ────────────────────────────
+                // Walk the sorted order and check each item's contiguous
+                // position against its window. If it doesn't fit, swap
+                // with an adjacent sport/filler.
+                function isSwappable(item) {
+                    return item._isFiller || (item.type || '').toLowerCase() === 'sport';
+                }
 
-                // Place each block
-                const placedInGap = [];
-                for (const blk of orderedBlocks) {
-                    const dur = blk.budgeted;
+                for (let pass = 0; pass < 3; pass++) {
+                    let changed = false;
+                    let cur = gap.start;
+                    for (let i = 0; i < items.length; i++) {
+                        const item = items[i];
+                        const itemEnd = cur + item.budgeted;
 
-                    // Find valid position: scan from cursor, check resource availability
-                    let pos = cursor;
-                    let placed = false;
+                        // Ends after window? Try to swap with something later
+                        if (itemEnd > item._winEnd && !isSwappable(item)) {
+                            for (let j = i - 1; j >= 0; j--) {
+                                if (!isSwappable(items[j])) continue;
+                                [items[i], items[j]] = [items[j], items[i]];
+                                changed = true;
+                                break;
+                            }
+                        }
+                        // Starts before window? Try to swap with something earlier
+                        else if (cur < item._winStart && !isSwappable(item)) {
+                            for (let j = i + 1; j < items.length; j++) {
+                                if (!isSwappable(items[j])) continue;
+                                [items[i], items[j]] = [items[j], items[i]];
+                                changed = true;
+                                break;
+                            }
+                        }
 
-                    // For swim/specials, verify resource at the exact position
-                    if (blk.type === 'swim') {
-                        // Find first 5-min-aligned position where pool is free
-                        for (let t = snapTo5(cursor); t + dur <= gap.end; t += 5) {
-                            // Don't overlap already-placed blocks in this gap
-                            const conflict = placedInGap.some(p => t < p.endMin && t + dur > p.startMin);
-                            if (conflict) continue;
-                            if (canUsePoolAtTime(grade, t, t + dur)) { pos = t; placed = true; break; }
-                        }
-                    } else if (blk.type === 'special' && blk._assignedSpecial) {
-                        for (let t = snapTo5(cursor); t + dur <= gap.end; t += 5) {
-                            const conflict = placedInGap.some(p => t < p.endMin && t + dur > p.startMin);
-                            if (conflict) continue;
-                            if (canUseSpecialAtTime(blk._assignedSpecial, grade, t, t + dur)) { pos = t; placed = true; break; }
-                        }
-                    } else {
-                        // Non-constrained: find first open position
-                        for (let t = snapTo5(cursor); t + dur <= gap.end; t += 5) {
-                            const conflict = placedInGap.some(p => t < p.endMin && t + dur > p.startMin);
-                            if (!conflict) { pos = t; placed = true; break; }
-                        }
+                        cur += items[i].budgeted;
                     }
+                    if (!changed) break;
+                }
 
-                    if (!placed) {
-                        // Fallback: just use cursor position
-                        pos = cursor;
+                // ── Resource validation pass ──────────────────────────
+                // If swim/special fails resource check at its contiguous
+                // position, swap with adjacent sport/filler.
+                {
+                    let cur = gap.start;
+                    for (let i = 0; i < items.length; i++) {
+                        const item = items[i];
+                        const dur = item.budgeted;
+                        let bad = false;
+
+                        if (item.type === 'swim' && !canUsePoolAtTime(grade, cur, cur + dur)) bad = true;
+                        if (item.type === 'special' && item._assignedSpecial &&
+                            !canUseSpecialAtTime(item._assignedSpecial, grade, cur, cur + dur)) bad = true;
+
+                        if (bad) {
+                            let swapped = false;
+                            // Try swap forward
+                            for (let j = i + 1; j < items.length && !swapped; j++) {
+                                if (!isSwappable(items[j])) continue;
+                                [items[i], items[j]] = [items[j], items[i]];
+                                swapped = true;
+                            }
+                            // Try swap backward
+                            if (!swapped) {
+                                for (let j = i - 1; j >= 0 && !swapped; j--) {
+                                    if (!isSwappable(items[j])) continue;
+                                    [items[i], items[j]] = [items[j], items[i]];
+                                    swapped = true;
+                                }
+                            }
+                        }
+
+                        cur += items[i].budgeted;
                     }
+                }
+
+                // ── CONTIGUOUS LAYOUT ─────────────────────────────────
+                // Cursor walks forward. Each item starts where the last
+                // one ended. sum(budgeted) === gap.size → no gaps.
+                let cursor = gap.start;
+
+                for (const item of items) {
+                    const dur = item.budgeted;
+                    const startMin = cursor;
+                    const endMin = cursor + dur;
 
                     // Register resources
-                    if (blk.type === 'special' && blk._assignedSpecial) {
-                        registerCrossGrade(grade, 'special', pos, pos + dur, blk.event);
-                        registerSpecialUsage(blk._assignedSpecial, grade, pos, pos + dur);
+                    if (item.type === 'special' && item._assignedSpecial) {
+                        registerCrossGrade(grade, 'special', startMin, endMin, item.event);
+                        registerSpecialUsage(item._assignedSpecial, grade, startMin, endMin);
                     }
-                    if (blk.type === 'swim') {
-                        registerCrossGrade(grade, 'swim', pos, pos + dur, blk.event);
-                        registerPoolUsage(grade, pos, pos + dur);
+                    if (item.type === 'swim') {
+                        registerCrossGrade(grade, 'swim', startMin, endMin, item.event);
+                        registerPoolUsage(grade, startMin, endMin);
                     }
-                    if (['snacks', 'snack'].includes((blk.type || '').toLowerCase())) {
-                        registerCrossGrade(grade, blk.type, pos, pos + dur, blk.event);
+                    if (['snacks', 'snack'].includes((item.type || '').toLowerCase())) {
+                        registerCrossGrade(grade, item.type, startMin, endMin, item.event);
                     }
-                    if (blk.type === 'custom') {
-                        registerCrossGrade(grade, 'custom', pos, pos + dur, blk._customActivity || blk.event);
+                    if (item.type === 'custom') {
+                        registerCrossGrade(grade, 'custom', startMin, endMin, item._customActivity || item.event);
                     }
 
-                    const entry = {
-                        startMin: pos, endMin: pos + dur,
-                        type: blk.type, event: blk.event,
-                        layer: blk.layer, field: blk.field || null,
-                        dMin: blk.dMin, dMax: blk.dMax,
-                        _source: blk._source || 'budget',
-                        _activityLocked: blk._activityLocked || false,
-                        _assignedSpecial: blk._assignedSpecial || null,
-                        _specialLocation: blk._specialLocation || null,
-                        _specialDuration: blk._specialDuration || null,
-                        _assignedSport: blk._assignedSport || null,
-                        _customActivity: blk._customActivity || null,
-                        _customField: blk._customField || null,
-                        _customBunks: blk._customBunks || null,
-                        _final: true
-                    };
-                    template.push(entry);
-                    placedInGap.push(entry);
-                }
-
-                // Place sport fillers in remaining positions
-                // Sort placed blocks so we can find gaps within the gap
-                placedInGap.sort((a, b) => a.startMin - b.startMin);
-                const innerGaps = [];
-                let ic = gap.start;
-                for (const p of placedInGap) {
-                    if (p.startMin > ic) innerGaps.push({ start: ic, size: p.startMin - ic });
-                    ic = Math.max(ic, p.endMin);
-                }
-                if (ic < gap.end) innerGaps.push({ start: ic, size: gap.end - ic });
-
-                let fillerIdx = 0;
-                for (const ig of innerGaps) {
-                    if (fillerIdx >= sportFillers.length) break;
-                    let fc = ig.start;
-                    while (fillerIdx < sportFillers.length && fc + sportFillers[fillerIdx].budgeted <= ig.start + ig.size) {
-                        const dur = sportFillers[fillerIdx].budgeted;
-                        const sp = findSportWithField(fc, fc + dur);
-                        if (sp) { claimField(sp.field, fc, fc + dur, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
+                    if (item._isFiller) {
+                        const sp = findSportWithField(startMin, endMin);
+                        if (sp) { claimField(sp.field, startMin, endMin, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
                         template.push({
-                            startMin: fc, endMin: fc + dur,
+                            startMin, endMin,
                             type: sp ? 'sport' : 'slot',
                             event: sp ? sp.name : 'General Activity Slot',
                             layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax,
@@ -2617,9 +2558,43 @@
                             _source: sp ? 'capacity_checked' : 'filler',
                             _sportFallbacks: priorityList.map(s => s.name), _final: true
                         });
-                        fc += dur;
-                        fillerIdx++;
+                    } else {
+                        template.push({
+                            startMin, endMin,
+                            type: item.type, event: item.event,
+                            layer: item.layer, field: item.field || null,
+                            dMin: item.dMin, dMax: item.dMax,
+                            _source: item._source || 'budget',
+                            _activityLocked: item._activityLocked || false,
+                            _assignedSpecial: item._assignedSpecial || null,
+                            _specialLocation: item._specialLocation || null,
+                            _specialDuration: item._specialDuration || null,
+                            _assignedSport: item._assignedSport || null,
+                            _customActivity: item._customActivity || null,
+                            _customField: item._customField || null,
+                            _customBunks: item._customBunks || null,
+                            _final: true
+                        });
                     }
+
+                    cursor = endMin;
+                }
+            }
+
+            // ── Step 6: Edge absorption ───────────────────────────────
+            // Tiny gaps at day edges too small for any activity
+            template.sort((a, b) => a.startMin - b.startMin);
+
+            if (template.length > 0) {
+                const first = template[0];
+                const firstGap = first.startMin - gradeStart;
+                if (firstGap > 0 && firstGap < sportC.dMin && first._source !== 'phase0') {
+                    first.startMin = gradeStart;
+                }
+                const last = template[template.length - 1];
+                const lastGap = gradeEnd - last.endMin;
+                if (lastGap > 0 && lastGap < sportC.dMin && last._source !== 'phase0') {
+                    last.endMin = gradeEnd;
                 }
             }
 
