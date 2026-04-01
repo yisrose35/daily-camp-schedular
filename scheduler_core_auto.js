@@ -2218,15 +2218,19 @@
                     .filter(g => g.end - g.start >= need.dMin)
                     .sort((a, b) => (b.end - b.start) - (a.end - a.start));
 
-                let didPlace = false;
+               let didPlace = false;
+                // ★ v4.3: Flex-duration specials place at dMax to conserve activity slots.
+                // Fixed-duration blocks (dMin===dMax) place at their exact size.
+                // Sports place at dMin (expand phase distributes evenly later).
+                const isFlexSpecial = need.type === 'special' && need._assignedSpecial && need.dMin !== need.dMax;
+                const placeDur = isFlexSpecial ? need.dMax : need.dMin;
                 for (const gap of validGaps) {
                     const isSwim = need.type === 'swim';
                     const isSpecial = need.type === 'special' && need._assignedSpecial;
                     const step = (isSwim || isSpecial) ? 5 : 15;
                     const candidates = [];
-                    for (let t = gap.start; t <= gap.end - need.dMin; t += step) candidates.push(t);
-                    if (step > 5 && gap.end - need.dMin > gap.start) candidates.push(gap.end - need.dMin);
-
+                    for (let t = gap.start; t <= gap.end - placeDur; t += step) candidates.push(t);
+                    if (step > 5 && gap.end - placeDur > gap.start) candidates.push(gap.end - placeDur);
                     // Sort by weighted score: cross-grade conflicts + rotation band preference
                     // Rotation band is a STRONG SUGGESTION, not a hard constraint.
                     // In-band positions get a bonus; out-of-band get a mild penalty.
@@ -2249,44 +2253,22 @@
                     }
 
                     for (const pos of candidates) {
-                        const beforeRes = pos - gap.origStart;
-                        const afterRes = gap.origEnd - (pos + need.dMin);
-                        if (need.dMin === need.dMax) {
-                            if (beforeRes > 0 && beforeRes < minFill) continue;
-                            if (afterRes > 0 && afterRes < minFill) continue;
-                        } else {
-                            if (beforeRes > ABSORB_MAX && beforeRes < minFill) continue;
-                            if (afterRes > ABSORB_MAX && afterRes < minFill) continue;
-                        }
-
-                        // ★ v4.0: Special cross-division check
-                        if (isSpecial && !canUseSpecialAtTime(need._assignedSpecial, grade, pos, pos + need.dMin)) continue;
-
-                        // ★ v4.0: Pool exclusivity check for swim
-                        if (isSwim && !canUsePoolAtTime(grade, pos, pos + need.dMin)) continue;
-
-                        const tempBlock = { startMin: pos, endMin: pos + need.dMin, type: need.type, event: need.event };
-                        if (canFitRemaining([...placed, tempBlock], remaining)) {
-                            placed.push({ startMin: pos, endMin: pos + need.dMin, ...need, _final: true });
-                            didPlace = true;
-                            break;
-                        }
                     }
                     if (didPlace) break;
                 }
 
-                // Fallback
+               // Fallback
                 if (!didPlace) {
                     for (const gap of validGaps) {
-                        for (let t = gap.start; t <= gap.end - need.dMin; t += 5) {
-                            if (need.type === 'special' && need._assignedSpecial && !canUseSpecialAtTime(need._assignedSpecial, grade, t, t + need.dMin)) continue;
-                            if (need.type === 'swim' && !canUsePoolAtTime(grade, t, t + need.dMin)) continue;
+                        for (let t = gap.start; t <= gap.end - placeDur; t += 5) {
+                            if (need.type === 'special' && need._assignedSpecial && !canUseSpecialAtTime(need._assignedSpecial, grade, t, t + placeDur)) continue;
+                            if (need.type === 'swim' && !canUsePoolAtTime(grade, t, t + placeDur)) continue;
                             if (need.dMin === need.dMax) {
-                                const br = t - gap.origStart, ar = gap.origEnd - (t + need.dMin);
+                                const br = t - gap.origStart, ar = gap.origEnd - (t + placeDur);
                                 if (br > 0 && br < minFill) continue;
                                 if (ar > 0 && ar < minFill) continue;
                             }
-                            placed.push({ startMin: t, endMin: t + need.dMin, ...need, _final: true });
+                            placed.push({ startMin: t, endMin: t + placeDur, ...need, _final: true });
                             didPlace = true;
                             break;
                         }
