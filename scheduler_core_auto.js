@@ -3103,7 +3103,7 @@
                             const t = (block.type || '').toLowerCase();
                             if (t !== 'sport' && t !== 'slot') return;
                             if (block._activityLocked || block._fixed) return;
-                            if (block._source === 'capacity_checked' && block.field) return;
+                            if (block._source === 'capacity_checked' && (block.field || block._draftField)) return;
 
                             const startMin = block.startMin;
                             const endMin = block.endMin;
