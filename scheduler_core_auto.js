@@ -2379,17 +2379,34 @@
             const afterGaps = getGaps(placed);
             for (const gap of afterGaps) {
                 if (gap.size < sportC.dMin) continue;
+                // ★ v4.3: Minimize slot count to conserve activities
+                // Prefer fewer, longer slots over many short ones.
+                // e.g. 90min gap with dMax=50 → 2 slots (50+40) not 3 slots (30+30+30)
                 let numSlots = Math.ceil(gap.size / sportC.dMax);
-                if (numSlots * sportC.dMin > gap.size) numSlots = Math.max(1, numSlots - 1);
+                // Verify we can actually fit that many at dMin
+                while (numSlots > 1 && numSlots * sportC.dMin > gap.size) numSlots--;
+                if (numSlots < 1) numSlots = 1;
+                // Distribute gap evenly across slots, each sized between dMin and dMax
+                const slotDur = snapTo5(Math.floor(gap.size / numSlots));
+                let remainder = gap.size - (slotDur * numSlots);
                 let cursor = gap.start;
                 for (let s = 0; s < numSlots; s++) {
-                    const sportPick = findSportWithField(cursor, cursor + sportC.dMax);
+                    // Give extra minutes to earlier slots
+                    let thisDur = slotDur;
+                    if (remainder >= 5) { thisDur += 5; remainder -= 5; }
+                    // Clamp to dMin/dMax
+                    thisDur = Math.max(sportC.dMin, Math.min(sportC.dMax, thisDur));
+                    // Last slot gets whatever remains
+                    if (s === numSlots - 1) thisDur = gap.start + gap.size - cursor;
+                    thisDur = Math.max(sportC.dMin, Math.min(sportC.dMax, thisDur));
+
+                    const sportPick = findSportWithField(cursor, cursor + thisDur);
                     if (sportPick) {
-                        claimField(sportPick.field, cursor, cursor + sportC.dMax, bunk, grade, sportPick.name);
+                        claimField(sportPick.field, cursor, cursor + thisDur, bunk, grade, sportPick.name);
                         usedSportsForBunk.add(sportPick.name);
                     }
                     placed.push({
-                        startMin: cursor, endMin: cursor + sportC.dMin,
+                        startMin: cursor, endMin: cursor + thisDur,
                         type: sportPick ? 'sport' : 'slot',
                         event: sportPick ? sportPick.name : 'General Activity Slot',
                         layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax,
@@ -2399,7 +2416,7 @@
                         _source: sportPick ? 'capacity_checked' : 'filler',
                         _sportFallbacks: priorityList.map(s => s.name), _final: true
                     });
-                    cursor += sportC.dMin;
+                    cursor += thisDur;
                 }
             }
 
