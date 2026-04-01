@@ -2498,9 +2498,8 @@
                 }
 
                 const descs = flexBlocks.map(b => {
-                    // ★ v4.0: Specials NEVER expand beyond dMax — prevents cross-div conflict
-                    const isSpec = (b.type || '').toLowerCase() === 'special';
-                    return { block: b, dMin: b.dMin, dMax: isSpec ? b.dMax : b.dMax };
+                    // ★ v4.3: ALL blocks respect their dMax — no exceptions
+                    return { block: b, dMin: b.dMin, dMax: b.dMax };
                 });
                 const totalDMax = descs.reduce((s, d) => s + d.dMax, 0);
                 if (totalDMax < rSize) {
@@ -2535,6 +2534,20 @@
                 }
             }
 
+            // ── Step 5.5: Universal dMax clamp ───────────────────────────
+            // No block may ever exceed its configured dMax. Period.
+            // The expand phase may have stretched blocks to fill regions —
+            // clamp them back and let Step 6 handle the resulting gaps.
+            for (const blk of template) {
+                if (blk._source === 'phase0') continue; // walls are exact
+                const dur = blk.endMin - blk.startMin;
+                const maxDur = blk.dMax || dur; // if no dMax, keep as-is
+                if (dur > maxDur) {
+                    blk.endMin = blk.startMin + maxDur;
+                }
+            }
+            template.sort((a, b) => a.startMin - b.startMin);
+
             // ── Step 6: Gap sweep — absorb residuals ─────────────────────
             template.sort((a, b) => a.startMin - b.startMin);
             for (let pass = 0; pass < 3; pass++) {
@@ -2546,14 +2559,11 @@
                         const prev = template[i], next = template[i + 1];
                         const prevFlex = prev.dMin !== prev.dMax && prev._source !== 'phase0';
                         const nextFlex = next.dMin !== next.dMax && next._source !== 'phase0';
-                        // ★ v4.0: Don't absorb into specials (would violate dMax constraint)
-                        const prevIsSpecial = (prev.type || '').toLowerCase() === 'special';
-                        const nextIsSpecial = (next.type || '').toLowerCase() === 'special';
-                        if (prevFlex && !prevIsSpecial) { prev.endMin += gap; changed = true; }
-                        else if (nextFlex && !nextIsSpecial) { next.startMin -= gap; changed = true; }
-                        else if (prevFlex) { prev.endMin += gap; changed = true; }
-                        else if (nextFlex) { next.startMin -= gap; changed = true; }
-                    } else if (gap >= sportC.dMin) {
+                        // ★ v4.3: Never absorb into ANY block that would exceed dMax
+                        const prevCanGrow = prevFlex && (!prev.dMax || (prev.endMin - prev.startMin + gap) <= prev.dMax);
+                        const nextCanGrow = nextFlex && (!next.dMax || (next.endMin - next.startMin + gap) <= next.dMax);
+                        if (prevCanGrow) { prev.endMin += gap; changed = true; }
+                        else if (nextCanGrow) { next.startMin -= gap; changed = true; }                    } else if (gap >= sportC.dMin) {
                         const sp = findSportWithField(template[i].endMin, template[i + 1].startMin);
                         if (sp) { claimField(sp.field, template[i].endMin, template[i + 1].startMin, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
                         template.push({
@@ -2565,16 +2575,7 @@
                         });
                         template.sort((a, b) => a.startMin - b.startMin);
                         changed = true;
-                    } else {
-                        // Dead zone — forced absorption into non-special neighbor
-                        const prev = template[i], next = template[i + 1];
-                        const prevIsSpec = (prev.type || '').toLowerCase() === 'special';
-                        const nextIsSpec = (next.type || '').toLowerCase() === 'special';
-                        if (prev._source !== 'phase0' && !prevIsSpec) { prev.endMin += gap; changed = true; }
-                        else if (next._source !== 'phase0' && !nextIsSpec) { next.startMin -= gap; changed = true; }
-                        else if (prev._source !== 'phase0') { prev.endMin += gap; changed = true; }
-                        else if (next._source !== 'phase0') { next.startMin -= gap; changed = true; }
-                    }
+                    // Dead zone — forced absorption into non-special neighbor                    }
                 }
                 // Day edges
                 if (template.length > 0) {
