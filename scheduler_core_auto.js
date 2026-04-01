@@ -3065,9 +3065,95 @@
                 });
             });
 
+            // ── Quick-solve simulation: count slots that can't find any field ──
+            let iterFreeEstimate = 0;
+            allGrades.forEach(grade => {
+                const pbs_sim = {};
+                getBunksForGrade(grade, divisions).forEach(bunk => {
+                    const tl = bunkTimelines[bunk] || [];
+                    pbs_sim[bunk] = tl.map((b, i) => ({ ...b, idx: i }));
+                });
+
+                // Track simulated claims per field: { fieldName: [{ startMin, endMin, bunk, grade }] }
+                const simClaims = {};
+                // Copy existing ledger claims (from packer)
+                Object.entries(fieldLedger).forEach(([fn, ledger]) => {
+                    simClaims[fn] = ledger.claims.map(c => ({ ...c }));
+                });
+
+                getBunksForGrade(grade, divisions).forEach(bunk => {
+                    const tl = bunkTimelines[bunk] || [];
+                    // Collect already-used activities for same-day repeat check
+                    const usedActivities = new Set();
+                    tl.forEach(b => {
+                        const act = (b._assignedSport || b._assignedSpecial || b.event || '').toLowerCase().trim();
+                        if (act && b._source === 'capacity_checked') usedActivities.add(act);
+                        if (act && (b._activityLocked || b._fixed)) usedActivities.add(act);
+                    });
+
+                    tl.forEach(block => {
+                        // Only check sport/slot blocks that need field assignment
+                        const t = (block.type || '').toLowerCase();
+                        if (t !== 'sport' && t !== 'slot') return;
+                        if (block._activityLocked || block._fixed) return;
+                        if (block._source === 'capacity_checked' && block.field) return;
+
+                        // Try to find ANY field+sport combo
+                        const sportList = block._sportFallbacks || [];
+                        let found = false;
+
+                        for (const sportName of sportList) {
+                            if (usedActivities.has(sportName.toLowerCase().trim())) continue;
+                            const sportFields = [];
+                            Object.entries(fieldLedger).forEach(([fn, ledger]) => {
+                                if (ledger._isSpecialLocation) return;
+                                if (!ledger.activities.includes(sportName)) return;
+                                if (isRainy && !ledger.isIndoor) return;
+                                sportFields.push(fn);
+                            });
+
+                            for (const fn of sportFields) {
+                                const ledger = fieldLedger[fn];
+                                if (!ledger) continue;
+
+                                const timeOk = ledger.timeRules.some(rule => {
+                                    if (rule.startMin > block.startMin || rule.endMin < block.endMin) return false;
+                                    if (rule.divisions && !rule.divisions.includes(grade)) return false;
+                                    return true;
+                                });
+                                if (!timeOk) continue;
+
+                                const claims = (simClaims[fn] || []).filter(c =>
+                                    c.startMin < block.endMin && c.endMin > block.startMin
+                                );
+
+                                if (claims.length >= ledger.capacity) continue;
+                                if (ledger.shareType === 'not_sharable' && claims.length > 0) continue;
+                                if (ledger.shareType === 'same_division' && claims.some(c => c.grade !== grade)) continue;
+
+                                // Can place here
+                                if (!simClaims[fn]) simClaims[fn] = [];
+                                simClaims[fn].push({ startMin: block.startMin, endMin: block.endMin, bunk, grade, activity: sportName });
+                                usedActivities.add(sportName.toLowerCase().trim());
+                                found = true;
+                                break;
+                            }
+                            if (found) break;
+                        }
+
+                        if (!found) iterFreeEstimate++;
+                    });
+                });
+            });
+
             // Score
             const iterWarnings = [];
-            const iterScore = scoreTimelines(bunkTimelines, iterWarnings);
+            let iterScore = scoreTimelines(bunkTimelines, iterWarnings);
+            // ★ Massive penalty for estimated Frees — this is the #1 thing to minimize
+            iterScore += iterFreeEstimate * 50000;
+            if (iterFreeEstimate > 0) {
+                log('[ITER-SIM] seed=' + _iterSeed + ' estimatedFrees=' + iterFreeEstimate);
+            }
             totalIters++;
             extractFragments(bunkTimelines);
 
@@ -3081,8 +3167,7 @@
             } else staleCount++;
 
             if (improved || totalIters <= 3 || totalIters % 10 === 0) {
-                log('[ITER ' + totalIters + '] score=' + iterScore + (improved ? ' ★ BEST' : '') + ' | best=' + bestScore + ' | stale=' + staleCount);
-            }
+               log('[ITER ' + totalIters + '] score=' + iterScore + (improved ? ' ★ BEST' : '') + ' | best=' + bestScore + ' | stale=' + staleCount + ' | estFree=' + iterFreeEstimate);            }
 
             if (bestScore > 0 && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS) { _iterSeed++; warnings.length = 0; resetIterState(); }
 
