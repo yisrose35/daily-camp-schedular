@@ -2068,7 +2068,24 @@
                     _activityLocked: true, _source: 'layer'                });
             }
 
-            // Draft specials — full window, rotation band applied at scoring
+           // Draft specials — full window, rotation band applied at scoring
+            // ★ v4.3: If draft didn't assign enough specials, pick from priority list
+            const draftSpecialCount = (draftResult.specials || []).length;
+            const requiredSpecials = shoppingList.specials?.required || 0;
+            if (draftSpecialCount < requiredSpecials) {
+                const usedNames = new Set((draftResult.specials || []).map(s => s.name));
+                const priorityList = shoppingList.specials?.priorityList || [];
+                for (const special of priorityList) {
+                    if (draftResult.specials.length >= requiredSpecials) break;
+                    if (usedNames.has(special.name)) continue;
+                    draftResult.specials.push({
+                        ...special,
+                        claimedTime: null,
+                        claimedField: special.location || null
+                    });
+                    usedNames.add(special.name);
+                }
+            }
             (draftResult.specials || []).forEach(special => {
                 const hasFixedDur = special.duration && special.duration > 0;
                 const sDMin = hasFixedDur ? special.duration : resolveConstraints(special.layer, 'special', special).dMin;
