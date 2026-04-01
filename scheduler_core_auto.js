@@ -1092,8 +1092,10 @@
             for (const ts of times) {
                 const te = ts + dMin;
                 if (!bunks.every(bk => !(bunkTimelines[bk] || []).some(b => b.startMin < te && b.endMin > ts))) continue;
-                let score = scorePositionByContention(ts, te, 'league', null, null);
+               let score = scorePositionByContention(ts, te, 'league', null, null);
                 score += getCrossGradeConflicts('league', ts, te, grade) * 10000;
+                // Iteration jitter: vary league placement across iterations
+                score += (seedJitter(_iterSeed, ts) - 0.5) * 2000;
                 // ★ v4.0: Prefer the rotation matrix's league band (strong suggestion)
                 if (leagueBand && ts >= leagueBand.start && te <= leagueBand.end) score -= 500;
                 else if (leagueBand) score += 200;
@@ -1188,6 +1190,12 @@
                 });
             });
             sportPriorityList.sort((a, b) => a.rotationScore - b.rotationScore);
+            // Iteration variation: partially shuffle sport order
+            if (_iterSeed > 0) {
+                const top = Math.min(5, sportPriorityList.length);
+                const topSlice = seedShuffle(sportPriorityList.slice(0, top), _iterSeed + parseInt(String(bunk).replace(/\D/g,'')) || 0);
+                for (let si = 0; si < top; si++) sportPriorityList[si] = topSlice[si];
+            }
 
             // Special priority list
             const specialNeeds = remainingNeeds.filter(n => n.type === 'special');
@@ -1231,7 +1239,16 @@
                     _layer: specialLayer
                 });
             });
-            specialPriorityList.sort((a, b) => { if (a.isScarce !== b.isScarce) return a.isScarce ? -1 : 1; return a.rotationScore - b.rotationScore; });
+           specialPriorityList.sort((a, b) => { if (a.isScarce !== b.isScarce) return a.isScarce ? -1 : 1; return a.rotationScore - b.rotationScore; });
+            // Iteration variation: shuffle non-scarce specials
+            if (_iterSeed > 0) {
+                const scarceEnd = specialPriorityList.findIndex(s => !s.isScarce);
+                const nonScarce = scarceEnd >= 0 ? specialPriorityList.splice(scarceEnd) : [];
+                if (nonScarce.length > 1) {
+                    const shuffled = seedShuffle(nonScarce, _iterSeed + parseInt(String(bunk).replace(/\D/g,'')) || 0);
+                    specialPriorityList.push(...shuffled);
+                }
+            }
 
             // Snack / elective / other needs
             const otherNeeds = remainingNeeds.filter(n => n.type !== 'sport' && n.type !== 'sports' && n.type !== 'special' && n.type !== 'league' && n.type !== 'specialty_league');
@@ -1710,7 +1727,11 @@
                             };
                         });
 
-                        bunkFlexibility.sort((a, b) => b.flexibility - a.flexibility);
+                        bunkFlexibility.sort((a, b) => {
+                            const jA = seedJitter(_iterSeed, parseInt(String(a.bunk).replace(/\D/g,'')) || 0) * 5;
+                            const jB = seedJitter(_iterSeed, parseInt(String(b.bunk).replace(/\D/g,'')) || 0) * 5;
+                            return (b.flexibility + jB) - (a.flexibility + jA);
+                        });
 
                         const specialBunks = bunkFlexibility.slice(0, deficit)
                             .filter(b => b.specialsAvailable > 0)
@@ -2035,10 +2056,16 @@
                 needs.push({
                     type: 'snacks', event: snackLayer.event || 'snacks', layer: snackLayer,
                     dMin: c.dMin, dMax: c.dMax,
-                    windowStart: Math.max(snackLayer.startMin || 0, gradeStart),
+                   windowStart: (() => {
+                        const base = Math.max(snackLayer.startMin || 0, gradeStart);
+                        const end = Math.min(snackLayer.endMin || 1440, gradeEnd);
+                        const range = end - base - c.dMin;
+                        if (range <= 0 || _iterSeed === 0) return base;
+                        const shift = Math.floor(seedJitter(_iterSeed, 777) * Math.min(range, 30));
+                        return base + snapTo5(shift);
+                    })(),
                     windowEnd: Math.min(snackLayer.endMin || 1440, gradeEnd),
-                    _activityLocked: true, _source: 'layer'
-                });
+                    _activityLocked: true, _source: 'layer'                });
             }
 
             // Draft specials — full window, rotation band applied at scoring
@@ -2158,7 +2185,7 @@
                     // In-band positions get a bonus; out-of-band get a mild penalty.
                     if (['swim', 'special', 'snacks', 'snack'].includes(need.type)) {
                         const band = typeBands[need.type] || typeBands[need.type === 'snacks' ? 'snack' : need.type] || null;
-                        candidates.sort((a, b) => {
+                      candidates.sort((a, b) => {
                             let scoreA = getCrossGradeConflicts(need.type, a, a + need.dMin, grade, need.event) * 100;
                             let scoreB = getCrossGradeConflicts(need.type, b, b + need.dMin, grade, need.event) * 100;
                             // Rotation band preference: -50 if inside, +20 if outside
@@ -2166,6 +2193,9 @@
                                 scoreA += (a >= band.start && (a + need.dMin) <= band.end) ? -50 : 20;
                                 scoreB += (b >= band.start && (b + need.dMin) <= band.end) ? -50 : 20;
                             }
+                            // Iteration jitter: vary time placement
+                            scoreA += (seedJitter(_iterSeed, a) - 0.5) * 80;
+                            scoreB += (seedJitter(_iterSeed, b) - 0.5) * 80;
                             if (scoreA !== scoreB) return scoreA - scoreB;
                             return (staggerOffset % 2 === 0) ? (a - b) : (b - a);
                         });
@@ -2553,8 +2583,21 @@
 
         const MAX_ITERATIONS = 30;
         const STALE_STOP = 8;
-        let _iterSeed = 0, bestScore = Infinity, bestTimelines = null;
+       let _iterSeed = 0, bestScore = Infinity, bestTimelines = null;
         let bestWarnings = [], staleCount = 0, totalIters = 0;
+
+        // Seeded jitter for iteration variation
+        function seedJitter(seed, index) {
+            return (((seed * 2654435761 + index * 1597) >>> 0) % 1000) / 1000;
+        }
+        function seedShuffle(arr, seed) {
+            const a = [...arr];
+            for (let i = a.length - 1; i > 0; i--) {
+                const j = ((seed * 2654435761 + i * 1597) >>> 0) % (i + 1);
+                [a[i], a[j]] = [a[j], a[i]];
+            }
+            return a;
+        }
 
         function scoreTimelines(timelines, iterWarnings) {
             let score = 0;
