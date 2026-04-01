@@ -2224,8 +2224,8 @@
                     const isSpecial = need.type === 'special' && need._assignedSpecial;
                     const step = (isSwim || isSpecial) ? 5 : 15;
                     const candidates = [];
-                    for (let t = gap.start; t <= gap.end - placeDur; t += step) candidates.push(t);
-                    if (step > 5 && gap.end - placeDur > gap.start) candidates.push(gap.end - placeDur);
+                    for (let t = gap.start; t <= gap.end - need.dMin; t += step) candidates.push(t);
+                    if (step > 5 && gap.end - need.dMin > gap.start) candidates.push(gap.end - need.dMin);
                     // Sort by weighted score: cross-grade conflicts + rotation band preference
                     // Rotation band is a STRONG SUGGESTION, not a hard constraint.
                     // In-band positions get a bonus; out-of-band get a mild penalty.
