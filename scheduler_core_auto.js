@@ -2563,7 +2563,8 @@
                         const prevCanGrow = prevFlex && (!prev.dMax || (prev.endMin - prev.startMin + gap) <= prev.dMax);
                         const nextCanGrow = nextFlex && (!next.dMax || (next.endMin - next.startMin + gap) <= next.dMax);
                         if (prevCanGrow) { prev.endMin += gap; changed = true; }
-                        else if (nextCanGrow) { next.startMin -= gap; changed = true; }                    } else if (gap >= sportC.dMin) {
+                        else if (nextCanGrow) { next.startMin -= gap; changed = true; }
+                    } else if (gap >= sportC.dMin) {
                         const sp = findSportWithField(template[i].endMin, template[i + 1].startMin);
                         if (sp) { claimField(sp.field, template[i].endMin, template[i + 1].startMin, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
                         template.push({
@@ -2575,7 +2576,18 @@
                         });
                         template.sort((a, b) => a.startMin - b.startMin);
                         changed = true;
-                    // Dead zone — forced absorption into non-special neighbor                    }
+                    } else {
+                        // Dead zone — forced absorption, but respect dMax
+                        const prev = template[i], next = template[i + 1];
+                        const prevDur = prev.endMin - prev.startMin;
+                        const nextDur = next.endMin - next.startMin;
+                        const prevOk = prev._source !== 'phase0' && (!prev.dMax || prevDur + gap <= prev.dMax);
+                        const nextOk = next._source !== 'phase0' && (!next.dMax || nextDur + gap <= next.dMax);
+                        if (prevOk) { prev.endMin += gap; changed = true; }
+                        else if (nextOk) { next.startMin -= gap; changed = true; }
+                        else if (prev._source !== 'phase0' && ['sport','slot'].includes((prev.type||'').toLowerCase())) { prev.endMin += gap; changed = true; }
+                        else if (next._source !== 'phase0' && ['sport','slot'].includes((next.type||'').toLowerCase())) { next.startMin -= gap; changed = true; }
+                    }
                 }
                 // Day edges
                 if (template.length > 0) {
