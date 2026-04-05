@@ -4030,6 +4030,8 @@
                     if (idx === -1 || window.scheduleAssignments[String(bunk)][idx]) return;
 
                     const isCustom = (block.type || '').toLowerCase() === 'custom' && block._customField;
+                    // ★ v7.0: Skip sport overrides — let the sport writer handle them (it includes field name)
+                    if (block._assignedSport && block.field && block._source === 'capacity_checked') return;
                     if (block._fixed || block._classification === 'pinned' || isCustom) {
                         window.scheduleAssignments[String(bunk)][idx] = {
                             field: isCustom ? block._customField : block.event,
