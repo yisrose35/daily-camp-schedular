@@ -2498,8 +2498,15 @@
                     const remainingSpace = gap.size - assignedTotal;
                     if (remainingSpace < need.dMin) continue;
 
-                    if (remainingSpace > bestRemaining) {
-                        bestRemaining = remainingSpace;
+                    // ★ v5.2: Prefer gaps where the remainder is fillable
+                    // A 50min gap with a 30min need leaves 20min — unfillable (< sportC.dMin).
+                    // Prefer a 90min gap where 60min remains — room for a sport.
+                    const remainingAfter = remainingSpace - need.dMin;
+                    const isFillable = remainingAfter === 0 || remainingAfter >= sportC.dMin;
+                    // Score: fillable gaps get massive bonus, then prefer more remaining space
+                    const gapScore = (isFillable ? 100000 : 0) + remainingAfter;
+                    if (gapScore > bestRemaining) {
+                        bestRemaining = gapScore;
                         bestGapIdx = gi;
                     }
                 }
