@@ -2242,8 +2242,8 @@
             (draftResult.sports || []).forEach(s => usedSportsForBunk.add(s.name));
             const priorityList = shoppingList.sports?.priorityList || [];
             const placedSpecialNames = new Set();
-            // ★ v5.1.1: Hard ceiling for sport duration — layer dMax may be too wide
-            const sportCeiling = Math.min(sportC.dMax, TYPE_CEILINGS.sport || GAP_MAX_DUR);
+            // ★ v5.1.1: Hard ceiling for sport duration — layer dMax may be too wide or NaN
+            const sportCeiling = Math.min(sportC.dMax || 60, TYPE_CEILINGS.sport || 60, 60);
             // ★ v5.1: Track how many specials this bunk has placed (draft + fill)
             let specialsPlacedCount = (draftResult.specials || []).length;
             const maxSpecialsForBunk = Math.max(
@@ -2401,6 +2401,8 @@
                             dur = baseDur;
                         }
                         dur = Math.max(sportC.dMin, Math.min(sportMaxDur, dur));
+                        // ★ HARD GUARD: No single sport block may exceed 60min
+                        if (dur > 60 || isNaN(dur)) dur = Math.min(60, leftover);
                         const sp = findSportWithField(cur, cur + dur);
                         if (sp) { claimField(sp.field, cur, cur + dur, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
                         template.push({
@@ -2418,10 +2420,11 @@
                     }
                     // ★ v5.1: If there's STILL leftover (shouldn't happen, but safety)
                     if (leftover >= sportC.dMin) {
-                        const sp = findSportWithField(cur, cur + leftover);
-                        if (sp) { claimField(sp.field, cur, cur + leftover, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
+                        let safetyDur = Math.min(leftover, 60); // HARD GUARD
+                        const sp = findSportWithField(cur, cur + safetyDur);
+                        if (sp) { claimField(sp.field, cur, cur + safetyDur, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
                         template.push({
-                            startMin: cur, endMin: cur + leftover,
+                            startMin: cur, endMin: cur + safetyDur,
                             type: sp ? 'sport' : 'slot',
                             event: sp ? sp.name : 'General Activity Slot',
                             layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax,
@@ -2430,7 +2433,7 @@
                             _source: sp ? 'capacity_checked' : 'filler',
                             _sportFallbacks: priorityList.map(s => s.name), _final: true
                         });
-                        cur += leftover;
+                        cur += safetyDur;
                     }
                 } else if (sportSpace > 0) {
                     // ★ v5.1 FIX: Try extending ANY last block, not just sports
