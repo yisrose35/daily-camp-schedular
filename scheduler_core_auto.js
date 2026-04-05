@@ -726,9 +726,27 @@
             Object.keys(fieldLedger).forEach(k => delete fieldLedger[k]);
             const fields = getFields(globalSettings);
             const baseDisabled = globalSettings.app1?.disabledFields || globalSettings.disabledFields || [];
-            const dailyDisabled = window.currentDisabledFields || [];
+            // ★ v7.0: Read daily disabled fields from ALL sources (not just window.currentDisabledFields)
+            let dailyDisabledFromOverrides = [];
+            const ovNested = dailyData?.overrides || {};
+            if (ovNested.disabledFields?.length) {
+                dailyDisabledFromOverrides = ovNested.disabledFields;
+            } else {
+                // Fallback: dedicated localStorage key
+                try {
+                    const dateKey = window.currentScheduleDate || '';
+                    const stored = localStorage.getItem('campResourceOverrides_' + dateKey);
+                    if (stored) {
+                        const parsed = JSON.parse(stored);
+                        if (parsed?.overrides?.disabledFields?.length) dailyDisabledFromOverrides = parsed.overrides.disabledFields;
+                    }
+                } catch(e) {}
+            }
+            const dailyDisabled = [...new Set([...(window.currentDisabledFields || []), ...dailyDisabledFromOverrides])];
             const disabled = [...new Set([...baseDisabled, ...dailyDisabled])];
-            const dailyDisabledSports = dailyData.dailyDisabledSportsByField || {};
+            // Also update window.currentDisabledFields so other modules see it
+            window.currentDisabledFields = disabled;
+            const dailyDisabledSports = dailyData.dailyDisabledSportsByField || ovNested.dailyDisabledSportsByField || {};
 
             fields.forEach(field => {
                 if (disabled.includes(field.name)) return;
