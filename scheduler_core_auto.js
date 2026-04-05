@@ -2929,10 +2929,36 @@
                             field: sp ? sp.field : null, _source: sp ? 'capacity_checked' : 'filler',
                             _sportFallbacks: priorityList.map(s => s.name), _final: true });
                     } else {
+                        // Small gap — extend a neighbor, respecting dMax for specials
                         const prev = template[i], next = template[i + 1];
-                        if (prev._source !== 'phase0') { prev.endMin += gs; }
-                        else if (next._source !== 'phase0') { next.startMin -= gs; }
-                        else { prev.endMin += gs; } // both walls — extend first
+                        const prevT = (prev.type || '').toLowerCase();
+                        const nextT = (next.type || '').toLowerCase();
+                        const prevDur = prev.endMin - prev.startMin;
+                        const nextDur = next.endMin - next.startMin;
+                        // Get effective max: specials have strict dMax, sports are flexible
+                        const prevMax = prevT === 'special' ? (prev.dMax || prevDur) : Infinity;
+                        const nextMax = nextT === 'special' ? (next.dMax || nextDur) : Infinity;
+
+                        if (prev._source !== 'phase0' && prevDur + gs <= prevMax) {
+                            prev.endMin += gs;
+                        } else if (next._source !== 'phase0' && nextDur + gs <= nextMax) {
+                            next.startMin -= gs;
+                        } else if (prev._source !== 'phase0' && prevT !== 'special') {
+                            prev.endMin += gs; // sports/slots can always grow
+                        } else if (next._source !== 'phase0' && nextT !== 'special') {
+                            next.startMin -= gs;
+                        } else if (prev._source === 'phase0' || next._source === 'phase0') {
+                            // Extend the wall
+                            if (prev._source === 'phase0') prev.endMin += gs;
+                            else next.startMin -= gs;
+                        } else {
+                            // Both are specials — create a tiny filler instead
+                            template.push({ startMin: prev.endMin, endMin: next.startMin,
+                                type: 'slot', event: 'General Activity Slot',
+                                layer: null, dMin: gs, dMax: gs,
+                                _activityLocked: false, _source: 'filler', _final: true,
+                                _sportFallbacks: priorityList.map(s => s.name) });
+                        }
                     }
                     fixed = true; break;
                 }
@@ -3930,6 +3956,54 @@
                 });
             });
             log('[3] Wrote ' + leagueWriteCount + ' league slots');
+
+            // ★ v6.0: Write matchup info back to bunkTimelines league blocks
+            // Source 1: processed leagueBlocks (have _allMatchups after processRegularLeagues)
+            leagueBlocks.forEach(lb => {
+                if (!lb._allMatchups || lb._allMatchups.length === 0) return;
+                const divBunks = getBunksForGrade(lb.divName, divisions);
+                divBunks.forEach(bk => {
+                    const tl = bunkTimelines[bk] || [];
+                    const block = tl.find(b => (b.type || '').toLowerCase() === 'league' && b.startMin === lb.startMin);
+                    if (!block) return;
+                    block._matchups = lb._allMatchups;
+                    block._leagueSport = lb._sport || lb.sport || '';
+                    block._gameLabel = lb._gameLabel || '';
+                    // Find this bunk's specific matchup
+                    const bunkStr = String(bk);
+                    const myMatchup = lb._allMatchups.find(m =>
+                        m.includes(bunkStr) || m.toLowerCase().includes(('bunk ' + bunkStr).toLowerCase())
+                    );
+                    if (myMatchup) block.event = myMatchup;
+                    else if (lb._sport) block.event = 'League - ' + lb._sport;
+                });
+            });
+
+            // Source 2: window.leagueAssignments (populated by storeLeagueMatchups)
+            Object.entries(window.leagueAssignments || {}).forEach(([divName, slots]) => {
+                const bunks = getBunksForGrade(divName, divisions);
+                Object.entries(slots).forEach(([startMinStr, asgn]) => {
+                    const startMin = parseInt(startMinStr);
+                    if (!asgn || !asgn.matchups || asgn.matchups.length === 0) return;
+                    bunks.forEach(bk => {
+                        const tl = bunkTimelines[bk] || [];
+                        const block = tl.find(b =>
+                            (b.type || '').toLowerCase() === 'league' && b.startMin === startMin
+                        );
+                        if (!block || block._matchups) return; // skip if already set by source 1
+                        block._matchups = asgn.matchups;
+                        block._leagueSport = asgn.sport || '';
+                        block._leagueName = asgn.leagueName || '';
+                        block._gameLabel = asgn.gameLabel || '';
+                        const bunkStr = String(bk);
+                        const myMatchup = asgn.matchups.find(m =>
+                            m.includes(bunkStr) || m.toLowerCase().includes(('bunk ' + bunkStr).toLowerCase())
+                        );
+                        if (myMatchup) block.event = myMatchup;
+                        else if (asgn.sport) block.event = 'League - ' + asgn.sport;
+                    });
+                });
+            });
         }
 
         const solverBlocks = schedulableSlotBlocks.filter(b => b.type !== 'league' && b.type !== 'specialty_league');
