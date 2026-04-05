@@ -3619,21 +3619,39 @@
                     if (totalIters < 1) warn('[P0] Override skipped — bunk not found: "' + bunk + '" (available: ' + Object.keys(bunkTimelines).slice(0, 5).join(', ') + '...)');
                     return;
                 }
-                // Determine block type
+                // Determine block type and find a field for sports
                 const blockType = ov.type === 'sport' ? 'sport' : (ov.type === 'special' ? 'special' : 'custom');
+                const bunkGrade = Object.keys(divisions).find(g =>
+                    getBunksForGrade(g, divisions).map(String).includes(bunk)
+                ) || '';
+
+                // Auto-assign field for sports if not specified
+                let assignedField = ov.location || null;
+                if (!assignedField && blockType === 'sport') {
+                    // Search for an available field that hosts this sport
+                    const sportName = ov.activity;
+                    for (const fn of Object.keys(fieldLedger)) {
+                        const ledger = fieldLedger[fn];
+                        if (!ledger.activities.includes(sportName)) continue;
+                        if (isFieldAvailable(fn, tStart, tEnd, bunk, bunkGrade, sportName)) {
+                            assignedField = fn;
+                            break;
+                        }
+                    }
+                    if (totalIters < 1) log('[P0] Override "' + sportName + '" for ' + bunk + ': field=' + (assignedField || 'NONE'));
+                }
+
                 bunkTimelines[bunk].push({
                     startMin: tStart, endMin: tEnd,
                     type: blockType, event: ov.activity,
-                    field: ov.location || null,
+                    field: assignedField,
                     layer: null, _classification: 'pinned', _committed: true, _fixed: true,
-                    _bunkOverride: true, _activityLocked: true, _noBacktrack: true
+                    _bunkOverride: true, _activityLocked: true, _noBacktrack: true,
+                    _assignedSport: blockType === 'sport' ? ov.activity : null
                 });
-                // Claim the field if specified
-                if (ov.location) {
-                    const bunkGrade = Object.keys(divisions).find(g =>
-                        getBunksForGrade(g, divisions).map(String).includes(bunk)
-                    );
-                    if (bunkGrade) claimField(ov.location, tStart, tEnd, bunk, bunkGrade, ov.activity);
+                // Claim the field
+                if (assignedField && bunkGrade) {
+                    claimField(assignedField, tStart, tEnd, bunk, bunkGrade, ov.activity);
                 }
                 overrideBlockCount++;
             });

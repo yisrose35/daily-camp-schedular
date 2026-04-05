@@ -160,8 +160,6 @@
 
         // Trip — green theme (off-campus)
         if (entry._isTrip || (entry.type || '').toLowerCase() === 'trip') return { bg: '#ecfdf5', border: '#34d399', text: '#065f46', accent: '#10b981' };
-        // Bunk override — amber theme (user-pinned)
-        if (entry._bunkOverride) return { bg: '#fffbeb', border: '#f59e0b', text: '#92400e', accent: '#d97706' };
 
         if (entry._fixed || entry._pinned) {
             if (act.includes('lunch'))    return { bg: '#fff7ed', border: '#fb923c', text: '#9a3412', accent: '#f97316' };
@@ -882,8 +880,7 @@
                 if (blockH < 2) return;
 
                 var style = blockStyle(act.entry);
-                var isOverride = act.entry?._bunkOverride || act.entry?._fixed;
-                var name  = (isOverride ? '📌 ' : '') + (act.entry?._activity || act.entry?.field || '');
+                var name  = act.entry?._activity || act.entry?.field || '';
                 var fieldName = act.entry?.field || '';
                 var sub   = (fieldName && fieldName !== name && fieldName !== 'Free') ? fieldName : '';
 
