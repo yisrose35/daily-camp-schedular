@@ -3175,9 +3175,9 @@
             for (const blk of template) {
                 if (blk._source === 'phase0') continue;
                 const t = (blk.type || '').toLowerCase();
-                if (['sport', 'slot'].includes(t)) continue; // sports are flexible
                 const dur = blk.endMin - blk.startMin;
-                const maxDur = blk.dMax || dur;
+                // ★ v7.0: Enforce dMax for ALL types including sports (hard cap at 60min for sports)
+                const maxDur = ['sport', 'slot'].includes(t) ? (sportC.dMax || 60) : (blk.dMax || dur);
                 if (dur > maxDur) {
                     blk.endMin = blk.startMin + maxDur;
                 }
@@ -4346,11 +4346,14 @@
                 const result = window.AutoSolverEngine.solve(solverInputBlocks, solverConfig);
                 log('[4] ✅ AutoSolver: ' + result.filled + ' filled, ' + result.free + ' Free');
 
-                // Run fallback sweep for remaining Free blocks
-                if (result.free > 0) {
-                    const fallbackFilled = window.AutoSolverEngine.fallbackSweep(solverConfig);
-                    if (fallbackFilled > 0) log('[4] Fallback sweep filled ' + fallbackFilled + ' more');
+                // ★ v7.0: Aggressive fallback — run multiple sweep passes to eliminate Free blocks
+                let totalFallbackFilled = 0;
+                for (let sweep = 0; sweep < 5 && result.free - totalFallbackFilled > 0; sweep++) {
+                    const swept = window.AutoSolverEngine.fallbackSweep(solverConfig);
+                    totalFallbackFilled += swept;
+                    if (swept === 0) break; // no progress
                 }
+                if (totalFallbackFilled > 0) log('[4] Fallback sweeps filled ' + totalFallbackFilled + ' more');
             } catch (e) {
                 err('[4] AutoSolver error: ' + e.message);
                 console.error(e);
