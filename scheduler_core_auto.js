@@ -2730,8 +2730,11 @@
                     bridgeIndicesToRemove.sort((a, b) => b - a);
                     bridgeIndicesToRemove.forEach(idx => deferred.splice(idx, 1));
 
-                    // Place the target
-                    if (cursor >= Math.max(next.windowStart || gap.start, gap.start) && cursor + dur <= targetWinEnd) {
+                    // Place the target — allow flexible needs (snack, custom) to start up to 15min early
+                    const isFlexTarget = next.type !== 'swim' && !(next.type === 'special' && next._assignedSpecial);
+                    const targetEarly = isFlexTarget ? 15 : 0;
+                    const targetWinStartAdj = Math.max(next.windowStart || gap.start, gap.start) - targetEarly;
+                    if (cursor >= targetWinStartAdj && cursor + dur <= targetWinEnd + targetEarly) {
                         let ok = true;
                         if (next.type === 'swim' && !canUsePoolAtTime(grade, cursor, cursor + dur)) ok = false;
                         if (next.type === 'special' && next._assignedSpecial &&
@@ -2958,11 +2961,24 @@
                         } else if (next._source !== 'phase0' && ['sport', 'slot'].includes(nextT)) {
                             next.startMin -= gs;
                         } else if (prev._source === 'phase0' || next._source === 'phase0') {
-                            // Extend the wall
-                            if (prev._source === 'phase0') prev.endMin += gs;
-                            else next.startMin -= gs;
+                            // ★ v6.0: Extend a wall, but respect dMax (leagues have strict dMax)
+                            const wallPrev = prev._source === 'phase0';
+                            const wallBlock = wallPrev ? prev : next;
+                            const wallDur = wallBlock.endMin - wallBlock.startMin;
+                            const wallMax = wallBlock.dMax || Infinity;
+                            if (wallDur + gs <= wallMax) {
+                                if (wallPrev) prev.endMin += gs;
+                                else next.startMin -= gs;
+                            } else {
+                                // Wall can't grow — create a tiny filler
+                                template.push({ startMin: prev.endMin, endMin: next.startMin,
+                                    type: 'slot', event: 'General Activity Slot',
+                                    layer: null, dMin: gs, dMax: gs,
+                                    _activityLocked: false, _source: 'filler', _final: true,
+                                    _sportFallbacks: priorityList.map(s => s.name) });
+                            }
                         } else {
-                            // Both are specials — create a tiny filler instead
+                            // Neither can grow — create a tiny filler
                             template.push({ startMin: prev.endMin, endMin: next.startMin,
                                 type: 'slot', event: 'General Activity Slot',
                                 layer: null, dMin: gs, dMax: gs,

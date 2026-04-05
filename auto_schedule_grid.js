@@ -500,85 +500,84 @@
    ════════════════════════════════════════ */
 .asg-league-row {
     position: relative;
-    background: #eff6ff;
-    border: 1px solid #bfdbfe;
-    border-radius: 6px;
+    background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+    border-left: 4px solid #0284c7;
+    border-top: 1px solid #7dd3fc;
+    border-bottom: 1px solid #7dd3fc;
+    border-right: 1px solid #7dd3fc;
     overflow-y: auto;
     overflow-x: hidden;
     display: flex;
     flex-direction: column;
     box-sizing: border-box;
 }
-
 .asg-league-row::before { display: none; }
 
 .asg-league-header {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 3px 8px;
-    background: #dbeafe;
-    border-bottom: 1px solid #bfdbfe;
+    gap: 8px;
+    padding: 4px 10px;
     flex-shrink: 0;
 }
 .asg-league-badge {
-    display: flex; align-items: center; gap: 3px;
-    font-size: 0.6rem; font-weight: 700;
-    color: #1e3a8a; text-transform: uppercase; letter-spacing: 0.05em;
+    font-size: 0.7rem; font-weight: 600;
+    color: #0369a1;
     white-space: nowrap;
 }
 .asg-league-name {
-    font-size: 0.65rem; font-weight: 600; color: #1e40af;
+    font-size: 0.7rem; font-weight: 600; color: #0369a1;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .asg-league-label {
     margin-left: auto;
-    font-size: 0.6rem; color: #3b82f6;
+    font-size: 0.6rem; color: #0369a1; font-weight: 500;
     white-space: nowrap;
 }
 
 .asg-league-matchups {
     flex: 1;
     overflow-y: auto;
-    padding: 3px 6px 4px;
+    padding: 2px 8px 4px;
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-content: start;
 }
 .asg-league-matchups::-webkit-scrollbar { width: 3px; }
 .asg-league-matchups::-webkit-scrollbar-track { background: transparent; }
-.asg-league-matchups::-webkit-scrollbar-thumb { background: #93c5fd; border-radius: 2px; }
+.asg-league-matchups::-webkit-scrollbar-thumb { background: #7dd3fc; border-radius: 2px; }
 
 .asg-matchup-card {
     display: flex;
     align-items: center;
     background: #fff;
-    border: 1px solid #dbeafe;
-    border-radius: 4px;
+    border-radius: 6px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
     overflow: hidden;
-    min-height: 22px;
+    padding: 3px 8px;
     flex-shrink: 0;
 }
 .asg-matchup-sport-pill {
     display: flex; align-items: center; justify-content: center;
-    background: #dbeafe;
-    border-right: 1px solid #bfdbfe;
-    padding: 2px 5px;
+    background: #e0f2fe;
+    border-radius: 4px;
+    padding: 1px 5px;
     font-size: 0.55rem; font-weight: 700;
-    color: #1e3a8a;
+    color: #0369a1;
     text-transform: uppercase; letter-spacing: 0.04em;
     white-space: nowrap;
     flex-shrink: 0;
+    margin-right: 6px;
 }
 .asg-matchup-body {
     display: flex; flex-direction: column; justify-content: center;
-    padding: 1px 6px;
     flex: 1;
     gap: 0;
 }
 .asg-matchup-teams {
-    font-size: 0.65rem; font-weight: 600; color: #1e293b;
-    line-height: 1.15;
+    font-size: 0.7rem; font-weight: 600; color: #1e3a5f;
+    line-height: 1.2;
 }
 .asg-matchup-field {
     font-size: 0.55rem; color: #64748b;
@@ -587,7 +586,7 @@
 
 .asg-league-empty {
     color: #64748b;
-    font-size: 0.65rem;
+    font-size: 0.7rem;
     font-style: italic;
     padding: 4px 8px;
 }
