@@ -2657,6 +2657,14 @@
                     // ★ v5.2: Chain check — would placing target at targetStart
                     // leave a dead zone before the next deferred item?
                     // If so, delay target to butt up against the next item.
+                    // ★ v6.0: If the gap between cursor and target is tiny (< fillMinDur)
+                    // and the target is flexible (not swim/special), pull target to cursor
+                    // to avoid creating an unfillable gap.
+                    const isFlexNeed = next.type !== 'swim' && !(next.type === 'special' && next._assignedSpecial);
+                    if (isFlexNeed && cursor < targetStart && (targetStart - cursor) < fillMinDur && (targetStart - cursor) > 0) {
+                        targetStart = cursor;
+                    }
+
                     if (cursor <= targetStart) {
                         const targetEndIfPlaced = Math.max(cursor, targetStart) + dur;
                         for (let di = 1; di < deferred.length; di++) {
