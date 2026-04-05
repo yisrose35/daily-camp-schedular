@@ -2549,31 +2549,7 @@
                         if (need.type === 'special' && need._assignedSpecial &&
                             !canUseSpecialAtTime(need._assignedSpecial, grade, cursor, cursor + dur)) ok = false;
 
-                        // ★ v5.2: Look-ahead — would placing here create a dead zone
-                        // before the next item that MUST start later?
                         if (ok) {
-                            const afterCursor = cursor + dur;
-                            let createsDeadZone = false;
-                            for (let nj = ni + 1; nj < sortedNeeds.length; nj++) {
-                                const future = sortedNeeds[nj];
-                                const futureWinStart = Math.max(future.windowStart || gap.start, gap.start);
-                                // Future item can't start until futureWinStart
-                                // Gap between afterCursor and futureWinStart
-                                const deadGap = futureWinStart - afterCursor;
-                                if (deadGap > 0 && deadGap < sportC.dMin) {
-                                    // Would this need fit right before the future item instead?
-                                    // If so, defer it — Pass 2 will place it optimally
-                                    if (futureWinStart - dur >= cursor) {
-                                        createsDeadZone = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if (createsDeadZone) {
-                                deferred.push(need);
-                                continue;
-                            }
-
                             placeNeed(need, cursor, dur);
                             cursor += dur;
                             continue;
@@ -2582,13 +2558,12 @@
                     deferred.push(need);
                 }
 
-                // ── Pass 2: Handle deferred with backward planning ──────
-                // For each target (earliest window), plan backward:
-                //   1. Find items that should bridge between sport fill and target
-                //   2. Reserve their space
-                //   3. Fill sports up to (targetStart - reservedSpace)
-                //   4. Place bridge items
-                //   5. Place target
+                // ── Pass 2: Chain-aware backward planning ──────────────
+                // For each target (earliest window), plan the entire chain:
+                //   1. Check if placing target creates dead zone to NEXT deferred
+                //   2. If so, delay target to close the gap
+                //   3. Find bridge items between sport fill and (delayed) target
+                //   4. Fill sports, place bridges, place target
                 let safety = 0;
                 while (deferred.length > 0 && safety++ < 20) {
                     deferred.sort((a, b) => {
@@ -2597,32 +2572,49 @@
                         return aWs - bWs;
                     });
                     const next = deferred[0];
-                    const nextWinStart = Math.max(next.windowStart || gap.start, gap.start);
-                    const nextWinEnd = Math.min(next.windowEnd || gap.end, gap.end);
+                    let targetStart = Math.max(next.windowStart || gap.start, gap.start);
+                    const targetWinEnd = Math.min(next.windowEnd || gap.end, gap.end);
                     const dur = next.dMin;
 
-                    if (nextWinStart + dur > gap.end || nextWinEnd < nextWinStart + dur) {
+                    if (targetStart + dur > gap.end || targetWinEnd < targetStart + dur) {
                         deferred.shift();
                         continue;
                     }
 
-                    // ★ v5.2: Backward planning — find bridge items
-                    // Items that can be placed between the sport fill and the target
+                    // ★ v5.2: Chain check — would placing target at targetStart
+                    // leave a dead zone before the next deferred item?
+                    // If so, delay target to butt up against the next item.
+                    if (cursor <= targetStart) {
+                        const targetEndIfPlaced = Math.max(cursor, targetStart) + dur;
+                        for (let di = 1; di < deferred.length; di++) {
+                            const nextDef = deferred[di];
+                            const nextDefWinStart = Math.max(nextDef.windowStart || gap.start, gap.start);
+                            const gapAfterTarget = nextDefWinStart - targetEndIfPlaced;
+                            if (gapAfterTarget > 0 && gapAfterTarget < sportC.dMin) {
+                                // Dead zone! Delay target so it ends at nextDefWinStart
+                                const delayedStart = nextDefWinStart - dur;
+                                // Only delay if: still in target's window AND still reachable
+                                if (delayedStart >= cursor && delayedStart >= Math.max(next.windowStart || gap.start, gap.start) &&
+                                    delayedStart + dur <= targetWinEnd) {
+                                    targetStart = delayedStart;
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    // Find bridge items between sport fill and target
                     const bridges = [];
                     let reservedSpace = 0;
-                    if (cursor < nextWinStart) {
+                    if (cursor < targetStart) {
                         for (let di = 1; di < deferred.length; di++) {
                             const cand = deferred[di];
                             const candDur = cand.dMin;
-                            // Can this item be placed right before the target?
-                            // It needs: cursor position would be (nextWinStart - reservedSpace - candDur)
-                            // Its window must include that position
                             const candWinStart = Math.max(cand.windowStart || gap.start, gap.start);
                             const candWinEnd = Math.min(cand.windowEnd || gap.end, gap.end);
-                            const proposedStart = nextWinStart - reservedSpace - candDur;
+                            const proposedStart = targetStart - reservedSpace - candDur;
                             if (proposedStart >= cursor && proposedStart >= candWinStart &&
                                 proposedStart + candDur <= candWinEnd) {
-                                // Check resource availability
                                 let candOk = true;
                                 if (cand.type === 'swim' && !canUsePoolAtTime(grade, proposedStart, proposedStart + candDur)) candOk = false;
                                 if (cand.type === 'special' && cand._assignedSpecial &&
@@ -2632,19 +2624,17 @@
                                     reservedSpace += candDur;
                                 }
                             }
-                            // Don't reserve more than the available space
-                            if (reservedSpace >= nextWinStart - cursor) break;
+                            if (reservedSpace >= targetStart - cursor) break;
                         }
                     }
 
-                    // Fill cursor → (nextWinStart - reservedSpace) with sports
-                    const sportFillEnd = nextWinStart - reservedSpace;
+                    // Fill sports up to (targetStart - reservedSpace)
+                    const sportFillEnd = targetStart - reservedSpace;
                     if (cursor < sportFillEnd) {
                         const fillSpace = sportFillEnd - cursor;
                         if (fillSpace >= sportC.dMin) {
                             cursor = fillRegion(cursor, sportFillEnd);
                         } else if (fillSpace > 0) {
-                            // Tiny gap — try absorb
                             if (absorbResidual(fillSpace)) {
                                 cursor += fillSpace;
                             } else {
@@ -2653,7 +2643,7 @@
                         }
                     }
 
-                    // Place bridge items (in order, leading up to target)
+                    // Place bridge items
                     const bridgeIndicesToRemove = [];
                     for (const br of bridges) {
                         const bWinStart = Math.max(br.need.windowStart || gap.start, gap.start);
@@ -2664,12 +2654,11 @@
                             bridgeIndicesToRemove.push(br.idx);
                         }
                     }
-                    // Remove placed bridges from deferred (reverse order to preserve indices)
                     bridgeIndicesToRemove.sort((a, b) => b - a);
                     bridgeIndicesToRemove.forEach(idx => deferred.splice(idx, 1));
 
-                    // Place the target item
-                    if (cursor >= nextWinStart && cursor + dur <= nextWinEnd) {
+                    // Place the target
+                    if (cursor >= Math.max(next.windowStart || gap.start, gap.start) && cursor + dur <= targetWinEnd) {
                         let ok = true;
                         if (next.type === 'swim' && !canUsePoolAtTime(grade, cursor, cursor + dur)) ok = false;
                         if (next.type === 'special' && next._assignedSpecial &&
